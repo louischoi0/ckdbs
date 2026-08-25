@@ -1259,7 +1259,9 @@ Status Expeditor::Serve() {
         const PageId extent_hint = recovery_.page_floor_raised
                                        ? std::max<PageId>(recovery_.page_floor, kFirstUserPageId)
                                        : kFirstUserPageId;
-        extents_.emplace(store_->free_map_bytes(), extent_hint);
+        // Over the store, not its bytes: a reservation must mark the map
+        // dirty itself (extent_lease.hpp, PW3b's finding).
+        extents_.emplace(*store_, extent_hint);
 
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             auto lease = extents_->Reserve(storage::kDefaultExtentPages);
@@ -1689,6 +1691,19 @@ Status Expeditor::Serve() {
         if (Status s = core->Sync(); !s.ok()) {
             logger_->Error("expeditor", "core " + std::to_string(core->core_id()) +
                                             ": final log sync failed: " + s.message());
+        }
+        // **A peer's shutdown checkpoint** (PW3b, `core_runtime.hpp` carries
+        // the contract): the third checkpoint point this core's tail below
+        // has had since RC08 and a peer had not. Sound here for the reason
+        // `Sync()` above is - after the join this thread owns the peer, and
+        // it has owned core 0 all along - and not fatal on the same terms as
+        // core 0's own below.
+        if (Status s = core->ShutdownCheckpoint(*checkpoint_anchor_); !s.ok()) {
+            logger_->Error("expeditor",
+                           "core " + std::to_string(core->core_id()) +
+                               ": the shutdown checkpoint failed, so its next mount will "
+                               "replay from the previous anchor: " +
+                               s.message());
         }
     }
     cores_.clear();

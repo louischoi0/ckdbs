@@ -17,6 +17,7 @@
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/server/index_build_service.hpp"
+#include "kds/server/mount_recovery.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
@@ -222,6 +223,31 @@ public:
     // it, and a test drives it without a reactor.
     Status Checkpoint();
 
+    // **The shutdown checkpoint** (PW3b, docs/workplan-peer-writer.md) - the
+    // third of core 0's three checkpoint points, which PW3 left a peer
+    // without: a graceful restart replayed up to one `checkpoint_interval`
+    // of every peer's stream. Flushes this core's pages, runs one checkpoint
+    // and publishes its anchor **directly through `system_anchor`** - core
+    // 0's `SuperBlockCheckpointAnchor` - rather than over the ring, because
+    // after the worker join no reactor runs on either side to carry a send
+    // (remote_checkpoint_anchor.hpp's last section holds the argument and
+    // the rejected alternative).
+    //
+    // The page flush comes first for the reason core 0's final Sync()
+    // precedes its checkpoint (expeditor.cpp): a checkpoint's redo start is
+    // min(recLSN) over the dirty table it snapshots at BEGIN, so with the
+    // table empty the redo start is the BEGIN LSN itself and the next mount
+    // reads this checkpoint's own two records rather than everything since
+    // the oldest dirty page. It runs under the WAL gate and Complete() makes
+    // CHECKPOINT_END durable, so nothing here rests on the caller's sync.
+    //
+    // Startup thread, after Run() returned and the worker joined - the same
+    // thread and moment as Sync(). On a core with no checkpointer the flush
+    // still runs and nothing is published. Not fatal to a shutdown when it
+    // fails: the data is durable through the syncs, and the cost is a slower
+    // next mount, which the caller logs.
+    Status ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor);
+
     // Drops this core's cached view of the catalog - both the derived facts
     // and the page frames they came from. What the `kCatalogInvalidate`
     // handler calls; exposed so a test can drive it without a reactor.
@@ -297,6 +323,13 @@ public:
 
     storage::DevicePageStore& store() noexcept { return *store_; }
 
+    // What this core's mount did (RV1/RV2 at Open, RC08's completion
+    // checkpoint at AttachTransport) - `Expeditor::recovery()`'s counterpart,
+    // and what this core's `SHOW META` recovery block reads (PW3b: kept
+    // rather than discarded, so a peer's stop can be checked to have bounded
+    // its next mount by the same field core 0's is).
+    const MountRecovery& recovery() const noexcept { return recovery_; }
+
 private:
     CoreRuntime(Config config, Logger* log) noexcept
         : config_(config), log_(log), lease_(config.lease) {}
@@ -304,6 +337,9 @@ private:
     Config config_;
     Logger* log_ = nullptr;
     sched::RingTransport* transport_ = nullptr;
+    // Filled at Open, read by the dispatcher below for the rest of this
+    // core's life - so it is declared above everything that borrows it.
+    MountRecovery recovery_;
 
     // Declared in construction order and torn down in reverse, the same
     // discipline Expeditor's members follow: the reactor holds the io

@@ -17,7 +17,14 @@ Status RegisterExtentGrantHandler(sched::Scheduler& system_scheduler,
             const sched::MessageHeader& header, std::span<const std::byte>) {
             ExtentGrantPayload grant{};
             auto reserved = allocator.Reserve(pages_per_grant);
-            if (reserved.ok()) {
+            // Durable before it leaves (extent_lease.hpp's contract, PW3b's
+            // finding): a crash after the peer commits rows into this run
+            // but before the map lands would free the run for the next
+            // mount's allocator to hand out over them. A run that cannot be
+            // made durable is not granted - it stays marked in memory for
+            // the next flush - and the peer gets the zero-page reply.
+            const Status durable = reserved.ok() ? allocator.Persist() : reserved.status();
+            if (durable.ok()) {
                 grant.first_page_id = reserved.value().first;
                 grant.page_count = reserved.value().count;
             } else if (log != nullptr && log->enabled(LogLevel::kError)) {
@@ -26,7 +33,7 @@ Status RegisterExtentGrantHandler(sched::Scheduler& system_scheduler,
                 // "none available" is what lets it fail honestly instead of
                 // waiting forever.
                 log->Error("extent", "cannot grant core " + std::to_string(header.src_core) +
-                                         " an extent: " + reserved.status().message());
+                                         " an extent: " + durable.message());
             }
 
             std::byte bytes[sizeof(ExtentGrantPayload)];

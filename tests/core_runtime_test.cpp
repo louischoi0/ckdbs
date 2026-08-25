@@ -81,7 +81,7 @@ protected:
         // and answers NotFound to everything.
         ASSERT_TRUE(core0_store_->Sync().ok());
 
-        extents_.emplace(core0_store_->free_map_bytes(), kFirstUserPageId);
+        extents_.emplace(*core0_store_, kFirstUserPageId);
     }
     void TearDown() override {
         std::error_code ec;
@@ -658,6 +658,28 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblo
     EXPECT_GE(next_on_core0.value(), block.value().first + block.value().count);
 }
 
+// Core 0's receiving half of a peer's anchor, as `Expeditor::Serve` wires
+// it: the ring payload decoded into the superblock anchor's Publish.
+void RegisterAnchorReceiver(sched::Scheduler& core0, SuperBlockCheckpointAnchor& receiver) {
+    ASSERT_TRUE(core0
+                    .RegisterMessageHandler(
+                        sched::RingMessageKind::kAnchorWrite,
+                        [&receiver](const sched::MessageHeader&,
+                                    std::span<const std::byte> payload) {
+                            ASSERT_EQ(payload.size(), sizeof(AnchorWritePayload));
+                            AnchorWritePayload fields{};
+                            std::memcpy(&fields, payload.data(), sizeof(fields));
+                            wal::CheckpointAnchorRecord record;
+                            record.core_id = fields.core_id;
+                            record.checkpoint_lsn = fields.checkpoint_lsn;
+                            record.redo_start_lsn = fields.redo_start_lsn;
+                            record.durable_lsn = fields.durable_lsn;
+                            record.segment_no = fields.segment_no;
+                            EXPECT_TRUE(receiver.Publish(record).ok());
+                        })
+                    .ok());
+}
+
 TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     // PW3. A peer cannot write page 0, so its completed checkpoint sends the
     // anchor and core 0 writes it (remote_checkpoint_anchor.hpp). Before
@@ -676,22 +698,7 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     core0.AttachTransport(&transport.value(), 0);
 
     SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
-    ASSERT_TRUE(core0
-                    .RegisterMessageHandler(
-                        sched::RingMessageKind::kAnchorWrite,
-                        [&](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                            ASSERT_EQ(payload.size(), sizeof(AnchorWritePayload));
-                            AnchorWritePayload fields{};
-                            std::memcpy(&fields, payload.data(), sizeof(fields));
-                            wal::CheckpointAnchorRecord record;
-                            record.core_id = fields.core_id;
-                            record.checkpoint_lsn = fields.checkpoint_lsn;
-                            record.redo_start_lsn = fields.redo_start_lsn;
-                            record.durable_lsn = fields.durable_lsn;
-                            record.segment_no = fields.segment_no;
-                            EXPECT_TRUE(receiver.Publish(record).ok());
-                        })
-                    .ok());
+    RegisterAnchorReceiver(core0, receiver);
 
     ASSERT_EQ(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u)
         << "core 1 should have no anchor before it checkpoints";
@@ -724,6 +731,130 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     }
     EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn, first);
     EXPECT_EQ(receiver.publishes(), 2u);
+}
+
+TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) {
+    // PW3b. Core 0 checkpoints at three points - the completion checkpoint
+    // at mount, the cadence, and the way out - and PW3 gave a peer the first
+    // two. Without the third a graceful restart replayed every peer's stream
+    // from its last cadence tick (docs/known-gaps.md; the core-0 property is
+    // the sim harness's AMountAfterACleanStopDoesNotRereadTheRunsWholeLog).
+    //
+    // The shape is Serve's tail after the worker join: Sync(), then
+    // ShutdownCheckpoint through core 0's own SuperBlockCheckpointAnchor -
+    // direct, with no reactor pumped on either side, which is the point
+    // (remote_checkpoint_anchor.hpp's last section). The control iteration
+    // stops the old way, so the test shows the gap and not only the bound.
+    for (const bool clean_stop : {false, true}) {
+        SCOPED_TRACE(clean_stop ? "stopped with the shutdown checkpoint"
+                                : "stopped without it - the PW3 gap");
+        catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                                  /*core_count=*/2);
+        catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+        const std::string name = clean_stop ? "stop_clean" : "stop_gap";
+        auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
+                                        catalog::ClusteredType::kHeap,
+                                        catalog::KeyMode::kAssigned);
+        ASSERT_TRUE(oid.ok()) << oid.status().message();
+        auto row = catalog2.GetSysTableRow(oid.value());
+        ASSERT_TRUE(row.ok());
+        ASSERT_EQ(row.value().owner_core, 1u);
+        ASSERT_TRUE(core0_store_->Sync().ok());
+
+        // Core 0's half, as Serve wires it: the ring and the receiving anchor.
+        auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+        ASSERT_TRUE(transport.ok()) << transport.status().message();
+        sched::NullIoBackend io0;
+        sched::Scheduler core0(clock_, io0);
+        core0.AttachTransport(&transport.value(), 0);
+        SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
+        RegisterAnchorReceiver(core0, receiver);
+
+        CoreRuntime::Config first_run = ConfigFor(1);
+        first_run.next_trx_id = core0_->superblock.next_trx_id();
+        auto peer = CoreRuntime::Open(first_run, *device_, clock_, nullptr);
+        ASSERT_TRUE(peer.ok()) << peer.status().message();
+        ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+        // The completion checkpoint's anchor lands over the ring, as at a
+        // real start - so the control's next mount starts from *that*
+        // anchor, and what it re-reads is exactly this run.
+        for (int i = 0; i < 20; ++i) {
+            peer.value()->scheduler().RunOnce();
+            core0.RunOnce();
+        }
+        ASSERT_EQ(receiver.publishes(), 1u);
+        const WalAnchorFields mount_anchor = core0_->superblock.wal_anchor(1);
+        ASSERT_GT(mount_anchor.checkpoint_lsn, 0u);
+
+        // Funded the ordinary way, then a run's worth of rows.
+        peer.value()->GrantRelationFault(
+            RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+        const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
+        peer.value()->GrantRelationWrite(pages);
+        auto first = catalog2.AllocateRowIdRange(oid.value(), 256);
+        ASSERT_TRUE(first.ok());
+        peer.value()->row_id_leases().Grant(oid.value(), first.value(), 256);
+        txn::TrxIdSequence core0_ids(core0_->superblock);
+        auto block = core0_ids.Carve(256);
+        ASSERT_TRUE(block.ok());
+        peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+        for (int i = 0; i < 200; ++i) {
+            const auto ins = peer.value()
+                                 ->dispatcher()
+                                 .Dispatch("INSERT INTO " + name + " VALUES (" +
+                                           std::to_string(i) + ")")
+                                 .response;
+            ASSERT_NE(ins.rfind("ERR", 0), 0u) << "row " << i << ": " << ins;
+        }
+
+        // Serve's tail after the join: the log sync, then - on a clean stop -
+        // the shutdown checkpoint, published directly.
+        ASSERT_TRUE(peer.value()->Sync().ok());
+        if (clean_stop) {
+            ASSERT_TRUE(peer.value()->ShutdownCheckpoint(receiver).ok());
+            EXPECT_EQ(receiver.publishes(), 2u)
+                << "the shutdown anchor must reach page 0 with no reactor running";
+            EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn,
+                      mount_anchor.checkpoint_lsn);
+        } else {
+            EXPECT_EQ(receiver.publishes(), 1u);
+        }
+        const WalAnchorFields stop_anchor = core0_->superblock.wal_anchor(1);
+        peer.value().reset();
+
+        // The restart, with the anchor Expeditor copies out of the superblock.
+        CoreRuntime::Config again = ConfigFor(1);
+        again.anchor = stop_anchor;
+        again.next_trx_id = core0_->superblock.next_trx_id();
+        auto reopened = CoreRuntime::Open(again, *device_, clock_, nullptr);
+        ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+
+        const auto count =
+            reopened.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM " + name).response;
+        EXPECT_NE(count.find("200"), std::string::npos) << count;
+        const MountRecovery& mount = reopened.value()->recovery();
+        if (clean_stop) {
+            // The checkpoint's own two records and nothing to redo - the
+            // bound rather than the constant, as the core-0 test asserts it.
+            EXPECT_LT(mount.records, 20u)
+                << "the mount re-read " << mount.records << " records after a clean stop";
+            EXPECT_EQ(mount.redo_applied, 0u);
+        } else {
+            EXPECT_GT(mount.records, 200u) << "the control re-read only " << mount.records
+                                           << " records, so it no longer shows the gap";
+        }
+        // And the block is where an operator reads it: this core's SHOW META.
+        const auto meta = reopened.value()->dispatcher().Dispatch("SHOW META").response;
+        EXPECT_NE(meta.find("recovery_records=" + std::to_string(mount.records)),
+                  std::string::npos)
+            << meta;
+        // Whole, not half: the `_us` fields are printed only when the mount
+        // supplied a clock (command_dispatcher.cpp), so this is what says a
+        // peer's block is core 0's block and not a subset of it - and it is
+        // the only route by which `checkpoint_ns`, timed at AttachTransport,
+        // is ever read.
+        EXPECT_NE(meta.find("recovery_checkpoint_us="), std::string::npos) << meta;
+    }
 }
 
 

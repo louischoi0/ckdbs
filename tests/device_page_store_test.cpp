@@ -782,6 +782,40 @@ TEST(DevicePageStoreOwnershipTest, APageStampedByThisStreamIsClaimedWithoutAGran
     EXPECT_EQ(store->stamp_claims(), 2u);
 }
 
+TEST(DevicePageStoreTest, AReservationAfterTheLastFlushIsLandedByPersist) {
+    // Found by PW3b's remount test (workplan-peer-writer.md §6): the store
+    // marks its map dirty when `free_map_bytes()` is *taken*, so an
+    // allocator holding that span across a flush reserved into a map the
+    // next flush skipped as clean. Every extent refill core 0 granted after
+    // its last flush reached the device only if something else dirtied the
+    // map, and a peer's pages in one survived a restart only through redo's
+    // CreateAt - which a checkpoint past their PAGE_INITs removes. Over the
+    // store, a reservation marks the map and Persist() lands it: the grant
+    // handler's call, made before the grant leaves.
+    auto device = MakeDevice(64, /*initial_pages=*/256);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    // **The allocator is built first, and the flush happens under it** -
+    // production's shape (`Expeditor::Serve` builds it at startup and grants
+    // refills for the rest of the run) and the only order that pins the
+    // defect. Built after the flush, the constructor's own `free_map_bytes()`
+    // would leave the map dirty, and a cached-span allocator would land its
+    // reservation on that mark alone.
+    ExtentAllocator extents(*store, /*hint=*/128);
+    ASSERT_TRUE(store->Sync().ok());  // the map is clean - the shape at any refill
+    auto lease = extents.Reserve(8);
+    ASSERT_TRUE(lease.ok()) << lease.status().message();
+    ASSERT_TRUE(extents.Persist().ok());
+
+    store.reset();
+    auto reopened = OpenStore(*device);
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_TRUE(reopened->IsAllocated(lease.value().first))
+        << "the reservation never reached the device";
+    EXPECT_TRUE(reopened->IsAllocated(lease.value().end() - 1));
+}
+
 TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
     // Found by PW1c-7's restart test (workplan-peer-writer.md §8): an
     // extent reserved for a peer is allocated whole in the map core 0
@@ -795,7 +829,7 @@ TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
 
-    ExtentAllocator extents(store->free_map_bytes(), /*hint=*/128);
+    ExtentAllocator extents(*store, /*hint=*/128);
     auto lease = extents.Reserve(8);
     ASSERT_TRUE(lease.ok()) << lease.status().message();
     ASSERT_TRUE(store->Sync().ok());  // the map is durable, the pages are not

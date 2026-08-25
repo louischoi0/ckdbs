@@ -9,6 +9,11 @@
 namespace kds::server {
 
 Status RemoteCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& anchor) {
+    // The shutdown route (the header's last section): no reactor on either
+    // side, so the startup thread writes page 0 itself through core 0's
+    // anchor. Synchronous, and durable when it returns.
+    if (direct_ != nullptr) return direct_->Publish(anchor);
+
     AnchorWritePayload payload{};
     payload.checkpoint_lsn = anchor.checkpoint_lsn;
     payload.redo_start_lsn = anchor.redo_start_lsn;
