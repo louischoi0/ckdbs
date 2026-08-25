@@ -10,7 +10,7 @@
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
 
-// `CREATE INDEX` / `DROP INDEX`: the checks, the root page, and the catalog
+// `CREATE INDEX` / `DROP INDEX`: the checks, the tree, and the catalog
 // write behind them (docs/feat-index.md §10, workplan IX05).
 //
 // It sits here rather than in `catalog/` for one reason: computing an
@@ -19,26 +19,20 @@
 // which the catalog may know about. `Catalog::CreateIndex` takes the widths
 // already computed and writes the row.
 //
+// ---- Three halves (workplan-peer-writer.md §7c, PW1c-6b-1) ---------------
+//
+// `CreateIndex` is `PrepareIndexDef`, then `BuildIndexTree`, then
+// `Catalog::CreateIndex` - three because a peer-owned relation's index is
+// built by the core that owns its pages: core 0 prepares the definition and
+// publishes the row, the owner builds the tree from its own lease, and the
+// definition crosses the ring between them as the plain `IndexDef`.
+//
 // ---- The error / warning line --------------------------------------------
 //
 // The same line `cabin_ddl.hpp` and `pattern_ddl.hpp` draw. An **error** is a
 // declaration that could never do what it says - an index on a heap relation,
 // on the primary key, on a column the relation has not got, on a type with no
 // order. A **warning** is one that works and will disappoint.
-//
-// ---- What CREATE INDEX does *not* do yet ---------------------------------
-//
-// **It refuses a relation that has ever held a row.** Not a limitation to
-// route around: IX06 (the write hook) and IX09 (the backfill) are not built,
-// so an index over existing rows would be empty and complete-looking - and
-// once the read path lands it would answer "no rows" authoritatively for
-// every value. The refusal is what keeps that impossible until the backfill
-// exists, and IX09 is what lifts it.
-//
-// The test is "has this relation ever issued a Keystone id", not "does it
-// have live rows", and the conservative direction is the correct one: a
-// relation whose rows were all deleted still has versions reachable through
-// the undo chain, which is exactly what IX09's backfill has to walk.
 
 namespace kds::exec {
 
@@ -55,26 +49,57 @@ struct IndexDdlResult {
     std::vector<std::string> warnings;
 };
 
-// Resolves the statement's names, computes the index's widths, allocates and
-// formats its root page, and writes the `sys.indexes` row.
+// The definition half: the relation resolved under `view` (spec §5's rule -
+// an index must not be built against a relation the caller cannot see),
+// every column resolved and refused by name if it cannot be indexed, the
+// widths computed by the encoders that will produce them, every catalog
+// refusal answered (`CheckIndexDef`), and the index oid issued. Touches no
+// page *of the relation* - only catalog pages, the oid bump among them - so
+// it is safe on the core that owns the catalog and none of the relation's;
+// `root_page_id` comes back `kInvalidPageId`, the build's to fill.
 //
-// The page is allocated **before** the row, so the row can never name a page
-// that does not exist. A catalog write that then fails leaks an unreachable
-// page, which is the bargain every allocation in this engine strikes while
-// there is no free-page path.
+// The oid is issued here, before any page exists, so the root and every
+// page a split creates carry their owner from birth (page.md §2a) - and
+// after the checks, so a refused declaration burns none. One burned by a
+// build that then fails is never reissued, which the row-id sequence
+// permits by rule.
 //
 // Fails with NotFound for an unknown relation or column, Unsupported for a
-// key column whose type has no index encoding, and whatever
-// `Catalog::CreateIndex` answers for the rest - passed through rather than
-// restated, so there is one answer to "why not" and not two that can drift.
+// key column whose type has no index encoding, and whatever `CheckIndexDef`
+// answers for the rest - passed through rather than restated, so there is
+// one answer to "why not" and not two that can drift. `seed` goes to that
+// check: `kByOwner` is how core 0 prepares a definition for a relation
+// another core owns, whose anchor it must not seed.
+StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
+    catalog::Catalog& catalog, const parser::IndexStmt& stmt, const txn::ReadView* view = nullptr,
+    catalog::Catalog::AnchorSeed seed = catalog::Catalog::AnchorSeed::kHere);
+
+// The page half: the root allocated from `store` and formatted, the tree
+// backfilled over everything `access` already holds (spec §10a - every
+// version, so a reader on an older snapshot finds its row through it), and
+// the whole tree logged as full page images under `trx_id` (RV3), so a
+// committed row survives a crash with a tree it can probe. Returns the root
+// the build ended at, which a split may have moved off the page allocated
+// first.
+//
+// Publishes nothing. The caller writes the `sys.indexes` row naming this
+// root, or leaves an unreachable tree and no row: a failure here is the
+// safe direction, where a row over a partial tree would be a wrong answer
+// with a right answer's shape. Nothing can observe the half-built tree in
+// between - DDL is one statement on one cooperative thread.
+// `wal` null = unlogged, the pre-RV3 path every socket-free test runs.
+StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
+                                const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
+                                wal::WalManager* wal);
+
+// The three halves back to back, for a relation whose pages this core owns.
+//
 // `trx_id` / `written` make the DDL transactional
 // (workplan-ddl-transactional.md DT5): the catalog row is stamped with
 // the creating transaction and its address reported, so a rollback can
-// retire it. Defaulted to the autocommit path.
-// `wal` (RV3): the built tree is logged as full page images before the
-// catalog row publishes it, so a committed CREATE INDEX survives a crash
-// with a tree its recovered row can probe. Null = unlogged, the pre-RV3
-// path every socket-free test runs.
+// retire it. Defaulted to the autocommit path. A failure after the tree is
+// built leaks it, which is the bargain every allocation in this engine
+// strikes while there is no free-page path.
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt,
                                      std::uint64_t trx_id = catalog::kBootstrapXid,

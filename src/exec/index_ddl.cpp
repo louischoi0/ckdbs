@@ -214,10 +214,10 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
 }  // namespace
 
-StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt, std::uint64_t trx_id,
-                                     catalog::CatalogRowRef* written,
-                                     const txn::ReadView* view, wal::WalManager* wal) {
+StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
+                                                     const parser::IndexStmt& stmt,
+                                                     const txn::ReadView* view,
+                                                     catalog::Catalog::AnchorSeed seed) {
     auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
@@ -273,42 +273,64 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     def.key_width = layout.key_width;
     def.entry_width = static_cast<std::uint16_t>(layout.leaf_entry_width());
 
-    // The root, allocated and formatted before the row that names it. The
-    // reverse order would leave a catalog row pointing at a page that does
-    // not exist, which is a worse failure than a page nothing points at.
-    // The oid, issued before the root exists so the root and every page
-    // the backfill splits off carry it from birth (page.md §2a). Burned on
-    // a later failure, which the row-id sequence explicitly permits.
+    // Every refusal, before a page is walked. `Catalog::CreateIndex` runs
+    // the same check again at the write - one implementation, two callers
+    // - so this buys the *position* of the failure and nothing else: a
+    // heap relation refused by name rather than as a page-type error from
+    // inside the build.
+    if (Status s = catalog.CheckIndexDef(def, seed); !s.ok()) return s;
+
+    // The oid, issued before any page exists so the root and every page
+    // the backfill splits off carry it from birth (page.md §2a). Burned
+    // by a build that then fails, which the row-id sequence permits.
     auto pre_oid = catalog.AllocateRowId(catalog::kSysIndexesTable);
     if (!pre_oid.ok()) return pre_oid.status();
     def.index_oid = pre_oid.value();
+    return def;
+}
 
-    auto created = store.CreateNew();
-    if (!created.ok()) return created.status();
-    auto& [root_id, root_bytes_ref] = created.value();
-    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
-    if (Status s = index::FormatRoot(root_bytes, layout, def.index_oid); !s.ok()) return s;
-    def.root_page_id = root_id;
+StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
+                                const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
+                                wal::WalManager* wal) {
+    // The layout the definition's widths encode: `PrepareIndexDef` stored
+    // `entry_width` as `leaf_entry_width()`, so the covered width is what
+    // is left after the key and the pk. Re-derived rather than carried, so
+    // a definition crosses a ring as the plain `IndexDef` - and guarded,
+    // because one that did is bytes this core did not compute.
+    // `FormatRoot` re-checks the layout as a whole.
+    if (def.entry_width < def.key_width + index::kIndexPkWidth) {
+        return Status::InvalidArgument("index oid " + std::to_string(def.index_oid) +
+                                       ": entry width " + std::to_string(def.entry_width) +
+                                       " is narrower than its key and pk");
+    }
+    // The same guard for the column counts, and here it is memory safety
+    // rather than a message: `IndexRef`'s arrays are fixed at the caps, and
+    // the assembly below writes one element per declared column. A
+    // definition this core computed came through `CheckIndexDef`, which
+    // refuses over-cap and empty; one that crossed a ring did not.
+    if (def.key_cols.empty() || def.key_cols.size() > catalog::kMaxIndexKeyColumns ||
+        def.covered_cols.size() > catalog::kMaxIndexCoveredColumns) {
+        return Status::InvalidArgument(
+            "index oid " + std::to_string(def.index_oid) + ": " +
+            std::to_string(def.key_cols.size()) + " key and " +
+            std::to_string(def.covered_cols.size()) +
+            " covered columns is not a shape an index entry has");
+    }
+    index::IndexLayout layout;
+    layout.key_width = def.key_width;
+    layout.covered_width =
+        static_cast<std::uint16_t>(def.entry_width - def.key_width - index::kIndexPkWidth);
 
-    // Every refusal, before a page is walked. `Catalog::CreateIndex` runs
-    // the same check again at the write below - one implementation, two
-    // callers - so this buys the *position* of the failure and nothing else:
-    // a heap relation refused by name rather than as a page-type error from
-    // inside the build.
-    if (Status s = catalog.CheckIndexDef(def); !s.ok()) return s;
+    // The root, scoped so its pin drops before the walk below fetches pages.
+    PageId root_id = kInvalidPageId;
+    {
+        auto created = store.CreateNew();
+        if (!created.ok()) return created.status();
+        auto& [id, bytes] = created.value();
+        if (Status s = index::FormatRoot(bytes.bytes(), layout, def.index_oid); !s.ok()) return s;
+        root_id = id;
+    }
 
-    // ---- Built before it is published (spec §10a) -----------------------
-    //
-    // The backfill runs *before* the sys.indexes row exists, so an index is
-    // published complete or not at all - a failure here leaves an
-    // unreachable tree and no catalog row, where the reverse order would
-    // leave a declared index missing rows, which is a wrong answer with a
-    // right answer's shape.
-    //
-    // Nothing can observe the half-built tree in between: DDL is one
-    // statement on one cooperative thread, so there is no reader to race.
-    // A split during the build moves the root, which is why the final root
-    // comes back from here rather than being the page allocated above.
     catalog::TableAccess::IndexRef building;
     building.index_oid = def.index_oid;  // pre-issued; the backfill stamps pages with it
     building.root_page_id = root_id;
@@ -321,11 +343,8 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
         building.covered_cols[i] = def.covered_cols[i];
     }
 
-    auto final_root = Backfill(store, *access.value(), building);
-    if (!final_root.ok()) {
-        return final_root.status().WithContext("building index '" + stmt.index_name + "'");
-    }
-    def.root_page_id = final_root.value();
+    auto final_root = Backfill(store, access, building);
+    if (!final_root.ok()) return final_root.status();
 
     // RV3: the built tree travels as full page images, **before** the
     // sys.indexes row that publishes it - a crash after the commit must
@@ -333,14 +352,28 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     // logged nothing per entry. An FPI both creates and fills a page at
     // redo, so no PAGE_INIT is needed; the cost is tree bytes per CREATE
     // INDEX, on a statement that is already O(relation).
-    if (Status s = LogBuiltTree(wal, store, trx_id, def.root_page_id); !s.ok()) {
-        return s.WithContext("logging the built tree of index '" + stmt.index_name + "'");
+    if (Status s = LogBuiltTree(wal, store, trx_id, final_root.value()); !s.ok()) {
+        return s.WithContext("logging the built tree");
     }
+    return final_root.value();
+}
 
-    // The heap-relation, pk-column, duplicate-column, over-cap, UNIQUE and
-    // duplicate-name refusals all live in the catalog and are deliberately
-    // not restated here: two answers to "why not" is how one of them ends up
-    // wrong.
+StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                     const parser::IndexStmt& stmt, std::uint64_t trx_id,
+                                     catalog::CatalogRowRef* written,
+                                     const txn::ReadView* view, wal::WalManager* wal) {
+    auto prepared = PrepareIndexDef(catalog, stmt, view);
+    if (!prepared.ok()) return prepared.status();
+    catalog::Catalog::IndexDef& def = prepared.value();
+
+    auto access = catalog.InitTableAccess(def.table_oid);
+    if (!access.ok()) return access.status();
+    auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal);
+    if (!root.ok()) {
+        return root.status().WithContext("building index '" + stmt.index_name + "'");
+    }
+    def.root_page_id = root.value();
+
     auto index_oid = catalog.CreateIndex(def, trx_id, written);
     if (!index_oid.ok()) return index_oid.status();
 

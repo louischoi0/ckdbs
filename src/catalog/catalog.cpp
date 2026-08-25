@@ -2724,7 +2724,7 @@ StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
     return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats, nullptr, txn_);
 }
 
-Status Catalog::CheckIndexDef(const IndexDef& def) {
+Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
     if (def.key_cols.empty()) {
         return Status::InvalidArgument("catalog: an index needs at least one key column");
     }
@@ -2766,8 +2766,10 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
     // the P4e harness builds indexed fixtures on rotated relations
     // through a hook-less catalog, where nothing was ever granted away
     // and core 0 is still the only writer (PW4's predicate-on-incapacity
-    // rule, one layer down).
-    if (access.value()->owner_core != core_id_ && on_publish_) {
+    // rule, one layer down). A row whose seed is the owner's
+    // (`kByOwner`) writes no relation page here, so the refusal has
+    // nothing to guard.
+    if (seed == AnchorSeed::kHere && access.value()->owner_core != core_id_ && on_publish_) {
         return Status::Unsupported(
             "catalog: relation oid " + std::to_string(def.table_oid) + " is owned by core " +
             std::to_string(access.value()->owner_core) + " and core " +
@@ -2842,11 +2844,11 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
 }
 
 StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
-                                    CatalogRowRef* where) {
+                                    CatalogRowRef* where, AnchorSeed seed) {
     // Re-checked here even when the caller already asked: this is the door
     // every non-DDL caller comes through, and a check that only runs when
     // someone remembers to ask is not a check.
-    if (Status s = CheckIndexDef(def); !s.ok()) return s;
+    if (Status s = CheckIndexDef(def, seed); !s.ok()) return s;
 
     // A caller that formatted pages already pre-issued the oid to stamp
     // them (IndexDef::index_oid); allocate only when it did not.
@@ -2884,9 +2886,10 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
     // PW2-3: the anchor slot is seeded at creation, so the anchor is the
     // index root's whole truth from birth - without this the row would
     // stay a second source forever ("slot absent, fall back") instead of
-    // for the transition alone. Peer-owned relations never reach here
-    // (PW1c-6 refuses their CREATE INDEX at dispatch).
-    {
+    // for the transition alone. A peer-owned relation's slot is the
+    // owner's (`kByOwner`): it built the tree in its own pages and wrote
+    // its own anchor before this row, so the row is all this core writes.
+    if (seed == AnchorSeed::kHere) {
         auto rel = GetSysTableRow(def.table_oid);
         if (!rel.ok()) {
             return rel.status().WithContext("resolving the relation for the index anchor seed");

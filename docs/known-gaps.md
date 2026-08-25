@@ -686,8 +686,9 @@ still waits on its own gate, so:
   — how a root move reaches core 0 — is open and listed there.
   **Later the same day (2026-08-24)**: PW1c-1..5 built — a funded peer
   INSERTs end to end — PW2 decided and built as the anchor page (the
-  btree shape lifted, the indexed shape still gated on PW1c-6's grant
-  extension), and **PW1c-7** closed the restart hole the series had
+  btree shape lifted, the indexed shape still gated on PW1c-6 — decided
+  2026-08-25 as "the owner builds", §7c, with PW1c-6b-1's split of
+  `exec::CreateIndex` landed and 6b-2..4 to go), and **PW1c-7** closed the restart hole the series had
   named: leases and grants are memory-resident, and the probe found a
   restart loses every page a peer allocated itself, not only its grants;
   the PL-C stamp now carries ownership (`docs/workplan-peer-writer.md`
