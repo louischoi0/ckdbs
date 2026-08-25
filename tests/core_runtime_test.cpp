@@ -288,8 +288,7 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationCoreZeroCreated) {
     // The point of the whole phase: a non-zero core can read the catalog,
     // so it can resolve a relation, so it can serve a statement.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     FlushCatalog();
 
@@ -321,7 +320,7 @@ TEST_F(CoreRuntimeTest, APeerDoesNotSeeADdlThatWasNotFlushed) {
 
     ASSERT_TRUE(core0_->catalog
                     .CreateTable(catalog::kNamespacePublic, "late", TwoColumnSchema(),
-                                 catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned)
+                                 catalog::ClusteredType::kHeap)
                     .ok());
 
     // Not flushed yet: invisible, and a NotFound rather than an error.
@@ -377,8 +376,7 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
 
 TEST_F(CoreRuntimeTest, AGrantedPeerFaultsARelationsDataPagesReadOnly) {
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     // The flush half of flush-then-grant: the relation's pages must be on
     // the device before the grant makes them reachable, or the peer faults
@@ -419,8 +417,7 @@ TEST_F(CoreRuntimeTest, AWriteGrantedPeerRestampsThePageAndMayWriteIt) {
     // granted page is restamped to the peer's stream - stamp its own,
     // page_lsn re-based into its space - flushed, and only then writable.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
     auto row = core0_->catalog.GetSysTableRow(oid.value());
@@ -511,8 +508,7 @@ TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
         });
 
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
-                                    TwoColumnSchema(), catalog::ClusteredType::kHeap,
-                                    catalog::KeyMode::kAssigned);
+                                    TwoColumnSchema(), catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // The catalog recorded the rotated owner, and the hook saw the same
@@ -571,8 +567,7 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
     // own store would refuse to write anyway (MayWrite is the guard this
     // path exists to satisfy, not to bypass).
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -742,8 +737,7 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
     // *relation* and has no subject until a statement names one. So the miss
     // records the demand and the refill tick answers it.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -858,8 +852,7 @@ TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOt
     // request is in flight per core and the neediest is the lowest low-water
     // oid, no *other* relation on that core is ever asked for again.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_GT(oid.value(), 3000u);  // the ungrantable oid below must sort first
     ASSERT_TRUE(core0_store_->Sync().ok());
@@ -926,7 +919,7 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
+                                    catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = catalog2.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1031,12 +1024,10 @@ TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) 
         return schema;
     };
     auto outer_oid = catalog2.CreateTable(catalog::kNamespacePublic, "ta", make_schema("b_id"),
-                                          catalog::ClusteredType::kHeap,
-                                          catalog::KeyMode::kAssigned);
+                                          catalog::ClusteredType::kHeap);
     ASSERT_TRUE(outer_oid.ok()) << outer_oid.status().message();
     auto inner_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tb", make_schema("qty"),
-                                          catalog::ClusteredType::kHeap,
-                                          catalog::KeyMode::kAssigned);
+                                          catalog::ClusteredType::kHeap);
     ASSERT_TRUE(inner_oid.ok()) << inner_oid.status().message();
 
     auto insert = [&](catalog::Oid oid, std::int64_t second) {
@@ -1183,19 +1174,16 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
         return schema;
     };
     auto outer_oid = catalog2.CreateTable(catalog::kNamespacePublic, "ta", make_schema("b_id"),
-                                          catalog::ClusteredType::kHeap,
-                                          catalog::KeyMode::kAssigned);
+                                          catalog::ClusteredType::kHeap);
     ASSERT_TRUE(outer_oid.ok()) << outer_oid.status().message();
     auto inner_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tb", make_schema("qty"),
-                                          catalog::ClusteredType::kHeap,
-                                          catalog::KeyMode::kAssigned);
+                                          catalog::ClusteredType::kHeap);
     ASSERT_TRUE(inner_oid.ok()) << inner_oid.status().message();
     // A third relation whose *non-pk* column overlaps `ta.b_id`, so a join
     // on it matches real rows. Without the overlap the non-pk cases below
     // would compare two empty answers and prove nothing.
     auto tag_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tc", make_schema("tag"),
-                                        catalog::ClusteredType::kHeap,
-                                        catalog::KeyMode::kAssigned);
+                                        catalog::ClusteredType::kHeap);
     ASSERT_TRUE(tag_oid.ok()) << tag_oid.status().message();
 
     auto insert = [&](catalog::Oid oid, std::int64_t second) {
@@ -1471,7 +1459,7 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "owned", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
+                                    catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1543,8 +1531,7 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
         catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
         const std::string name = flush_before_restart ? "survives_flushed" : "survives_logged";
         auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
-                                        catalog::ClusteredType::kHeap,
-                                        catalog::KeyMode::kAssigned);
+                                        catalog::ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto row = catalog2.GetSysTableRow(oid.value());
         ASSERT_TRUE(row.ok());
@@ -1648,7 +1635,7 @@ TEST_F(CoreRuntimeTest, AnUnacquiredRelationIsAskedForAndTheRegrantLands) {
     // No publish hook on the catalog: this CREATE TABLE's grants are the
     // ones that got lost.
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "unacquired", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
+                                    catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1751,8 +1738,7 @@ TEST_F(CoreRuntimeTest, AnUnacquiredRelationIsAskedForAndTheRegrantLands) {
     // Core 0 re-delivers only to the catalog's owner: a request for a
     // relation this peer does not own is dropped, never granted.
     auto other = core0_->catalog.CreateTable(catalog::kNamespacePublic, "core0s",
-                                             TwoColumnSchema(), catalog::ClusteredType::kHeap,
-                                             catalog::KeyMode::kAssigned);
+                                             TwoColumnSchema(), catalog::ClusteredType::kHeap);
     ASSERT_TRUE(other.ok());
     RequestRelationGrant(peer.value()->scheduler(), transport.value(), other.value(), 1);
     for (int i = 0; i < 40; ++i) {
@@ -1767,8 +1753,7 @@ TEST_F(CoreRuntimeTest, AWriteGrantAloneCarriesItsOwnFaultRights) {
     // a full ring, so the write grant must survive arriving before the
     // extent fault grant.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "solo", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
     auto row = core0_->catalog.GetSysTableRow(oid.value());
@@ -1804,17 +1789,19 @@ TEST_F(CoreRuntimeTest, PrepareRelationHandoffRefusesPastCapacityAndSkipsInvalid
         << refused.status().message();
 }
 
-TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
-    // PW2-4 lifted the btree arm; the EXPLICIT arm is the shape gate's
-    // surviving clustered-side refusal - AdmitExplicitRowId persists the
-    // id ceiling on the catalog page, which a peer may never write. No
-    // session poison: a different statement can succeed.
+TEST_F(CoreRuntimeTest, APeerRefusesACallerSuppliedKeyAndTakesTheSameRowWithout) {
+    // The shape gate's key-mode arm lifted with the mode (heap-and-tuple.md
+    // §4.1) and the refusal moved into the row: admitting a supplied id
+    // writes the relation's sys.tables row, which a peer may never write,
+    // while the *same* relation takes a row that omits its key through this
+    // core's own id lease. Per row, so both halves are asserted here - the
+    // gate's old form refused the relation and would have failed the second.
+    // No session poison either way.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "explicit_owned",
-                                    TwoColumnSchema(), catalog::ClusteredType::kBtree,
-                                    catalog::KeyMode::kExplicit);
+                                    TwoColumnSchema(), catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -1824,8 +1811,17 @@ TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
     ASSERT_TRUE(row.ok());
     peer.value()->GrantRelationFault(
         RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
-    // Funded past the trx-id wall, so the refusal reaching the client is
-    // the shape gate's and not the lease's.
+    // **Funded the whole way**, which the old form of this test did not have
+    // to be: its per-relation refusal fired above the write grant and the id
+    // lease, so a peer with neither still produced the expected message. The
+    // refusal is per row now, and the row that *omits* its key has to reach
+    // the storage and succeed - so everything a funded peer write needs is
+    // granted here, and what the test then isolates is the one thing left.
+    const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
+    peer.value()->GrantRelationWrite(pages);
+    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
+    ASSERT_TRUE(first.ok());
+    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
     txn::TrxIdSequence core0_ids(core0_->superblock);
     auto block = core0_ids.Carve(16);
     ASSERT_TRUE(block.ok());
@@ -1837,7 +1833,14 @@ TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
             .Dispatch("INSERT INTO explicit_owned VALUES (5, 1)")
             .response;
     EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-    EXPECT_NE(reply.find("EXPLICIT"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("caller-supplied primary key"), std::string::npos) << reply;
+
+    // The same relation, the same core, the key omitted: admitted. This is
+    // the half the old per-relation gate could not express.
+    const auto omitted =
+        peer.value()->dispatcher().Dispatch("INSERT INTO explicit_owned VALUES (1)").response;
+    EXPECT_EQ(omitted.substr(0, 8), "INSERTED") << omitted;
+
     // Not poisoned: the next statement answers normally.
     EXPECT_NE(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0), 0u);
 }
@@ -1850,7 +1853,7 @@ TEST_F(CoreRuntimeTest, AFundedPeerGrowsItsOwnBtreeWritingNoCatalogPage) {
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema(),
-                                    catalog::ClusteredType::kBtree, catalog::KeyMode::kAssigned);
+                                    catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1901,8 +1904,7 @@ TEST_F(CoreRuntimeTest, ACreatedRelationsAnchorIsWiredWholeThroughTheCatalog) {
     // pinned by the redo replay test and exercised by the sim's crash
     // sweep, which remounts created relations.)
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "anchored",
-                                           TwoColumnSchema(), catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = core0_->catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1929,8 +1931,7 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
     // moving the anchor's slot by hand and filling through a fresh
     // catalog over the same store - the cache-miss path.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "moved", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     auto row = core0_->catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -1965,7 +1966,7 @@ TEST_F(CoreRuntimeTest, CreateIndexOnAPeerOwnedRelationIsRefusedByName) {
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
+                                    catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -1992,8 +1993,7 @@ TEST_F(CoreRuntimeTest, APeerOpenedBeforeTheDdlCanStillTakeTheWriteGrant) {
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "late", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
     auto row = core0_->catalog.GetSysTableRow(oid.value());
@@ -2120,12 +2120,10 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesForeignAndRoutes
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto rotated = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
-                                        TwoColumnSchema(), catalog::ClusteredType::kHeap,
-                                        catalog::KeyMode::kAssigned);
+                                        TwoColumnSchema(), catalog::ClusteredType::kHeap);
     ASSERT_TRUE(rotated.ok()) << rotated.status().message();
     auto local0 = core0_->catalog.CreateTable(catalog::kNamespacePublic, "local0",
-                                              TwoColumnSchema(), catalog::ClusteredType::kHeap,
-                                              catalog::KeyMode::kAssigned);
+                                              TwoColumnSchema(), catalog::ClusteredType::kHeap);
     ASSERT_TRUE(local0.ok()) << local0.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -2318,8 +2316,7 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // at `done`.
     rig.catalog2->SetInvalidationHook([this] { FlushCatalog(); });
     auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema(),
-                                         catalog::ClusteredType::kBtree,
-                                         catalog::KeyMode::kAssigned);
+                                         catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     rig.oid = oid.value();
     auto row = rig.catalog2->GetSysTableRow(rig.oid);
@@ -2752,14 +2749,13 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix2", TwoColumnSchema(),
-                                    catalog::ClusteredType::kBtree, catalog::KeyMode::kAssigned);
+                                    catalog::ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto row = catalog2.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
     ASSERT_EQ(row.value().owner_core, 1u);
     auto other = core0_->catalog.CreateTable(catalog::kNamespacePublic, "core0s_ix",
-                                             TwoColumnSchema(), catalog::ClusteredType::kBtree,
-                                             catalog::KeyMode::kAssigned);
+                                             TwoColumnSchema(), catalog::ClusteredType::kBtree);
     ASSERT_TRUE(other.ok()) << other.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 

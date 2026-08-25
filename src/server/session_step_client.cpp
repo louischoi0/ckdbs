@@ -189,8 +189,9 @@ Status TwoStepPipelineEligible(const exec::StepChain& chain) {
     // final edge is not the local sink they decorate - a shipped sorted
     // statement would answer unordered. A sub-chain cannot ship at all
     // (the descriptor codec refuses it). `emit_in_key_order` is how a
-    // kExplicit relation's walk is made to emit in key order and the
-    // descriptor does not carry it, so a shipped step would walk in slot
+    // relation that has taken an out-of-order key is made to emit in key
+    // order and the descriptor does not carry it, so a shipped step would
+    // walk in slot
     // order and answer the clause wrongly. And a projected form is
     // *required* rather than excluded: the batches carry exactly the
     // planned output layout, which a star read has no list to describe.

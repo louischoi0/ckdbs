@@ -319,10 +319,10 @@ being pk order the moment the write hook appends an earlier pk to an
 observed value (an UPDATE moving a row into the set) - a reply-reordering
 bug against I12's within-step contract, latent since v1 because the
 original contract queries always filtered the exposed set to one row. The
-serve now sorts to the walk's order before emission - pk for ASSIGNED,
-page-and-slot for EXPLICIT, per heap-and-tuple.md §4.1 (IX8a's rule, key
-modes respected; the unconditional pk sort was itself a reordering on
-EXPLICIT, caught in review). The §4a join queries and the two focused
+serve now sorts to the walk's order before emission - pk while the relation's keys have only ascended,
+page-and-slot once one has landed below the mark, per heap-and-tuple.md §4.1 (IX8a's rule, key
+order respected; the unconditional pk sort was itself a reordering on an
+unordered relation, caught in review). The §4a join queries and the two focused
 pins in `tests/cabin_contract_test.cpp` are what caught it and hold it.
 
 **CB13 — the correlated EXISTS converges — built 2026-08-19.** Spec §4a's

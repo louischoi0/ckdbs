@@ -37,7 +37,7 @@ from those, `DROP PATTERN`, `DROP CABIN`, `DROP INDEX` and
 
 ```sql
 CREATE TABLE accounts (id int64, owner varchar, balance decimal(10,2)) BTREE;
-CREATE TABLE trades   (id int64, sym varchar, qty int64) BTREE EXPLICIT;
+CREATE TABLE trades   (id int64, sym varchar, qty int64) BTREE;
 ```
 
 Grammar (verified):
@@ -45,29 +45,31 @@ Grammar (verified):
 ```
 CREATE TABLE <name> ( <col> <type> [NULL | NOT NULL] [REFERENCES <parent>]
                      [CABIN | CABIN AUTO | NO CABIN]
-                     [, ...] ) [HEAP | BTREE] [ASSIGNED | EXPLICIT];
+                     [, ...] ) [HEAP | BTREE] [EXPLICIT];
 ```
 
 - The storage clause defaults to `HEAP`. `BTREE` gives the relation a
   clustered B+ tree on the primary key; only a btree relation can carry a
-  secondary index or be an FK parent.
-- The key-mode clause defaults to `ASSIGNED` — see the Keystone contract
-  below.
-- **The two trailing words are order-free**: `BTREE EXPLICIT` and
-  `EXPLICIT BTREE` are the same statement. Each *category* may appear at
-  most once, and a repeat is refused with its byte
-  (`ERR CREATE TABLE takes one storage word - HEAP or BTREE - and this is
-  the second (byte <n>)`, and the matching message for the key mode) rather
-  than resolved last-one-wins: `HEAP BTREE` names two different relations
-  and `ASSIGNED EXPLICIT` two different `INSERT` arities.
-- All four words are ordinary **identifiers**, not reserved (see the
-  appendix) — a column may still be named `explicit` or `btree`.
-- **Omitting the key-mode word takes the server's `default_key_mode`**
-  (shipped `assigned`, `kds.conf.sample`). Writing one always wins over the
-  setting. On a server configured `explicit`, a statement naming neither
-  word is `BTREE EXPLICIT` — the storage default follows the mode there,
-  because an explicit relation must be btree-clustered. `DESCRIBE <table>`
-  reports which mode a relation actually got.
+  secondary index or be an FK parent — and only a btree relation accepts a
+  caller-named key that sorts *below* keys already placed (see the Keystone
+  contract below).
+- **There is no key mode.** Every relation takes a caller-named primary key
+  or issues one when `INSERT` omits it, so nothing about keys is declared
+  here. `EXPLICIT` is still accepted and **does nothing** — it states what is
+  true of every relation, so old scripts keep working. `ASSIGNED` is refused:
+  `ERR the ASSIGNED key mode no longer exists (byte <n>) - every relation
+  takes a caller-supplied primary key or issues one when INSERT omits it, so
+  there is nothing for this word to select`.
+- **The words are order-free**: `BTREE EXPLICIT` and `EXPLICIT BTREE` are the
+  same statement. Each *category* may appear at most once, and a repeat is
+  refused with its byte (`ERR CREATE TABLE takes one storage word - HEAP or
+  BTREE - and this is the second (byte <n>)`) rather than resolved
+  last-one-wins: `HEAP BTREE` names two different relations.
+- The words are ordinary **identifiers**, not reserved (see the appendix) — a
+  column may still be named `explicit` or `btree`.
+- **`EXPLICIT` does not change the storage default.** `CREATE TABLE t (...)`
+  and `CREATE TABLE t (...) EXPLICIT` are both `HEAP`. Write `BTREE` when you
+  want one.
 - At least one column is required.
 - The optional per-column suffixes come in a **fixed order**: nullability,
   then `REFERENCES`, then the cabin policy. Two optional suffixes in either
@@ -88,22 +90,24 @@ key:
 
 - It must be declared with an integer type (`catalog::CheckKeystoneColumn`,
   checked at CREATE TABLE).
-- **Where its values come from is the relation's *key mode*, fixed here and
-  never alterable afterwards** (`ALTER TABLE` renames only):
-  - **`ASSIGNED`** (the default): the engine issues the id and it ascends.
-    `INSERT` supplies the columns *after* the pk and must **not** supply a
-    value for it.
-  - **`EXPLICIT`**: the caller names the id. `INSERT` supplies every
-    column starting with the pk, and omitting it is refused. The ids need
-    **not** ascend and need not be dense — they may arrive in any order.
-- **An `EXPLICIT` relation must be `BTREE`.** `HEAP EXPLICIT`, and a bare
-  `EXPLICIT` (which takes the default `HEAP`), are refused as `Unsupported`
-  with the key-mode word's byte: a named id may sort anywhere, and only a
-  btree descent can both place it and prove it unused. A heap chain grows
-  only at its tail.
-- It cannot be `UPDATE`d **in either mode**: it is the tuple's identity,
-  not a field of it. Naming a key at insert and changing one afterwards are
-  unrelated permissions; only the first is granted.
+- **Where its values come from is decided per `INSERT`, not per relation.**
+  Supply a value in the pk's position and that value *is* the key; omit it
+  and the engine issues one. Both work on every relation, and one statement
+  may mix the two across its rows.
+- **An issued key always clears every key you have named.** The relation
+  keeps a high-water mark, `DESCRIBE`'s `next_id`, which every named key
+  advances past itself. So naming 500 and then omitting the key gives 501,
+  never a collision.
+- **Naming a key that sorts backwards is `BTREE`-only.** On a `BTREE`
+  relation a named key may be anything unused — any order, any gaps. On a
+  `HEAP` relation it must be at or above the high-water mark, or it is
+  refused: `ERR primary key <k> is below relation <oid>'s high-water mark
+  <m>; a heap-clustered relation's ids must ascend, because its chain grows
+  only at its tail - use BTREE to name keys in any order`. Named keys on a
+  heap still need not be dense; they only have to go forward.
+- It cannot be `UPDATE`d: it is the tuple's identity, not a field of it.
+  Naming a key at insert and changing one afterwards are unrelated
+  permissions; only the first is granted.
 - It cannot carry a Cabin — a cabin on the primary key is refused with the
   position of the `CABIN` keyword.
 - Ids are unique, never gapless. A supplied id that is already in use — 
@@ -333,45 +337,46 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 ### INSERT (verified; multi-row built 2026-08-10, spec-bulkinsert.md T1)
 
 ```sql
--- accounts is ASSIGNED (the default): no pk in VALUES
+-- Omit the pk and the engine issues one
 INSERT INTO accounts VALUES ('alice', 120.50);
 INSERT INTO accounts VALUES ('bob', 10), ('carol', 20), ('dave', 30);
 
--- trades is EXPLICIT: the pk comes first, and need not ascend
+-- Or name it: the pk comes first. On a BTREE relation it need not ascend
 INSERT INTO trades VALUES (5000, 'AAPL', 10);
 INSERT INTO trades VALUES (900, 'MSFT', 3), (4200, 'NVDA', 7);
+
+-- And one statement may do both. Row 2's key is issued above 7000
+INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
 ```
 
 - Grammar: `INSERT INTO <table> VALUES (<val> [, ...]) [, (<val> [, ...])]*`
   — no column list; up to `max_insert_rows` rows per statement (config key,
   default 1024, a refusal never a truncation).
-- **The arity is the relation's key mode, and a relation has exactly one.**
-  On an `ASSIGNED` relation VALUES supplies the columns *after* the primary
-  key; on an `EXPLICIT` relation it supplies every column, the pk first.
-  There is no per-statement opt-out either way, because `INSERT` is
-  positional with no column list: a relation accepting both counts would
-  make `VALUES (1, 2)` on a three-column table ambiguous, and leave the
-  arity error unable to say which shape was meant. Each mode's mistake gets
-  a message naming the rule rather than the count:
-  `ERR do not supply a value for primary-key column 'id' - it is autoincrement and engine-assigned`,
-  and
-  `ERR supply a value for primary-key column 'id' - this relation is EXPLICIT, so the caller names its keys`.
-- **A supplied pk must be a non-negative integer literal**, and must fit
+- **The arity is per row, and there are two of them.** Supply `n` values on
+  an `n`-column relation and the first is the primary key; supply `n - 1` and
+  the engine issues one. Both are legal on every relation and a statement may
+  mix them. The two counts cannot be confused — `INSERT` is positional with
+  no column list and no body column may be omitted individually — so a wrong
+  length is refused naming both:
+  `ERR expected 3 value(s) including primary-key column 'id', or 2 to have it issued; got 4`.
+- **A named pk must be a non-negative integer literal**, and must fit
   `[1, 2^40 - 1]` — 0 is reserved for "unset". A non-integer or negative
   value is refused with the offending token's byte; an unspellable one with
   the bound it missed. All of these are checked before anything is placed,
   so a refused row burns no id (BI9).
-- **A supplied pk that is already in use is refused**
-  (`ERR duplicate primary key <n> already present at page <p> slot <s>`).
-  Uniqueness is proved by the clustered btree descent, which lands on the
-  only leaf that could hold the key — which is why the mode is `BTREE`-only.
-  A `DELETE`d row still holds its key until its slot is reclaimed, and
-  nothing reclaims today, so a deleted pk cannot be re-supplied.
+- **A named pk that is already in use is refused**
+  (`ERR duplicate primary key <n> already present at page <p> slot <s>`). On
+  a `BTREE` relation uniqueness is proved by the clustered descent, which
+  lands on the only leaf that could hold the key. On a `HEAP` relation it is
+  proved by the high-water mark instead — which is why a heap relation
+  refuses a key below it (see the Keystone contract). A `DELETE`d row still
+  holds its key until its slot is reclaimed, and nothing reclaims today, so a
+  deleted pk cannot be re-supplied.
 - Replies: `INSERTED oid=<o> id=<n> page=<p> slot=<s>` for one row;
   `INSERTED oid=<o> rows=<n> first_id=<f> last_id=<l>` for several (no id
   contiguity promised). `first_id`/`last_id` are the **first and last rows
-  in statement order**, not a minimum and maximum — on an `EXPLICIT`
-  relation, where keys may descend, `last_id` can be below `first_id`.
+  in statement order**, not a minimum and maximum — on a `BTREE` relation,
+  where named keys may descend, `last_id` can be below `first_id`.
 - **Every bulk row runs the full single-row pipeline, in order** (BI2):
   FK check, assertion admission (row k sees rows 1..k-1's reservations),
   id, encode, placement, Cabin witness, index maintenance, WAL. Bulk
@@ -400,10 +405,10 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
 
 - Grammar: `UPDATE <table> SET <col> = <val> [, ...] [WHERE ...]`.
 - The WHERE is the same production SELECT uses, subqueries included.
-- **The primary key cannot be assigned, in either key mode**, and the
+- **The primary key cannot be assigned**, and the
   refusal is `Unsupported` with the column's byte — understood and
-  declined, not a feature awaiting work (K2). This holds on an `EXPLICIT`
-  relation too: naming a key at insert and changing one afterwards are
+  declined, not a feature awaiting work (K2). This holds whether the key was
+  named or issued: naming a key at insert and changing one afterwards are
   unrelated permissions. The id names the tuple in the clustered
   tree, in every index and Cabin entry and in every recorded trail, so an
   in-place change would retarget all of them at once. An unknown SET
@@ -562,11 +567,14 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   clause and the statement pays nothing. `ANALYZE` shows this as the
   absence of a `sort` line. Every other order — including `ORDER BY <pk>
   DESC` — is an output sort, which is not free; see the two notes below.
-- **`ORDER BY <pk>` on an `EXPLICIT` relation** costs slightly more than
-  on an `ASSIGNED` one: a caller-named key lands in the slot it was
-  inserted into rather than the one it sorts to, so the engine emits each
-  page's rows in key order instead of slot order. Exact, not approximate,
-  and still not an output sort — the disorder is bounded by one page.
+- **`ORDER BY <pk>` costs slightly more once a relation has taken a key
+  below its high-water mark** — which only a `BTREE` relation admits, and
+  which `DESCRIBE` reports as `key_order=unordered`. Such a key lands in the
+  slot it was inserted into rather than the one it sorts to, so the engine
+  emits each page's rows in key order instead of slot order. Exact, not
+  approximate, and still not an output sort — the disorder is bounded by one
+  page. A relation whose keys have only ever gone forward, named or issued,
+  pays nothing.
 - **A sorted statement's `LIMIT` bounds what you receive, not what the
   engine reads.** The sort must see every qualifying row before it knows
   which comes first, so unlike an unsorted or pk-ordered `LIMIT`, it
@@ -697,7 +705,7 @@ Dispatcher commands, not parser statements:
 | `SHOW FKEYS` | declared foreign keys |
 | `SHOW ASSERTIONS` | assertions with `enforcing=` and live counters (checks/violations/reserved/aborted) |
 | `SHOW RELAYOUT [<table>]` | the physical optimizer's shadow report (candidate moves, each blocked by a named gate) |
-| `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `key_mode=ASSIGNED\|EXPLICIT`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A pk column reports `autoincrement=yes` only on an `ASSIGNED` relation |
+| `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `key_order=ascending\|unordered`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A pk column reports `autoincrement=if-omitted`, every other column `no` |
 | `PING` | `PONG` |
 | `SYNC` | forces log + store durability: `OK synced` |
 | `STOP` | closes the connection: `OK bye` |
@@ -777,9 +785,9 @@ waits on"; `InvalidArgument` means "simply wrong".
   half of it would settle the rest by accident. Ordinary statements do
   have a full `ORDER BY` — any columns, `ASC`/`DESC` — since 2026-08-11;
   see Ordering and pagination.
-- **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (an
-  `ASSIGNED` relation's pk is already both, and an `EXPLICIT` one's is
-  deliberately neither), no `IF NOT EXISTS`, no `public.` schema
+- **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (every pk is
+  already both when the `INSERT` omits it, and deliberately neither when the
+  `INSERT` names it), no `IF NOT EXISTS`, no `public.` schema
   qualifier, no
   bare-alias `FROM t a`, no quote-escaping in string literals. Each would be
   a second spelling of something that already has one, and every spelling
@@ -814,13 +822,13 @@ client library switches on, `ERR <message>` for everything else.
 | Statement in a poisoned transaction | `ERR current transaction is aborted; commands are ignored until ROLLBACK` |
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
-| Supplying the pk in INSERT on an `ASSIGNED` relation | `ERR do not supply a value for primary-key column '<name>' - it is autoincrement and engine-assigned` |
-| Omitting the pk in INSERT on an `EXPLICIT` relation | `ERR supply a value for primary-key column '<name>' - this relation is EXPLICIT, so the caller names its keys` |
+| A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k>` |
 | A non-integer or negative supplied pk | `ERR primary-key column '<name>' needs an integer literal (byte <n>)` / `ERR primary key <n> is negative (byte <n>)` |
 | A supplied pk outside `[1, 2^40 - 1]` | `InvalidArgument` — names the bound it missed (`0 is reserved for "unset"`, or the 40-bit ceiling) |
 | A supplied pk already in use (including a `DELETE`d row's, whose slot is never reclaimed) | `AlreadyExists` — `ERR duplicate primary key <n> already present at page <p> slot <s>` |
-| `EXPLICIT` on a heap relation (written, or by `HEAP` defaulting) | `Unsupported` — `ERR an EXPLICIT relation must be BTREE (byte <n>) - ...` |
-| Assigning the pk in UPDATE (either key mode) | `Unsupported` — `ERR primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
+| A supplied pk below a **heap** relation's high-water mark | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a heap-clustered relation's ids must ascend ... - use BTREE to name keys in any order` |
+| `ASSIGNED` in CREATE TABLE | `Unsupported` — `ERR the ASSIGNED key mode no longer exists (byte <n>) - ...` (removed 2026-08-25; `EXPLICIT` is accepted and does nothing) |
+| Assigning the pk in UPDATE | `Unsupported` — `ERR primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)` |
 | Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |

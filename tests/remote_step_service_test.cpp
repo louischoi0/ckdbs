@@ -61,8 +61,7 @@ protected:
         add("id", "int64");
         add("qty", "int64");
         auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, "t", schema,
-                                                  catalog::ClusteredType::kHeap,
-                                                  catalog::KeyMode::kAssigned);
+                                                  catalog::ClusteredType::kHeap);
         ASSERT_TRUE(created.ok());
         oid_ = created.value();
 

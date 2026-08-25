@@ -1,4 +1,26 @@
-# Key mode (`EXPLICIT` pk) — workplan
+# Key mode (`EXPLICIT` pk) — workplan  **[SUPERSEDED 2026-08-25]**
+
+> **The key mode this workplan built no longer exists.** It was removed on
+> 2026-08-25: `catalog::KeyMode` is gone, `CREATE TABLE` declares nothing
+> about keys, and every relation takes a caller-named pk or issues one when
+> the `INSERT` omits it, per row. `docs/heap-and-tuple.md` §4.1 owns the
+> replacement and states what each of the mode's three jobs turned into.
+>
+> **Kept, not deleted, and worth reading for two things.** PK04a and PK09
+> are the btree work — leaf division, internal-node division, the linear
+> slot fallback — and every word of them still describes shipping code:
+> what produces a division is now a caller-named key below the relation's
+> high-water mark rather than an `EXPLICIT` relation's insert, and nothing
+> else about them moved. And PK02's corrected text is the record of a rule
+> that came *back*: it explains why "reject an id below the mark" was
+> deleted for the btree, and the 2026-08-25 work reinstated exactly that
+> rule for the heap, where the argument for deleting it does not hold.
+>
+> Read the task rows as history. `tests/key_mode_test.cpp`, which PK07
+> named, is `tests/supplied_key_test.cpp` now.
+
+---
+
 
 Tasks `PK01`-`PK09` for `docs/heap-and-tuple.md` §4.1 (the 2026-08-11
 amendment to invariant 11). The spec owns the argument and the refusal

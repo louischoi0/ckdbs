@@ -6,6 +6,18 @@ amendments are **applied here** (2026-08-03): K3's wording, §1's min_key
 aside, §5's milestone order, and §1.2's oid claim. Read the findings before
 starting K-M2; three of them change what K-M2 is.
 
+**Amended again 2026-08-25 by `docs/heap-and-tuple.md` §4.1**, which
+**removed the key mode**. K1, K2, K4 and K5 are untouched a second time. What
+moves is the scoping every "per mode" phrase below rests on: there is no
+mode, `AllocateRowId` and `AllocateRowIdRange` refuse nothing for a key
+reason, and `AdmitExplicitRowId` runs on every relation. **The reserved rule
+§2 records as deleted came back, scoped to the heap** — `id < next_id` is
+`OutOfRange` on a heap-clustered relation — because there the mark is the
+only uniqueness proof available and §3.1b's chain rests on it. Read every
+`ASSIGNED`/`EXPLICIT` below as *"a key at or above the mark"* / *"a key below
+it, btree-only"*; the arguments survive the renaming, and where they do not,
+the 2026-08-25 notes say so.
+
 **Amended 2026-08-11 by `docs/heap-and-tuple.md` §4.1** (the `EXPLICIT` key
 mode, **built** the same day). K1, K2, K4 and K5 are untouched. **K3 and §2
 are not**: the amendment removed monotonicity for explicit relations, which
@@ -50,11 +62,14 @@ Decisions fixed here:
   too, and the leaf slot search no longer assumes key order. Nothing outside the btree
   changed, because nothing outside it depended on issuance order —
   see the corrected list in §1.
-  **What did not move:** an `ASSIGNED` relation's cursor still never
-  goes backward, and every heap-clustered relation is `ASSIGNED`, so
-  the semi-sorted heap chain keeps monotonic ids unconditionally.
-  Monotonicity is now a **per-relation property, not an engine-wide
-  one** — code that needs it must read `key_mode`, never assume it.
+  **What did not move:** the cursor still never goes backward, and the
+  semi-sorted heap chain still sees a monotonic sequence — **by the mark
+  rather than by the mode since 2026-08-25**, when `AdmitExplicitRowId`
+  took over the refusal `CREATE TABLE` used to make. Monotonicity is a
+  **per-relation, per-history property, not an engine-wide one** — code
+  that needs it must read `key_order`, never assume it, and never derive
+  it from the storage type either: a btree relation fed only ascending
+  keys is as monotonic as any heap.
 - **K4 — Lifetime budget is a documented product constraint.** 2^40
   ids per relation is the relation's lifetime insert budget, stated
   openly in product docs rather than engineered around.
@@ -124,7 +139,11 @@ btree-clustered relations and each of the four had to be settled:
   values. **Kept, by scoping**: an `EXPLICIT` relation must be
   btree-clustered, so every heap chain is still fed a monotonic
   sequence. This is the dependency that decided the shape of the whole
-  feature.
+  feature. **Re-scoped 2026-08-25** and kept again, more cheaply: the
+  scope moved from the relation to the id, `AdmitExplicitRowId` refusing
+  a below-the-mark key on a heap relation, so the chain is fed a
+  monotonic sequence whoever named the ids. `heap_chain.cpp` did not
+  change — this refusal sits above the one it names.
 - the clustered btree used to **refuse a non-monotonic id outright**,
   with `OutOfSpace` naming the open split-policy decision rather than
   guessing — the strongest of the four. **Paid off**: `SplitLeafAndInsert`
@@ -155,20 +174,30 @@ Per relation, the allocator maintains a persisted **high-water mark**
 mode-dependent** (`heap-and-tuple.md` §4.1), and conflating the two
 readings is the mistake this section previously made:
 
-- on an **`ASSIGNED`** relation it is *the smallest id never yet issued*,
-  and it is both the source of ids and the proof they are unique;
-- on an **`EXPLICIT`** relation it is *a ceiling at or above every id
-  placed so far*, and it is neither. It issues nothing and gates nothing;
-  it exists so K4's budget and the 40-bit exhaustion check stay truthful
-  about the id space consumed.
+- for an **omitted key** it is *the smallest id never yet issued*, and it
+  is both the source of the id and the proof it is unique;
+- for a **named key** it is *a ceiling at or above every id placed so
+  far*. It issues nothing. On a **heap** relation it still gates — `id <
+  next_id` is `OutOfRange`, and that comparison is the only uniqueness
+  proof a chain has. On a **btree** relation it gates nothing; the descent
+  does, and the mark exists only so K4's budget and the 40-bit exhaustion
+  check stay truthful about the id space consumed.
+
+**The two readings meet on every relation since 2026-08-25**, where the
+2026-08-11 shape kept them apart by refusing whole relations. What keeps
+them from colliding is that they share one monotone mark: an issued id
+clears every named one, and a named one at or above the mark clears every
+issued one. Only a *below-the-mark* named key can meet an issued id, which
+is why only a btree relation admits one and why the descent is what answers
+there.
 
 Rules:
 
 - Issue = return current cursor, advance. The cursor never moves
-  backward, and no free-list of any kind exists for Keystone ids. This is
-  the `ASSIGNED` path; `Catalog::AllocateRowId` and
-  `Catalog::AllocateRowIdRange` both refuse a `kExplicit` relation with
-  `Unsupported`, so there is no path on which the two readings meet.
+  backward, and no free-list of any kind exists for Keystone ids.
+  `Catalog::AllocateRowId` and `Catalog::AllocateRowIdRange` refuse
+  nothing for a key reason — the 2026-08-11 `Unsupported` on a
+  `kExplicit` relation is gone with the mode.
 - **Bump-ahead persistence** `[PROPOSED]`: the HWM is persisted in
   chunks — the durable record always holds a *ceiling* at or above
   every id actually issued (persist `cursor + N`, hand out ids up to
@@ -209,6 +238,16 @@ Rules:
   returns having written nothing**. There is no ordering check and no
   `OutOfRange`.
 
+  **Corrected 2026-08-25: half the reserved rule came back.** The mode
+  check is gone (there is no mode), and below the mark the function now
+  splits on storage: a **heap** relation gets exactly the `OutOfRange`
+  this section records as deleted, and a **btree** relation is admitted as
+  described, plus a once-ever `key_order` flip. So the paragraphs below
+  are right about the btree and wrong about the engine — the reserved
+  rule was not too strong in general, it was too strong *for a relation
+  with a descent*. Where the chain has no descent, its cheapness is
+  exactly what makes caller-named keys possible at all.
+
   **Why the reserved rule had to go.** It rested on "HWM is the smallest
   id never issued, so `id ≥ HWM` proves non-collision with no page
   read". True — but it is a proof about ids *the allocator* issued, and
@@ -222,7 +261,10 @@ Rules:
   That is a page read the insert was making anyway, and it is why the
   mode is restricted to btree-clustered relations — a heap chain has no
   such walk, and the reserved rule's cheapness was the only thing that
-  would have made one unnecessary.
+  would have made one unnecessary. **Which is what 2026-08-25 then did**:
+  it kept the reserved rule on the heap instead of keeping the relation
+  off caller-named keys, and the sentence above turns out to have been
+  the design.
 
   **What the mark still owes.** Because it never falls below an id
   placed while the process was up, K4's budget and the 40-bit

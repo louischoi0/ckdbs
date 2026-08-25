@@ -69,9 +69,10 @@
 //
 // **Buckets append in walk order and replay front to back.** Spec §3's
 // third fact: a probe emits each key's matches in exactly the order the
-// walk would have — for both key modes, because build order *is* walk
-// order whichever that is (`ASSIGNED` pk order, `EXPLICIT` page-slot
-// order). The chain is appended at the tail for exactly this reason; a
+// walk would have — for either key order, because build order *is* walk
+// order whichever that is (pk order while a relation's keys have only
+// ascended, page-slot order once one has landed below its high-water
+// mark). The chain is appended at the tail for exactly this reason; a
 // head-insert list would be one instruction cheaper and would reverse
 // every reply. The contrast to keep in view: the Cabin's recording SORTS
 // its entry set by page and slot before committing (step_vm.cpp,

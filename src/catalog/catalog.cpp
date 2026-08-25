@@ -1091,7 +1091,7 @@ Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                                    PageId desc_page_id, ClusteredType clustered_type,
                                    PageId varheap_page_id, std::uint32_t owner_core,
-                                   KeyMode key_mode, PageId anchor_page_id, std::uint64_t trx_id,
+                                   PageId anchor_page_id, std::uint64_t trx_id,
                                    CatalogRowRef* where) {
     SysTableRow row{};
     row.oid = oid;
@@ -1102,7 +1102,10 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
     row.owner_core = owner_core;
-    row.key_mode = key_mode;
+    // Every relation starts ascending: it holds no ids at all, so no id has
+    // landed out of order. Nothing may pass this in - it is an observation,
+    // and the only writer is AdmitExplicitRowId.
+    row.key_order = KeyOrder::kAscending;
     row.anchor_page_id = anchor_page_id;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
@@ -1147,29 +1150,20 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 }
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                                    ClusteredType clustered_type, KeyMode key_mode,
+                                    ClusteredType clustered_type,
                                     std::uint64_t trx_id, std::vector<CatalogRowRef>* written) {
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
     if (Status s = CheckKeystoneColumn(schema); !s.ok()) return s;
 
-    // An EXPLICIT relation must be btree-clustered (heap-and-tuple.md
-    // section 4.1). A caller-supplied id may sort anywhere, and a heap chain
-    // has no answer for one: it grows only at its tail, so an id below the
-    // tail's min_key has no legal page, and proving the id unused would mean
-    // scanning every page in the chain. The btree's descent answers both in
-    // one walk.
-    //
-    // Enforced here as well as at the statement layer - which refuses with
-    // the offending token's byte - because this is where a relation actually
-    // comes into being, and a relation that cannot accept a single INSERT
-    // should not be creatable through any path.
-    if (key_mode == KeyMode::kExplicit && clustered_type != ClusteredType::kBtree) {
-        return Status::Unsupported(
-            "an EXPLICIT relation must be BTREE-clustered: a supplied id is not drawn from the "
-            "cursor, so placing it and proving it unique both need a descent");
-    }
+    // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
+    // relation was required to be btree-clustered and this is where the
+    // pairing was refused; the mode is gone, both storage types take a
+    // caller-supplied pk, and what the heap cannot do is now refused per
+    // *id* by AdmitExplicitRowId rather than per relation - a heap relation
+    // that only ever omits its pk was never in doubt and no longer has to be
+    // declared.
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
@@ -1315,7 +1309,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     ref.oid = new_oid;
     note(ref);
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
-                                      varheap_root, owner_core, key_mode, anchor_id, trx_id,
+                                      varheap_root, owner_core, anchor_id, trx_id,
                                       &ref);
         !s.ok()) {
         return s;
@@ -1837,7 +1831,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;
     access.owner_core = table_row.value().owner_core;
-    access.key_mode = table_row.value().key_mode;
+    access.key_order = table_row.value().key_order;
     access.anchor_page_id = table_row.value().anchor_page_id;
 
     // PW2-2 (workplan-peer-writer.md §7a): the durable truth for a user
@@ -2023,15 +2017,17 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
         [&](SysTableRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
-            if (row.key_mode == KeyMode::kExplicit) {
-                // A carve issues a contiguous block of ids, which is exactly
-                // what this relation's caller is doing by hand. Refused for
-                // AllocateRowId's reason, and it also takes row-id leasing
-                // off the table for these relations - a lease is a carve.
-                return Status::Unsupported(
-                    "relation names its own primary keys (EXPLICIT); the engine does not carve "
-                    "id ranges for it");
-            }
+            // No key-mode refusal: a carve is legal on every relation now,
+            // because every relation's omitted-pk inserts draw from this same
+            // mark. What a carve costs is stated at the call site and in
+            // section 4.1 - the ids inside it are spent from the mark's point
+            // of view before they are placed, so a *supplied* id landing
+            // inside a live carve collides with whichever of the two lands
+            // second. On a heap relation that cannot happen (a supplied id
+            // must be at or above the mark, which the carve has already moved
+            // past its own block); on a btree one the descent reports it as
+            // the duplicate it is.
+            //
             // Exhaustion checked against the range's *last* id: a range
             // that would cross the ceiling is refused whole, never split.
             if (row.next_id > kMaxKeystoneId - (count - 1)) {
@@ -2075,15 +2071,13 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
         if (row.oid != table_oid) return false;
 
-        if (row.key_mode == KeyMode::kExplicit) {
-            // The caller names ids on this relation, so issuing one here
-            // would hand out a value the caller may spell later - and
-            // nothing downstream could tell the two apart.
-            return Status::Unsupported(
-                "relation names its own primary keys (EXPLICIT); the engine does not issue "
-                "ids for it");
-        }
-
+        // No key-mode refusal: this is what every INSERT that omits the pk
+        // calls, whatever the relation. The id it hands out is safe from a
+        // caller-supplied one for the same reason it always was - the mark
+        // only ever moves forward, and AdmitExplicitRowId moves it past every
+        // supplied id at or above it. A supplied id *below* the mark is a
+        // value this function has already issued, and the btree descent that
+        // admits it is what proves the row is not there twice.
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
@@ -2133,28 +2127,64 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
                                        std::to_string(kMaxKeystoneId) + ")");
     }
 
+    bool flipped_order = false;
     auto acted = ForFirstRow<SysTableRow>(
         store_, kCatalogPageTables,
         [&](SysTableRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
 
-            if (row.key_mode != KeyMode::kExplicit) {
-                // The mirror of AllocateRowId's refusal. Both are checked at
-                // the callee because the mode is a per-relation fact and the
-                // call sites are several.
-                return Status::Unsupported(
-                    "the engine issues primary keys for this relation (ASSIGNED); it does not "
-                    "accept a caller-supplied id");
-            }
+            if (id < row.next_id) {
+                // ---- Below the mark ------------------------------------
+                //
+                // A heap relation cannot take it. Its chain grows at the
+                // tail, so an id below the tail page's min_key has no legal
+                // page (invariant 3) - and worse than the placement, its
+                // duplicate check reads the tail page alone, which is sound
+                // only while every earlier page's ids sit below the tail's
+                // bound. Both are the ascent. The mark is exactly the ascent
+                // expressed as one number, so refusing here is what keeps
+                // section 3.1b true rather than a second rule that could
+                // drift from it (heap-and-tuple.md section 3.1b, 4.1).
+                if (row.clustered_type != ClusteredType::kBtree) {
+                    return Status::OutOfRange(
+                        "primary key " + std::to_string(id) + " is below relation " +
+                        std::to_string(table_oid) + "'s high-water mark " +
+                        std::to_string(row.next_id) +
+                        "; a heap-clustered relation's ids must ascend, because its chain "
+                        "grows only at its tail - use BTREE to name keys in any order");
+                }
 
-            // Below the mark: nothing to record. The mark is a ceiling on
-            // what has been *issued*, and a descending id issues nothing -
-            // it is admitted on the strength of the btree descent that
-            // follows, not on this number. Returning without a write is what
-            // keeps a backfill of old ids from touching the catalog page
-            // once per row.
-            if (id < row.next_id) return true;
+                // A btree relation takes it: the descent that follows lands
+                // on the one leaf that may hold the key and proves it unused,
+                // so the mark is asked nothing. The mark itself does not
+                // move - it is a ceiling on what has been placed, and this id
+                // is under it.
+                //
+                // What *does* move, once per relation ever, is the order
+                // flag: from here on a page's slot order is not its key
+                // order, so ORDER BY <pk> can no longer be discarded
+                // (well_known.hpp's KeyOrder). Guarded on the current value
+                // so a backfill of old ids writes the catalog page once, not
+                // once per row.
+                if (row.key_order == KeyOrder::kUnordered) return true;
+                row.key_order = KeyOrder::kUnordered;
+                auto reordered = row.Encode();
+                if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, reordered,
+                                               wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
+                    !s.ok()) {
+                    return s;
+                }
+                flipped_order = true;
+                if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+                    log_->Trace("catalog", "table oid " + std::to_string(table_oid) +
+                                               " took primary key " + std::to_string(id) +
+                                               " below its high-water mark " +
+                                               std::to_string(row.next_id) +
+                                               "; key order is now unordered");
+                }
+                return true;
+            }
 
             // At or above: the mark moves past it, persisted before the
             // caller places anything. Same ordering as AllocateRowId and the
@@ -2177,6 +2207,36 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
         });
     if (!acted.ok()) return acted.status();
     if (!acted.value()) return Status::NotFound("no sys.tables row for this oid");
+    // Publishing the flip: **in place here, invalidation everywhere else.**
+    // Neither half is optional and they are optional for opposite reasons.
+    //
+    // In place locally, because this runs inside an ordinary INSERT and
+    // `BumpVersion`'s `cache_.Invalidate()` would destroy the
+    // `const TableAccess*` that statement is holding - the collateral damage
+    // catalog_cache.hpp's four other in-place updates were each written to
+    // avoid. The first form of this flip did bump, and the dangling access
+    // re-read the pk out of a freed vector: a second insert on one relation
+    // answered "tuple's Keystone id N does not match the id being inserted".
+    //
+    // But **another core reads this field**, which is where it parts company
+    // with the index root and the desc page - those belong to one owner and
+    // nobody else looks. `key_order` is read by `CompileStepChain` on the
+    // *session's* core, which for a cross-core read is not the owner, and a
+    // stale kAscending there discards an `ORDER BY <pk>` this relation now
+    // needs. Worse, the elision is exactly what makes such a statement
+    // shippable (`session_step_client.cpp` refuses a sorted chain but not an
+    // elided one), so the stale read would answer out of order rather than
+    // refuse. Hence the version bump and the peer notification, without the
+    // local drop - and in that order, `BumpVersion`'s rule verbatim: a peer
+    // must never re-read while this instance still holds a stale entry.
+    //
+    // Affordable because it happens **once per relation, ever**. `next_id`'s
+    // advance - once per ascending key - is not cached and publishes nothing.
+    if (flipped_order) {
+        cache_.MarkKeysUnordered(table_oid);
+        ++catalog_version_;
+        if (on_invalidate_) on_invalidate_();
+    }
     return Status::OK();
 }
 

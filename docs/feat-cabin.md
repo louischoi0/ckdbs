@@ -271,9 +271,9 @@ the set's end, and serving entry-order then reordered a reply against
 I12's within-step contract — latent since v1 and reachable by a plain
 single-relation probe, not only by a join; the original contract queries
 happened to filter every exposed set to one row. The serve now sorts to
-the walk's order before emission — pk for an `ASSIGNED` relation, page
-and slot for `EXPLICIT`, whose caller-supplied ids need not ascend —
-IX8a's rule applied with §4.1's key modes respected.
+the walk's order before emission — pk while a relation's keys have only
+ascended, page and slot once one has been admitted below its high-water
+mark — IX8a's rule applied with §4.1's `key_order` respected.
 
 ## 5. Write path — the witness
 

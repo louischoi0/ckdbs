@@ -245,9 +245,8 @@ public:
                        txn::IsolationLevel isolation =
                            txn::IsolationLevel::kReadCommitted,
                        std::uint32_t core_id = 0, bool indexes = true,
-                       std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows,
-                       catalog::KeyMode default_key_mode =
-                           catalog::KeyMode::kAssigned) noexcept
+                       std::uint64_t max_insert_rows =
+                           parser::kDefaultMaxInsertRows) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -264,7 +263,6 @@ public:
           core_id_(core_id),
           indexes_enabled_(indexes),
           max_insert_rows_(max_insert_rows),
-          default_key_mode_(default_key_mode),
           // Last two, matching their declaration order below. Order-free:
           // every initializer here reads a constructor parameter, and none
           // reads another member.
@@ -376,18 +374,19 @@ public:
     //                            Kept only so the failure names the
     //                            reason; use the column-list form.
     //   CREATE TABLE <name> (<col> <type> [, ...])
-    //       [HEAP | BTREE] [ASSIGNED | EXPLICIT]
+    //       [HEAP | BTREE] [EXPLICIT]
     //                         -> same CREATED/EXISTS response as above,
     //                            but with real columns: parsed via
     //                            src/parser, types resolved through
     //                            Catalog::ResolveTypeByName(). The storage
     //                            word: HEAP (default) is a chain of heap
     //                            pages, BTREE is a clustered B+ tree on the
-    //                            Keystone pk. The key-mode word (§4.1):
-    //                            ASSIGNED (default) has the engine issue the
-    //                            pk, EXPLICIT has the caller supply it and
-    //                            requires BTREE. Either order, each at most
-    //                            once. See src/exec/row_codec.hpp for the
+    //                            Keystone pk. EXPLICIT is vacuous (§4.1) -
+    //                            every relation takes a caller-named pk or
+    //                            issues one when INSERT omits it, so the
+    //                            word states the default; ASSIGNED is
+    //                            refused. Either order, each at most once.
+    //                            See src/exec/row_codec.hpp for the
     //                            supported column type set.
     //   INSERT INTO <name> VALUES (<val> [, ...])
     //                         -> "INSERTED oid=<table_oid> id=<n> slot=<n>"
@@ -1411,11 +1410,6 @@ private:
     // BI3's per-statement row cap, from the `max_insert_rows` config key.
     // A refusal, never a truncation.
     std::uint64_t max_insert_rows_ = parser::kDefaultMaxInsertRows;
-
-    // What a CREATE TABLE naming no key-mode word means, from the
-    // `default_key_mode` config key (docs/heap-and-tuple.md section 4.1).
-    // A written word always wins over it.
-    catalog::KeyMode default_key_mode_ = catalog::KeyMode::kAssigned;
 
     // The physical optimizer's mode and R1 half-life (workplan PX06).
     // Shadow costs nothing at rest - the planner is pull-only, computed

@@ -245,24 +245,11 @@ public:
         // per transaction.
         txn::IsolationLevel isolation = txn::IsolationLevel::kReadCommitted;
 
-        // What a `CREATE TABLE` that names no key-mode word means
-        // (`default_key_mode`, default `assigned` -
-        // docs/heap-and-tuple.md §4.1).
-        //
-        // **A written word always wins**, so this changes only what silence
-        // means. It ships as `assigned` because that is what every relation
-        // predating the amendment is and what the manual's examples assume;
-        // an instance whose keys come from outside - a migration, an
-        // upstream system, natural keys - sets it to `explicit` once instead
-        // of repeating the word on every statement.
-        //
-        // Setting it to `explicit` also moves the *storage* default for a
-        // statement that named neither word, from heap to btree, because an
-        // explicit relation must be btree-clustered. That is the one place a
-        // key-mode setting reaches past key mode, and it exists so the
-        // default is usable rather than a refusal: `CREATE TABLE t (...)`
-        // under an explicit default has to mean something that works.
-        catalog::KeyMode default_key_mode = catalog::KeyMode::kAssigned;
+        // There is no `default_key_mode` field. The key is still recognized
+        // by the loader, and refused there naming the removal rather than
+        // falling to the unknown-key error - it decided what a `CREATE
+        // TABLE` naming no key-mode word meant, and there is no longer a
+        // mode to decide (docs/heap-and-tuple.md §4.1).
 
         // Whether a successful SELECT records a Waystone trail
         // (`waystone_recording`, default on).

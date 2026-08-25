@@ -364,12 +364,11 @@ public:
     // the requested clustered type, and inserts the corresponding
     // sys.objects/sys.tables/sys.columns rows.
     //
-    // `key_mode` is deliberately **not defaulted** (docs/workplan-key-mode.md
-    // PK01). Both values are legal and neither is safe to assume: a relation
-    // silently created kAssigned refuses every INSERT its author wrote, and
-    // one silently created kExplicit refuses every INSERT that omits the pk.
-    // Making the caller name it means the choice is visible at the DDL site,
-    // which is the only place it is ever made.
+    // There is no key-mode parameter. Until 2026-08-25 there was, and it was
+    // required rather than defaulted because getting it wrong made a relation
+    // refuse every INSERT its author wrote; the mode is gone (section 4.1),
+    // every relation now takes a supplied pk or issues one per row, and the
+    // parameter went with it.
     // `trx_id` stamps the `sys.objects` / `sys.tables` / `sys.columns`
     // rows this writes (workplan-ddl-transactional.md DT2). Defaulting to
     // `kBootstrapXid` is what keeps every existing caller - bootstrap,
@@ -386,7 +385,7 @@ public:
     // rollback (DT3a). Filled even when the create fails partway: rows
     // already on the page are rows a rollback must still retire.
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                               ClusteredType clustered_type, KeyMode key_mode,
+                               ClusteredType clustered_type,
                                std::uint64_t trx_id = kBootstrapXid,
                                std::vector<CatalogRowRef>* written = nullptr);
 
@@ -519,14 +518,12 @@ public:
     StatusOr<const TableAccess*> InitTableAccess(Oid oid);
 
     // Issues the next Keystone id for `table_oid` and persists the bumped
-    // sequence. Ids are unique and monotonic by construction; they are not
-    // gapless, since a failed insert after a successful allocation burns
-    // one.
-    //
-    // **Refuses a kExplicit relation** (`Unsupported`): there the caller
-    // names the id, and an engine-issued one would collide with a value the
-    // caller may supply later. Checked here rather than trusted at the call
-    // sites, because there are several and only one of them is wrong.
+    // sequence. This is what an `INSERT` that **omits** the pk calls, on
+    // every relation - there is no longer a key mode that makes it illegal
+    // (section 4.1). Ids are unique by construction and rise above every id
+    // the relation has ever placed, since `AdmitExplicitRowId` moves the same
+    // mark past every supplied one; they are not gapless, since a failed
+    // insert after a successful allocation burns one.
     //
     // Fails with NotFound if no sys.tables row names `table_oid`, and with
     // OutOfRange once the relation has issued its 40-bit id space -
@@ -534,40 +531,49 @@ public:
     // rather than wrapped.
     StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
-    // The kExplicit counterpart (docs/heap-and-tuple.md section 4.1,
-    // workplan-key-mode.md PK02): admits a **caller-supplied** id and moves
-    // the relation's high-water mark past it.
+    // What an `INSERT` that **supplies** the pk calls (docs/heap-and-tuple.md
+    // section 4.1): admits a caller-named id and moves the relation's
+    // high-water mark past it. Every relation may be inserted into either
+    // way; which of the two functions runs is a property of the row, not of
+    // the relation.
     //
-    // ---- What this checks, and what it deliberately does not -------------
+    // ---- What this checks -------------------------------------------------
     //
-    // It checks the id is *spellable*: within [kFirstRowId, kMaxKeystoneId],
-    // since 0 means "unset" and the Keystone field is 40 bits wide.
-    // `InvalidArgument` otherwise - a value outside the id space is simply
-    // wrong, not a declined feature.
+    // **Spellability, always.** Within [kFirstRowId, kMaxKeystoneId], since 0
+    // means "unset" and the Keystone field is 40 bits wide. `InvalidArgument`
+    // otherwise - a value outside the id space is simply wrong, not a
+    // declined feature. Checked before the catalog page is touched at all.
     //
-    // It does **not** check uniqueness, and it cannot. The amendment permits
-    // a *descending* id, so `next_id` no longer proves anything about
-    // whether a value is already in use - it is a ceiling on what the engine
-    // has issued, not a record of what the caller has spent. Uniqueness is
-    // proved where it can be proved completely: by the clustered btree's
-    // descent, which lands on the one leaf that may hold the key and finds
-    // the duplicate or does not. That is why a kExplicit relation is
-    // required to be btree-clustered (refused at CREATE TABLE); a heap chain
-    // could only answer the question by scanning every page.
+    // **Then the ordering rule, and it is the storage type that decides it:**
     //
-    // ---- Why the high-water mark still moves -----------------------------
+    //   - **Btree-clustered: any id.** Uniqueness is proved completely by the
+    //     descent, which lands on the one leaf that may hold the key and
+    //     finds the duplicate or does not, so `next_id` is asked nothing. An
+    //     id below the mark leaves it untouched, writes no catalog page for
+    //     the mark, and flips `key_order` to kUnordered if it was not already
+    //     - once per relation, ever.
+    //   - **Heap-clustered: at or above the mark only**, `OutOfRange`
+    //     otherwise. The semi-sorted chain grows at its tail, so an id below
+    //     the tail page's `min_key` has no legal page (invariant 3); and its
+    //     duplicate check reads the tail page alone, which is sound only
+    //     while every earlier page's ids sit below the tail's bound. Both
+    //     properties are the ascent, and the mark is what preserves it: at or
+    //     above it, the id is above every id the relation has ever placed, so
+    //     uniqueness follows from the mark without a page being read. A heap
+    //     relation therefore never reaches kUnordered.
     //
-    // `next_id` stays meaningful for two things that outlive the ordering
-    // rule: K4's lifetime budget, which DESCRIBE and SHOW BUDGET both read
-    // from it, and the 40-bit exhaustion refusal. Advanced with max(), never
-    // assigned - a descending id must not walk the mark backwards, or a
-    // later relation-wide check would read a ceiling below ids already
-    // placed. An id at or below the mark leaves it untouched and costs no
-    // catalog write at all.
+    // ---- Why the high-water mark moves ------------------------------------
     //
-    // Fails with NotFound if no sys.tables row names `table_oid`, and with
-    // `Unsupported` on a kAssigned relation - the mirror of AllocateRowId's
-    // refusal, and for the mirror reason.
+    // `next_id` is a ceiling on what has been *placed*, which is what makes
+    // it the uniqueness proof on a heap relation and what keeps K4's lifetime
+    // budget and the 40-bit exhaustion refusal truthful on a btree one -
+    // DESCRIBE and SHOW BUDGET both read it. Advanced with max(), never
+    // assigned, and persisted before the caller places anything: a crash
+    // between here and the insert leaves a ceiling that is too high (K3 calls
+    // a burned id free) rather than one too low, and a too-low mark is how
+    // the engine later issues an id that is already a tuple's identity.
+    //
+    // Fails with NotFound if no sys.tables row names `table_oid`.
     Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id);
 
     // ---- sys.patterns (docs/waystone-concpets.md section 4) --------------
@@ -877,10 +883,9 @@ public:
     // `owner_core` defaults to kSystemCore because every caller but
     // CreateTable() is bootstrap writing a system relation, and M5 puts
     // those on core 0 by definition - it owns the catalog pages they live
-    // on. `key_mode` defaults for the same reason and reads the same way: a
-    // catalog relation's ids come from the engine, and there is no spelling
-    // by which a bootstrap table could be anything else. CreateTable()'s own
-    // parameter is *not* defaulted - see its declaration.
+    // on. There is no key-mode parameter to default: the row's `key_order`
+    // is an observation set to kAscending here and moved only by
+    // AdmitExplicitRowId, never passed in.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
     // rows.hpp owns the rule (a system relation carries no anchor).
     // The one anchor write path (the f5686f8 review's S1): validate the
@@ -896,7 +901,6 @@ public:
                               PageId desc_page_id, ClusteredType clustered_type,
                               PageId varheap_page_id,
                               std::uint32_t owner_core = kSystemCore,
-                              KeyMode key_mode = KeyMode::kAssigned,
                               PageId anchor_page_id = kInvalidPageId,
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr);

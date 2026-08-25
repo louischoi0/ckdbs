@@ -580,7 +580,14 @@ opened; **the pre-grant window closes at the grant** — an own
 pre-grant fill falls back to the row (P6's resolve-before-grant kept;
 provably safe, a peer cannot have moved a root it could not write) and
 `GrantRelationWrite` drops the catalog cache when rights land;
-**EXPLICIT stays refused on a peer** (the id-ceiling catalog write);
+**EXPLICIT stays refused on a peer** (the id-ceiling catalog write) —
+**superseded 2026-08-25**: the key mode is gone
+(`docs/heap-and-tuple.md` §4.1), so `funded_shape` lost this arm and
+the refusal moved into `InsertOneRow`, where the supplied id is in
+hand. It refuses *the row that names a key*, which is the row whose
+admission writes `sys.tables`; a row that omits its key draws from
+this core's lease and writes no catalog page, so a peer now takes
+writes to relations this gate used to refuse whole;
 **`WriteAnchorRoot` validates page type and owner stamp** (the
 review's C3 — the write is where damage is created); the fill holds
 **one anchor ref across the whole fill** (C2 — the N+1 re-fetch could

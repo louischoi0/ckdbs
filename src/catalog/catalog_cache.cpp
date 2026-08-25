@@ -133,6 +133,12 @@ void CatalogCache::UpdateDescPage(Oid rel_oid, PageId root) noexcept {
     it->second.desc_page_id = root;
 }
 
+void CatalogCache::MarkKeysUnordered(Oid rel_oid) noexcept {
+    auto it = table_access_.find(rel_oid);
+    if (it == table_access_.end()) return;
+    it->second.key_order = KeyOrder::kUnordered;
+}
+
 void CatalogCache::Invalidate() noexcept {
     // types_ is deliberately kept: sys.types is written only by Bootstrap()
     // (see catalog_cache.hpp's table of what is cacheable).

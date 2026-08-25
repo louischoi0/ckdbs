@@ -834,16 +834,28 @@ still waits on its own gate, so:
   right-split-with-no-movement is kept for the append case it correctly
   serves. Struck rather than deleted because the refusal it replaced was a
   named `OutOfSpace` some reader may still be holding.
-- **A heap relation cannot be `EXPLICIT`**, refused at
-  `Catalog::CreateTable` and at the statement layer. Not a defect: a heap
-  chain grows only at its tail and has no descent to prove a supplied key
-  unused. Lifting it is the heap page split policy
-  (`docs/heap-and-tuple.md` §3.1b), which stays open.
-- **A `DELETE`d row's primary key cannot be re-supplied** on an
-  `EXPLICIT` relation. The uniqueness check scans the landing leaf's live
-  slots, and a delete-marked slot is live until retirement — and nothing
-  retires (see reclamation above). Consistent with K1 issue-once, and a
-  restriction a caller doing delete-then-reinsert will meet.
+- ~~**A heap relation cannot be `EXPLICIT`**~~ — **closed 2026-08-25** by
+  the key mode's removal (`docs/heap-and-tuple.md` §4.1). A heap relation
+  takes a caller-named key like any other; what it refuses is a key *below
+  its high-water mark*, `OutOfRange` at `Catalog::AdmitExplicitRowId`. The
+  entry above claimed lifting it was the **heap page split policy**, and
+  that was wrong in the same way §9's ascent entry once was: a heap never
+  has to place a key that sorts inside a full page, because such a key is
+  refused, so the split policy is untouched and stays open on its own
+  terms. What is left is the restriction below, not a gap.
+- **A heap relation's caller-named keys must ascend.** Not a defect and
+  not a policy choice: §3.1b's tail append, its page-wise ordering and its
+  tail-page-only duplicate check are all that ascent, and the third is the
+  dangerous one — a page opening below an id already on its predecessor
+  would admit a duplicate pk with no error at all. `BTREE` is the storage
+  that takes keys in any order, and the refusal says so.
+- **A `DELETE`d row's primary key cannot be re-supplied.** On a btree
+  relation the uniqueness check scans the landing leaf's live slots and a
+  delete-marked slot is live until retirement — and nothing retires (see
+  reclamation above). On a heap relation the mark never falls, so a
+  deleted key is below it and refused for that reason instead. Consistent
+  with K1 issue-once either way, and a restriction a caller doing
+  delete-then-reinsert will meet.
 
 ## SQL surface and protocol
 
@@ -906,7 +918,10 @@ still waits on its own gate, so:
   page-wise `min_key` ordering. `Step::emit_in_key_order` is set only when
   the statement asked for pk order *and* the relation is `EXPLICIT`; the
   walk is untouched everywhere else. Covered by emission-order tests,
-  including under `LIMIT`/`OFFSET`.
+  including under `LIMIT`/`OFFSET`. **Narrowed 2026-08-25**: the second
+  conjunct now reads `key_order == kUnordered` — has this relation ever
+  taken a key below its mark — rather than a declared mode, so a btree
+  relation fed only ascending keys pays nothing where the mode charged it.
 - **`IN (value list)`** is unbuilt — the open half of parser workplan V08;
   it currently reports "expected a subquery".
 - **Per-transaction durability class** is a KWP/1 protocol field; the text

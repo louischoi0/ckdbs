@@ -358,7 +358,8 @@ decisions, never by relaxing the refusal.
 
 ### 6b. Inserts and the Tail — Id-Block-Aligned Spreading (v2, R4)
 
-In `ASSIGNED` mode ids ascend, so every INSERT targets the relation's
+When an `INSERT` omits its key the engine issues an ascending one, so
+every such INSERT targets the relation's
 maximum id — the tail range — and naive range ownership spreads reads
 while leaving inserts single-core, which for insert-heavy OLTP concedes
 the headline number. The answer is built from the row-id block leases
@@ -377,8 +378,12 @@ the tails; R3/R4 owns building the second. Consequences, stated now:
   invariant 11's 2026-08-11 amendment (`docs/heap-and-tuple.md` §4.1:
   "monotonicity is now per-relation, never engine-wide") one level
   down, and it needs the same loud documentation when built (R4).
-- `EXPLICIT`-mode relations spread naturally — the caller's ids need
-  not ascend — and need none of this.
+- A **btree** relation whose caller names its keys spreads naturally —
+  those ids need not ascend — and needs none of this. A **heap**
+  relation does not get that for free even when the caller names its
+  keys: since 2026-08-25 they must still be at or above the mark
+  (`docs/heap-and-tuple.md` §4.1), which is the same tail this section
+  is about. The spreading problem is the chain's, not the issuer's.
 - Whether interleaved blocks are the default or opt-in is `[OPEN]`
   (§9): a single-writer relation gains nothing from them.
 

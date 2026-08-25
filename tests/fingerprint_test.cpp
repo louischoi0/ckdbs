@@ -372,11 +372,13 @@ TEST(FingerprintTest, ABareNumericIsTheQuotedStringOfItsSpelling) {
 }
 
 TEST(FingerprintTest, TheKeyModeWordNeededNoFingerprintVersionBump) {
-    // PK03 (docs/heap-and-tuple.md §4.1). The easy half of the bump rule:
-    // `ASSIGNED` and `EXPLICIT` are new *syntax* - they lexed as ordinary
-    // identifiers before and they hash as ordinary identifiers now, and no
-    // statement that parses today contains one, so no hash moves. The
-    // version therefore does not move either.
+    // PK03, and its removal in 2026-08-25 (docs/heap-and-tuple.md §4.1) -
+    // one test, because both directions are the easy half of the bump rule.
+    // `ASSIGNED` and `EXPLICIT` lexed as ordinary identifiers before either
+    // change and hash as ordinary identifiers after: adding them moved no
+    // hash because no parsing statement contained one, and refusing
+    // `ASSIGNED` moves none because a statement that no longer parses no
+    // longer hashes at all. The version therefore stays put through both.
     //
     // This is here so that a later change which *does* move a hash cannot
     // pass by leaving the version alone quietly: the golden corpus pins the

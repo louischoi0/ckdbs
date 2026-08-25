@@ -263,11 +263,17 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         isolation = parsed.value();
     }
     if (file.Has("default_key_mode")) {
-        auto v = file.GetString("default_key_mode");
-        if (!v.ok()) return v.status();
-        auto parsed = catalog::ParseKeyMode(v.value());
-        if (!parsed.ok()) return parsed.status();
-        default_key_mode = parsed.value();
+        // Still *known*, so the refusal can say what happened rather than
+        // "unknown key". The setting decided what a CREATE TABLE naming no
+        // key-mode word meant; there is no longer a mode for it to decide
+        // (docs/heap-and-tuple.md section 4.1), and an instance that kept
+        // the line would be reading a preference the engine cannot honor
+        // either way - which is the misunderstanding this file's
+        // unknown-key rule exists to prevent.
+        return Status::Unsupported(
+            "config key 'default_key_mode' no longer exists: every relation takes a "
+            "caller-supplied primary key or issues one when INSERT omits it, so there is no "
+            "default to set - remove the line");
     }
     if (file.Has("waystone_replay")) {
         auto v = file.GetBool("waystone_replay");
@@ -837,8 +843,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
         expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
         &*expeditor->txn_manager_, expeditor->config_.isolation, /*core_id=*/0,
-        expeditor->config_.indexes, expeditor->config_.max_insert_rows,
-        expeditor->config_.default_key_mode);
+        expeditor->config_.indexes, expeditor->config_.max_insert_rows);
     expeditor->dispatcher_->set_aggregate_limits(
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});

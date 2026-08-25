@@ -65,7 +65,7 @@ protected:
             schema.columns.push_back(row);
         }
         auto created = boot_->catalog.CreateTable(catalog::kNamespacePublic, ct.table_name, schema,
-                                                  ct.clustered, catalog::KeyMode::kAssigned);
+                                                  ct.clustered);
         ASSERT_TRUE(created.ok()) << created.status().message();
     }
 

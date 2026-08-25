@@ -448,9 +448,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // The PW1c interim DML guard stood here from 2026-08-24 until PW1c-5
     // removed it the same day. What replaced it, so its removal is not a
     // hole: `CheckWriteAffinity`'s shape gate refuses the still-unsound
-    // shapes by name (EXPLICIT-keyed, FK-linked, cabined, assertion-covered
-    // - each citing the task that lifts it; btree lifted at PW2-4 and
-    // indexed at PW1c-6b-4), the multi-row VALUES path refuses on a
+    // shapes by name (FK-linked, cabined, assertion-covered
+    // - each citing the task that lifts it; btree lifted at PW2-4, indexed at
+    // PW1c-6b-4, and the key mode gone entirely 2026-08-25 - a
+    // caller-named pk is now refused per row in InsertOneRow), the
+    // multi-row VALUES path refuses on a
     // peer before touching the catalog page, and the store's `MayWrite`
     // is enforced for leased stores in **every** build now, not Debug
     // alone - so an unfunded write is refused retryably instead of
@@ -1076,13 +1078,9 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
         }
 
         catalog::Schema schema;
-        // kAssigned by name: this legacy command has no syntax for a key mode
-        // and is not gaining one (the SQL path owns DDL surface), so the
-        // relation it makes is engine-keyed and says so.
         DdlScope ddl = DdlScopeFor(scope);
         auto oid = catalog_.CreateTable(catalog::kNamespacePublic, args, schema,
-                                         catalog::ClusteredType::kHeap,
-                                         catalog::KeyMode::kAssigned, ddl.trx_id, ddl.sink());
+                                         catalog::ClusteredType::kHeap, ddl.trx_id, ddl.sink());
         NoteDdlRows(ddl);  // before the status, for the partial-write reason above
         if (!oid.ok()) {
             return {"ERR " + oid.status().message(), false};
@@ -1147,7 +1145,13 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     std::ostringstream os;
     os << "oid=" << oid.value() << " root_page_id=" << current_root
        << " clustered_type=" << clustered
-       << " key_mode=" << catalog::KeyModeName(table_row.value().key_mode)
+       // Where `key_mode=` used to print a declaration, this prints an
+       // observation (docs/heap-and-tuple.md §4.1): whether any id has landed
+       // below the mark, which is what decides whether a page's slot order is
+       // still its key order. Kept on the line rather than dropped, because
+       // the question someone reads this line for - "can I trust the pk order
+       // of a walk here" - is the one it now answers.
+       << " key_order=" << catalog::KeyOrderName(table_row.value().key_order)
        << " next_id=" << table_row.value().next_id
        << " owner_core=" << table_row.value().owner_core
        << " columns=" << schema.columns.size();
@@ -1213,19 +1217,17 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
         // stored flag - heap-and-tuple.md section 4 makes it positional.
         const bool is_pk = i == 0;
 
-        // The pk is autoincrement only where the engine is the one issuing
-        // it. On an EXPLICIT relation the caller names the id and the
-        // cursor is merely admitted past it (heap-and-tuple.md section 4.1),
-        // so `yes` here would describe a sequence that never runs - and a
-        // field that is convenient to print is not a reason to print
-        // something untrue.
-        const bool autoincrement =
-            is_pk && table_row.value().key_mode == catalog::KeyMode::kAssigned;
+        // Neither `yes` nor `no` is true of a pk any more, and printing
+        // either would be printing something untrue for a field's
+        // convenience: the sequence runs when the INSERT omits the key and
+        // does not when the INSERT names one, and both are legal on every
+        // relation (heap-and-tuple.md section 4.1). So the pk says which -
+        // `if-omitted` - and every other column keeps the `no` it always had.
         os << "\\n"
            << "pos=" << col.pos << " name=" << catalog::NameView(col.name) << " type=" << type_name
            << " notnull=" << (col.notnull ? "yes" : "no")
            << " pk=" << (is_pk ? "yes" : "no")
-           << " autoincrement=" << (autoincrement ? "yes" : "no");
+           << " autoincrement=" << (is_pk ? "if-omitted" : "no");
 
         // The declared cabin policy (docs/feat-cabin.md), printed for every
         // non-pk column. The *effective* value, so `auto` covers both "the
@@ -2676,56 +2678,22 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                       parent_oid.value(), col.references_table});
         }
 
-        // ---- Resolving the two trailing words (docs/heap-and-tuple.md §4.1) --
+        // ---- Storage (docs/heap-and-tuple.md §4.1) --------------------------
         //
-        // A written word always wins; `default_key_mode` decides only what
-        // silence means. The instance-wide setting exists so a database whose
-        // keys come from outside says so once instead of on every statement,
-        // and it must never be able to change what a statement that *did* name
-        // a mode does.
-        const catalog::KeyMode key_mode =
-            stmt.key_mode_given ? stmt.key_mode : default_key_mode_;
-
-        // Storage follows the resolved mode when the statement named neither.
-        // An explicit relation must be btree-clustered, so under an explicit
-        // default a bare `CREATE TABLE t (...)` has to mean BTREE EXPLICIT -
-        // otherwise the default would be a configuration whose every
-        // unqualified statement is refused, which is not a default at all.
-        // A written storage word still wins, including one that contradicts the
-        // mode: that is the refusal below, and it belongs to the writer.
+        // One trailing word decides anything now. The key mode was removed
+        // 2026-08-25, and with it the whole resolution that used to live here:
+        // an instance-wide `default_key_mode`, a storage default that moved
+        // with it, and the EXPLICIT-implies-BTREE refusal that made the pair
+        // consistent. A relation's storage is the writer's word or the heap,
+        // and what a heap cannot do with a *supplied* id is refused per id by
+        // `AdmitExplicitRowId` - so no `CREATE TABLE` shape is refused for a
+        // key-mode reason at all.
         const catalog::ClusteredType clustered =
-            stmt.clustered_given ? stmt.clustered
-            : (key_mode == catalog::KeyMode::kExplicit ? catalog::ClusteredType::kBtree
-                                                       : catalog::ClusteredType::kHeap);
+            stmt.clustered_given ? stmt.clustered : catalog::ClusteredType::kHeap;
 
-        // **An EXPLICIT relation must be BTREE-clustered**, and the refusal is
-        // here rather than in the parser because it is a statement about where
-        // rows can be put, not about how the words go together: the grammar
-        // takes the two trailing words in either order and neither one's
-        // meaning depends on the other. Unsupported, not InvalidArgument - the
-        // combination is understood and declined.
-        //
-        // Only reachable now when the writer named the storage themselves,
-        // since the resolution above never pairs an explicit mode with a heap
-        // it chose. The byte points at the key-mode word when there is one and
-        // at the statement's start when the mode came from configuration - a
-        // refusal about a word nobody wrote has no byte of its own to name.
-        if (key_mode == catalog::KeyMode::kExplicit &&
-            clustered != catalog::ClusteredType::kBtree) {
-            return {ErrorReply(Status::Unsupported(
-                        "an EXPLICIT relation must be BTREE (byte " +
-                        std::to_string(stmt.key_mode_byte_offset) +
-                        ") - a supplied id is not drawn from the cursor, so placing it and proving "
-                        "it unique both need a descent, and a heap chain grows only at its tail")),
-                    false};
-        }
-
-        // Passed by name rather than defaulted, per PK01's rule: a defaulted
-        // mode is how the wrong one reaches a relation without anyone reading
-        // the line.
         DdlScope ddl = DdlScopeFor(scope);
         auto oid = catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema,
-                                         clustered, key_mode, ddl.trx_id, ddl.sink());
+                                         clustered, ddl.trx_id, ddl.sink());
         // Registered before the status is read: a create that failed partway
         // still left rows on the page, and those are exactly the rows a
         // rollback has to retire.
@@ -2994,9 +2962,11 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     }
     // PW1c-5's shape gate, a **whitelist**: on a peer, a write is admitted
     // only where the PW1c-4 grants and this core's own extent lease make it
-    // sound - an ASSIGNED-keyed relation, clustered either way (the btree
-    // arm lifted at PW2-4), whose only secondary structure is an
-    // owner-built index (PW1c-6b-4). The interim guard this
+    // sound - any relation, clustered either way (the btree arm lifted at
+    // PW2-4), whose only secondary structure is an owner-built index
+    // (PW1c-6b-4). The key-mode arm lifted with the mode (2026-08-25) and
+    // its refusal is per row in `InsertOneRow`, so this gate no longer says
+    // anything about keys at all. The interim guard this
     // replaced indicted its own blacklist shape ("a page-writing verb
     // added later is admitted by omission"), and the first form of this
     // gate repeated it one level down - it missed assertions, whose entry
@@ -3041,20 +3011,19 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // core 0's, and the backstop is the store's: `MayWrite` refuses a
         // page carrying neither this lease, a grant, nor this stream's
         // stamp, so the ending is a refused write, never a torn tree.
-        // EXPLICIT stays
-        // refused: AdmitExplicitRowId persists the id ceiling on the
-        // catalog page, which a peer may never write.
-        const bool funded_shape = access.key_mode == catalog::KeyMode::kAssigned &&
-                                  access.fkeys_out.empty() && access.fkeys_in.empty() &&
+        //
+        // **The key-mode arm lifted 2026-08-25** with the mode itself
+        // (heap-and-tuple.md §4.1). What it was really refusing was the
+        // catalog write `AdmitExplicitRowId` makes, and that is a property of
+        // the *row*, not of the relation: a row omitting its pk draws from
+        // this core's lease and writes no catalog page at all. So the
+        // refusal moved to `InsertOneRow`, where the supplied id is in hand -
+        // which admits every peer write this gate used to refuse for having
+        // the wrong mode declared, and refuses exactly the rows that would
+        // have needed the system core's page.
+        const bool funded_shape = access.fkeys_out.empty() && access.fkeys_in.empty() &&
                                   !any_cabin && !enforcer_.AnyOn(access.oid);
         if (!funded_shape) {
-            if (access.key_mode == catalog::KeyMode::kExplicit) {
-                return Status::Unsupported(
-                    "an EXPLICIT-keyed relation cannot take writes on core " +
-                    std::to_string(core_id_) +
-                    ": admitting a caller-supplied id persists the ceiling on the catalog "
-                    "page, the system core's (workplan-peer-writer.md §7a)");
-            }
             if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
                 return Status::Unsupported(
                     "an FK-linked relation cannot take writes on core " +
@@ -3315,7 +3284,18 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     //
     // Page-at-a-time placement and one image per touched page, engaged
     // only inside T3-2's gate; everything else takes the row loop below.
-    if (bulk && SortedFillEligible(*ta, oid.value())) {
+    //
+    // The per-statement half of that gate: the fill carves one contiguous id
+    // range up front, so a row that names its own key has no place in it.
+    // Checked over the rows rather than off the relation since 2026-08-25
+    // (heap-and-tuple.md §4.1) - naming a key is a property of the row now.
+    // Ineligibility, not a refusal: a statement that names keys still runs,
+    // through the ordinary per-row path below.
+    const std::size_t fill_arity = ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
+    const bool every_row_omits_pk =
+        std::all_of(stmt.rows.begin(), stmt.rows.end(),
+                    [&](const std::vector<parser::AstValue>& r) { return r.size() == fill_arity; });
+    if (bulk && every_row_omits_pk && SortedFillEligible(*ta, oid.value())) {
         return SortedFillInner(stmt, oid.value(), *ta, scope);
     }
 
@@ -3351,12 +3331,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
 
 bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
                                            catalog::Oid oid) const {
-    // kAssigned is not implied by kHeap, even though an EXPLICIT relation
-    // must be btree-clustered and so cannot reach here through DDL: the
-    // catalog can be driven directly, and this path's whole shape - one
-    // contiguous id range carved up front, appended in order - is wrong for
-    // ids the caller names. Stated rather than inherited, so the coupling
-    // cannot be broken silently from the other end.
+    // The key-mode clause is gone with the mode (heap-and-tuple.md §4.1) and
+    // is **replaced by a per-statement one at the call site**, not deleted:
+    // this path's whole shape is one contiguous id range carved up front and
+    // appended in order, which is wrong for any id the caller names. Whether
+    // a caller names one is a fact about the rows now, so the caller checks
+    // the rows; what is left here is the relation-shaped half.
     // PW1c-5 (revised at the 25059bf review's S-1): the sorted fill's id
     // block is AllocateRowIdRange's, straight off the catalog page a peer
     // may never write - so a peer takes the ordinary per-row path, which
@@ -3364,8 +3344,8 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
     // refusal: the first form refused the statement whole, which was
     // false of what the per-row path could do.
     return !catalog_read_only_ && ta.clustered_type == catalog::ClusteredType::kHeap &&
-           ta.key_mode == catalog::KeyMode::kAssigned && ta.varheap_page_id == kInvalidPageId &&
-           ta.indexes.empty() && ta.cabin_mask == 0 && !enforcer_.AnyOn(oid);
+           ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
+           !enforcer_.AnyOn(oid);
 }
 
 DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stmt,
@@ -3380,11 +3360,12 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         const auto& values = stmt.rows[k];
         std::string err;
-        if (ncols > 0 && values.size() == ncols) {
-            err = "ERR do not supply a value for primary-key column '" +
-                  std::string(catalog::NameView(ta.schema.columns.front().name)) +
-                  "' - it is autoincrement and engine-assigned";
-        } else if (ncols > 0 && values.size() != ncols - 1) {
+        // Arity is the caller's gate, not this one's: the fill is entered
+        // only when every row omits its pk, because the id range it carves
+        // leaves no room for a key a caller named (heap-and-tuple.md §4.1).
+        // Restated here as checked redundancy - a row of the wrong length
+        // would otherwise be encoded against the wrong column positions.
+        if (ncols > 0 && values.size() != ncols - 1) {
             err = "ERR expected " + std::to_string(ncols - 1) +
                   " value(s) after the primary key, got " + std::to_string(values.size());
         } else if (!ta.fkeys_out.empty()) {
@@ -3485,52 +3466,45 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
 
     // ---- Arity, and where the pk comes from -----------------------------
     //
-    // Which one of these is right is the relation's key mode
-    // (docs/heap-and-tuple.md section 4.1), fixed at CREATE TABLE:
+    // **Two arities, and the row picks** (docs/heap-and-tuple.md section
+    // 4.1). Until 2026-08-25 this was one arity fixed at CREATE TABLE by the
+    // key mode; the mode is gone and both counts are legal on every relation:
     //
-    //   kAssigned - the engine issues the id, so VALUES supplies the columns
-    //               *after* it and naming the pk is refused.
-    //   kExplicit - the caller names the id, so VALUES supplies every column
-    //               starting with it and omitting the pk is refused.
+    //   ncols     - the caller names the key. values[0] is the pk, and the
+    //               rest are the columns after it.
+    //   ncols - 1 - the caller omits it. The engine issues one from the
+    //               relation's cursor, exactly as an ASSIGNED relation's
+    //               INSERT always did, and every value is a body column.
     //
-    // One arity per relation, never two: INSERT is positional with no column
-    // list, so a relation that accepted both counts could not say which of
-    // them a wrong-length row meant.
+    // The two counts cannot be confused, which is what makes accepting both
+    // honest rather than ambiguous: INSERT is positional with no column list
+    // and no body column may be omitted individually, so a row's length names
+    // one reading and not the other. The old rule's stated reason for one
+    // arity per relation - that a relation taking both counts could not say
+    // which a wrong-length row meant - was about a relation whose two
+    // readings had the same length, and no relation does.
     const std::size_t ncols = ta.schema.columns.size();
-    const bool explicit_key = ta.key_mode == catalog::KeyMode::kExplicit;
-    const std::size_t want = explicit_key ? ncols : ncols - 1;
+    const bool explicit_key = ncols > 0 && values.size() == ncols;
 
-    if (ncols > 0 && values.size() != want) {
-        // The two common mistakes get the message that names the rule rather
-        // than the count, because the count alone reads as an off-by-one.
-        if (!explicit_key && values.size() == ncols) {
-            return "ERR do not supply a value for primary-key column '" +
-                   std::string(catalog::NameView(ta.schema.columns.front().name)) +
-                   "' - it is autoincrement and engine-assigned";
-        }
-        if (explicit_key && values.size() == ncols - 1) {
-            return "ERR supply a value for primary-key column '" +
-                   std::string(catalog::NameView(ta.schema.columns.front().name)) +
-                   "' - this relation is EXPLICIT, so the caller names its keys";
-        }
-        // Any other arity error, *before* the id: the codec would refuse
-        // this row at encode, which sits after the id is settled - and BI9's
-        // rule is that a refused row burns nothing. Same spelling as the
-        // codec's own check (row_codec.cpp), which stays the authority on
-        // everything deeper; this is only the count, hoisted above the burn.
-        return "ERR expected " + std::to_string(want) + " value(s)" +
-               (explicit_key ? " including the primary key" : " after the primary key") +
-               ", got " + std::to_string(values.size());
+    if (ncols > 0 && values.size() != ncols && values.size() != ncols - 1) {
+        // Before the id: the codec would refuse this row at encode, which
+        // sits after the id is settled - and BI9's rule is that a refused row
+        // burns nothing. Both accepted counts are named, because with two of
+        // them a single number reads as an off-by-one against the wrong one.
+        return "ERR expected " + std::to_string(ncols) + " value(s) including primary-key column '" +
+               std::string(catalog::NameView(ta.schema.columns.front().name)) + "', or " +
+               std::to_string(ncols - 1) + " to have it issued; got " +
+               std::to_string(values.size());
     }
 
-    // On an explicit relation the pk is values[0] and the body is the rest.
-    // Split here, once, so everything downstream - the FK check, assertion
-    // admission, EncodeRow, the Cabin witness, index maintenance - keeps
-    // receiving exactly the shape it already expects: the columns after the
-    // key. The copy is paid only by explicit relations, and only per row.
+    // When the row names its key, the pk is values[0] and the body is the
+    // rest. Split here, once, so everything downstream - the FK check,
+    // assertion admission, EncodeRow, the Cabin witness, index maintenance -
+    // keeps receiving exactly the shape it already expects: the columns after
+    // the key. The copy is paid only by a row that names its key.
     std::vector<parser::AstValue> body_storage;
     std::uint64_t supplied_id = 0;
-    if (explicit_key && ncols > 0) {
+    if (explicit_key) {
         const parser::AstValue& key = values.front();
         if (key.type != parser::ValueType::kInt) {
             return "ERR primary-key column '" +
@@ -3577,12 +3551,26 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         return ErrorReply(s);
     }
 
-    // The id, from whichever source the mode names. Both sit at exactly this
-    // point in the statement - after admission, before the encode - so a
-    // refused row still burns nothing either way, and the explicit path
+    // The id, from whichever source *this row* named. Both sit at exactly
+    // this point in the statement - after admission, before the encode - so a
+    // refused row still burns nothing either way, and the supplied path
     // advances the relation's high-water mark rather than drawing from it.
     std::uint64_t row_id = 0;
     if (explicit_key) {
+        // PW1c-5's shape gate used to refuse the whole relation here
+        // (CheckWriteAffinity); the refusal is per row now, because that is
+        // what it was always about. Admitting a supplied id writes the
+        // relation's sys.tables row - the mark, or the key-order flip - and
+        // that page is the system core's. A row that omits its pk writes no
+        // catalog page at all: AllocateRowId below draws from this core's
+        // lease, which is why the omitted arity needs no gate.
+        if (catalog_read_only_) {
+            return ErrorReply(Status::Unsupported(
+                "a caller-supplied primary key cannot be written on core " +
+                std::to_string(core_id_) +
+                ": admitting one writes the relation's catalog row, the system core's page "
+                "(workplan-peer-writer.md §7a) - omit the key and this core issues one"));
+        }
         if (Status s = catalog_.AdmitExplicitRowId(oid, supplied_id); !s.ok()) {
             return ErrorReply(s);
         }
@@ -4685,7 +4673,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // `sorted()` and not `stmt.order_by.empty()`: an `ORDER BY <pk> ASC`
     // the compiler elided asks for the order this path already returns, so
     // it stays eligible - **except** when the elision leaned on
-    // `emit_in_key_order`. That flag is how a `kExplicit` relation's walk
+    // `emit_in_key_order`. That flag is how an out-of-order-keyed relation's walk
     // is made to emit in key order (heap-and-tuple.md §4.1), and
     // `EncodeStepDescriptor` does not carry it, so a shipped step would
     // walk in slot order and answer the clause wrongly. Refused here rather

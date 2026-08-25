@@ -141,11 +141,9 @@ public:
         catalog_->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
 
         auto outer = catalog_->CreateTable(catalog::kNamespacePublic, "ta",
-                                           TwoColumns("b_id"), catalog::ClusteredType::kBtree,
-                                           catalog::KeyMode::kAssigned);
+                                           TwoColumns("b_id"), catalog::ClusteredType::kBtree);
         auto inner = catalog_->CreateTable(catalog::kNamespacePublic, "tb", TwoColumns("qty"),
-                                           catalog::ClusteredType::kBtree,
-                                           catalog::KeyMode::kAssigned);
+                                           catalog::ClusteredType::kBtree);
         if (!outer.ok() || !inner.ok()) return false;
 
         auto row = catalog_->GetSysTableRow(outer.value());

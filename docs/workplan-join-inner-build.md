@@ -103,7 +103,7 @@ per-key chains, `Find` returns a `Bucket` by value, and an index-held
 Bucket survives every `Add`, its own key's included). The walk-order
 pin includes the discriminating case: a map that sorted by pk the way
 the Cabin's recording does would pass every other test and change
-replies on an `EXPLICIT` relation.
+replies on a relation whose keys have gone out of order.
 
 `include/kds/exec/inner_build.hpp` (new; header-only). The landing A/B
 measured +2.2–2.7% on the two walked correlated cells and the finding
@@ -121,8 +121,8 @@ redesigning one. **Buckets append in walk order** and a probe replays a
 bucket front to back; that single property is spec §3's third fact, so
 it gets its own pin rather than riding on an integration test.
 
-*Done when:* a unit test pins per-key walk-order replay; both key modes
-covered (`ASSIGNED` pk order, `EXPLICIT` page-slot order — build order
+*Done when:* a unit test pins per-key walk-order replay; both orders
+covered (pk order while ascending, page-slot order once unordered — build order
 *is* walk order, whichever that is).
 
 ## JB3 — the lazy build
@@ -283,7 +283,7 @@ walk needs to start mid-relation, so `RunWalkStep` takes an optional
 covered, **in the page's own emission order**. Rows, not slots, because
 `emit_in_key_order` sorts a page by Keystone id before emitting it —
 counting slots would resume in the wrong place on exactly the relations
-(`EXPLICIT` key mode) whose order the sort exists to fix. Every
+(those with `key_order = kUnordered`) whose order the sort exists to fix. Every
 accepted tuple of every walk now goes through one `accept` lambda that
 owns the ordinal, so the count a resume skips cannot drift from the
 count a mark recorded. The mark's soundness rests on the same

@@ -160,7 +160,19 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // 14 -> 15 (2026-08-24): SysTableRow grew `anchor_page_id` (PW2-1) - four
 // bytes, and Decode refuses any size but the exact one, so without the
 // bump a pre-anchor file would mount and fail on its first catalog read
-// naming a size instead of a version (key_mode's precedent, verbatim).
+// naming a size instead of a version (the key-mode byte's precedent,
+// verbatim).
+//
+// **No bump on 2026-08-25, and the reason is worth recording** because this
+// list is where a missed one would be found. The key mode was removed
+// (docs/heap-and-tuple.md section 4.1), and the byte the 13 -> 14 entry
+// above bought was **repurposed in place** rather than dropped: same offset,
+// same width, and `SysTableRow::key_order` reads the two old values as the
+// facts they already implied - kAssigned's 0 as "every id here ascended",
+// kExplicit's 1 as "an id landed out of order". `kOnDiskSize` did not move,
+// so `Decode` accepts a version-15 file and every row in it means what it
+// meant. Dropping the byte instead would have been the seventh break on
+// this list, and it would have bought nothing: the flag has a live reader.
 inline constexpr std::uint32_t kSuperBlockVersion = 15;
 
 // ---- On-disk field layout ----------------------------------------------

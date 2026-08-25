@@ -166,7 +166,7 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
     EXPECT_NE(out.response.find("name=id type=int32"), std::string::npos) << out.response;
     EXPECT_NE(out.response.find("name=name type=varchar"), std::string::npos) << out.response;
     // Column 0 is the Keystone pk; nothing else is.
-    EXPECT_NE(out.response.find("name=id type=int32 notnull=yes pk=yes autoincrement=yes"),
+    EXPECT_NE(out.response.find("name=id type=int32 notnull=yes pk=yes autoincrement=if-omitted"),
               std::string::npos)
         << out.response;
     EXPECT_NE(out.response.find("pk=no autoincrement=no"), std::string::npos) << out.response;
@@ -174,36 +174,42 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
     EXPECT_EQ(out.response.find('\n'), std::string::npos);
 }
 
-// ---- The key mode in DESCRIBE (PK06, heap-and-tuple.md §4.1) ------------
+// ---- The key order in DESCRIBE (heap-and-tuple.md §4.1) -----------------
 //
-// Two facts, and the second is the reason the first is printed at all:
-// which mode the relation was created in, and whether its pk column is
-// something the engine issues.
+// `key_mode=` was a declaration and is gone with the mode. `key_order=` is
+// an observation in the same position, and the pk column's `autoincrement=`
+// is now `if-omitted` on every relation - the sequence runs when the INSERT
+// omits the key and does not when the INSERT names one, and both are legal
+// everywhere, so neither `yes` nor `no` would be true.
 
-TEST_F(CommandDispatcherTest, DescribeReportsAnAssignedRelationsKeyMode) {
+TEST_F(CommandDispatcherTest, DescribeReportsANewRelationAsAscending) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, qty int64)").response.substr(0, 7),
               "CREATED");
 
     auto out = d.Dispatch("DESCRIBE acct");
-    // Beside the storage, which is the other DDL-only fact on the line.
-    EXPECT_NE(out.response.find("clustered_type=HEAP key_mode=ASSIGNED"), std::string::npos)
+    // Beside the storage, which is the DDL-only fact on the line.
+    EXPECT_NE(out.response.find("clustered_type=HEAP key_order=ascending"), std::string::npos)
         << out.response;
-    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=yes"),
+    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted"),
               std::string::npos)
         << out.response;
 }
 
-TEST_F(CommandDispatcherTest, DescribeReportsAnExplicitRelationsKeyMode) {
+TEST_F(CommandDispatcherTest, DescribeReportsUnorderedAfterABelowMarkKey) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto created = d.Dispatch("CREATE TABLE t (id int64, qty int64) BTREE EXPLICIT");
+    auto created = d.Dispatch("CREATE TABLE t (id int64, qty int64) BTREE");
     ASSERT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
 
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 1)").response.substr(0, 8), "INSERTED");
+    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("key_order=ascending"), std::string::npos);
+
+    // Below the mark 100 left behind: admitted, and the line changes.
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (50, 2)").response.substr(0, 8), "INSERTED");
     auto out = d.Dispatch("DESCRIBE t");
-    EXPECT_NE(out.response.find("clustered_type=BTREE key_mode=EXPLICIT"), std::string::npos)
+    EXPECT_NE(out.response.find("clustered_type=BTREE key_order=unordered"), std::string::npos)
         << out.response;
-    // Still the pk - the caller names it, so nothing autoincrements it.
-    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=no"),
+    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted"),
               std::string::npos)
         << out.response;
 }
@@ -406,27 +412,22 @@ TEST_F(CommandDispatcherTest, CreateTableAcceptsAnExplicitBtreeRelation) {
               "CREATED ");
 }
 
-TEST_F(CommandDispatcherTest, CreateTableRefusesAnExplicitHeapRelation) {
+TEST_F(CommandDispatcherTest, CreateTableNoLongerRefusesAnExplicitHeapRelation) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
 
-    // The contradiction the *writer* stated: a heap was asked for by name
-    // and an explicit relation cannot live on one.
+    // The contradiction this test was written for is gone (§4.1): a heap
+    // relation takes a caller-named key, provided the key ascends, so there
+    // is no pairing of the two words left to refuse.
     auto spelled = d.Dispatch("CREATE TABLE t (id int64) HEAP EXPLICIT");
-    EXPECT_EQ(spelled.response.substr(0, 4), "ERR ") << spelled.response;
-    EXPECT_NE(spelled.response.find("must be BTREE"), std::string::npos) << spelled.response;
-    EXPECT_NE(spelled.response.find("byte 31"), std::string::npos) << spelled.response;
+    EXPECT_EQ(spelled.response.substr(0, 7), "CREATED") << spelled.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("clustered_type=HEAP"), std::string::npos);
 
-    // Refused before anything is written: the refusal leaves no relation.
-    EXPECT_EQ(d.Dispatch("DESCRIBE t").response.substr(0, 4), "ERR ");
-
-    // A bare EXPLICIT is **not** the same statement, and is no longer
-    // refused. The writer named a mode and said nothing about storage, and
-    // there is exactly one storage an explicit relation can use - so
-    // resolving to it is deduction, not a guess. Refusing this used to
-    // punish a statement for an unstated default it never mentioned.
-    auto implied = d.Dispatch("CREATE TABLE t (id int64) EXPLICIT");
+    // And a bare EXPLICIT no longer pulls storage to btree with it - that
+    // resolution existed only to keep the refusal above reachable from a
+    // written word alone.
+    auto implied = d.Dispatch("CREATE TABLE t2 (id int64) EXPLICIT");
     EXPECT_EQ(implied.response.substr(0, 7), "CREATED") << implied.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("clustered_type=BTREE key_mode=EXPLICIT"),
+    EXPECT_NE(d.Dispatch("DESCRIBE t2").response.find("clustered_type=HEAP key_order=ascending"),
               std::string::npos);
 }
 
@@ -474,17 +475,22 @@ TEST_F(CommandDispatcherTest, InsertAssignsAscendingIdsWithoutTheCallerSupplying
     EXPECT_NE(rows.response.find("2,bob"), std::string::npos) << rows.response;
 }
 
-TEST_F(CommandDispatcherTest, SupplyingThePrimaryKeyOnInsertIsRefused) {
+TEST_F(CommandDispatcherTest, SupplyingThePrimaryKeyOnInsertIsAdmittedAndMovesTheMark) {
+    // The inverse of what this test asserted until 2026-08-25 (§4.1). The
+    // mark is the part worth keeping: a named key moves it, so the next
+    // issued id clears the named one instead of colliding with it.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
               "CREATED");
 
-    auto out = d.Dispatch("INSERT INTO acct VALUES (1, 'alice')");
-    EXPECT_EQ(out.response.substr(0, 4), "ERR ") << out.response;
-    EXPECT_NE(out.response.find("primary-key column 'id'"), std::string::npos) << out.response;
+    auto out = d.Dispatch("INSERT INTO acct VALUES (7, 'alice')");
+    EXPECT_NE(out.response.find("id=7"), std::string::npos) << out.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE acct").response.find("next_id=8"), std::string::npos);
 
-    // Nothing was written, and no id was burned.
-    EXPECT_NE(d.Dispatch("DESCRIBE acct").response.find("next_id=1"), std::string::npos);
+    // A refused key still burns nothing: below the mark on a heap relation.
+    auto refused = d.Dispatch("INSERT INTO acct VALUES (3, 'bob')");
+    EXPECT_EQ(refused.response.substr(0, 4), "ERR ") << refused.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE acct").response.find("next_id=8"), std::string::npos);
 }
 
 TEST_F(CommandDispatcherTest, RepeatedInsertsOfTheSameValuesGetDistinctKeys) {

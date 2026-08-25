@@ -257,7 +257,7 @@ public:
     // life a row's address was stable for life (row_codec.hpp). A btree leaf
     // division breaks that: it moves half a leaf's tuples to another page and
     // renumbers the slots of the ones that stay
-    // (`docs/heap-and-tuple.md` §4.1). Only a kExplicit relation can trigger
+    // (`docs/heap-and-tuple.md` §4.1). Only a relation taking an out-of-order key can trigger
     // one mid-statement, but when it does, every entry this transaction
     // recorded earlier names a slot that is out of range or holds a
     // different row - and compensating that blindly is not a failed

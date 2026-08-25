@@ -129,7 +129,7 @@ StatusOr<std::uint64_t> MaxLiveId(heap::PageView& leaf) {
 // covers it, appends land past every key already there, and dead slots keep
 // their position so retirement does not disturb the order.
 //
-// **A kExplicit relation breaks that** (docs/heap-and-tuple.md section 4.1):
+// **A caller-supplied id breaks that** (docs/heap-and-tuple.md section 4.1):
 // a caller-supplied id may sort anywhere, so it can be appended into a slot
 // below its neighbours, and SplitLeafAndInsert redistributes by key rather
 // than by slot position. Which is why the fallback below is not decoration:

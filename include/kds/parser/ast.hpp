@@ -13,7 +13,7 @@
 // AST for the KDS SQL subset. The whole grammar:
 //
 //   CREATE TABLE <name> (<col> <type> [, ...])
-//       [HEAP | BTREE] [ASSIGNED | EXPLICIT];   -- either order, each once
+//       [HEAP | BTREE] [EXPLICIT];   -- either order, each once; EXPLICIT is vacuous
 //   INSERT INTO  <name> VALUES (<val> [, ...]);
 //   SELECT <list> FROM  <rel> [<join>]* [WHERE <cond> [AND <cond>]*]
 //       [GROUP BY <col> [, ...]] [HAVING <hcond> [AND <hcond>]*]
@@ -320,31 +320,18 @@ struct CreateTableStmt {
     std::vector<ColumnDef> columns;
     catalog::ClusteredType clustered = catalog::ClusteredType::kHeap;
 
-    // Who names the relation's pk (docs/heap-and-tuple.md §4.1), from an
-    // optional trailing `ASSIGNED` | `EXPLICIT` word written in the same
-    // slot as the storage clause and in either order with it. kAssigned is
-    // both the default and what every relation predating the amendment is,
-    // so a statement that says nothing means exactly what it always did.
-    catalog::KeyMode key_mode = catalog::KeyMode::kAssigned;
+    // There is no key-mode field. The trailing `ASSIGNED` | `EXPLICIT` word
+    // set one until 2026-08-25; the mode is gone (docs/heap-and-tuple.md
+    // §4.1), so `EXPLICIT` is now accepted as the vacuous statement of what
+    // every relation is and `ASSIGNED` is refused in the parser with its
+    // byte. Neither reaches this struct - there is nothing left for the
+    // dispatcher to resolve.
 
-    // Where the key-mode word was written, for the refusals that point at
-    // it. Which storage a mode can be stored on is a catalog rule rather
-    // than a grammar one, so the dispatcher - not the parser - is what
-    // needs this.
-    std::uint32_t key_mode_byte_offset = 0;
-
-    // Whether the statement *said* either word, as opposed to landing on
-    // the field's default above.
-    //
-    // The two fields cannot answer this themselves: `HEAP` and `ASSIGNED`
-    // are also what an unqualified statement means, so "kHeap" is both "the
-    // writer asked for a heap" and "the writer said nothing". The
-    // dispatcher needs them apart, because an instance-wide default
-    // (`default_key_mode`) applies only to the second - a written word
-    // always wins over configuration, or the statement does not mean what
-    // it says.
+    // Whether the statement *said* a storage word, as opposed to landing on
+    // `clustered`'s default above. The field cannot answer this itself:
+    // `HEAP` is also what an unqualified statement means, so kHeap is both
+    // "the writer asked for a heap" and "the writer said nothing".
     bool clustered_given = false;
-    bool key_mode_given = false;
 };
 
 // The per-statement row cap for a multi-row INSERT (docs/spec-bulkinsert.md

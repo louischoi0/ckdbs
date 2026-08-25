@@ -13,21 +13,30 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// End-to-end cover for the key-mode amendment (docs/heap-and-tuple.md §4.1,
-// docs/workplan-key-mode.md PK07). The unit-level pieces are tested where
-// they live - the catalog gate in catalog_test.cpp, the leaf division in
-// btree_test.cpp, the grammar in parser_test.cpp - and this file is the one
-// place all of them run together, through SQL, the way a caller meets them.
+// End-to-end cover for caller-supplied primary keys (docs/heap-and-tuple.md
+// §4.1). The unit-level pieces are tested where they live - the admission
+// gate in catalog_test.cpp, the leaf division in btree_test.cpp, the grammar
+// in parser_test.cpp - and this file is the one place all of them run
+// together, through SQL, the way a caller meets them.
 //
-// The claim under test is narrow and worth stating plainly: **a caller may
-// name a relation's primary keys, those keys need not ascend, and nothing
-// else about the engine changes.** Everything here is a consequence of that
-// sentence or a refusal that protects it.
+// **The claim moved on 2026-08-25** and the file was renamed with it. It was
+// *a caller may name a relation's primary keys, those keys need not ascend,
+// and nothing else about the engine changes* - a per-relation mode, chosen at
+// CREATE TABLE, btree-only. It is now:
+//
+//   **Every relation takes a caller-supplied primary key or issues one when
+//   the INSERT omits it, per row. On a btree relation the key may sort
+//   anywhere; on a heap one it must not fall below the relation's high-water
+//   mark, because the chain's tail append is that ascent.**
+//
+// Everything here is a consequence of that sentence or a refusal protecting
+// it. The tests that survived the rewrite unchanged are the ones about what
+// a btree does with a descending key, which is the half that did not move.
 
 namespace kds::server {
 namespace {
 
-class KeyModeSqlTest : public ::testing::Test {
+class SuppliedKeySqlTest : public ::testing::Test {
 protected:
     void SetUp() override {
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
@@ -39,17 +48,17 @@ protected:
         return CommandDispatcher(boot_->superblock, boot_->catalog, store_);
     }
 
-    // The relation every test here uses: two columns, caller-keyed, and
-    // btree-clustered because §4.1 requires it of an explicit relation.
-    void CreateExplicit(CommandDispatcher& d, const char* name = "t") {
-        auto out = d.Dispatch(std::string("CREATE TABLE ") + name +
-                              " (id int64, qty int64) BTREE EXPLICIT");
+    // The relation most tests here use: two columns, btree-clustered, which
+    // is the storage that takes a key sorting anywhere. Nothing about keys
+    // is said at CREATE - there is nothing left to say.
+    void CreateBtree(CommandDispatcher& d, const char* name = "t") {
+        auto out =
+            d.Dispatch(std::string("CREATE TABLE ") + name + " (id int64, qty int64) BTREE");
         ASSERT_EQ(out.response.substr(0, 7), "CREATED") << out.response;
     }
 
-    void CreateAssigned(CommandDispatcher& d, const char* name = "a") {
-        auto out = d.Dispatch(std::string("CREATE TABLE ") + name +
-                              " (id int64, qty int64) BTREE ASSIGNED");
+    void CreateHeap(CommandDispatcher& d, const char* name = "a") {
+        auto out = d.Dispatch(std::string("CREATE TABLE ") + name + " (id int64, qty int64) HEAP");
         ASSERT_EQ(out.response.substr(0, 7), "CREATED") << out.response;
     }
 
@@ -57,124 +66,136 @@ protected:
     std::optional<bootstrap::BootstrapResult> boot_;
 };
 
-// ---- The config value ----------------------------------------------------
-
-TEST(KeyModeConfigTest, TheTwoWordsParseInAnyCase) {
-    for (const char* text : {"assigned", "ASSIGNED", "Assigned"}) {
-        auto parsed = catalog::ParseKeyMode(text);
-        ASSERT_TRUE(parsed.ok()) << text << ": " << parsed.status().message();
-        EXPECT_EQ(parsed.value(), catalog::KeyMode::kAssigned) << text;
-    }
-    for (const char* text : {"explicit", "EXPLICIT", "Explicit"}) {
-        auto parsed = catalog::ParseKeyMode(text);
-        ASSERT_TRUE(parsed.ok()) << text << ": " << parsed.status().message();
-        EXPECT_EQ(parsed.value(), catalog::KeyMode::kExplicit) << text;
-    }
-}
-
-TEST(KeyModeConfigTest, TheNameAndTheParserAgree) {
-    // The round trip, so a rename cannot leave a config file that no longer
-    // parses the word DESCRIBE prints.
-    for (catalog::KeyMode mode : {catalog::KeyMode::kAssigned, catalog::KeyMode::kExplicit}) {
-        auto parsed = catalog::ParseKeyMode(catalog::KeyModeName(mode));
-        ASSERT_TRUE(parsed.ok()) << catalog::KeyModeName(mode);
-        EXPECT_EQ(parsed.value(), mode);
-    }
-}
-
-TEST(KeyModeConfigTest, AnUnknownWordIsRefusedNamingWhatWasGiven) {
-    // Not a silent fall back to the default: a misspelled mode would leave
-    // an instance quietly creating the wrong kind of relation, and the first
-    // sign of it would be an INSERT arity refusal nobody can explain.
-    auto parsed = catalog::ParseKeyMode("explict");
-    EXPECT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(parsed.status().message().find("explict"), std::string::npos)
-        << parsed.status().message();
-}
-
-// ---- `default_key_mode`: what silence means ------------------------------
+// ---- The two arities, on one relation ------------------------------------
 //
-// The setting decides what a CREATE TABLE naming no key-mode word does, and
-// nothing else. A written word always wins, or the statement would not mean
-// what it says.
+// The half the mode made impossible: a relation whose INSERTs may name a key
+// or not, row by row.
 
-class ExplicitDefaultTest : public KeyModeSqlTest {
-protected:
-    // The same dispatcher, on an instance configured `default_key_mode =
-    // explicit`.
-    CommandDispatcher Dispatcher() {
-        return CommandDispatcher(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
-                                 /*clock=*/nullptr, /*wal=*/nullptr,
-                                 wal::DurabilityClass::kGroup, exec::Budget(),
-                                 /*recorder=*/nullptr, /*replay_enabled=*/false,
-                                 /*access_statistics=*/true, /*cabins=*/nullptr, /*txn=*/nullptr,
-                                 txn::IsolationLevel::kReadCommitted, /*core_id=*/0,
-                                 /*indexes=*/true, parser::kDefaultMaxInsertRows,
-                                 catalog::KeyMode::kExplicit);
-    }
-};
+TEST_F(SuppliedKeySqlTest, OneRelationTakesBothArities) {
+    auto d = Dispatcher();
+    CreateBtree(d);
 
-TEST_F(ExplicitDefaultTest, ABareCreateTableBecomesExplicitAndBtree) {
+    auto named = d.Dispatch("INSERT INTO t VALUES (500, 11)");
+    EXPECT_NE(named.response.find("id=500"), std::string::npos) << named.response;
+
+    // Omitted on the same relation, in the next statement. The issued id
+    // comes from the mark the supplied one moved, so the two sources cannot
+    // collide.
+    auto issued = d.Dispatch("INSERT INTO t VALUES (22)");
+    EXPECT_NE(issued.response.find("id=501"), std::string::npos) << issued.response;
+
+    // And back again, above the new mark.
+    auto again = d.Dispatch("INSERT INTO t VALUES (900, 33)");
+    EXPECT_NE(again.response.find("id=900"), std::string::npos) << again.response;
+    EXPECT_NE(d.Dispatch("INSERT INTO t VALUES (44)").response.find("id=901"), std::string::npos);
+}
+
+TEST_F(SuppliedKeySqlTest, AWrongArityNamesBothAcceptedCounts) {
+    auto d = Dispatcher();
+    CreateBtree(d);
+
+    // Two legal counts, so a message naming one of them reads as an
+    // off-by-one against whichever the writer did not mean.
+    auto out = d.Dispatch("INSERT INTO t VALUES (1, 2, 3)");
+    EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
+    EXPECT_NE(out.response.find("2 value(s) including primary-key column 'id'"),
+              std::string::npos)
+        << out.response;
+    EXPECT_NE(out.response.find("or 1 to have it issued"), std::string::npos) << out.response;
+}
+
+TEST_F(SuppliedKeySqlTest, TheShippedStorageDefaultIsStillHeap) {
+    // The key mode used to be able to move this - an `explicit` default
+    // pulled storage to btree so its own statements were not all refused.
+    // With the mode gone, silence means the heap and nothing else.
     auto d = Dispatcher();
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, qty int64)").response.substr(0, 7), "CREATED");
 
-    // Both halves: the mode came from configuration, and the storage
-    // followed it. Defaulting the storage is not decoration - HEAP is the
-    // shipped storage default, so without it every unqualified statement on
-    // an explicit-default instance would be refused.
     auto described = d.Dispatch("DESCRIBE t");
-    EXPECT_NE(described.response.find("clustered_type=BTREE key_mode=EXPLICIT"),
+    EXPECT_NE(described.response.find("clustered_type=HEAP key_order=ascending"),
               std::string::npos)
         << described.response;
 
-    // And it behaves as one: the caller names the key, descending.
-    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (900, 1)").response.substr(0, 8), "INSERTED");
-    EXPECT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 2)").response.substr(0, 8), "INSERTED");
+    // And it takes a named key like any other relation, ascending - which
+    // is the whole of what a heap accepts.
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 1)").response.substr(0, 8), "INSERTED");
+    EXPECT_EQ(d.Dispatch("INSERT INTO t VALUES (900, 2)").response.substr(0, 8), "INSERTED");
 }
 
-TEST_F(ExplicitDefaultTest, AWrittenWordBeatsTheSetting) {
+// ---- The heap, which is the new half -------------------------------------
+//
+// `HEAP EXPLICIT` was refused at CREATE until 2026-08-25. It is now an
+// ordinary relation, and what it cannot do is refused per id instead: the
+// chain's tail append, its page-wise ordering and its tail-page-only
+// duplicate check are all the ascent (§3.1b), so the mark is the rule.
+
+TEST_F(SuppliedKeySqlTest, AHeapRelationTakesNamedKeysThatAscend) {
     auto d = Dispatcher();
-    ASSERT_EQ(d.Dispatch("CREATE TABLE a (id int64, qty int64) ASSIGNED").response.substr(0, 7),
-              "CREATED");
+    CreateHeap(d, "h");
 
-    auto described = d.Dispatch("DESCRIBE a");
-    EXPECT_NE(described.response.find("key_mode=ASSIGNED"), std::string::npos)
-        << described.response;
-    // Storage follows the *written* mode's default, not the setting's.
-    EXPECT_NE(described.response.find("clustered_type=HEAP"), std::string::npos)
-        << described.response;
+    for (int id : {10, 25, 400, 900, 1000}) {
+        auto out = d.Dispatch("INSERT INTO h VALUES (" + std::to_string(id) + ", " +
+                              std::to_string(id) + ")");
+        ASSERT_EQ(out.response.substr(0, 8), "INSERTED") << "id " << id << ": " << out.response;
+    }
 
-    // The engine issues its keys, so VALUES omits the pk.
-    EXPECT_NE(d.Dispatch("INSERT INTO a VALUES (7)").response.find("id=1"), std::string::npos);
+    for (int id : {10, 25, 400, 900, 1000}) {
+        const std::string want = std::to_string(id) + "," + std::to_string(id);
+        EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = " + std::to_string(id)).response.find(want),
+                  std::string::npos)
+            << "lost id " << id;
+    }
+
+    // Enough rows to grow the chain past one page, still named by the
+    // caller: the growth path sets each new page's min_key from the id that
+    // opened it, which is only sound while the ids ascend.
+    for (int id = 2000; id < 2400; ++id) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (" + std::to_string(id) + ", 1)")
+                      .response.substr(0, 8),
+                  "INSERTED")
+            << "id " << id;
+    }
+    EXPECT_NE(d.Dispatch("SELECT * FROM h WHERE id = 2399").response.find("2399,1"),
+              std::string::npos);
 }
 
-TEST_F(ExplicitDefaultTest, AWrittenStorageWordStillContradictsAndIsRefused) {
+TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMark) {
     auto d = Dispatcher();
-    // The writer asked for a heap and the setting asks for explicit keys.
-    // Resolution never pairs them itself, so this can only come from the
-    // statement - and it is still refused rather than silently re-pointed.
-    auto refused = d.Dispatch("CREATE TABLE h (id int64, qty int64) HEAP");
-    EXPECT_EQ(refused.response.substr(0, 3), "ERR") << refused.response;
-    EXPECT_NE(refused.response.find("must be BTREE"), std::string::npos) << refused.response;
+    CreateHeap(d, "h");
+
+    ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (600, 1)").response.substr(0, 8), "INSERTED");
+
+    // The refusal that keeps §3.1b true. Refused at admission, before the
+    // chain is touched at all - a tail page whose min_key is 600 would have
+    // no legal place for 550, and the tail-page-only duplicate check would
+    // stop meaning anything the moment a later page opened below it.
+    auto backwards = d.Dispatch("INSERT INTO h VALUES (550, 2)");
+    EXPECT_EQ(backwards.response.substr(0, 3), "ERR") << backwards.response;
+    EXPECT_NE(backwards.response.find("must ascend"), std::string::npos) << backwards.response;
+    EXPECT_NE(backwards.response.find("use BTREE"), std::string::npos)
+        << "the refusal has to say what does take the key: " << backwards.response;
+
+    // The relation is unharmed and the mark did not move: the next omitted
+    // key is still 601.
+    EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (3)").response.find("id=601"), std::string::npos);
 }
 
-TEST_F(KeyModeSqlTest, TheShippedDefaultIsAssignedAndHeap) {
-    // The other side of the setting: with no configuration, silence means
-    // exactly what it did before the amendment.
+TEST_F(SuppliedKeySqlTest, AHeapRelationMixesNamedAndIssuedKeys) {
     auto d = Dispatcher();
-    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, qty int64)").response.substr(0, 7), "CREATED");
+    CreateHeap(d, "h");
 
-    auto described = d.Dispatch("DESCRIBE t");
-    EXPECT_NE(described.response.find("clustered_type=HEAP key_mode=ASSIGNED"), std::string::npos)
-        << described.response;
+    EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (1)").response.find("id=1"), std::string::npos);
+    ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (100, 2)").response.substr(0, 8), "INSERTED");
+    // The issued id resumes above the named one, which is what keeps the
+    // chain ascending across a mixed load.
+    EXPECT_NE(d.Dispatch("INSERT INTO h VALUES (3)").response.find("id=101"), std::string::npos);
 }
 
 // ---- The claim itself ----------------------------------------------------
 
-TEST_F(KeyModeSqlTest, ACallerNamesTheKeyAndItIsTheRowsIdentity) {
+TEST_F(SuppliedKeySqlTest, ACallerNamesTheKeyAndItIsTheRowsIdentity) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     auto inserted = d.Dispatch("INSERT INTO t VALUES (500, 11)");
     EXPECT_NE(inserted.response.find("id=500"), std::string::npos)
@@ -184,9 +205,9 @@ TEST_F(KeyModeSqlTest, ACallerNamesTheKeyAndItIsTheRowsIdentity) {
     EXPECT_NE(selected.response.find("11"), std::string::npos) << selected.response;
 }
 
-TEST_F(KeyModeSqlTest, ADescendingKeyIsAccepted) {
+TEST_F(SuppliedKeySqlTest, ADescendingKeyIsAccepted) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (500, 1)").response.substr(0, 8), "INSERTED");
 
@@ -201,9 +222,9 @@ TEST_F(KeyModeSqlTest, ADescendingKeyIsAccepted) {
               std::string::npos);
 }
 
-TEST_F(KeyModeSqlTest, AFullyDescendingLoadStaysWholeAndFindable) {
+TEST_F(SuppliedKeySqlTest, AFullyDescendingLoadStaysWholeAndFindable) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // Enough rows to fill leaves and force repeated divisions, arriving in
     // the worst order there is. Each one lands in a leaf that already holds
@@ -235,9 +256,9 @@ TEST_F(KeyModeSqlTest, AFullyDescendingLoadStaysWholeAndFindable) {
     }
 }
 
-TEST_F(KeyModeSqlTest, ARangeScanIsCorrectAfterDescendingInserts) {
+TEST_F(SuppliedKeySqlTest, ARangeScanIsCorrectAfterDescendingInserts) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // Range scans prune by page-wise `min_key` ordering (exec/step_vm.cpp):
     // the walk stops at the first page whose min_key passes the high bound,
@@ -285,9 +306,9 @@ std::vector<std::uint64_t> EmittedIds(const std::string& response) {
     return ids;
 }
 
-TEST_F(KeyModeSqlTest, OrderByEmitsKeyOrderOnAnExplicitRelation) {
+TEST_F(SuppliedKeySqlTest, OrderByEmitsKeyOrderAfterADescendingLoad) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // Descending inserts put a page's slots deliberately out of key order:
     // each id is appended *below* everything already on the page, which is
@@ -311,9 +332,9 @@ TEST_F(KeyModeSqlTest, OrderByEmitsKeyOrderOnAnExplicitRelation) {
     EXPECT_EQ(ids.back(), static_cast<std::uint64_t>(kRows));
 }
 
-TEST_F(KeyModeSqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
+TEST_F(SuppliedKeySqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // The case a per-page sort has to get right and a naive one would not:
     // LIMIT stops the walk part-way through a page, so the page's rows must
@@ -339,19 +360,23 @@ TEST_F(KeyModeSqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
         << page2.response;
 }
 
-TEST_F(KeyModeSqlTest, OrderByStillWorksOnAnAssignedRelation) {
+TEST_F(SuppliedKeySqlTest, OrderByCostsNothingOnARelationThatNeverTookAnOutOfOrderKey) {
     auto d = Dispatcher();
-    CreateAssigned(d);
+    CreateHeap(d);
 
-    // The path that was always sound: an engine-issued id is appended above
-    // every id on the page, so slot order *is* key order and the walk is
-    // left untouched. This is the regression guard for that - the per-page
-    // sort must not have become the only correct path.
+    // The path that was always sound, and the reason `key_order` is a fact
+    // rather than a storage type: an id at or above the mark is appended
+    // above every id on the page, so slot order *is* key order and the walk
+    // is left untouched. The regression guard is that the per-page sort must
+    // not have become the only correct path - which is what reading the
+    // storage type instead of the flag would have produced on every btree
+    // relation.
     for (int k = 1; k <= 50; ++k) {
         ASSERT_EQ(d.Dispatch("INSERT INTO a VALUES (" + std::to_string(k) + ")")
                       .response.substr(0, 8),
                   "INSERTED");
     }
+    EXPECT_NE(d.Dispatch("DESCRIBE a").response.find("key_order=ascending"), std::string::npos);
 
     auto ordered = d.Dispatch("SELECT * FROM a ORDER BY id");
     ASSERT_NE(ordered.response.substr(0, 3), "ERR") << ordered.response;
@@ -360,9 +385,9 @@ TEST_F(KeyModeSqlTest, OrderByStillWorksOnAnAssignedRelation) {
     EXPECT_TRUE(std::is_sorted(ids.begin(), ids.end()));
 }
 
-TEST_F(KeyModeSqlTest, InterleavedAscendingAndDescendingKeysAllLand) {
+TEST_F(SuppliedKeySqlTest, InterleavedAscendingAndDescendingKeysAllLand) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // Neither ordered nor reverse-ordered: the shape a real backfill or a
     // migration from another system produces.
@@ -385,10 +410,10 @@ TEST_F(KeyModeSqlTest, InterleavedAscendingAndDescendingKeysAllLand) {
 // A multi-row INSERT needs the transaction manager - BI4's rollback of the
 // placed prefix replays its trail - so this one builds the configuration
 // production always has, rather than the bare dispatcher above.
-class KeyModeBulkTest : public KeyModeSqlTest {
+class SuppliedKeyBulkTest : public SuppliedKeySqlTest {
 protected:
     void SetUp() override {
-        KeyModeSqlTest::SetUp();
+        SuppliedKeySqlTest::SetUp();
         ids_.emplace(boot_->superblock);
         undo_.emplace(store_, /*wal=*/nullptr);
         mgr_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr);
@@ -414,12 +439,13 @@ protected:
 // failure is not a rollback that misses rows, it is a rollback that writes
 // over rows it never touched.
 //
-// Only a kExplicit relation can trigger a division mid-statement, which is
-// why these live here rather than in the transaction suite.
+// Only a key named below the relation's high-water mark can trigger a
+// division mid-statement, which is why these live here rather than in the
+// transaction suite.
 
-TEST_F(KeyModeBulkTest, AFailedStatementThatDividedALeafRollsBackWhole) {
+TEST_F(SuppliedKeyBulkTest, AFailedStatementThatDividedALeafRollsBackWhole) {
     CommandDispatcher& d = *d_;
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // A committed base, ascending and gapped so there is room to insert
     // between the keys later.
@@ -467,9 +493,9 @@ TEST_F(KeyModeBulkTest, AFailedStatementThatDividedALeafRollsBackWhole) {
     }
 }
 
-TEST_F(KeyModeBulkTest, AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransaction) {
+TEST_F(SuppliedKeyBulkTest, AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransaction) {
     CommandDispatcher& d = *d_;
-    CreateExplicit(d);
+    CreateBtree(d);
 
     std::string base = "INSERT INTO t VALUES ";
     for (int k = 1; k <= 300; ++k) {
@@ -518,9 +544,9 @@ TEST_F(KeyModeBulkTest, AnAbortedUpdateDoesNotSurviveADivisionInItsOwnTransactio
     }
 }
 
-TEST_F(KeyModeBulkTest, ABulkStatementMayNameKeysInAnyOrder) {
+TEST_F(SuppliedKeyBulkTest, ABulkStatementMayNameKeysInAnyOrder) {
     CommandDispatcher& d = *d_;
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // Each row gates individually and in statement order (BI2), so an
     // unordered set is not a special case - it is N single-row inserts that
@@ -539,9 +565,9 @@ TEST_F(KeyModeBulkTest, ABulkStatementMayNameKeysInAnyOrder) {
 
 // ---- The refusals that protect it ----------------------------------------
 
-TEST_F(KeyModeSqlTest, ADuplicateKeyIsRefused) {
+TEST_F(SuppliedKeySqlTest, ADuplicateKeyIsRefused) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (42, 1)").response.substr(0, 8), "INSERTED");
 
@@ -557,9 +583,9 @@ TEST_F(KeyModeSqlTest, ADuplicateKeyIsRefused) {
     EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 42").response.find("1"), std::string::npos);
 }
 
-TEST_F(KeyModeSqlTest, ADuplicateOfADescendingKeyIsAlsoRefused) {
+TEST_F(SuppliedKeySqlTest, ADuplicateOfADescendingKeyIsAlsoRefused) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (900, 1)").response.substr(0, 8), "INSERTED");
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 2)").response.substr(0, 8), "INSERTED");
@@ -571,9 +597,9 @@ TEST_F(KeyModeSqlTest, ADuplicateOfADescendingKeyIsAlsoRefused) {
     EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos) << dup.response;
 }
 
-TEST_F(KeyModeSqlTest, AKeyOutsideTheIdSpaceIsRefused) {
+TEST_F(SuppliedKeySqlTest, AKeyOutsideTheIdSpaceIsRefused) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     // 0 is reserved for "unset" (§4).
     auto zero = d.Dispatch("INSERT INTO t VALUES (0, 1)");
@@ -585,9 +611,9 @@ TEST_F(KeyModeSqlTest, AKeyOutsideTheIdSpaceIsRefused) {
     EXPECT_NE(too_big.response.find("40-bit"), std::string::npos) << too_big.response;
 }
 
-TEST_F(KeyModeSqlTest, ANonIntegerKeyIsRefusedWithItsByte) {
+TEST_F(SuppliedKeySqlTest, ANonIntegerKeyIsRefusedWithItsByte) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
     auto out = d.Dispatch("INSERT INTO t VALUES ('nope', 1)");
     EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
@@ -595,30 +621,22 @@ TEST_F(KeyModeSqlTest, ANonIntegerKeyIsRefusedWithItsByte) {
         << "a refusal has to carry the offending token's byte: " << out.response;
 }
 
-TEST_F(KeyModeSqlTest, OmittingTheKeyOnAnExplicitRelationIsRefused) {
+TEST_F(SuppliedKeySqlTest, OmittingTheKeyIsAcceptedAndIssuesAboveTheMark) {
+    // The inverse of what this file used to assert. Omitting was the
+    // refusal that made the mode a mode; it is now the other arity.
     auto d = Dispatcher();
-    CreateExplicit(d);
+    CreateBtree(d);
 
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (700, 1)").response.substr(0, 8), "INSERTED");
     auto out = d.Dispatch("INSERT INTO t VALUES (7)");
-    EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
-    EXPECT_NE(out.response.find("EXPLICIT"), std::string::npos)
-        << "the message has to name the rule, or it reads as an off-by-one: " << out.response;
+    EXPECT_NE(out.response.find("id=701"), std::string::npos)
+        << "an issued id must clear every id the caller has named: " << out.response;
+    EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 701").response.find("7"), std::string::npos);
 }
 
-TEST_F(KeyModeSqlTest, SupplyingTheKeyOnAnAssignedRelationIsStillRefused) {
+TEST_F(SuppliedKeySqlTest, AHeapRelationStillIssuesItsOwnKeysWhenAsked) {
     auto d = Dispatcher();
-    CreateAssigned(d);
-
-    // The amendment relaxed *who may* name a key, per relation. It did not
-    // make every relation accept one.
-    auto out = d.Dispatch("INSERT INTO a VALUES (7, 1)");
-    EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
-    EXPECT_NE(out.response.find("engine-assigned"), std::string::npos) << out.response;
-}
-
-TEST_F(KeyModeSqlTest, AnAssignedRelationStillIssuesItsOwnKeys) {
-    auto d = Dispatcher();
-    CreateAssigned(d);
+    CreateHeap(d);
 
     auto first = d.Dispatch("INSERT INTO a VALUES (11)");
     EXPECT_NE(first.response.find("id=1"), std::string::npos) << first.response;
@@ -626,29 +644,40 @@ TEST_F(KeyModeSqlTest, AnAssignedRelationStillIssuesItsOwnKeys) {
     EXPECT_NE(second.response.find("id=2"), std::string::npos) << second.response;
 }
 
-TEST_F(KeyModeSqlTest, AnExplicitHeapRelationIsRefusedAtCreate) {
+TEST_F(SuppliedKeySqlTest, HeapExplicitIsCreatedRatherThanRefused) {
     auto d = Dispatcher();
 
-    // A heap chain grows only at its tail and cannot place a key that sorts
-    // behind it, so this pairing is refused - and it is refused because the
-    // *writer* asked for a heap, not because of a default.
+    // This pairing was `Unsupported` at CREATE until 2026-08-25, on both the
+    // catalog path and the statement path. It creates an ordinary heap
+    // relation now, and `EXPLICIT` is the vacuous word it has become.
     auto named = d.Dispatch("CREATE TABLE h (id int64, qty int64) HEAP EXPLICIT");
-    EXPECT_EQ(named.response.substr(0, 3), "ERR") << named.response;
-    EXPECT_NE(named.response.find("must be BTREE"), std::string::npos) << named.response;
+    EXPECT_EQ(named.response.substr(0, 7), "CREATED") << named.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE h").response.find("clustered_type=HEAP"), std::string::npos);
+    EXPECT_EQ(d.Dispatch("INSERT INTO h VALUES (5, 1)").response.substr(0, 8), "INSERTED");
 
-    // Naming only the mode is a different statement: storage follows it to
-    // btree, since that is the one storage the mode can use. Resolution
-    // never pairs an explicit mode with a heap it chose itself, which is why
-    // the refusal above can only ever come from a written word.
+    // And bare EXPLICIT no longer drags storage to btree with it - the
+    // resolution that did so existed only to keep the refusal above
+    // reachable from a written word alone.
     auto defaulted = d.Dispatch("CREATE TABLE h2 (id int64, qty int64) EXPLICIT");
     EXPECT_EQ(defaulted.response.substr(0, 7), "CREATED") << defaulted.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE h2").response.find("clustered_type=BTREE key_mode=EXPLICIT"),
-              std::string::npos);
+    EXPECT_NE(d.Dispatch("DESCRIBE h2").response.find("clustered_type=HEAP"), std::string::npos);
 }
 
-TEST_F(KeyModeSqlTest, TheKeyIsStillNotUpdatable) {
+TEST_F(SuppliedKeySqlTest, AssignedIsRefusedAtCreateWithItsByte) {
     auto d = Dispatcher();
-    CreateExplicit(d);
+
+    // The word that outlived nothing: it named a mode where supplying a pk
+    // was refused, and on the relation this statement would create,
+    // supplying one is admitted. Refused rather than ignored.
+    auto out = d.Dispatch("CREATE TABLE a (id int64, qty int64) HEAP ASSIGNED");
+    EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
+    EXPECT_NE(out.response.find("no longer exists"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("byte "), std::string::npos) << out.response;
+}
+
+TEST_F(SuppliedKeySqlTest, TheKeyIsStillNotUpdatable) {
+    auto d = Dispatcher();
+    CreateBtree(d);
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (5, 1)").response.substr(0, 8), "INSERTED");
 
     // Naming a key at insert and changing one afterwards are unrelated
@@ -658,32 +687,36 @@ TEST_F(KeyModeSqlTest, TheKeyIsStillNotUpdatable) {
     EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
 }
 
-// ---- The mode is a property of the relation ------------------------------
+// ---- The mark and the flag are per relation ------------------------------
 
-TEST_F(KeyModeSqlTest, TwoModesCoexistInOneDatabase) {
+TEST_F(SuppliedKeySqlTest, OneRelationsMarkDoesNotTouchAnothers) {
     auto d = Dispatcher();
-    CreateExplicit(d, "caller_keyed");
-    CreateAssigned(d, "engine_keyed");
+    CreateBtree(d, "caller_keyed");
+    CreateHeap(d, "engine_keyed");
 
     ASSERT_EQ(d.Dispatch("INSERT INTO caller_keyed VALUES (9000, 1)").response.substr(0, 8),
               "INSERTED");
     auto engine = d.Dispatch("INSERT INTO engine_keyed VALUES (1)");
     EXPECT_NE(engine.response.find("id=1"), std::string::npos)
-        << "an explicit relation's high-water mark must not touch another relation's: "
+        << "a named key must move its own relation's high-water mark and no other's: "
         << engine.response;
 }
 
-TEST_F(KeyModeSqlTest, TheModeSurvivesAcrossDispatchers) {
+TEST_F(SuppliedKeySqlTest, TheKeyOrderSurvivesAcrossDispatchers) {
     {
         auto d = Dispatcher();
-        CreateExplicit(d);
+        CreateBtree(d);
         ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (77, 1)").response.substr(0, 8), "INSERTED");
+        // Below 77's mark: the relation is unordered from here on.
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (33, 2)").response.substr(0, 8), "INSERTED");
     }
-    // A second dispatcher over the same catalog reads the mode off the page
-    // rather than remembering it.
+    // A second dispatcher over the same catalog reads the flag off the page
+    // rather than remembering it - and so must still answer ORDER BY <pk>
+    // with the per-page sort the first dispatcher's insert made necessary.
     auto d2 = Dispatcher();
-    auto out = d2.Dispatch("INSERT INTO t VALUES (33, 2)");
-    EXPECT_EQ(out.response.substr(0, 8), "INSERTED") << out.response;
+    EXPECT_NE(d2.Dispatch("DESCRIBE t").response.find("key_order=unordered"), std::string::npos);
+    EXPECT_EQ(EmittedIds(d2.Dispatch("SELECT * FROM t ORDER BY id").response),
+              (std::vector<std::uint64_t>{33, 77}));
 }
 
 }  // namespace

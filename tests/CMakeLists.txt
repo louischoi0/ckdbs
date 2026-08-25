@@ -95,7 +95,7 @@ add_executable(kds_tests
     bootstrap_test.cpp
     page_mgr_test.cpp
     command_dispatcher_test.cpp
-    key_mode_test.cpp
+    supplied_key_test.cpp
     tcp_server_test.cpp
     lexer_test.cpp
     fingerprint_test.cpp

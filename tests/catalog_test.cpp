@@ -97,8 +97,7 @@ TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {
     name_col.notnull = false;
     schema.columns.push_back(name_col);
 
-    auto oid = catalog_.CreateTable(kNamespacePublic, "accounts", schema, ClusteredType::kHeap,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "accounts", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     auto found_oid = catalog_.FindTableOidByName("accounts");
@@ -124,8 +123,7 @@ TEST_F(CatalogTest, CreateTableRejectsBtreeClusteredType) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
     Schema schema;
-    auto oid = catalog_.CreateTable(kNamespacePublic, "t", schema, ClusteredType::kBtree,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "t", schema, ClusteredType::kBtree);
     EXPECT_FALSE(oid.ok());
     EXPECT_EQ(oid.status().code(), StatusCode::kInvalidArgument);
 }
@@ -142,8 +140,7 @@ TEST_F(CatalogTest, InitTableAccessReturnsSchemaAndDescPageId) {
     col.notnull = true;
     schema.columns.push_back(col);
 
-    auto oid = catalog_.CreateTable(kNamespacePublic, "widgets", schema, ClusteredType::kHeap,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "widgets", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
     auto access = catalog_.InitTableAccess(oid.value());
@@ -166,8 +163,7 @@ TEST_F(CatalogTest, InitTableAccessReturnsSchemaAndDescPageId) {
 TEST_F(CatalogTest, ATableAccessPointerSurvivesRowIdAllocation) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     Schema schema = MinimalPkSchema();
-    auto oid = catalog_.CreateTable(kNamespacePublic, "held", schema, ClusteredType::kHeap,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "held", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
     auto access = catalog_.InitTableAccess(oid.value());
@@ -189,8 +185,7 @@ TEST_F(CatalogTest, ATableAccessPointerSurvivesRowIdAllocation) {
 TEST_F(CatalogTest, DdlInvalidatesACachedTableAccess) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     Schema schema = MinimalPkSchema();
-    auto oid = catalog_.CreateTable(kNamespacePublic, "relinked", schema, ClusteredType::kHeap,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "relinked", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
     auto first = catalog_.InitTableAccess(oid.value());
@@ -223,8 +218,7 @@ TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
     Schema schema = MinimalPkSchema();
-    auto oid = catalog_.CreateTable(kNamespacePublic, "movable", schema, ClusteredType::kHeap,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "movable", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
     auto before = catalog_.GetSysTableRow(oid.value());
@@ -280,10 +274,10 @@ TEST_F(CatalogTest, IndexRowsRoundTripAndFilterByTable) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
     auto table_a = catalog_.CreateTable(kNamespacePublic, "a", IndexableSchema(),
-                                        ClusteredType::kBtree, KeyMode::kAssigned);
+                                        ClusteredType::kBtree);
     ASSERT_TRUE(table_a.ok()) << table_a.status().message();
     auto table_b = catalog_.CreateTable(kNamespacePublic, "b", IndexableSchema(),
-                                        ClusteredType::kBtree, KeyMode::kAssigned);
+                                        ClusteredType::kBtree);
     ASSERT_TRUE(table_b.ok());
 
     auto by_owner = catalog_.CreateIndex(SimpleIndex(table_a.value(), "a_owner", 1));
@@ -317,7 +311,7 @@ TEST_F(CatalogTest, IndexRowsRoundTripAndFilterByTable) {
 TEST_F(CatalogTest, FindIndexOnColumnAnswersForTheLeadingKeyColumnOnly) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     Catalog::IndexDef def = SimpleIndex(table.value(), "composite", 1);
@@ -333,7 +327,7 @@ TEST_F(CatalogTest, AHeapClusteredRelationTakesNoIndex) {
     // relation has no index for - so every probe would be a chain scan.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "h", IndexableSchema(),
-                                      ClusteredType::kHeap, KeyMode::kAssigned);
+                                      ClusteredType::kHeap);
     ASSERT_TRUE(table.ok());
 
     auto created = catalog_.CreateIndex(SimpleIndex(table.value(), "h_owner", 1));
@@ -344,7 +338,7 @@ TEST_F(CatalogTest, AHeapClusteredRelationTakesNoIndex) {
 TEST_F(CatalogTest, CreateIndexRefusesRatherThanTruncatingOrGuessing) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     // The primary key: the clustered tree already indexes it.
@@ -392,7 +386,7 @@ TEST_F(CatalogTest, CreateIndexRefusesRatherThanTruncatingOrGuessing) {
 TEST_F(CatalogTest, ADroppedIndexIsRetiredSoTheNameIsFreeAgain) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
@@ -423,7 +417,7 @@ TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
     // (catalog_cache.hpp).
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
     auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
     ASSERT_TRUE(oid.ok());
@@ -471,7 +465,7 @@ TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
 TEST_F(CatalogTest, TableAccessCarriesTheRelationsIndexesInCreationOrder) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     Catalog::IndexDef composite = SimpleIndex(table.value(), "composite", 1);
@@ -511,7 +505,7 @@ TEST_F(CatalogTest, TableAccessCarriesTheRelationsIndexesInCreationOrder) {
 TEST_F(CatalogTest, TheIndexMaskNamesLeadingKeyColumnsOnly) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     Catalog::IndexDef def = SimpleIndex(table.value(), "composite", 1);
@@ -540,7 +534,7 @@ TEST_F(CatalogTest, IndexOnPicksTheLowestOidWhenTwoIndexesShareALeadingColumn) {
     // same way whatever the data did.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     auto first = catalog_.CreateIndex(SimpleIndex(table.value(), "one", 1));
@@ -560,7 +554,7 @@ TEST_F(CatalogTest, ACachedTableAccessSeesAnIndexCreatedAfterItWasFilled) {
     // every held entry for the relation, and the compiler reads it.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     auto before = catalog_.InitTableAccess(table.value());
@@ -591,7 +585,7 @@ TEST_F(CatalogTest, ACachedTableAccessSeesAnIndexCreatedAfterItWasFilled) {
 TEST_F(CatalogTest, ADroppedIndexLeavesTheRelationWithNoneAgain) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
     auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
     ASSERT_TRUE(oid.ok());
@@ -608,9 +602,9 @@ TEST_F(CatalogTest, ADroppedIndexLeavesTheRelationWithNoneAgain) {
 TEST_F(CatalogTest, OneRelationsIndexesDoNotAppearOnAnother) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto a = catalog_.CreateTable(kNamespacePublic, "a", IndexableSchema(),
-                                  ClusteredType::kBtree, KeyMode::kAssigned);
+                                  ClusteredType::kBtree);
     auto b = catalog_.CreateTable(kNamespacePublic, "b", IndexableSchema(),
-                                  ClusteredType::kBtree, KeyMode::kAssigned);
+                                  ClusteredType::kBtree);
     ASSERT_TRUE(a.ok() && b.ok());
     ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(a.value(), "a_ix", 1)).ok());
 
@@ -625,7 +619,7 @@ TEST_F(CatalogTest, OneRelationsIndexesDoNotAppearOnAnother) {
 TEST_F(CatalogTest, CreatingAndDroppingAnIndexBumpsTheCatalogVersion) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
-                                      ClusteredType::kBtree, KeyMode::kAssigned);
+                                      ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
     const std::uint64_t before_create = catalog_.catalog_version();
@@ -647,8 +641,7 @@ TEST_F(CatalogTest, DdlBumpsTheCatalogVersion) {
     EXPECT_GT(after_bootstrap, 0u);
 
     Schema schema = MinimalPkSchema();
-    auto oid = catalog_.CreateTable(kNamespacePublic, "versioned", schema, ClusteredType::kHeap,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "versioned", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     const std::uint64_t after_create = catalog_.catalog_version();
     EXPECT_GT(after_create, after_bootstrap);
@@ -670,8 +663,7 @@ TEST_F(CatalogTest, DdlBumpsTheCatalogVersion) {
 TEST_F(CatalogTest, AllocateRowIdAndReadsDoNotBumpTheCatalogVersion) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     Schema schema = MinimalPkSchema();
-    auto oid = catalog_.CreateTable(kNamespacePublic, "seq", schema, ClusteredType::kHeap,
-                                    KeyMode::kAssigned);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "seq", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
     const std::uint64_t before = catalog_.catalog_version();
@@ -725,8 +717,7 @@ TEST_F(CatalogTest, DdlRefreshesTheTableListAndKeepsTypes) {
     const std::size_t count_before = before.value().size();
 
     Schema schema = MinimalPkSchema();
-    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "listed", schema, ClusteredType::kHeap,
-                                     KeyMode::kAssigned).ok());
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "listed", schema, ClusteredType::kHeap).ok());
 
     auto after = catalog_.ListTables();
     ASSERT_TRUE(after.ok());
@@ -760,8 +751,7 @@ TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
     Catalog catalog(*store.value());
     ASSERT_TRUE(catalog.Bootstrap().ok());
     Schema schema = MinimalPkSchema();
-    auto oid = catalog.CreateTable(kNamespacePublic, "hot", schema, ClusteredType::kHeap,
-                                   KeyMode::kAssigned);
+    auto oid = catalog.CreateTable(kNamespacePublic, "hot", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // Warm the three cached facts, then flush so every frame starts clean.
@@ -981,7 +971,7 @@ TEST_F(PatternCatalogTest, SettingTheRootOfAnUnknownPatternIsNotFound) {
 
 TEST_F(PatternCatalogTest, RegisteringAPatternDoesNotInvalidateTableAccess) {
     auto oid = catalog_.CreateTable(kNamespacePublic, "t", MinimalPkSchema(),
-                                     ClusteredType::kHeap, KeyMode::kAssigned);
+                                     ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     auto access = catalog_.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
@@ -1037,7 +1027,7 @@ TEST_F(OwnerCoreTest, ASingleCoreInstancePutsEveryRelationOnCoreZero) {
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto oid = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
-                                    ClusteredType::kHeap, KeyMode::kAssigned);
+                                    ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     auto row = catalog.GetSysTableRow(oid.value());
@@ -1053,7 +1043,7 @@ TEST_F(OwnerCoreTest, CreateTableRecordsAnOwnerAndTableAccessCarriesIt) {
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto oid = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
-                                    ClusteredType::kHeap, KeyMode::kAssigned);
+                                    ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     auto row = catalog.GetSysTableRow(oid.value());
@@ -1077,8 +1067,7 @@ TEST_F(OwnerCoreTest, EveryRelationIsReachableFromTheCoreThatCreatedIt) {
 
     for (int i = 0; i < 6; ++i) {
         auto oid = catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
-                                        OneColumnSchema(), ClusteredType::kHeap,
-                                        KeyMode::kAssigned);
+                                        OneColumnSchema(), ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto row = catalog.GetSysTableRow(oid.value());
         ASSERT_TRUE(row.ok());
@@ -1096,7 +1085,7 @@ TEST_F(OwnerCoreTest, OwnershipSurvivesAReopen) {
         Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
         ASSERT_TRUE(catalog.Bootstrap().ok());
         auto created = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
-                                            ClusteredType::kHeap, KeyMode::kAssigned);
+                                            ClusteredType::kHeap);
         ASSERT_TRUE(created.ok());
         oid = created.value();
         auto row = catalog.GetSysTableRow(oid);
@@ -1110,89 +1099,175 @@ TEST_F(OwnerCoreTest, OwnershipSurvivesAReopen) {
     EXPECT_EQ(row.value().owner_core, assigned);
 }
 
-// ---- Key mode (docs/heap-and-tuple.md §4.1, workplan-key-mode.md PK01) ---
+// ---- Key order (docs/heap-and-tuple.md §4.1) -----------------------------
 //
-// The mode is a catalog fact with the same lifetime rules as `owner_core`
-// above: chosen at CREATE TABLE, never changed, and read back off the page
-// rather than re-derived. PK01 builds only that much - nothing yet consults
-// it, which is why these tests are about persistence and not about INSERT.
+// There is no key *mode* to test any more - `CreateTable` takes no such
+// parameter and refuses no storage pairing for one. What replaced it is an
+// **observation**: every relation starts ascending and stays there until an
+// id is admitted below its high-water mark, which only a btree relation can
+// do. So these tests are about what `AdmitExplicitRowId` admits, what it
+// refuses, and what the flag says afterwards.
 
-using KeyModeTest = OwnerCoreTest;
+using KeyOrderTest = OwnerCoreTest;
 
-TEST_F(KeyModeTest, TheModeIsPerRelationAndSurvivesAReopen) {
-    Oid assigned_oid = 0;
-    Oid explicit_oid = 0;
+TEST_F(KeyOrderTest, EveryNewRelationStartsAscendingAndSurvivesAReopen) {
+    Oid heap_oid = 0;
+    Oid btree_oid = 0;
     {
         Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
         ASSERT_TRUE(catalog.Bootstrap().ok());
 
-        auto a = catalog.CreateTable(kNamespacePublic, "engine_keyed", OneColumnSchema(),
-                                      ClusteredType::kHeap, KeyMode::kAssigned);
-        ASSERT_TRUE(a.ok()) << a.status().message();
-        assigned_oid = a.value();
+        auto h = catalog.CreateTable(kNamespacePublic, "chained", OneColumnSchema(),
+                                      ClusteredType::kHeap);
+        ASSERT_TRUE(h.ok()) << h.status().message();
+        heap_oid = h.value();
 
-        auto e = catalog.CreateTable(kNamespacePublic, "caller_keyed", OneColumnSchema(),
-                                      ClusteredType::kBtree, KeyMode::kExplicit);
-        ASSERT_TRUE(e.ok()) << e.status().message();
-        explicit_oid = e.value();
+        // The pairing that was refused until 2026-08-25 is now unremarkable:
+        // nothing about naming keys is declared at CREATE at all.
+        auto b = catalog.CreateTable(kNamespacePublic, "clustered", OneColumnSchema(),
+                                      ClusteredType::kBtree);
+        ASSERT_TRUE(b.ok()) << b.status().message();
+        btree_oid = b.value();
     }
 
-    // Both modes in one instance, which is the claim: §4.1 makes this a
-    // property of the relation, not a switch on the database.
     Catalog reopened(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
 
-    auto a_row = reopened.GetSysTableRow(assigned_oid);
-    ASSERT_TRUE(a_row.ok()) << a_row.status().message();
-    EXPECT_EQ(a_row.value().key_mode, KeyMode::kAssigned);
+    auto h_row = reopened.GetSysTableRow(heap_oid);
+    ASSERT_TRUE(h_row.ok()) << h_row.status().message();
+    EXPECT_EQ(h_row.value().key_order, KeyOrder::kAscending);
 
-    auto e_row = reopened.GetSysTableRow(explicit_oid);
-    ASSERT_TRUE(e_row.ok()) << e_row.status().message();
-    EXPECT_EQ(e_row.value().key_mode, KeyMode::kExplicit);
+    auto b_row = reopened.GetSysTableRow(btree_oid);
+    ASSERT_TRUE(b_row.ok()) << b_row.status().message();
+    EXPECT_EQ(b_row.value().key_order, KeyOrder::kAscending);
 }
 
-TEST_F(KeyModeTest, ATableAccessCarriesTheMode) {
-    // The INSERT path reads it from here and never from sys.tables, so a
-    // TableAccess that dropped it would send every statement to the wrong
-    // arity while the on-disk row looked correct.
+TEST_F(KeyOrderTest, AHeapRelationTakesASuppliedKeyAtOrAboveTheMark) {
+    // The capability the removal bought: a heap-clustered relation may be
+    // told its keys. What it may not be told is a key that goes backwards -
+    // its chain's tail append, its page-wise ordering and its tail-page-only
+    // duplicate check are all the ascent (§3.1b), and the mark is the ascent
+    // written as one number.
     Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
-    auto oid = catalog.CreateTable(kNamespacePublic, "caller_keyed", OneColumnSchema(),
-                                    ClusteredType::kBtree, KeyMode::kExplicit);
+    auto oid = catalog.CreateTable(kNamespacePublic, "chained", OneColumnSchema(),
+                                    ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
-    auto access = catalog.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok()) << access.status().message();
-    EXPECT_EQ(access.value()->key_mode, KeyMode::kExplicit);
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 500).ok());
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 600).ok());
+
+    auto row = catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().next_id, 601u);
+    // Never unordered, whatever it was told: the refusal below is what keeps
+    // that true, so the flag is a consequence rather than a second rule.
+    EXPECT_EQ(row.value().key_order, KeyOrder::kAscending);
+
+    auto refused = catalog.AdmitExplicitRowId(oid.value(), 550);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kOutOfRange);
+    EXPECT_NE(refused.message().find("must ascend"), std::string::npos) << refused.message();
+
+    // And the refusal wrote nothing: a refused id burns no mark.
+    auto after = catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(after.ok());
+    EXPECT_EQ(after.value().next_id, 601u);
+    EXPECT_EQ(after.value().key_order, KeyOrder::kAscending);
 }
 
-TEST_F(KeyModeTest, AnExplicitHeapRelationIsRefusedAtCreate) {
-    // A supplied id may sort anywhere, and a heap chain has no answer for
-    // one: it grows only at its tail, so an id below the tail's min_key has
-    // no legal page, and proving the id unused would mean scanning the whole
-    // chain. Refused where relations are made, not only at the statement
-    // layer, so no path can produce a relation that refuses every INSERT.
+TEST_F(KeyOrderTest, ABtreeRelationTakesABelowMarkKeyAndTurnsUnordered) {
     Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
-    auto refused = catalog.CreateTable(kNamespacePublic, "impossible", OneColumnSchema(),
-                                        ClusteredType::kHeap, KeyMode::kExplicit);
-    EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kUnsupported);
-    EXPECT_NE(refused.status().message().find("must be BTREE"), std::string::npos)
-        << refused.status().message();
+    auto oid = catalog.CreateTable(kNamespacePublic, "clustered", OneColumnSchema(),
+                                    ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 600).ok());
+    {
+        auto row = catalog.GetSysTableRow(oid.value());
+        ASSERT_TRUE(row.ok());
+        EXPECT_EQ(row.value().key_order, KeyOrder::kAscending) << "600 was above the mark";
+    }
+
+    // Below the mark: admitted, because the descent - not this function -
+    // proves the key unused. The mark does not move; the flag does.
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 550).ok());
+    auto row = catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().next_id, 601u) << "a below-mark id must not walk the mark backwards";
+    EXPECT_EQ(row.value().key_order, KeyOrder::kUnordered);
+
+    // A second below-mark id changes nothing - the flip is guarded, so a
+    // backfill of old ids does not write the catalog page once per row.
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 549).ok());
+    auto again = catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(again.ok());
+    EXPECT_EQ(again.value().key_order, KeyOrder::kUnordered);
+    EXPECT_EQ(again.value().next_id, 601u);
 }
 
-TEST_F(KeyModeTest, ACatalogRelationIsEngineKeyed) {
+TEST_F(KeyOrderTest, ATableAccessCarriesTheOrderAndIsInvalidatedByTheFlip) {
+    // The compiler reads it from here and never from sys.tables. A cache
+    // left saying kAscending after the flip would let an ORDER BY <pk> be
+    // discarded on a relation whose pages are no longer in key order - a
+    // wrong answer, which is why the flip bumps the catalog version.
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    auto oid = catalog.CreateTable(kNamespacePublic, "clustered", OneColumnSchema(),
+                                    ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 600).ok());
+    {
+        auto access = catalog.InitTableAccess(oid.value());
+        ASSERT_TRUE(access.ok()) << access.status().message();
+        EXPECT_EQ(access.value()->key_order, KeyOrder::kAscending);
+    }
+
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 550).ok());
+    auto access = catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_EQ(access.value()->key_order, KeyOrder::kUnordered)
+        << "the cached access outlived the flip that made it wrong";
+}
+
+TEST_F(KeyOrderTest, AnIssuedIdRisesAboveEverySuppliedOne) {
+    // The two id sources share one mark, which is what keeps them from
+    // colliding: AllocateRowId used to refuse an explicit relation outright,
+    // and now both run on every relation.
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    auto oid = catalog.CreateTable(kNamespacePublic, "mixed", OneColumnSchema(),
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 900).ok());
+    auto issued = catalog.AllocateRowId(oid.value());
+    ASSERT_TRUE(issued.ok()) << issued.status().message();
+    EXPECT_EQ(issued.value(), 901u);
+
+    // And the reverse order: an issued id moves the mark a supplied one is
+    // then measured against.
+    ASSERT_TRUE(catalog.AdmitExplicitRowId(oid.value(), 902).ok());
+    auto next = catalog.AllocateRowId(oid.value());
+    ASSERT_TRUE(next.ok()) << next.status().message();
+    EXPECT_EQ(next.value(), 903u);
+}
+
+TEST_F(KeyOrderTest, ACatalogRelationStartsAscending) {
     // Not a tautology worth skipping: sys.tables rows for the bootstrap
-    // relations are written by InsertRelationRow's defaulted argument, so
-    // this is the check that the default is the one it claims to be.
+    // relations go through InsertRelationRow, which sets the field rather
+    // than taking it, so this is the check that it sets what it claims.
     Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
     auto row = catalog.GetSysTableRow(kSysTablesTable);
     ASSERT_TRUE(row.ok()) << row.status().message();
-    EXPECT_EQ(row.value().key_mode, KeyMode::kAssigned);
+    EXPECT_EQ(row.value().key_order, KeyOrder::kAscending);
 }
 
 // ---- The catalog relations chain (docs/keystoneid-k0-findings.md) --------
@@ -1235,7 +1310,7 @@ TEST(CatalogChain, ColumnsBeyondOnePageAreStoredAndReadBack) {
     std::vector<Oid> oids;
     for (int i = 0; i < 12; ++i) {
         auto oid = catalog.CreateTable(kNamespacePublic, "wide" + std::to_string(i),
-                                       WideSchema(20), ClusteredType::kHeap, KeyMode::kAssigned);
+                                       WideSchema(20), ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << "relation " << i << ": " << oid.status().message();
         oids.push_back(oid.value());
     }
@@ -1257,7 +1332,7 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
 
     for (int i = 0; i < 12; ++i) {
         ASSERT_TRUE(catalog.CreateTable(kNamespacePublic, "wide" + std::to_string(i),
-                                        WideSchema(20), ClusteredType::kHeap, KeyMode::kAssigned)
+                                        WideSchema(20), ClusteredType::kHeap)
                         .ok());
     }
 
@@ -1293,7 +1368,7 @@ TEST(CatalogChain, ASequenceOnALaterPageStillIssuesIds) {
     std::vector<Oid> oids;
     for (int i = 0; i < 60; ++i) {
         auto oid = catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
-                                       WideSchema(1), ClusteredType::kHeap, KeyMode::kAssigned);
+                                       WideSchema(1), ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << "relation " << i << ": " << oid.status().message();
         oids.push_back(oid.value());
     }
@@ -1320,7 +1395,7 @@ TEST(CatalogChain, NameLookupFindsARelationOnALaterPage) {
 
     for (int i = 0; i < 60; ++i) {
         ASSERT_TRUE(catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
-                                        WideSchema(1), ClusteredType::kHeap, KeyMode::kAssigned)
+                                        WideSchema(1), ClusteredType::kHeap)
                         .ok());
     }
     auto oid = catalog.FindTableOidByName("t59");
@@ -1362,7 +1437,7 @@ TEST_F(CatalogTest, CreateTableStampsItsRowsWithTheTransactionIdItWasGiven) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     constexpr std::uint64_t kDdlTrx = 4242;
     auto oid = catalog_.CreateTable(kNamespacePublic, "stamped", MinimalPkSchema(),
-                                    ClusteredType::kHeap, KeyMode::kAssigned, kDdlTrx);
+                                    ClusteredType::kHeap, kDdlTrx);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // All three of a relation's rows carry the same stamp: a reader that
@@ -1383,7 +1458,7 @@ TEST_F(CatalogTest, ADefaultedCreateTableStillStampsBootstrapAndBootstrapRowsAlw
     // (spec-ddl-transactional.md §3).
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto oid = catalog_.CreateTable(kNamespacePublic, "unstamped", MinimalPkSchema(),
-                                    ClusteredType::kHeap, KeyMode::kAssigned);
+                                    ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     for (PageId page : {kCatalogPageObjects, kCatalogPageTables, kCatalogPageColumns}) {
@@ -1402,7 +1477,7 @@ TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatRead
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     constexpr std::uint64_t kCreator = 500;
     auto oid = catalog_.CreateTable(kNamespacePublic, "pending", MinimalPkSchema(),
-                                    ClusteredType::kHeap, KeyMode::kAssigned, kCreator);
+                                    ClusteredType::kHeap, kCreator);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // A concurrent reader: the creating transaction is live, so it is in
@@ -1449,7 +1524,7 @@ TEST_F(CatalogTest, ATransactionalLookupNeitherReadsNorFillsTheSharedCache) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     constexpr std::uint64_t kCreator = 700;
     ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "half_open", MinimalPkSchema(),
-                                     ClusteredType::kHeap, KeyMode::kAssigned, kCreator)
+                                     ClusteredType::kHeap, kCreator)
                     .ok());
 
     txn::ReadView own;
@@ -1488,7 +1563,7 @@ TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
 
     std::vector<CatalogRowRef> written;
     auto oid = catalog_.CreateTable(kNamespacePublic, "doomed", MinimalPkSchema(),
-                                    ClusteredType::kHeap, KeyMode::kAssigned,
+                                    ClusteredType::kHeap,
                                     txn.value()->id(), &written);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     // sys.objects + sys.tables + one column.

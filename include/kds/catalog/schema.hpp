@@ -210,17 +210,28 @@ struct TableAccess {
     // core's id everywhere else.
     std::uint32_t owner_core = 0;
 
-    // Who names this relation's ids (well_known.hpp's KeyMode,
-    // docs/heap-and-tuple.md section 4.1), from sys.tables. Cacheable by
-    // this struct's admission test for the same reason `clustered_type` is:
-    // it is chosen at CREATE TABLE and there is no statement that changes
-    // it, so it cannot move without DDL.
+    // Whether an id has ever landed on this relation out of order
+    // (well_known.hpp's KeyOrder, docs/heap-and-tuple.md section 4.1), from
+    // sys.tables.
     //
-    // Read by the INSERT path to pick the arity and the id source. Nothing
-    // below the dispatcher reads it - the storage layer takes an id and
-    // never asks who named it, which is the property that keeps this a
-    // catalog fact rather than a storage mode.
-    KeyMode key_mode = KeyMode::kAssigned;
+    // **The one cached field here that is not a DDL fact**, so it is the one
+    // that needed an argument rather than the admission test. It moves at
+    // most once in a relation's life - kAscending to kUnordered, never back -
+    // and `AdmitExplicitRowId` publishes that single flip through
+    // `CatalogCache::MarkKeysUnordered` - an **in-place** update locally,
+    // because the flip happens inside a running INSERT that is holding a
+    // pointer into this cache - **plus** a version bump and a peer
+    // notification, because unlike the index root and the desc page this
+    // field is read by a core that does not own the relation. catalog.cpp's
+    // note at the flip carries the whole argument.
+    //
+    // Stale here is a **wrong answer**, not a lost optimization: a cache that
+    // says kAscending on an unordered relation lets `ORDER BY <pk>` be
+    // discarded, and the walk then emits one page out of key order. That is
+    // the reason for the bump, and it is why nothing here defaults the other
+    // way as a safety margin - a default that lied in the safe direction on
+    // every relation would cost every relation a sort.
+    KeyOrder key_order = KeyOrder::kAscending;
 
     // The relation's anchor page - rows.hpp owns what it is and the
     // system-relation sentinel. Cacheable for varheap_page_id's reason

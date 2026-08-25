@@ -251,10 +251,10 @@ SysTableRow SampleTableRow() {
     row.next_id = 0x2122232425262728ull;
     row.varheap_page_id = 0xB1B2B3B4u;
     row.owner_core = 0xC1C2C3C4u;
-    // kExplicit rather than the default, so a codec that dropped the field
+    // kUnordered rather than the default, so a codec that dropped the field
     // fails the round trip instead of passing on a zero that happens to be
     // the right answer.
-    row.key_mode = KeyMode::kExplicit;
+    row.key_order = KeyOrder::kUnordered;
     return row;
 }
 
@@ -352,22 +352,22 @@ TEST(SysTableRowTest, RoundTripsEveryFieldIncludingTheOwnerCore) {
     EXPECT_EQ(out.value().next_id, in.next_id);
     EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
     EXPECT_EQ(out.value().owner_core, in.owner_core);
-    EXPECT_EQ(out.value().key_mode, in.key_mode);
+    EXPECT_EQ(out.value().key_order, in.key_order);
 }
 
-TEST(SysTableRowTest, TheKeyModeOccupiesItsOwnByte) {
+TEST(SysTableRowTest, TheKeyOrderOccupiesItsOwnByte) {
     // Same check `owner_core` gets, for the same reason: a round trip
     // through one codec cannot catch an offset that overlaps a neighbour,
     // because both halves make the same mistake.
     SysTableRow row = SampleTableRow();
     const auto baseline = row.Encode();
 
-    row.key_mode = KeyMode::kAssigned;
+    row.key_order = KeyOrder::kAscending;
     const auto zeroed = row.Encode();
 
     for (std::size_t i = 0; i < SysTableRow::kOnDiskSize; ++i) {
-        if (i == SysTableRow::kKeyModeOffset) continue;
-        EXPECT_EQ(baseline[i], zeroed[i]) << "key_mode disturbed byte " << i;
+        if (i == SysTableRow::kKeyOrderOffset) continue;
+        EXPECT_EQ(baseline[i], zeroed[i]) << "key_order disturbed byte " << i;
     }
 }
 
@@ -389,16 +389,16 @@ TEST(SysTableRowTest, TheOwnerCoreOccupiesItsOwnBytes) {
 }
 
 TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
-    // The row grew by four bytes for `owner_core`, one for `key_mode`, and
+    // The row grew by four bytes for `owner_core`, one for the key-order byte (`key_mode` when it was added), and
     // four for `anchor_page_id` (PW2-1), each a format-version event - the
     // superblock bumps to 10, 14 and 15 are the other halves. Pinned so
     // the next person to add a field cannot do so quietly.
     EXPECT_EQ(SysTableRow::kOwnerCoreOffset,
               SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
-    EXPECT_EQ(SysTableRow::kKeyModeOffset,
+    EXPECT_EQ(SysTableRow::kKeyOrderOffset,
               SysTableRow::kOwnerCoreOffset + sizeof(std::uint32_t));
     EXPECT_EQ(SysTableRow::kAnchorPageIdOffset,
-              SysTableRow::kKeyModeOffset + sizeof(std::uint8_t));
+              SysTableRow::kKeyOrderOffset + sizeof(std::uint8_t));
     EXPECT_EQ(SysTableRow::kOnDiskSize,
               SysTableRow::kAnchorPageIdOffset + sizeof(PageId));
 }

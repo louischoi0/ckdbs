@@ -1484,21 +1484,21 @@ private:
         // where the original list's one exposed value was always filtered
         // down to a single row.
         //
-        // **Which order that is depends on the key mode**, and getting it
-        // from the pk alone is wrong for one of them (heap-and-tuple.md
-        // §4.1). Under `ASSIGNED` ids ascend with insertion, so pk order
-        // *is* the walk's order - across pages by `min_key`, within a page
-        // because slots are appended - and sorting by pk is exact even
-        // after a leaf division has given a later page a lower id. Under
-        // `EXPLICIT` a caller-supplied id can be appended below the ids
-        // already in the page, so the walk emits that page out of key
-        // order and a pk sort here would make a *served* execution
-        // disagree with the recording one that preceded it. There the
-        // entry's own (page, slot) is what the walk gives, which is the
-        // order WalkAndRecord committed and the order this serve emitted
-        // before the fix above - so EXPLICIT keeps it and gains only the
-        // repositioning of an appended entry.
-        if (access.key_mode == catalog::KeyMode::kExplicit) {
+        // **Which order that is depends on whether this relation has taken
+        // an out-of-order key**, and getting it from the pk alone is wrong
+        // for one of the two (heap-and-tuple.md §4.1). While `key_order` is
+        // kAscending, ids ascend with insertion, so pk order *is* the walk's
+        // order - across pages by `min_key`, within a page because slots are
+        // appended - and sorting by pk is exact even after a leaf division
+        // has given a later page a lower id. Once an id has been admitted
+        // below the relation's high-water mark, it can sit in a page below
+        // the ids already there, so the walk emits that page out of key
+        // order and a pk sort here would make a *served* execution disagree
+        // with the recording one that preceded it. There the entry's own
+        // (page, slot) is what the walk gives, which is the order
+        // WalkAndRecord committed - so an unordered relation keeps it and
+        // gains only the repositioning of an appended entry.
+        if (access.key_order == catalog::KeyOrder::kUnordered) {
             std::sort(located.begin(), located.end(), [](const Located& a, const Located& b) {
                 return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
             });

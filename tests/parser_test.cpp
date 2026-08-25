@@ -42,10 +42,13 @@ TEST(ParserTest, CreateTableDefaultsToAssigned) {
     auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
     ASSERT_NE(ct, nullptr);
     EXPECT_EQ(ct->clustered, catalog::ClusteredType::kHeap);
-    EXPECT_EQ(ct->key_mode, catalog::KeyMode::kAssigned);
 }
 
-TEST(ParserTest, CreateTableTakesTheStorageAndKeyModeWordsInEitherOrder) {
+TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
+    // The word outlived the mode it selected (docs/heap-and-tuple.md §4.1).
+    // Accepted so written SQL keeps working, and it says nothing false -
+    // every relation takes a caller-supplied key now. The only thing to
+    // assert is that it changes no field, storage least of all.
     for (std::string_view sql : {"CREATE TABLE t (id int64) BTREE EXPLICIT",
                                  "CREATE TABLE t (id int64) EXPLICIT BTREE",
                                  "CREATE TABLE t (id int64) explicit btree"}) {
@@ -54,30 +57,32 @@ TEST(ParserTest, CreateTableTakesTheStorageAndKeyModeWordsInEitherOrder) {
         auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
         ASSERT_NE(ct, nullptr) << sql;
         EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree) << sql;
-        EXPECT_EQ(ct->key_mode, catalog::KeyMode::kExplicit) << sql;
     }
+
+    // Bare EXPLICIT does not move storage either - the old grammar's
+    // explicit-implies-btree resolution went with the refusal it fed.
+    auto bare = Parse("CREATE TABLE t (id int64) EXPLICIT");
+    ASSERT_TRUE(bare.ok()) << bare.status().message();
+    auto* bare_ct = std::get_if<CreateTableStmt>(&bare.value());
+    ASSERT_NE(bare_ct, nullptr);
+    EXPECT_EQ(bare_ct->clustered, catalog::ClusteredType::kHeap);
+    EXPECT_FALSE(bare_ct->clustered_given);
 }
 
-TEST(ParserTest, CreateTableAcceptsHeapAssigned) {
-    // Both defaults said out loud. Accepted rather than refused as
-    // redundant: saying what you are relying on is not an error.
+TEST(ParserTest, CreateTableRefusesASSIGNEDWithItsByte) {
+    // Not ignored, which would be accepting a spelling and enforcing
+    // something else: the word means "supplying a pk is refused", and on the
+    // relation this statement makes, supplying one is admitted.
     auto stmt = Parse("CREATE TABLE t (id int64) HEAP ASSIGNED");
-    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
-    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
-    ASSERT_NE(ct, nullptr);
-    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kHeap);
-    EXPECT_EQ(ct->key_mode, catalog::KeyMode::kAssigned);
-}
-
-TEST(ParserTest, CreateTableRecordsWhereTheKeyModeWordWasWritten) {
-    // The dispatcher refuses HEAP EXPLICIT and needs a byte to point at.
-    auto stmt = Parse("CREATE TABLE t (id int64) EXPLICIT");
-    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
-    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
-    ASSERT_NE(ct, nullptr);
-    EXPECT_EQ(ct->key_mode, catalog::KeyMode::kExplicit);
-    EXPECT_EQ(ct->key_mode_byte_offset,
-              std::string_view("CREATE TABLE t (id int64) ").size());
+    ASSERT_FALSE(stmt.ok());
+    EXPECT_EQ(stmt.status().code(), StatusCode::kUnsupported);
+    EXPECT_NE(stmt.status().message().find("no longer exists"), std::string::npos)
+        << stmt.status().message();
+    EXPECT_NE(stmt.status().message().find(
+                  "byte " + std::to_string(std::string_view("CREATE TABLE t (id int64) HEAP ")
+                                                .size())),
+              std::string::npos)
+        << stmt.status().message();
 }
 
 TEST(ParserTest, CreateTableRefusesARepeatedWordInEitherCategory) {
@@ -85,9 +90,10 @@ TEST(ParserTest, CreateTableRefusesARepeatedWordInEitherCategory) {
         std::string_view sql;
         std::size_t offending_byte;
     };
+    // `ASSIGNED EXPLICIT` is no longer one of these: the first word is
+    // refused outright, before there is a second to be a repeat of.
     for (const Case& c : {Case{"CREATE TABLE t (id int64) HEAP BTREE", 31},
                           Case{"CREATE TABLE t (id int64) BTREE BTREE", 32},
-                          Case{"CREATE TABLE t (id int64) ASSIGNED EXPLICIT", 35},
                           Case{"CREATE TABLE t (id int64) EXPLICIT EXPLICIT", 35}}) {
         auto stmt = Parse(c.sql);
         ASSERT_FALSE(stmt.ok()) << c.sql;

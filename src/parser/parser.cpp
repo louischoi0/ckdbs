@@ -559,16 +559,30 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     }
 
     // Optional trailing words: the storage clause (HEAP | BTREE) and the
-    // key mode (ASSIGNED | EXPLICIT, docs/heap-and-tuple.md §4.1). Both are
-    // facts about the whole relation, both are matched as identifiers and
-    // neither is reserved, so this is one loop over bare words rather than
-    // two peeks. Order between the two categories is free - unlike a
-    // column's suffixes, these are not two clauses on one thing whose
-    // spellings would both have to hash, since CREATE is not patternable.
-    // Anything else is left untouched for the trailing-garbage check at the
-    // top level.
+    // vestigial key-mode word (docs/heap-and-tuple.md §4.1). Both are facts
+    // about the whole relation, both are matched as identifiers and neither
+    // is reserved, so this is one loop over bare words rather than two
+    // peeks. Order between the two categories is free - unlike a column's
+    // suffixes, these are not two clauses on one thing whose spellings would
+    // both have to hash, since CREATE is not patternable. Anything else is
+    // left untouched for the trailing-garbage check at the top level.
+    //
+    // The key-mode words are what the 2026-08-25 removal left behind:
+    //
+    //   `EXPLICIT` is **accepted and does nothing**. It used to select a
+    //   mode; it now states what is true of every relation - the caller may
+    //   name this relation's keys - so accepting it keeps written SQL
+    //   working and says nothing false. It sets no field because there is no
+    //   field left to set.
+    //
+    //   `ASSIGNED` is **refused**, `Unsupported` with its byte. Accepting it
+    //   would be accepting a spelling and enforcing something other than
+    //   what was written (CLAUDE.md's truthfulness rule): the word means
+    //   "the engine issues every id and supplying one is refused", and on
+    //   the relation this statement creates, supplying one is admitted.
+    //   Ignoring it would be worse than refusing it.
     bool storage_given = false;
-    bool key_mode_given = false;
+    bool key_word_given = false;
     for (;;) {
         const Token word = lexer_.Peek();
         if (word.type != TokenType::kIdent) break;
@@ -580,9 +594,8 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         if (!is_heap && !is_btree && !is_assigned && !is_explicit) break;
 
         // A category given twice is refused rather than last-one-wins:
-        // `HEAP BTREE` names two different relations and `ASSIGNED
-        // EXPLICIT` two different insert arities, so silently keeping one
-        // of them would be the parser deciding what the writer meant.
+        // `HEAP BTREE` names two different relations, so silently keeping
+        // one of them would be the parser deciding what the writer meant.
         if (is_heap || is_btree) {
             if (storage_given) {
                 return Status::InvalidArgument(
@@ -594,18 +607,19 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
             stmt.clustered_given = true;
             stmt.clustered = is_heap ? catalog::ClusteredType::kHeap
                                      : catalog::ClusteredType::kBtree;
+        } else if (is_assigned) {
+            return Status::Unsupported(
+                "the ASSIGNED key mode no longer exists (byte " +
+                std::to_string(word.byte_offset) +
+                ") - every relation takes a caller-supplied primary key or issues one when "
+                "INSERT omits it, so there is nothing for this word to select");
         } else {
-            if (key_mode_given) {
+            if (key_word_given) {
                 return Status::InvalidArgument(
-                    "CREATE TABLE takes one key-mode word - ASSIGNED or EXPLICIT - and this is "
-                    "the second (byte " +
+                    "CREATE TABLE takes one EXPLICIT and this is the second (byte " +
                     std::to_string(word.byte_offset) + ")");
             }
-            key_mode_given = true;
-            stmt.key_mode_given = true;
-            stmt.key_mode_byte_offset = word.byte_offset;
-            stmt.key_mode = is_assigned ? catalog::KeyMode::kAssigned
-                                        : catalog::KeyMode::kExplicit;
+            key_word_given = true;
         }
 
         lexer_.Next();

@@ -166,7 +166,7 @@ Out of scope by decision: deriving column-column conjuncts (placement already ke
 
 - **The outer relation still drives.** The build changes how a match set is located, never which relation iterates or what joins what — the claim IX17 and CB12 already ratified for correlated probes, applied to a structure whose lifetime is one statement.
 - **Read scheduling is unchanged.** The inner relation is first read exactly when written order reads it: the build is that walk's side effect, the Recording pattern `docs/feat-cabin.md` §4 ratified.
-- **Emission order is captured, not reconstructed.** Buckets append in walk order, so a probe replays each key's matches in the order the walk would have emitted them — for both key modes, since build order *is* the walk's order.
+- **Emission order is captured, not reconstructed.** Buckets append in walk order, so a probe replays each key's matches in the order the walk would have emitted them — for a named key and an issued one alike, since build order *is* the walk's order.
 
 Hard rules ratified with it: never the outer side, never an emission reorder, never survives the statement, never feeds Waystone. What the prohibition above still forbids is the hoist — building before written order first reads the inner side — which is the semi-join/hash-join rewrite and is not what this paragraph licenses.
 

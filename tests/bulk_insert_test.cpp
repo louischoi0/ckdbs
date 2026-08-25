@@ -168,13 +168,28 @@ TEST_F(BulkInsertTest, AFailingRowUnwindsTheWholeStatement) {
     EXPECT_EQ(Run("SELECT v FROM t"), "v\\nkeep");
 }
 
-TEST_F(BulkInsertTest, ASupplyedPkIsRefusedWithItsOrdinal) {
+TEST_F(BulkInsertTest, RowsMayNameTheirOwnKeysOrNotWithinOneStatement) {
+    // The inverse of what this asserted until 2026-08-25 (§4.1): naming the
+    // pk is an arity, not a violation, and BI2's per-row pipeline means one
+    // statement may mix the two. Row 1 takes an issued id, row 2 names 2 -
+    // which is exactly what the mark had reached, so a heap relation admits
+    // it - and row 3 takes the next issued one, above the named one.
     Ok("CREATE TABLE t (id int64, n int64)");
-    const std::string out = Run("INSERT INTO t VALUES (1), (2, 99)");
-    EXPECT_EQ(out.rfind("ERR", 0), 0u);
-    EXPECT_NE(out.find("primary-key"), std::string::npos) << out;
+    const std::string out = Run("INSERT INTO t VALUES (1), (2, 99), (3)");
+    EXPECT_NE(out.rfind("ERR", 0), 0u) << out;
+    EXPECT_EQ(Run("SELECT n FROM t"), "n\\n1\\n99\\n3") << out;
+}
+
+TEST_F(BulkInsertTest, ABelowMarkKeyIsRefusedWithItsOrdinal) {
+    // What is still refused on a heap relation, and what BI4 does with it:
+    // the offending row is named and the whole statement inserts nothing.
+    Ok("CREATE TABLE t (id int64, n int64)");
+    Ok("INSERT INTO t VALUES (500, 1)");
+    const std::string out = Run("INSERT INTO t VALUES (600, 2), (550, 3)");
+    EXPECT_EQ(out.rfind("ERR", 0), 0u) << out;
+    EXPECT_NE(out.find("must ascend"), std::string::npos) << out;
     EXPECT_NE(out.find("(row 2)"), std::string::npos) << out;
-    EXPECT_EQ(Run("SELECT n FROM t"), "n");
+    EXPECT_EQ(Run("SELECT n FROM t"), "n\\n1") << out;
 }
 
 // BI9: a refused row burns no id (admission precedes allocation), and an
@@ -322,18 +337,23 @@ TEST_F(BulkInsertTest, ASortedFillRollsBackWhole) {
 // BI9 sharpened by T3: the admission-class checks run before the range is
 // allocated, so a refused statement burns *nothing* - and a failure past
 // the range (a bad literal at encode) burns exactly the range.
-TEST_F(BulkInsertTest, TheSortedFillBurnsNothingBeforeTheRangeAndTheRangeAfter) {
+TEST_F(BulkInsertTest, TheSortedFillBurnsItsWholeRangeAndANamedKeyDeclinesIt) {
     Ok("CREATE TABLE t (id int64, n int64)");
 
-    // Arity at row 2: refused before AllocateRowIdRange - no ids burned.
-    EXPECT_EQ(Run("INSERT INTO t VALUES (1), (2, 9), (3)").rfind("ERR", 0), 0u);
-    EXPECT_NE(Run("INSERT INTO t VALUES (7)").find(" id=1 "), std::string::npos);
-
-    // A literal no int column can hold, at row 2: past the range, so ids
-    // 2..4 burn and the next insert takes 5.
+    // Every row omits its key, so the fill is eligible: it carves 1..3 up
+    // front, the encode fails at row 2 on a literal no int column can hold -
+    // past the range - and all three ids burn.
     EXPECT_EQ(Run("INSERT INTO t VALUES (1), ('x'), (3)").rfind("ERR", 0), 0u);
-    EXPECT_NE(Run("INSERT INTO t VALUES (8)").find(" id=5 "), std::string::npos);
-    EXPECT_EQ(Run("SELECT n FROM t"), "n\\n7\\n8");
+    EXPECT_NE(Run("INSERT INTO t VALUES (8)").find(" id=4 "), std::string::npos);
+
+    // A row that names its key makes the statement ineligible for the fill:
+    // the carved range has no place for a key the caller chose (§4.1). The
+    // statement still runs, through the per-row path, which is why this is
+    // ineligibility and not a refusal - and the arity case this test used to
+    // check here is unreachable now, since the fill is entered only when
+    // every row omits.
+    EXPECT_NE(Run("INSERT INTO t VALUES (9), (100, 10)").rfind("ERR", 0), 0u);
+    EXPECT_EQ(Run("SELECT n FROM t"), "n\\n8\\n9\\n10");
 }
 
 }  // namespace

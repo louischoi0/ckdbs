@@ -43,12 +43,15 @@ ok	-	-	CREATE TABLE t (id int) BTREE
 ok	-	-	CREATE TABLE t (id int) heap
 ok	-	-	CREATE TABLE t (id int);
 ok	-	-	create table t (id int)
-# [PK03] the key-mode word (heap-and-tuple.md §4.1), order-free with the
-# storage word. `EXPLICIT` alone parses: HEAP EXPLICIT is refused by the
-# dispatcher, which is a storage rule and not something this file sees.
-ok	-	-	CREATE TABLE t (id int) ASSIGNED
+# The key-mode words after the mode's removal (heap-and-tuple.md §4.1,
+# 2026-08-25). `EXPLICIT` still parses and now does nothing - it states
+# what every relation is. `ASSIGNED` names a mode that no longer exists and
+# is refused here, `Unsupported` with its byte: ignoring it would be
+# accepting a spelling and enforcing something else. No hash moved either
+# way, so kFingerprintVersion did not (fingerprint_test.cpp).
+Unsupported	-	-	CREATE TABLE t (id int) ASSIGNED
 ok	-	-	CREATE TABLE t (id int) EXPLICIT
-ok	-	-	CREATE TABLE t (id int) HEAP ASSIGNED
+Unsupported	-	-	CREATE TABLE t (id int) HEAP ASSIGNED
 ok	-	-	CREATE TABLE t (id int) BTREE EXPLICIT
 ok	-	-	CREATE TABLE t (id int) EXPLICIT BTREE
 ok	-	-	CREATE TABLE t (id int) explicit btree
@@ -69,7 +72,7 @@ InvalidArgument	-	-	CREATE TABLE
 # reaches the trailing-garbage check.
 InvalidArgument	-	-	CREATE TABLE t (id int) HEAP BTREE
 InvalidArgument	-	-	CREATE TABLE t (id int) BTREE BTREE
-InvalidArgument	-	-	CREATE TABLE t (id int) ASSIGNED EXPLICIT
+Unsupported	-	-	CREATE TABLE t (id int) ASSIGNED EXPLICIT
 InvalidArgument	-	-	CREATE TABLE t (id int) EXPLICIT EXPLICIT
 InvalidArgument	-	-	CREATE TABLE t (id int) BTREE EXPLICIT FOO
 # [V11] gains WITH (k = v); today the option list is trailing garbage.

@@ -169,6 +169,24 @@ public:
     // was holding. Same in-place license, same one-field/one-owner test.
     void UpdateDescPage(Oid rel_oid, PageId root) noexcept;
 
+    // The fifth, and the one that is not a page id (heap-and-tuple.md §4.1):
+    // a relation turns kUnordered the first time `AdmitExplicitRowId` admits
+    // an id below its high-water mark, which happens **inside an ordinary
+    // INSERT** - so a global drop here dangles the `const TableAccess*` the
+    // running statement holds, exactly as the four above would. Not a
+    // hypothetical: the first form of the flip did call `BumpVersion`, and
+    // it re-derived the pk from the freed body vector, so a second insert on
+    // one relation answered "tuple's Keystone id N does not match the id
+    // being inserted".
+    //
+    // Same one-field/one-owner test: the flag belongs to one relation and is
+    // read by nothing else. One-way, which is why there is no value
+    // parameter - kAscending never comes back, and a setter that could write
+    // it would be a way to lose the fact.
+    //
+    // A no-op when the relation is not cached, like its four neighbours.
+    void MarkKeysUnordered(Oid rel_oid) noexcept;
+
     // ---- sys.types (bootstrap-immutable) --------------------------------
 
     // nullptr means "not loaded yet, scan the page"; a non-null empty

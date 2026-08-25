@@ -421,69 +421,45 @@ enum class ClusteredType : std::uint8_t {
     kBtree = 1,
 };
 
-// Who names a relation's Keystone id (docs/heap-and-tuple.md section 4.1,
-// the 2026-08-11 amendment to invariant 11). Fixed at CREATE TABLE, a
-// property of the relation rather than of a statement, and never altered
-// afterwards.
+// Whether a relation has ever taken a primary key that did not ascend
+// (docs/heap-and-tuple.md section 4.1, rewritten 2026-08-25). An **observed
+// fact**, not a declaration: no DDL word sets it, `Catalog::CreateTable`
+// cannot choose it, and it moves exactly once - the first time
+// `Catalog::AdmitExplicitRowId` admits an id below `sys.tables.next_id`.
 //
-// **This chooses the issuer *and*, with it, the ordering.** On a kExplicit
-// relation an id may sort anywhere - below every id already placed - which
-// is the half of the amendment that has consequences. Three of them, and
-// code that reads this enum is usually reading it for one of the three:
+// It replaced the `KeyMode` enum in the same byte of `SysTableRow`, and the
+// two on-disk values were chosen to carry over unchanged, which is why the
+// removal of the key mode came with **no format bump**:
 //
-//   - **A kExplicit relation must be btree-clustered**, refused otherwise at
-//     `Catalog::CreateTable`. A heap chain grows only at its tail, so an id
-//     below the tail's `min_key` has no legal page (invariant 3), and
-//     proving such an id unused would mean scanning the whole chain.
-//   - **Uniqueness is proved by the descent**, not by the cursor.
-//     `sys.tables.next_id` is a high-water mark for K4's budget and nothing
-//     else here: a relation whose mark is 1000 may have had 500 since its
-//     first insert, so the mark answers no question about what is in use.
-//   - **A full leaf divides** rather than refusing (btree.cpp's
-//     `SplitLeafAndInsert`). Invariants 2 and 3 both survive it - the old
-//     leaf keeps its `min_key` and each half stays at or above its own low
-//     bound - but tuples move, so the page's `relayout_epoch` moves with
-//     them.
+//   0 - was `kAssigned`, now "every id ever placed here ascended". True of
+//       an assigned relation by construction: the cursor never went back.
+//   1 - was `kExplicit`, now "an id has landed out of order". Conservative
+//       for a pre-existing explicit relation, which may or may not have
+//       taken one - and being wrong that way costs a sort, never an answer.
 //
-// What is *not* affected: every heap-clustered relation is kAssigned by the
-// rule above, so the semi-sorted chain still sees a monotonic sequence, and
-// page-wise `min_key` ordering holds in the btree because a division's new
-// leaf opens at a key that was already inside the old one.
+// One consumer, and it is a performance question rather than a correctness
+// one: with the flag clear, a page's slot order *is* its key order - an id
+// at or above the mark is appended above everything already on the page - so
+// `ORDER BY <pk>` needs no work and a Waystone replay may sort by pk. With it
+// set the two diverge, **within one page only** (page-wise `min_key` ordering
+// survives a leaf division), so the walk emits that page's live slots sorted
+// by Keystone id.
 //
-// kAssigned is 0 so a zeroed or default-constructed row reads as the
-// behavior every relation had before the amendment.
-enum class KeyMode : std::uint8_t {
-    // The engine issues the id from the cursor. INSERT supplies values for
-    // columns 1..n-1 and supplying the pk is refused.
-    kAssigned = 0,
-    // The caller supplies the id. INSERT supplies values for columns
-    // 0..n-1, the first being the pk, and omitting it is refused.
-    kExplicit = 1,
+// A heap-clustered relation can never reach kUnordered: `AdmitExplicitRowId`
+// refuses a below-the-mark id there outright, because the semi-sorted chain's
+// tail append, its page-wise ordering and its tail-page-only duplicate check
+// all rest on the ascent (docs/heap-and-tuple.md section 3.1b).
+enum class KeyOrder : std::uint8_t {
+    // Every id placed on this relation so far was above every id before it.
+    kAscending = 0,
+    // At least one id landed below the relation's high-water mark.
+    kUnordered = 1,
 };
 
-// The one spelling of each mode, so the word a config file accepts, the word
-// a refusal names and the word `DESCRIBE` prints cannot drift apart.
-constexpr const char* KeyModeName(KeyMode mode) noexcept {
-    return mode == KeyMode::kExplicit ? "EXPLICIT" : "ASSIGNED";
-}
-
-// Parses the `default_key_mode` config value, case-insensitively - the same
-// two words the trailing `CREATE TABLE` clause accepts, so an operator never
-// has to learn a second spelling for the same idea.
-//
-// Anything else is InvalidArgument naming what was given, rather than a
-// silent fall back to the default: a misspelled key mode would otherwise
-// leave an instance quietly creating the wrong kind of relation, and the
-// first sign of it would be an INSERT arity refusal nobody can explain.
-inline StatusOr<KeyMode> ParseKeyMode(std::string_view text) {
-    std::string folded(text);
-    for (char& c : folded) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    if (folded == "assigned") return KeyMode::kAssigned;
-    if (folded == "explicit") return KeyMode::kExplicit;
-    return Status::InvalidArgument("unknown key mode '" + std::string(text) +
-                                   "'; expected 'assigned' or 'explicit'");
+// The one spelling of each, so what `DESCRIBE` prints and what a test
+// asserts cannot drift apart.
+constexpr const char* KeyOrderName(KeyOrder order) noexcept {
+    return order == KeyOrder::kUnordered ? "unordered" : "ascending";
 }
 
 }  // namespace kds::catalog

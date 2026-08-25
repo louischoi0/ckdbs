@@ -148,8 +148,9 @@ open **heap page split policy**. That bargain held because invariant 11 made
 every pk monotonic.
 
 **Corrected 2026-08-11** (`docs/heap-and-tuple.md` §4.1): the premise is
-gone. An `EXPLICIT` relation's caller names its keys and they need not
-ascend, so the clustered btree now **does** divide a full leaf —
+gone. A caller may name a btree relation's keys and they need not ascend
+(the per-relation `EXPLICIT` mode then; per row since 2026-08-25, gated on
+the high-water mark), so the clustered btree now **does** divide a full leaf —
 `SplitLeafAndInsert` cuts the live versions at their median key, the old
 leaf keeping its `min_key` and the new one taking the split key. The
 refusal that remains is narrower and is about internal nodes, not leaves.

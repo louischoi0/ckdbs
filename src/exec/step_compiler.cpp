@@ -1820,10 +1820,11 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // because IX8a sorts its pks back into that order deliberately; a
     // lookup or probe emits one row. A Cabin probe stays excluded by name:
     // since 2026-08-19 a served set *is* sorted to the walk's order, but
-    // that order is pk only on an ASSIGNED relation - on EXPLICIT it is
-    // page-and-slot (heap-and-tuple.md §4.1) - so the elision's premise
-    // holds for one key mode and not the other, and an exclusion that
-    // depended on the mode would be a second copy of that rule. The
+    // that order is pk only while a relation's keys have ascended - once one
+    // has landed below the mark it is page-and-slot (heap-and-tuple.md §4.1)
+    // - so the elision's premise holds for one key order and not the other,
+    // and an exclusion that depended on `key_order` would be a second copy
+    // of that rule. The
     // exclusion is a fix, not a precaution: the discarding version of this
     // clause answered `ORDER BY <pk>` over a Cabin-probed relation with
     // whatever order the entry set happened to hold.
@@ -1835,11 +1836,17 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (one_ascending_pk && driving_emits_pk_order) {
         chain.sort_keys.clear();
 
-        // ...and on a kExplicit relation "the order the chain already emits"
-        // is not quite true (docs/heap-and-tuple.md §4.1): a page's slots are
-        // in insertion order, which equals key order only because an
-        // engine-issued id is appended above every id already there. A
-        // caller-supplied id can be appended below them.
+        // ...and on a relation that has taken an out-of-order key, "the order
+        // the chain already emits" is not quite true (docs/heap-and-tuple.md
+        // §4.1): a page's slots are in insertion order, which equals key
+        // order only while every id was appended above every id already
+        // there. An id admitted below the relation's high-water mark was not.
+        //
+        // Read off `key_order` rather than off the storage type, which is
+        // what makes this cost nothing on the relations that never took one -
+        // a btree relation fed only ascending keys is exactly as free here as
+        // an ASSIGNED relation used to be (well_known.hpp's KeyOrder). A heap
+        // relation can never be kUnordered.
         //
         // The divergence is **within a page only** - pages stay key-ordered
         // by `min_key`, which a leaf division preserves - so the fix is a
@@ -1847,7 +1854,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // than always, because reading every live slot's Keystone word up
         // front is a real cost on a walk that otherwise reads one per row.
         if (!scope.relations.empty() && scope.relations[0].access != nullptr &&
-            scope.relations[0].access->key_mode == catalog::KeyMode::kExplicit) {
+            scope.relations[0].access->key_order == catalog::KeyOrder::kUnordered) {
             chain.steps[0].emit_in_key_order = true;
         }
     }

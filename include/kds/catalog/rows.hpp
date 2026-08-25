@@ -103,21 +103,22 @@ struct SysTableRow {
     // DDL.
     std::uint32_t owner_core;
 
-    // Who names this relation's Keystone ids (well_known.hpp's KeyMode,
-    // docs/heap-and-tuple.md section 4.1). Like `clustered_type` and
-    // `owner_core` this is fixed at CREATE TABLE and cannot change without
-    // DDL, which is what makes it cacheable on TableAccess.
+    // Whether an id has ever landed here out of order (well_known.hpp's
+    // KeyOrder, docs/heap-and-tuple.md section 4.1).
     //
-    // Appended after `owner_core` rather than placed beside `clustered_type`
-    // where it reads better: every offset below is a fixed on-disk position,
-    // so inserting a field in the middle would move four of them.
+    // **Unlike every other field on this row it is not a DDL fact**, and it
+    // is the one thing TableAccess caches that a plain INSERT can move: the
+    // first below-the-mark id flips it and bumps the catalog version, so a
+    // cached access whose flag reads stale is refreshed by the ordinary
+    // invalidation. Reading it stale would cost a discarded sort, never a
+    // wrong answer.
     //
-    // The one byte it adds is a **format-version event** - superblock 13 ->
-    // 14, the same call `varheap_page_id` and `owner_core` each forced
-    // before it. Decode() below refuses any size but the exact one, so an
-    // older file without the bump would mount and then fail on its first
-    // catalog read naming a size instead of a version.
-    KeyMode key_mode;
+    // It occupies the byte the `KeyMode` enum held until 2026-08-25, at the
+    // same offset and the same width, with kAssigned's 0 and kExplicit's 1
+    // carrying over as kAscending and kUnordered. `kOnDiskSize` therefore did
+    // not move and no format bump came with the key mode's removal - a file
+    // written before it mounts and means exactly what it meant.
+    KeyOrder key_order;
 
     // The relation's anchor page (storage/anchor_page.hpp; PW2-1,
     // workplan-peer-writer.md §7a), or kInvalidPageId for a **system**
@@ -127,8 +128,8 @@ struct SysTableRow {
     // gets one at CREATE TABLE, and the field never changes after: the
     // anchor is the page whose *contents* move so this row never has to.
     // The four bytes are a format-version event (superblock 14 -> 15;
-    // Decode refuses any size but the exact one - key_mode's precedent).
-    // Appended after `key_mode` because every offset below is a fixed
+    // Decode refuses any size but the exact one - the key-order byte's precedent).
+    // Appended after `key_order` because every offset below is a fixed
     // on-disk position.
     PageId anchor_page_id;
 
@@ -142,8 +143,8 @@ struct SysTableRow {
     static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kVarHeapPageIdOffset = kNextIdOffset + sizeof(std::uint64_t);
     static constexpr std::size_t kOwnerCoreOffset = kVarHeapPageIdOffset + sizeof(PageId);
-    static constexpr std::size_t kKeyModeOffset = kOwnerCoreOffset + sizeof(std::uint32_t);
-    static constexpr std::size_t kAnchorPageIdOffset = kKeyModeOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kKeyOrderOffset = kOwnerCoreOffset + sizeof(std::uint32_t);
+    static constexpr std::size_t kAnchorPageIdOffset = kKeyOrderOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kOnDiskSize = kAnchorPageIdOffset + sizeof(PageId);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
@@ -155,7 +156,7 @@ static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOid
 static_assert(offsetof(SysTableRow, name) == SysTableRow::kNameOffset);
 static_assert(offsetof(SysTableRow, desc_page_id) == SysTableRow::kDescPageIdOffset);
 static_assert(offsetof(SysTableRow, clustered_type) == SysTableRow::kClusteredTypeOffset);
-// `key_mode` gets no offsetof assert, for the same reason `next_id`,
+// `key_order` gets no offsetof assert, for the same reason `next_id`,
 // `varheap_page_id` and `owner_core` have none: everything from `next_id`
 // on sits behind the compiler's alignment padding, so its in-memory offset
 // and its on-disk offset are different numbers by design. Encode/Decode
