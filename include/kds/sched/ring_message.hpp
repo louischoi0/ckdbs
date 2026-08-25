@@ -98,6 +98,13 @@ enum class RingMessageKind : std::uint16_t {
     // Payload is server::RelationWriteGrantPayload: exact pages, never an
     // extent - the superset that is safe to fault is not safe to write.
     kRelationWriteGrant = 23,
+
+    // owner core -> core 0: re-deliver a relation's grants (PW1c-7,
+    // server/relation_grant_service.hpp says when and why). Payload is
+    // server::RelationGrantRequestPayload; the answer is not a reply on
+    // this kind but the ordinary kRelationFaultGrant and
+    // kRelationWriteGrant, produced by the same publish a CREATE TABLE runs.
+    kRelationGrantRequest = 24,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -118,6 +125,7 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kRelationFaultGrant:
         case RingMessageKind::kRowIdLease:
         case RingMessageKind::kRelationWriteGrant:
+        case RingMessageKind::kRelationGrantRequest:
             return true;
         case RingMessageKind::kUnset:
             return false;

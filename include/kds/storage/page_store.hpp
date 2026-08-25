@@ -292,6 +292,14 @@ protected:
     }
 
 public:
+    // Whether this store's core may **write** `page_id`. True by default:
+    // a store with no core ownership is the system core's arrangement and
+    // may write anything. DevicePageStore overrides it with the lease, the
+    // grants and the stamp claims (PW1c-4, PW1c-7); it is on the interface
+    // so a dispatcher can ask before a write reaches the frame-load path's
+    // refusal, and answer retryably with the relation's name.
+    virtual bool MayWrite(PageId /*page_id*/) const noexcept { return true; }
+
     // Records that the WAL record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn, which is what a store's write-back path
     // compares against the log's durable watermark (wal.md section 8-1).

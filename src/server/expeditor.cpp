@@ -15,6 +15,7 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/send_retry.hpp"
+#include "kds/server/relation_grant_service.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/file_page_device.hpp"
 #include "kds/wal/log_page_handoff.hpp"
@@ -1434,8 +1435,12 @@ Status Expeditor::Serve() {
         // The send side of CC7's flush-then-grant handoff (workplan P6c):
         // a relation placed on a peer gets that peer fault rights over its
         // pages, flush strictly first - a grant to unflushed pages would
-        // hand the owner stale bytes.
-        database_->catalog.SetRelationPublishHook(
+        // hand the owner stale bytes. Named rather than passed inline
+        // because it has two callers since PW1c-7: CREATE TABLE's publish
+        // and the owner's re-delivery request (below) run the identical
+        // sequence, and the second exists precisely so that nothing else
+        // ever does.
+        const catalog::Catalog::RelationPublishHook publish =
             [this, &scheduler](catalog::Oid oid, std::uint32_t owner_core, PageId root,
                                PageId varheap_root, PageId anchor) {
                 catalog::SysTableRow row{};
@@ -1500,7 +1505,20 @@ Status Expeditor::Serve() {
                                        "evicting handed-off pages failed: " + s.message());
                     }
                 }
-            });
+            };
+        database_->catalog.SetRelationPublishHook(publish);
+
+        // PW1c-7 (relation_grant_service.hpp): an owner that finds itself
+        // without a relation's write rights - after a restart, a crash
+        // before its acquisition, or a message lost to the ring - asks, and
+        // core 0 answers by running the same publish. Idempotent: a second
+        // handoff record for a page is analysis's no-op, and the receive
+        // side takes no second acquisition on a page already its own.
+        if (Status s = RegisterRelationGrantHandler(scheduler, database_->catalog, publish,
+                                                    &*logger_);
+            !s.ok()) {
+            return s;
+        }
 
         // Spawned only after every core is built, so a failure above leaves
         // no thread to unwind.

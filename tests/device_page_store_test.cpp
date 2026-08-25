@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/storage/extent_lease.hpp"
 #include "kds/storage/file_page_device.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -249,10 +250,14 @@ TEST(DevicePageStoreTest, OpenRejectsACorruptedFreeMap) {
     EXPECT_EQ(opened.status().code(), StatusCode::kCorruption);
 }
 
-// A free map claiming a page the device cannot address is a disagreement
-// between the two, not a page to read: it must be reported, not papered
-// over with zeroes.
-TEST(DevicePageStoreTest, AllocatedPageBeyondDeviceCapacityIsCorruption) {
+// A free map claiming a page the device cannot address is not a page to
+// read - and since PW1c-7 it is NotFound rather than Corruption: an extent
+// reserved for a peer is allocated whole in the map core 0 flushes while
+// the peer writes its pages lazily, so "allocated, never written" is an
+// ordinary state, and the code redo needs for it is the one its PAGE_INIT
+// arm creates from (wal/redo.cpp). Nothing is papered over with zeroes: the
+// read still fails, and only a logged PAGE_INIT may create the page.
+TEST(DevicePageStoreTest, AllocatedPageBeyondDeviceCapacityIsNeverWritten) {
     auto device = MakeDevice(/*extent_pages=*/8, /*initial_pages=*/8);
 
     Page free_map{};
@@ -267,7 +272,7 @@ TEST(DevicePageStoreTest, AllocatedPageBeyondDeviceCapacityIsCorruption) {
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
     EXPECT_TRUE(store->IsAllocated(1000));
-    EXPECT_EQ(store->Get(1000).status().code(), StatusCode::kCorruption);
+    EXPECT_EQ(store->Get(1000).status().code(), StatusCode::kNotFound);
 }
 
 TEST(DevicePageStoreTest, GrowsTheDeviceToCoverNewPages) {
@@ -696,6 +701,122 @@ TEST(DevicePageStoreOwnershipTest, ALeasedCoreMayNotFaultAForeignPage) {
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
 #endif
+}
+
+TEST(DevicePageStoreOwnershipTest, APageStampedByThisStreamIsClaimedWithoutAGrant) {
+    // PW1c-7 (workplan-peer-writer.md §8): every lease and grant is
+    // memory-resident, so after a restart a core holds rights over none of
+    // the pages it wrote - but each carries the PL-C stamp of the stream
+    // that last wrote it (PL §9 rule 4), and rule 6 lets no page leave a
+    // stream unrestamped. So a page whose stamp names this core is claimed
+    // on the fault, read or write, and nothing else is: a foreign stamp is
+    // another core's page and 0 is a page no stream has written since it
+    // was formatted (a creation page never acquired - the grant path's
+    // job, never a claim's).
+    //
+    // "A previous run of core 2" is a store over the device that stamps
+    // and flushes; "the restart" is a fresh core-2 store whose lease does
+    // not cover those pages.
+    auto device = MakeDevice(64, 0);
+    PageId own = kInvalidPageId, own_read = kInvalidPageId, foreign = kInvalidPageId,
+           blank = kInvalidPageId;
+    {
+        auto previous = OpenStore(*device);
+        ASSERT_NE(previous, nullptr);
+        auto stamped = [&](std::uint16_t stamp) -> PageId {
+            auto created = previous->CreateNew();
+            EXPECT_TRUE(created.ok()) << created.status().message();
+            if (!created.ok()) return kInvalidPageId;
+            Fill(created.value().second.bytes(), 1);
+            SetPageStreamStamp(created.value().second.bytes(), stamp);
+            return created.value().first;
+        };
+        own = stamped(StreamStampFor(2));
+        own_read = stamped(StreamStampFor(2));
+        foreign = stamped(StreamStampFor(0));
+        blank = stamped(0);
+        ASSERT_TRUE(previous->Sync().ok());
+    }
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    LeasedIdSource lease(Extent{1000, 4});
+    store->SetCoreOwnership(/*core_id=*/2, &lease, /*system_page_limit=*/128);
+
+    // Before the fault: no lease, no grant, no rights - as any restart.
+    EXPECT_FALSE(store->MayFault(own));
+    EXPECT_FALSE(store->MayWrite(own));
+    EXPECT_EQ(store->stamp_claims(), 0u);
+
+    // A write fault claims, and the claim is both rights at once.
+    auto written = store->Get(own);
+    ASSERT_TRUE(written.ok()) << written.status().message();
+    EXPECT_TRUE(Matches(written.value().bytes(), 1)) << "the claim's read is the miss path's";
+    EXPECT_TRUE(store->MayWrite(own));
+    EXPECT_TRUE(store->MayFault(own));
+    EXPECT_EQ(store->stamp_claims(), 1u);
+
+    // A read fault claims too, so the first SELECT after a restart is what
+    // makes the next INSERT writable.
+    ASSERT_TRUE(store->GetForRead(own_read).ok());
+    EXPECT_TRUE(store->MayWrite(own_read));
+    EXPECT_EQ(store->stamp_claims(), 2u);
+
+    // Another stream's stamp and no stamp: refused for writes in every
+    // build, and the claim count does not move.
+    for (PageId page : {foreign, blank}) {
+        auto refused = store->Get(page);
+        EXPECT_FALSE(refused.ok()) << "page " << page << " must not be writable";
+        if (!refused.ok()) EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
+        EXPECT_FALSE(store->MayWrite(page));
+    }
+    EXPECT_EQ(store->stamp_claims(), 2u);
+#ifndef NDEBUG
+    // And for reads where the fault check is enforced.
+    EXPECT_FALSE(store->GetForRead(foreign).ok());
+    EXPECT_FALSE(store->GetForRead(blank).ok());
+#endif
+
+    // Idempotent: a second fault of a claimed page is a hit, not a claim.
+    ASSERT_TRUE(store->GetForRead(own).ok());
+    EXPECT_EQ(store->stamp_claims(), 2u);
+}
+
+TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
+    // Found by PW1c-7's restart test (workplan-peer-writer.md §8): an
+    // extent reserved for a peer is allocated whole in the map core 0
+    // flushes, while the peer writes its pages lazily - so a crash between
+    // a page's PAGE_INIT and its first write-back leaves a page the map
+    // calls allocated and the device holds as zeros. Reading it used to be
+    // a checksum Corruption, which redo can only poison and wait for a full
+    // page image to heal; as NotFound, redo's PAGE_INIT arm creates it, and
+    // the peer remounts.
+    auto device = MakeDevice(64, /*initial_pages=*/256);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    ExtentAllocator extents(store->free_map_bytes(), /*hint=*/128);
+    auto lease = extents.Reserve(8);
+    ASSERT_TRUE(lease.ok()) << lease.status().message();
+    ASSERT_TRUE(store->Sync().ok());  // the map is durable, the pages are not
+    const PageId page = lease.value().first;
+    ASSERT_TRUE(store->IsAllocated(page));
+
+    auto got = store->GetForRead(page);
+    ASSERT_FALSE(got.ok());
+    EXPECT_EQ(got.status().code(), StatusCode::kNotFound) << got.status().message();
+    EXPECT_NE(got.status().message().find("never written"), std::string::npos)
+        << got.status().message();
+
+    // What redo does with a NotFound under a PAGE_INIT: the page exists
+    // after it, and reads back as what was written.
+    auto created = store->CreateAt(page);
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    Fill(created.value().bytes(), 3);
+    ASSERT_TRUE(store->Sync().ok());
+    auto again = store->GetForRead(page);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_TRUE(Matches(again.value().bytes(), 3));
 }
 
 }  // namespace

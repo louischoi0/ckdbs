@@ -242,6 +242,12 @@ public:
     // statement asks it for an id (catalog/row_id_lease.hpp).
     void MaybeRefillRowIds();
 
+    // And for a relation's grants (PW1c-7, relation_grant_service.hpp):
+    // sends the system core one re-delivery request per relation the
+    // dispatcher's rights probe found unwritable since the last tick. On
+    // the same tick as the leases; a no-op with no transport or no demand.
+    void MaybeRequestRelationGrants();
+
     // The receive side of CC7's flush-then-grant handoff (workplan P6b):
     // fault rights over a relation's page range, granted by core 0 at DDL
     // publish. What the `kRelationFaultGrant` handler calls; exposed so a
@@ -264,6 +270,10 @@ public:
     // without a reactor, and diagnostics read the counters.
     catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
     RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
+
+    // PW1c-7's demand, exposed for the same reason: a test reads that the
+    // dispatcher's probe recorded a relation, then drives the tick.
+    const RelationGrantDemand& relation_grant_demand() const noexcept { return grant_demand_; }
 
     // This core's transaction-id lease, exposed for the first of those two
     // reasons only: a test drives a grant without a reactor. The refill
@@ -330,6 +340,23 @@ private:
     // per core rather than per relation, so a second needy relation waits one
     // tick rather than racing the first.
     bool row_id_refill_in_flight_ = false;
+
+    // The relations this core owns and found itself unable to write
+    // (PW1c-7): written by the dispatcher's rights probe, drained by
+    // MaybeRequestRelationGrants. Peers only; core 0's dispatcher is never
+    // given it.
+    RelationGrantDemand grant_demand_;
+    // One re-delivery request in flight per core (the PW1c-7 review's C4):
+    // each request makes core 0 run a whole publish - a catalog scan, an
+    // extent flush, three appends and one fsync on its reactor - so a client
+    // retrying an ungrantable relation at the 1 ms drain cadence must not
+    // become a thousand fsyncs a second on core 0. Cleared when a write
+    // grant is admitted; expires after kRelationGrantRequestTicks ticks so
+    // a request core 0 dropped (a failed publish, a relation it does not
+    // grant) can be asked again by the next refused statement.
+    bool grant_request_in_flight_ = false;
+    std::uint32_t grant_request_age_ticks_ = 0;
+    static constexpr std::uint32_t kRelationGrantRequestTicks = 1000;  // ~1 s at 1 ms
 
     // The remote step server (P4b), armed at AttachTransport: this core
     // answers STEP_OPENs for relations it owns.

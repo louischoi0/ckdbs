@@ -12,6 +12,8 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
+#include "kds/server/relation_grant_service.hpp"
+#include "kds/storage/page_header.hpp"
 #include "kds/wal/log_page_handoff.hpp"
 
 namespace kds::server {
@@ -213,6 +215,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {
         runtime->dispatcher_->SetCatalogReadOnly(true);
+        // And where its rights probe records a relation this core owns but
+        // cannot write (PW1c-7); the tick in Run() asks core 0 for it.
+        runtime->dispatcher_->SetRelationGrantDemand(&runtime->grant_demand_);
     }
 
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {
@@ -508,23 +513,32 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
         return;
     }
     for (PageId id : pages) {
-        // Idempotent re-grant (the review's C3): a page this core already
-        // holds write rights over gets no second acquisition record - the
-        // erase a second record implies is sound only when everything
-        // below it is durable, which a repeat delivery cannot promise.
-        if (store_->MayWrite(id)) continue;
         // C2: the write grant implies fault rights over its exact pages,
         // so it survives arriving before the extent fault grant - two
         // send-retry tasks on a full ring can reorder (scheduler
         // re-queue), and a dropped write grant never returns.
         store_->GrantFaultPages(storage::Extent{id, 1});
-        if (auto page = store_->GetForRead(id); !page.ok()) {
+        auto page = store_->GetForRead(id);
+        if (!page.ok()) {
             if (log_ != nullptr) {
                 log_->Error("core", "core " + std::to_string(config_.core_id) +
                                         " could not fault write-granted page " +
                                         std::to_string(id) + ": " + page.status().message());
             }
             return;
+        }
+        // Idempotent re-grant (the review's C3): a page this core already
+        // holds write rights over gets no second acquisition record - the
+        // erase a second record implies is sound only when everything
+        // below it is durable, which a repeat delivery cannot promise.
+        // Asked after the fault, and of the stamp as well as the rights
+        // (PW1c-7): a re-delivery after a restart names pages whose stamp
+        // already says this stream - the durable form of the acquisition
+        // that already happened - and restamping those again would only
+        // dirty and flush them for a fact the page already states.
+        if (store_->MayWrite(id) || storage::GetPageStreamStamp(page.value().bytes()) ==
+                                        storage::StreamStampFor(config_.core_id)) {
+            continue;
         }
         auto acquired = wal::LogPageHandoff(&*wal_, id, config_.core_id);
         if (!acquired.ok()) {
@@ -550,6 +564,9 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
         return;  // unwritable is refused-retryably, never served wrong
     }
     store_->GrantWritePages(pages);
+    // Whatever asked for these is answered (PW1c-7's latch); a demand that
+    // waited behind it goes out on the next tick.
+    grant_request_in_flight_ = false;
     // A fill that ran before these rights landed cached the CREATE-time
     // row as its root (the pre-grant fall-back in InitTableAccess); drop
     // it so the next fill resolves the anchor now that it is faultable -
@@ -674,15 +691,17 @@ void CoreRuntime::Run() {
         // has never held a window reads as low, so the first tick asks and
         // a peer is ready to write before a client arrives - which is the
         // point, since `TrxIdSequence::Next()` cannot await a grant.
+        // The row-id lease (PW1b) and the relation-grant re-delivery
+        // (PW1c-7) ride the same tick and for the same reason the extent
+        // check is here: cheap `system` work, and a timer each would cost
+        // more than it measures - so one timer, one lambda (the PW1c-7
+        // review's S4; they were one registration apiece).
         if (config_.core_id != 0) {
-            scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
-                                    [this] { MaybeRefillTrxIds(); });
-            // And the row-id lease's (PW1b), on the same tick and for the
-            // same reason the extent check is here: cheap `system` work, and
-            // a second timer for a map walk bounded by this core's relations
-            // would cost more than it measures.
-            scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
-                                    [this] { MaybeRefillRowIds(); });
+            scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
+                MaybeRefillTrxIds();
+                MaybeRefillRowIds();
+                MaybeRequestRelationGrants();
+            });
         }
     }
 
@@ -769,6 +788,31 @@ void CoreRuntime::MaybeRefillRowIds() {
                                          ": row-id refill failed: " + s.message());
             }
         }));
+}
+
+void CoreRuntime::MaybeRequestRelationGrants() {
+    // PW1c-7's asking half (relation_grant_service.hpp). Demand is recorded
+    // where it is discovered - the dispatcher's rights probe, on a write the
+    // shape gate admitted - and this tick asks for one relation at a time:
+    // the answer is an ordinary grant pair, not a reply on this kind, so
+    // the latch (see the header) is what bounds core 0's work, released by
+    // the grant's admission or by age. A demand that arrives while a
+    // request is out simply waits its turn.
+    if (transport_ == nullptr) return;
+    if (grant_request_in_flight_) {
+        if (++grant_request_age_ticks_ < kRelationGrantRequestTicks) return;
+        grant_request_in_flight_ = false;  // core 0 never answered; ask again
+    }
+    const auto oid = grant_demand_.Pop();
+    if (!oid.has_value()) return;
+    RequestRelationGrant(*scheduler_, *transport_, *oid, config_.core_id);
+    grant_request_in_flight_ = true;
+    grant_request_age_ticks_ = 0;
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("grant", "core " + std::to_string(config_.core_id) +
+                                " asked the system core to re-deliver relation oid=" +
+                                std::to_string(*oid) + " (workplan-peer-writer.md PW1c-7)");
+    }
 }
 
 void CoreRuntime::MaybeRefillTrxIds() {

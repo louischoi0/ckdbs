@@ -869,6 +869,13 @@ public:
     // dispatcher never told behaves exactly as it did before PW4.
     void SetCatalogReadOnly(bool read_only) noexcept { catalog_read_only_ = read_only; }
 
+    // Where CheckWriteAffinity records that a relation this core owns has
+    // no write rights here (PW1c-7, core_affinity.hpp). Installed by
+    // CoreRuntime::Open on every non-system core, beside
+    // SetCatalogReadOnly; a dispatcher never told skips the probe. `demand`
+    // must outlive this.
+    void SetRelationGrantDemand(RelationGrantDemand* demand) noexcept { grant_demand_ = demand; }
+
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
     // with the same default posture: a dispatcher never told behaves as the
@@ -1195,6 +1202,8 @@ private:
     // core writes no page the system core allocated", the catalog being
     // the first such page.
     bool catalog_read_only_ = false;
+    // PW1c-7's demand sink; null on core 0 and on hook-less fixtures.
+    RelationGrantDemand* grant_demand_ = nullptr;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;

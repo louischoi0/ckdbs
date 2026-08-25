@@ -12,6 +12,16 @@
 
 namespace kds::storage {
 
+namespace {
+
+// "Never written" as the device shows it: every byte zero. The miss path
+// and CreateAt ask the same question and must answer it the same way.
+bool PageIsAllZero(const std::array<std::byte, kPageSize>& page) noexcept {
+    return std::all_of(page.begin(), page.end(), [](std::byte b) { return b == std::byte{0}; });
+}
+
+}  // namespace
+
 DevicePageStore::DevicePageStore(PageDevice& device, PageId first_new_page_id,
                                  const Page& free_map, const Page& headerless_map,
                                  bool maps_dirty) noexcept
@@ -211,6 +221,20 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
                                                                          bool mark_dirty,
                                                                          bool bump_usage) {
+    // PW1c-7: a page outside every granted set is *claimed* from its stream
+    // stamp before either check below can refuse - the stamp is the durable
+    // form of ownership, the premise server/relation_grant_service.hpp
+    // states once. Attempted only where the check that applies would
+    // refuse (MayWrite implies MayFault for a leased store, so a write asks
+    // one predicate, not two), so a leased or granted page pays nothing and
+    // core 0 (no lease) pays the one pointer compare it always did. The
+    // device read a claim makes is the miss path's own, handed down rather
+    // than repeated.
+    std::unique_ptr<Page> prefetched;
+    if (lease_ != nullptr && page_id >= system_page_limit_ &&
+        (mark_dirty ? !MayWrite(page_id) : !MayFault(page_id))) {
+        TryClaimByStamp(page_id, prefetched);
+    }
 #ifndef NDEBUG
     // The shared-nothing check (workplan-crosscore.md P2, guideline 1),
     // debug builds only. It sits here rather than in Get()/GetForRead()
@@ -242,8 +266,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
             std::to_string(page_id) +
             (page_id < system_page_limit_
                  ? "; the system range has one writer, the system core"
-                 : "; it is not from this core's extent lease, and a relation fault grant "
-                   "conveys read rights only"));
+                 : "; it is not from this core's extent lease, carries no write grant, and "
+                   "its stream stamp does not name this core (a relation fault grant "
+                   "conveys read rights only)"));
     }
 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
@@ -257,17 +282,27 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         return std::span<std::byte, kPageSize>(*it->second.bytes);
     }
 
-    // The free map says this page exists; if the device cannot address it,
-    // the two disagree and that is not a page to read.
+    // The free map says this page exists and the device cannot address it:
+    // the strongest form of "allocated but never written" (the all-zero
+    // case below says when the map runs ahead of the bytes). NotFound for
+    // the same reason as that case - a PAGE_INIT in the log re-creates it,
+    // and calling it Corruption left redo waiting for a full page image.
     if (page_id >= device_.page_capacity()) {
-        return Status::Corruption("DevicePageStore: page " + std::to_string(page_id) +
-                                  " is allocated but beyond device capacity " +
-                                  std::to_string(device_.page_capacity()));
+        return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
+                                " is allocated but was never written (beyond device capacity " +
+                                std::to_string(device_.page_capacity()) + ")");
     }
 
-    auto bytes = std::make_unique<Page>();
-    if (Status s = device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes)); !s.ok()) {
-        return s;
+    // The claim attempt above may already hold the bytes, checksum-verified
+    // there; otherwise this is the read.
+    const bool verified_by_claim = prefetched != nullptr;
+    std::unique_ptr<Page> bytes = std::move(prefetched);
+    if (bytes == nullptr) {
+        bytes = std::make_unique<Page>();
+        if (Status s = device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes));
+            !s.ok()) {
+            return s;
+        }
     }
 
     // Verified on the miss path only, never on a hit (page.md section 10).
@@ -277,7 +312,36 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // to be durable: this is the moment an in-memory-only set would have
     // already been lost.
     if (!IsHeaderless(page_id)) {
-        if (Status s = VerifyPageChecksum(std::span<const std::byte, kPageSize>(*bytes));
+        // A page the map calls allocated whose bytes were never written:
+        // all zero, page_type kInvalid - the shape Open() already reads as
+        // "fresh" for the free map. Reached when an allocation outruns its
+        // first flush: an extent reserved for a peer's lease is allocated
+        // whole in the map core 0 flushes at startup, while the peer writes
+        // its pages lazily, so a crash between a page's PAGE_INIT and its
+        // write-back leaves exactly this (found by PW1c-7's restart test:
+        // a peer that crashed with one unflushed new page could not
+        // remount). NotFound, not Corruption: nothing was damaged, and
+        // redo's PAGE_INIT arm *creates* a page the store does not hold,
+        // where its checksum arm can only poison one it holds wrong and
+        // wait for a full page image that never comes (wal/redo.cpp). A
+        // torn page with a zero header and a nonzero body is not all zero
+        // and still fails the checksum below.
+        //
+        // Run even when the claim above verified the checksum, and
+        // deliberately: the claim verifies *that* check, not this one, and
+        // "an all-zero page cannot pass a checksum" is a fact about
+        // CRC32C's value over 8192 zero bytes rather than anything this
+        // code says. Skipping it on the claim path would make the store's
+        // answer for a never-written page depend on that coincidence.
+        if (PageIsAllZero(*bytes)) {
+            return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
+                                    " is allocated but was never written (all zero)");
+        }
+        // The claim above verified these very bytes before it believed
+        // their stamp, so this is the one check it does subsume.
+        if (Status s = verified_by_claim
+                           ? Status::OK()
+                           : VerifyPageChecksum(std::span<const std::byte, kPageSize>(*bytes));
             !s.ok()) {
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore",
@@ -375,28 +439,71 @@ bool DevicePageStore::MayFault(PageId page_id) const noexcept {
     if (page_id < system_page_limit_) return true;
     if (lease_->Owns(page_id)) return true;
     // CC7: pages of a relation the catalog assigns to this core, granted at
-    // DDL publish. Read rights only - MayWrite never consults this list.
-    for (const Extent& granted : fault_granted_) {
-        if (granted.Contains(page_id)) return true;
-    }
-    return false;
+    // DDL publish - read rights only, MayWrite never consults them. And
+    // what this core may write it may read: a write grant's exact pages
+    // and PW1c-7's stamp claims.
+    return HasFaultRight(page_id) || HasWriteRight(page_id);
 }
 
 void DevicePageStore::GrantFaultPages(Extent extent) {
-    if (extent.empty()) return;
-    for (Extent& granted : fault_granted_) {
-        if (granted.end() == extent.first) {
-            granted.count += extent.count;
-            return;
-        }
-    }
-    fault_granted_.push_back(extent);
+    // The bitmap's ceiling bounds the loop, not the extent: an id past it
+    // holds no bit and stays unfaultable, GrantWritePages' rule.
+    const PageId end = std::min<PageId>(extent.end(), kFreeMapBitsPerPage);
+    for (PageId id = extent.first; id < end; ++id) FreeMapAllocate(fault_rights_bytes(), id);
 }
 
 void DevicePageStore::GrantWritePages(std::span<const PageId> pages) {
     for (PageId id : pages) {
-        auto it = std::lower_bound(write_granted_.begin(), write_granted_.end(), id);
-        if (it == write_granted_.end() || *it != id) write_granted_.insert(it, id);
+        if (id < kFreeMapBitsPerPage) FreeMapAllocate(write_rights_bytes(), id);
+    }
+}
+
+bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
+    // Not addressable is the strongest form of never written. A failed read
+    // answers "in use": refusing a CreateAt is the safe error.
+    if (page_id >= device_.page_capacity()) return true;
+    auto bytes = std::make_unique<Page>();
+    if (!device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes)).ok()) return false;
+    return PageIsAllZero(*bytes);
+}
+
+void DevicePageStore::TryClaimByStamp(PageId page_id, std::unique_ptr<Page>& prefetched) {
+    if (page_id >= kFreeMapBitsPerPage) return;  // no bit could hold the claim
+    // A headerless page carries no stamp at all, so the bytes at the stamp's
+    // offset are payload - checked here rather than beside the device read,
+    // because the resident branch below would otherwise believe whatever a
+    // headerless body happened to spell there and hand out write rights for
+    // it. Refused downstream exactly as today.
+    if (IsHeaderless(page_id)) return;
+    std::uint16_t stamp = 0;
+    if (auto it = frames_.find(page_id); it != frames_.end()) {
+        // Resident without rights: redo faulted it at mount, before the
+        // lease existed (core_runtime.cpp orders it that way), and stamped
+        // this stream's id onto it as it replayed.
+        stamp = GetPageStreamStamp(std::span<const std::byte, kPageSize>(*it->second.bytes));
+    } else {
+        // A page the device cannot address is not a page to read.
+        if (page_id >= device_.page_capacity()) return;
+        auto bytes = std::make_unique<Page>();
+        if (!device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes)).ok()) return;
+        // Verified before the stamp is believed: a torn page could spell
+        // any stamp. The miss path trusts this verification and skips its
+        // own.
+        if (!VerifyPageChecksum(std::span<const std::byte, kPageSize>(*bytes)).ok()) return;
+        stamp = GetPageStreamStamp(std::span<const std::byte, kPageSize>(*bytes));
+        prefetched = std::move(bytes);
+    }
+    // Only this stream's own stamp claims. A foreign stamp is another
+    // core's page (a defect to reach, refused as before); 0 is a page no
+    // stream has written since it was formatted - a creation page core 0
+    // handed off but this core never acquired, which the grant path's
+    // acquisition restamp (rule 6) settles, never a claim.
+    if (stamp != StreamStampFor(core_id_)) return;
+    FreeMapAllocate(write_rights_bytes(), page_id);
+    ++stamp_claims_;
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("pagestore", "core " + std::to_string(core_id_) + " claimed page " +
+                                     std::to_string(page_id) + " from its stream stamp");
     }
 }
 
@@ -439,8 +546,9 @@ bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
     if (page_id < system_page_limit_) return false;
     if (lease_->Owns(page_id)) return true;
     // PW1c-4: the exact pages core 0 formatted for this core's relations,
-    // granted after their handoff records went durable (GrantWritePages).
-    return std::binary_search(write_granted_.begin(), write_granted_.end(), page_id);
+    // granted after their handoff records went durable (GrantWritePages);
+    // PW1c-7: the pages this stream's stamp claimed (TryClaimByStamp).
+    return HasWriteRight(page_id);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(PageId page_id) {
@@ -459,7 +567,17 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
                                   " is beyond the single free-map page's coverage (" +
                                   std::to_string(kFreeMapBitsPerPage) + " ids)");
     }
-    if (IsAllocated(page_id)) {
+    // An allocated id is in use unless the device proves it was never
+    // written - the page redo re-creates after a PAGE_INIT outran its first
+    // flush (ResidentBytes answers NotFound for the same page, and says why
+    // the map can be ahead of the bytes). Decided by a resident frame or
+    // the device's bytes, never by the map alone: the map bit is exactly
+    // what is true of both a live page and a never-written one.
+    // The two maps live in this object, not in a frame, and may not have
+    // reached the device yet - in use by definition.
+    if (page_id == kFreeMapPageId || page_id == kHeaderlessMapPageId ||
+        (IsAllocated(page_id) &&
+         (frames_.count(page_id) != 0 || !DeviceHoldsOnlyZeros(page_id)))) {
         return Status::AlreadyExists("page id already in use");
     }
     if (Status s = EnsureAddressable(page_id); !s.ok()) return s;

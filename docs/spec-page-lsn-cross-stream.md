@@ -295,12 +295,30 @@ context.
    pages *before* appending the acquisition (free at first contact,
    load-bearing on a re-grant after a remount, where replayed-but-
    unflushed writes can sit on the frame), and a page already holding
-   write rights takes no second acquisition at all.
+   write rights takes no second acquisition at all — rights granted this
+   run, or **a stamp that already names the receiver**, which is the
+   durable form of the same fact (amended 2026-08-24 with PW1c-7: a
+   re-delivery after a remount names pages whose stamp already says so,
+   and restamping them again would only dirty and flush them for a fact
+   the page already states).
    Cost: one page write and flush per handoff, beside the flush rule 1a
    already pays. This also closes the unstamped-crossing gap: creation
    pages cross at DDL publish carrying stamp 0 today (`LogPageInit` does
    not stamp), and the restamp is what stamps them — the crossing
    itself, not the writer's goodwill.
+   - **The stamp is the durable form of ownership** (2026-08-24,
+     `docs/workplan-peer-writer.md` PW1c-7). Every lease and grant a
+     core holds is memory-resident, so after a restart the stamp is the
+     only statement of whose page this is — complete by rule 4 (every
+     write stamps) and exact by this rule (no page leaves a stream
+     unrestamped). A leased store therefore **claims** a page whose
+     stamp names its own stream, for reads and writes alike, when no
+     lease or grant covers it (`DevicePageStore::TryClaimByStamp`); a
+     foreign stamp or 0 claims nothing, and a creation page never
+     acquired is re-delivered by the giver on request. Binding on the
+     mover: a migration must **revoke** the giver's lease ownership of
+     the page as well as restamp it, or the giver's `LeasedIdSource`
+     keeps admitting a write the stamp no longer allows.
 
 Consequences that bind other work:
 

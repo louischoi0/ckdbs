@@ -469,6 +469,24 @@ the owner's workplan.
 
 ## What a restart loses (without a crash)
 
+- ~~**A peer's page ownership.** Extent leases and relation grants are
+  memory-resident and carved or sent once, so a restarted peer could
+  neither read (Debug) nor write (every build) the pages it had
+  allocated, and could not write the creation pages core 0 had handed
+  it~~ — **closed 2026-08-24** (PW1c-7, `docs/workplan-peer-writer.md`
+  §8): the PL-C stream stamp is the durable form of ownership, a leased
+  store claims own-stamped pages on the fault, and a creation page never
+  acquired is re-delivered on the owner's request. What a restart still
+  costs: one claim per page on first touch (a stamp read on the miss
+  path's own bytes), and a relation whose grant was lost takes one
+  retryable refusal before the re-delivery lands. **The same test found
+  and closed a crash-recovery hole**: a peer that crashed between a new
+  page's PAGE_INIT and its first write-back could not remount — the
+  reserved extent had the page *allocated* in the flushed map while the
+  device held zeros, and redo poisoned the checksum failure instead of
+  creating the page. An allocated-but-never-written page now reads
+  `NotFound` and redo's PAGE_INIT arm creates it (PW1c-7's row has the
+  detail).
 - **Cabin entry sets** are memory-resident by design
   (`docs/feat-cabin.md` §9): the `sys.cabins` row survives, the sets
   re-observe from traffic.
@@ -630,6 +648,15 @@ still waits on its own gate, so:
   heap relation with no secondary index writes no catalog page, so the
   trx-id lease alone makes that one shape peer-writable. Its PW2 decision
   — how a root move reaches core 0 — is open and listed there.
+  **Later the same day (2026-08-24)**: PW1c-1..5 built — a funded peer
+  INSERTs end to end — PW2 decided and built as the anchor page (the
+  btree shape lifted, the indexed shape still gated on PW1c-6's grant
+  extension), and **PW1c-7** closed the restart hole the series had
+  named: leases and grants are memory-resident, and the probe found a
+  restart loses every page a peer allocated itself, not only its grants;
+  the PL-C stamp now carries ownership (`docs/workplan-peer-writer.md`
+  §8). What still stands of this entry: PW6's number is unmeasured, and
+  a peer listener with tls/auth is refused at boot (PW5).
 - **`Catalog::catalog_version()` is not a sound guard for a cached
   `TableAccess`** (named 2026-08-15 while designing P4d-4c's per-batch
   runner handle). `InvalidateFromPeer()` — the `kCatalogInvalidate`

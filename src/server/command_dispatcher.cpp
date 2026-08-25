@@ -2812,6 +2812,34 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                 "this relation's shape is not funded for writes on core " +
                 std::to_string(core_id_) + " (workplan-peer-writer.md §8)");
         }
+        // PW1c-7's rights probe. The shape is funded; whether the *rights*
+        // are here is a separate question, because every grant is
+        // memory-resident and a crash before acquisition, a restart or a
+        // message lost to the ring leaves a relation this core owns with
+        // no writer. The store answers from its lease, its grants and the
+        // stamp claim it makes on the read below (ResidentBytes,
+        // device_page_store.cpp); a page none of them covers is a creation
+        // page core 0 formatted and this core never acquired, which only
+        // the system core can re-deliver - so the demand is recorded for
+        // the drain tick's request and the statement refused retryably by
+        // name, where the store's backstop would name a page id. All three
+        // creation pages, because a crash between the grant path's restamp
+        // flush and its admission can leave them split. One bit test per
+        // page on the funded path. The null test is defence only: the sink
+        // is installed at the same site, under the same condition, as
+        // `catalog_read_only_` (core_runtime.cpp), so nothing reaches here
+        // without one.
+        if (grant_demand_ != nullptr) {
+            const PageId creation[] = {access.desc_page_id, access.varheap_page_id,
+                                       access.anchor_page_id};
+            for (PageId page : creation) {
+                if (page == kInvalidPageId || page_store_.MayWrite(page)) continue;
+                (void)page_store_.GetForRead(page);  // the claim runs on the fault
+                if (page_store_.MayWrite(page)) continue;
+                grant_demand_->Record(access.oid);
+                return RelationWriteRightsPending(core_id_, relation);
+            }
+        }
     }
     session.BindHomeCore(access.owner_core);
     return Status::OK();
@@ -2995,7 +3023,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // row goes to the one relation.
     if (Status affinity = CheckWriteAffinity(*ta, stmt.table_name, *scope.session);
         !affinity.ok()) {
-        return {"ERR " + affinity.message(), false};
+        // ErrorReply, not a bare "ERR ": the affinity refusals are
+        // TxnConflict (CrossCoreWriteRefused, RelationWriteRightsPending)
+        // and the wire's `TXN_CONFLICT retryable=1` is what a client
+        // retries on - all three write sites spelled it without until
+        // PW1c-7's test asked for the bit.
+        return {ErrorReply(affinity), false};
     }
 
     // ---- The bulk loop (docs/spec-bulkinsert.md §2.3, §4) ---------------
@@ -4876,7 +4909,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // transaction already bound to another core, is refused retryably
     // (crosscore.md CC3, core_affinity.hpp).
     if (Status affinity = CheckWriteAffinity(ta, stmt.table_name, *scope.session); !affinity.ok()) {
-        return {"ERR " + affinity.message(), false};
+        return {ErrorReply(affinity), false};  // the retryable spelling, as INSERT's site says
     }
 
     // Resolve the SET list before touching storage, so a bad target fails
@@ -5581,7 +5614,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // Before anything is marked: same rule as INSERT and UPDATE
     // (crosscore.md CC3). A delete-mark is a write.
     if (Status affinity = CheckWriteAffinity(ta, stmt.table_name, *scope.session); !affinity.ok()) {
-        return {"ERR " + affinity.message(), false};
+        return {ErrorReply(affinity), false};  // the retryable spelling, as INSERT's site says
     }
 
     // The same WHERE compilation UPDATE uses, so a DELETE's predicate means

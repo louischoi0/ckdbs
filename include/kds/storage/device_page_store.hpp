@@ -303,6 +303,11 @@ public:
     // mechanical check on shared-nothing rather than a security boundary:
     // what it catches is a core reaching for a page that is not its own,
     // which is a defect however it got there.
+    //
+    // A page this core may write, it may read: the write-rights set
+    // (grants and stamp claims, below) is consulted here too, so a write
+    // grant carries its own fault rights (the 95b45e8 review's C2) and a
+    // page claimed from its stamp is readable by the claim alone.
     bool MayFault(PageId page_id) const noexcept;
 
     // Whether this store's core may **write** `page_id` - i.e. take a frame
@@ -313,18 +318,28 @@ public:
     // of P6's soundness. Catalog pages have exactly one writer, so a peer's
     // view can be stale (which is a retryable "not found", crosscore.md §5)
     // but never torn by a second writer.
-    bool MayWrite(PageId page_id) const noexcept;
+    //
+    // Three sources say yes for a leased store: the lease, a write grant
+    // (PW1c-4), and a **stamp claim** (PW1c-7) - a page whose PL-C stream
+    // stamp names this core, found on the frame-load path when neither of
+    // the first two covered it. The claim is what makes ownership survive
+    // a restart: leases and grants are memory-resident, the stamp is the
+    // page's own durable statement of the same fact, and PL §9 rule 6
+    // guarantees no page leaves a stream without being restamped.
+    bool MayWrite(PageId page_id) const noexcept override;
 
     // Fault rights over a page range this core does **not** own by lease
     // (crosscore.md CC7, workplan P6b): a relation the catalog assigns to
     // this core is built from another core's allocations, and this is how
     // page ownership becomes a function of the catalog. MayFault consults
-    // these ranges; MayWrite deliberately never does - a grant is
-    // read-only, and the write path arrives only with statement dispatch.
+    // these; MayWrite deliberately never does - a grant is read-only, and
+    // the write path arrives only with statement dispatch.
     //
-    // Contiguous grants merge, LeasedIdSource::Grant's rule, so the common
-    // case stays one range. Nothing revokes a grant: revocation is
-    // ownership rebalance, which M3 keeps out of v1.
+    // Held as bits beside the write-rights bitmap (the PW1c-7 review's S1;
+    // it was a vector of extents merged where contiguous), so a
+    // re-delivered grant that repeats its extent sets what is already set
+    // and MayFault stays one bit test whatever was granted. Nothing revokes
+    // a grant: revocation is ownership rebalance, which M3 keeps out of v1.
     void GrantFaultPages(Extent extent);
 
     // Write rights over **exact pages** this core does not own by lease
@@ -334,9 +349,15 @@ public:
     // the sender's to keep). Exact-page and never extent-granular,
     // deliberately - the superset that is safe to fault is not safe to
     // write, which is the precise objection that rules out widening
-    // GrantFaultPages instead. MayWrite consults this set; nothing revokes
-    // an entry, GrantFaultPages' rule.
+    // GrantFaultPages instead. MayWrite and MayFault consult this set;
+    // nothing revokes an entry, GrantFaultPages' rule. Ids beyond the free
+    // map's coverage hold no bit and are never writable, the store's
+    // existing ceiling.
     void GrantWritePages(std::span<const PageId> pages);
+
+    // Pages this store admitted from their stream stamp alone (PW1c-7).
+    // A diagnostic, and what a test reads to see that a claim happened.
+    std::uint64_t stamp_claims() const noexcept { return stamp_claims_; }
 
     // Re-reads the free-map page from the device into this store's copy
     // (peers only - the system core's copy IS the authority). The fix for
@@ -607,6 +628,23 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
                                                             bool bump_usage = true);
 
+    // PW1c-7's claim, run by ResidentBytes for a leased store on a page
+    // outside every granted set: reads the page's stream stamp - off the
+    // resident frame when redo left one, else off the device, checksum
+    // verified - and admits the page to the write-rights set when the
+    // stamp names this core. A device read it made is handed back through
+    // `prefetched` so the miss path does not read twice. Anything else
+    // (foreign stamp, unstamped, headerless, unreadable, beyond the bitmap)
+    // leaves the rights exactly as they were: the checks after it refuse.
+    void TryClaimByStamp(PageId page_id, std::unique_ptr<Page>& prefetched);
+
+    // Whether the device holds nothing for `page_id` - not addressable, or
+    // every byte zero: a page allocated in the map and never written. What
+    // lets CreateAt take an allocated id (redo re-creating a page whose
+    // PAGE_INIT outran its first flush) without ever clobbering a live one.
+    // A failed read answers false, the refusing side.
+    bool DeviceHoldsOnlyZeros(PageId page_id) const;
+
     // The ring's rotation half: drops `page_id`'s frame unless the
     // foreground claimed it (dirty, pinned, usage-bumped, or pinned-class)
     // - in which case the frame is abandoned to the page table, having
@@ -637,6 +675,22 @@ private:
     std::span<const std::byte, kPageSize> headerless_map_bytes() const noexcept {
         return std::span<const std::byte, kPageSize>(headerless_map_page_);
     }
+    std::span<std::byte, kPageSize> fault_rights_bytes() noexcept {
+        return std::span<std::byte, kPageSize>(fault_rights_);
+    }
+    std::span<std::byte, kPageSize> write_rights_bytes() noexcept {
+        return std::span<std::byte, kPageSize>(write_rights_);
+    }
+    // The bit tests, range-checked because the bitmap helper reads an id
+    // beyond its coverage as set - stated once, here.
+    bool HasFaultRight(PageId page_id) const noexcept {
+        return page_id < kFreeMapBitsPerPage &&
+               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(fault_rights_), page_id);
+    }
+    bool HasWriteRight(PageId page_id) const noexcept {
+        return page_id < kFreeMapBitsPerPage &&
+               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(write_rights_), page_id);
+    }
 
     PageDevice& device_;
     Logger* log_ = nullptr;
@@ -646,13 +700,21 @@ private:
     // every construction site that predates multicore keeps its behaviour.
     std::uint32_t core_id_ = 0;
     LeasedIdSource* lease_ = nullptr;
-    // CC7 fault grants, merged where contiguous. See GrantFaultPages.
-    std::vector<Extent> fault_granted_;
-    // PW1c-4 exact-page write grants, sorted and unique. A vector rather
-    // than a set: the population is the formatted creation pages of this
-    // core's relations - a handful - and MayWrite is on the write hot
-    // path, where a sorted-vector binary search beats a node container.
-    std::vector<PageId> write_granted_;
+    // The two rights sets a leased store holds beyond its lease, one bit
+    // per page id in the free map's layout (the headerless map's
+    // precedent: identical addressing, different meaning): CC7's fault
+    // grants, and the write rights - PW1c-4's exact-page grants plus
+    // PW1c-7's stamp claims. Bitmaps rather than the extent vector and
+    // sorted page vector that preceded them, because the claims grew the
+    // write population from a handful of creation pages to every page of
+    // this core's relations touched since mount, re-delivery repeats
+    // grants, and both checks sit on the frame-load path. Never persisted:
+    // the durable form of the same fact is each page's own stamp, which is
+    // what refills them. Core 0 (no lease) never consults either. 16 KiB
+    // per store.
+    Page fault_rights_{};
+    Page write_rights_{};
+    std::uint64_t stamp_claims_ = 0;
     // First non-system page id; 0 means no readable system range. See
     // SetCoreOwnership.
     PageId system_page_limit_ = 0;

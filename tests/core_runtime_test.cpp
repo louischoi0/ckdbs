@@ -21,6 +21,7 @@
 
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/server/relation_grant_service.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/session_step_client.hpp"
@@ -1456,7 +1457,9 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
 
     peer.value()->GrantRelationFault(
         RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
-    const PageId pages[] = {row.value().desc_page_id};
+    // The production grant set (root, var-heap root, anchor); PW1c-7's
+    // rights probe asks for all of it before admitting a write.
+    const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
     peer.value()->GrantRelationWrite(pages);
     ASSERT_TRUE(peer.value()->store().MayWrite(row.value().desc_page_id));
 
@@ -1492,6 +1495,245 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
     peer.value()->GrantRelationWrite(pages);
     EXPECT_EQ(peer.value()->wal().appended_lsn(), before)
         << "a page already writable must take no second acquisition";
+}
+
+TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
+    // PW1c-7 (workplan-peer-writer.md §8): a peer that wrote a relation
+    // across several pages, then restarted, holds nothing in memory - a
+    // fresh extent lease that covers none of its old pages, no fault grant,
+    // no write grant. What it does hold is durable: every page it wrote
+    // carries its stream stamp (PL §9 rule 4), the creation pages since the
+    // acquisition restamp (rule 6). The store claims from the stamp on the
+    // fault, so the relation reads whole and takes writes again with no
+    // grant re-delivered at all. Two restarts: one after the pages were
+    // flushed (the device path), one with the pages living only in the
+    // log (redo's replay leaves them resident without rights, stamped as it
+    // applied them - the resident-frame path).
+    for (const bool flush_before_restart : {true, false}) {
+        SCOPED_TRACE(flush_before_restart ? "pages flushed before the restart"
+                                          : "pages living only in the log");
+        catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                                  /*core_count=*/2);
+        catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+        const std::string name = flush_before_restart ? "survives_flushed" : "survives_logged";
+        auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
+                                        catalog::ClusteredType::kHeap,
+                                        catalog::KeyMode::kAssigned);
+        ASSERT_TRUE(oid.ok()) << oid.status().message();
+        auto row = catalog2.GetSysTableRow(oid.value());
+        ASSERT_TRUE(row.ok());
+        ASSERT_EQ(row.value().owner_core, 1u);
+        ASSERT_TRUE(core0_store_->Sync().ok());
+        const PageId root = row.value().desc_page_id;
+
+        txn::TrxIdSequence core0_ids(core0_->superblock);
+        auto fund = [&](CoreRuntime& peer) {
+            auto first = catalog2.AllocateRowIdRange(oid.value(), 1024);
+            ASSERT_TRUE(first.ok());
+            peer.row_id_leases().Grant(oid.value(), first.value(), 1024);
+            auto block = core0_ids.Carve(1024);
+            ASSERT_TRUE(block.ok());
+            peer.trx_id_lease().Grant(block.value().first, block.value().count);
+        };
+
+        // The first run: funded the ordinary way, grown past one page.
+        CoreRuntime::Config first_run = ConfigFor(1);
+        // The ceiling core 0 copies in at every start (Expeditor's loop):
+        // the second iteration's stream already names the first's ids.
+        first_run.next_trx_id = core0_->superblock.next_trx_id();
+        SCOPED_TRACE("first run's lease starts at page " + std::to_string(first_run.lease.first));
+        auto peer = CoreRuntime::Open(first_run, *device_, clock_, nullptr);
+        ASSERT_TRUE(peer.ok()) << peer.status().message();
+        peer.value()->GrantRelationFault(
+            RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+        const PageId pages[] = {root, row.value().anchor_page_id};
+        peer.value()->GrantRelationWrite(pages);
+        fund(*peer.value());
+        for (int i = 0; i < 600; ++i) {
+            const auto ins = peer.value()
+                                 ->dispatcher()
+                                 .Dispatch("INSERT INTO " + name + " VALUES (" +
+                                           std::to_string(i) + ")")
+                                 .response;
+            ASSERT_NE(ins.rfind("ERR", 0), 0u) << "row " << i << ": " << ins;
+        }
+        EXPECT_EQ(peer.value()->store().stamp_claims(), 0u)
+            << "a funded first run claims nothing";
+        ASSERT_TRUE(peer.value()->Sync().ok()) << "the log is what survives";
+        if (flush_before_restart) ASSERT_TRUE(peer.value()->store().Sync().ok());
+        peer.value().reset();
+
+        // The restart: a new lease, nothing granted, the ceiling core 0
+        // would copy in.
+        CoreRuntime::Config again = ConfigFor(1);
+        again.next_trx_id = core0_->superblock.next_trx_id();
+        auto reopened = CoreRuntime::Open(again, *device_, clock_, nullptr);
+        ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+        EXPECT_FALSE(reopened.value()->store().MayWrite(root))
+            << "nothing in memory says the root is this core's yet";
+
+        const auto count =
+            reopened.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM " + name).response;
+        EXPECT_NE(count.find("600"), std::string::npos) << count;
+        EXPECT_GT(reopened.value()->store().stamp_claims(), 1u)
+            << "the root and its growth pages must each have been claimed";
+        EXPECT_TRUE(reopened.value()->store().MayWrite(root))
+            << "the read's claim is the write's right";
+
+        fund(*reopened.value());
+        const auto ins =
+            reopened.value()->dispatcher().Dispatch("INSERT INTO " + name + " VALUES (600)").response;
+        EXPECT_NE(ins.rfind("ERR", 0), 0u) << "the restarted owner must write again: " << ins;
+        const auto after =
+            reopened.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM " + name).response;
+        EXPECT_NE(after.find("601"), std::string::npos) << after;
+        // Destroyed with its last page unflushed and its PAGE_INIT in the
+        // log - the second iteration's mount replays this stream too, which
+        // is the never-written-page case the store now reads as NotFound.
+        reopened.value().reset();
+    }
+}
+
+TEST_F(CoreRuntimeTest, AnUnacquiredRelationIsAskedForAndTheRegrantLands) {
+    // PW1c-7's other half: the stamp claims only what this stream wrote,
+    // and a relation whose creation pages this peer never acquired - the
+    // grant crashed, was lost to the ring, or preceded a restart - has an
+    // owner and no writer. The dispatcher's rights probe refuses by name
+    // and records the demand; the tick asks core 0; core 0 re-runs the
+    // publish; the grants land through PW1c-4's receivers; the retry
+    // writes. Over a real ring, with core 0's handler wired to the same
+    // publish sequence Expeditor installs.
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    core0.AttachTransport(&transport.value(), 0);
+    // The peer's completion checkpoint publishes an anchor here; not what
+    // this test is about, so it is accepted and dropped.
+    ASSERT_TRUE(core0
+                    .RegisterMessageHandler(sched::RingMessageKind::kAnchorWrite,
+                                            [](const sched::MessageHeader&,
+                                               std::span<const std::byte>) {})
+                    .ok());
+
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    // No publish hook on the catalog: this CREATE TABLE's grants are the
+    // ones that got lost.
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "unacquired", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 1u);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    const PageId root = row.value().desc_page_id;
+
+    int publishes = 0;
+    const auto send = [&](sched::RingMessageKind kind, const auto& pod) {
+        std::byte payload[sizeof(pod)];
+        std::memcpy(payload, &pod, sizeof(pod));
+        sched::MessageHeader header{};
+        header.src_core = 0;
+        header.dst_core = 1;
+        header.session_core = 0;
+        header.kind = static_cast<std::uint16_t>(kind);
+        header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+        core0.Submit(sched::MakeSendRetryTask(transport.value(), header, payload));
+    };
+    // Expeditor's publish, on the fixture's store: flush, durable handoff
+    // records (an unlogged store answers kNoLsn), both grants.
+    const catalog::Catalog::RelationPublishHook publish =
+        [&](catalog::Oid, std::uint32_t owner, PageId r, PageId varheap, PageId anchor) {
+            catalog::SysTableRow facts{};
+            facts.desc_page_id = r;
+            facts.varheap_page_id = varheap;
+            facts.anchor_page_id = anchor;
+            const storage::Extent range =
+                RelationFaultExtentOf(facts, storage::kDefaultExtentPages);
+            std::vector<PageId> pages;
+            for (PageId id = range.first; id < range.end(); ++id) pages.push_back(id);
+            ASSERT_TRUE(core0_store_->FlushPages(pages).ok());
+            const PageId formatted[] = {r, varheap, anchor};
+            auto grant = PrepareRelationHandoff(nullptr, owner, formatted);
+            ASSERT_TRUE(grant.ok()) << grant.status().message();
+            send(sched::RingMessageKind::kRelationFaultGrant,
+                 ExtentGrantPayload{range.first, range.count});
+            send(sched::RingMessageKind::kRelationWriteGrant, grant.value());
+            ++publishes;
+        };
+    ASSERT_TRUE(RegisterRelationGrantHandler(core0, catalog2, publish, nullptr).ok());
+
+    CoreRuntime::Config config = ConfigFor(1);
+    config.next_trx_id = core0_->superblock.next_trx_id();
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
+    ASSERT_TRUE(first.ok());
+    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    // Refused by name, retryably, with the demand recorded - and no
+    // request has left yet.
+    const auto refused =
+        peer.value()->dispatcher().Dispatch("INSERT INTO unacquired VALUES (1)").response;
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("PW1c-7"), std::string::npos) << refused;
+    EXPECT_NE(refused.find("TXN_CONFLICT"), std::string::npos)
+        << "a re-delivery makes the retry succeed, so the refusal is retryable: " << refused;
+    EXPECT_FALSE(peer.value()->relation_grant_demand().empty());
+    EXPECT_EQ(publishes, 0);
+
+    peer.value()->MaybeRequestRelationGrants();
+    // A statement refused while the request is out records its demand and
+    // the tick sends nothing more (the review's C4 latch): one publish on
+    // core 0 per request, however hard a client retries.
+    const auto refused_again =
+        peer.value()->dispatcher().Dispatch("INSERT INTO unacquired VALUES (1)").response;
+    EXPECT_EQ(refused_again.rfind("ERR", 0), 0u) << refused_again;
+    peer.value()->MaybeRequestRelationGrants();
+    for (int i = 0; i < 40; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    EXPECT_EQ(publishes, 1) << "core 0 must have run the publish exactly once";
+    EXPECT_TRUE(peer.value()->store().MayWrite(root)) << "the re-delivered grant did not land";
+
+    // The grant's admission released the latch, so the demand that waited
+    // goes out on the next tick - and core 0's repeat is harmless: no
+    // second acquisition, the same rights.
+    EXPECT_FALSE(peer.value()->relation_grant_demand().empty());
+    peer.value()->MaybeRequestRelationGrants();
+    for (int i = 0; i < 40; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    EXPECT_EQ(publishes, 2);
+    EXPECT_TRUE(peer.value()->relation_grant_demand().empty());
+
+    const auto retried =
+        peer.value()->dispatcher().Dispatch("INSERT INTO unacquired VALUES (1)").response;
+    EXPECT_NE(retried.rfind("ERR", 0), 0u) << "the retry must write: " << retried;
+    const auto sel = peer.value()->dispatcher().Dispatch("SELECT * FROM unacquired").response;
+    EXPECT_NE(sel.find(",1"), std::string::npos) << sel;
+
+    // Core 0 re-delivers only to the catalog's owner: a request for a
+    // relation this peer does not own is dropped, never granted.
+    auto other = core0_->catalog.CreateTable(catalog::kNamespacePublic, "core0s",
+                                             TwoColumnSchema(), catalog::ClusteredType::kHeap,
+                                             catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(other.ok());
+    RequestRelationGrant(peer.value()->scheduler(), transport.value(), other.value(), 1);
+    for (int i = 0; i < 40; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    EXPECT_EQ(publishes, 2) << "a foreign relation's request must be dropped";
 }
 
 TEST_F(CoreRuntimeTest, AWriteGrantAloneCarriesItsOwnFaultRights) {
