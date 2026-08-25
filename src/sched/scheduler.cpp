@@ -203,13 +203,15 @@ int Scheduler::IdleTimeoutMs() const noexcept {
     return timeout;
 }
 
-bool Scheduler::PickNextGroup(SchedulingGroup& out) const {
+bool Scheduler::PickNextGroup(const std::array<std::size_t, kNumSchedulingGroups>& remaining,
+                              SchedulingGroup& out) const {
     bool found = false;
     double best_ratio = 0.0;
     for (int i = 0; i < kNumSchedulingGroups; ++i) {
-        if (ready_queues_[static_cast<std::size_t>(i)].empty()) continue;
-        double ratio = static_cast<double>(consumed_ns_[static_cast<std::size_t>(i)]) /
-                       static_cast<double>(config_.group_shares[static_cast<std::size_t>(i)]);
+        const auto idx = static_cast<std::size_t>(i);
+        if (remaining[idx] == 0) continue;
+        double ratio = static_cast<double>(consumed_ns_[idx]) /
+                       static_cast<double>(config_.group_shares[idx]);
         if (!found || ratio < best_ratio) {
             found = true;
             best_ratio = ratio;
@@ -229,31 +231,63 @@ void Scheduler::MaybeDecayConsumedRuntime() {
 }
 
 bool Scheduler::RunReadyTasks() {
+    // The round's population is what was ready when it began: a task polled
+    // this round that suspends goes to the back of its queue and is not
+    // polled again until the next iteration - `remaining` counts it out,
+    // and a task submitted by a poll waits for the next round too.
+    //
+    // Two floors under the share law, both forced by the lease-refill
+    // trace (docs/workplan-peer-writer.md PW7; sched.md §4 carries them).
+    // A *parked* coroutine answers kSuspended in nanoseconds. Without the
+    // first floor the loop budget re-polled one parked system task up to
+    // 64 times an iteration and charged every poll to a group with share
+    // 50, so the group ran up a debt the foreground (share 1000, and mostly
+    // idle inside polls - a statement's time is the drain's fdatasync,
+    // outside any group's account) took hundreds of iterations to match;
+    // without the second, the next system task - the next relation's
+    // refill - sat behind that debt for 395 iterations before its first
+    // poll. The share law governs everything past one poll per group.
+    std::array<std::size_t, kNumSchedulingGroups> remaining{};
+    for (std::size_t i = 0; i < static_cast<std::size_t>(kNumSchedulingGroups); ++i) {
+        remaining[i] = ready_queues_[i].size();
+    }
+    int polled = 0;
     bool ran_any = false;
-    for (int i = 0; i < config_.max_tasks_per_iteration; ++i) {
-        SchedulingGroup group;
-        if (!PickNextGroup(group)) break;
-
-        std::size_t idx = static_cast<std::size_t>(SchedulingGroupIndex(group));
+    const auto poll_one = [&](std::size_t idx) {
         TaskPtr task = std::move(ready_queues_[idx].front());
         ready_queues_[idx].pop_front();
+        --remaining[idx];
 
         MonoTimeNs start = clock_.Now();
         PollResult result = task->Poll();
-        MonoTimeNs elapsed = clock_.Now() - start;
-        consumed_ns_[idx] += elapsed;
+        consumed_ns_[idx] += clock_.Now() - start;
         ran_any = true;
+        ++polled;
 
         if (result == PollResult::kSuspended) {
             ready_queues_[idx].push_back(std::move(task));
         }
         // kDone: task is dropped here (unique_ptr destructor runs).
+    };
+
+    // Floor two: one poll for every group with a task ready this round.
+    for (std::size_t i = 0; i < static_cast<std::size_t>(kNumSchedulingGroups) &&
+                            polled < config_.max_tasks_per_iteration;
+         ++i) {
+        if (remaining[i] > 0) poll_one(i);
+    }
+    // Then share-proportional picking over the rest of the round.
+    while (polled < config_.max_tasks_per_iteration) {
+        SchedulingGroup group;
+        if (!PickNextGroup(remaining, group)) break;
+        poll_one(static_cast<std::size_t>(SchedulingGroupIndex(group)));
     }
     if (ran_any) MaybeDecayConsumedRuntime();
     return ran_any;
 }
 
 bool Scheduler::RunOnce() {
+    ++iterations_;
     bool did_work = false;
 
     // Phase 1: drain I/O completions. The wait is phase 6's idle policy

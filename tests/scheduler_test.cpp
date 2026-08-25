@@ -218,6 +218,54 @@ TEST_F(SchedulerTimerTest, ATimerCallbackCanSubmitATaskThatRunsTheSameIteration)
     EXPECT_EQ(ran, 1);
 }
 
+TEST_F(SchedulerTimerTest, AParkedTaskIsPolledAtMostOncePerIteration) {
+    // The lease-refill trace (docs/workplan-peer-writer.md PW7): a parked
+    // coroutine answers kSuspended in nanoseconds, and the loop budget used
+    // to re-poll it until the budget ran out - 64 polls an iteration, every
+    // one charged to its group's share.
+    int polls = 0;
+    scheduler_.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kSystem, [&] {
+        ++polls;
+        return PollResult::kSuspended;
+    }));
+    scheduler_.RunOnce();
+    EXPECT_EQ(polls, 1);
+    scheduler_.RunOnce();
+    EXPECT_EQ(polls, 2);
+}
+
+TEST_F(SchedulerTimerTest, AGroupInDebtStillGetsOnePollPerIteration) {
+    // The same trace's other half. A system task that consumed 10 ms leaves
+    // its group (share 50) owing the foreground (share 1000) two hundred
+    // milliseconds of polls, and a cheap foreground task that never
+    // finishes would, under the share law alone, keep the *next* system
+    // task from its first poll until that debt was paid - hundreds of
+    // iterations on a peer whose statements spend their time in the
+    // drain's fdatasync, outside every group's account. One poll per ready
+    // group per iteration is the floor.
+    scheduler_.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kSystem, [&] {
+        clock_.Advance(10'000'000);  // 10 ms of system-group runtime
+        return PollResult::kDone;
+    }));
+    scheduler_.RunOnce();
+
+    int fg_polls = 0;
+    scheduler_.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kForeground, [&] {
+        ++fg_polls;
+        clock_.Advance(1'000);
+        return PollResult::kSuspended;
+    }));
+    int sys_polls = 0;
+    scheduler_.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kSystem, [&] {
+        ++sys_polls;
+        return PollResult::kDone;
+    }));
+    scheduler_.RunOnce();
+    EXPECT_EQ(sys_polls, 1) << "the new system task must be polled in the iteration it was "
+                               "ready for, whatever its group's ratio says";
+    EXPECT_EQ(fg_polls, 1) << "and the suspended foreground task is polled once, not 64 times";
+}
+
 TEST_F(SchedulerTimerTest, RunStopsWhenATimerCallbackCallsStop) {
     int fired = 0;
     scheduler_.SubmitEvery(100, [&] {

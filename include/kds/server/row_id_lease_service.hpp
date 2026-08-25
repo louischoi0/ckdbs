@@ -9,6 +9,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/server/lease_refill_stats.hpp"
 
 // The row-id lease over the ring (`RingMessageKind::kRowIdLease`): how a
 // peer that may not write the catalog obtains blocks of Keystone ids for
@@ -57,22 +58,24 @@ struct RowIdRefill {
     std::uint64_t table_oid = 0;
     std::uint64_t first_id = 0;
     std::uint64_t count = 0;
-    std::uint64_t requests = 0;
-    std::uint64_t grants = 0;
+    LeaseRefillStats stats;  // requests, grants, and what each cost
 };
 
 // Installs a peer's reply handler: records the grant into `refill`,
 // applies it to `leases`, and releases the waiting coroutine. Applying
 // here rather than in the coroutine means a grant is never lost to a
-// caller that stopped waiting.
+// caller that stopped waiting. `clock`, when given, stamps the grant's
+// arrival into the stats.
 Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refill,
-                                  catalog::RowIdLeaseTable& leases, Logger* log = nullptr);
+                                  catalog::RowIdLeaseTable& leases, Logger* log = nullptr,
+                                  const sched::Clock* clock = nullptr);
 
 // The coroutine that asks for a block for one relation. Submit on spent or
 // low lease; one in flight per core, the extent refill's rule.
 sched::Coro RequestRowIdLease(sched::RingTransport& transport, RowIdRefill& refill,
                               std::uint64_t table_oid, std::uint64_t count,
                               std::uint32_t core_id, std::uint32_t system_core = 0,
-                              Logger* log = nullptr);
+                              Logger* log = nullptr, const sched::Clock* clock = nullptr,
+                              const sched::Scheduler* sched = nullptr);
 
 }  // namespace kds::server

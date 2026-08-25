@@ -7,6 +7,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/server/lease_refill_stats.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/trx_id_lease.hpp"
 
@@ -84,22 +85,23 @@ struct TrxIdRefill {
     bool granted = false;
     std::uint64_t first_id = 0;
     std::uint64_t count = 0;
-    std::uint64_t requests = 0;
-    std::uint64_t grants = 0;
+    LeaseRefillStats stats;  // requests, grants, and what each cost
 };
 
 // Installs a peer's reply handler: records the grant into `refill`, applies
 // it to `lease`, and releases the waiting coroutine. Applying here rather
 // than in the coroutine means a grant is never lost to a caller that stopped
-// waiting.
+// waiting. `clock`, when given, stamps the grant's arrival into the stats.
 Status RegisterTrxIdGrantReceiver(sched::Scheduler& scheduler, TrxIdRefill& refill,
-                                  txn::TrxIdLease& lease, Logger* log = nullptr);
+                                  txn::TrxIdLease& lease, Logger* log = nullptr,
+                                  const sched::Clock* clock = nullptr);
 
 // The coroutine that asks for a block. Submit at `low_water()`; one in
 // flight per core, the extent refill's rule. It names no size - see the
 // payload above.
 sched::Coro RequestTrxIdLease(sched::RingTransport& transport, TrxIdRefill& refill,
                               std::uint32_t core_id, std::uint32_t system_core = 0,
-                              Logger* log = nullptr);
+                              Logger* log = nullptr, const sched::Clock* clock = nullptr,
+                              const sched::Scheduler* sched = nullptr);
 
 }  // namespace kds::server

@@ -31,6 +31,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/server/core_affinity.hpp"
+#include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -911,6 +912,18 @@ public:
     // ran and found nothing".
     void set_recovery(const MountRecovery* recovery) noexcept { recovery_ = recovery; }
 
+    // What this core's lease refills cost, for `SHOW META` on a peer
+    // (lease_refill_stats.hpp): pointers into CoreRuntime's three refill
+    // states, which outlive this dispatcher; null on core 0, which leases
+    // from nobody, and everywhere the block is then omitted rather than
+    // printed as zeroes.
+    void set_lease_refill_stats(const LeaseRefillStats* extent, const LeaseRefillStats* trx_id,
+                                const LeaseRefillStats* row_id) noexcept {
+        extent_refill_stats_ = extent;
+        trx_id_refill_stats_ = trx_id;
+        row_id_refill_stats_ = row_id;
+    }
+
     // The assertion registry, exposed for the two things only a mount does:
     // refilling it after recovery (RC07's `ResumeAssertionsAfterRecovery`) and
     // handing it to the checkpointer as AS6a's snapshot source. Every other
@@ -1362,6 +1375,10 @@ private:
     exec::ExecStats exec_stats_;
     bool cabin_optimizer_enabled_ = false;  // §II.6: off, experimental
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
+    // A peer's lease refill stats, set_lease_refill_stats(); null on core 0.
+    const LeaseRefillStats* extent_refill_stats_ = nullptr;
+    const LeaseRefillStats* trx_id_refill_stats_ = nullptr;
+    const LeaseRefillStats* row_id_refill_stats_ = nullptr;
 
     // PHY06's view sources: the controller's managed table and decision
     // log, the executor's applied-action counters. Read-only - the view

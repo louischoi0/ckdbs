@@ -574,6 +574,29 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " undo_pages_recycled=" << txn_->undo().PagesRecycled();
     }
 
+    // A peer's lease refills and what each cost (lease_refill_stats.hpp):
+    // requests and grants per kind, and the three legs' maxima - submit to
+    // grant received (the ring and core 0), grant received to the parked
+    // coroutine resuming (this reactor), and the whole wait. The trace
+    // PW6's four-writer cell asked for, where every refill took seconds
+    // and nothing said which leg. Peers only: core 0 leases from nobody.
+    const auto refill_block = [&os](const char* kind, const LeaseRefillStats* s) {
+        if (s == nullptr) return;
+        os << ' ' << kind << "_refill_requests=" << s->requests << ' ' << kind
+           << "_refill_grants=" << s->grants << ' ' << kind
+           << "_refill_wait_max_us=" << s->wait_total_max_ns / 1000 << ' ' << kind
+           << "_refill_submit_lag_max_us=" << s->submit_lag_max_ns / 1000 << ' ' << kind
+           << "_refill_grant_lag_max_us=" << s->wait_to_grant_max_ns / 1000 << ' ' << kind
+           << "_refill_resume_lag_max_us=" << s->resume_lag_max_ns / 1000 << ' ' << kind
+           << "_refill_wait_last_us=" << s->wait_total_last_ns / 1000 << ' ' << kind
+           << "_refill_submit_lag_max_iters=" << s->submit_lag_max_iters << ' ' << kind
+           << "_refill_grant_lag_max_iters=" << s->grant_lag_max_iters << ' ' << kind
+           << "_refill_resume_lag_max_iters=" << s->resume_lag_max_iters;
+    };
+    refill_block("extent", extent_refill_stats_);
+    refill_block("trxid", trx_id_refill_stats_);
+    refill_block("rowid", row_id_refill_stats_);
+
     // The last recovery, for the operator who has to answer "what did the
     // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
     // report is installed - a dispatcher built without one (every socket-free

@@ -9,6 +9,7 @@
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/server/lease_refill_stats.hpp"
 #include "kds/storage/extent_lease.hpp"
 
 // Refilling a core's page-id lease over the ring (docs/workplan-crosscore.md
@@ -90,16 +91,15 @@ Status RegisterExtentGrantHandler(sched::Scheduler& system_scheduler,
 struct ExtentRefill {
     bool granted = false;
     storage::Extent extent{};
-    // Requests made and grants received. Diagnostics, and what a test reads
-    // to see that a refill happened at all.
-    std::uint64_t requests = 0;
-    std::uint64_t grants = 0;
+    // Requests made, grants received, and what each cost (lease_refill_stats.hpp).
+    LeaseRefillStats stats;
 };
 
 // Installs a peer's reply handler, which records the grant and releases the
-// waiting coroutine.
+// waiting coroutine. `clock`, when given, stamps the grant's arrival into
+// `refill.stats` - the middle of the three legs the stats measure.
 Status RegisterExtentGrantReceiver(sched::Scheduler& scheduler, ExtentRefill& refill,
-                                   Logger* log = nullptr);
+                                   Logger* log = nullptr, const sched::Clock* clock = nullptr);
 
 // The coroutine that asks. Submit it when `lease.low_water()` first turns
 // true; it sends the request, waits for the grant, and applies it.
@@ -109,6 +109,8 @@ Status RegisterExtentGrantReceiver(sched::Scheduler& scheduler, ExtentRefill& re
 // it keeps issuing whatever it still holds.
 sched::Coro RequestExtentRefill(sched::RingTransport& transport, storage::LeasedIdSource& lease,
                                 ExtentRefill& refill, std::uint32_t core_id,
-                                std::uint32_t system_core = 0, Logger* log = nullptr);
+                                std::uint32_t system_core = 0, Logger* log = nullptr,
+                                const sched::Clock* clock = nullptr,
+                                const sched::Scheduler* sched = nullptr);
 
 }  // namespace kds::server

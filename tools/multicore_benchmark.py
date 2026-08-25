@@ -165,6 +165,24 @@ def session_core(conn):
     return field(conn.cmd("SHOW META"), "core")
 
 
+def refill_summary(meta):
+    """A peer's `<kind>_refill_*` fields off SHOW META, one clause per lease
+    kind: requests/grants, and the longest wait with its two legs."""
+    out = []
+    for kind in ("rowid", "trxid", "extent"):
+        if f"{kind}_refill_requests=" not in meta:
+            continue
+        f = {k: field(meta, f"{kind}_refill_{k}")
+             for k in ("requests", "grants", "wait_max_us", "submit_lag_max_us",
+                       "grant_lag_max_us", "resume_lag_max_us", "submit_lag_max_iters",
+                       "grant_lag_max_iters", "resume_lag_max_iters")}
+        out.append(f"{kind} {f['requests']}/{f['grants']} wait_max={f['wait_max_us'] / 1000:.1f}ms "
+                   f"(submit {f['submit_lag_max_us'] / 1000:.1f}ms/{f['submit_lag_max_iters']}it, "
+                   f"to-grant {f['grant_lag_max_us'] / 1000:.1f}ms/{f['grant_lag_max_iters']}it, "
+                   f"resume {f['resume_lag_max_us'] / 1000:.1f}ms/{f['resume_lag_max_iters']}it)")
+    return ", ".join(out) or "none reported"
+
+
 def collect_connections(port, needed, max_attempts):
     """Opens connections until every core in `needed` (core -> count) has that
     many, closing the rest. The kernel distributes SO_REUSEPORT accepts, so
@@ -385,6 +403,20 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
             t.join()
         wall = time.perf_counter() - t0
 
+        # What the peer's lease refills cost, from its own SHOW META
+        # (docs/client-manual.md): requests, grants and the longest wait per
+        # kind, split into the ring-and-core-0 leg and this reactor's
+        # resume leg. Read after the workload from one fresh session per
+        # writer core; the lease-refill trace's instrument.
+        refills = None
+        if peer_listeners:
+            lines = []
+            per_core, _ = collect_connections(port, {c: 1 for c in needed}, max_connects)
+            for core, conns in sorted(per_core.items()):
+                lines.append(f"core {core}: " + refill_summary(conns[0].cmd("SHOW META")))
+                conns[0].close()
+            refills = "refills: " + "; ".join(lines)
+
         stop_server(port)
 
         # Survivors: the even ids, plus the probe row in the first relation
@@ -403,7 +435,7 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
             if n != expected:
                 lost.append(f"{name} expected {expected} got {got!r}")
         report = [f"host: workdir on {fs}, 1-minute load {load1:.2f} at start",
-                  sessions,
+                  sessions] + ([refills] if refills else []) + [
                   "verify: " + ("; ".join(lost) if lost else
                                 f"survivors as expected ({rows // 2}, and one more in "
                                 f"{names[0]} for the probe row)"),

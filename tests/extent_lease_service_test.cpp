@@ -80,8 +80,8 @@ TEST_F(ExtentLeaseServiceTest, APeerAsksAndIsGrantedAnExtent) {
 
     ASSERT_TRUE(finished) << "the refill never completed";
     EXPECT_TRUE(result.ok()) << result.message();
-    EXPECT_EQ(refill_.requests, 1u);
-    EXPECT_EQ(refill_.grants, 1u);
+    EXPECT_EQ(refill_.stats.requests, 1u);
+    EXPECT_EQ(refill_.stats.grants, 1u);
 
     // The lease can now issue, and the ids it issues are the ones core 0
     // reserved - and marked allocated, so nobody else can find them.

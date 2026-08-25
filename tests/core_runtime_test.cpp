@@ -754,7 +754,7 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
     // tick has nothing to do.
     EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value());
     peer.value()->MaybeRefillRowIds();
-    EXPECT_EQ(peer.value()->row_id_refill().requests, 0u)
+    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 0u)
         << "a peer asked for ids for a relation no statement had named";
 
     // The first allocation fails retryably **and records the demand** - the
@@ -772,8 +772,26 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
         peer.value()->scheduler().RunOnce();
         core0.RunOnce();
     }
-    EXPECT_EQ(peer.value()->row_id_refill().requests, 1u);
-    EXPECT_EQ(peer.value()->row_id_refill().grants, 1u);
+    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 1u);
+    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
+    // The refill's three legs are stamped (lease_refill_stats.hpp): the
+    // request's submit, the grant's arrival on this reactor, the parked
+    // coroutine's completion. Real clock, so nonzero and ordered is the
+    // pin; the in-flight stamps are cleared by the completion.
+    {
+        const auto& st = peer.value()->row_id_refill().stats;
+        EXPECT_GT(st.wait_total_max_ns, 0u);
+        EXPECT_GE(st.wait_total_max_ns, st.wait_to_grant_max_ns);
+        EXPECT_GE(st.wait_total_max_ns, st.resume_lag_max_ns);
+        EXPECT_EQ(st.wait_total_last_ns, st.wait_total_max_ns);
+        EXPECT_EQ(st.requested_at_ns, 0u);
+        EXPECT_EQ(st.granted_at_ns, 0u);
+    }
+    // And a peer's SHOW META prints them; core 0's never does.
+    const auto meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find("rowid_refill_requests=1 rowid_refill_grants=1"), std::string::npos)
+        << meta;
+    EXPECT_NE(meta.find("rowid_refill_wait_max_us="), std::string::npos) << meta;
 
     auto wet = peer.value()->catalog().AllocateRowId(oid.value());
     ASSERT_TRUE(wet.ok()) << wet.status().message();
@@ -783,7 +801,7 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
     EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value())
         << "a freshly granted relation still reads as low water";
     peer.value()->MaybeRefillRowIds();
-    EXPECT_EQ(peer.value()->row_id_refill().requests, 1u)
+    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 1u)
         << "the tick asked again for a relation that had just been granted a block";
 
     // The ids are core 0's to give, and disjoint from what core 0 issues.
@@ -867,8 +885,8 @@ TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOt
     };
 
     turn();
-    EXPECT_EQ(peer.value()->row_id_refill().requests, 1u);
-    EXPECT_EQ(peer.value()->row_id_refill().grants, 0u) << "core 0 granted a relation it has no row for";
+    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 1u);
+    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 0u) << "core 0 granted a relation it has no row for";
     ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value());
     EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value())
         << "a relation core 0 refused still counts as demand, so the tick never reaches another";
@@ -876,11 +894,11 @@ TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOt
     // The next tick reaches the real relation, and the one after that asks
     // for nothing at all.
     turn();
-    EXPECT_EQ(peer.value()->row_id_refill().requests, 2u);
-    EXPECT_EQ(peer.value()->row_id_refill().grants, 1u);
+    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 2u);
+    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
     EXPECT_TRUE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
     turn();
-    EXPECT_EQ(peer.value()->row_id_refill().requests, 2u)
+    EXPECT_EQ(peer.value()->row_id_refill().stats.requests, 2u)
         << "the tick asked again for a relation core 0 had already refused";
 
     // And the refusal is not permanent to a *statement*: a fresh miss is

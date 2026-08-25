@@ -133,6 +133,9 @@ public:
     // Messages this reactor has drained. Diagnostics and tests - notably
     // the single-core assertion that it stays 0.
     std::uint64_t messages_drained() const noexcept { return messages_drained_; }
+    // RunOnce() calls so far: a stamp for "did the loop iterate between two
+    // events, or was it blocked" (server/lease_refill_stats.hpp).
+    std::uint64_t iterations() const noexcept { return iterations_; }
 
     // ---- Timers (sched.md section 6, phase 2) ---------------------------
     //
@@ -221,7 +224,10 @@ private:
 
     bool RunReadyTasks();
     bool DrainInbox();
-    bool PickNextGroup(SchedulingGroup& out) const;
+    // The share-proportional pick over the groups with tasks still unpolled
+    // this round (`remaining`, RunReadyTasks' count-down).
+    bool PickNextGroup(const std::array<std::size_t, kNumSchedulingGroups>& remaining,
+                       SchedulingGroup& out) const;
     void MaybeDecayConsumedRuntime();
     bool ExpireTimers();
     bool HasReadyTask() const noexcept;
@@ -254,6 +260,7 @@ private:
     // has.
     std::vector<std::byte> message_payload_scratch_;
     std::uint64_t messages_drained_ = 0;
+    std::uint64_t iterations_ = 0;
 
     std::vector<Timer> timers_;                  // heap, LaterDeadlineFirst
     std::unordered_set<TimerId> cancelled_timers_;

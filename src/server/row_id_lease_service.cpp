@@ -62,11 +62,14 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
 }
 
 Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refill,
-                                  catalog::RowIdLeaseTable& leases, Logger* log) {
+                                  catalog::RowIdLeaseTable& leases, Logger* log,
+                                  const sched::Clock* clock) {
     return scheduler.RegisterMessageHandler(
         sched::RingMessageKind::kRowIdLease,
-        [&refill, &leases, log](const sched::MessageHeader& header,
-                                std::span<const std::byte> payload) {
+        [&refill, &leases, &scheduler, log, clock](const sched::MessageHeader& header,
+                                       std::span<const std::byte> payload) {
+            if (clock != nullptr) refill.stats.granted_at_ns = clock->Now();
+            refill.stats.granted_iter = scheduler.iterations();
             if (payload.size() != sizeof(RowIdLeaseGrantPayload)) {
                 if (log != nullptr && log->enabled(LogLevel::kError)) {
                     log->Error("rowid", "grant from core " + std::to_string(header.src_core) +
@@ -93,7 +96,7 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
             if (fields.count > 0) {
                 leases.Grant(static_cast<catalog::Oid>(fields.table_oid), fields.first_id,
                              fields.count);
-                ++refill.grants;
+                ++refill.stats.grants;
             } else {
                 // "None available" is an answer, and a permanent one - the
                 // carve failed because the relation is gone, names its own
@@ -110,12 +113,15 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
 
 sched::Coro RequestRowIdLease(sched::RingTransport& transport, RowIdRefill& refill,
                               std::uint64_t table_oid, std::uint64_t count,
-                              std::uint32_t core_id, std::uint32_t system_core, Logger* log) {
+                              std::uint32_t core_id, std::uint32_t system_core, Logger* log,
+                              const sched::Clock* clock, const sched::Scheduler* sched) {
     refill.granted = false;
     refill.table_oid = table_oid;
     refill.first_id = 0;
     refill.count = 0;
-    ++refill.requests;
+    ++refill.stats.requests;
+    if (clock != nullptr) refill.stats.sent_at_ns = clock->Now();
+    if (sched != nullptr) refill.stats.sent_iter = sched->iterations();
 
     RowIdLeaseRequestPayload request{table_oid, count};
     std::byte bytes[sizeof(request)];

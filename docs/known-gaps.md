@@ -551,21 +551,27 @@ still waits on its own gate, so:
 
 ## Concurrency and multicore
 
-- **Lease refills lag under load on a peer** (found 2026-08-25 by PW6's
+- ~~**Lease refills lag under load on a peer** (found 2026-08-25 by PW6's
   four-writer cell, `bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md` §6a-§6b): with
   four active sessions on one peer the row-id, trx-id and extent refills
   complete hundreds of milliseconds to seconds after a ring round trip that
   idle takes 2–7 ms — relations 3 and 4 wait 0.5–1.75 s for their first
   INSERT, the trx-id lease is spent with a quarter-window of headroom, and
   the 64-page extent lease is spent so the btree insert fails and **INSERTs
-  are lost** (1, 13, 51 per run; the refusal is not retried, next bullet).
-  Core 0 logs no failed grant, the peer no failed send; the mechanism is
-  untraced (`src/sched/scheduler.cpp`'s `PickNextGroup` picks the ready
-  group with the lowest consumed-time/share ratio, so starvation of the
-  parked refill by the query group is not the obvious reading). Until
-  it is traced, **a peer serving more than two writers is a known cliff**,
-  and the extent lease's 64 pages with a quarter-window refill is too little
-  headroom for concurrent btree writers. Two writers show none of it.
+  are lost** (1, 13, 51 per run)~~ — **traced and closed the same day**
+  (PW7, `docs/workplan-peer-writer.md` §6): the reactor's share-proportional
+  pick re-polled a parked refill up to 64 times an iteration and charged the
+  `system` group for every poll, and the group's debt then kept the *next*
+  refill unpolled for 395 iterations (546 ms, measured). Two floors under
+  the share law in `RunReadyTasks` (`docs/sched.md` §4) end it: the same
+  cell's refill waits 2.7 ms, four writers run at 0.99–1.03× the single-core
+  configuration, and no row is lost. What stands from the finding: **a
+  reactor with any parked coroutine spins** — `IdleTimeoutMs` counts a
+  parked task as ready and drops the idle block to 0, so a peer waiting on a
+  grant burns its CPU (108,150 iterations in one 39 ms refill) — and **the
+  group accounting charges nobody for reactor time outside polls** (the
+  drain's fdatasync above all), which is why a low-share group's debt was
+  so slow to clear. Both are `docs/sched.md` §4's, unfixed.
 - **Three peer refusals say "retry" without the wire's `retryable=1`** —
   the row-id, trx-id and extent leases' `ResourceExhausted`
   (`include/kds/base/status.hpp`: only `TxnConflict` is `IsRetryable`, by

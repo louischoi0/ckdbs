@@ -40,6 +40,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                                          storage::PageDevice& device,
                                                          const sched::Clock& clock, Logger* log) {
     auto runtime = std::unique_ptr<CoreRuntime>(new CoreRuntime(config, log));
+    runtime->clock_ = &clock;  // the lease refills' stamps; outlives the runtime
 
     // Each core gets its own epoll instance. Sharing one would be shared
     // mutable state between cores (workplan guideline 1) and would also
@@ -218,6 +219,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // And where its rights probe records a relation this core owns but
         // cannot write (PW1c-7); the tick in Run() asks core 0 for it.
         runtime->dispatcher_->SetRelationGrantDemand(&runtime->grant_demand_);
+        // And the lease refills' cost, for `SHOW META` on this core
+        // (lease_refill_stats.hpp): the trace PW6's four-writer cell asked
+        // for.
+        runtime->dispatcher_->set_lease_refill_stats(&runtime->refill_.stats,
+                                                     &runtime->trx_id_refill_.stats,
+                                                     &runtime->row_id_refill_.stats);
     }
 
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {
@@ -322,7 +329,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // instead (row_id_lease_service.hpp).
     if (config_.core_id != 0) {
         if (Status s = RegisterRowIdGrantReceiver(*scheduler_, row_id_refill_, row_id_leases_,
-                                                  log_);
+                                                  log_, clock_);
             !s.ok()) {
             return s;
         }
@@ -330,7 +337,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         // terms and for the same reason: core 0 carries the grant handler
         // on this kind instead (trx_id_lease_service.hpp).
         if (Status s = RegisterTrxIdGrantReceiver(*scheduler_, trx_id_refill_, trx_id_lease_,
-                                                  log_);
+                                                  log_, clock_);
             !s.ok()) {
             return s;
         }
@@ -412,7 +419,9 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // rather than in Run() because a grant can arrive before this core has
     // armed anything.
     transport_ = &transport;
-    if (Status s = RegisterExtentGrantReceiver(*scheduler_, refill_, log_); !s.ok()) return s;
+    if (Status s = RegisterExtentGrantReceiver(*scheduler_, refill_, log_, clock_); !s.ok()) {
+        return s;
+    }
 
     // **This core's checkpointer** (PW3, docs/workplan-peer-writer.md), and
     // it can only be built here: the anchor publishes over the ring, so it
@@ -739,12 +748,15 @@ void CoreRuntime::MaybeRefillLease() {
     if (refill_in_flight_ || !lease_.low_water()) return;
 
     refill_in_flight_ = true;
+    refill_.stats.requested_at_ns = clock_->Now();
+    refill_.stats.requested_iter = scheduler_->iterations();
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
         RequestExtentRefill(*transport_, lease_, refill_, config_.core_id, /*system_core=*/0,
-                            log_),
+                            log_, clock_, &*scheduler_),
         [this](const Status& s) {
             refill_in_flight_ = false;
+            refill_.stats.Complete(clock_->Now(), scheduler_->iterations());
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 // Nothing to return it to - this is a background task - and
                 // the consequence is bounded: allocation on this core fails
@@ -772,12 +784,15 @@ void CoreRuntime::MaybeRefillRowIds() {
     if (!neediest.has_value()) return;
 
     row_id_refill_in_flight_ = true;
+    row_id_refill_.stats.requested_at_ns = clock_->Now();
+    row_id_refill_.stats.requested_iter = scheduler_->iterations();
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
         RequestRowIdLease(*transport_, row_id_refill_, *neediest, kRowIdLeasePerGrant,
-                          config_.core_id, /*system_core=*/0, log_),
+                          config_.core_id, /*system_core=*/0, log_, clock_, &*scheduler_),
         [this](const Status& s) {
             row_id_refill_in_flight_ = false;
+            row_id_refill_.stats.Complete(clock_->Now(), scheduler_->iterations());
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 // Nothing to return it to - a background task - and the
                 // consequence is bounded: INSERTs into that relation keep
@@ -823,11 +838,15 @@ void CoreRuntime::MaybeRefillTrxIds() {
     if (trx_id_refill_in_flight_ || !trx_ids_->low_water()) return;
 
     trx_id_refill_in_flight_ = true;
+    trx_id_refill_.stats.requested_at_ns = clock_->Now();
+    trx_id_refill_.stats.requested_iter = scheduler_->iterations();
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
-        RequestTrxIdLease(*transport_, trx_id_refill_, config_.core_id, /*system_core=*/0, log_),
+        RequestTrxIdLease(*transport_, trx_id_refill_, config_.core_id, /*system_core=*/0, log_,
+                          clock_, &*scheduler_),
         [this](const Status& s) {
             trx_id_refill_in_flight_ = false;
+            trx_id_refill_.stats.Complete(clock_->Now(), scheduler_->iterations());
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 // Nothing to return it to - this is a background task - and
                 // the consequence is bounded: writes on this core fail

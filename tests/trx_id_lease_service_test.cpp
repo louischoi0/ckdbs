@@ -112,8 +112,8 @@ TEST_F(TrxIdLeaseServiceTest, ALeasedPeerIssuesIdsAndTheCeilingIsDurableFirst) {
 
     const std::uint64_t persists_before = persists_;
     ASSERT_TRUE(Refill().ok());
-    EXPECT_EQ(refill_.requests, 1u);
-    EXPECT_EQ(refill_.grants, 1u);
+    EXPECT_EQ(refill_.stats.requests, 1u);
+    EXPECT_EQ(refill_.stats.grants, 1u);
     EXPECT_EQ(refill_.count, kTrxIdLeasePerGrant);
 
     // **Persisted before the reply, not after.** CoreRuntime::Open refuses a

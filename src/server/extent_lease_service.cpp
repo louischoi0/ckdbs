@@ -47,10 +47,14 @@ Status RegisterExtentGrantHandler(sched::Scheduler& system_scheduler,
         });
 }
 
-Status RegisterExtentGrantReceiver(sched::Scheduler& scheduler, ExtentRefill& refill, Logger* log) {
+Status RegisterExtentGrantReceiver(sched::Scheduler& scheduler, ExtentRefill& refill, Logger* log,
+                                   const sched::Clock* clock) {
     return scheduler.RegisterMessageHandler(
         sched::RingMessageKind::kExtentLease,
-        [&refill, log](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+        [&refill, &scheduler, log, clock](const sched::MessageHeader& header,
+                              std::span<const std::byte> payload) {
+            if (clock != nullptr) refill.stats.granted_at_ns = clock->Now();
+            refill.stats.granted_iter = scheduler.iterations();
             if (payload.size() != sizeof(ExtentGrantPayload)) {
                 if (log != nullptr && log->enabled(LogLevel::kError)) {
                     log->Error("extent", "grant from core " + std::to_string(header.src_core) +
@@ -68,17 +72,20 @@ Status RegisterExtentGrantReceiver(sched::Scheduler& scheduler, ExtentRefill& re
             ExtentGrantPayload fields{};
             std::memcpy(&fields, payload.data(), sizeof(fields));
             refill.extent = storage::Extent{fields.first_page_id, fields.page_count};
-            ++refill.grants;
+            ++refill.stats.grants;
             refill.granted = true;
         });
 }
 
 sched::Coro RequestExtentRefill(sched::RingTransport& transport, storage::LeasedIdSource& lease,
                                 ExtentRefill& refill, std::uint32_t core_id,
-                                std::uint32_t system_core, Logger* log) {
+                                std::uint32_t system_core, Logger* log,
+                                const sched::Clock* clock, const sched::Scheduler* sched) {
     refill.granted = false;
     refill.extent = storage::Extent{};
-    ++refill.requests;
+    ++refill.stats.requests;
+    if (clock != nullptr) refill.stats.sent_at_ns = clock->Now();
+    if (sched != nullptr) refill.stats.sent_iter = sched->iterations();
 
     sched::MessageHeader header{};
     header.src_core = core_id;
