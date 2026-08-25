@@ -653,6 +653,50 @@ request/reply inside a DDL statement, which is the operator's to ratify.
 Until decided, the PW1c-6 refusal stands and the shape gate keeps refusing
 writes to indexed relations on a peer.
 
+**Decided 2026-08-25 (operator): (a), the owner builds.** The shape, as
+built in worktree `pw1c6-index-grant`:
+
+- **Two phases on core 0, parked between them.** Phase 1 (`HandleIndex`,
+  the foreign-relation arm): resolve the relation and columns, compute the
+  definition and layout, pre-issue the index oid (the `sys.indexes`
+  `next_id` bump is non-transactional under RV3; an oid burned by a failed
+  build is never reissued, the ids' standing rule), `CheckIndexDef`, send
+  the owner a build request, and return a `DispatchOutcome` carrying a
+  pending build — `DispatchAsync` parks on it with a deadline, the way it
+  parks on a remote read. Phase 2, on the reply: a DDL scope, the
+  `sys.indexes` row with the owner's root and **no anchor seed** (the
+  owner seeded its own), the commit, the catalog invalidation broadcast,
+  then `done(committed)` to the owner. A timeout or a refused reply ends
+  the statement with an error and `done(aborted)`. **Inside an explicit
+  transaction the statement is refused by name**: the owner's write
+  refusal below would last until the client's `COMMIT`.
+- **The owner's handler** (a `system`-group task on its reactor): its own
+  `InitTableAccess`, a root from its own lease, `Backfill` from its own
+  pool in the one synchronous poll `CreateIndex` always was, the tree's
+  full page images logged under `kNoTxnId` into its own stream (a
+  transaction of core 0's would be a phantom in this stream's analysis),
+  its anchor slot seeded, the reply. From the build's first page until
+  `done` arrives, **writes to that relation on the owner are refused
+  retryably** — rows inserted in that window would never be indexed,
+  since the owner's catalog does not show the index until core 0's
+  commit invalidates its cache — with a generous timeout as the backstop
+  against a core 0 that never says `done`. On `done(aborted)` the tree
+  orphans and the anchor slot stays (PW2-3's named debt, one more
+  occupant).
+- **Then the shape gate's `indexed` arm lifts** for the owner: every
+  index page is the owner's, allocated from its lease and stamped by its
+  stream, so maintenance on INSERT/UPDATE/DELETE is a local write, and a
+  root split's `UpdateIndexRoot` writes the owner's anchor (PW2-4).
+  `DROP INDEX` stays core 0's catalog write; the owner's slot stays.
+
+| # | Task | Gate |
+|---|---|---|
+| PW1c-6b-1 | Split `exec::CreateIndex` into the definition half (`PrepareIndexDef`: resolve, widths, oid, `CheckIndexDef`), the page half (`BuildIndexTree`: root, `Backfill`, `LogBuiltTree`) and the publish half (`Catalog::CreateIndex` with the anchor seed optional). Behaviour-identical on core 0; the suite is the proof | §7c |
+| PW1c-6b-2 | The ring half: `kIndexBuildRequest`/`kIndexBuildReply`/`kIndexBuildDone` and their payloads; the owner's handler (build, seed, reply) and its pending-build set; the dispatcher's write refusal while a build is pending; core 0's reply receiver | 6b-1 |
+| PW1c-6b-3 | Core 0's two-phase `HandleIndex`: the foreign arm sends and parks (`DispatchOutcome::pending_index_build`, `DispatchAsync`'s wait with a deadline), phase 2 writes the row without the seed, commits, broadcasts, sends `done`; the explicit-transaction refusal; the timeout path | 6b-2 |
+| PW1c-6b-4 | Lift the shape gate's `indexed` arm and the PW1c-6 dispatch refusal; the e2e: a populated peer relation, `CREATE INDEX` from core 0, the owner's INSERTs maintained, an indexed read answering whole on the owner; the pending-window refusal and its release; the abort path | 6b-3 |
+| PW1c-6b-5 | Docs: `docs/spec-ddl-transactional.md` (what atomic and isolated mean for a `CREATE INDEX` whose build is another core's), `docs/crosscore.md` CC7 (the owner-builds exception and why), `docs/known-gaps.md`, this row | 6b-4 |
+
 ## 8. The PW1c decision — decided 2026-08-24 (operator-delegated)
 
 **The write handoff, riding PL-B.** A peer gains write rights over a
