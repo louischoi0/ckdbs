@@ -9,6 +9,8 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <cstring>
+#include <map>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -101,6 +103,11 @@ protected:
     void FlushCatalog() {
         ASSERT_TRUE(core0_store_->FlushPages(catalog::kAllCatalogPages).ok());
     }
+
+    // PW1c-6b-3's rig (defined below, after the schema helpers it needs):
+    // a peer owning one populated relation, core 0 as a dispatcher over a
+    // real ring, and the client the statement parks on.
+    void OpenForeignIndexRig(struct ForeignIndexRig& rig, const char* table);
 
     static inline int counter_ = 0;
     std::filesystem::path dir_;
@@ -2228,137 +2235,399 @@ TEST_F(CoreRuntimeTest, APeerListenerIsTornDownBeforeTheReactorItRegisteredWith)
     EXPECT_TRUE(after.ok()) << after.status().message();
 }
 
-TEST_F(CoreRuntimeTest, APeerBuildsAnIndexOverItsOwnRelationOnRequest) {
-    // PW1c-6b-2's happy path over a real ring, with core 0's two phases
-    // driven by hand (6b-3 puts them in HandleIndex): the owner builds the
-    // tree in its own pages from rows core 0 never faulted, seeds its own
-    // anchor slot, replies the root; writes are refused by name until
-    // `done`; the row core 0 then writes names the owner's root, and the
-    // index answers on the owner.
+// ---- PW1c-6b-3: core 0's two phases over a real ring ----------------------
+
+// Everything the tests below share. Core 0 is a scheduler, a dispatcher
+// with its transaction stack (so phase 2's DDL scope is a real
+// transaction, D2) and the client that parks between the phases; the peer
+// is a whole runtime owning one relation with three rows core 0 never
+// faulted. `clock` is core 0's alone - the timeout test drives it by hand
+// while the peer keeps the system clock, so nothing there expires.
+struct ForeignIndexRig {
+    explicit ForeignIndexRig(const sched::Clock& core0_clock) : clock(core0_clock) {}
+
+    const sched::Clock& clock;
+    std::optional<StatusOr<sched::RealRingTransport>> transport;
+    sched::NullIoBackend io0;
+    std::optional<sched::Scheduler> core0;
+    std::optional<catalog::Catalog> catalog2;
+    std::optional<txn::TrxIdSequence> ids;
+    std::optional<txn::UndoLog> undo;
+    std::optional<txn::TransactionManager> txns;
+    // `client` before `dispatcher`, deliberately: members die in reverse
+    // declaration order, and `SetIndexBuilds` requires the client to
+    // outlive the dispatcher that holds a pointer to it. It is built from
+    // `core0`, so it is declared after that and dies before it - which is
+    // the contract's other half, and the reason nothing pumps `core0`
+    // after this rig starts unwinding.
+    std::optional<IndexBuildClient> client;
+    std::optional<CommandDispatcher> dispatcher;
+    std::unique_ptr<CoreRuntime> peer;
+    catalog::Oid oid = 0;
+    catalog::SysTableRow row{};
+
+    sched::RealRingTransport& ring() { return transport->value(); }
+
+    // One turn of both reactors, the peer first: a message core 0 sent
+    // last turn is handled before core 0 polls anything parked on it.
+    void Pump(int rounds = 1) {
+        for (int i = 0; i < rounds; ++i) {
+            peer->scheduler().RunOnce();
+            core0->RunOnce();
+        }
+    }
+    // Core 0's statement as the coroutine its reactor would poll. Never
+    // polled here: the tests poll it between turns, so they see it parked.
+    std::unique_ptr<sched::CoroTask> Start(const char* sql, DispatchOutcome& out,
+                                           Session* session = nullptr) {
+        return sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                   dispatcher->DispatchAsync(sql, session, &out));
+    }
+    // Polls `statement` between turns until it finishes; false if it does
+    // not within `max_rounds`.
+    bool Drive(sched::CoroTask& statement, int max_rounds = 256) {
+        for (int i = 0; i < max_rounds; ++i) {
+            if (statement.Poll() == sched::PollResult::kDone) return true;
+            Pump();
+        }
+        return false;
+    }
+};
+
+void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* table) {
     auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 256);
     ASSERT_TRUE(transport.ok()) << transport.status().message();
-    sched::NullIoBackend io0;
-    sched::Scheduler core0(clock_, io0);
-    core0.AttachTransport(&transport.value(), 0);
-    ASSERT_TRUE(core0
-                    .RegisterMessageHandler(sched::RingMessageKind::kAnchorWrite,
-                                            [](const sched::MessageHeader&,
-                                               std::span<const std::byte>) {})
+    rig.transport.emplace(std::move(transport));
+    rig.core0.emplace(rig.clock, rig.io0);
+    rig.core0->AttachTransport(&rig.ring(), 0);
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kAnchorWrite,
+                                             [](const sched::MessageHeader&,
+                                                std::span<const std::byte>) {})
                     .ok());
-    IndexBuildWaiters waiters;
-    ASSERT_TRUE(RegisterIndexBuildReplyReceiver(core0, waiters).ok());
 
-    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                              /*core_count=*/2);
-    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix", TwoColumnSchema(),
-                                    catalog::ClusteredType::kBtree, catalog::KeyMode::kAssigned);
+    rig.catalog2.emplace(*core0_store_, storage::kDefaultInlineCellWidth, /*core_count=*/2);
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    // What Expeditor's invalidation hook does before any peer is told
+    // (index_build_service.hpp's ordering): the catalog pages are unlogged
+    // here, so nothing else puts the row on the device the owner re-reads
+    // at `done`.
+    rig.catalog2->SetInvalidationHook([this] { FlushCatalog(); });
+    auto oid = rig.catalog2->CreateTable(catalog::kNamespacePublic, table, TwoColumnSchema(),
+                                         catalog::ClusteredType::kBtree,
+                                         catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
-    auto row = catalog2.GetSysTableRow(oid.value());
+    rig.oid = oid.value();
+    auto row = rig.catalog2->GetSysTableRow(rig.oid);
     ASSERT_TRUE(row.ok());
     ASSERT_EQ(row.value().owner_core, 1u);
+    rig.row = row.value();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     CoreRuntime::Config config = ConfigFor(1);
     config.next_trx_id = core0_->superblock.next_trx_id();
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-    peer.value()->GrantRelationFault(
-        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
-    const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
-    peer.value()->GrantRelationWrite(pages);
-    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
+    rig.peer = std::move(peer.value());
+    ASSERT_TRUE(rig.peer->AttachTransport(rig.ring()).ok());
+    rig.peer->GrantRelationFault(RelationFaultExtentOf(rig.row, storage::kDefaultExtentPages));
+    const PageId pages[] = {rig.row.desc_page_id, rig.row.anchor_page_id};
+    rig.peer->GrantRelationWrite(pages);
+    auto first = rig.catalog2->AllocateRowIdRange(rig.oid, 16);
     ASSERT_TRUE(first.ok());
-    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
-    txn::TrxIdSequence core0_ids(core0_->superblock);
-    auto block = core0_ids.Carve(16);
+    rig.peer->row_id_leases().Grant(rig.oid, first.value(), 16);
+
+    // One transaction-id sequence: the peer's lease is carved from it, and
+    // core 0's manager draws from it.
+    rig.ids.emplace(core0_->superblock);
+    auto block = rig.ids->Carve(16);
     ASSERT_TRUE(block.ok());
-    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+    rig.peer->trx_id_lease().Grant(block.value().first, block.value().count);
+    rig.undo.emplace(*core0_store_, /*wal=*/nullptr);
+    rig.txns.emplace(*rig.ids, *rig.undo, *core0_store_, /*wal=*/nullptr);
+    rig.dispatcher.emplace(core0_->superblock, *rig.catalog2, *core0_store_, /*log=*/nullptr,
+                           &rig.clock, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
+                           exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                           /*access_statistics=*/false, /*cabins=*/nullptr, &*rig.txns,
+                           txn::IsolationLevel::kReadCommitted, /*core_id=*/0);
+    rig.client.emplace(*rig.core0, rig.ring(), rig.clock);
+    ASSERT_TRUE(rig.client->RegisterReplyReceiver().ok());
+    rig.dispatcher->SetIndexBuilds(&*rig.client);
 
     // Rows the owner wrote and core 0 never saw - what the build must find.
-    const auto ins = peer.value()
-                         ->dispatcher()
-                         .Dispatch("INSERT INTO rotated_ix VALUES (10), (20), (30)")
-                         .response;
+    const std::string ins =
+        rig.peer->dispatcher()
+            .Dispatch("INSERT INTO " + std::string(table) + " VALUES (10), (20), (30)")
+            .response;
     ASSERT_NE(ins.rfind("ERR", 0), 0u) << ins;
+}
 
-    // Phase 1, by hand: the definition on core 0, the oid issued, the send.
-    parser::Parser parser("CREATE INDEX rix ON rotated_ix (v)");
-    auto parsed = parser.Parse();
-    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
-    auto def = exec::PrepareIndexDef(catalog2, std::get<parser::IndexStmt>(parsed.value()),
-                                     nullptr, catalog::Catalog::AnchorSeed::kByOwner);
-    ASSERT_TRUE(def.ok()) << def.status().message();
-    IndexBuildOutcome& outcome = waiters.Open(/*request_id=*/7);
-    SendIndexBuildRequest(core0, transport.value(), /*owner_core=*/1, /*request_id=*/7,
-                          IndexBuildRequestOf(def.value()));
-    for (int i = 0; i < 40; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
+TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublishedByCore0) {
+    // PW1c-6b-3's happy path through HandleIndex itself: core 0's statement
+    // parks on the owner's build, the owner refuses the relation's writes
+    // by name meanwhile, and the row core 0 then commits names the owner's
+    // root - which the owner's own probes answer through.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "rotated_ix");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("CREATE INDEX rix ON rotated_ix (v)", out);
+    // Driven a turn at a time so the window can be observed: it opens on
+    // the owner the turn the request lands and holds until core 0's `done`.
+    bool window_seen = false;
+    int rounds = 0;
+    while (statement->Poll() != sched::PollResult::kDone) {
+        rig.Pump();
+        if (!window_seen && rig.peer->pending_index_builds().Covers(rig.oid)) {
+            window_seen = true;
+            EXPECT_EQ(rig.client->waiting(), 1u);
+            const std::string refused =
+                rig.peer->dispatcher().Dispatch("INSERT INTO rotated_ix VALUES (40)").response;
+            EXPECT_NE(refused.find("TXN_CONFLICT"), std::string::npos) << refused;
+            EXPECT_NE(refused.find("PW1c-6b"), std::string::npos) << refused;
+            // And the owner's SHOW META shows the window while it is open.
+            const std::string meta = rig.peer->dispatcher().Dispatch("SHOW META").response;
+            EXPECT_NE(meta.find(" index_build_windows=1 "), std::string::npos) << meta;
+        }
+        ASSERT_LT(++rounds, 256) << "the statement did not finish: " << out.response;
     }
-    ASSERT_TRUE(outcome.arrived) << "no reply reached core 0";
-    ASSERT_TRUE(outcome.status.ok()) << outcome.status.message();
-    ASSERT_NE(outcome.root_page_id, kInvalidPageId);
-    EXPECT_EQ(peer.value()->index_builds()->builds(), 1u);
-
-    // The window: refused retryably by name until done.
-    const auto refused =
-        peer.value()->dispatcher().Dispatch("INSERT INTO rotated_ix VALUES (40)").response;
-    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
-    EXPECT_NE(refused.find("PW1c-6b"), std::string::npos) << refused;
-    EXPECT_NE(refused.find("TXN_CONFLICT"), std::string::npos) << refused;
-    EXPECT_TRUE(peer.value()->pending_index_builds().Covers(oid.value()));
-
-    // The owner seeded its own anchor slot with the root it replied.
+    EXPECT_TRUE(window_seen) << "the owner never opened a window";
+    ASSERT_EQ(out.response.rfind("CREATED INDEX", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("built_by_core=1"), std::string::npos) << out.response;
+    EXPECT_EQ(rig.client->waiting(), 0u);
+    EXPECT_EQ(rig.peer->index_builds()->builds(), 1u);
+    rig.Pump(8);  // `done(committed)` is in flight
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty());
     {
-        auto anchor = peer.value()->store().GetForRead(row.value().anchor_page_id);
-        ASSERT_TRUE(anchor.ok()) << anchor.status().message();
-        auto slot = storage::AnchorIndexRoot(anchor.value().bytes(), def.value().index_oid);
-        ASSERT_TRUE(slot.ok()) << slot.status().message();
-        EXPECT_EQ(slot.value(), outcome.root_page_id);
+        const std::string meta = rig.peer->dispatcher().Dispatch("SHOW META").response;
+        EXPECT_NE(meta.find(" index_build_windows=0 "), std::string::npos) << meta;
     }
 
-    // Phase 2, by hand: the row with the owner's root and no seed, the
-    // catalog flushed as Expeditor does before a broadcast, then done.
-    def.value().root_page_id = outcome.root_page_id;
-    auto published = catalog2.CreateIndex(def.value(), catalog::kBootstrapXid, nullptr,
-                                          catalog::Catalog::AnchorSeed::kByOwner);
+    // The row names the owner's root, and the owner's anchor slot agrees.
+    auto published = rig.catalog2->FindIndexByName("rix");
     ASSERT_TRUE(published.ok()) << published.status().message();
-    EXPECT_EQ(published.value(), def.value().index_oid);
-    FlushCatalog();
-    SendIndexBuildDone(core0, transport.value(), 1, def.value().index_oid, /*committed=*/true);
-    for (int i = 0; i < 40; ++i) {
-        peer.value()->scheduler().RunOnce();
-        core0.RunOnce();
+    ASSERT_NE(published.value().root_page_id, kInvalidPageId);
+    {
+        auto anchor = rig.peer->store().GetForRead(rig.row.anchor_page_id);
+        ASSERT_TRUE(anchor.ok()) << anchor.status().message();
+        auto slot =
+            storage::AnchorIndexRoot(anchor.value().bytes(), published.value().index_oid);
+        ASSERT_TRUE(slot.ok()) << slot.status().message();
+        EXPECT_EQ(slot.value(), published.value().root_page_id);
     }
-    EXPECT_TRUE(peer.value()->pending_index_builds().empty());
 
-    // `done(committed)` dropped the owner's cache: the index is in its
-    // view with the root it built, and a keyed read answers through it.
-    auto access = peer.value()->catalog().InitTableAccess(oid.value());
+    // `done(committed)` dropped the owner's cache: the index is in its view
+    // with the root it built, and a keyed read answers *through it* - the
+    // plan says so, not just the rows.
+    auto access = rig.peer->catalog().InitTableAccess(rig.oid);
     ASSERT_TRUE(access.ok()) << access.status().message();
     ASSERT_EQ(access.value()->indexes.size(), 1u);
-    EXPECT_EQ(access.value()->indexes[0].root_page_id, outcome.root_page_id);
-    const auto sel = peer.value()
-                         ->dispatcher()
-                         .Dispatch("SELECT * FROM rotated_ix WHERE v = 20")
-                         .response;
+    EXPECT_EQ(access.value()->indexes[0].root_page_id, published.value().root_page_id);
+    const std::string plan =
+        rig.peer->dispatcher().Dispatch("ANALYZE SELECT * FROM rotated_ix WHERE v = 20").response;
+    EXPECT_NE(plan.find("IndexProbe"), std::string::npos) << plan;
+    const std::string sel =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM rotated_ix WHERE v = 20").response;
     EXPECT_NE(sel.find(",20"), std::string::npos) << sel;
     EXPECT_EQ(sel.find(",10"), std::string::npos) << sel;
 
     // The window is closed for its own reason; what refuses a write now is
-    // the shape gate 6b-4 lifts, not the pending build.
-    const auto after =
-        peer.value()->dispatcher().Dispatch("INSERT INTO rotated_ix VALUES (40)").response;
+    // the shape gate PW1c-6b-4 lifts, and it says so by name.
+    const std::string after =
+        rig.peer->dispatcher().Dispatch("INSERT INTO rotated_ix VALUES (40)").response;
+    EXPECT_EQ(after.rfind("ERR", 0), 0u) << after;
+    EXPECT_NE(after.find("indexed relation cannot take writes"), std::string::npos) << after;
     EXPECT_EQ(after.find("PW1c-6b"), std::string::npos) << after;
 }
 
+TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationIsRefusedInsideATransaction) {
+    // §7c: inside an explicit transaction the owner's refusal window would
+    // last until the client's COMMIT, so the statement is refused by name
+    // before anything is sent - no request, no oid, no window, and the
+    // transaction is not poisoned.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "rotated_ix_txn");
+
+    Session session(txn::IsolationLevel::kReadCommitted);
+    const std::string begun = rig.dispatcher->Dispatch("BEGIN", &session).response;
+    ASSERT_NE(begun.rfind("ERR", 0), 0u) << begun;
+    // The refusal sits before PrepareIndexDef, which is what keeps the
+    // index oid from being issued: the sequence must not move.
+    auto before = rig.catalog2->GetSysTableRow(catalog::kSysIndexesTable);
+    ASSERT_TRUE(before.ok()) << before.status().message();
+    DispatchOutcome out;
+    auto statement = rig.Start("CREATE INDEX rix ON rotated_ix_txn (v)", out, &session);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    auto after = rig.catalog2->GetSysTableRow(catalog::kSysIndexesTable);
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    EXPECT_EQ(after.value().next_id, before.value().next_id) << "an oid was burned";
+    EXPECT_EQ(out.response.rfind("ERR", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("PW1c-6b-3"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("COMMIT"), std::string::npos) << out.response;
+    EXPECT_EQ(rig.client->waiting(), 0u);
+    EXPECT_FALSE(session.failed()) << "refused before anything was written";
+    rig.Pump(8);
+    EXPECT_EQ(rig.peer->index_builds()->builds(), 0u);
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty());
+    EXPECT_FALSE(rig.catalog2->FindIndexByName("rix").ok());
+    const std::string ended = rig.dispatcher->Dispatch("ROLLBACK", &session).response;
+    EXPECT_NE(ended.rfind("ERR", 0), 0u) << ended;
+}
+
+TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationTimesOutAndTellsTheOwner) {
+    // Core 0 under a manual clock and the owner never run: the statement
+    // parks until the deadline, ends retryably with no row, and the
+    // `done(aborted)` it sends reaches the owner behind the late request -
+    // so the tree the owner then builds is orphaned and its window closes
+    // at once, not at the ceiling.
+    sched::ManualClock core0_clock;
+    ForeignIndexRig rig(core0_clock);
+    OpenForeignIndexRig(rig, "rotated_ix_late");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("CREATE INDEX rix ON rotated_ix_late (v)", out);
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_NE(statement->Poll(), sched::PollResult::kDone) << out.response;
+        rig.core0->RunOnce();  // core 0 alone: the request leaves, nothing answers
+    }
+    EXPECT_EQ(rig.client->waiting(), 1u);
+    core0_clock.Advance(kIndexBuildReplyDeadlineNs);
+    ASSERT_EQ(statement->Poll(), sched::PollResult::kDone);
+    EXPECT_EQ(out.response.rfind("ERR", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("did not reply"), std::string::npos) << out.response;
+    EXPECT_EQ(rig.client->waiting(), 0u);
+    EXPECT_FALSE(rig.catalog2->FindIndexByName("rix").ok());
+
+    // Now the owner runs. The request, first in the ring, opens a window
+    // and builds; the `done(aborted)` behind it closes the window; the
+    // reply finds no waiter on core 0 and is answered with a second
+    // `done(aborted)`, which the owner ignores.
+    rig.Pump(40);
+    EXPECT_EQ(rig.peer->index_builds()->builds(), 1u);
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty());
+    auto access = rig.peer->catalog().InitTableAccess(rig.oid);
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_TRUE(access.value()->indexes.empty()) << "an abandoned build publishes nothing";
+    // The window closed, so the owner writes again - the relation has no
+    // index in its view, and the orphaned tree's slot is nobody's.
+    const std::string after =
+        rig.peer->dispatcher().Dispatch("INSERT INTO rotated_ix_late VALUES (40)").response;
+    EXPECT_NE(after.rfind("ERR", 0), 0u) << after;
+}
+
+TEST_F(CoreRuntimeTest, ASecondCreateIndexOnTheRelationIsRefusedByTheOwnerWhileTheFirstBuilds) {
+    // Two statements parked at once on core 0's dispatcher. The owner
+    // refuses the second by name (one window per relation), the second
+    // ends retryably with its own `done(aborted)` - which names an index
+    // the owner has no window for and ignores - and the first is
+    // untouched by it.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "rotated_ix_two");
+
+    DispatchOutcome first_out;
+    DispatchOutcome second_out;
+    auto first = rig.Start("CREATE INDEX rix ON rotated_ix_two (v)", first_out);
+    EXPECT_NE(first->Poll(), sched::PollResult::kDone) << first_out.response;
+    auto second = rig.Start("CREATE INDEX rix_second ON rotated_ix_two (v)", second_out);
+    EXPECT_NE(second->Poll(), sched::PollResult::kDone) << second_out.response;
+    EXPECT_EQ(rig.client->waiting(), 2u);
+
+    bool first_done = false;
+    bool second_done = false;
+    int rounds = 0;
+    while (!first_done || !second_done) {
+        if (!first_done) first_done = first->Poll() == sched::PollResult::kDone;
+        if (!second_done) second_done = second->Poll() == sched::PollResult::kDone;
+        rig.Pump();
+        ASSERT_LT(++rounds, 256) << first_out.response << " / " << second_out.response;
+    }
+    EXPECT_EQ(second_out.response.rfind("ERR", 0), 0u) << second_out.response;
+    EXPECT_NE(second_out.response.find("TXN_CONFLICT"), std::string::npos)
+        << second_out.response;
+    EXPECT_NE(second_out.response.find("already has an index build pending"), std::string::npos)
+        << second_out.response;
+    EXPECT_NE(second_out.response.find("refused the build"), std::string::npos)
+        << second_out.response;
+    ASSERT_EQ(first_out.response.rfind("CREATED INDEX", 0), 0u) << first_out.response;
+    rig.Pump(8);
+    EXPECT_EQ(rig.client->waiting(), 0u);
+    EXPECT_EQ(rig.peer->index_builds()->builds(), 1u);
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty());
+    EXPECT_TRUE(rig.catalog2->FindIndexByName("rix").ok());
+    EXPECT_FALSE(rig.catalog2->FindIndexByName("rix_second").ok());
+    auto access = rig.peer->catalog().InitTableAccess(rig.oid);
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_EQ(access.value()->indexes.size(), 1u);
+}
+
+TEST_F(CoreRuntimeTest, TheReplyToAnAbandonedRequestOrphansTheTreeAndClosesTheWindow) {
+    // The receiver's no-waiter branch, which the deadline and sync-path
+    // tests cannot reach - their `done(aborted)` is ahead of the reply in
+    // the ring and closes the window first. Here core 0 drops its waiter
+    // without a word, the owner builds and replies, and the reply itself
+    // is what closes the window: now, not at the 180 s ceiling.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "rotated_ix_dropped");
+
+    parser::Parser parser("CREATE INDEX rix ON rotated_ix_dropped (v)");
+    auto parsed = parser.Parse();
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    auto def = exec::PrepareIndexDef(*rig.catalog2, std::get<parser::IndexStmt>(parsed.value()),
+                                     nullptr, catalog::Catalog::AnchorSeed::kByOwner);
+    ASSERT_TRUE(def.ok()) << def.status().message();
+    ASSERT_TRUE(rig.client->Request(/*owner_core=*/1, /*request_id=*/77, def.value()).ok());
+    rig.client->Close(77);
+    EXPECT_EQ(rig.client->waiting(), 0u);
+
+    bool window_seen = false;
+    for (int i = 0; i < 40; ++i) {
+        rig.Pump();
+        window_seen = window_seen || rig.peer->pending_index_builds().Covers(rig.oid);
+    }
+    EXPECT_TRUE(window_seen) << "the owner never opened a window";
+    EXPECT_EQ(rig.peer->index_builds()->builds(), 1u);
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty())
+        << "the reply's done(aborted) did not close the window";
+    auto access = rig.peer->catalog().InitTableAccess(rig.oid);
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_TRUE(access.value()->indexes.empty());
+}
+
+TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationNeedsTheReactorPath) {
+    // The synchronous Dispatch() has nothing to receive the owner's reply
+    // on, so it abandons the build at once - the remote read's stance -
+    // and tells the owner, whose window would otherwise wait the ceiling
+    // out on a tree nobody publishes.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "rotated_ix_sync");
+
+    const std::string reply =
+        rig.dispatcher->Dispatch("CREATE INDEX rix ON rotated_ix_sync (v)").response;
+    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
+    EXPECT_NE(reply.find("TXN_CONFLICT"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("reactor path"), std::string::npos) << reply;
+    EXPECT_EQ(rig.client->waiting(), 0u);
+    EXPECT_FALSE(rig.catalog2->FindIndexByName("rix").ok());
+
+    // The request was queued before the refusal; the owner builds it and
+    // is told to orphan it.
+    rig.Pump(40);
+    EXPECT_EQ(rig.peer->index_builds()->builds(), 1u);
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty());
+    auto access = rig.peer->catalog().InitTableAccess(rig.oid);
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_TRUE(access.value()->indexes.empty());
+}
+
 TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbort) {
-    // The refusals and the other endings: a relation this peer does not
-    // own, a request whose counts are past the caps, a build whose
-    // statement aborts (window closed, row never written, tree orphaned,
-    // slot kept), a `done` for nothing, and a window nobody closes.
+    // The owner's endings over raw payloads, with core 0 a bare scheduler
+    // capturing replies - no client, since these are requests a client
+    // never sends: a relation this peer does not own, counts past the
+    // caps (refused on the wire by the owner, and before the wire by
+    // core 0's encode), a build whose statement aborts (window closed, row
+    // never written, tree orphaned, slot kept), a `done` for nothing, and
+    // a window nobody closes.
     auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 256);
     ASSERT_TRUE(transport.ok()) << transport.status().message();
     sched::NullIoBackend io0;
@@ -2369,8 +2638,18 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
                                             [](const sched::MessageHeader&,
                                                std::span<const std::byte>) {})
                     .ok());
-    IndexBuildWaiters waiters;
-    ASSERT_TRUE(RegisterIndexBuildReplyReceiver(core0, waiters).ok());
+    std::map<std::uint64_t, IndexBuildReplyPayload> replies;
+    ASSERT_TRUE(core0
+                    .RegisterMessageHandler(
+                        sched::RingMessageKind::kIndexBuildReply,
+                        [&replies](const sched::MessageHeader& header,
+                                   std::span<const std::byte> payload) {
+                            IndexBuildReplyPayload reply{};
+                            ASSERT_EQ(payload.size(), sizeof(reply));
+                            std::memcpy(&reply, payload.data(), sizeof(reply));
+                            replies[header.request_id] = reply;
+                        })
+                    .ok());
 
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/2);
@@ -2403,6 +2682,22 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
             core0.RunOnce();
         }
     };
+    const auto send_request = [&](std::uint64_t request_id,
+                                  const IndexBuildRequestPayload& request) {
+        std::byte bytes[sizeof(request)];
+        std::memcpy(bytes, &request, sizeof(request));
+        SendIndexBuildMessage(core0, transport.value(), 0, 1, request_id,
+                              sched::RingMessageKind::kIndexBuildRequest, bytes);
+    };
+    const auto send_done = [&](std::uint64_t index_oid, bool committed) {
+        IndexBuildDonePayload done{};
+        done.index_oid = index_oid;
+        done.committed = committed ? 1 : 0;
+        std::byte bytes[sizeof(done)];
+        std::memcpy(bytes, &done, sizeof(done));
+        SendIndexBuildMessage(core0, transport.value(), 0, 1, /*request_id=*/0,
+                              sched::RingMessageKind::kIndexBuildDone, bytes);
+    };
     const auto prepare = [&](const char* sql) {
         parser::Parser parser(sql);
         auto parsed = parser.Parse();
@@ -2420,13 +2715,13 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
     foreign.nkeys = 1;
     foreign.key_cols[0] = 1;
     std::memcpy(foreign.name, "fx", 2);
-    IndexBuildOutcome& refused = waiters.Open(1);
-    SendIndexBuildRequest(core0, transport.value(), 1, 1, foreign);
+    send_request(1, foreign);
     pump();
-    ASSERT_TRUE(refused.arrived);
-    EXPECT_EQ(refused.status.code(), StatusCode::kUnsupported) << refused.status.message();
-    EXPECT_NE(refused.status.message().find("owned by core 0"), std::string::npos)
-        << refused.status.message();
+    ASSERT_TRUE(replies.count(1));
+    EXPECT_EQ(replies[1].status_code, static_cast<std::uint32_t>(StatusCode::kUnsupported))
+        << replies[1].message;
+    EXPECT_NE(std::string(replies[1].message).find("owned by core 0"), std::string::npos)
+        << replies[1].message;
     EXPECT_TRUE(peer.value()->pending_index_builds().empty());
     EXPECT_EQ(peer.value()->index_builds()->builds(), 0u);
 
@@ -2434,23 +2729,31 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
     IndexBuildRequestPayload wide = foreign;
     wide.table_oid = oid.value();
     wide.nkeys = 5;
-    IndexBuildOutcome& too_wide = waiters.Open(2);
-    SendIndexBuildRequest(core0, transport.value(), 1, 2, wide);
+    send_request(2, wide);
     pump();
-    ASSERT_TRUE(too_wide.arrived);
-    EXPECT_EQ(too_wide.status.code(), StatusCode::kInvalidArgument) << too_wide.status.message();
+    ASSERT_TRUE(replies.count(2));
+    EXPECT_EQ(replies[2].status_code, static_cast<std::uint32_t>(StatusCode::kInvalidArgument))
+        << replies[2].message;
     EXPECT_TRUE(peer.value()->pending_index_builds().empty());
 
     // A good build whose statement then aborts.
     auto def = prepare("CREATE INDEX rix2 ON rotated_ix2 (v)");
     ASSERT_TRUE(def.ok()) << def.status().message();
-    IndexBuildOutcome& built = waiters.Open(3);
-    SendIndexBuildRequest(core0, transport.value(), 1, 3, IndexBuildRequestOf(def.value()));
+    {
+        // And the same over-cap shape refused by core 0's encode, never
+        // truncated into a request the owner would check as something else.
+        catalog::Catalog::IndexDef too_wide = def.value();
+        too_wide.key_cols.assign(catalog::kMaxIndexKeyColumns + 1, 1);
+        EXPECT_FALSE(IndexBuildRequestOf(too_wide).ok());
+    }
+    auto request = IndexBuildRequestOf(def.value());
+    ASSERT_TRUE(request.ok()) << request.status().message();
+    send_request(3, request.value());
     pump();
-    ASSERT_TRUE(built.arrived);
-    ASSERT_TRUE(built.status.ok()) << built.status.message();
+    ASSERT_TRUE(replies.count(3));
+    ASSERT_EQ(replies[3].status_code, 0u) << replies[3].message;
     EXPECT_TRUE(peer.value()->pending_index_builds().Covers(oid.value()));
-    SendIndexBuildDone(core0, transport.value(), 1, def.value().index_oid, /*committed=*/false);
+    send_done(def.value().index_oid, /*committed=*/false);
     pump();
     EXPECT_TRUE(peer.value()->pending_index_builds().empty());
     auto access = peer.value()->catalog().InitTableAccess(oid.value());
@@ -2465,18 +2768,19 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
     }
 
     // A `done` naming no open window is ignored.
-    SendIndexBuildDone(core0, transport.value(), 1, 12345, /*committed=*/true);
+    send_done(12345, /*committed=*/true);
     pump();
     EXPECT_TRUE(peer.value()->pending_index_builds().empty());
 
     // A window nobody closes releases at the ceiling, not before.
     auto def2 = prepare("CREATE INDEX rix3 ON rotated_ix2 (v)");
     ASSERT_TRUE(def2.ok()) << def2.status().message();
-    IndexBuildOutcome& unanswered = waiters.Open(4);
-    SendIndexBuildRequest(core0, transport.value(), 1, 4, IndexBuildRequestOf(def2.value()));
+    auto request2 = IndexBuildRequestOf(def2.value());
+    ASSERT_TRUE(request2.ok()) << request2.status().message();
+    send_request(4, request2.value());
     pump();
-    ASSERT_TRUE(unanswered.arrived);
-    ASSERT_TRUE(unanswered.status.ok()) << unanswered.status.message();
+    ASSERT_TRUE(replies.count(4));
+    ASSERT_EQ(replies[4].status_code, 0u) << replies[4].message;
     peer.value()->index_builds()->Expire(clock_.Now());
     EXPECT_TRUE(peer.value()->pending_index_builds().Covers(oid.value()))
         << "younger than the ceiling, the window stays";

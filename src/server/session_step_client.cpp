@@ -127,25 +127,14 @@ void SessionStepClient::OnStepError(std::span<const std::byte> payload) {
     if (read == nullptr) return;
     // The remote code arrives as its enum value; the message is generic
     // because messages do not travel (a Status string on the wire would be
-    // a second error format). The factory switch keeps the code faithful -
-    // Status's constructor is deliberately private - and an unknown code
-    // degrades to IoError rather than being trusted.
-    const auto code = static_cast<StatusCode>(error.value().status_code);
+    // a second error format). `Status::FromWire` keeps the code faithful
+    // and degrades an unknown one to IoError; a STEP_ERROR carrying kOk is
+    // a build disagreeing with itself and is IoError too, never a success.
+    const std::uint32_t code = error.value().status_code;
     std::string msg = "remote step failed on its owning core";
-    switch (code) {
-        case StatusCode::kTxnConflict: read->error = Status::TxnConflict(std::move(msg)); break;
-        case StatusCode::kNotFound: read->error = Status::NotFound(std::move(msg)); break;
-        case StatusCode::kUnsupported: read->error = Status::Unsupported(std::move(msg)); break;
-        case StatusCode::kInvalidArgument:
-            read->error = Status::InvalidArgument(std::move(msg));
-            break;
-        case StatusCode::kResourceExhausted:
-            read->error = Status::ResourceExhausted(std::move(msg));
-            break;
-        case StatusCode::kOutOfRange: read->error = Status::OutOfRange(std::move(msg)); break;
-        case StatusCode::kCorruption: read->error = Status::Corruption(std::move(msg)); break;
-        default: read->error = Status::IoError(std::move(msg)); break;
-    }
+    read->error = code == static_cast<std::uint32_t>(StatusCode::kOk)
+                      ? Status::IoError(std::move(msg))
+                      : Status::FromWire(code, std::move(msg));
     read->done = true;
 }
 

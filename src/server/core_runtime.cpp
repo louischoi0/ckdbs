@@ -419,27 +419,14 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
 
     // The owner's half of a peer-owned relation's CREATE INDEX (PW1c-6b-2,
     // index_build_service.hpp), peers only: core 0 builds its own
-    // relations' indexes in the statement and never asks itself. The send
-    // rides the retry task like every other sender; the build is a
-    // `system` task on this reactor; `done(committed)` drops the catalog
-    // cache so the published index is seen by the first admitted write.
+    // relations' indexes in the statement and never asks itself. The
+    // build is a `system` task on this reactor and its replies ride the
+    // retry task on `transport` - the parameter, since `transport_` is
+    // assigned below; `done(committed)` drops the catalog cache so the
+    // published index is seen by the first admitted write.
     if (config_.core_id != 0) {
-        index_builds_.emplace(
-            *catalog_, *store_, &*wal_, config_.core_id, pending_index_builds_,
-            scheduler_->clock(),
-            [this](std::uint32_t dst, std::uint64_t request_id, sched::RingMessageKind kind,
-                   std::span<const std::byte> payload) {
-                sched::MessageHeader out{};
-                out.request_id = request_id;
-                out.src_core = config_.core_id;
-                out.dst_core = dst;
-                out.session_core = dst;
-                out.kind = static_cast<std::uint16_t>(kind);
-                out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-                scheduler_->Submit(sched::MakeSendRetryTask(*transport_, out, payload));
-            },
-            [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); },
-            [this] { InvalidateCatalog(); }, log_);
+        index_builds_.emplace(*catalog_, *store_, &*wal_, config_.core_id, pending_index_builds_,
+                              *scheduler_, transport, [this] { InvalidateCatalog(); }, log_);
         if (Status s = scheduler_->RegisterMessageHandler(
                 sched::RingMessageKind::kIndexBuildRequest,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

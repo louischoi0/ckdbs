@@ -146,6 +146,21 @@ enum class PhysicalOptimizerMode : std::uint8_t {
     kShadow = 1,
 };
 
+class IndexBuildClient;
+
+// A peer-owned relation's `CREATE INDEX` between its two phases on core 0
+// (docs/workplan-peer-writer.md §7c, PW1c-6b-3): the definition core 0
+// prepared and sent - the oid issued, the root the owner's to fill - and
+// what phase 2 needs to answer the client. Carried by value across the
+// park: the statement's frame is the one thing that survives it.
+struct PendingIndexBuild {
+    std::uint64_t request_id = 0;
+    std::uint32_t owner_core = 0;
+    catalog::Catalog::IndexDef def;
+    std::string table_name;       // the reply line
+    std::string key_column_name;  // the Cabin warning
+};
+
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
@@ -157,6 +172,13 @@ struct DispatchOutcome {
     // in-process loopback case), because with no reactor there is nothing
     // to pump the reply through.
     std::optional<PipelineTag> pending_remote = std::nullopt;
+
+    // A peer-owned relation's CREATE INDEX this statement sent to the owner
+    // to build (PW1c-6b-3): the reply is not in `response` yet.
+    // `DispatchAsync()` parks on the owner's reply under its deadline and
+    // finishes through `FinishIndexBuild()`; the synchronous `Dispatch()`
+    // has no reactor to receive one on and abandons it, telling the owner.
+    std::optional<PendingIndexBuild> pending_index_build = std::nullopt;
 
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/wal.md
@@ -666,6 +688,18 @@ private:
     Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
 
     DispatchOutcome HandleIndex(std::string_view line, Session& session);
+    // The foreign arm's two phases (PW1c-6b-3). Phase 1: the refusal inside
+    // an explicit transaction, the definition under the session's view with
+    // the oid issued, the request sent, the outcome returned pending. Phase
+    // 2, once `IndexBuildClient::Settled`: the owner's root read, the
+    // `sys.indexes` row written with no anchor seed under a DDL scope, the
+    // commit, `done` - or the timeout / the owner's refusal as the error
+    // and `done(aborted)`. Phase 2 stages its commit through
+    // `pending_commit_lsn_` exactly as DispatchAndStage does, so the
+    // caller's durability wait is unchanged.
+    DispatchOutcome BeginForeignIndexBuild(const parser::IndexStmt& stmt,
+                                           std::uint32_t owner_core, Session& session);
+    DispatchOutcome FinishIndexBuild(const PendingIndexBuild& build, Session& session);
     DispatchOutcome HandleShowIndexes(Session& session);
 
     // `CREATE ASSERTION` / `DROP ASSERTION` (docs/feat-assertion.md §3,
@@ -884,6 +918,15 @@ public:
     void SetPendingIndexBuilds(const PendingIndexBuilds* builds) noexcept {
         pending_index_builds_ = builds;
     }
+
+    // Arms the foreign arm of CREATE INDEX (PW1c-6b-3,
+    // index_build_service.hpp): a relation another core owns has its index
+    // built there, with this dispatcher parked between the request and the
+    // row. Core 0 only. `client` must outlive the dispatcher. With this
+    // never called, the PW1c-6 refusal stands - which is where production
+    // is until PW1c-6b-4 lifts the owner's shape gate, since an index
+    // published today would leave the relation unwritable on its owner.
+    void SetIndexBuilds(IndexBuildClient* client) noexcept { index_builds_ = client; }
 
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
@@ -1227,6 +1270,9 @@ private:
     RelationGrantDemand* grant_demand_ = nullptr;
     // PW1c-6b-2's window; null on the same cores.
     const PendingIndexBuilds* pending_index_builds_ = nullptr;
+    // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
+    // stands (see SetIndexBuilds).
+    IndexBuildClient* index_builds_ = nullptr;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -135,6 +136,34 @@ public:
     }
     static Status AssertionViolation(std::string msg) {
         return Status(StatusCode::kAssertionViolation, std::move(msg));
+    }
+
+    // A status decoded off a wire: the code as the integer it travelled as,
+    // and a message the receiver chose. **A code outside the enum degrades
+    // to IoError** rather than being trusted - nothing persists a
+    // StatusCode and no on-disk format encodes one, so a stray integer is a
+    // build disagreeing with itself. The one decode for every wire that
+    // carries a code (remote steps, index builds): two switches drifted once
+    // - one read kAlreadyExists as IoError - and this is what keeps a third
+    // from drifting.
+    static Status FromWire(std::uint32_t code, std::string msg) {
+        switch (static_cast<StatusCode>(code)) {
+            case StatusCode::kOk: return OK();
+            case StatusCode::kInvalidArgument: return InvalidArgument(std::move(msg));
+            case StatusCode::kOutOfSpace: return OutOfSpace(std::move(msg));
+            case StatusCode::kNotFound: return NotFound(std::move(msg));
+            case StatusCode::kAlreadyExists: return AlreadyExists(std::move(msg));
+            case StatusCode::kOutOfRange: return OutOfRange(std::move(msg));
+            case StatusCode::kCorruption: return Corruption(std::move(msg));
+            case StatusCode::kIoError: return IoError(std::move(msg));
+            case StatusCode::kTxnConflict: return TxnConflict(std::move(msg));
+            case StatusCode::kUnsupported: return Unsupported(std::move(msg));
+            case StatusCode::kCardinalityViolation: return CardinalityViolation(std::move(msg));
+            case StatusCode::kResourceExhausted: return ResourceExhausted(std::move(msg));
+            case StatusCode::kFkViolation: return FkViolation(std::move(msg));
+            case StatusCode::kAssertionViolation: return AssertionViolation(std::move(msg));
+        }
+        return IoError(std::move(msg));
     }
 
     // The same failure, said with more context: "<prefix>: <message>",

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "kds/base/status.hpp"
@@ -91,6 +92,15 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
 StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
                                 const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
                                 wal::WalManager* wal);
+
+// What a successful CREATE INDEX has to say besides its row (the
+// `IndexDdlResult::warnings` lines), for both arms of the statement -
+// the local one through `CreateIndex`, the owner-built one from the
+// dispatcher's phase 2. Today one line: the key column already carries a
+// Cabin. `key_column` is the user's spelling, for the message.
+std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
+                                               const catalog::Catalog::IndexDef& def,
+                                               std::string_view key_column);
 
 // The three halves back to back, for a relation whose pages this core owns.
 //

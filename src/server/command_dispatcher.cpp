@@ -1,5 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include "kds/server/index_build_service.hpp"
+
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
@@ -171,6 +173,20 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         *out = FinishRemoteRead(tag);
     }
 
+    if (out->pending_index_build.has_value() && index_builds_ != nullptr) {
+        // The owner's build (PW1c-6b-3, index_build_service.hpp). The
+        // predicate re-finds the waiter each poll and reads the clock, so
+        // the deadline ends the park with nothing having to wake it. The
+        // pending record is copied off the outcome first: phase 2 writes
+        // the outcome whole.
+        const PendingIndexBuild build = std::move(*out->pending_index_build);
+        const std::function<bool()> settled = [this, id = build.request_id] {
+            return index_builds_->Settled(id);
+        };
+        co_await sched::WaitUntil{&settled};
+        *out = FinishIndexBuild(build, session != nullptr ? *session : autocommit_session_);
+    }
+
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
         // statement is the whole change: every other runnable connection
@@ -260,6 +276,22 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                         "remote read needs the reactor path; retry on a served connection")),
                     false};
         }
+    }
+    if (outcome.pending_index_build.has_value()) {
+        // The same stance for the owner's build (PW1c-6b-3): with no reactor
+        // nothing here receives the reply, so the statement is abandoned
+        // now rather than spun on, and the owner is told - its window would
+        // otherwise wait the ceiling out on a tree nobody will publish.
+        // (`index_builds_` is set: nothing produces the pending outcome
+        // without it.)
+        const PendingIndexBuild& build = *outcome.pending_index_build;
+        index_builds_->Close(build.request_id);
+        index_builds_->Done(build.owner_core, build.def.index_oid, /*committed=*/false);
+        return {ErrorReply(Status::TxnConflict(
+                    "CREATE INDEX on '" + build.table_name +
+                    "' needs the reactor path to await its owner's build; retry on a served "
+                    "connection")),
+                false};
     }
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
 
@@ -595,6 +627,22 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     refill_block("extent", extent_refill_stats_);
     refill_block("trxid", trx_id_refill_stats_);
     refill_block("rowid", row_id_refill_stats_);
+
+    // PW1c-6b-2's windows on a peer: how many of this core's relations
+    // refuse writes for an index build core 0 has not yet said `done` for,
+    // and the oldest's age - a window is otherwise visible to a client
+    // only as a retryable refusal, and to nobody as a duration.
+    if (pending_index_builds_ != nullptr) {
+        // Oldest first (core_affinity.hpp), so the front is the maximum.
+        sched::MonoTimeNs oldest_ns = 0;
+        if (!pending_index_builds_->empty()) {
+            const std::uint64_t opened = pending_index_builds_->entries().front().opened_at_ns;
+            const sched::MonoTimeNs now = NowNs();
+            if (now > opened) oldest_ns = now - opened;
+        }
+        os << " index_build_windows=" << pending_index_builds_->size()
+           << " index_build_window_age_max_us=" << oldest_ns / 1000;
+    }
 
     // The last recovery, for the operator who has to answer "what did the
     // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
@@ -1273,6 +1321,25 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
     return {os.str(), false};
 }
 
+namespace {
+
+// The one spelling of a successful CREATE INDEX (docs/client-manual.md),
+// for both arms of the statement. `tail` is what differs: the local arm's
+// ` entries=0`, the foreign arm's ` built_by_core=<n>`.
+std::string CreatedIndexReply(std::string_view name, std::string_view table,
+                              catalog::Oid index_oid, PageId root, std::uint16_t key_width,
+                              std::uint16_t entry_width, const std::string& tail,
+                              const std::vector<std::string>& warnings) {
+    std::ostringstream os;
+    os << "CREATED INDEX name=" << name << " on=" << table << " index_oid=" << index_oid
+       << " root_page=" << root << " key_width=" << key_width << " entry_width=" << entry_width
+       << tail;
+    for (const std::string& warning : warnings) os << "\\n" << "WARN " << warning;
+    return os.str();
+}
+
+}  // namespace
+
 DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                                Session& session) {
     // Parsed before the DDL scope exists: the PW1c-6 refusal below must
@@ -1288,21 +1355,23 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     }
     const parser::IndexStmt stmt = std::get<parser::IndexStmt>(std::move(parsed.value()));
 
-    // PW1c-6, decided as the refusal half: an index built here for a
-    // relation another core owns would live in *this* core's pages -
-    // covered by the owner's fault grant only through the 64-page-extent
-    // accident (the f878f4d review's finding), with no handoff record and
-    // no write grant. The grant-extension half arrives with PW2, which
-    // the owner's write path is gated on anyway (CheckWriteAffinity's
-    // shape gate refuses writes to an indexed relation on a peer), so
-    // granting index pages today would fund nothing. The unfiltered row
-    // read is deliberate: the build touches physical pages whichever view
+    // A relation another core owns has its index built *there* (§7c,
+    // decided 2026-08-25: the owner builds - `Backfill` here would read
+    // the device's stale image and miss every row the owner holds). With
+    // the client armed, that is the two-phase arm below; without it the
+    // PW1c-6 refusal stands, and it stands in production until PW1c-6b-4
+    // lifts the owner's shape gate - an index published before that
+    // leaves the relation unwritable on its owner. The unfiltered row read
+    // is deliberate: the build touches physical pages whichever view
     // resolved the name. An unresolvable name falls through -
     // exec::CreateIndex owns that refusal and its byte position.
     if (!stmt.drop) {
         if (auto rel_oid = catalog_.FindTableOidByName(stmt.table_name); rel_oid.ok()) {
             auto rel_row = catalog_.GetSysTableRow(rel_oid.value());
             if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
+                if (index_builds_ != nullptr) {
+                    return BeginForeignIndexBuild(stmt, rel_row.value().owner_core, session);
+                }
                 return {"ERR " +
                             Status::Unsupported(
                                 "CREATE INDEX on '" + stmt.table_name + "' at byte " +
@@ -1311,9 +1380,9 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                 std::to_string(rel_row.value().owner_core) +
                                 ", and an index built here would live in core " +
                                 std::to_string(core_id_) +
-                                "'s pages with no handoff or grant to the owner "
-                                "(workplan-peer-writer.md PW1c-6; lifted with PW2's grant "
-                                "extension)")
+                                "'s pages holding none of the owner's rows "
+                                "(workplan-peer-writer.md PW1c-6; the owner builds it once "
+                                "PW1c-6b-4 lifts its shape gate)")
                                 .message(),
                         false};
             }
@@ -1380,28 +1449,146 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             create_ddl.written.push_back(created_row);
             NoteDdlRows(create_ddl);
         }
-        if (!result.ok()) {
-            return {"ERR " + result.status().message(), false};
-        }
-
-        std::ostringstream os;
-        // `entries=0` is printed for the reason `observed=0` is on a fresh
-        // Cabin: it is the thing most likely to be misunderstood. Creating an
-        // index over an empty relation indexes nothing, and only the rows
-        // written after it exist in it.
-        os << "CREATED INDEX name=" << stmt.index_name << " on=" << stmt.table_name
-           << " index_oid=" << result.value().index_oid
-           << " root_page=" << result.value().root_page_id
-           << " key_width=" << result.value().key_width
-           << " entry_width=" << result.value().entry_width << " entries=0";
-        for (const std::string& warning : result.value().warnings) {
-            os << "\\n" << "WARN " << warning;
-        }
+        if (!result.ok()) return {ErrorReply(result.status()), false};
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
         }
-        return {os.str(), false};
+        // `entries=0` is a literal the manual documents (client-manual.md,
+        // CREATE INDEX) and the backfill over a populated relation makes
+        // false. It stays until the field is dropped or counted - either
+        // is client-visible, so neither is done in passing (the PW1c-6b-3
+        // review's finding); the foreign arm prints who built the tree and
+        // never the literal.
+        return {CreatedIndexReply(stmt.index_name, stmt.table_name, result.value().index_oid,
+                                  result.value().root_page_id, result.value().key_width,
+                                  result.value().entry_width, " entries=0",
+                                  result.value().warnings),
+                false};
     });
+}
+
+DispatchOutcome CommandDispatcher::BeginForeignIndexBuild(const parser::IndexStmt& stmt,
+                                                          std::uint32_t owner_core,
+                                                          Session& session) {
+    // Inside an explicit transaction the owner's refusal window would last
+    // until the client's COMMIT, however far off that is, so the statement
+    // is refused by name before anything is sent (§7c). Not poisoned:
+    // nothing was written and the transaction is as it was.
+    if (session.in_explicit_txn()) {
+        return {ErrorReply(Status::Unsupported(
+                    "CREATE INDEX on '" + stmt.table_name + "' at byte " +
+                    std::to_string(stmt.table_byte_offset) + ": the relation is owned by core " +
+                    std::to_string(owner_core) +
+                    ", which refuses its writes from the build until this statement ends - "
+                    "inside a transaction, the client's COMMIT; run it in autocommit "
+                    "(workplan-peer-writer.md PW1c-6b-3)")),
+                false};
+    }
+    // Resolved under the session's view (spec §5's rule), as the local arm
+    // is; `kByOwner` stands the owner refusal down, since the owner seeds
+    // its own anchor. The oid is issued here, before any page exists - a
+    // burned one is never reissued, the ids' standing rule - and no page of
+    // the relation is touched: the catalog pages are this core's.
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto def = exec::PrepareIndexDef(catalog_, stmt, view.has_value() ? &*view : nullptr,
+                                     catalog::Catalog::AnchorSeed::kByOwner);
+    if (!def.ok()) return {ErrorReply(def.status()), false};
+
+    const std::uint64_t request_id = next_remote_request_++;
+    if (Status s = index_builds_->Request(owner_core, request_id, def.value()); !s.ok()) {
+        return {ErrorReply(s), false};
+    }
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "asked core " + std::to_string(owner_core) + " to build index '" +
+                              stmt.index_name + "' on " + stmt.table_name + " (request " +
+                              std::to_string(request_id) + ")");
+    }
+    DispatchOutcome pending;
+    pending.pending_index_build = PendingIndexBuild{request_id, owner_core,
+                                                    std::move(def.value()), stmt.table_name,
+                                                    stmt.key_columns[0].name};
+    return pending;
+}
+
+DispatchOutcome CommandDispatcher::FinishIndexBuild(const PendingIndexBuild& build,
+                                                    Session& session) {
+    const IndexBuildOutcome* reply = index_builds_->Find(build.request_id);
+    Status verdict = Status::OK();
+    PageId root = kInvalidPageId;
+    if (reply == nullptr) {
+        verdict = Status::IoError("CREATE INDEX on '" + build.table_name +
+                                  "': the wait for core " + std::to_string(build.owner_core) +
+                                  "'s build was closed under the statement");
+    } else if (!reply->arrived) {
+        // The deadline. Retryable: the owner's window closes on the
+        // done(aborted) below - or, if the request itself is still in the
+        // ring, when its reply reaches the receiver's no-waiter branch -
+        // and a retry after that builds afresh.
+        verdict = Status::TxnConflict(
+            "CREATE INDEX on '" + build.table_name + "': core " +
+            std::to_string(build.owner_core) + " did not reply within " +
+            std::to_string(kIndexBuildReplyDeadlineNs / 1'000'000'000ull) +
+            " s; the build is abandoned and the owner told (workplan-peer-writer.md "
+            "PW1c-6b-3)");
+    } else if (!reply->status.ok()) {
+        verdict = reply->status.WithContext("CREATE INDEX on '" + build.table_name +
+                                            "': core " + std::to_string(build.owner_core) +
+                                            " refused the build");
+    } else {
+        root = reply->root_page_id;
+    }
+    index_builds_->Close(build.request_id);
+    if (!verdict.ok()) {
+        index_builds_->Done(build.owner_core, build.def.index_oid, /*committed=*/false);
+        if (logging(LogLevel::kWarn)) log_->Warn("ddl", verdict.message());
+        return {ErrorReply(verdict), false};
+    }
+
+    // Phase 2 proper: the row alone under a DDL scope of its own - the
+    // local arm's shape minus the build and the anchor seed. A refusal
+    // here (a same-named index created while this was parked, the
+    // relation dropped) aborts the scope and orphans the owner's tree
+    // through the done(aborted) below. The staged-commit member is zeroed
+    // first because DispatchAndStage, the only other place that zeroes
+    // it, is not on this path.
+    pending_commit_lsn_ = wal::kNoLsn;
+    DispatchOutcome out = InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        DdlScope ddl = DdlScopeFor(scope);
+        catalog::Catalog::IndexDef def = build.def;
+        def.root_page_id = root;
+        catalog::CatalogRowRef created_row;
+        auto index_oid = catalog_.CreateIndex(def, ddl.trx_id,
+                                              ddl.txn != nullptr ? &created_row : nullptr,
+                                              catalog::Catalog::AnchorSeed::kByOwner);
+        // Before the status is read: a create that failed after the row
+        // went down still left it there.
+        if (ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
+            ddl.written.push_back(created_row);
+            NoteDdlRows(ddl);
+        }
+        if (!index_oid.ok()) return {ErrorReply(index_oid.status()), false};
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "created index '" + def.name + "' on " + build.table_name +
+                                  ", built by core " + std::to_string(build.owner_core));
+        }
+        return {CreatedIndexReply(def.name, build.table_name, index_oid.value(), root,
+                                  def.key_width, def.entry_width,
+                                  " built_by_core=" + std::to_string(build.owner_core),
+                                  exec::IndexCreationWarnings(catalog_, def,
+                                                              build.key_column_name)),
+                false};
+    });
+    // The commit record is appended (or the scope aborted) by now: the
+    // owner's window closes either way, and `committed` publishes the
+    // tree. Sent before the durability wait, which the caller takes -
+    // index_build_service.hpp on why that order is sound.
+    const bool committed = out.response.rfind("ERR ", 0) != 0;
+    index_builds_->Done(build.owner_core, build.def.index_oid, committed);
+    // DispatchAndStage's read-out of the staged commit, for its reason:
+    // the caller waits on `pending_lsn`, never on the member.
+    out.pending_lsn = pending_commit_lsn_;
+    pending_commit_lsn_ = wal::kNoLsn;
+    return out;
 }
 
 DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "kds/exec/index_ddl.hpp"
@@ -17,36 +18,8 @@ void SendPod(sched::Scheduler& scheduler, sched::RingTransport& transport, std::
              const Pod& pod) {
     std::byte bytes[sizeof(Pod)];
     std::memcpy(bytes, &pod, sizeof(Pod));
-    sched::MessageHeader header{};
-    header.request_id = request_id;
-    header.src_core = src;
-    header.dst_core = dst;
-    header.session_core = src;
-    header.kind = static_cast<std::uint16_t>(kind);
-    header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-    // The task copies the payload (send_retry.hpp), so a stack buffer is
-    // enough.
-    scheduler.Submit(sched::MakeSendRetryTask(transport, header,
-                                              std::span<const std::byte>(bytes, sizeof(bytes))));
-}
-
-// session_step_client.cpp's switch, for its reason: Status's constructor
-// is private, and an unknown code degrades to IoError rather than being
-// trusted.
-Status StatusOfWire(std::uint32_t code, std::string msg) {
-    switch (static_cast<StatusCode>(code)) {
-        case StatusCode::kOk: return Status::OK();
-        case StatusCode::kTxnConflict: return Status::TxnConflict(std::move(msg));
-        case StatusCode::kNotFound: return Status::NotFound(std::move(msg));
-        case StatusCode::kUnsupported: return Status::Unsupported(std::move(msg));
-        case StatusCode::kInvalidArgument: return Status::InvalidArgument(std::move(msg));
-        case StatusCode::kResourceExhausted: return Status::ResourceExhausted(std::move(msg));
-        case StatusCode::kAlreadyExists: return Status::AlreadyExists(std::move(msg));
-        case StatusCode::kCorruption: return Status::Corruption(std::move(msg));
-        case StatusCode::kOutOfSpace: return Status::OutOfSpace(std::move(msg));
-        case StatusCode::kOutOfRange: return Status::OutOfRange(std::move(msg));
-        default: return Status::IoError(std::move(msg));
-    }
+    SendIndexBuildMessage(scheduler, transport, src, dst, request_id, kind,
+                          std::span<const std::byte>(bytes, sizeof(bytes)));
 }
 
 std::string NameOf(const char* bytes, std::size_t capacity) {
@@ -55,21 +28,50 @@ std::string NameOf(const char* bytes, std::size_t capacity) {
 
 }  // namespace
 
-IndexBuildRequestPayload IndexBuildRequestOf(const catalog::Catalog::IndexDef& def) {
+void SendIndexBuildMessage(sched::Scheduler& scheduler, sched::RingTransport& transport,
+                           std::uint32_t src_core, std::uint32_t dst_core,
+                           std::uint64_t request_id, sched::RingMessageKind kind,
+                           std::span<const std::byte> payload) {
+    sched::MessageHeader header{};
+    header.request_id = request_id;
+    header.src_core = src_core;
+    header.dst_core = dst_core;
+    header.session_core = 0;  // core 0 owns the statement, both ways (the header)
+    header.kind = static_cast<std::uint16_t>(kind);
+    header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+    // The task copies the payload (send_retry.hpp), so the caller's buffer
+    // need not outlive this call.
+    scheduler.Submit(sched::MakeSendRetryTask(transport, header, payload));
+}
+
+StatusOr<IndexBuildRequestPayload> IndexBuildRequestOf(const catalog::Catalog::IndexDef& def) {
     IndexBuildRequestPayload out{};
+    if (def.key_cols.empty() || def.key_cols.size() > catalog::kMaxIndexKeyColumns ||
+        def.covered_cols.size() > catalog::kMaxIndexCoveredColumns) {
+        return Status::InvalidArgument("index definition names " +
+                                       std::to_string(def.key_cols.size()) + " key and " +
+                                       std::to_string(def.covered_cols.size()) +
+                                       " covered columns, not a shape the build request "
+                                       "carries");
+    }
+    if (def.name.size() >= sizeof(out.name)) {
+        return Status::InvalidArgument("index name '" + def.name + "' is " +
+                                       std::to_string(def.name.size()) +
+                                       " bytes; the build request carries at most " +
+                                       std::to_string(sizeof(out.name) - 1));
+    }
     out.table_oid = def.table_oid;
     out.index_oid = def.index_oid;
     out.key_width = def.key_width;
     out.entry_width = def.entry_width;
     out.flags = def.flags;
-    const std::size_t nkeys = std::min(def.key_cols.size(), catalog::kMaxIndexKeyColumns);
-    const std::size_t ncovered =
-        std::min(def.covered_cols.size(), catalog::kMaxIndexCoveredColumns);
-    out.nkeys = static_cast<std::uint8_t>(nkeys);
-    out.ncovered = static_cast<std::uint8_t>(ncovered);
-    for (std::size_t i = 0; i < nkeys; ++i) out.key_cols[i] = def.key_cols[i];
-    for (std::size_t i = 0; i < ncovered; ++i) out.covered_cols[i] = def.covered_cols[i];
-    std::memcpy(out.name, def.name.data(), std::min(def.name.size(), sizeof(out.name) - 1));
+    out.nkeys = static_cast<std::uint8_t>(def.key_cols.size());
+    out.ncovered = static_cast<std::uint8_t>(def.covered_cols.size());
+    for (std::size_t i = 0; i < def.key_cols.size(); ++i) out.key_cols[i] = def.key_cols[i];
+    for (std::size_t i = 0; i < def.covered_cols.size(); ++i) {
+        out.covered_cols[i] = def.covered_cols[i];
+    }
+    std::memcpy(out.name, def.name.data(), def.name.size());
     return out;
 }
 
@@ -151,16 +153,12 @@ void IndexBuildServer::OnRequest(const sched::MessageHeader& header,
     // The window opens *here*, before the build and before the task's
     // turn: a write admitted between this message and the build's first
     // page would be the missing row the header describes.
-    pending_.Open(request.table_oid, request.index_oid, clock_.Now());
-    if (submit_) {
-        submit_(std::make_unique<sched::FunctionTask>(
-            sched::SchedulingGroup::kSystem, [this, requester, request_id, request] {
-                Build(requester, request_id, request);
-                return sched::PollResult::kDone;
-            }));
-    } else {
-        Build(requester, request_id, request);
-    }
+    pending_.Open(request.table_oid, request.index_oid, scheduler_.clock().Now());
+    scheduler_.Submit(std::make_unique<sched::FunctionTask>(
+        sched::SchedulingGroup::kSystem, [this, requester, request_id, request] {
+            Build(requester, request_id, request);
+            return sched::PollResult::kDone;
+        }));
 }
 
 void IndexBuildServer::Build(std::uint32_t requester, std::uint64_t request_id,
@@ -231,10 +229,8 @@ void IndexBuildServer::Reply(std::uint32_t requester, std::uint64_t request_id,
     reply.status_code = static_cast<std::uint32_t>(status.code());
     const std::string& msg = status.message();
     std::memcpy(reply.message, msg.data(), std::min(msg.size(), sizeof(reply.message) - 1));
-    std::byte bytes[sizeof(reply)];
-    std::memcpy(bytes, &reply, sizeof(reply));
-    send_(requester, request_id, sched::RingMessageKind::kIndexBuildReply,
-          std::span<const std::byte>(bytes, sizeof(bytes)));
+    SendPod(scheduler_, transport_, core_id_, requester, request_id,
+            sched::RingMessageKind::kIndexBuildReply, reply);
 }
 
 void IndexBuildServer::OnDone(const sched::MessageHeader& header,
@@ -293,64 +289,78 @@ void IndexBuildServer::Expire(sched::MonoTimeNs now) {
 
 // ---- Core 0's half ---------------------------------------------------------
 
-IndexBuildOutcome& IndexBuildWaiters::Open(std::uint64_t request_id) {
-    return waiting_.insert_or_assign(request_id, IndexBuildOutcome{}).first->second;
-}
-
-IndexBuildOutcome* IndexBuildWaiters::Find(std::uint64_t request_id) {
-    auto it = waiting_.find(request_id);
-    return it == waiting_.end() ? nullptr : &it->second;
-}
-
-void IndexBuildWaiters::Close(std::uint64_t request_id) { waiting_.erase(request_id); }
-
-Status RegisterIndexBuildReplyReceiver(sched::Scheduler& system_scheduler,
-                                       IndexBuildWaiters& waiters, Logger* log) {
-    return system_scheduler.RegisterMessageHandler(
+Status IndexBuildClient::RegisterReplyReceiver() {
+    return scheduler_.RegisterMessageHandler(
         sched::RingMessageKind::kIndexBuildReply,
-        [&waiters, log](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+        [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
             IndexBuildReplyPayload reply{};
             if (payload.size() != sizeof(reply)) {
-                if (log != nullptr && log->enabled(LogLevel::kError)) {
-                    log->Error("index", "index build reply from core " +
-                                            std::to_string(header.src_core) + " has " +
-                                            std::to_string(payload.size()) + " bytes, not " +
-                                            std::to_string(sizeof(reply)) + "; dropped");
+                if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                    log_->Error("index", "index build reply from core " +
+                                             std::to_string(header.src_core) + " has " +
+                                             std::to_string(payload.size()) + " bytes, not " +
+                                             std::to_string(sizeof(reply)) + "; dropped");
                 }
                 return;
             }
             std::memcpy(&reply, payload.data(), sizeof(reply));
-            IndexBuildOutcome* out = waiters.Find(header.request_id);
-            if (out == nullptr) {
-                if (log != nullptr && log->enabled(LogLevel::kDebug)) {
-                    log->Debug("index", "index build reply for request " +
-                                            std::to_string(header.request_id) + " from core " +
-                                            std::to_string(header.src_core) +
-                                            " matched no waiter; discarded");
+            auto it = waiting_.find(header.request_id);
+            if (it == waiting_.end()) {
+                // Core 0 gave up on this one. A tree the owner built for it
+                // is orphaned by saying so, which also closes the window
+                // the late request opened (the header's argument); a
+                // refusal closed its own.
+                if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+                    log_->Debug("index", "index build reply for request " +
+                                             std::to_string(header.request_id) +
+                                             " from core " + std::to_string(header.src_core) +
+                                             " matched no waiter; " +
+                                             (reply.status_code == 0
+                                                  ? "its tree is orphaned"
+                                                  : "discarded"));
+                }
+                if (reply.status_code == static_cast<std::uint32_t>(StatusCode::kOk)) {
+                    Done(header.src_core, reply.index_oid, /*committed=*/false);
                 }
                 return;
             }
-            out->status = StatusOfWire(reply.status_code,
-                                       NameOf(reply.message, sizeof(reply.message)));
-            out->root_page_id = out->status.ok() ? reply.root_page_id : kInvalidPageId;
-            out->arrived = true;
+            IndexBuildOutcome& out = it->second;
+            out.status = Status::FromWire(reply.status_code,
+                                          NameOf(reply.message, sizeof(reply.message)));
+            out.root_page_id = out.status.ok() ? reply.root_page_id : kInvalidPageId;
+            out.arrived = true;
         });
 }
 
-void SendIndexBuildRequest(sched::Scheduler& scheduler, sched::RingTransport& transport,
-                           std::uint32_t owner_core, std::uint64_t request_id,
-                           const IndexBuildRequestPayload& request, std::uint32_t system_core) {
-    SendPod(scheduler, transport, system_core, owner_core, request_id,
-            sched::RingMessageKind::kIndexBuildRequest, request);
+Status IndexBuildClient::Request(std::uint32_t owner_core, std::uint64_t request_id,
+                                 const catalog::Catalog::IndexDef& def) {
+    auto request = IndexBuildRequestOf(def);
+    if (!request.ok()) return request.status();
+    IndexBuildOutcome& out = waiting_.insert_or_assign(request_id, IndexBuildOutcome{}).first->second;
+    out.deadline_ns = clock_.Now() + kIndexBuildReplyDeadlineNs;
+    SendPod(scheduler_, transport_, /*src=*/0, owner_core, request_id,
+            sched::RingMessageKind::kIndexBuildRequest, request.value());
+    return Status::OK();
 }
 
-void SendIndexBuildDone(sched::Scheduler& scheduler, sched::RingTransport& transport,
-                        std::uint32_t owner_core, std::uint64_t index_oid, bool committed,
-                        std::uint32_t system_core) {
+bool IndexBuildClient::Settled(std::uint64_t request_id) const {
+    auto it = waiting_.find(request_id);
+    if (it == waiting_.end()) return true;
+    return it->second.arrived || clock_.Now() >= it->second.deadline_ns;
+}
+
+const IndexBuildOutcome* IndexBuildClient::Find(std::uint64_t request_id) const {
+    auto it = waiting_.find(request_id);
+    return it == waiting_.end() ? nullptr : &it->second;
+}
+
+void IndexBuildClient::Close(std::uint64_t request_id) { waiting_.erase(request_id); }
+
+void IndexBuildClient::Done(std::uint32_t owner_core, std::uint64_t index_oid, bool committed) {
     IndexBuildDonePayload done{};
     done.index_oid = index_oid;
     done.committed = committed ? 1 : 0;
-    SendPod(scheduler, transport, system_core, owner_core, /*request_id=*/0,
+    SendPod(scheduler_, transport_, /*src=*/0, owner_core, /*request_id=*/0,
             sched::RingMessageKind::kIndexBuildDone, done);
 }
 

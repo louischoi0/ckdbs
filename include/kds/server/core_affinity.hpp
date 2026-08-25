@@ -202,6 +202,8 @@ public:
     std::vector<Entry> Expire(std::uint64_t now_ns, std::uint64_t ceiling_ns);
     bool empty() const noexcept { return entries_.empty(); }
     std::size_t size() const noexcept { return entries_.size(); }
+    // Open windows, oldest first. `SHOW META` reads their ages.
+    const std::vector<Entry>& entries() const noexcept { return entries_; }
 
 private:
     std::vector<Entry> entries_;

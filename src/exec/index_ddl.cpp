@@ -385,16 +385,25 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     out.entry_width = def.entry_width;
 
     // Collected after the write, because none of them is a reason not to
-    // write. An index is complete for every value where a Cabin is
-    // authoritative only for observed ones, so the Cabin becomes dead weight
-    // - but dropping it is the operator's call, not the engine's.
-    if (catalog.FindCabinOnColumn(def.table_oid, def.key_cols[0]).ok()) {
-        out.warnings.push_back("column '" + stmt.key_columns[0].name +
-                               "' already carries a cabin; this index supersedes it for every "
-                               "value, not just observed ones, and the cabin's write hook and "
-                               "memory now buy nothing (DROP CABIN to reclaim them)");
-    }
+    // write.
+    out.warnings = IndexCreationWarnings(catalog, def, stmt.key_columns[0].name);
     return out;
+}
+
+std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
+                                               const catalog::Catalog::IndexDef& def,
+                                               std::string_view key_column) {
+    std::vector<std::string> warnings;
+    // An index is complete for every value where a Cabin is authoritative
+    // only for observed ones, so the Cabin becomes dead weight - but
+    // dropping it is the operator's call, not the engine's.
+    if (catalog.FindCabinOnColumn(def.table_oid, def.key_cols[0]).ok()) {
+        warnings.push_back("column '" + std::string(key_column) +
+                           "' already carries a cabin; this index supersedes it for every "
+                           "value, not just observed ones, and the cabin's write hook and "
+                           "memory now buy nothing (DROP CABIN to reclaim them)");
+    }
+    return warnings;
 }
 
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
