@@ -280,7 +280,10 @@ interface that keeps every listed option viable.
   core-count changes; initial placement policy (`creating` | `rotate`);
   split/migrate policy and constants (the mover); auxiliary placement
   under a split relation (each §6a gate's owner); the id-block
-  interleave default; the shared-structure access mechanism.
+  interleave default; the shared-structure access mechanism; **`CREATE
+  INDEX` on a peer-owned relation** (PW1c-6's grant extension: the owner
+  builds in its own stream vs freeze-flush-handoff,
+  `docs/workplan-peer-writer.md` §7c).
 - **Foreign keys** (`docs/impl-foreign-keys.md`): forward-check expression;
   the busy status code; heap parents; `kFkNullable`; CASCADE/SET NULL.
 - **Indexes** (`docs/feat-index.md` §13): `kIndexStringKeyBytes`; split
