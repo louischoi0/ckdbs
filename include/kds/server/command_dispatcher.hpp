@@ -922,10 +922,11 @@ public:
     // Arms the foreign arm of CREATE INDEX (PW1c-6b-3,
     // index_build_service.hpp): a relation another core owns has its index
     // built there, with this dispatcher parked between the request and the
-    // row. Core 0 only. `client` must outlive the dispatcher. With this
-    // never called, the PW1c-6 refusal stands - which is where production
-    // is until PW1c-6b-4 lifts the owner's shape gate, since an index
-    // published today would leave the relation unwritable on its owner.
+    // row. Core 0 only. `client` must outlive the dispatcher. Installed by
+    // the Expeditor on every multi-core instance since PW1c-6b-4, which
+    // lifted the owner's shape gate in the same step - so what a
+    // dispatcher never told refuses is a fixture with no reactor to park
+    // on, not production.
     void SetIndexBuilds(IndexBuildClient* client) noexcept { index_builds_ = client; }
 
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md

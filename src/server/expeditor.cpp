@@ -1400,6 +1400,14 @@ Status Expeditor::Serve() {
         }
         dispatcher_->SetRemoteReads(&*remote_reads_);
 
+        // Core 0's index-build client (PW1c-6b-4): the foreign arm of
+        // CREATE INDEX sends the owner a build request and parks on the
+        // reply here. Registered before the dispatcher learns about it,
+        // remote_reads_' rule, so a reply cannot beat its receiver.
+        index_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
+        if (Status s = index_builds_->RegisterReplyReceiver(); !s.ok()) return s;
+        dispatcher_->SetIndexBuilds(&*index_builds_);
+
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -
         // the bulk-INSERT primitive, already ceiling-checked. Core 0 is the

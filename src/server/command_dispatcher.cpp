@@ -448,8 +448,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // The PW1c interim DML guard stood here from 2026-08-24 until PW1c-5
     // removed it the same day. What replaced it, so its removal is not a
     // hole: `CheckWriteAffinity`'s shape gate refuses the still-unsound
-    // shapes by name (btree, indexed, FK-linked, cabined - each citing
-    // the task that lifts it), the multi-row VALUES path refuses on a
+    // shapes by name (EXPLICIT-keyed, FK-linked, cabined, assertion-covered
+    // - each citing the task that lifts it; btree lifted at PW2-4 and
+    // indexed at PW1c-6b-4), the multi-row VALUES path refuses on a
     // peer before touching the catalog page, and the store's `MayWrite`
     // is enforced for leased stores in **every** build now, not Debug
     // alone - so an unfunded write is refused retryably instead of
@@ -1357,14 +1358,14 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
 
     // A relation another core owns has its index built *there* (§7c,
     // decided 2026-08-25: the owner builds - `Backfill` here would read
-    // the device's stale image and miss every row the owner holds). With
-    // the client armed, that is the two-phase arm below; without it the
-    // PW1c-6 refusal stands, and it stands in production until PW1c-6b-4
-    // lifts the owner's shape gate - an index published before that
-    // leaves the relation unwritable on its owner. The unfiltered row read
-    // is deliberate: the build touches physical pages whichever view
-    // resolved the name. An unresolvable name falls through -
-    // exec::CreateIndex owns that refusal and its byte position.
+    // the device's stale image and miss every row the owner holds), which
+    // is `BeginForeignIndexBuild`'s two phases below. The client that
+    // drives them is wired on core 0 by the Expeditor (PW1c-6b-4); a
+    // dispatcher without one is a socket-free test, and it is refused by
+    // name rather than left to build a tree in the wrong core's pages.
+    // The unfiltered row read is deliberate: the build touches physical
+    // pages whichever view resolved the name. An unresolvable name falls
+    // through - exec::CreateIndex owns that refusal and its byte position.
     if (!stmt.drop) {
         if (auto rel_oid = catalog_.FindTableOidByName(stmt.table_name); rel_oid.ok()) {
             auto rel_row = catalog_.GetSysTableRow(rel_oid.value());
@@ -1378,11 +1379,42 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                 std::to_string(stmt.table_byte_offset) + ": the relation is "
                                 "owned by core " +
                                 std::to_string(rel_row.value().owner_core) +
-                                ", and an index built here would live in core " +
-                                std::to_string(core_id_) +
-                                "'s pages holding none of the owner's rows "
-                                "(workplan-peer-writer.md PW1c-6; the owner builds it once "
-                                "PW1c-6b-4 lifts its shape gate)")
+                                ", built by its owner (workplan-peer-writer.md §7c, PW1c-6b), "
+                                "and this dispatcher has no index-build client to reach it")
+                                .message(),
+                        false};
+            }
+        }
+    }
+
+    // The drop's cross-core hole the gate lift opens (PW1c-6b-4, the
+    // review's finding). DROP INDEX marks the sys.indexes row and
+    // `BumpVersion` broadcasts *at the mark*, before the commit; on the
+    // owner, DT9's "is the deleter in flight" predicate walks that core's
+    // own live list and never finds core 0's transaction, so the mark
+    // reads as settled and the index leaves the owner's view at once. With
+    // the shape gate lifted the owner now takes writes and maintains
+    // nothing for the vanished index - and a ROLLBACK restores it missing
+    // every row written meanwhile. Inside a transaction that window is the
+    // client's to hold open, so it is refused by name, exactly as the
+    // sibling CREATE is (BeginForeignIndexBuild) and for the same reason.
+    // Autocommit keeps only the commit-failure window every DDL has, so it
+    // is left admitted. Core-local (core 0 owns the relation) stays
+    // isolated by DT9 and is untouched.
+    if (stmt.drop && session.in_explicit_txn()) {
+        if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
+            auto rel_row = catalog_.GetSysTableRow(ix.value().table_oid);
+            if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
+                return {"ERR " +
+                            Status::Unsupported(
+                                "DROP INDEX '" + stmt.index_name + "' at byte " +
+                                std::to_string(stmt.byte_offset) + ": its relation is owned by "
+                                "core " + std::to_string(rel_row.value().owner_core) +
+                                ", whose maintenance cannot see this delete-mark's deleter in "
+                                "flight (DT9 is core-local), so inside a transaction the owner "
+                                "would stop maintaining the index before COMMIT and a ROLLBACK "
+                                "would restore it missing the owner's meanwhile-writes; run it "
+                                "in autocommit (workplan-peer-writer.md PW1c-6b-4)")
                                 .message(),
                         false};
             }
@@ -2961,8 +2993,10 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         return CrossCoreWriteRefused(session.home_core(), access.owner_core, relation);
     }
     // PW1c-5's shape gate, a **whitelist**: on a peer, a write is admitted
-    // only where the PW1c-4 grants make it sound - a heap-clustered
-    // relation with no secondary structure at all. The interim guard this
+    // only where the PW1c-4 grants and this core's own extent lease make it
+    // sound - an ASSIGNED-keyed relation, clustered either way (the btree
+    // arm lifted at PW2-4), whose only secondary structure is an
+    // owner-built index (PW1c-6b-4). The interim guard this
     // replaced indicted its own blacklist shape ("a page-writing verb
     // added later is admitted by omission"), and the first form of this
     // gate repeated it one level down - it missed assertions, whose entry
@@ -2988,13 +3022,31 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                         [](const catalog::TableAccess::CabinRef& c) { return c.id != 0; });
         // The btree arm lifted 2026-08-24 (PW2-4): a root move writes the
         // relation's own granted anchor page and updates the cache in
-        // place - no catalog write remains on the growth path. EXPLICIT
-        // stays refused: AdmitExplicitRowId persists the id ceiling on the
+        // place - no catalog write remains on the growth path. **The
+        // indexed arm lifted 2026-08-25 (PW1c-6b-4)**: a peer-owned
+        // relation's index is owner-built (§7c, PW1c-6b-3) - a peer takes
+        // no DDL, and there is no migration - so every index page is this
+        // core's own, allocated from its lease and stamped by its stream,
+        // and maintenance is a local write: `AppendIndexEntry` writes
+        // owner-stamped leaves (MayWrite passes on the own stamp) and a
+        // root split's `UpdateIndexRoot` writes the relation's granted
+        // anchor (PW2-4), the last catalog write off the growth path. What
+        // would break this is an index whose tree is *not* the owner's,
+        // and the two routes to one are shut: a relation indexed on core 0
+        // and then moved needs the mover (R5), which does not exist -
+        // `owner_core` is written once, by CreateTable - and a local build
+        // against a foreign relation is refused by `CheckIndexDef` itself
+        // (catalog.cpp, the 96b0343 review's C4). Where that refusal is
+        // keyed off - a hook-less fixture catalog - the tree really is
+        // core 0's, and the backstop is the store's: `MayWrite` refuses a
+        // page carrying neither this lease, a grant, nor this stream's
+        // stamp, so the ending is a refused write, never a torn tree.
+        // EXPLICIT stays
+        // refused: AdmitExplicitRowId persists the id ceiling on the
         // catalog page, which a peer may never write.
         const bool funded_shape = access.key_mode == catalog::KeyMode::kAssigned &&
-                                  access.indexes.empty() && access.fkeys_out.empty() &&
-                                  access.fkeys_in.empty() && !any_cabin &&
-                                  !enforcer_.AnyOn(access.oid);
+                                  access.fkeys_out.empty() && access.fkeys_in.empty() &&
+                                  !any_cabin && !enforcer_.AnyOn(access.oid);
         if (!funded_shape) {
             if (access.key_mode == catalog::KeyMode::kExplicit) {
                 return Status::Unsupported(
@@ -3002,13 +3054,6 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                     std::to_string(core_id_) +
                     ": admitting a caller-supplied id persists the ceiling on the catalog "
                     "page, the system core's (workplan-peer-writer.md §7a)");
-            }
-            if (!access.indexes.empty()) {
-                return Status::Unsupported(
-                    "an indexed relation cannot take writes on core " +
-                    std::to_string(core_id_) +
-                    ": index root moves write sys.indexes, and index pages carry no write "
-                    "grant (workplan-peer-writer.md PW2, PW1c-6)");
             }
             if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
                 return Status::Unsupported(

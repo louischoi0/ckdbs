@@ -1955,9 +1955,12 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
 }
 
 TEST_F(CoreRuntimeTest, CreateIndexOnAPeerOwnedRelationIsRefusedByName) {
-    // PW1c-6's refusal half: the index tree would be built from core 0's
-    // free map into pages the owner holds no grant over - refused before
-    // the DDL scope draws a transaction id, naming the task and the byte.
+    // A core-0 runtime opened bare - no Expeditor, so no index-build
+    // client (only the Expeditor calls SetIndexBuilds). The foreign arm
+    // has nothing to reach the owner with and refuses by name and byte
+    // rather than build a tree in the wrong core's pages (PW1c-6b-4).
+    // With the client wired the same statement is the two-phase build,
+    // covered by the ForeignIndexRig tests below.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
@@ -1974,7 +1977,8 @@ TEST_F(CoreRuntimeTest, CreateIndexOnAPeerOwnedRelationIsRefusedByName) {
             .Dispatch("CREATE INDEX rix ON rotated_ix (value)")
             .response;
     EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-    EXPECT_NE(reply.find("PW1c-6"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("PW1c-6b"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("no index-build client"), std::string::npos) << reply;
     EXPECT_NE(reply.find("at byte"), std::string::npos) << reply;
 }
 
@@ -2431,13 +2435,106 @@ TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublished
     EXPECT_NE(sel.find(",20"), std::string::npos) << sel;
     EXPECT_EQ(sel.find(",10"), std::string::npos) << sel;
 
-    // The window is closed for its own reason; what refuses a write now is
-    // the shape gate PW1c-6b-4 lifts, and it says so by name.
+    // The window is closed, and the shape gate's indexed arm is lifted
+    // (PW1c-6b-4): the INSERT the window refused is now admitted, the
+    // owner maintains the index it built, and a keyed read finds the new
+    // row through it.
     const std::string after =
         rig.peer->dispatcher().Dispatch("INSERT INTO rotated_ix VALUES (40)").response;
-    EXPECT_EQ(after.rfind("ERR", 0), 0u) << after;
-    EXPECT_NE(after.find("indexed relation cannot take writes"), std::string::npos) << after;
-    EXPECT_EQ(after.find("PW1c-6b"), std::string::npos) << after;
+    EXPECT_NE(after.rfind("ERR", 0), 0u) << "the gate did not lift: " << after;
+    // The read-through that proves the INSERT was maintained is
+    // AnOwnerMaintainsInsertsIntoAPeerBuiltIndexAndReadsAnswerWhole's, over
+    // seven values; here the one new fact is that the write is admitted.
+}
+
+TEST_F(CoreRuntimeTest, AnOwnerMaintainsInsertsIntoAPeerBuiltIndexAndReadsAnswerWhole) {
+    // The PW1c-6b-4 e2e for the maintained path: after the owner builds
+    // and core 0 publishes, a run of INSERTs on the owner each maintains
+    // the index (a local write - owner-stamped leaves, the granted anchor
+    // on a split), and every keyed read answers whole - the pre-build rows
+    // the backfill covered and the post-build rows maintenance added, and
+    // a value with no row answering none without opening the relation.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "maintained_ix");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("CREATE INDEX mix ON maintained_ix (v)", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    ASSERT_EQ(out.response.rfind("CREATED INDEX", 0), 0u) << out.response;
+    rig.Pump(8);  // `done(committed)` lands, the owner's cache drops
+    EXPECT_TRUE(rig.peer->pending_index_builds().empty());
+
+    // Entries before: the backfill covered the three rows the rig wrote.
+    const std::string before =
+        rig.peer->dispatcher().Dispatch("SHOW INDEXES").response;
+    EXPECT_NE(before.find("entries=3"), std::string::npos) << before;
+
+    // A run of INSERTs, each admitted and maintained.
+    for (int v : {40, 50, 60, 70}) {
+        const std::string ins =
+            rig.peer->dispatcher()
+                .Dispatch("INSERT INTO maintained_ix VALUES (" + std::to_string(v) + ")")
+                .response;
+        ASSERT_NE(ins.rfind("ERR", 0), 0u) << ins;
+    }
+    const std::string after =
+        rig.peer->dispatcher().Dispatch("SHOW INDEXES").response;
+    EXPECT_NE(after.find("entries=7"), std::string::npos)
+        << "the four INSERTs were not all maintained: " << after;
+
+    // Every value present reads whole through the index; an absent one
+    // answers none.
+    for (int v : {10, 20, 30, 40, 50, 60, 70}) {
+        const std::string sel =
+            rig.peer->dispatcher()
+                .Dispatch("SELECT * FROM maintained_ix WHERE v = " + std::to_string(v))
+                .response;
+        EXPECT_NE(sel.find("," + std::to_string(v)), std::string::npos) << sel;
+    }
+    const std::string plan =
+        rig.peer->dispatcher().Dispatch("ANALYZE SELECT * FROM maintained_ix WHERE v = 60")
+            .response;
+    EXPECT_NE(plan.find("IndexProbe"), std::string::npos) << plan;
+    const std::string absent =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM maintained_ix WHERE v = 999").response;
+    EXPECT_NE(absent.rfind("ERR", 0), 0u) << absent;
+    EXPECT_EQ(absent.find(",999"), std::string::npos) << absent;
+}
+
+TEST_F(CoreRuntimeTest, DropIndexOnAPeerRelationIsRefusedInsideATransactionAndAdmittedInAutocommit) {
+    // The gate lift's cross-core DROP hole (PW1c-6b-4, the review's
+    // finding): inside a transaction the owner would drop the index from
+    // its view - DT9's in-flight predicate is core-local and cannot see
+    // core 0's deleter - and maintain nothing before a ROLLBACK restores
+    // it, so it is refused by name; autocommit keeps only the general DDL
+    // commit-failure window and is admitted.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "droptest_ix");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("CREATE INDEX dix ON droptest_ix (v)", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    ASSERT_EQ(out.response.rfind("CREATED INDEX", 0), 0u) << out.response;
+    rig.Pump(8);
+
+    // Inside a transaction: refused by name and byte, the transaction
+    // untouched, and the index still present.
+    Session session(txn::IsolationLevel::kReadCommitted);
+    ASSERT_NE(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("ERR", 0), 0u);
+    const std::string refused =
+        rig.dispatcher->Dispatch("DROP INDEX dix", &session).response;
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("PW1c-6b-4"), std::string::npos) << refused;
+    EXPECT_NE(refused.find("at byte"), std::string::npos) << refused;
+    EXPECT_FALSE(session.failed()) << "refused before anything was written";
+    ASSERT_NE(rig.dispatcher->Dispatch("ROLLBACK", &session).response.rfind("ERR", 0), 0u);
+    EXPECT_TRUE(rig.catalog2->FindIndexByName("dix").ok()) << "the index was dropped anyway";
+
+    // Autocommit: admitted - the row is delete-marked and committed in one
+    // statement, so the reachable window closes with it.
+    const std::string dropped = rig.dispatcher->Dispatch("DROP INDEX dix").response;
+    EXPECT_NE(dropped.rfind("ERR", 0), 0u) << dropped;
+    EXPECT_NE(dropped.find("DROPPED INDEX"), std::string::npos) << dropped;
 }
 
 TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationIsRefusedInsideATransaction) {

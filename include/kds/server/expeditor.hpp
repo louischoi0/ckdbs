@@ -20,6 +20,7 @@
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/index_build_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
@@ -691,6 +692,16 @@ private:
     // shared message kind, because a scheduler holds one handler per kind
     // and both consumers discard unmatched tags silently.
     std::optional<RemoteStepServer> remote_steps_;
+
+    // Core 0's side of a peer-owned relation's CREATE INDEX (PW1c-6b-4,
+    // index_build_service.hpp): the dispatcher's foreign arm parks on it
+    // between the request it sends the owner and the sys.indexes row it
+    // then commits. Armed with the transport, beside remote_reads_ and for
+    // its reason - a reply must never beat its receiver. It captures the
+    // Serve() scheduler exactly as remote_reads_' send lambda does, and is
+    // used only while that scheduler runs; nothing pumps it after Serve
+    // returns.
+    std::optional<IndexBuildClient> index_builds_;
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 
     // Core 0's page-id allocator (M5): the only thing that carves the free
