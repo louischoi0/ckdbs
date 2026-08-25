@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The PW6 per-core writer benchmark's matrix runner, twin and report
 (docs/workplan-peer-writer.md §6, row PW6; results in
-bench/results-multicore-writers.md).
+bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md).
 
 Wraps tools/multicore_benchmark.py without modifying it: the driver is
 imported and `run_config` called directly, which hands back every

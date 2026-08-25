@@ -5,6 +5,13 @@ documents those drivers; the files in `bench/` above it document *results*. A
 results file states findings and links here — it does not re-explain how to
 run a tool.
 
+Results are filed **per version** (operator rule, 2026-08-25):
+`bench/<version>/<benchmark>-<git describe --tags>.md` under the version of
+record — `bench/v2.0.0/` today — and a scenario run archives its raw driver
+output (JSON summaries and logs, never data files) beside it under
+`bench/<version>/archive/<scenario>-<describe>/`. The three scenario
+documents at the top of `bench/` predate the rule and stay as history.
+
 The rules those results files follow are in `.claude/agents/ck-tester.md`, the
 agent that owns this directory. Three of them decide whether a run is worth
 recording at all, so they are repeated here:
@@ -633,7 +640,7 @@ At `cores = 2` rotation skips the system core, so every rotated relation is
 core 1's: that cell compares the peer write path against core 0's at equal
 parallelism — a cost, not a speedup. Two writer cores need `--cores 3
 --tables 2` on a host with at least three CPUs. The driver prints p50/p99
-only; `bench/run_pw6.py` below is what `bench/results-multicore-writers.md`
+only; `bench/run_pw6.py` below is what `bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md`
 is built from.
 
 ### `bench/run_pw6.py` — the PW6 matrix, its PostgreSQL twin, the probes and the report

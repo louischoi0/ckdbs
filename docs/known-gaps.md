@@ -552,7 +552,7 @@ still waits on its own gate, so:
 ## Concurrency and multicore
 
 - **Lease refills lag under load on a peer** (found 2026-08-25 by PW6's
-  four-writer cell, `bench/results-multicore-writers.md` §6a-§6b): with
+  four-writer cell, `bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md` §6a-§6b): with
   four active sessions on one peer the row-id, trx-id and extent refills
   complete hundreds of milliseconds to seconds after a ring round trip that
   idle takes 2–7 ms — relations 3 and 4 wait 0.5–1.75 s for their first
@@ -574,7 +574,7 @@ still waits on its own gate, so:
 - **The WAL drain's fdatasync runs on the reactor thread**, so every session
   on that core — reads included — waits out a committing session's sync:
   point-SELECT 973 µs beside one writer against 37 µs alone
-  (`bench/results-multicore-writers.md` §7). `docs/wal.md` §6's
+  (`bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md` §7). `docs/wal.md` §6's
   non-blocking reactor is not what is built; the I/O-backend decision
   (`docs/heap-and-tuple.md` §8) has its first number.
 
