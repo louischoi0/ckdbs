@@ -172,4 +172,39 @@ private:
     std::vector<catalog::Oid> pending_;
 };
 
+// The refusal a write gets on the owner of a relation whose index is being
+// built there, or built and not yet published by core 0's commit
+// (docs/workplan-peer-writer.md §7c, PW1c-6b-2). Retryable: the window
+// closes when core 0 says `done`, and the retry then writes - and it must
+// close, because a row written inside it would be in nobody's index
+// (index_build_service.hpp says why).
+Status IndexBuildPending(std::uint32_t this_core, std::string_view relation);
+
+// The index builds a core is running or has built and not yet heard `done`
+// for (PW1c-6b-2). Opened, closed and expired by the index build service
+// (the ring half); asked by the dispatcher's write gate. Here for
+// RelationGrantDemand's reason: this is the dispatcher's whole dependency
+// on the path. Times are `sched::MonoTimeNs`, spelled as the integer they
+// are so this header pulls no scheduler header in.
+class PendingIndexBuilds {
+public:
+    struct Entry {
+        catalog::Oid table_oid;
+        std::uint64_t index_oid;
+        std::uint64_t opened_at_ns;
+    };
+
+    void Open(catalog::Oid table_oid, std::uint64_t index_oid, std::uint64_t now_ns);
+    // Closes the window `index_oid` names; false when none was open.
+    bool Close(std::uint64_t index_oid);
+    bool Covers(catalog::Oid table_oid) const noexcept;
+    // Closes and returns every window opened `ceiling_ns` or more ago.
+    std::vector<Entry> Expire(std::uint64_t now_ns, std::uint64_t ceiling_ns);
+    bool empty() const noexcept { return entries_.empty(); }
+    std::size_t size() const noexcept { return entries_.size(); }
+
+private:
+    std::vector<Entry> entries_;
+};
+
 }  // namespace kds::server

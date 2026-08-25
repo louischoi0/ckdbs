@@ -688,7 +688,7 @@ still waits on its own gate, so:
   INSERTs end to end — PW2 decided and built as the anchor page (the
   btree shape lifted, the indexed shape still gated on PW1c-6 — decided
   2026-08-25 as "the owner builds", §7c, with PW1c-6b-1's split of
-  `exec::CreateIndex` landed and 6b-2..4 to go), and **PW1c-7** closed the restart hole the series had
+  `exec::CreateIndex` and 6b-2's ring half landed - the owner builds on request, refusing its own writes to the relation until core 0's `done` - and 6b-3..4, the two-phase `HandleIndex` and the shape gate's lift, to go), and **PW1c-7** closed the restart hole the series had
   named: leases and grants are memory-resident, and the probe found a
   restart loses every page a peer allocated itself, not only its grants;
   the PL-C stamp now carries ownership (`docs/workplan-peer-writer.md`

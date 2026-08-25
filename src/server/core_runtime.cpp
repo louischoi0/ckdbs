@@ -218,6 +218,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // And where its rights probe records a relation this core owns but
         // cannot write (PW1c-7); the tick in Run() asks core 0 for it.
         runtime->dispatcher_->SetRelationGrantDemand(&runtime->grant_demand_);
+        // And the index-build window its gate reads (PW1c-6b-2); the
+        // service that opens and closes it is armed at AttachTransport.
+        runtime->dispatcher_->SetPendingIndexBuilds(&runtime->pending_index_builds_);
         // And the lease refills' cost, for `SHOW META` on this core
         // (lease_refill_stats.hpp): the trace PW6's four-writer cell asked
         // for.
@@ -412,6 +415,47 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             });
         !s.ok()) {
         return s;
+    }
+
+    // The owner's half of a peer-owned relation's CREATE INDEX (PW1c-6b-2,
+    // index_build_service.hpp), peers only: core 0 builds its own
+    // relations' indexes in the statement and never asks itself. The send
+    // rides the retry task like every other sender; the build is a
+    // `system` task on this reactor; `done(committed)` drops the catalog
+    // cache so the published index is seen by the first admitted write.
+    if (config_.core_id != 0) {
+        index_builds_.emplace(
+            *catalog_, *store_, &*wal_, config_.core_id, pending_index_builds_,
+            scheduler_->clock(),
+            [this](std::uint32_t dst, std::uint64_t request_id, sched::RingMessageKind kind,
+                   std::span<const std::byte> payload) {
+                sched::MessageHeader out{};
+                out.request_id = request_id;
+                out.src_core = config_.core_id;
+                out.dst_core = dst;
+                out.session_core = dst;
+                out.kind = static_cast<std::uint16_t>(kind);
+                out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+                scheduler_->Submit(sched::MakeSendRetryTask(*transport_, out, payload));
+            },
+            [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); },
+            [this] { InvalidateCatalog(); }, log_);
+        if (Status s = scheduler_->RegisterMessageHandler(
+                sched::RingMessageKind::kIndexBuildRequest,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    index_builds_->OnRequest(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = scheduler_->RegisterMessageHandler(
+                sched::RingMessageKind::kIndexBuildDone,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    index_builds_->OnDone(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
     }
 
     // The grant side of the page-id lease (workplan P5). Registered here
@@ -709,6 +753,8 @@ void CoreRuntime::Run() {
                 MaybeRefillTrxIds();
                 MaybeRefillRowIds();
                 MaybeRequestRelationGrants();
+                // And the index-build windows' ceiling (PW1c-6b-2).
+                if (index_builds_.has_value()) index_builds_->Expire(scheduler_->clock().Now());
             });
         }
     }

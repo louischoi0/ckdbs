@@ -52,6 +52,50 @@ Status RelationWriteRightsPending(std::uint32_t this_core, std::string_view rela
         "(workplan-peer-writer.md PW1c-7)");
 }
 
+Status IndexBuildPending(std::uint32_t this_core, std::string_view relation) {
+    // kTxnConflict for RelationWriteRightsPending's reason: the window
+    // closes when the statement ends on the system core, and a retry then
+    // writes.
+    return Status::TxnConflict(
+        "relation '" + std::string(relation) + "' has an index being built on core " +
+        std::to_string(this_core) +
+        " and takes no writes until that CREATE INDEX ends on the system core; retry "
+        "(workplan-peer-writer.md PW1c-6b)");
+}
+
+void PendingIndexBuilds::Open(catalog::Oid table_oid, std::uint64_t index_oid,
+                              std::uint64_t now_ns) {
+    entries_.push_back(Entry{table_oid, index_oid, now_ns});
+}
+
+bool PendingIndexBuilds::Close(std::uint64_t index_oid) {
+    auto it = std::find_if(entries_.begin(), entries_.end(),
+                           [index_oid](const Entry& e) { return e.index_oid == index_oid; });
+    if (it == entries_.end()) return false;
+    entries_.erase(it);
+    return true;
+}
+
+bool PendingIndexBuilds::Covers(catalog::Oid table_oid) const noexcept {
+    return std::any_of(entries_.begin(), entries_.end(),
+                       [table_oid](const Entry& e) { return e.table_oid == table_oid; });
+}
+
+std::vector<PendingIndexBuilds::Entry> PendingIndexBuilds::Expire(std::uint64_t now_ns,
+                                                                  std::uint64_t ceiling_ns) {
+    std::vector<Entry> expired;
+    auto keep = entries_.begin();
+    for (const Entry& e : entries_) {
+        if (now_ns >= e.opened_at_ns && now_ns - e.opened_at_ns >= ceiling_ns) {
+            expired.push_back(e);
+        } else {
+            *keep++ = e;
+        }
+    }
+    entries_.erase(keep, entries_.end());
+    return expired;
+}
+
 Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb) {
     return Status::Unsupported(
         std::string(verb) + " is DDL, and core " + std::to_string(this_core) +

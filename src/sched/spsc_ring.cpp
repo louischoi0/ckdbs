@@ -33,6 +33,10 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kRelationFaultGrant: return "RELATION_FAULT_GRANT";
         case RingMessageKind::kRowIdLease: return "ROWID_LEASE";
         case RingMessageKind::kRelationWriteGrant: return "RELATION_WRITE_GRANT";
+        case RingMessageKind::kRelationGrantRequest: return "RELATION_GRANT_REQUEST";
+        case RingMessageKind::kIndexBuildRequest: return "INDEX_BUILD_REQUEST";
+        case RingMessageKind::kIndexBuildReply: return "INDEX_BUILD_REPLY";
+        case RingMessageKind::kIndexBuildDone: return "INDEX_BUILD_DONE";
     }
     return "unknown";
 }

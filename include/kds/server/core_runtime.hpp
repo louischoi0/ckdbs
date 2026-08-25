@@ -16,6 +16,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/index_build_service.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
@@ -275,6 +276,15 @@ public:
     // dispatcher's probe recorded a relation, then drives the tick.
     const RelationGrantDemand& relation_grant_demand() const noexcept { return grant_demand_; }
 
+    // PW1c-6b-2's window and the service that keeps it, exposed for the
+    // same reason. Null on core 0 and before AttachTransport.
+    const PendingIndexBuilds& pending_index_builds() const noexcept {
+        return pending_index_builds_;
+    }
+    IndexBuildServer* index_builds() noexcept {
+        return index_builds_.has_value() ? &*index_builds_ : nullptr;
+    }
+
     // This core's transaction-id lease, exposed for the first of those two
     // reasons only: a test drives a grant without a reactor.
     txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
@@ -359,6 +369,15 @@ private:
     // The remote step server (P4b), armed at AttachTransport: this core
     // answers STEP_OPENs for relations it owns.
     std::optional<RemoteStepServer> remote_steps_;
+
+    // PW1c-6b-2 (index_build_service.hpp): the window the dispatcher's
+    // gate reads - declared before the dispatcher, which holds a pointer
+    // - and the owner's half of a peer-owned relation's CREATE INDEX,
+    // armed at AttachTransport on peers. It borrows the catalog, store
+    // and WAL declared below; references only, and its destructor
+    // touches none of them.
+    PendingIndexBuilds pending_index_builds_;
+    std::optional<IndexBuildServer> index_builds_;
 
     // The two objects this core's checkpointer borrows (PW3). Built at
     // `AttachTransport`, not at `Open`: the anchor publishes over the ring,

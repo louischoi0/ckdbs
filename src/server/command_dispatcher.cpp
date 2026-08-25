@@ -2785,6 +2785,14 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     // None poisons the session; the backstop below every admitted shape is
     // the store's every-build MayWrite (device_page_store.cpp).
     if (catalog_read_only_) {
+        // PW1c-6b-2's window (index_build_service.hpp): an index of this
+        // relation is being built here, or built and not yet published by
+        // core 0's commit, and a row written now would be in nobody's
+        // index. Retryable - `done` closes it. Before the shape gate,
+        // because the relation *looks* funded until the commit lands.
+        if (pending_index_builds_ != nullptr && pending_index_builds_->Covers(access.oid)) {
+            return IndexBuildPending(core_id_, relation);
+        }
         // cabin_ids is per-column-parallel with id 0 meaning "no Cabin"
         // (schema.hpp) - emptiness is the wrong test, and so is
         // cabin_mask != 0: a Cabin on a column past 64 folds into no bit.

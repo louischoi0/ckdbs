@@ -877,6 +877,14 @@ public:
     // must outlive this.
     void SetRelationGrantDemand(RelationGrantDemand* demand) noexcept { grant_demand_ = demand; }
 
+    // Where CheckWriteAffinity reads that an index of a relation this core
+    // owns is being built here (PW1c-6b-2, core_affinity.hpp). Installed
+    // beside the demand sink, on the same cores; a dispatcher never told
+    // admits every write the shape gate does. `builds` must outlive this.
+    void SetPendingIndexBuilds(const PendingIndexBuilds* builds) noexcept {
+        pending_index_builds_ = builds;
+    }
+
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
     // with the same default posture: a dispatcher never told behaves as the
@@ -1217,6 +1225,8 @@ private:
     bool catalog_read_only_ = false;
     // PW1c-7's demand sink; null on core 0 and on hook-less fixtures.
     RelationGrantDemand* grant_demand_ = nullptr;
+    // PW1c-6b-2's window; null on the same cores.
+    const PendingIndexBuilds* pending_index_builds_ = nullptr;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;

@@ -105,6 +105,18 @@ enum class RingMessageKind : std::uint16_t {
     // this kind but the ordinary kRelationFaultGrant and
     // kRelationWriteGrant, produced by the same publish a CREATE TABLE runs.
     kRelationGrantRequest = 24,
+
+    // core 0 <-> owner core: a peer-owned relation's CREATE INDEX, built
+    // by the owner (workplan-peer-writer.md §7c, PW1c-6b;
+    // server/index_build_service.hpp). The request carries the definition
+    // core 0 prepared (`server::IndexBuildRequestPayload`), the reply the
+    // root the owner built or why not (`IndexBuildReplyPayload`, matched
+    // to its request by `request_id`), and `done` the statement's end
+    // (`IndexBuildDonePayload`) - which is what closes the owner's
+    // write-refusal window on that relation.
+    kIndexBuildRequest = 25,
+    kIndexBuildReply = 26,
+    kIndexBuildDone = 27,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -126,6 +138,9 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kRowIdLease:
         case RingMessageKind::kRelationWriteGrant:
         case RingMessageKind::kRelationGrantRequest:
+        case RingMessageKind::kIndexBuildRequest:
+        case RingMessageKind::kIndexBuildReply:
+        case RingMessageKind::kIndexBuildDone:
             return true;
         case RingMessageKind::kUnset:
             return false;
