@@ -1160,6 +1160,19 @@ Status Expeditor::Serve() {
 
     sched::Scheduler scheduler(clock_, io_backend.value());
     scheduler.SetLogger(&*logger_);
+    // `SHOW META`'s group-accounting block on core 0 (sched.md §4). The
+    // reactor is a local of this function and `dispatcher_` is a member that
+    // outlives it, so the view has to be cleared on **every** exit - and
+    // there are twenty early `return`s between here and the tail. A guard,
+    // not a line at the bottom: a path that missed it would leave the
+    // dispatcher pointing at a destroyed reactor, and `SHOW META` through
+    // the public `dispatcher()` accessor would then read freed memory.
+    // Declared after `scheduler`, so reverse order clears the view first.
+    dispatcher_->set_scheduler_view(&scheduler);
+    struct ClearSchedulerView {
+        CommandDispatcher* dispatcher;
+        ~ClearSchedulerView() { dispatcher->set_scheduler_view(nullptr); }
+    } clear_scheduler_view{&*dispatcher_};
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,

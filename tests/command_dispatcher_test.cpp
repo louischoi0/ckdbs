@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>   // std::make_unique, for the scheduler-view test's FunctionTask
 #include <optional>
 #include <string>
 #include <vector>
@@ -13,6 +14,8 @@
 #include "kds/parser/fingerprint.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/sched/io_backend.hpp"
+#include "kds/sched/scheduler.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -135,6 +138,137 @@ TEST_F(CommandDispatcherTest, ShowMetaReportsSuperblockFields) {
               std::string::npos);
     EXPECT_NE(out.response.find("wal_anchor_count=0"), std::string::npos);
     EXPECT_FALSE(out.should_stop);
+}
+
+// ---- The cross-core write refusal counters (crosscore.md §6, T5) --------
+//
+// §6 specifies a per-core counter keyed (home core, target core, relation)
+// and calls it "the input the future placement/2PC decision will be made
+// from". The class and both recording sites existed; nothing printed them,
+// so the number could not be read from outside the process - which is the
+// whole of what a metric is for.
+
+TEST_F(CommandDispatcherTest, ShowMetaReportsNoCrossCoreWriteRefusalsOnAQuietCore) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto out = d.Dispatch("SHOW META");
+    // Zero prints. It is an answer - *this workload asked for no cross-core
+    // write* - and the before-shipping era is recorded for exactly that
+    // reading, so it must not be omitted the way an absent subsystem is.
+    EXPECT_NE(out.response.find("cross_core_write_refusals=0"), std::string::npos)
+        << out.response;
+    EXPECT_NE(out.response.find("cross_core_write_refusal_keys=0"), std::string::npos)
+        << out.response;
+    EXPECT_EQ(out.response.find("cross_core_write_refusal_detail="), std::string::npos)
+        << "no keys, no detail token: " << out.response;
+}
+
+TEST_F(CommandDispatcherTest, ARefusedCrossCoreWriteIsCountedAndPrintedByKey) {
+    // Core 0 creates the relation, so it is owned by core 0.
+    CommandDispatcher owner(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(owner.Dispatch("CREATE TABLE acct (id int64, name varchar)")
+                  .response.substr(0, 7),
+              "CREATED");
+
+    // A dispatcher running as core 1 may not write it (CC3).
+    CommandDispatcher peer(boot_->superblock, boot_->catalog, store_, nullptr, nullptr,
+                           nullptr, wal::DurabilityClass::kGroup, exec::Budget(),
+                           /*recorder=*/nullptr, /*replay_enabled=*/false,
+                           /*access_statistics=*/true, /*cabins=*/nullptr,
+                           /*txn=*/nullptr, txn::IsolationLevel::kReadCommitted,
+                           /*core_id=*/1);
+    auto refused = peer.Dispatch("INSERT INTO acct VALUES ('alice')");
+    ASSERT_NE(refused.response.find("bound to core"), std::string::npos)
+        << refused.response;
+
+    auto meta = peer.Dispatch("SHOW META");
+    EXPECT_NE(meta.response.find("cross_core_write_refusals=1"), std::string::npos)
+        << meta.response;
+    EXPECT_NE(meta.response.find("cross_core_write_refusal_keys=1"), std::string::npos)
+        << meta.response;
+    // home>target:oid=count - the key §6 names, in the order the ordered map
+    // gives, which is what keeps two runs' reports comparable. Asserted as
+    // the **whole token**: a bare find("=1") over the reply passes on a
+    // dozen unrelated fields (`ddl_durable=1`, `catalog_recovered=1`) and
+    // would therefore pass with no count printed at all.
+    const std::size_t at = meta.response.find("cross_core_write_refusal_detail=");
+    ASSERT_NE(at, std::string::npos) << meta.response;
+    const std::string detail =
+        meta.response.substr(at, meta.response.find(' ', at) - at);
+    EXPECT_EQ(detail.rfind("cross_core_write_refusal_detail=1>0:", 0), 0u) << detail;
+    EXPECT_EQ(detail.substr(detail.size() - 2), "=1") << detail;
+
+    // A second refusal of the same shape is the same key, counted twice -
+    // not a second key. The distinction is the whole point of a keyed
+    // counter: "one relation refused twice" and "two relations refused
+    // once" are different evidence for 2PC.
+    ASSERT_NE(peer.Dispatch("INSERT INTO acct VALUES ('bob')").response.find("bound to core"),
+              std::string::npos);
+    auto meta2 = peer.Dispatch("SHOW META");
+    EXPECT_NE(meta2.response.find("cross_core_write_refusals=2"), std::string::npos)
+        << meta2.response;
+    EXPECT_NE(meta2.response.find("cross_core_write_refusal_keys=1"), std::string::npos)
+        << meta2.response;
+}
+
+TEST_F(CommandDispatcherTest, TheOwningCoresOwnWritesAreNotCountedAsCrossCore) {
+    // The counter answers "did this workload want a cross-core write". A
+    // write that succeeds locally is not evidence for 2PC and must not
+    // appear - the sibling half of the undercount stated at the print site.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, name varchar)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8),
+              "INSERTED");
+    EXPECT_NE(d.Dispatch("SHOW META").response.find("cross_core_write_refusals=0"),
+              std::string::npos);
+}
+
+// ---- The group-accounting block (sched.md §4, T4) ----------------------
+
+TEST_F(CommandDispatcherTest, ShowMetaOmitsGroupAccountingWithNoReactorAttached) {
+    // The recovery block's rule: absent, not zeroed. A dispatcher with no
+    // reactor has not "spent no time in the foreground", it has no answer,
+    // and printing zeroes would be one.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    const std::string meta = d.Dispatch("SHOW META").response;
+    EXPECT_EQ(meta.find("sched_wall_us="), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("sched_foreground_polls="), std::string::npos) << meta;
+}
+
+TEST_F(CommandDispatcherTest, ShowMetaReportsGroupAccountingAgainstWallTime) {
+    sched::ManualClock clock;
+    sched::NullIoBackend io;
+    sched::Scheduler scheduler(clock, io);
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    d.set_scheduler_view(&scheduler);
+
+    clock.SetNow(0);
+    scheduler.Submit(std::make_unique<sched::FunctionTask>(
+        sched::SchedulingGroup::kSystem, [&] {
+            clock.Advance(3'000'000);        // 3 ms inside a system poll
+            return sched::PollResult::kDone;
+        }));
+    scheduler.RunOnce();
+    clock.Advance(7'000'000);                // 7 ms outside every poll
+
+    const std::string meta = d.Dispatch("SHOW META").response;
+    // Whole tokens: `find("...=10000")` also matches `=100000`, and a
+    // counter that grew by a factor of ten is exactly the defect worth
+    // catching here.
+    const auto token = [&meta](std::string_view key) {
+        const std::size_t at = meta.find(key);
+        if (at == std::string::npos) return std::string("<absent>");
+        const std::size_t end = meta.find(' ', at);
+        return meta.substr(at, end == std::string::npos ? end : end - at);
+    };
+    EXPECT_EQ(token("sched_wall_us="), "sched_wall_us=10000") << meta;
+    EXPECT_EQ(token("sched_system_polled_us="), "sched_system_polled_us=3000") << meta;
+    EXPECT_EQ(token("sched_system_polls="), "sched_system_polls=1") << meta;
+    EXPECT_EQ(token("sched_foreground_polled_us="), "sched_foreground_polled_us=0") << meta;
+    EXPECT_EQ(token("sched_maintenance_polls="), "sched_maintenance_polls=0") << meta;
+    // 10 ms of wall against 3 ms of polls: the 7 ms difference is the time
+    // sched.md §4 says is charged to no group, and this is the first build
+    // in which a client can compute it.
 }
 
 TEST_F(CommandDispatcherTest, ShowTablesIncludesBootstrapTables) {

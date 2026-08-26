@@ -5,6 +5,7 @@
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
+#include "kds/sched/scheduler.hpp"       // SHOW META's group accounting (sched.md 4)
 
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/pattern_defs.hpp"
@@ -630,6 +631,81 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     refill_block("extent", extent_refill_stats_);
     refill_block("trxid", trx_id_refill_stats_);
     refill_block("rowid", row_id_refill_stats_);
+
+    // The cross-core writes this core refused, `crosscore.md` §6's "input
+    // the future placement/2PC decision will be made from". Printed
+    // unconditionally, zero included: unlike the blocks above it, a zero
+    // here is an answer - *this workload asked for no cross-core write* -
+    // and that is exactly the reading the before-shipping era is recorded
+    // for.
+    //
+    // **The undercount, stated where it is read.** The key is
+    // (home core, target core, relation oid), so a refusal that never
+    // resolves a relation cannot appear:
+    //
+    //   - **DDL on a peer** is refused by verb before anything is parsed
+    //     (`PeerDdlRefused`, the guard at the top of Dispatch) - not a
+    //     relation-keyed write, and not counted.
+    //   - A statement refused **before resolution** for any other reason -
+    //     a parse error, `max_insert_rows`, the multi-row-without-a-
+    //     transaction refusal - never reaches the affinity check.
+    //   - The two **owner-core** refusals, `RelationWriteRightsPending`
+    //     (PW1c-7) and `IndexBuildPending` (PW1c-6b-2), are deliberately
+    //     *not* counted: the write is not cross-core at all, it is this
+    //     core's own write waiting on a grant or a build window, and
+    //     folding them in would inflate the 2PC evidence with cases 2PC
+    //     does not address.
+    //
+    // `docs/workplan-peer-writer.md` §8's pre-parse DML guard - the class
+    // §6 names as invisible to a relation-keyed counter - was removed at
+    // PW1c-5, so at this commit a peer's foreign write is refused by
+    // `CheckWriteAffinity` and *is* counted. The list above is the
+    // undercount that is real now.
+    os << " cross_core_write_refusals=" << cross_core_writes_.total()
+       << " cross_core_write_refusal_keys=" << cross_core_writes_.counts().size();
+    if (!cross_core_writes_.counts().empty()) {
+        // `home>target:oid=count`, comma-separated, in the map's order
+        // (stable run to run - sched.md §8's rule for anything observable).
+        // Capped, and the cap **says** it truncated: a silent cut would
+        // read as "these were all of them".
+        constexpr std::size_t kMaxDetailKeys = 16;
+        os << " cross_core_write_refusal_detail=";
+        std::size_t printed = 0;
+        for (const auto& [key, count] : cross_core_writes_.counts()) {
+            if (printed == kMaxDetailKeys) {
+                os << ",+" << (cross_core_writes_.counts().size() - printed) << "more";
+                break;
+            }
+            if (printed != 0) os << ',';
+            os << key.home_core << '>' << key.target_core << ':' << key.rel_oid
+               << '=' << count;
+            ++printed;
+        }
+    }
+
+    // Group accounting against wall time (`docs/sched.md` §4's last bullet;
+    // `sched/scheduler.hpp`'s accessors carry the argument for why there are
+    // two counters per group). `sched_wall_us - sum(sched_*_polled_us)` is
+    // the reactor time charged to no group: the idle block, the WAL drain's
+    // `fdatasync`, timer callbacks, the io drain. Absent rather than zeroed
+    // where no reactor is attached, the rule the recovery block follows.
+    if (scheduler_view_ != nullptr) {
+        os << " sched_wall_us=" << scheduler_view_->run_wall_ns() / 1000
+           << " sched_iterations=" << scheduler_view_->iterations();
+        // Indexed by the enum, not paired with it: a fourth group would
+        // then fail to compile here rather than print as two.
+        static constexpr const char* kGroupNames[sched::kNumSchedulingGroups] = {
+            "foreground", "maintenance", "system"};
+        for (int i = 0; i < sched::kNumSchedulingGroups; ++i) {
+            const auto group = static_cast<sched::SchedulingGroup>(i);
+            os << " sched_" << kGroupNames[i]
+               << "_polled_us=" << scheduler_view_->polled_ns_total(group) / 1000
+               << " sched_" << kGroupNames[i]
+               << "_polls=" << scheduler_view_->polls_total(group)
+               << " sched_" << kGroupNames[i]
+               << "_consumed_us=" << scheduler_view_->consumed_ns(group) / 1000;
+        }
+    }
 
     // PW1c-6b-2's windows on a peer: how many of this core's relations
     // refuse writes for an index build core 0 has not yet said `done` for,

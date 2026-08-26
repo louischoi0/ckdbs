@@ -680,7 +680,16 @@ still waits on its own gate, so:
   grant burns its CPU (108,150 iterations in one 39 ms refill) — and **the
   group accounting charges nobody for reactor time outside polls** (the
   drain's fdatasync above all), which is why a low-share group's debt was
-  so slow to clear. Both are `docs/sched.md` §4's, unfixed.
+  so slow to clear. Both are `docs/sched.md` §4's. The spin is **unfixed**;
+  the accounting gap is **unfixed but no longer invisible** — since
+  2026-08-26 (T4 of the statement-shipping pretasks) `SHOW META` prints
+  `sched_wall_us`, `sched_iterations` and per group
+  `sched_<group>_polled_us` / `_polls` / `_consumed_us`, so
+  `wall - sum(polled)` is the untracked time and a spin reads as polls
+  climbing while polled time does not. `bench/v2.1.0` §11-5 recorded the
+  measurement as impossible from outside the process and owed it to
+  whoever next touched §4; that debt is paid, and what is owed now is a
+  decision about the gap, not an instrument for it.
 - ~~**Three peer refusals say "retry" without the wire's `retryable=1`** —
   the row-id, trx-id and extent leases' `ResourceExhausted`
   (`include/kds/base/status.hpp`: only `TxnConflict` is `IsRetryable`, by
@@ -937,7 +946,17 @@ still waits on its own gate, so:
   without the wiring (the in-flight row appears).
 - Cross-core writes are refused retryably (CC3): a transaction's writes
   bind to one home core. 2PC is an open decision, to be designed from the
-  refusal counters.
+  refusal counters — which are **readable from outside the process since
+  2026-08-26** (T5 of the statement-shipping pretasks): `SHOW META` prints
+  `cross_core_write_refusals`, `cross_core_write_refusal_keys` and a capped
+  `cross_core_write_refusal_detail` of `home>target:oid=count`, per core.
+  The class the counter cannot see is DDL on a peer, refused by verb before
+  any relation is resolved; the two owner-core refusals
+  (`RelationWriteRightsPending`, `IndexBuildPending`) are excluded by
+  decision, being this core's own writes waiting on a grant rather than
+  cross-core writes. `docs/crosscore.md` §6's older claim — that PW5's
+  pre-parse guard hid the foreign-write class — was already false when
+  PW1c-5 deleted that guard, and is retired in place there.
 - ~~**Buffer-pool eviction is built but disarmed**: nothing calls the sweep,
   because `Get()` hands out raw spans safe only while nothing evicts~~ —
   **closed 2026-08-13**: the `PageRef` migration is built (MG01-MG06,

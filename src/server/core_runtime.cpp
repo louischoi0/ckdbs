@@ -33,6 +33,13 @@ namespace kds::server {
 // scope), so a peer's teardown is the same sequence as the system core's.
 CoreRuntime::~CoreRuntime() {
     listener_.reset();
+    // Before the reactor goes, because this body inverts declaration order
+    // (see the header): `scheduler_` is dropped here, ahead of the
+    // dispatcher that holds a view on it. Nothing below dispatches today,
+    // so this is the contract rather than a live fix - but the header's
+    // whole teardown argument is that a member destructor may reach back,
+    // and a stale reactor pointer is exactly what that argument forbids.
+    if (dispatcher_.has_value()) dispatcher_->set_scheduler_view(nullptr);
     scheduler_.reset();
 }
 
@@ -223,6 +230,13 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // list, docs/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.
     runtime->dispatcher_->set_recovery(&runtime->recovery_);
+    // `SHOW META`'s group-accounting block on this core (sched.md §4). Set
+    // on every core, peer or not: the accounting question is about a
+    // reactor, and every core runs one. Set on the startup thread, before
+    // this runtime's worker exists, so the reactor-local read rule holds.
+    // The view is dropped in `~CoreRuntime`, which destroys the scheduler
+    // *ahead* of the dispatcher - declaration order alone would not do it.
+    runtime->dispatcher_->set_scheduler_view(&*runtime->scheduler_);
     // Asymmetry 1 made enforceable at dispatch (PW4) - the argument is at
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {
