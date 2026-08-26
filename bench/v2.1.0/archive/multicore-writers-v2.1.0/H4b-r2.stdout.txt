@@ -1,0 +1,33 @@
+/usr/bin/python3 tools/multicore_benchmark.py --server build-release/kds_server --cores 3 --tables 4 --rows 2000 --placement rotate --workdir /home/ubuntu/mcbench/H4b-r2 --port 15664 --peer-listeners
+
+
+== single-core: cores=1, 4 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0
+   host: workdir on ext4, 1-minute load 0.60 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=10.30s  aggregate=2,718 stmt/s  errors=0
+   insert        n=  8001  p50=   1968us  p99=   2322us
+   point-select  n=  8000  p50=    139us  p99=   1078us
+   update        n=  8000  p50=   1979us  p99=   2193us
+   delete        n=  4000  p50=   1955us  p99=   2142us
+   scan          n=     4  p50=   1465us  p99=   1520us
+
+== multi-core: cores=3, 4 relations x 2000 rows ==
+   placement: bench0 owner_core=2  bench1 owner_core=1  bench2 owner_core=2  bench3 owner_core=1
+   host: workdir on ext4, 1-minute load 0.88 at start
+   ddl session on core 0 after 1 connection(s); 4 writer session(s) on cores [1, 2] after 7 connection(s)
+   refills: core 1: rowid 2/2 wait_max=0.8ms (submit 0.0ms/0it, to-grant 0.7ms/327it, resume 0.0ms/1it), trxid 3/3 wait_max=5.7ms (submit 0.0ms/0it, to-grant 5.7ms/13328it, resume 1.0ms/1it), extent 1/1 wait_max=4.7ms (submit 0.0ms/0it, to-grant 3.8ms/4it, resume 0.9ms/1it); core 2: rowid 2/2 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/1442it, resume 0.0ms/1it), trxid 3/3 wait_max=5.6ms (submit 0.0ms/0it, to-grant 5.6ms/13303it, resume 1.0ms/1it), extent 1/1 wait_max=5.0ms (submit 0.0ms/0it, to-grant 4.0ms/4it, resume 0.9ms/1it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=15
+   wall=9.57s  aggregate=2,926 stmt/s  errors=0
+   insert        n=  8001  p50=   1883us  p99=   2248us
+   point-select  n=  8000  p50=    130us  p99=    476us
+   update        n=  8000  p50=   1931us  p99=   2193us
+   delete        n=  4000  p50=   1923us  p99=   2707us
+   scan          n=     4  p50=   1428us  p99=   1453us
+
+== comparison ==
+   multi-core / single-core throughput: 1.076x

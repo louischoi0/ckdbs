@@ -1,0 +1,6 @@
+fdatasync overlap probe: dir=/home/ubuntu/mcbench/probe reps=5 seconds=3.0 page=8192
+threads  median_sps   min_sps      max_sps      vs_N1     
+1        1066.1       1060.2       1074.9       1.000     
+2        2138.1       2136.7       2148.8       2.005     
+3        3203.8       3192.4       3211.4       3.005     
+4        3898.6       3892.5       3911.0       3.657     

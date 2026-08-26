@@ -1,0 +1,35 @@
+/usr/bin/python3 tools/multicore_benchmark.py --server build-release/kds_server --cores 4 --tables 6 --rows 2000 --placement creating --workdir /home/ubuntu/mcbench/C1-r4 --port 15692
+
+
+== single-core: cores=1, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0
+   host: workdir on ext4, 1-minute load 0.59 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=10.87s  aggregate=3,865 stmt/s  errors=0
+   insert        n= 12001  p50=   2020us  p99=   2520us
+   point-select  n= 12000  p50=    232us  p99=   1163us
+   update        n= 12000  p50=   2027us  p99=   2249us
+   delete        n=  6000  p50=   2015us  p99=   2626us
+   scan          n=     6  p50=   1460us  p99=   1866us
+
+== multi-core: cores=4, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0
+   host: workdir on ext4, 1-minute load 0.65 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=9.99s  aggregate=4,204 stmt/s  errors=0
+   insert        n= 12001  p50=   1342us  p99=   2288us
+   point-select  n= 12000  p50=    268us  p99=   1116us
+   update        n= 12000  p50=   2030us  p99=   2198us
+   delete        n=  6000  p50=   2015us  p99=   2199us
+   scan          n=     6  p50=   1411us  p99=   1700us
+
+== comparison ==
+   multi-core / single-core throughput: 1.088x
+   (expected ~1.0x at placement=creating whatever the pipeline can do:
+    every relation is on core 0, so no statement ships - docs/workplan-crosscore.md P6c)

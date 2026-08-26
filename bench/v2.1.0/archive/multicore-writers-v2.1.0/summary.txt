@@ -1,0 +1,118 @@
+==============================================================================
+MATRIX
+==============================================================================
+
+### H1  (5/5 usable reps)
+  ratio median=1.051  spread=1.008..1.070  all=[1.008, 1.05, 1.067, 1.07, 1.051]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=17', 'retries: insert=19', 'retries: insert=19', 'retries: insert=17', 'retries: insert=20']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               2000        1910     1.047        2425        2218   12001
+  point-select          255         255     1.000        1109        1018   12000
+  update               2030        1941     1.046        2230        2203   12000
+  delete               2005        1934     1.037        2212        2623   6000
+  scan                 1453        1372     1.059        1580        1451   6
+  aggregate stmt/s: single=3923  multi=4159
+  per-core busy (whole invocation, both configs): cpu0=0.111  cpu1=0.139  cpu2=0.132  cpu3=0.144
+  refills (rep 1): core 1: rowid 2/2 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/1079it, resume 0.0ms/1it), trxid 3/3 wait_max=10.5ms (submit 0.0ms/0it, to-grant 10.5ms/18980it, resume 1.0ms/1it), extent 1/1 wait_max=5.6ms (submit 0.0ms/0it, to-grant 4.6ms/4it, resume 1.0ms/1it); core 2: rowid 2/2 wait_max=0.6ms (submit 0.0ms/0it, to-grant 0.6ms/786it, resume 0.0ms/1it), trxid 3/3 wait_max=10.4ms (submit 0.0ms/
+
+### H2  (2/2 usable reps)
+  ratio median=1.024  spread=1.019..1.030  all=[1.019, 1.03]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (10000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=17', 'retries: insert=22']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               2020        1950     1.036        2466        2380   120001
+  point-select          254         267     0.949         976         988   120000
+  update               2029        1942     1.045        2256        2281   120000
+  delete               2004        1988     1.008        2232        2295   60000
+  scan                 4978        5279     0.943        5301        5669   6
+  aggregate stmt/s: single=3908  multi=4003
+  per-core busy (whole invocation, both configs): cpu0=0.102  cpu1=0.141  cpu2=0.132  cpu3=0.138
+  refills (rep 1): core 1: rowid 12/12 wait_max=2.4ms (submit 0.0ms/0it, to-grant 1.1ms/1493it, resume 1.4ms/1it), trxid 25/25 wait_max=9.0ms (submit 0.1ms/0it, to-grant 9.0ms/16392it, resume 1.2ms/1it), extent 10/10 wait_max=6.2ms (submit 0.0ms/0it, to-grant 5.1ms/5it, resume 1.9ms/1it); core 2: rowid 12/12 wait_max=3.4ms (submit 0.0ms/0it, to-grant 2.0ms/1281it, resume 1.4ms/1it), trxid 25/25 wait_max=17.5ms (subm
+
+### H3  (5/5 usable reps)
+  ratio median=1.927  spread=1.886..1.947  all=[1.886, 1.943, 1.927, 1.916, 1.947]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=8', 'retries: insert=10', 'retries: insert=6', 'retries: insert=6', 'retries: insert=8']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               1944         984     1.976        2226        1192   6001
+  point-select           93         124     0.750         251         285   6000
+  update               1944        1032     1.884        2098        1209   6000
+  delete               1938        1025     1.891        2128        1210   3000
+  scan                 1396         488     2.861        1497         525   3
+  aggregate stmt/s: single=2096  multi=4053
+  per-core busy (whole invocation, both configs): cpu0=0.069  cpu1=0.092  cpu2=0.099  cpu3=0.081
+  refills (rep 1): core 1: rowid 1/1 wait_max=0.1ms (submit 0.0ms/0it, to-grant 0.1ms/153it, resume 0.0ms/1it), trxid 2/2 wait_max=8.5ms (submit 0.0ms/0it, to-grant 8.4ms/15436it, resume 0.0ms/1it), extent 0/0 wait_max=0.0ms (submit 0.0ms/0it, to-grant 0.0ms/0it, resume 0.0ms/0it); core 2: rowid 1/1 wait_max=1.0ms (submit 0.0ms/0it, to-grant 1.0ms/1977it, resume 0.0ms/1it), trxid 2/2 wait_max=8.3ms (submit 0.0ms/0it
+
+### H4a  (5/5 usable reps)
+  ratio median=1.034  spread=0.983..1.052  all=[1.034, 1.041, 1.052, 0.983, 1.02]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=4', 'retries: insert=4', 'retries: insert=5', 'retries: insert=5', 'retries: insert=5']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               1899        1893     1.003        2136        2168   4001
+  point-select           71          66     1.076         150         136   4000
+  update               1907        1934     0.986        2060        2108   4000
+  delete               1914        1925     0.994        2073        2070   2000
+  scan                 1399        1398     1.001        1399        1398   2
+  aggregate stmt/s: single=1441  multi=1500
+  per-core busy (whole invocation, both configs): cpu0=0.048  cpu1=0.086  cpu2=0.044  cpu3=0.055
+  refills (rep 1): core 1: rowid 2/2 wait_max=0.6ms (submit 0.0ms/0it, to-grant 0.5ms/587it, resume 0.0ms/1it), trxid 3/3 wait_max=16.5ms (submit 0.0ms/0it, to-grant 16.5ms/40646it, resume 1.0ms/1it), extent 1/1 wait_max=5.3ms (submit 0.0ms/0it, to-grant 4.3ms/4it, resume 1.0ms/1it)
+
+### H4b  (5/5 usable reps)
+  ratio median=1.058  spread=1.005..1.080  all=[1.08, 1.076, 1.005, 1.058, 1.042]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=9', 'retries: insert=15', 'retries: insert=15', 'retries: insert=7', 'retries: insert=7']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               1963        1883     1.042        2282        2236   8001
+  point-select          137         143     0.958        1066         479   8000
+  update               1978        1929     1.025        2144        2145   8000
+  delete               1955        1919     1.019        2181        2147   4000
+  scan                 1418        1381     1.027        1515        1431   4
+  aggregate stmt/s: single=2775  multi=2928
+  per-core busy (whole invocation, both configs): cpu0=0.082  cpu1=0.105  cpu2=0.109  cpu3=0.086
+  refills (rep 1): core 1: rowid 2/2 wait_max=0.6ms (submit 0.0ms/0it, to-grant 0.6ms/587it, resume 0.0ms/1it), trxid 3/3 wait_max=5.4ms (submit 0.0ms/0it, to-grant 5.4ms/12059it, resume 1.0ms/1it), extent 1/1 wait_max=5.3ms (submit 0.0ms/0it, to-grant 4.3ms/4it, resume 1.0ms/1it); core 2: rowid 2/2 wait_max=1.2ms (submit 0.0ms/0it, to-grant 1.2ms/1381it, resume 0.0ms/1it), trxid 3/3 wait_max=5.4ms (submit 0.0ms/0it
+
+### C1  (5/5 usable reps)
+  ratio median=1.071  spread=0.988..1.093  all=[1.071, 0.988, 1.05, 1.088, 1.093]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: none', 'retries: none', 'retries: none', 'retries: none', 'retries: none']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               2006        1377     1.457        2520        2288   12001
+  point-select          256         267     0.959        1120        1098   12000
+  update               2027        2030     0.999        2299        2237   12000
+  delete               2005        2015     0.995        2306        2273   6000
+  scan                 1430        1411     1.013        1651        1667   6
+  aggregate stmt/s: single=3938  multi=4206
+  per-core busy (whole invocation, both configs): cpu0=0.102  cpu1=0.102  cpu2=0.099  cpu3=0.105
+  refills (rep 1): none (no peer listener)
+
+==============================================================================
+PW7 BEFORE / AFTER  (H1 shape, adjacent in time)
+==============================================================================
+
+### HEAD 5ad2455 (floors present): NO RUNS FOUND
+
+### 9c0528a (pre-PW7 tree, no instrument): NO RUNS FOUND
+
+### HEAD with scheduler.cpp reverted to 2c6ae23^ (floors out, instrument in): NO RUNS FOUND
+
+==============================================================================
+PER-CORE INSERT
+==============================================================================
+  not present
+
+==============================================================================
+RESTART OWNERSHIP
+==============================================================================
+  not present
+
+==============================================================================
+DRAIN CADENCE
+==============================================================================
+  not present

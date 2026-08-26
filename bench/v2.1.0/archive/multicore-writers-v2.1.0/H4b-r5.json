@@ -1,0 +1,115 @@
+{
+  "configs": {
+    "single-core": {
+      "cores": 1,
+      "phases": {
+        "insert": {
+          "n": 8001,
+          "p50_us": 1944,
+          "p99_us": 2262
+        },
+        "point-select": {
+          "n": 8000,
+          "p50_us": 136,
+          "p99_us": 997
+        },
+        "update": {
+          "n": 8000,
+          "p50_us": 1974,
+          "p99_us": 2434
+        },
+        "delete": {
+          "n": 4000,
+          "p50_us": 1960,
+          "p99_us": 2200
+        },
+        "scan": {
+          "n": 4,
+          "p50_us": 1373,
+          "p99_us": 1381
+        }
+      },
+      "verify": "survivors as expected (1000, and one more in bench0 for the probe row)",
+      "placement": "bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0",
+      "refills": "none (no peer listener)",
+      "retries": "retries: none",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 9.96,
+      "aggregate_stmt_s": 2811.0,
+      "errors": 0
+    },
+    "multi-core": {
+      "cores": 3,
+      "phases": {
+        "insert": {
+          "n": 8001,
+          "p50_us": 1870,
+          "p99_us": 2203
+        },
+        "point-select": {
+          "n": 8000,
+          "p50_us": 143,
+          "p99_us": 529
+        },
+        "update": {
+          "n": 8000,
+          "p50_us": 1929,
+          "p99_us": 2213
+        },
+        "delete": {
+          "n": 4000,
+          "p50_us": 1918,
+          "p99_us": 2420
+        },
+        "scan": {
+          "n": 4,
+          "p50_us": 1261,
+          "p99_us": 1431
+        }
+      },
+      "verify": "survivors as expected (1000, and one more in bench0 for the probe row)",
+      "placement": "bench0 owner_core=2  bench1 owner_core=1  bench2 owner_core=2  bench3 owner_core=1",
+      "refills": "core 1: rowid 2/2 wait_max=0.3ms (submit 0.0ms/0it, to-grant 0.3ms/540it, resume 0.0ms/1it), trxid 3/3 wait_max=6.0ms (submit 0.0ms/0it, to-grant 6.0ms/14186it, resume 1.0ms/1it), extent 1/1 wait_max=4.6ms (submit 0.0ms/0it, to-grant 3.6ms/3it, resume 0.9ms/1it); core 2: rowid 2/2 wait_max=0.6ms (submit 0.0ms/0it, to-grant 0.6ms/270it, resume 0.0ms/1it), trxid 3/3 wait_max=5.9ms (submit 0.0ms/0it, to-grant 5.9ms/13951it, resume 1.0ms/1it), extent 1/1 wait_max=4.0ms (submit 0.0ms/0it, to-grant 3.0ms/3it, resume 1.0ms/1it)",
+      "retries": "retries: insert=7",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 9.56,
+      "aggregate_stmt_s": 2928.0,
+      "errors": 0
+    }
+  },
+  "ratio": 1.042,
+  "raw_lines": 31,
+  "cell": "H4b",
+  "rep": 5,
+  "invocation": "/usr/bin/python3 tools/multicore_benchmark.py --server build-release/kds_server --cores 3 --tables 4 --rows 2000 --placement rotate --workdir /home/ubuntu/mcbench/H4b-r5 --port 15676 --peer-listeners",
+  "returncode": 0,
+  "timed_out": false,
+  "elapsed_s": 21.804985761642456,
+  "load_before": 0.5595703125,
+  "load_after": 0.83935546875,
+  "cpu": {
+    "cpu0": {
+      "mean": 0.08455467201893274,
+      "peak": 0.34782608695652173,
+      "samples": 43
+    },
+    "cpu1": {
+      "mean": 0.10540841725840364,
+      "peak": 0.5833333333333334,
+      "samples": 43
+    },
+    "cpu2": {
+      "mean": 0.10916939824637488,
+      "peak": 0.5319148936170213,
+      "samples": 43
+    },
+    "cpu3": {
+      "mean": 0.08614260808549558,
+      "peak": 0.3829787234042553,
+      "samples": 43
+    }
+  },
+  "usable": true
+}

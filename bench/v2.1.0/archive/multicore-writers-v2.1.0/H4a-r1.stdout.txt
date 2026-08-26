@@ -1,0 +1,37 @@
+/usr/bin/python3 tools/multicore_benchmark.py --server build-release/kds_server --cores 2 --tables 2 --rows 2000 --placement rotate --workdir /home/ubuntu/mcbench/H4a-r1 --port 15640 --peer-listeners
+
+
+== single-core: cores=1, 2 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0
+   host: workdir on ext4, 1-minute load 0.56 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=9.76s  aggregate=1,435 stmt/s  errors=0
+   insert        n=  4001  p50=   1899us  p99=   2136us
+   point-select  n=  4000  p50=     70us  p99=    130us
+   update        n=  4000  p50=   1917us  p99=   2057us
+   delete        n=  2000  p50=   1917us  p99=   2073us
+   scan          n=     2  p50=   1399us  p99=   1399us
+
+== multi-core: cores=2, 2 relations x 2000 rows ==
+   placement: bench0 owner_core=1  bench1 owner_core=1
+   host: workdir on ext4, 1-minute load 0.71 at start
+   ddl session on core 0 after 1 connection(s); 2 writer session(s) on cores [1] after 5 connection(s)
+   refills: core 1: rowid 2/2 wait_max=0.6ms (submit 0.0ms/0it, to-grant 0.5ms/587it, resume 0.0ms/1it), trxid 3/3 wait_max=16.5ms (submit 0.0ms/0it, to-grant 16.5ms/40646it, resume 1.0ms/1it), extent 1/1 wait_max=5.3ms (submit 0.0ms/0it, to-grant 4.3ms/4it, resume 1.0ms/1it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=4
+   wall=9.44s  aggregate=1,484 stmt/s  errors=0
+   insert        n=  4001  p50=   1897us  p99=   2086us
+   point-select  n=  4000  p50=     73us  p99=    138us
+   update        n=  4000  p50=   1939us  p99=   2080us
+   delete        n=  2000  p50=   1931us  p99=   2062us
+   scan          n=     2  p50=   1435us  p99=   1435us
+
+== comparison ==
+   multi-core / single-core throughput: 1.034x
+   (rotation skips the system core, so at cores=2 every relation is
+    core 1's: this compares the peer write path against core 0's at
+    equal parallelism - a cost, not a scaling number; cores >= 3 is
+    where two writer cores exist)
