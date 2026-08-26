@@ -5,7 +5,7 @@
 #include "kds/catalog/schema.hpp"
 
 // What a foreign key declaration has to satisfy before it may be recorded
-// (docs/impl-foreign-keys.md §1, milestone FK-M1).
+// (docs/spec/impl-foreign-keys.md §1, milestone FK-M1).
 //
 // ---- Why these are free functions and not Catalog methods ---------------
 //

@@ -13,7 +13,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// TY05 - comparison and compile-time coercion (docs/spec-types.md §3.1,
+// TY05 - comparison and compile-time coercion (docs/spec/spec-types.md §3.1,
 // §3.2; docs/workplan-types.md).
 //
 // The property under test is that **the coercion happens at compile**, and

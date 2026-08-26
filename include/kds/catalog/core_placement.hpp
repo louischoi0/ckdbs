@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-// Which core owns a newly created relation (docs/workplan-crosscore.md M1).
+// Which core owns a newly created relation (docs/inflight/in-progress/workplan-crosscore.md M1).
 //
 // ---- Why this is a free function and not a Catalog method ---------------
 //
@@ -28,7 +28,7 @@
 // relation's unique indexes, Cabin, Waystone pages and var-heap hang off
 // its own catalog row and have no owner of their own (rows.hpp). What M1's
 // co-location rule will need a say in, when it exists, is FK-linked
-// relations - and `docs/impl-foreign-keys.md` keeps those co-located in v1
+// relations - and `docs/spec/impl-foreign-keys.md` keeps those co-located in v1
 // by deferring cross-core FK entirely, so there is nothing to encode yet.
 
 namespace kds::catalog {
@@ -77,7 +77,7 @@ inline constexpr std::uint32_t kSystemCore = 0;
 //
 // `relation_seq` is kept in the signature for the rotation above, and is
 // deliberately not the oid: oids restart at kUserOidStart every boot
-// (docs/keystoneid-k0-findings.md), so a placement keyed on one would
+// (docs/rules/keystoneid-k0-findings.md), so a placement keyed on one would
 // re-walk the same rotation after every restart.
 // Which placement rule CreateTable applies (workplan P6c, config key
 // `placement`). `kCreatingCore` is the default and the mode a

@@ -23,7 +23,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
-// The CREATE-time builder and its cutover (docs/feat-assertion.md §8.1,
+// The CREATE-time builder and its cutover (docs/spec/feat-assertion.md §8.1,
 // workplan AST06), tested through the statement surface: what a client sees
 // is what the acceptance criteria are written in terms of - a CREATE that
 // incorporates every live row or refuses whole, a reply that reports what

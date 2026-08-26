@@ -7,7 +7,7 @@
 #include "kds/base/file_descriptor.hpp"
 #include "kds/storage/page_device.hpp"
 
-// The single-file, disk-backed PageDevice (docs/page.md section 4,
+// The single-file, disk-backed PageDevice (docs/spec/page.md section 4,
 // decision S5 CONFIRMED):
 //
 //   file_offset = page_id * kPageSize

@@ -1,10 +1,10 @@
 // The cross-core step pipeline, priced against local execution
-// (docs/workplan-crosscore.md P4e).
+// (docs/inflight/in-progress/workplan-crosscore.md P4e).
 //
 // ---- Why this is a C++ benchmark and not a server driver ----------------
 //
 // Every other per-statement number in `bench/` is measured the way
-// `docs/workplan-aggregate-perf.md` prescribes: two servers, interleaved
+// `docs/inflight/in-progress/workplan-aggregate-perf.md` prescribes: two servers, interleaved
 // A/B over the wire. **That cannot reach this code path.** A pipeline runs
 // only when a relation is owned by a core other than the session's, and a
 // peer-owned relation cannot be populated over the wire at all: writes to

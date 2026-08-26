@@ -108,7 +108,7 @@ std::string HexEncode(std::span<const std::byte> bytes) {
 
 }  // namespace
 
-// ---- The error surface (docs/txn.md section 5, protocol.md section 11) ---
+// ---- The error surface (docs/spec/txn.md section 5, protocol.md section 11) ---
 //
 // A conflict is not an ordinary error: financial client libraries build
 // retry loops on the `retryable` bit, so its spelling is part of the
@@ -140,7 +140,7 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // explicitly rather than by omission, so the two look alike where they
     // are read.
     {StatusCode::kFkViolation, "FK_VIOLATION retryable=0 "},
-    // The third constraint spelling (docs/feat-assertion.md §4.4, AS9),
+    // The third constraint spelling (docs/spec/feat-assertion.md §4.4, AS9),
     // shaped exactly like FK_VIOLATION and for its reason. Its spelling
     // landed before its producer did, because a client written against it
     // must not see the message arrive as a bare "ERR ..." in the meantime.
@@ -312,7 +312,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     return outcome;
 }
 
-// ---- The durability wait (docs/wal.md D2) --------------------------------
+// ---- The durability wait (docs/spec/wal.md D2) --------------------------------
 //
 // Two entry points, one statement path, and the difference is only *how the
 // wait is taken*. `Dispatch()` blocks on this thread, because its callers -
@@ -389,7 +389,7 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
 
 namespace {
 
-// The statement-class → role table (role.hpp's model, docs/protocol.md
+// The statement-class → role table (role.hpp's model, docs/spec/protocol.md
 // §14). Keyed on exactly the tokens DispatchInner routes on, and
 // *total*: a command absent from every readonly/readwrite line below is
 // admin's - including commands that do not exist, so a statement added
@@ -431,7 +431,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return {"ERR empty command", false};
     }
 
-    // ---- Authorization (role.hpp; docs/protocol.md §14) -----------------
+    // ---- Authorization (role.hpp; docs/spec/protocol.md §14) -----------------
     //
     // One check, on the same tokens the routing below reads, before
     // anything else interprets the line. An admin never fails it, so a
@@ -444,7 +444,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
                 false};
     }
 
-    // ---- The failed-txn gate (docs/txn.md section 10-8) -----------------
+    // ---- The failed-txn gate (docs/spec/txn.md section 10-8) -----------------
     //
     // A statement inside an explicit transaction failed, so the transaction
     // can no longer be committed. Everything but the ways out is refused -
@@ -668,7 +668,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " last_mount_time=" << superblock_.last_mount_time()
        << " wal_anchor_count=" << superblock_.wal_anchor_count()
        << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
-       // The core serving this session (PW6, docs/workplan-peer-writer.md).
+       // The core serving this session (PW6, docs/inflight/in-progress/workplan-peer-writer.md).
        // Under `peer_listeners = on` the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -
        // the per-core writer benchmark, an operator reading a refusal - must
@@ -680,7 +680,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // this one is live dispatcher state and prints unconditionally.
        << " catalog_marks_purged=" << catalog_marks_purged_;
 
-    // FM10 (docs/workplan-multi-free-map.md): what the allocation map
+    // FM10 (docs/inflight/in-progress/workplan-multi-free-map.md): what the allocation map
     // costs, printed unconditionally because a one-region database's `1`
     // is the answer that says the multi-page map is costing nothing here.
     // `map_pages_resident` below twice `map_regions` is FM6's saving made
@@ -693,7 +693,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " map_coverage_ids=" << map.coverage_ids
        << " headerless_pages=" << (map.has_headerless ? 1 : 0);
 
-    // The undo purge's two numbers (docs/workplan-undo-purge.md UP3):
+    // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
     // live pages plateauing under a write-heavy loop is the feature, and
     // the recycle count is what proves the plateau came from reuse rather
     // than idleness. Absent without a manager, like the transaction rows.
@@ -748,7 +748,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     //     folding them in would inflate the 2PC evidence with cases 2PC
     //     does not address.
     //
-    // `docs/workplan-peer-writer.md` §8's pre-parse DML guard - the class
+    // `docs/inflight/in-progress/workplan-peer-writer.md` §8's pre-parse DML guard - the class
     // §6 names as invisible to a relation-keyed counter - was removed at
     // PW1c-5, so at this commit a peer's foreign write is refused by
     // `CheckWriteAffinity` and *is* counted. The list above is the
@@ -814,7 +814,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " shipped_early_evictions=" << shipped_statements_->early_evictions();
     }
 
-    // Group accounting against wall time (`docs/sched.md` §4's last bullet;
+    // Group accounting against wall time (`docs/spec/sched.md` §4's last bullet;
     // `sched/scheduler.hpp`'s accessors carry the argument for why there are
     // two counters per group). `sched_wall_us - sum(sched_*_polled_us)` is
     // the reactor time charged to no group: the idle block, the WAL drain's
@@ -855,7 +855,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     }
 
     // The last recovery, for the operator who has to answer "what did the
-    // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
+    // restart do" (RC09, `docs/spec/wal.md` §13). Absent rather than zeroed when no
     // report is installed - a dispatcher built without one (every socket-free
     // test) has not "recovered nothing", it has no answer, and printing zeroes
     // would be an answer.
@@ -1222,7 +1222,7 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
                          static_cast<std::uint8_t>(PageType::kBtreeLeaf);
 
     // The wire protocol allows exactly one response line per command (see
-    // this class's header comment / docs/client-manual.md section 2), so a
+    // this class's header comment / docs/spec/client-manual.md section 2), so a
     // raw newline byte can't appear here - it would desync any client that
     // reads "up to the next \n" as one reply. Instead, sections are joined
     // with the two-character escape "\n" (backslash + n); the bundled CLI
@@ -1353,7 +1353,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     os << "oid=" << oid.value() << " root_page_id=" << current_root
        << " clustered_type=" << clustered
        // Where `key_mode=` used to print a declaration, this prints an
-       // observation (docs/heap-and-tuple.md §4.1): whether any id has landed
+       // observation (docs/spec/heap-and-tuple.md §4.1): whether any id has landed
        // below the mark, which is what decides whether a page's slot order is
        // still its key order. Kept on the line rather than dropped, because
        // the question someone reads this line for - "can I trust the pk order
@@ -1436,7 +1436,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
            << " pk=" << (is_pk ? "yes" : "no")
            << " autoincrement=" << (is_pk ? "if-omitted" : "no");
 
-        // The declared cabin policy (docs/feat-cabin.md), printed for every
+        // The declared cabin policy (docs/spec/feat-cabin.md), printed for every
         // non-pk column. The *effective* value, so `auto` covers both "the
         // engine may decide" and "nothing was said" - the difference is
         // recorded on disk and matters only to whoever writes the promotion
@@ -1450,7 +1450,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
                                                                          : "auto");
 
             // What this column references, if anything
-            // (docs/impl-foreign-keys.md §1). Read from the relation's own
+            // (docs/spec/impl-foreign-keys.md §1). Read from the relation's own
             // outgoing list rather than by asking the catalog per column,
             // which is the same absence rule the cabin mask follows.
             if (access.ok()) {
@@ -1533,7 +1533,7 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
 
 namespace {
 
-// The one spelling of a successful CREATE INDEX (docs/client-manual.md),
+// The one spelling of a successful CREATE INDEX (docs/spec/client-manual.md),
 // for both arms of the statement. `tail` is what differs: the local arm's
 // ` entries=0`, the foreign arm's ` built_by_core=<n>`.
 std::string CreatedIndexReply(std::string_view name, std::string_view table,
@@ -1653,7 +1653,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // **The claim this may carry is core-0-scoped**, not "isolated"
             // outright: `IsInFlight` answers about one core's transactions,
             // and it is every writer's core only while CC3 refuses
-            // cross-core writes (`docs/spec-ddl-transactional.md` §5a).
+            // cross-core writes (`docs/spec/spec-ddl-transactional.md` §5a).
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
             auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -2288,7 +2288,7 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
 }
 
 DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
-    // The physical optimizer's shadow report (docs/feat-physical-optimizer.md
+    // The physical optimizer's shadow report (docs/spec/feat-physical-optimizer.md
     // §5, workplan PX06). Read-only by construction: the bare form's planner
     // takes no PageStore, and the per-relation form's walk is a census
     // priced through the statement budget.
@@ -2530,7 +2530,7 @@ DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
     return {os.str(), false};
 }
 
-// ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) ----------------
+// ---- Foreign-key checks (docs/spec/impl-foreign-keys.md §§2-4) ----------------
 
 StatusOr<txn::ReadView> CommandDispatcher::CheckView(const WriteScope& scope) {
     // **Minted here, not taken from the statement.** A constraint check reads
@@ -2784,7 +2784,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             row.notnull = col.notnull;  // D1: NOT NULL unless declared NULL
             row.cabin_policy = col.cabin_policy;
 
-            // ---- decimal(p, s) (docs/spec-types.md TY2, TY9) ----------------
+            // ---- decimal(p, s) (docs/spec/spec-types.md TY2, TY9) ----------------
             //
             // The pair replaces the type's default `len`, which for a decimal
             // was never read as a width - `RowLayout::ColumnWidth` gives every
@@ -2885,7 +2885,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                       parent_oid.value(), col.references_table});
         }
 
-        // ---- Storage (docs/heap-and-tuple.md §4.1) --------------------------
+        // ---- Storage (docs/spec/heap-and-tuple.md §4.1) --------------------------
         //
         // One trailing word decides anything now. The key mode was removed
         // 2026-08-25, and with it the whole resolution that used to live here:
@@ -2936,7 +2936,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             }
         }
 
-        // ---- `CABIN` on a column creates one now (docs/feat-cabin.md) -------
+        // ---- `CABIN` on a column creates one now (docs/spec/feat-cabin.md) -------
         //
         // The policy is enforced at exactly two moments, and this is the first:
         // an *enabled* column gets its Cabin as part of the CREATE TABLE that
@@ -3093,7 +3093,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     if (Status s = exec::LogSpills(wal_, page_store_, spills, txn_id, owner_oid); !s.ok()) return s;
 
     // The index entries this row is now reachable through, before the row
-    // itself (docs/feat-index.md §12.1). Same direction as the var-heap
+    // itself (docs/spec/feat-index.md §12.1). Same direction as the var-heap
     // above, reached from the opposite pointer: a dangling entry is dropped
     // by verification, a row with no entry is lost.
     if (Status s = LogIndexWrites(index_writes, txn_id); !s.ok()) return s;
@@ -3577,7 +3577,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // statements used to be refused - 80-92% of an unrouted client's
     // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
     // §9b). Unconditionally, per D6: whether to ship or to refuse by load
-    // is placement policy (`docs/crosscore.md` §9's open decision) and does
+    // is placement policy (`docs/spec/crosscore.md` §9's open decision) and does
     // not ride along.
     //
     // **After the shape resolution and before the affinity check**, so
@@ -3603,7 +3603,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
         return {ErrorReply(affinity), false};
     }
 
-    // ---- The bulk loop (docs/spec-bulkinsert.md §2.3, §4) ---------------
+    // ---- The bulk loop (docs/spec/spec-bulkinsert.md §2.3, §4) ---------------
     //
     // One write scope, one resolution, one affinity check - and then the
     // full single-row pipeline per row, in the same order (BI2). Admission
@@ -3615,7 +3615,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // (TXN_CONFLICT, FK_VIOLATION, ASSERTION_VIOLATION) never move.
     const bool bulk = stmt.rows.size() > 1;
 
-    // ---- T3: the sorted heap fill (docs/workplan-t3.md) -----------------
+    // ---- T3: the sorted heap fill (docs/inflight/in-progress/workplan-t3.md) -----------------
     //
     // Page-at-a-time placement and one image per touched page, engaged
     // only inside T3-2's gate; everything else takes the row loop below.
@@ -3811,7 +3811,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
 
     // ---- Arity, and where the pk comes from -----------------------------
     //
-    // **Two arities, and the row picks** (docs/heap-and-tuple.md section
+    // **Two arities, and the row picks** (docs/spec/heap-and-tuple.md section
     // 4.1). Until 2026-08-25 this was one arity fixed at CREATE TABLE by the
     // key mode; the mode is gone and both counts are legal on every relation:
     //
@@ -3865,7 +3865,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     }
     const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;
 
-    // ---- The forward check (docs/impl-foreign-keys.md §2) ---------------
+    // ---- The forward check (docs/spec/impl-foreign-keys.md §2) ---------------
     //
     // **Before the id is allocated**, which is a stronger form of §2's
     // "before the heap write": a refused row costs no undo work *and* no
@@ -3884,7 +3884,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         }
     }
 
-    // ---- The admission check (docs/feat-assertion.md §6.2 step 2) -------
+    // ---- The admission check (docs/spec/feat-assertion.md §6.2 step 2) -------
     //
     // Pure, and before the id for FK's reason: a refused row burns nothing.
     // The reservation (step 3) happens after placement, when the entry has
@@ -3952,7 +3952,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         return ErrorReply(placed.status());
     }
 
-    // ---- The Cabin witness (docs/feat-cabin.md §5) ----------------------
+    // ---- The Cabin witness (docs/spec/feat-cabin.md §5) ----------------------
     //
     // **Before the log, deliberately.** A WAL failure below reports an error
     // and leaves the tuple in the page - that is a stated, accepted gap
@@ -3965,7 +3965,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     NoteCabinWrite(ta, body, /*first_col_pos=*/1, row_id, placed.value().page_id,
                    placed.value().slot);
 
-    // ---- Index maintenance (docs/feat-index.md §2) ----------------------
+    // ---- Index maintenance (docs/spec/feat-index.md §2) ----------------------
     //
     // Beside the Cabin witness and before the log, for the same reason and a
     // stronger one: a Cabin that missed an append can be un-observed, and an
@@ -3992,7 +3992,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         return ErrorReply(s);
     }
 
-    // ---- The reservation (docs/feat-assertion.md §6.2 step 3) -----------
+    // ---- The reservation (docs/spec/feat-assertion.md §6.2 step 3) -----------
     //
     // The arrival entry, the group delta, the ASSERT_RESERVE record - after
     // placement so the entry carries the row's real location, before the
@@ -4679,7 +4679,7 @@ namespace {
 
 // Re-emits multi-line text under the dispatcher's one-line wire contract:
 // sections are joined with the literal two-character "\n" escape, never a
-// raw newline byte (docs/client-manual.md section 2). The plan printer
+// raw newline byte (docs/spec/client-manual.md section 2). The plan printer
 // produces ordinary newlines because the same text goes to a test's
 // assertion unescaped; the escaping belongs here, at the wire.
 void AppendEscaped(std::ostringstream& os, const std::string& text) {
@@ -4695,7 +4695,7 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 }  // namespace
 
 // Executes `chain` with an `Aggregator` in place of the row formatter, and
-// emits the fold's output rows (docs/feat-aggregate.md AG1, workplan AG06).
+// emits the fold's output rows (docs/spec/feat-aggregate.md AG1, workplan AG06).
 //
 // `header` is the column-heading line the caller already built from
 // `chain.column_names` - which for an aggregated chain labels the *fold's*
@@ -5323,7 +5323,7 @@ void CommandDispatcher::RecordExecution(const std::optional<stats::InstanceKey>&
 
 void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
     // Unconditional on a successful SELECT, and independent of Waystone:
-    // this is the physical optimizer's input (docs/heap-and-tuple.md §7),
+    // this is the physical optimizer's input (docs/spec/heap-and-tuple.md §7),
     // not a trail, and it is collected whether or not anything is recording
     // or replaying one.
     if (!access_stats_enabled_) return;
@@ -5530,7 +5530,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // statements used to be refused - 80-92% of an unrouted client's
     // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
     // §9b). Unconditionally, per D6: whether to ship or to refuse by load
-    // is placement policy (`docs/crosscore.md` §9's open decision) and does
+    // is placement policy (`docs/spec/crosscore.md` §9's open decision) and does
     // not ride along.
     //
     // **After the shape resolution and before the affinity check**, so
@@ -5661,7 +5661,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
 
-        // ---- First-updater-wins (docs/txn.md section 5) ----------------
+        // ---- First-updater-wins (docs/spec/txn.md section 5) ----------------
         //
         // Checked only once the row has qualified: a conflict is reported
         // about a row this statement actually wanted, never about one it
@@ -5734,7 +5734,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // below. **They were not collected before, and so not logged at all**:
         // an UPDATE that spilled a value wrote the bytes into a var-heap page
         // and told the log nothing, leaving a recovered tuple whose cell
-        // points at bytes no record describes (`docs/known-gaps.md`'s var-heap
+        // points at bytes no record describes (`docs/inflight/known-gaps.md`'s var-heap
         // entry, hole 3). Collected only when there is a log to write them to,
         // the same condition the index half above uses.
         //
@@ -5766,7 +5766,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // appended to the var-heap, and a store is free to move its frames
         // when it hands out a new page (the same reason heap_chain.cpp
         // re-fetches its tail after CreateNew()).
-        // ---- The before-image (docs/txn.md section 3.3) ----------------
+        // ---- The before-image (docs/spec/txn.md section 3.3) ----------------
         //
         // Written **before** the page is overwritten, and the tuple is
         // stamped with the pointer it returns. A tuple carrying an
@@ -5813,7 +5813,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             return s;
         }
 
-        // ---- The Cabin witness, UPDATE half (docs/feat-cabin.md §5) -----
+        // ---- The Cabin witness, UPDATE half (docs/spec/feat-cabin.md §5) -----
         //
         // `row.value()` now holds the **new** values, so this appends the pk
         // to v′'s set for every cabined column. The old value's set is
@@ -5848,7 +5848,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // version - both for the same reason the var-heap has: a replay must
         // never reach a pointer that resolves to nothing, and a version no
         // index entry names is a row a probe cannot find
-        // (docs/feat-index.md §12.1).
+        // (docs/spec/feat-index.md §12.1).
         if (wal_ != nullptr && scope.txn != nullptr) {
             // The var-heap first, for the reason the comment above gives and
             // INSERT already obeyed: the cell in the tuple record below points
@@ -5939,7 +5939,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     return {"UPDATED " + std::to_string(updated), false};
 }
 
-// ---- Transaction control (docs/txn.md sections 1, 6) ---------------------
+// ---- Transaction control (docs/spec/txn.md sections 1, 6) ---------------------
 
 DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& session) {
     if (txn_ == nullptr) {
@@ -6264,7 +6264,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // statements used to be refused - 80-92% of an unrouted client's
     // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
     // §9b). Unconditionally, per D6: whether to ship or to refuse by load
-    // is placement policy (`docs/crosscore.md` §9's open decision) and does
+    // is placement policy (`docs/spec/crosscore.md` §9's open decision) and does
     // not ride along.
     //
     // **After the shape resolution and before the affinity check**, so
@@ -6338,7 +6338,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             }
         }
 
-        // ---- The reverse check (docs/impl-foreign-keys.md §3) ----------
+        // ---- The reverse check (docs/spec/impl-foreign-keys.md §3) ----------
         //
         // RESTRICT: a row still referenced may not be deleted. Run per
         // qualifying row, since the id being deleted *is* the value every

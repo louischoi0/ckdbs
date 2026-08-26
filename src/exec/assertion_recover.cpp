@@ -77,7 +77,7 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
                 // right (snapshot + folded deltas) but §5.2's
                 // `VerifyAgainstEntries` proof reports Corruption for a
                 // directory that is correct. That is the AS6b decision taken
-                // 2026-08-12 (`docs/feat-assertion.md` §7).
+                // 2026-08-12 (`docs/spec/feat-assertion.md` §7).
                 continue;
             }
             if (entry.value().group_id == 0) {
@@ -313,7 +313,7 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
                 log->Error("recovery",
                            "assertion " + std::to_string(r.assertion_id) +
                                " found no group snapshot at or after the last checkpoint, so it "
-                               "cannot enforce until it is rebuilt (docs/feat-assertion.md §7)");
+                               "cannot enforce until it is rebuilt (docs/spec/feat-assertion.md §7)");
                 continue;
             }
             log->Info("recovery", "assertion " + std::to_string(r.assertion_id) + ": " +

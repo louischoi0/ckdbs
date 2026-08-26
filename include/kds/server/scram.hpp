@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 
 // SCRAM-SHA-256 (RFC 5802 mechanics, RFC 7677 hash) - the reserved auth
-// method of docs/protocol.md D8, built as a pure message transformer so
+// method of docs/spec/protocol.md D8, built as a pure message transformer so
 // the same state machines serve the newline text protocol today and the
 // KWP handshake frames when P07 lands. Neither class does I/O; a caller
 // feeds messages and forwards what comes back.
@@ -28,7 +28,7 @@
 // additive later), SASLprep username normalization (provisioning
 // restricts usernames to printable ASCII without ',' instead), and any
 // authorization identity (`a=` is refused; authorization is an Open
-// Decision in docs/protocol.md §14).
+// Decision in docs/spec/protocol.md §14).
 //
 // Lock/atomic protocol: none. One Server or Client per connection
 // attempt, on that connection's core.
@@ -110,7 +110,7 @@ std::string RandomNonce();
 // fake salt is redrawn per attempt, so two hellos for the same name
 // answer with two different salts where a real user's salt would repeat.
 // Closing that needs a salt keyed deterministically by username under a
-// server-lifetime secret - future hardening, docs/protocol.md §14.
+// server-lifetime secret - future hardening, docs/spec/protocol.md §14.
 class Server {
 public:
     // NotFound from the lookup means "no such user"; any other non-OK

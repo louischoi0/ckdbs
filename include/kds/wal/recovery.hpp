@@ -11,7 +11,7 @@
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/redo.hpp"
 
-// One core's recovery, end to end (docs/wal.md §12,
+// One core's recovery, end to end (docs/spec/wal.md §12,
 // docs/workplan-wal-recovery.md RV1/RV2).
 //
 // The phases exist as separate, separately-tested functions - `Analyze`,
@@ -86,7 +86,7 @@ public:
     virtual Status RollBack(storage::PageStore& store, const AnalysisResult& analysis) = 0;
 };
 
-// How long each phase took (`docs/wal.md` §13's "recovery phase timings",
+// How long each phase took (`docs/spec/wal.md` §13's "recovery phase timings",
 // RC09). Zero throughout when no clock was supplied, which `timed` says
 // explicitly - an operator reading four zeroes must be able to tell "instant"
 // from "never measured", and a duration is the one number where those two look

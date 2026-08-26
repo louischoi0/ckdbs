@@ -139,7 +139,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     os << Indent(depth) << "step " << step.step_id << ' ' << AccessKindName(step.kind) << ' '
        << (step.rel_name.empty() ? "oid=" + std::to_string(step.rel_oid) : step.rel_name);
     if (step.key.has_value()) os << " key=" << FormatOperand(*step.key);
-    // A correlated index probe's key source (docs/feat-index.md §8a),
+    // A correlated index probe's key source (docs/spec/feat-index.md §8a),
     // rendered from the probe's own field - the executor's single
     // authority; nothing is mirrored into `Step::key` for it.
     if (step.index.has_value() && step.index->key_from.has_value()) {
@@ -163,7 +163,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         // probe is one the engine may drop on its own judgement.
         if (step.cabin->managed) os << " cabin_optimizer=true";
     }
-    // The walked join's build annotation (docs/spec-join-inner-build.md,
+    // The walked join's build annotation (docs/spec/spec-join-inner-build.md,
     // workplan JB7), rendered in the Cabin line's own vocabulary because
     // it names the same two things: the own column the map is keyed on,
     // and the outer column each key is read from. **Visible before
@@ -179,7 +179,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
 
     for (const StepPredicate& pred : step.residual) {
         // `derived` marks a conjunct equality propagation added
-        // (docs/parser-v2.md §5): without it, ANALYZE would print a filter
+        // (docs/spec/parser-v2.md §5): without it, ANALYZE would print a filter
         // the reader cannot find in the statement they wrote.
         os << Indent(depth + 1) << "filter " << FormatPredicate(pred)
            << (pred.derived ? " derived" : "") << '\n';
@@ -438,7 +438,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.trail_replays > 0) os << " replays=" << counters.trail_replays;
         if (counters.trail_misses > 0) os << " trail_misses=" << counters.trail_misses;
         if (counters.range_pages_pruned > 0) os << " range_stopped_early=1";
-        // Cabin (docs/feat-cabin.md §7). A hit means the step served an
+        // Cabin (docs/spec/feat-cabin.md §7). A hit means the step served an
         // observed value's entry set **authoritatively** and did not walk;
         // the entries/hint pair below says how much of that was the C6
         // location advice and how much needed a pk resolution.
@@ -454,7 +454,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.cabin_hint_misses > 0) os << " hint_misses=" << counters.cabin_hint_misses;
         if (counters.cabin_recordings > 0) os << " cabin_recorded=" << counters.cabin_recordings;
 
-        // The index's three numbers (docs/feat-index.md §7). The gap between
+        // The index's three numbers (docs/spec/feat-index.md §7). The gap between
         // `index_scanned` and `index_resolved` is what the layer saved, and
         // `index_filtered` is the part of that gap a COVERING clause bought -
         // the only honest price for one, since a covered column saves a

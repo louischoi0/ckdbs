@@ -315,7 +315,7 @@ TEST(WalPayloadTest, SlotRetireRoundTrips) {
 
 TEST(WalPayloadTest, UndoWriteRoundTripsTheChainLinkAndTheRecordTail) {
     // The payload carries the two chain links as fields and the undo
-    // record's *tail* as bytes (docs/txn.md section 3.5) - so the fields
+    // record's *tail* as bytes (docs/spec/txn.md section 3.5) - so the fields
     // naming which tuple the image belongs to survive the round trip,
     // which is what redo needs and what the pre-2026-08-10 writer dropped.
     UndoWritePayload fields{};

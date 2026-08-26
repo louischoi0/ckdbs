@@ -245,7 +245,7 @@ the relation grows, so the key space grows with it — 2,000 distinct users at
 10,000 loans — and the hit rate collapses. **The two results are the same
 mechanism read at opposite ends of one variable, and neither is a property of
 the Cabin alone.** What decides it is the workload's argument distribution,
-which is the input the `CABIN AUTO` threshold in `docs/feat-cabin.md` §11 is
+which is the input the `CABIN AUTO` threshold in `docs/spec/feat-cabin.md` §11 is
 still open on.
 
 `symbol-history` is the counter-case on both engines: its result set grows
@@ -299,7 +299,7 @@ The contrast with `bench/results-scenario2-freight.md` is the mechanism in
 one line. There, concurrency buys ckdbs 1.35× — because that workload commits,
 and `durability = group` batches concurrent commits into one flush. Here there
 is nothing to batch, and the dispatcher's single thread is the whole answer.
-**Cross-core execution (`docs/crosscore.md`, P4d/P4e) is the work that would
+**Cross-core execution (`docs/spec/crosscore.md`, P4d/P4e) is the work that would
 change this row**, and until a peer-owned relation has a writer it cannot be
 measured on a workload that writes.
 
@@ -311,8 +311,8 @@ measured on a workload that writes.
   more memory bandwidth or more cores.
 - **Why ckdbs's per-row fold cost is higher.** The four flipped shapes are all
   simple folds; the engine exposes no per-step timing that would separate the
-  walk from the fold from the render. `docs/observability.md` owns that and it
-  is unbuilt. `docs/workplan-aggregate-perf.md` AP05 is the open work.
+  walk from the fold from the render. `docs/inflight/in-progress/observability.md` owns that and it
+  is unbuilt. `docs/inflight/in-progress/workplan-aggregate-perf.md` AP05 is the open work.
 - **What a secondary index does to these shapes.** This run declares Cabins,
   not indexes — `--index-mode` is scenario3's axis, not this driver's. The
   comparison of a Cabin against an index on the same column is

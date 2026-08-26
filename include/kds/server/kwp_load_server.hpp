@@ -12,7 +12,7 @@
 #include "kds/wire/kwp_types.hpp"
 #include "kds/wire/row_codec.hpp"
 
-// KWP v0: the load endpoint (docs/workplan-kwp-load.md KW1-KW7). A second
+// KWP v0: the load endpoint (docs/inflight/in-progress/workplan-kwp-load.md KW1-KW7). A second
 // listener speaking exactly the subset T2 needs - the handshake and the
 // modal load session - while the query surface stays on the newline
 // protocol. TcpServer's shape deliberately: a reactor participant with

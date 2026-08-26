@@ -14,7 +14,7 @@
 // ---- Why this is only a printer -----------------------------------------
 //
 // There is no plan *selection* in this engine to explain. Written order is
-// execution order and is a documented client contract (docs/parser-v2.md
+// execution order and is a documented client contract (docs/spec/parser-v2.md
 // §1: "the statement is the chain", never silently reordered), so a plan
 // is not a choice the optimizer made - it is the statement, restated with
 // the one thing the compiler did decide made visible: each step's

@@ -8,7 +8,7 @@
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 
-// `CREATE ASSERTION` / `DROP ASSERTION` — the grammar (docs/feat-assertion.md
+// `CREATE ASSERTION` / `DROP ASSERTION` — the grammar (docs/spec/feat-assertion.md
 // §3, workplan AST02).
 //
 // Three things this file is really about, and none of them is "does the
@@ -67,7 +67,7 @@ void ExpectRefusal(std::string_view sql, StatusCode code, std::string_view menti
 // ---- The accepted forms -------------------------------------------------
 
 TEST(AssertionDdlTest, TheSpecsOwnExampleParsesIntoItsFourFacts) {
-    // docs/feat-assertion.md §3.2, verbatim.
+    // docs/spec/feat-assertion.md §3.2, verbatim.
     auto parsed = ParseSql(
         "CREATE ASSERTION user_product_purchase_limit ON purchases "
         "GROUP BY (user_id, product_id) CHECK COUNT(*) <= 5");
@@ -418,7 +418,7 @@ TEST(AssertionDdlTest, TheIndexCapsStillRefuseAndStillNameTheirByte) {
     // The GROUP BY list reuses the index declaration's column-list
     // production, with the cap turned off. This pins that turning it off did
     // not turn it off for the index: a cap refuses and never truncates
-    // (docs/feat-index.md §13), which is what keeps a truncated index from
+    // (docs/spec/feat-index.md §13), which is what keeps a truncated index from
     // being declared complete.
     ExpectRefusal("CREATE INDEX ix ON t (a, b, c, d, e)", StatusCode::kUnsupported,
                   "index key columns");

@@ -39,8 +39,8 @@
 // AND-only conjunct list (no OR; NOT only in the reserved negation forms),
 // with predicate-position subqueries per V07 and explicit select lists per
 // V06. HAVING compares an aggregate against a literal and nothing else
-// (docs/workplan-having.md HV3). No quote-escaping in string literals.
-// docs/parser-v2.md specifies the grammar this is growing into.
+// (docs/inflight/in-progress/workplan-having.md HV3). No quote-escaping in string literals.
+// docs/spec/parser-v2.md specifies the grammar this is growing into.
 //
 // Two decisions worth stating, because both push work downstream on
 // purpose:
@@ -59,7 +59,7 @@ namespace kds::parser {
 // What sits in a value position.
 //
 // `kParam` is a declared pattern's `$name`
-// (docs/spec-create-pattern-user-defined-patterns-v1.md). It is a value
+// (docs/spec/spec-create-pattern-user-defined-patterns-v1.md). It is a value
 // **position** with no value in it: a declaration is not an execution, and
 // nothing ever binds one - a chain compiled from a pattern body exists to be
 // type-checked and fingerprinted, never run. Every path that would consume a
@@ -72,7 +72,7 @@ namespace kds::parser {
 // boundary and not in the value. A decimal cannot reuse it, because its
 // unscaled integer means nothing without the scale beside it.
 // `kDecimalWide` is the 16-byte decimal's kind (`decimal(p, s)`, p 19..38,
-// stored as int128 - docs/spec-types.md TY2's separate type, built
+// stored as int128 - docs/spec/spec-types.md TY2's separate type, built
 // 2026-08-07). A kind of its own rather than a width flag on `kDecimal`,
 // deliberately: one kind hiding two widths would make every consumer that
 // reads `int_val` silently truncate a wide value, where a new enumerator
@@ -88,7 +88,7 @@ struct AstValue {
     // Set for every literal the parser produces, and for kParam. It was
     // kParam only until TY05, when a literal became something a *later*
     // stage can reject: the step compiler coerces one against its column's
-    // type (docs/spec-types.md §3.1), so `WHERE d = '2026-02-30'` fails
+    // type (docs/spec/spec-types.md §3.1), so `WHERE d = '2026-02-30'` fails
     // long after the token is gone, and without the offset that failure
     // can name the column but not the byte.
     //
@@ -118,7 +118,7 @@ struct AstValue {
     std::string raw_int_text;
 
     // kDecimal and kDecimalWide: the scale the unscaled value is scaled
-    // by, so `1234` at scale 2 is 12.34 (docs/spec-types.md TY2/TY5).
+    // by, so `1234` at scale 2 is 12.34 (docs/spec/spec-types.md TY2/TY5).
     //
     // A separate field rather than a second integer packed into `int_val`,
     // because the unscaled value needs the whole 64 bits - `p` may be 18 -
@@ -169,13 +169,13 @@ inline constexpr std::size_t kMaxSortKeys = 8;
 // kIsNull/kIsNotNull take no right-hand side; they are CompareOps rather
 // than a separate predicate kind so every carrier - step predicates, the
 // evaluator, the fingerprint - takes them through the one op field it
-// already has (docs/spec-null.md, workplan-null.md NU5).
+// already has (docs/spec/spec-null.md, workplan-null.md NU5).
 enum class CompareOp { kEq, kNeq, kLt, kLte, kGt, kGte, kIsNull, kIsNotNull };
 
 struct SelectStmt;  // a predicate may carry one - see Condition below
 
 // How deep a chain of predicate-position subqueries may nest
-// (docs/parser-v2.md §2, `[PROPOSED default]`). The outermost query block
+// (docs/spec/parser-v2.md §2, `[PROPOSED default]`). The outermost query block
 // is depth 0, so `kMaxSubqueryDepth = 4` admits four nested SELECTs under
 // it and refuses the fifth.
 //
@@ -246,7 +246,7 @@ struct ColumnDef {
     std::string name;
     std::string type_name;  // unresolved - see file comment
 
-    // `DECIMAL(p, s)`'s two arguments, as written (docs/spec-types.md TY2).
+    // `DECIMAL(p, s)`'s two arguments, as written (docs/spec/spec-types.md TY2).
     //
     // **Both are mandatory and neither is defaulted here.** A bare
     // `decimal` is refused at parse rather than given a scale, because a
@@ -274,7 +274,7 @@ struct ColumnDef {
     // (invariant 11) to point at. 0 when nothing was said.
     std::uint32_t null_byte_offset = 0;
 
-    // The column's cabin policy (docs/feat-cabin.md), one of
+    // The column's cabin policy (docs/spec/feat-cabin.md), one of
     // `catalog::kCabinPolicy*`. Written as an optional suffix on the column:
     //
     //     sym varchar CABIN            -- enabled: a cabin now, n=1
@@ -293,7 +293,7 @@ struct ColumnDef {
     std::uint32_t cabin_byte_offset = 0;
 
     // The relation this column references, from an optional `REFERENCES
-    // <table>` suffix (docs/impl-foreign-keys.md §1), or empty for a column
+    // <table>` suffix (docs/spec/impl-foreign-keys.md §1), or empty for a column
     // that references nothing:
     //
     //     account_id int REFERENCES accounts
@@ -321,7 +321,7 @@ struct CreateTableStmt {
     catalog::ClusteredType clustered = catalog::ClusteredType::kHeap;
 
     // There is no key-mode field. The trailing `ASSIGNED` | `EXPLICIT` word
-    // set one until 2026-08-25; the mode is gone (docs/heap-and-tuple.md
+    // set one until 2026-08-25; the mode is gone (docs/spec/heap-and-tuple.md
     // §4.1), so `EXPLICIT` is now accepted as the vacuous statement of what
     // every relation is and `ASSIGNED` is refused in the parser with its
     // byte. Neither reaches this struct - there is nothing left for the
@@ -334,14 +334,14 @@ struct CreateTableStmt {
     bool clustered_given = false;
 };
 
-// The per-statement row cap for a multi-row INSERT (docs/spec-bulkinsert.md
+// The per-statement row cap for a multi-row INSERT (docs/spec/spec-bulkinsert.md
 // BI3, `[PROPOSED]`). A config key (`max_insert_rows`), not a compiled-in
 // constant - this is only the default the dispatcher starts from. It bounds
 // the id burn of an aborted bulk statement (BI9) and the memory a statement
 // holds before execution begins.
 inline constexpr std::size_t kDefaultMaxInsertRows = 1024;
 
-// `INSERT INTO <t> VALUES (…) [, (…)]*` (docs/spec-bulkinsert.md T1, BI3).
+// `INSERT INTO <t> VALUES (…) [, (…)]*` (docs/spec/spec-bulkinsert.md T1, BI3).
 //
 // One or more rows; the single-row statement is a rows vector of size one,
 // and its parse is byte-identical in behavior to what it always was. The
@@ -387,7 +387,7 @@ struct JoinClause {
     ColumnName right;  // always qualified
 };
 
-// The aggregate functions the fold computes (docs/feat-aggregate.md AG2).
+// The aggregate functions the fold computes (docs/spec/feat-aggregate.md AG2).
 //
 // `kAvg` joined on 2026-08-07, when §10's open question - return scale,
 // rounding rule, divide semantics, "three questions, one answer" - was
@@ -434,7 +434,7 @@ struct SelectItem {
 };
 
 // One `ORDER BY` key: what to order by and the direction written beside it
-// (docs/workplan-order-by.md OB1, amended by docs/workplan-having.md HV-1).
+// (docs/workplan-order-by.md OB1, amended by docs/inflight/in-progress/workplan-having.md HV-1).
 // `ASC` and a bare key are the same key - the standard's default - so only
 // descending needs a bit.
 //
@@ -449,7 +449,7 @@ struct SortKey {
     bool descending = false;
 };
 
-// One conjunct of a `HAVING` clause (docs/workplan-having.md HV1, HV3).
+// One conjunct of a `HAVING` clause (docs/inflight/in-progress/workplan-having.md HV1, HV3).
 //
 // The clause is a flat AND-only list, like WHERE and for WHERE's reason:
 // this grammar has no expression tree, and an OR would need one. What
@@ -497,7 +497,7 @@ struct SelectStmt {
 
     std::vector<Condition> where;  // empty = no WHERE clause; AND-combined
 
-    // ---- Aggregation (docs/feat-aggregate.md) ---------------------------
+    // ---- Aggregation (docs/spec/feat-aggregate.md) ---------------------------
     //
     // `agg_items` is the select list of an **aggregated** statement, in
     // written order, and is empty for every other statement - including one
@@ -516,7 +516,7 @@ struct SelectStmt {
     std::vector<ColumnName> group_by;
 
     // The `HAVING` conjuncts in written order, AND-combined, empty when no
-    // clause was written (docs/workplan-having.md HV-1).
+    // clause was written (docs/inflight/in-progress/workplan-having.md HV-1).
     //
     // **A HAVING makes a statement aggregated**, exactly as a GROUP BY
     // does and for the same reason: it consumes the fold's output rows, so
@@ -524,13 +524,13 @@ struct SelectStmt {
     // ungrouped column beside it meets AG5's, with its own byte.
     std::vector<HavingCondition> having;
 
-    // ---- The pagination tail (docs/parser-v2.md I11, workplan V09) ------
+    // ---- The pagination tail (docs/spec/parser-v2.md I11, workplan V09) ------
     //
     // `[ORDER BY <key> [ASC]] [LIMIT <n>] [OFFSET <m>]`, clauses in that
     // order and each independently optional, parsed on a depth-0 block - a
     // subquery's tail is refused at parse with a position.
     //
-    // **`[AMENDED 2026-08-24 — docs/workplan-having.md HV4]`** `ORDER BY`
+    // **`[AMENDED 2026-08-24 — docs/inflight/in-progress/workplan-having.md HV4]`** `ORDER BY`
     // is parsed over an aggregated statement too, where a key may be an
     // aggregate; `LIMIT` and `OFFSET` stay refused there (HV5), because
     // serving them would promote AG6's deterministic fold order into a
@@ -607,7 +607,7 @@ struct UpdateStmt {
 // `DELETE FROM <t> [WHERE ...]`.
 //
 // A **delete-mark**, never a physical removal: the tuple's bytes stay for
-// readers whose snapshot predates the deleter (docs/txn.md section 4.3), and
+// readers whose snapshot predates the deleter (docs/spec/txn.md section 4.3), and
 // physical retirement is a purge pass that does not exist. That is why there
 // is no column list and nothing to assign - a DELETE changes a slot flag and
 // a writer id, and nothing else.
@@ -621,7 +621,7 @@ struct DeleteStmt {
 };
 
 // `ALTER TABLE <t> RENAME TO <new>` and
-// `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` (docs/spec-alter.md AL1).
+// `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` (docs/spec/spec-alter.md AL1).
 //
 // v1 is catalog-only: a rename changes a catalog label and no tuple
 // bytes. Everything else spelled under ALTER answers Unsupported at
@@ -729,7 +729,7 @@ struct DropPatternStmt {
     std::uint32_t byte_offset = 0;
 };
 
-// `DROP TABLE <name>` (docs/spec-drop-table.md). Catalog-scoped: the
+// `DROP TABLE <name>` (docs/spec/spec-drop-table.md). Catalog-scoped: the
 // relation becomes unreachable and its oid is tombstoned, never reissued
 // (DT2); pages orphan until reclamation exists (DT1).
 struct DropTableStmt {
@@ -738,7 +738,7 @@ struct DropTableStmt {
 };
 
 // `CREATE CABIN ON <table>(<column>)` / `DROP CABIN ON <table>(<column>)`
-// (docs/feat-cabin.md §10).
+// (docs/spec/feat-cabin.md §10).
 //
 // A Cabin is named by what it is on, never by a name of its own - unlike a
 // pattern, which needs one because its shape is not something a client can
@@ -771,7 +771,7 @@ struct IndexColumnRef {
 };
 
 // `CREATE INDEX <name> ON <table>(<col>, ...) [COVERING (<col>, ...)]` and
-// `DROP INDEX <name>` (docs/feat-index.md §10).
+// `DROP INDEX <name>` (docs/spec/feat-index.md §10).
 //
 // **A secondary index is named**, where a Cabin is not, and the difference
 // is not a style choice: `(relation, column)` identifies a Cabin uniquely
@@ -795,7 +795,7 @@ struct IndexStmt {
 
 // `CREATE ASSERTION <name> ON <rel> GROUP BY (<col>, ...)
 //     CHECK COUNT(*) <op> <N> | SUM(<col>) <op> <N>` and
-// `DROP ASSERTION <name>` (docs/feat-assertion.md §3, AS2).
+// `DROP ASSERTION <name>` (docs/spec/feat-assertion.md §3, AS2).
 //
 // **The grammar encodes the supported class** (AS2), which is the whole
 // reason this is not SQL-92's free-form `CHECK (<search condition>)`. There

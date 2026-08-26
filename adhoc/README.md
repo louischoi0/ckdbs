@@ -15,7 +15,7 @@ Exit status is 0 when every expectation held.
 ## Writing a query
 
 One statement per line — the wire protocol is one line in, one line out
-(`docs/client-manual.md`), so a statement cannot span lines here either.
+(`docs/spec/client-manual.md`), so a statement cannot span lines here either.
 `--` starts a comment, and four spellings are directives applying to the
 **next** statement:
 

@@ -15,7 +15,7 @@ this driver runs both, against a Release server on a block-device data file:
            priced from server CPU (`/proc/<pid>/stat`) over two idle
            windows, on and off, divided by the tick count `SHOW
            CABIN_OPTIMIZER` reports - client latency cannot resolve a
-           background task, which is `docs/workplan-aggregate-perf.md`'s
+           background task, which is `docs/inflight/in-progress/workplan-aggregate-perf.md`'s
            rule applied to a cost that is not even per-statement.
 
   improve  A hot non-pk equality (`SELECT * FROM t WHERE val = 7`) probed

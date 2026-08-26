@@ -367,7 +367,7 @@ StatusOr<std::string> Server::OnClientFirst(std::string_view client_first) {
         // shapes match and the user list cannot be probed by shape.
         // (The fake salt varies across *attempts*; a cross-connection
         // salt-consistency probe is future hardening, noted in
-        // docs/protocol.md §14's SCRAM entry.)
+        // docs/spec/protocol.md §14's SCRAM entry.)
         //
         // Hashed, not used raw: a nonce is base64 text, so a raw nonce
         // would make every mock salt 16 bytes drawn from the base64

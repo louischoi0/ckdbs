@@ -1,5 +1,5 @@
 // What the Keystone id allocator costs today, and what bump-ahead would
-// save (`docs/keystoneid-invariant.md` §2, `docs/keystoneid-k0-findings.md`).
+// save (`docs/rules/keystoneid-invariant.md` §2, `docs/rules/keystoneid-k0-findings.md`).
 //
 // The question this answers is narrow and was asked in one sentence: could
 // issue-once make inserts dramatically slower? The design that is *feared*
@@ -294,7 +294,7 @@ int main() {
     constexpr std::uint64_t kInserts = 50000;
     constexpr std::uint64_t kDurableIds = 2000;  // fsync-bound; a smaller n
 
-    std::printf("keystone id allocator - docs/keystoneid-k0-findings.md\n\n");
+    std::printf("keystone id allocator - docs/rules/keystoneid-k0-findings.md\n\n");
 
     // ---- 1. The allocator's share of an INSERT ---------------------------
     std::printf("1. cost per issued id, and share of a whole INSERT (memory store)\n");

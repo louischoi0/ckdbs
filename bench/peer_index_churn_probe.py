@@ -2,7 +2,7 @@
 """The G1 sustained-churn probe: does index churn against a peer-owned
 relation leave it unwritable?
 
-The defect this reproduces (`docs/known-gaps.md`, `docs/workplan-peer-writer.md`
+The defect this reproduces (`docs/inflight/known-gaps.md`, `docs/inflight/in-progress/workplan-peer-writer.md`
 PW1c-8): a peer's free-map copy is a mount-time snapshot advanced only by a
 relation fault/write grant, so a **catalog** page core 0 allocates between
 grants stays invisible to that peer -- and the fault seam reported that

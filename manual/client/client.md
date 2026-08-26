@@ -2,12 +2,12 @@
 
 How to talk to `kds_server` from client code: the wire protocol, reply
 shapes, error handling and retry rules, and the bundled client tools.
-Verified against `docs/client-manual.md`, `include/kds/server/tcp_server.hpp`,
+Verified against `docs/spec/client-manual.md`, `include/kds/server/tcp_server.hpp`,
 `src/server/command_dispatcher.cpp` and `tools/ckdbs_cli.py` as of
 2026-08-10. For what you can *say*, see `manual/sql/sql.md`; for running
 the server, `manual/server/server.md`.
 
-> The binary wire protocol **KWP/1** (`docs/protocol.md`) will eventually
+> The binary wire protocol **KWP/1** (`docs/spec/protocol.md`) will eventually
 > replace this newline text protocol. Only its frame codec exists in code,
 > so everything below is still exactly how the server behaves.
 
@@ -53,7 +53,7 @@ contain a raw newline byte.
 
 ## 3. Reply shapes
 
-The full per-command table is `docs/client-manual.md` §3; the shapes a
+The full per-command table is `docs/spec/client-manual.md` §3; the shapes a
 client parses:
 
 | Statement | Success reply |

@@ -199,7 +199,7 @@ StatusOr<std::vector<std::byte>> EncodeStepDescriptor(const exec::Step& step) {
     if (!step.sub_chains.empty()) {
         return Status::Unsupported(
             "a step carrying a predicate-position subquery cannot ship yet; nested chains "
-            "are P4d's multi-step work (docs/workplan-crosscore.md)");
+            "are P4d's multi-step work (docs/inflight/in-progress/workplan-crosscore.md)");
     }
     switch (step.kind) {
         case exec::AccessKind::kLookup:

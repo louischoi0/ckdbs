@@ -7,7 +7,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/record.hpp"
 
-// Replay of the five assertion records (docs/feat-assertion.md §7, workplan
+// Replay of the five assertion records (docs/spec/feat-assertion.md §7, workplan
 // AST05): the fold that turns a stream of ASSERT_* records back into the
 // Bound Cabin state that emitted them - entry pages restored through the
 // store, the memory-resident group directory rebuilt beside them.

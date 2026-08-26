@@ -4,7 +4,7 @@
 #include <functional>
 
 // The identity of one **pattern instance**: a statement shape with its
-// arguments bound (docs/waystone-concpets.md sections 1 and 5).
+// arguments bound (docs/spec/waystone-concpets.md sections 1 and 5).
 //
 //   pattern_id   the shape, from parse (parser/fingerprint.hpp)
 //   arg_hash     the arguments bound into it

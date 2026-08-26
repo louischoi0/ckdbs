@@ -7,7 +7,7 @@
 #include "kds/catalog/rows.hpp"
 #include "kds/parser/ast.hpp"
 
-// The secondary index key encoding (docs/feat-index.md §5, workplan IX01).
+// The secondary index key encoding (docs/spec/feat-index.md §5, workplan IX01).
 //
 // One index key is **one order-preserving byte string**: the concatenation
 // of its key columns' encodings, compared with `memcmp` and nothing else.
@@ -41,7 +41,7 @@
 // form.** A `DATE` arrives as an epoch-day integer, a `DECIMAL(10,2)` as an
 // unscaled integer carrying scale 2 - never as the text the client wrote.
 // The one path from a written literal to a storage value is
-// `exec::CoerceLiteralToColumn` (docs/spec-types.md §3.1), and this file
+// `exec::CoerceLiteralToColumn` (docs/spec/spec-types.md §3.1), and this file
 // **refuses** anything else rather than parsing it itself.
 //
 // That refusal is deliberate and load-bearing. There were briefly two

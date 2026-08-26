@@ -3,8 +3,8 @@
 #include <functional>
 #include <memory>
 
-// Task representation is an explicit open decision (docs/sched.md section
-// 3, docs/rules.md section 7): callback/future chains vs C++20 stackless
+// Task representation is an explicit open decision (docs/spec/sched.md section
+// 3, docs/rules/rules.md section 7): callback/future chains vs C++20 stackless
 // coroutines vs stackful fibers are all still viable. This header does not
 // choose one - it defines the type-erased "runnable task handle" contract
 // sched.md says the scheduler needs (a queue of runnable task handles),
@@ -34,7 +34,7 @@ enum class PollResult {
 
 // Run-to-completion-until-yield unit of work. Every task belongs to
 // exactly one scheduling group (sched.md section 4) for its whole
-// lifetime. Poll() must return promptly (cooperative yield, docs/sched.md
+// lifetime. Poll() must return promptly (cooperative yield, docs/spec/sched.md
 // section 3) - there is no preemption.
 class Task {
 public:

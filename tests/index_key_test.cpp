@@ -11,7 +11,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/row_codec.hpp"
 
-// The index key encoding (docs/feat-index.md §5, workplan IX01).
+// The index key encoding (docs/spec/feat-index.md §5, workplan IX01).
 //
 // One property carries the whole design, and it is what these tests exist to
 // falsify: **`memcmp` over the encoding must agree with `CompareValues` over
@@ -159,7 +159,7 @@ TEST(IndexKeyTest, SignedIntegersEncodeInValueOrder) {
 
 TEST(IndexKeyTest, DateAndTimestampRideTheIntegerArm) {
     // A DATE *is* an int32 of epoch days and a TIMESTAMP an int64 of epoch
-    // micros (docs/spec-types.md), which is why neither needs code of its
+    // micros (docs/spec/spec-types.md), which is why neither needs code of its
     // own here - and why a pre-epoch value must still order correctly.
     ExpectOrderAgrees(MakeColumn(kTypeValDate), {Int(-719162), Int(-1), Int(0), Int(20672)});
     ExpectOrderAgrees(MakeColumn(kTypeValTimestamp),
@@ -294,7 +294,7 @@ TEST(IndexKeyTest, AnUncoercedLiteralIsRefusedRatherThanParsed) {
     // The rule that has already cost this engine rows: a written literal
     // reaches a key only through exec::CoerceLiteralToColumn. A second
     // parser here is how the Cabin came to key on one form and read on
-    // another (docs/spec-types.md §3.1).
+    // another (docs/spec/spec-types.md §3.1).
     const auto date = MakeColumn(kTypeValDate);
     std::vector<std::byte> out(IndexKeyColumnWidth(date).value());
     Status s = EncodeIndexKeyColumn(date, Str("2026-08-07"), out);

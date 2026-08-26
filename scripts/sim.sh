@@ -79,7 +79,7 @@ for seed in $COMMITTED $FRESH_SEEDS; do
         for faults in none io; do
             # All three value profiles, not just the default: `colliding`
             # (v over [0,4]) is what makes a FilterScan set interesting, and
-            # it is where the Cabin finding in docs/known-gaps.md lives. A
+            # it is where the Cabin finding in docs/inflight/known-gaps.md lives. A
             # sweep that ran `uniform` only would have missed it.
             for profile in uniform zipfian colliding; do
                 run_one "seed=$seed mode=$mode faults=$faults profile=$profile" \

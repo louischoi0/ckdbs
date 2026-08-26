@@ -12,7 +12,7 @@
 #include "kds/txn/read_view.hpp"
 #include "kds/wal/record.hpp"
 
-// The CREATE-time Bound Cabin builder (docs/feat-assertion.md §8.1, workplan
+// The CREATE-time Bound Cabin builder (docs/spec/feat-assertion.md §8.1, workplan
 // AST06): one full scan of the target relation, accumulated into entry pages
 // and a group directory, refused whole if the data already violates the
 // declared bound.
@@ -35,7 +35,7 @@
 // half-built tree in between" - so no write can interleave and the
 // membership question never has a contested answer. The spec's "background
 // scheduling group, cooperative yielding" needs the suspendable statement
-// path that `docs/crosscore.md` P4 still lacks (nothing in the engine
+// path that `docs/spec/crosscore.md` P4 still lacks (nothing in the engine
 // yields mid-statement); when the build learns to yield, the membership
 // protocol is the correctness story it resumes under, which is why it is
 // decided now and recorded here.

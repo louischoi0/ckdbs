@@ -9,7 +9,7 @@
 #include "kds/catalog/core_placement.hpp"
 #include "kds/parser/fingerprint.hpp"
 
-// Pure codec tests for sys.patterns rows (docs/waystone-concpets.md
+// Pure codec tests for sys.patterns rows (docs/spec/waystone-concpets.md
 // section 4). No Catalog, no PageStore: this is Encode/Decode over a byte
 // span and nothing else, which is the level the offsets and the exact-size
 // rule actually live at.
@@ -258,7 +258,7 @@ SysTableRow SampleTableRow() {
     return row;
 }
 
-// ---- sys.indexes (docs/feat-index.md §12, workplan IX03) ---------------
+// ---- sys.indexes (docs/spec/feat-index.md §12, workplan IX03) ---------------
 
 SysIndexRow SampleIndexRow() {
     SysIndexRow row{};

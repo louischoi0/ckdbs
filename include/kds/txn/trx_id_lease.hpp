@@ -6,7 +6,7 @@
 #include "kds/base/status.hpp"
 
 // Transaction-id leases: how a core that may not write the superblock issues
-// transaction ids (`docs/workplan-peer-writer.md` PW1).
+// transaction ids (`docs/inflight/in-progress/workplan-peer-writer.md` PW1).
 //
 // `TrxIdSequence::Carve()` raises `SuperBlock::next_trx_id` and persists it,
 // and the superblock is page 0 - core 0's, by M5. So a peer holds a **leased

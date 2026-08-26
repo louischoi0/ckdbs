@@ -15,7 +15,7 @@
 // SS1: the shipped-statement wire and the waiter on it.
 //
 // Two reactors over one ring, stepped by hand, which is what makes every
-// one of these deterministic (`docs/sched.md` §8's simulation shape, and
+// one of these deterministic (`docs/spec/sched.md` §8's simulation shape, and
 // the shape `trx_id_lease_service_test.cpp` already uses).
 //
 // The three things worth pinning here, in the order they would hurt:
@@ -126,7 +126,7 @@ TEST_F(StatementShipTest, AStatementCrossesAndItsAnswerComesBack) {
 
 TEST_F(StatementShipTest, TheOwnersRefusalArrivesAsTheOwnerSpelledIt) {
     // Including the retryable bit, which is the one bit clients build retry
-    // loops on (docs/protocol.md §11) and the thing a re-wrapped status
+    // loops on (docs/spec/protocol.md §11) and the thing a re-wrapped status
     // silently loses.
     InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) {

@@ -6,7 +6,7 @@
 
 #include "kds/stats/cabin_store.hpp"
 
-// The statement-local inner build's map (docs/spec-join-inner-build.md §2,
+// The statement-local inner build's map (docs/spec/spec-join-inner-build.md §2,
 // workplan JB2): one entry per inner row that passed the step's
 // non-correlated residual, bucketed by join-column value, appended in walk
 // order. The executor's walked-join site fills it once per statement (JB3)

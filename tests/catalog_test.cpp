@@ -242,7 +242,7 @@ TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
     }
 }
 
-// ---- Secondary indexes (docs/feat-index.md §12, workplan IX03) ----------
+// ---- Secondary indexes (docs/spec/feat-index.md §12, workplan IX03) ----------
 
 // Three columns, so an index can be declared on something that is neither
 // the primary key nor the only other column.
@@ -778,7 +778,7 @@ TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
     EXPECT_EQ(store.value()->DirtyPageIds(), std::vector<PageId>{kCatalogPageTables});
 }
 
-// ---- sys.patterns (docs/waystone-concpets.md section 4) -------------------
+// ---- sys.patterns (docs/spec/waystone-concpets.md section 4) -------------------
 
 class PatternCatalogTest : public ::testing::Test {
 protected:
@@ -1003,7 +1003,7 @@ TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
     EXPECT_EQ(row.value().last_seen, 0u);
 }
 
-// ---- Relation ownership (docs/workplan-crosscore.md M1) ---------------
+// ---- Relation ownership (docs/inflight/in-progress/workplan-crosscore.md M1) ---------------
 
 class OwnerCoreTest : public ::testing::Test {
 protected:
@@ -1099,7 +1099,7 @@ TEST_F(OwnerCoreTest, OwnershipSurvivesAReopen) {
     EXPECT_EQ(row.value().owner_core, assigned);
 }
 
-// ---- Key order (docs/heap-and-tuple.md §4.1) -----------------------------
+// ---- Key order (docs/spec/heap-and-tuple.md §4.1) -----------------------------
 //
 // There is no key *mode* to test any more - `CreateTable` takes no such
 // parameter and refuses no storage pairing for one. What replaced it is an
@@ -1270,7 +1270,7 @@ TEST_F(KeyOrderTest, ACatalogRelationStartsAscending) {
     EXPECT_EQ(row.value().key_order, KeyOrder::kAscending);
 }
 
-// ---- The catalog relations chain (docs/keystoneid-k0-findings.md) --------
+// ---- The catalog relations chain (docs/rules/keystoneid-k0-findings.md) --------
 //
 // `sys.columns` used to be one fixed 8 KB page that did not chain, so the
 // whole instance held ~68 column rows and the CREATE TABLE that needed the

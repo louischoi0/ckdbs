@@ -17,7 +17,7 @@
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// V19 - cost guards and meters (docs/parser-v2-workplan.md).
+// V19 - cost guards and meters (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // Two things are being tested, and only one of them is about performance.
 //

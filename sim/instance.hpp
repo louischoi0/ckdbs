@@ -158,7 +158,7 @@ private:
     // Engine stack — rebuilt per boot. The recorder and the Cabin store
     // hold references into the catalog and the store, so they are rebuilt
     // with them; a Cabin's entry sets are memory-resident by design
-    // (docs/feat-cabin.md), so a reboot forgets them, exactly as a server
+    // (docs/spec/feat-cabin.md), so a reboot forgets them, exactly as a server
     // restart does.
     std::unique_ptr<wal::WalManager> wal_;
     std::unique_ptr<storage::DevicePageStore> store_;

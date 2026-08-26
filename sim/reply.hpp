@@ -1,7 +1,7 @@
 #pragma once
 
 // sim/reply.hpp — parsing the dispatcher's one-line wire replies
-// (docs/client-manual.md; the exact shapes are pinned by the dispatcher's
+// (docs/spec/client-manual.md; the exact shapes are pinned by the dispatcher's
 // own tests). A reply is one line; multi-row content is joined with the
 // literal two-character escape `\n`, never a raw newline byte.
 

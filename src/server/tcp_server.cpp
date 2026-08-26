@@ -532,7 +532,7 @@ void TcpServer::CloseClient(int client_fd) {
         return;
     }
 
-    // **A connection that goes away rolls back** (docs/txn.md section
+    // **A connection that goes away rolls back** (docs/spec/txn.md section
     // 10-8). Anything else would leave an open transaction holding its
     // writes and its place in every other session's in-flight set, with
     // nobody left to end it. The dispatcher cannot reach clients_, so

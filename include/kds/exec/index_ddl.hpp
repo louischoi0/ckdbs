@@ -12,7 +12,7 @@
 #include "kds/storage/page_store.hpp"
 
 // `CREATE INDEX` / `DROP INDEX`: the checks, the tree, and the catalog
-// write behind them (docs/feat-index.md §10, workplan IX05).
+// write behind them (docs/spec/feat-index.md §10, workplan IX05).
 //
 // It sits here rather than in `catalog/` for one reason: computing an
 // index's `key_width` needs the key encoding (`exec/index_key.hpp`) and

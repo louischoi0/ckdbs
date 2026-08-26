@@ -13,7 +13,7 @@
 #include "kds/stats/decay.hpp"
 #include "kds/storage/page_store.hpp"
 
-// The physical-optimizer planner (docs/feat-physical-optimizer.md R2/R9/R10,
+// The physical-optimizer planner (docs/spec/feat-physical-optimizer.md R2/R9/R10,
 // workplan PX05) - the shadow half, and in v1 the only half.
 //
 // Pure planning: reads `sys.access_stats` and the catalog, weighs shapes

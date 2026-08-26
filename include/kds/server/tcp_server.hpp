@@ -175,7 +175,7 @@ private:
         // This connection's transaction state (session.hpp). Per
         // connection and not per server: two clients on one dispatcher must
         // not see each other's open transaction, which is exactly what
-        // docs/txn.md section 10-8 requires and what a shared dispatcher
+        // docs/spec/txn.md section 10-8 requires and what a shared dispatcher
         // could not provide before.
         Session session;
     };

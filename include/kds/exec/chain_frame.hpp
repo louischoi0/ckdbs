@@ -10,7 +10,7 @@
 #include "kds/parser/ast.hpp"
 
 // The values a chain has bound so far, and the one place a `ColumnRef`
-// turns into a value (docs/parser-v2-workplan.md V16).
+// turns into a value (docs/inflight/in-progress/parser-v2-workplan.md V16).
 //
 // ---- Why one buffer, not one vector per step ---------------------------
 //

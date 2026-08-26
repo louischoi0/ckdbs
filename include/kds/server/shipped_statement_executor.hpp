@@ -39,7 +39,7 @@
 // The pretasks measured that batching at **79x** on one core
 // (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §4), and
 // re-concentrating commits onto owners is the reason shipping exists at
-// all (`docs/memo-shipping-and-group-commit.md` §3).
+// all (`docs/inflight/in-progress/memo-shipping-and-group-commit.md` §3).
 //
 // ---- The answer, and how a code survives the round trip ------------------
 //

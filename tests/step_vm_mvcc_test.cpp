@@ -18,7 +18,7 @@
 #include "kds/txn/undo_log.hpp"
 #include "kds/txn/visibility.hpp"
 
-// The predicate applied where the step VM reads (docs/txn.md section 4.4 as
+// The predicate applied where the step VM reads (docs/spec/txn.md section 4.4 as
 // amended by docs/txn-workplan.md A1): one call site, and every access kind
 // funnels through it.
 //

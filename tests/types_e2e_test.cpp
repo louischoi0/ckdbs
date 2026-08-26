@@ -532,7 +532,7 @@ TEST(TypesEndToEnd, MixedWidthDecimalColumnsRefuseToCompare) {
     EXPECT_NE(reply.find("width"), std::string::npos) << reply;
 }
 
-// ---- NULL end to end (docs/spec-null.md, workplan-null.md NU5) -------------
+// ---- NULL end to end (docs/spec/spec-null.md, workplan-null.md NU5) -------------
 
 TEST(NullE2eTest, ANullInsertsReadsBackAndIsNotZeroOrEmpty) {
     Instance db;

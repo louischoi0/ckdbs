@@ -100,7 +100,7 @@ struct HighWaterRepair {
 // that cannot raise its floor answers Unsupported, and a floor past the
 // store's addressable range answers OutOfRange. Either refuses the mount,
 // which is the point: a recovery that could not close this hazard must not
-// serve the database (docs/txn.md §8).
+// serve the database (docs/spec/txn.md §8).
 //
 // Fails with Corruption when the log names `kInvalidPageId - 1`, whose
 // successor is the reserved invalid id (invariant 1). No page can legally

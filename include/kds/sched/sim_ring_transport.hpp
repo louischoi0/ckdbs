@@ -9,7 +9,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/ring_transport.hpp"
 
-// The simulated cross-core transport (docs/sched.md §8, workplan M9).
+// The simulated cross-core transport (docs/spec/sched.md §8, workplan M9).
 //
 // Same seam as the real rings, different physics: a message here is held
 // until an injected *delivery time* passes, so a test can make one core's

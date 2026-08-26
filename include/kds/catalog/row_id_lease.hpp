@@ -9,7 +9,7 @@
 #include "kds/catalog/well_known.hpp"
 
 // Row-id leases: how a core that may not write the catalog issues Keystone
-// ids (docs/workplan-crosscore.md P5's shape, the blocker P6 recorded).
+// ids (docs/inflight/in-progress/workplan-crosscore.md P5's shape, the blocker P6 recorded).
 //
 // `Catalog::AllocateRowId()` bumps `sys.tables.next_id` on a catalog page,
 // and catalog pages have exactly one writer - core 0. So a peer holds a
@@ -22,7 +22,7 @@
 // The same trade as every lease here: ids are **unique and monotonic per
 // core, never gapless**. A crash, a dropped core, or a refill that arrives
 // while ids remain burns the remainder - K3 calls a burned id free.
-// `docs/keystoneid-invariant.md` K-M2's bump-ahead allocator is this
+// `docs/rules/keystoneid-invariant.md` K-M2's bump-ahead allocator is this
 // mechanism again at a different layer, and its measured block-size floor
 // (4096 - below it the durable bump stops amortizing) is the default grant
 // size the service uses.

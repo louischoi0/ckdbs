@@ -10,12 +10,12 @@
 #include "kds/catalog/well_known.hpp"
 
 // A snapshot: what one statement, or one transaction, is entitled to see
-// (docs/txn.md section 4.1).
+// (docs/spec/txn.md section 4.1).
 //
 // ---- A POD, deliberately ---------------------------------------------------
 //
 // Copyable, no heap allocation, fixed size. The reactor body allocates
-// nothing in steady state (docs/sched.md), and a read view is minted per
+// nothing in steady state (docs/spec/sched.md), and a read view is minted per
 // statement under READ COMMITTED - so a view that allocated would put a
 // malloc on every statement's front door. Begin past kMaxTrackedLiveTxns is
 // OutOfSpace: a documented, testable bound rather than an unbounded vector.

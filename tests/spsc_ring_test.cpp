@@ -6,7 +6,7 @@
 
 #include <gtest/gtest.h>
 
-// The single-producer/single-consumer ring (docs/sched.md §5). Everything
+// The single-producer/single-consumer ring (docs/spec/sched.md §5). Everything
 // here runs on one thread: what is under test is the index protocol and the
 // slot arithmetic, not the memory model, and a two-thread test would only
 // make those two things harder to see. The ordering guarantees are asserted

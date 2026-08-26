@@ -330,7 +330,7 @@ TEST_F(ShippedStatementExecutorTest, AShippedStatementMayNotLeaveATransactionOpe
     // with the statement, so a transaction it adopted would stay `active_`
     // forever - pinning `ReadHorizon()`, stalling the undo purge, and
     // answering `IsInFlight` true for the life of the process. A dropped
-    // connection is rolled back (docs/txn.md section 10-8); so is this.
+    // connection is rolled back (docs/spec/txn.md section 10-8); so is this.
     const Answer out = Ship("BEGIN", /*session_id=*/99, /*sequence=*/1);
     ASSERT_TRUE(out.answered);
     EXPECT_EQ(out.status.code(), StatusCode::kUnsupported) << out.status.message();

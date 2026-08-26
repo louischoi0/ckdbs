@@ -13,7 +13,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 
-// **The advisory contract** (docs/waystone-concpets.md §11-3 and §11-4,
+// **The advisory contract** (docs/spec/waystone-concpets.md §11-3 and §11-4,
 // workplan P12). The spec calls §11-3 "the test that must never be allowed
 // to fail", and this is it.
 //
@@ -108,7 +108,7 @@ const std::vector<std::string>& Queries() {
         "SELECT a.label, c.w FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
         "SELECT a.label, c.w FROM h AS a JOIN j AS c ON a.id = c.id WHERE a.id = 6",
 
-        // ---- The walked join (docs/spec-join-inner-build.md, JB7) ------
+        // ---- The walked join (docs/spec/spec-join-inner-build.md, JB7) ------
         //
         // The inner is `h` keyed on `h.v`: not a pk, no index (only
         // `b(v)` has one), no Cabin - so every arm of the structure
@@ -133,7 +133,7 @@ const std::vector<std::string>& Queries() {
         // nothing - not a reply compared.
         "SELECT a.label, d.label FROM b AS a JOIN h AS d ON d.v = a.v",
 
-        // ---- Aggregated statements (docs/feat-aggregate.md §9 item 8) --
+        // ---- Aggregated statements (docs/spec/feat-aggregate.md §9 item 8) --
         //
         // They belong in *this* set rather than in a suite of their own,
         // and the reason is AG1. The fold consumes rows and has no opinion
@@ -157,7 +157,7 @@ const std::vector<std::string>& Queries() {
         "SELECT COUNT(*), SUM(c.w) FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
         "SELECT a.label, COUNT(*) FROM h AS a JOIN j AS c ON a.id = c.id GROUP BY a.label",
 
-        // ---- Indexed statements (docs/feat-index.md §8) ----------------
+        // ---- Indexed statements (docs/spec/feat-index.md §8) ----------------
         //
         // Here for the aggregates' reason, one step further along: an index
         // probe is search-class, so a trail may prefetch for it and must
@@ -175,7 +175,7 @@ const std::vector<std::string>& Queries() {
         "SELECT COUNT(*) FROM b WHERE v = 50",
         "SELECT a.label FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.v = 50",
 
-        // ---- Paginated statements (docs/parser-v2.md I11, V09) ---------
+        // ---- Paginated statements (docs/spec/parser-v2.md I11, V09) ---------
         //
         // Here for the aggregates' reason a third time: the emission
         // quota is a sink decorator, so a limited statement's exposure to
@@ -242,7 +242,7 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
 }
 
 // What a relayout mover will do to every page it touches, done by hand
-// because no mover exists (docs/feat-physical-optimizer.md §6). Sweeps the
+// because no mover exists (docs/spec/feat-physical-optimizer.md §6). Sweeps the
 // user id range; absent ids just miss.
 std::size_t BumpEveryUserPage(Instance& db) {
     std::size_t bumped = 0;
@@ -413,7 +413,7 @@ TEST(WaystoneContractTest, AnUnindexedNonPkPredicateStillScans) {
 }
 
 TEST(WaystoneContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
-    // **Spec §2 rule 2, proven load-bearing** (docs/feat-physical-optimizer.md
+    // **Spec §2 rule 2, proven load-bearing** (docs/spec/feat-physical-optimizer.md
     // R4, workplan PX04). Until this test the epoch comparison's inputs were
     // constant - recorded 0 against a page at 0 - so it passed vacuously.
     // Here the page side moves, which is exactly what a relayout mover will

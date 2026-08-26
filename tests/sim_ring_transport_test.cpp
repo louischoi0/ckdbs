@@ -9,7 +9,7 @@
 
 #include "kds/sched/clock.hpp"
 
-// The simulated transport's own contract (docs/sched.md §8, workplan M9):
+// The simulated transport's own contract (docs/spec/sched.md §8, workplan M9):
 // injected delay actually delays, injected variance actually reorders, and
 // **the whole thing reproduces from the seed**. The last one is the reason
 // the class exists - a cross-core failure that cannot be replayed is a

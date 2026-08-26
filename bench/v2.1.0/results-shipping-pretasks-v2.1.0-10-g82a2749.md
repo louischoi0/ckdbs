@@ -27,7 +27,7 @@ server to within 0.1% (§7b). What a `cores = 1` baseline really differs by is
 how much of the box is asleep.
 
 **These are the numbers the shipping workplan was owed**, and
-`docs/memo-shipping-and-group-commit.md` (T6) does the arithmetic they
+`docs/inflight/in-progress/memo-shipping-and-group-commit.md` (T6) does the arithmetic they
 license: shipping re-concentrates onto one owner exactly what rotation
 divides across W cores, which is the mechanism that made rotation lose at two
 sessions per core — so shipping is predicted to be positive in the regime
@@ -85,7 +85,7 @@ never mixed in one sentence.
 | **T3** discriminating the four-core-server effect | run — §7 |
 | **T4** the parked-coroutine price, and the group-accounting instrument | run — §8 |
 | **T5** the cross-core write refusal counters, and a baseline reading | run — §9 |
-| **T6** the shipping × group-commit memo | `docs/memo-shipping-and-group-commit.md` |
+| **T6** the shipping × group-commit memo | `docs/inflight/in-progress/memo-shipping-and-group-commit.md` |
 | the device gate, the harness gate | run — §3 |
 
 Four things this run corrected, recorded because a run that only ever
@@ -101,7 +101,7 @@ confirms its own instructions is not measuring:
    from outside the process. And the undercount named is retired: that
    pre-parse guard was `PeerWriteRefused`, **deleted at PW1c-5** on
    2026-08-24, whose own workplan row says the change *"reverses PW5's
-   recorded undercount"*. `docs/crosscore.md` §6 still asserted it and has
+   recorded undercount"*. `docs/spec/crosscore.md` §6 still asserted it and has
    been corrected in place. T5 became "expose, and state the undercount that
    is real now" — §9.
 2. **T2's sweep measures the busiest core, not the average.** The
@@ -378,7 +378,7 @@ is that a single hot relation is a serialization point; that is true of the
 is what sets throughput here. And shipping's arrival-core cost has to be paid
 against a number that grows with concurrency rather than a ceiling: an owner
 core absorbing N shipped writers is on this curve, not on a per-core sync
-cap. §5 of the memo (`docs/memo-shipping-and-group-commit.md`) does that
+cap. §5 of the memo (`docs/inflight/in-progress/memo-shipping-and-group-commit.md`) does that
 arithmetic.
 
 ### 5a. What `cores = 8` adds, and what it costs
@@ -454,7 +454,7 @@ core take two gives back nearly all of it, however good the average looks.
 `bench/v2.1.0`'s bracket — 1.751× at 1.00 and 0.989× at 2.00 — was not
 bracketing a slope; it was measuring the two sides of a step.
 
-**No policy is proposed here.** Placement is `docs/crosscore.md` §9's open
+**No policy is proposed here.** Placement is `docs/spec/crosscore.md` §9's open
 decision and this is an input to it.
 
 ### 6a. At seven writer cores the multi-core arm is pinned, and that is the whole curve
@@ -650,7 +650,7 @@ the question could not be answered from outside the process at all.
 and `SHOW META` does not print it — so reporting whether group accounting
 diverges from wall time *"requires adding instrumentation to the engine,
 which is a code change and outside what a measurement run may do"*. It was
-left owed to whoever next touched `docs/sched.md` §4.
+left owed to whoever next touched `docs/spec/sched.md` §4.
 
 It is paid here. `SHOW META` now prints, per core:
 
@@ -675,7 +675,7 @@ has had. `polled_us` and `polls` are new, cumulative and never decayed. So
 
 is the reactor time charged to **no** group — the `PollReady` idle block on a
 quiet reactor, the WAL drain's `fdatasync` on a committing one, timer
-callbacks, the io drain — which is the quantity `docs/sched.md` §4's last
+callbacks, the io drain — which is the quantity `docs/spec/sched.md` §4's last
 bullet names and could not previously be read. And a **spin** has a
 signature of its own here: `polls` climbing while `polled_us` does not,
 because a parked coroutine answers `kSuspended` in nanoseconds.
@@ -698,7 +698,7 @@ found three defects before any number was taken with it: the dangling view on
 header documents at length), and a test assertion — `find("=1")` — that
 `SHOW META` satisfies through `ddl_durable=1` whatever the counters say. All
 three are fixed; the accessors' concurrency protocol is now written into
-`scheduler.hpp`'s protocol block, and `docs/client-manual.md`'s field list
+`scheduler.hpp`'s protocol block, and `docs/spec/client-manual.md`'s field list
 carries both new blocks.
 
 
@@ -722,7 +722,7 @@ cell:
 Windows are 6 s loaded and 4 s idle; "unaccounted" is
 `sched_wall_us − Σ sched_<group>_polled_us` over `sched_wall_us`.
 
-**The gap `docs/sched.md` §4 names is 94–98%.** A writing core spends between
+**The gap `docs/spec/sched.md` §4 names is 94–98%.** A writing core spends between
 0.15 and 0.34 seconds of every six inside task polls; the rest — the WAL
 drain's `fdatasync` above all — is charged to no scheduling group at all. The
 share law is therefore arbitrating over **2–6%** of the reactor's time, which
@@ -790,7 +790,7 @@ at K = 16, and nothing here says what shipping's steady-state waiters cost.
 > `NotFound` for a page that is allocated on disk. `InvalidateCatalog()`
 > now refreshes the map before evicting the catalog frames. The
 > reproduction below runs 297 builds with the relation still writable.
-> `docs/known-gaps.md` carries the mechanism and the residual. **The
+> `docs/inflight/known-gaps.md` carries the mechanism and the residual. **The
 > measurement below is left exactly as it was taken** — it is what the
 > engine did at `v2.1.0-15-g5989f13`, and back-filling a fix into it would
 > date a claim to a build that never carried one.
@@ -843,7 +843,7 @@ loop is the original form.
 
 ## 9. T5 — the cross-core write refusal counters, and their before-shipping reading
 
-`docs/crosscore.md` §6 specifies a per-core counter keyed
+`docs/spec/crosscore.md` §6 specifies a per-core counter keyed
 (home core, target core, relation) and calls it *"the input the future
 placement/2PC decision will be made from"*. **One instrument, two eras**:
 read now, it says how often today's engine refuses a write because the
@@ -871,7 +871,7 @@ cross_core_write_refusal_detail=<home>&gt;<target>:<oid>=<count>[,...]   (capped
 the one that is real now is stated in its place. The named class — *"the
 peer-listener guard refuses foreign writes before parsing"* — was
 `PeerWriteRefused`, **deleted at PW1c-5** on 2026-08-24, whose workplan row
-says the change *"reverses PW5's recorded undercount"*. `docs/crosscore.md`
+says the change *"reverses PW5's recorded undercount"*. `docs/spec/crosscore.md`
 §6 still asserted it and is corrected in place. What the counter genuinely
 cannot see today: **DDL on a peer** (`PeerDdlRefused` fires by verb before
 any relation is resolved) and anything refused before resolution at all. The
@@ -905,7 +905,7 @@ turns the stated undercount from an assertion into a checked claim: no CC3
 refusal escapes the counter, and the classes that do escape are the ones
 named above.
 
-The per-key detail is the shape `docs/crosscore.md` §6 wants the 2PC
+The per-key detail is the shape `docs/spec/crosscore.md` §6 wants the 2PC
 decision made from. One
 cell's core 0, verbatim:
 
@@ -970,7 +970,7 @@ Stated plainly so no headline is quoted for something it cannot support.
    still not this file's to decide.
 3. **The reactor spin.** T4 prices the population the engine creates from
    outside; whether the idle policy should become park-aware is
-   `docs/sched.md` §4's decision and is untouched here. §7b adds a wrinkle
+   `docs/spec/sched.md` §4's decision and is untouched here. §7b adds a wrinkle
    that decision should know about: the 1 ms wake cadence a reactor keeps
    while idle is worth **1.17×** to whatever else runs on the box, so an idle
    policy that blocked longer would be giving that up.

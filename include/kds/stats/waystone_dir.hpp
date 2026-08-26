@@ -8,7 +8,7 @@
 #include "kds/stats/instance_key.hpp"
 #include "kds/storage/page_store.hpp"
 
-// The per-pattern waystone directory (docs/waystone-concpets.md §5): the
+// The per-pattern waystone directory (docs/spec/waystone-concpets.md §5): the
 // second level of addressing, turning an `arg_hash` into the waystone page
 // holding that pattern instance's trail.
 //

@@ -271,7 +271,7 @@ def main():
         for i in range(args.rows):
             text = "".join(rng.choices(ALPHABET, k=args.value_bytes))
             # One value, not two: the pk is ASSIGNED, so a row supplies the
-            # columns after it (`docs/heap-and-tuple.md` §4.1).
+            # columns after it (`docs/spec/heap-and-tuple.md` §4.1).
             values = (f"{i % args.assert_groups}, '{text}'" if args.assertion
                       else f"'{text}'")
             rolled = (args.assertion and args.assert_rollback_every

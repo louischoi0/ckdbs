@@ -23,7 +23,7 @@
 // a tear the run then *continues past* is not the failure it looks like:
 // it models a device that reported success for a partial transfer and kept
 // working, which leaves a hole in the middle of a log whose later records
-// all landed. Nothing in `docs/wal.md` is written against that — a torn
+// all landed. Nothing in `docs/spec/wal.md` is written against that — a torn
 // transfer is what the power cut leaves in flight, so the realistic image
 // is a partial record at the **tail** with nothing after it, made durable
 // by the flush the cut interrupted.
@@ -37,7 +37,7 @@
 // "the torn record is the end of the stream"). So: **torn injection waits
 // for `Crash(prefix)`**, and when it lands the log half asserts (recovery's
 // CRC is what it is for) while the page half is [GATED: FPI] — the cadence
-// `docs/known-gaps.md` records as unbuilt for every page class, which
+// `docs/inflight/known-gaps.md` records as unbuilt for every page class, which
 // leaves a torn *page* unhealable and the mount refusing it.
 
 #include <cstddef>

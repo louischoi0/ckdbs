@@ -6,7 +6,7 @@
 #include "kds/sched/task.hpp"
 
 // The cross-core message: what one core sends another, and the only thing
-// it ever sends (docs/sched.md §5, docs/workplan-crosscore.md P1 and
+// it ever sends (docs/spec/sched.md §5, docs/inflight/in-progress/workplan-crosscore.md P1 and
 // guideline 1). Every kind the engine will ever send is enumerated here,
 // centrally, so no subsystem invents a parallel numbering.
 //
@@ -39,7 +39,7 @@ namespace kds::sched {
 // `StoredAccessKind`, `kCabinOriginUnset` and `stmt_class` each had to be
 // taught: a zeroed buffer must not decode as a real value.
 //
-// The step kinds are `docs/crosscore.md` §3's six, declared now though
+// The step kinds are `docs/spec/crosscore.md` §3's six, declared now though
 // nothing sends them until workplan P4. Declaring them early costs a line
 // each and is what keeps the pipeline from arriving with an enum of its
 // own - P1's "kinds enumerated centrally" is a structural requirement, not

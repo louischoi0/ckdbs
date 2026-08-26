@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 
 // The text forms of `DATE`, `TIMESTAMP` and `DECIMAL(p,s)`
-// (docs/spec-types.md TY3, TY7; workplan TY01).
+// (docs/spec/spec-types.md TY3, TY7; workplan TY01).
 //
 // ---- One parser per type, two callers, zero drift ----------------------
 //

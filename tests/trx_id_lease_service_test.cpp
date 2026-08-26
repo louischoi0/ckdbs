@@ -8,7 +8,7 @@
 #include "kds/sched/io_backend.hpp"
 #include "kds/server/superblock.hpp"
 
-// Leasing transaction ids over the ring (`docs/workplan-peer-writer.md` PW1).
+// Leasing transaction ids over the ring (`docs/inflight/in-progress/workplan-peer-writer.md` PW1).
 //
 // The gap this closes is not a slow path, it is a closed door:
 // `TrxIdSequence` constructs spent, so a peer's very first `Next()` reserved

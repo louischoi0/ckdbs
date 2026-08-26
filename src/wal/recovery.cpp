@@ -59,8 +59,8 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
             "recovery of core " + std::to_string(core_id) + ": " +
             std::to_string(out.analysis.losers) +
             " transaction(s) have no terminal record and no undo phase is installed; replaying "
-            "without rolling them back would publish their uncommitted writes (docs/txn.md §8, "
-            "docs/workplan-wal-recovery.md RC05)");
+            "without rolling them back would publish their uncommitted writes (docs/spec/txn.md §8, "
+            "docs/spec/wal.md)");
     }
 
     // ---- 2. Redo: crash-time state, uncommitted writes included ---------

@@ -32,7 +32,7 @@ TEST(ParserTest, CreateTableExplicitBtree) {
     EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree);
 }
 
-// ---- The key-mode word (PK03, docs/heap-and-tuple.md §4.1) ---------------
+// ---- The key-mode word (PK03, docs/spec/heap-and-tuple.md §4.1) ---------------
 
 TEST(ParserTest, CreateTableDefaultsToAssigned) {
     // A statement that names no mode means what every statement written
@@ -45,7 +45,7 @@ TEST(ParserTest, CreateTableDefaultsToAssigned) {
 }
 
 TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
-    // The word outlived the mode it selected (docs/heap-and-tuple.md §4.1).
+    // The word outlived the mode it selected (docs/spec/heap-and-tuple.md §4.1).
     // Accepted so written SQL keeps working, and it says nothing false -
     // every relation takes a caller-supplied key now. The only thing to
     // assert is that it changes no field, storage least of all.
@@ -342,7 +342,7 @@ TEST(ParserTest, StatementTypeNameMatchesVariant) {
     EXPECT_STREQ(StatementTypeName(Parse("CREATE TABLE t (a int64)").value()), "CREATE TABLE");
 }
 
-// ---- Nullability (docs/spec-null.md §2.3, D1) ------------------------------
+// ---- Nullability (docs/spec/spec-null.md §2.3, D1) ------------------------------
 
 TEST(ParserTest, AColumnIsNotNullUnlessDeclaredNull) {
     auto stmt = Parse("CREATE TABLE t (id int64, a int64 NULL, b int64 NOT NULL, c varchar)");

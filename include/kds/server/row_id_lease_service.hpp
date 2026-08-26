@@ -18,7 +18,7 @@
 // rather than per-instance - which is why every payload carries the oid.
 //
 // The block size default is `kRowIdLeasePerGrant` = 4096: the measured
-// floor `docs/keystoneid-invariant.md` K-M2 established for bump-ahead
+// floor `docs/rules/keystoneid-invariant.md` K-M2 established for bump-ahead
 // allocation (below it the durable bump stops amortizing), reused rather
 // than re-decided. A parameter everywhere, like every such number.
 

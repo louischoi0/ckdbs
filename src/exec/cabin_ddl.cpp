@@ -47,7 +47,7 @@ StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& s
 //
 // This is the interlock spec §7 describes, in its cheapest form: the access
 // statistics already record which columns the workload searches on
-// (`docs/heap-and-tuple.md` §7), and a Cabin on a column nothing filters is
+// (`docs/spec/heap-and-tuple.md` §7), and a Cabin on a column nothing filters is
 // the definition of a structure that works and will disappoint. It is a
 // *warning* and not a refusal, because an operator declaring a Cabin ahead
 // of the traffic that will use it is doing exactly what declaration is for.

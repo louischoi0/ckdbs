@@ -16,7 +16,7 @@
 // This exists because rules.md section 4 makes deterministic simulation a
 // first-class constraint: the whole engine must be runnable single-threaded
 // under a simulated scheduler with I/O errors and torn writes injected, and
-// docs/page.md's testing requirements (sections 18-5 through 18-8) are
+// docs/spec/page.md's testing requirements (sections 18-5 through 18-8) are
 // written against exactly that. Every guarantee in wal.md is proven here
 // before it is trusted on a real file.
 //

@@ -8,7 +8,7 @@
 // The Status type is used by nearly every function in the engine and had no
 // test of its own. It gets one now because `retryable()` is the first thing
 // Status has ever asserted about a code *class* rather than a single value,
-// and docs/protocol.md §11 makes that bit part of the wire compatibility
+// and docs/spec/protocol.md §11 makes that bit part of the wire compatibility
 // surface - "financial client libraries build retry loops on this bit".
 
 namespace kds {
@@ -87,7 +87,7 @@ TEST(StatusTest, TxnConflictIsTheOnlyRetryableCode) {
 
 TEST(StatusTest, TxnConflictCarriesItsReason) {
     // The message is what the newline protocol turns into
-    // "ERR TXN_CONFLICT retryable=1 ..." (docs/txn.md §5), so it must not
+    // "ERR TXN_CONFLICT retryable=1 ..." (docs/spec/txn.md §5), so it must not
     // be dropped.
     const Status s = Status::TxnConflict("row id=42 was written by transaction 118");
     EXPECT_EQ(s.code(), StatusCode::kTxnConflict);
@@ -96,7 +96,7 @@ TEST(StatusTest, TxnConflictCarriesItsReason) {
 }
 
 TEST(StatusTest, UnsupportedIsDistinctFromInvalidArgumentAndNotRetryable) {
-    // docs/parser-v2.md J2: a reserved-but-inexecutable form is well-formed
+    // docs/spec/parser-v2.md J2: a reserved-but-inexecutable form is well-formed
     // input the engine declines, not malformed input. Folding it into
     // kInvalidArgument would tell a client to go looking for a typo, and
     // retrying it would fail identically forever.
@@ -108,7 +108,7 @@ TEST(StatusTest, UnsupportedIsDistinctFromInvalidArgumentAndNotRetryable) {
 }
 
 TEST(StatusTest, CardinalityViolationIsNotRetryable) {
-    // docs/parser-v2.md §2: a scalar subquery that returned more than one
+    // docs/spec/parser-v2.md §2: a scalar subquery that returned more than one
     // row. Re-running it against unchanged data returns the same extra
     // rows, so retryable = 0 - even though, unlike every other code here,
     // it is a *runtime* verdict that a later data change could lift.
@@ -129,7 +129,7 @@ TEST(StatusTest, ResourceExhaustedIsNotRetryable) {
 }
 
 TEST(StatusTest, AssertionViolationIsNotRetryable) {
-    // docs/feat-assertion.md §4.4. The one race a retry could win - a
+    // docs/spec/feat-assertion.md §4.4. The one race a retry could win - a
     // refusal caused by a reservation that later aborts - is §4.3's bounded
     // false rejection, accepted rather than encoded: granting the bit would
     // make every client spin on a group that is genuinely full. The enum

@@ -8,7 +8,7 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/recovery.hpp"
 
-// Recovery's undo phase (docs/wal.md §12-3,
+// Recovery's undo phase (docs/spec/wal.md §12-3,
 // docs/workplan-wal-recovery.md RC05): roll every loser back, so a restart
 // yields exactly the acknowledged-commit state.
 //
@@ -46,7 +46,7 @@
 // than compensate a row this transaction never wrote. Narrow in practice -
 // only a key named below a relation's high-water mark can divide a leaf
 // mid-statement, and a heap relation refuses such a key
-// (`docs/heap-and-tuple.md` §4.1) - and it fails loudly rather than
+// (`docs/spec/heap-and-tuple.md` §4.1) - and it fails loudly rather than
 // corrupting. Lifting it means putting `rel_oid` in the undo record, which
 // is a format-version event and its own decision (§4a).
 //

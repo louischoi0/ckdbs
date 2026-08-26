@@ -102,7 +102,7 @@ StatusOr<std::uint16_t> PageAppend(std::span<std::byte, kPageSize> page,
         return Status::Unsupported("var-heap value of " + std::to_string(value.size()) +
                                     " bytes exceeds the " + std::to_string(kMaxValueSize) +
                                     " a page can hold; values spanning pages are not supported "
-                                    "(docs/rule-fixed-length-tuple.md section 9)");
+                                    "(docs/rules/rule-fixed-length-tuple.md section 9)");
     }
 
     VarHeapPageHeaderFields h = ReadHeader(page);
@@ -226,7 +226,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
         return Status::Unsupported("var-heap value of " + std::to_string(value.size()) +
                                     " bytes exceeds the " + std::to_string(kMaxValueSize) +
                                     " a page can hold; values spanning pages are not supported "
-                                    "(docs/rule-fixed-length-tuple.md section 9)");
+                                    "(docs/rules/rule-fixed-length-tuple.md section 9)");
     }
 
     // Walk to the tail. Cheap in the shape that matters - a chain grows

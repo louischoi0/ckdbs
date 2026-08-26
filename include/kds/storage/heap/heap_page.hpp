@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// Semi-sorted heap page (docs/heap-and-tuple.md section 3). Layout within one
+// Semi-sorted heap page (docs/spec/heap-and-tuple.md section 3). Layout within one
 // kPageSize buffer:
 //
 //   [ common page header    ]  <- offset 0, 32 bytes: page_type, checksum,
@@ -198,7 +198,7 @@ public:
     // Formats `page` as a brand-new, empty heap page whose min_key is
     // fixed for the rest of the page's lifetime - no method below ever
     // writes header.min_key again. Fails only if `min_key` does not fit
-    // the Keystone column's 40-bit id space (docs/heap-and-tuple.md invariant 7).
+    // the Keystone column's 40-bit id space (docs/spec/heap-and-tuple.md invariant 7).
     // `owner_oid` (page.md §2a) is stamped with the same immutability:
     // the owning relation for a user page, 0 for system callers (catalog).
     static StatusOr<PageView> CreateEmpty(std::span<std::byte, kPageSize> page,
@@ -231,7 +231,7 @@ public:
     PageId next_page_id() const;
     void set_next_page_id(PageId next);
 
-    // The common header's relayout epoch (docs/feat-physical-optimizer.md
+    // The common header's relayout epoch (docs/spec/feat-physical-optimizer.md
     // R4), surfaced here because the callers that need it at tuple-access
     // time hold a PageView, not the raw span. Read-only on purpose: bumping
     // is the mover's act, through storage::BumpRelayoutEpoch on the span it
@@ -309,7 +309,7 @@ public:
     // the deleter rather than failing.
     Status DeleteMark(std::uint16_t slot, std::uint64_t trx_id);
 
-    // The inverse of DeleteMark, for rollback (docs/txn.md section 6):
+    // The inverse of DeleteMark, for rollback (docs/spec/txn.md section 6):
     // clears the mark and restores the header the tuple carried before the
     // deleter stamped it. Both halves matter - a cleared mark with the
     // deleter still in `trx_id` would leave the row attributed to a

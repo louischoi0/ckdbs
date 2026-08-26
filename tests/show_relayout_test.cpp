@@ -8,7 +8,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// `SHOW RELAYOUT` (docs/feat-physical-optimizer.md §5/§8, workplan PX06):
+// `SHOW RELAYOUT` (docs/spec/feat-physical-optimizer.md §5/§8, workplan PX06):
 // the shadow report's surface. The planner's own behavior is pinned in
 // relayout_planner_test.cpp; this file pins the rendering, the off notice,
 // the refusals, and the advisory family's standing assertion - a report

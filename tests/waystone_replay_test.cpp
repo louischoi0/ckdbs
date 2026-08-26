@@ -17,7 +17,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 
 // Replay: serving a keyed step from a recorded location instead of
-// descending for it (docs/waystone-workplan.md P11/P13).
+// descending for it (docs/inflight/in-progress/waystone-workplan.md P11/P13).
 //
 // The hit path is one test. The rest of this file is **misses**, because a
 // trail is advisory and every way it can be wrong has to end in the same

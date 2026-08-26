@@ -7,7 +7,7 @@
 
 #include <gtest/gtest.h>
 
-// The tagged cell (docs/rule-fixed-length-tuple.md sections 3 and 8.1): the
+// The tagged cell (docs/rules/rule-fixed-length-tuple.md sections 3 and 8.1): the
 // fixed-width slot every variable-width value occupies.
 //
 // Two things are being defended here. First, the boundary - the spill

@@ -50,7 +50,7 @@ PageId AnchorClusteredRoot(std::span<const std::byte, kPageSize> page);
 void SetAnchorClusteredRoot(std::span<std::byte, kPageSize> page, PageId root);
 
 // `nr_index` duplicates a schema constant, so every reader treats it as
-// **checked redundancy** (docs/rules.md): compared against the bound,
+// **checked redundancy** (docs/rules/rules.md): compared against the bound,
 // Corruption on disagreement, never computed from - a forged count was an
 // ASan-demonstrated out-of-bounds read, and one branch over, a write
 // (this file's 3f07eda review, C1).
@@ -72,7 +72,7 @@ StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
 // every attempt allocated an index tree - 32 pages - and threw it away.
 // Nothing frees, so those pages are gone for the life of the database.
 // The storm that measured it, and its numbers, are in
-// `docs/known-gaps.md`; they are not restated here, so there is one
+// `docs/inflight/known-gaps.md`; they are not restated here, so there is one
 // figure to keep true.
 Status CheckAnchorRoomForIndex(std::span<const std::byte, kPageSize> page,
                                std::uint64_t index_oid);

@@ -10,8 +10,8 @@
 #include "kds/storage/page_store.hpp"
 
 // The var-heap: the out-of-line store for values too long to fit in a
-// tuple's fixed-width tagged cell (docs/heap-and-tuple.md section 3.4,
-// docs/rule-fixed-length-tuple.md section 5).
+// tuple's fixed-width tagged cell (docs/spec/heap-and-tuple.md section 3.4,
+// docs/rules/rule-fixed-length-tuple.md section 5).
 //
 // ---- The design goal is to be boring -------------------------------------
 //
@@ -134,7 +134,7 @@ inline constexpr std::size_t kNextPageIdOffset = kPageSize - sizeof(PageId);
 // page's lower and upper, less the one slot it needs.
 //
 // **This is also the spilled-value size cap, and that cap is an [OPEN]
-// decision** (docs/rule-fixed-length-tuple.md section 9: "uncapped blobs
+// decision** (docs/rules/rule-fixed-length-tuple.md section 9: "uncapped blobs
 // are not obviously an OLTP feature"). Nothing here decides it. A value
 // larger than one page needs a multi-page representation, and rather than
 // invent one to answer a question nobody has settled, an oversize value is
@@ -154,7 +154,7 @@ static_assert(kMaxValueSize == 8144);
 //
 // Encoded with explicit shift/mask helpers, never a bitfield: this is an
 // on-disk format and bitfield layout is implementation-defined
-// (docs/rules.md section 5, invariant 6).
+// (docs/rules/rules.md section 5, invariant 6).
 
 struct VarHeapPtr {
     PageId page_id = kInvalidPageId;
@@ -240,7 +240,7 @@ StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid)
 // page that exists and is unreachable (silent loss). The heap and btree paths
 // already report their structural changes for exactly this reason
 // (`insert_placement.hpp`, and `command_dispatcher.cpp`'s loop over them);
-// this is the var-heap's, and its absence was `docs/known-gaps.md`'s var-heap
+// this is the var-heap's, and its absence was `docs/inflight/known-gaps.md`'s var-heap
 // entry.
 struct ChainAppendResult {
     VarHeapPtr ptr;
@@ -277,7 +277,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
 // The returned span points into a page frame owned by `store`. It is valid
 // only until the caller touches the store again; every caller in the engine
 // copies it immediately, which is also what keeps the nested-access rule
-// (docs/parser-v2.md I15 R1) satisfiable on the decode path.
+// (docs/spec/parser-v2.md I15 R1) satisfiable on the decode path.
 // `pin` keeps the value's page resident: the span points into its frame,
 // and dies with the pin, not with the call. Passing a fresh PageRef per
 // call is the whole contract.

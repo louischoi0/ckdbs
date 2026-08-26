@@ -41,7 +41,7 @@ enum class PageAccess {
     kWrite,  // the visitor may modify tuples in place
 };
 
-// How a bulk sequential reader fetches pages (docs/spec-eviction.md §5,
+// How a bulk sequential reader fetches pages (docs/spec/spec-eviction.md §5,
 // workplan EVT06). A scan that faults every page of a large relation
 // through the ordinary path floods the pool with frames it will touch
 // exactly once; ring mode reuses a small fixed set of frames cyclically
@@ -246,7 +246,7 @@ public:
     // no-op, never a lowering - a floor that could fall would re-open the
     // hazard it exists to close, and every caller so far only ever raises.
     //
-    // Its one production caller is recovery (docs/wal.md §12,
+    // Its one production caller is recovery (docs/spec/wal.md §12,
     // docs/workplan-wal-recovery.md RV4/RC04): the durable record of which
     // ids exist is unlogged, so a crash can revert it while the log still
     // names pages above it, and an allocation afterwards would hand out a
@@ -354,9 +354,9 @@ public:
     // store they hold.
     //
     // This is a whole-store durability point, which is all there is until
-    // the WAL lands (docs/wal.md): with one, durability becomes
+    // the WAL lands (docs/spec/wal.md): with one, durability becomes
     // per-transaction (group commit, and KWP/1's per-transaction
-    // durability class, docs/protocol.md) and calling this per statement
+    // durability class, docs/spec/protocol.md) and calling this per statement
     // stops being the right shape.
     virtual Status Sync() { return Status::OK(); }
 

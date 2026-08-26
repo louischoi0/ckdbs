@@ -41,7 +41,7 @@
 #include "kds/storage/memory_page_device.hpp"
 
 // One core's stack, and the shutdown protocol that stops it
-// (docs/workplan-crosscore.md P2).
+// (docs/inflight/in-progress/workplan-crosscore.md P2).
 //
 // These are the engine's **first threaded tests**. They are deliberately
 // narrow: what is under test is that a reactor comes up on its own thread,
@@ -464,7 +464,7 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
 // `Catalog::AllocateRowId()` bumps `next_id` on the sys.tables page, and a
 // peer may not write the catalog. That one is P5's shape - a leased range
 // of row ids, exactly like the page-id lease - and
-// `docs/keystoneid-invariant.md` K-M2's bump-ahead allocator is the same
+// `docs/rules/keystoneid-invariant.md` K-M2's bump-ahead allocator is the same
 // mechanism.
 
 TEST_F(CoreRuntimeTest, AGrantedPeerFaultsARelationsDataPagesReadOnly) {
@@ -721,7 +721,7 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
 
 TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblock) {
     // The row-id lease's twin, and the door PW1 opened
-    // (`docs/workplan-peer-writer.md`): before it, a peer's TrxIdSequence
+    // (`docs/inflight/in-progress/workplan-peer-writer.md`): before it, a peer's TrxIdSequence
     // constructed spent and its persist callback refused, so a peer could
     // not begin a *single* transaction - every write died at its first id,
     // ahead of any page. Reads never noticed: a read view mints from
@@ -853,7 +853,7 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
     // PW3b. Core 0 checkpoints at three points - the completion checkpoint
     // at mount, the cadence, and the way out - and PW3 gave a peer the first
     // two. Without the third a graceful restart replayed every peer's stream
-    // from its last cadence tick (docs/known-gaps.md; the core-0 property is
+    // from its last cadence tick (docs/inflight/known-gaps.md; the core-0 property is
     // the sim harness's AMountAfterACleanStopDoesNotRereadTheRunsWholeLog).
     //
     // The shape is Serve's tail after the worker join: Sync(), then
@@ -1604,7 +1604,7 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
     //
     // The three `tc.tag` statements above are the walked join, which is
     // the shape the statement-local inner build serves
-    // (docs/spec-join-inner-build.md): locally the inner step builds a map
+    // (docs/spec/spec-join-inner-build.md): locally the inner step builds a map
     // on its first outer row and probes it thereafter, while the shipped
     // side gets `ShippedForm`'s walk with the annotation cleared. So the
     // equivalence those rows assert is **build against shipped walk**, not
@@ -1623,7 +1623,7 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
 
     // ---- The structure-served shapes ship as their walk -----------------
     //
-    // docs/known-gaps.md's closed entry named its own blind spot: "no
+    // docs/inflight/known-gaps.md's closed entry named its own blind spot: "no
     // cross-core test declares an index, which is why no suite catches
     // it." This block is that test. An index or Cabin probe cannot cross
     // the descriptor; before the ship-time downgrade every shape below

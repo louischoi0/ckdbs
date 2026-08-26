@@ -11,7 +11,7 @@
 #include "kds/storage/page_store.hpp"
 
 // The trail recorder: what decides that a pattern instance is worth
-// remembering, and writes its trail (docs/waystone-workplan.md P09/P10).
+// remembering, and writes its trail (docs/inflight/in-progress/waystone-workplan.md P09/P10).
 //
 // One call from the statement path, `OnPatternResult()`, after the
 // statement has **succeeded**. Everything else - the sighting count, the
@@ -26,7 +26,7 @@
 // instances. Two is the smallest n that excludes the one-shot case.
 //
 // `n = 1` for a **user-declared** pattern
-// (docs/spec-create-pattern-user-defined-patterns-v1.md section 7): a
+// (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 7): a
 // declaration *is* the evidence n=2 waits for. An operator who wrote
 // `CREATE PATTERN` has already said this shape repeats, and making them
 // prove it again with traffic is asking a question that was answered.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What a declared assertion costs on the write path: with, against without.
 
-`docs/feat-assertion.md` restricts `CREATE ASSERTION` to group ceilings
+`docs/spec/feat-assertion.md` restricts `CREATE ASSERTION` to group ceilings
 (`GROUP BY (cols) CHECK COUNT(*)|SUM(col) <= N`) precisely so that the check
 can ride the write path instead of re-evaluating a query. This driver prices
 that ride as a *difference*: every measured statement runs against relations
@@ -71,7 +71,7 @@ rather than single statements because of the second meter: with
 `--server-pid`, the driver samples the server's CPU (`/proc/<pid>/stat`,
 utime+stime) around each block and reports **server CPU per operation** per
 relation beside the wall-clock percentiles. That is the measurement
-`docs/workplan-aggregate-perf.md` requires for per-statement fixed costs -
+`docs/inflight/in-progress/workplan-aggregate-perf.md` requires for per-statement fixed costs -
 client latency carries the Python socket stack, which is most of a small
 statement - and it cannot be attributed per-relation under per-statement
 interleaving, so the block is the unit. Build the statement strings before

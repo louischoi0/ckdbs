@@ -622,7 +622,7 @@ Status Catalog::Bootstrap() {
         {kTypeBool, "bool", kTypeValBool, 1},
         {kTypeVarchar, "varchar", kTypeValVarchar, 0},
         {kTypeChar, "char", kTypeValChar, 1},
-        // docs/spec-types.md TY1. `len` here is the type's *width*, which
+        // docs/spec/spec-types.md TY1. `len` here is the type's *width*, which
         // is what sys.types has always meant by it - a DECIMAL column
         // carries its own (p, s) elsewhere (TY9).
         {kTypeDate, "date", kTypeValDate, 4},
@@ -1297,7 +1297,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         }
     }
 
-    // Placement (docs/workplan-crosscore.md M1). The rotation counter is
+    // Placement (docs/inflight/in-progress/workplan-crosscore.md M1). The rotation counter is
     // how many relations already exist, read off the page rather than
     // derived from the oid. That was originally because the oid restarted
     // at kUserOidStart every boot; it no longer does, but the reason still
@@ -1453,7 +1453,7 @@ StatusOr<bool> Catalog::NameHeldByPendingDrop(std::string_view name,
     return held;
 }
 
-// ALTER TABLE's catalog half (docs/spec-alter.md, workplan ALT02). Both
+// ALTER TABLE's catalog half (docs/spec/spec-alter.md, workplan ALT02). Both
 // renames are one fixed-width Name rewrite - MutatePatternRow's shape -
 // followed by BumpVersion(): a name is read by resolution itself, so the
 // in-place-cache exception the pattern setters use does not apply.
@@ -1970,7 +1970,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     }
 
     // The relation's secondary indexes, in one sys.indexes scan
-    // (docs/feat-index.md §12, workplan IX04).
+    // (docs/spec/feat-index.md §12, workplan IX04).
     //
     // A failure here is fatal to opening the relation, and for the *fkeys*
     // reason rather than the Cabin one. An index the compiler cannot see
@@ -2061,7 +2061,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             // Bumped and persisted before anything is placed, exactly as
             // the single-id allocator: an abort burns the range, which K3
             // calls free and BI9's class already accepted
-            // (docs/workplan-t3.md T3-3).
+            // (docs/inflight/in-progress/workplan-t3.md T3-3).
             row.next_id = first + count;
             const auto encoded = row.Encode();
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
@@ -2830,7 +2830,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
     }
     if ((def.flags & kIndexFlagUnique) != 0) {
         return Status::Unsupported(
-            "catalog: UNIQUE indexes are not supported (docs/feat-index.md IX11); v1 is a read "
+            "catalog: UNIQUE indexes are not supported (docs/spec/feat-index.md IX11); v1 is a read "
             "accelerator that cannot fail a write for a reason of its own");
     }
 
@@ -2869,7 +2869,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
         return Status::InvalidArgument(
             "catalog: relation oid " + std::to_string(def.table_oid) +
             " is heap-clustered; a secondary index resolves an entry through the primary key, "
-            "which a heap relation has no index for (docs/feat-index.md IX3)");
+            "which a heap relation has no index for (docs/spec/feat-index.md IX3)");
     }
 
     const auto check_column = [&](std::uint16_t pos, const char* role) -> Status {
@@ -2898,7 +2898,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
             return Status::Unsupported(
                 "catalog: column '" +
                 std::string(NameView(schema.columns[def.key_cols[i]].name)) +
-                "' is nullable, and an index key must always exist (docs/spec-null.md D2; "
+                "' is nullable, and an index key must always exist (docs/spec/spec-null.md D2; "
                 "declare the column NOT NULL or leave it unindexed)");
         }
         for (std::size_t j = 0; j < i; ++j) {
@@ -2917,7 +2917,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
         if (!schema.columns[pos].notnull) {
             return Status::Unsupported(
                 "catalog: covered column '" + std::string(NameView(schema.columns[pos].name)) +
-                "' is nullable, and an index entry has no NULL encoding (docs/spec-null.md D2)");
+                "' is nullable, and an index entry has no NULL encoding (docs/spec/spec-null.md D2)");
         }
     }
 

@@ -12,7 +12,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/page_header.hpp"
 
-// docs/txn.md section 10-1, the codec half: record round-trips, undo_ptr
+// docs/spec/txn.md section 10-1, the codec half: record round-trips, undo_ptr
 // packing over the whole page-id range, kNoUndoPtr unreachable from any
 // legal (page, offset), and appending until OutOfSpace.
 

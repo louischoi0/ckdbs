@@ -14,8 +14,8 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/sched/task.hpp"
 
-// The engine-wide answer to a full ring (docs/workplan-crosscore.md M7,
-// docs/sched.md §5).
+// The engine-wide answer to a full ring (docs/inflight/in-progress/workplan-crosscore.md M7,
+// docs/spec/sched.md §5).
 //
 // The rule M7 fixes is short: **the sending task yields and retries. Never
 // an error to the client, never a reactor block, never a drop.** Each of

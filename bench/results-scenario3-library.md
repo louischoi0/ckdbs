@@ -320,7 +320,7 @@ it: `AcceptTupleAt` forced a **full row decode for every walked row while a
 Cabin recording was live** — eight columns per rejected row on `loans`,
 where the plain `FilterScan` decodes only the filter's column, on a path
 whose cost is decode-dominated. The fix landed as `a44c5cc`
-(`src/exec/step_vm.cpp`; `docs/feat-cabin.md` §4 carries the dated
+(`src/exec/step_vm.cpp`; `docs/spec/feat-cabin.md` §4 carries the dated
 amendment): the recording walk now decodes the filter's columns per row —
 the cabined equality *is* the filter, so the key column is already in the
 mask — and the pk on demand, only for a row whose key matches, with the key
@@ -405,7 +405,7 @@ not resolvable across runs and this addendum's claims rest on its own
 interleaved cells only. At `a44c5cc` the miss costs **+5.1–5.9%** over the
 walk, consistently across all three shapes — the honest residual, about one
 key comparison per walked row, the price of building the entry set rather
-than of decoding for it. (`docs/feat-cabin.md` §4's amendment quotes ~14%
+than of decoding for it. (`docs/spec/feat-cabin.md` §4's amendment quotes ~14%
 from the pre-A/B measurement chain; this run's interleaved number is the
 5–6% above, and the spec's figure should be read as superseded.)
 
@@ -432,7 +432,7 @@ engines and why its derived stmts/s outruns `loans-by-user`'s. On waits:
 single-connection reads, so no commit/fsync or lock wait exists in the
 unit; it is round-trip floor (~38 µs) plus walk plus, at BASE, the decode
 overhead the fix removed. No per-step timing exists to split the walk
-further (`docs/observability.md`).
+further (`docs/inflight/in-progress/observability.md`).
 
 ### 7a.4 The walk cells — the changed decode path costs nothing measurable
 
@@ -520,7 +520,7 @@ stands whole — a Cabin's benefit is still a function of how often an
 argument repeats, `scenario1`'s 15.3× on eight cycling arguments and this
 workload's growing key space still bracket the answer, and the hit rate is
 still unreported by the engine (§12). The `CABIN AUTO` threshold
-(`docs/feat-cabin.md` §11, CLAUDE.md's open decision) remains open; what
+(`docs/spec/feat-cabin.md` §11, CLAUDE.md's open decision) remains open; what
 this addendum moves is only where that threshold's economics start — a
 structure that costs ~6% on a cold key and round-trip-floor on a warm one
 is cheap enough to declare at far lower repeat rates than the pre-fix
@@ -534,7 +534,7 @@ file, which describes `9f762a3`.
 §9b closed the no-literal join for an *indexed* join column, and its §9b.7
 left the other half open by name: a join key on an unindexed non-pk column,
 where IX17 has nothing to probe and IX3 refuses a heap relation an index at
-all. **CB12** (`8f3f730`, `docs/feat-cabin.md` §4a) closes that half with
+all. **CB12** (`8f3f730`, `docs/spec/feat-cabin.md` §4a) closes that half with
 the other structure: a cabined join column bound by equality to an earlier
 step's column probes the Cabin **per outer row**, the key read from the
 frame (`CabinProbe::key_from`) instead of a compile-time literal — the same
@@ -672,7 +672,7 @@ conflict wait exists in the unit. NEW's 67 µs decomposes as the ~42 µs
 fixed part (round trip plus the 32-row outer range, measured at k→0 by the
 intercept; `pk-user`'s p50 is 37–38 µs in the same cells) plus 16 serves
 at ~1.7 µs; no per-step timing exists to split a serve further
-(`docs/observability.md`). The two p99 outliers (one 15.2 ms BASE sample,
+(`docs/inflight/in-progress/observability.md`). The two p99 outliers (one 15.2 ms BASE sample,
 one 706 µs NEW sample, each a single draw) are scheduling noise on a 2-vCPU
 box, not a path.
 
@@ -682,7 +682,7 @@ box, not a path.
 limitation; §7c measures the convergence. This section stands as the BASE
 side of that A/B and as the record of the pre-CB13 engine.)*
 
-`docs/feat-cabin.md` §4a records that a correlated EXISTS over a cabined
+`docs/spec/feat-cabin.md` §4a records that a correlated EXISTS over a cabined
 column **re-observes without ever recording** when every probed outer key
 has a qualifying match: the stopping sink halts the inner walk at its first
 match, a partial walk cannot commit an authoritative set, so the statement
@@ -776,7 +776,7 @@ a subsequent serve then emitted rows in an order no walk of the relation
 could produce, violating I12's within-step contract. It went unseen
 because the original contract queries happened to filter every exposed set
 to one row. The fix sorts the serve to the walk's order before emission,
-**key-mode-conditional** per `docs/heap-and-tuple.md` §4.1: pk order for
+**key-mode-conditional** per `docs/spec/heap-and-tuple.md` §4.1: pk order for
 an `ASSIGNED` relation, page-then-slot for `EXPLICIT`, whose
 caller-supplied ids need not ascend. This run's evidence is §7b.1's replay
 check — NEW's serve byte-identical to BASE's walk on the 79-row k=16 reply
@@ -822,7 +822,7 @@ each imposing the write-hook cost thereafter. A join whose outer keys
 never repeat pays ~6% per key (§7a's miss surcharge) for nothing — **the
 never-repeating-key distribution on an unindexed column remains the
 uncovered case**, and it is a `CABIN AUTO` policy question
-(`docs/feat-cabin.md` §11), not an executor one *(closed on the Cabin's
+(`docs/spec/feat-cabin.md` §11), not an executor one *(closed on the Cabin's
 side later by CB14 — §7d measures it)*. Also unchanged: the
 EXISTS non-convergence (§7b.4 above, recorded in §4a with the reason the
 narrow fix is wrong) *(closed later the same day by CB13 — §7c measures
@@ -832,7 +832,7 @@ re-measured; and the rest of this file, which describes `9f762a3`.
 
 ## 7c. Addendum, 2026-08-19 — the correlated EXISTS converges: sub-chain mode commits whole sets, and the caps bound the license
 
-§7b.4 measured the limitation `docs/feat-cabin.md` §4a recorded: a
+§7b.4 measured the limitation `docs/spec/feat-cabin.md` §4a recorded: a
 correlated EXISTS over a cabined column re-observed forever, because the
 stopping sink halted every recording walk at its first match and a partial
 walk may never commit a set (C1). **CB13** (`fa1f320`, §4a's closed
@@ -989,7 +989,7 @@ the walk it licenses, not at the short-circuit it replaces.
 licensed walk visits past the stop are the Cabin's work, not the
 statement's answer: charging them made the cabined side of the review's
 reproduction answer `ResourceExhausted` where the cabin-free side answered
-rows — an accelerator changing a result, which `docs/feat-cabin.md` §1
+rows — an accelerator changing a result, which `docs/spec/feat-cabin.md` §1
 forbids. The uncharged work is bounded per key: a commitable set completes
 once ever, and the caps stop the doomed forms before they walk.
 
@@ -1171,7 +1171,7 @@ of this file, which describes `9f762a3`.
 keys never repeat paid the observation surcharge for nothing, and one
 SELECT could push up to `cabin_max_values` keys into observation — each a
 dead set carrying a standing write-hook cost for a key nobody would probe
-again. **CB14** (`8420242`, `docs/feat-cabin.md` §4a and §8.1 amended)
+again. **CB14** (`8420242`, `docs/spec/feat-cabin.md` §4a and §8.1 amended)
 closes it at the admission seam: the correlated probe now takes the
 `n = 2` threshold whatever the Cabin's declaration says, because a
 declaration is evidence about the value the operator *named* — the
@@ -1784,7 +1784,7 @@ derived.
 *(each column is the mean of two same-configuration cells)*
 
 **The join cell passes and misses its class.**
-`docs/spec-join-inner-build.md` §9 sets acceptance at moving the join from
+`docs/spec/spec-join-inner-build.md` §9 sets acceptance at moving the join from
 ~8.5 ms "to the ~600 µs class". The on-side p50 at 10,000 is **1,461.8 µs**,
 so the class is missed by 2.4×, and §7f.5 says exactly where the miss is:
 the k=1 statement the build already pays (602 µs — client, the outer `Range`
@@ -1792,7 +1792,7 @@ and one walk of `loans`) plus the build constant (834 µs) plus fifteen
 further bucket replays (26 µs) is **1,462 µs** against a measured 1,461.8.
 
 **The `EXISTS` cell does not move, and that is the JB6 gate holding.**
-JB6 — the stopping sub-chain's prefix map, `docs/spec-join-inner-build.md` §6
+JB6 — the stopping sub-chain's prefix map, `docs/spec/spec-join-inner-build.md` §6
 — **is not built**, and JB3 gates sub-chains out of the build until it is. A
 correlated `EXISTS` inner walk stops at its first qualifying row, so the map
 it would produce is a walk-order prefix, and a conclusive miss over a partial
@@ -1842,12 +1842,12 @@ is a single sample on a 2-vCPU box.
 
 **On waits:** these are single-connection reads. There is **no durability or
 commit wait** in the unit and **no lock or conflict wait anywhere in this
-engine** — no lock manager exists (`docs/txn.md`), so a conflict is an
+engine** — no lock manager exists (`docs/spec/txn.md`), so a conflict is an
 immediate error rather than a queue, and none occurred. The unit decomposes
 as client and socket round trip, plus the outer `Range` walk, plus the inner
 step. §7f.5 splits the inner step; splitting *within* it — page I/O against
 latch against CPU — needs per-step timing that does not exist
-(`docs/observability.md`, unbuilt).
+(`docs/inflight/in-progress/observability.md`, unbuilt).
 
 ### 7f.5 The k-sweep, the k=1 cell, and the build constant
 
@@ -1904,7 +1904,7 @@ and the table above confirms it without a fit: **k=2 loses at every size**
 cost and the build's premium are proportional to the same row count, so the
 ratio that sets the crossing cancels it.
 
-**This makes `docs/spec-join-inner-build.md` §5's "at k ≥ 2 every avoided walk
+**This makes `docs/spec/spec-join-inner-build.md` §5's "at k ≥ 2 every avoided walk
 is pure win" quantitatively wrong at every cardinality measured**, by 8% at
 200 rows, 17% at 1,000 and 21% at 10,000. The prior round found the same
 thing at 10,000 and estimated break-even between 2.6 and 5.3 depending on
@@ -2117,7 +2117,7 @@ because an index is declared, the build arm is never offered the shape, and
 the disabled probe degrades to a per-outer-row walk. It is reachable only
 through a benchmark lever rather than a production configuration, but it is
 the one interaction between IX13 and JB1 that this matrix exposes, and
-`docs/feat-index.md` §13 owns the key.
+`docs/spec/feat-index.md` §13 owns the key.
 
 **Composite reaches the build and single does not.** `--index-mode composite`
 declares keys on `(status, due_day)` and `(branch_id, genre)` and nothing on
@@ -2168,7 +2168,7 @@ addendum establishes the baseline it will be judged against (691 stmts/s at
 10,000, 4,014 at 1,000, 9,732 at 200). And where inside the 83 ns/row the
 cost sits — hashing, entry write, or the residual evaluation JB3 applies
 before bucketing — needs per-step timing the engine does not have
-(`docs/observability.md`).
+(`docs/inflight/in-progress/observability.md`).
 
 ## 7g. Addendum, 2026-08-21 — JB8's closing measurement: two constant cuts and JB6 later, at `aa3e26c`
 
@@ -2422,11 +2422,11 @@ and every size (join 7/12/17/39/79 at 200, 5/14/22/47/80 at 1,000,
 **On waits.** These are single-connection reads. There is **no durability or
 commit wait** in the measured unit — nothing here writes — and **no lock or
 conflict wait anywhere in this engine**: no lock manager exists
-(`docs/txn.md`), so a conflict is an immediate error rather than a queue, and
+(`docs/spec/txn.md`), so a conflict is an immediate error rather than a queue, and
 none occurred in 163,864 operations. The unit decomposes as client and socket
 round trip, plus the outer `Range` walk, plus the inner step; the table above
 splits the inner step. Splitting *within* it — page I/O against latch against
-CPU — needs per-step timing that does not exist (`docs/observability.md`,
+CPU — needs per-step timing that does not exist (`docs/inflight/in-progress/observability.md`,
 unbuilt), and that limit is unchanged from §7f.
 
 ### 7g.5 The k-sweep, the build constant, and where break-even sits
@@ -2805,7 +2805,7 @@ cell is the only place in this file where ckdbs beats PostgreSQL on an
 unindexed, uncabined column with no cross-statement memory, and it does so
 with a map that never completes — `inner_built=0` in every draw. JB6's prefix
 is cheaper than PostgreSQL's decorrelated hash aggregate for the same reason
-the whole positive-only rule exists (`docs/parser-v2.md` §6): proving
+the whole positive-only rule exists (`docs/spec/parser-v2.md` §6): proving
 existence needs a prefix, and only proving *absence* needs the whole relation.
 
 *One constant explains both shapes, and it is worth carrying forward: a
@@ -2833,7 +2833,7 @@ neither confirm nor deny it, and does not try. §7f.8's `composite`,
 `covering` and `indexes = off` columns were not re-run. And where inside the
 33.6 ns/row the cost sits — hashing, entry write, or the split residual
 evaluation — still needs per-step timing the engine does not have
-(`docs/observability.md`).
+(`docs/inflight/in-progress/observability.md`).
 
 ## 8. Composite is the only structure that helps `overdue`
 
@@ -2929,7 +2929,7 @@ propagated form would not.
 The rewrite §9 named — deriving `l.user_id = 3` from `l.user_id = u.id` and
 `u.id = 3` at compile — landed as `881f69a` (`perf(exec): propagate a join
 key's literal equality to the step that can be keyed on it`,
-`src/exec/step_compiler.cpp`, `docs/parser-v2.md` §5). This addendum
+`src/exec/step_compiler.cpp`, `docs/spec/parser-v2.md` §5). This addendum
 answers the two questions that change raises and nothing else: **how much of
 §9's loss the propagation recovers, and what the new compile pass costs
 every other statement.** Both by interleaved A/B — the base engine and the
@@ -3028,7 +3028,7 @@ no commit/fsync wait and no lock wait in these numbers; the unit is a client
 round trip on localhost. NEW's join p0 of ~44 µs is the same fixed
 round-trip floor every ~40 µs shape in §5 pays, which is what bounds the
 decomposition available here — engine time above the floor is ~7 µs and no
-per-step timing exists to split it further (`docs/observability.md` owns
+per-step timing exists to split it further (`docs/inflight/in-progress/observability.md` owns
 that gap).
 
 ### 9a.4 Every other shape is unchanged — the pass's overhead is below the floor
@@ -3103,7 +3103,7 @@ what that pass cannot reach: a join with no literal at all. `ON l.user_id =
 u.id WHERE u.id BETWEEN ? AND ?` gives the propagation nothing to derive —
 there is no constant to push onto `loans` — so the inner side stayed a full
 scan *per outer row*, and the same is true of a correlated `EXISTS`. **IX17**
-(`4f304fd`, `perf(index): the correlated probe`, `docs/feat-index.md` §8a)
+(`4f304fd`, `perf(index): the correlated probe`, `docs/spec/feat-index.md` §8a)
 closes that shape differently: when the inner side of a join step carries a
 secondary index on the join column, the executor probes that index keyed by
 each outer row's value (`IndexProbe::key_from`) instead of walking the
@@ -3236,7 +3236,7 @@ On waits: single-connection reads — no commit/fsync wait, no lock wait; the
 unit is one localhost round trip. NEW's p0 of ~84–89 µs at k=16 decomposes
 as the ~27 µs socket floor every §5 shape pays, plus 16 index probes and pk
 resolutions at ~3.2 µs each, plus the two-relation projection of 79 rows;
-no per-step timing exists to split it further (`docs/observability.md` owns
+no per-step timing exists to split it further (`docs/inflight/in-progress/observability.md` owns
 that gap).
 
 ### 9b.4 The correlated EXISTS
@@ -3379,7 +3379,7 @@ standard shapes was not re-run.
 - **Multi-core.** `cores = 1` throughout. On a multi-core instance an index
   step cannot ship, so a peer-owned join on an indexed column is *refused*
   by the affinity check — opened at `881f69a`, widened by IX17, recorded in
-  `docs/known-gaps.md` with the ship-time-downgrade fix. A cross-core cell
+  `docs/inflight/known-gaps.md` with the ship-time-downgrade fix. A cross-core cell
   of this workload is not currently runnable.
 - **The driver does not carry these shapes.** The no-literal join and the
   correlated EXISTS were driven by a session scratch harness (statements in
@@ -3487,7 +3487,7 @@ is a ckdbs-only comparison against ckdbs's own alternatives.
   `a44c5cc`; the residual is ~5–6%, one key comparison per walked row.)*
   §7 measures the inversion twice and locates it in the Cabin's own path via
   `ANALYZE`, but the engine exposes no per-step timing that would say which
-  part of that path is the cost. `docs/observability.md` owns that gap and
+  part of that path is the cost. `docs/inflight/in-progress/observability.md` owns that gap and
   it is unbuilt.
 - **The Cabin's hit rate, and the space each structure costs.** This run
   measures neither, and they are the mechanism behind §7's inversion: a Cabin

@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-// TY01 - the three literal parsers (docs/spec-types.md TY3/TY6/TY7,
+// TY01 - the three literal parsers (docs/spec/spec-types.md TY3/TY6/TY7,
 // docs/workplan-types.md).
 //
 // These are the **only gate** (TY7): a value is proven here, once, and

@@ -22,26 +22,26 @@ enum class StatusCode {
     kOutOfRange,
     kCorruption,
     kIoError,
-    // A write lost a first-updater-wins race (docs/txn.md §5): the row was
+    // A write lost a first-updater-wins race (docs/spec/txn.md §5): the row was
     // written by a transaction still in flight, or one that committed after
     // the writer's read view. Appending is free - nothing persists a
     // StatusCode, and no on-disk format encodes one.
     //
     // The only **retryable** code in this enum, and the distinction matters
     // outward: it maps to wire::ErrorCategory::kTxnConflict with
-    // retryable = 1, which docs/protocol.md §11 calls part of the
+    // retryable = 1, which docs/spec/protocol.md §11 calls part of the
     // compatibility surface because client libraries build retry loops on
     // that bit. Every other code here means "this will fail the same way
     // again".
     kTxnConflict,
-    // A form the language reserves but cannot execute (docs/parser-v2.md J2,
+    // A form the language reserves but cannot execute (docs/spec/parser-v2.md J2,
     // I18): table-position nesting, outer joins, over-depth sub-chains,
     // non-pk ORDER BY. Distinct from kInvalidArgument on purpose - the
     // statement is well-formed and the position it carries points at what
     // the engine will not do, not at a typo. A client that sees it should
     // rewrite the statement, never retry it.
     kUnsupported,
-    // A scalar subquery returned more than one row (docs/parser-v2.md §2).
+    // A scalar subquery returned more than one row (docs/spec/parser-v2.md §2).
     // Parse time cannot prove cardinality in general, so this is per
     // execution; zero rows is NULL and not an error. Picking a first row
     // instead would make the answer depend on physical order.
@@ -57,7 +57,7 @@ enum class StatusCode {
     // client on it. Failing after a bounded amount of work is the kinder
     // answer than a connection that never replies.
     kResourceExhausted,
-    // A write would leave a foreign key unsatisfied (docs/impl-foreign-keys.md
+    // A write would leave a foreign key unsatisfied (docs/spec/impl-foreign-keys.md
     // F2): a child row referencing a parent that is not there, or a parent
     // delete with a child still referencing it. RESTRICT, the only action v1
     // has.
@@ -70,10 +70,10 @@ enum class StatusCode {
     // own: the retryable case already had one, and clients already retry on
     // it. Splitting the two verdicts across an existing retryable code and a
     // new non-retryable one keeps the wire's `retryable` bit - a
-    // compatibility surface (docs/protocol.md §11) - one code wide.
+    // compatibility surface (docs/spec/protocol.md §11) - one code wide.
     kFkViolation,
     // A write would take a declared assertion's group aggregate past its
-    // bound (docs/feat-assertion.md §4.4, AS9): the admission check on the
+    // bound (docs/spec/feat-assertion.md §4.4, AS9): the admission check on the
     // relation's home core refused the statement before anything was
     // mutated.
     //
@@ -101,7 +101,7 @@ enum class StatusCode {
     // two different ids and no way to notice. Folding it into
     // kTxnConflict, which is where a timeout would naturally land, is
     // precisely the mistake: that code carries the wire's `retryable` bit
-    // and clients build retry loops on it (docs/protocol.md §11).
+    // and clients build retry loops on it (docs/spec/protocol.md §11).
     //
     // It is also not kIoError, though that is where an unrecognised code
     // decodes to. IoError says the engine failed to do something; this
@@ -115,7 +115,7 @@ enum class StatusCode {
 // Spelled out here rather than at each call site so the wire layer's
 // `retryable` bit and the engine's notion of retryable cannot drift.
 //
-// **One code, by decision** (docs/protocol.md section 11: the bit is a
+// **One code, by decision** (docs/spec/protocol.md section 11: the bit is a
 // compatibility surface). Everything the engine means by "wait and retry"
 // spells itself kTxnConflict - a lost write race, a write to another core's
 // relation, a peer's rights still in flight, an index build's window - and
@@ -123,7 +123,7 @@ enum class StatusCode {
 // extent: catalog/row_id_lease.hpp, txn/trx_id_lease.hpp,
 // storage/extent_lease.cpp). Those three were kResourceExhausted, whose
 // message promised a retry the wire never carried, so a client retrying on
-// the bit lost rows (PW6, docs/known-gaps.md). kResourceExhausted stays for
+// the bit lost rows (PW6, docs/inflight/known-gaps.md). kResourceExhausted stays for
 // what a retry cannot fix: a cap, a budget, a ring's backpressure, and a
 // refill core 0 has denied.
 constexpr bool IsRetryable(StatusCode code) noexcept { return code == StatusCode::kTxnConflict; }

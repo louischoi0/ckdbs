@@ -8,7 +8,7 @@
 
 #include "kds/storage/free_map.hpp"
 
-// Page-id extents (docs/workplan-crosscore.md M5/P5). The property that
+// Page-id extents (docs/inflight/in-progress/workplan-crosscore.md M5/P5). The property that
 // matters is **exclusivity**: an id promised to one core must never be found
 // free by another, which is why a reservation marks the free map rather than
 // merely remembering a range.

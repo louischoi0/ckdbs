@@ -52,8 +52,8 @@ inline constexpr std::uint16_t kNoNullBit = 0xFFFF;
 // ---- RowLayout -----------------------------------------------------------
 //
 // The per-relation row-size constant and its column offsets - invariant 13
-// made computable (docs/heap-and-tuple.md section 3.3,
-// docs/rule-fixed-length-tuple.md section 2).
+// made computable (docs/spec/heap-and-tuple.md section 3.3,
+// docs/rules/rule-fixed-length-tuple.md section 2).
 //
 // **Every tuple is fixed-length.** A relation's tuple layout is a sequence
 // of fixed-size cells at offsets computable from the schema *alone*, so the
@@ -161,7 +161,7 @@ inline void SetNullBit(std::span<std::byte> payload, const RowLayout& layout,
 bool SchemaCanSpill(const Schema& schema) noexcept;
 
 // One end of a foreign key, as the relation at the *other* end holds it
-// (docs/impl-foreign-keys.md §1). Which end `rel_oid` names depends on
+// (docs/spec/impl-foreign-keys.md §1). Which end `rel_oid` names depends on
 // which list it is in - the parent in `fkeys_out`, the child in `fkeys_in`
 // - because a relation reading its own list already knows which side it is
 // on, and a field saying so again is a field that can disagree.
@@ -198,7 +198,7 @@ struct TableAccess {
     // through the pages' own links, never by moving the root.
     PageId varheap_page_id = kInvalidPageId;
 
-    // The core that owns this relation (docs/workplan-crosscore.md M1),
+    // The core that owns this relation (docs/inflight/in-progress/workplan-crosscore.md M1),
     // from sys.tables. Cacheable by this struct's own admission test:
     // ownership is assigned at CREATE and never rebalanced (M3 observes
     // skew and deliberately does not act on it), so it cannot change
@@ -211,7 +211,7 @@ struct TableAccess {
     std::uint32_t owner_core = 0;
 
     // Whether an id has ever landed on this relation out of order
-    // (well_known.hpp's KeyOrder, docs/heap-and-tuple.md section 4.1), from
+    // (well_known.hpp's KeyOrder, docs/spec/heap-and-tuple.md section 4.1), from
     // sys.tables.
     //
     // **The one cached field here that is not a DDL fact**, so it is the one
@@ -246,7 +246,7 @@ struct TableAccess {
     // inline_cell_width, neither of which can change without DDL.
     RowLayout layout;
 
-    // ---- Cabins on this relation (docs/feat-cabin.md) -------------------
+    // ---- Cabins on this relation (docs/spec/feat-cabin.md) -------------------
     //
     // Which columns carry a Cabin, and which Cabin each is. Both are DDL
     // facts - `CREATE CABIN` and `DROP CABIN` bump the catalog version -
@@ -287,7 +287,7 @@ struct TableAccess {
         return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
     }
 
-    // ---- Foreign keys at both ends (docs/impl-foreign-keys.md §1) -------
+    // ---- Foreign keys at both ends (docs/spec/impl-foreign-keys.md §1) -------
     //
     // `fkeys_out` is this relation as the **child**: each entry names the
     // parent it references and the local column holding the reference. The
@@ -321,7 +321,7 @@ struct TableAccess {
         return nullptr;
     }
 
-    // ---- Secondary indexes on this relation (docs/feat-index.md) --------
+    // ---- Secondary indexes on this relation (docs/spec/feat-index.md) --------
     //
     // One entry per index, everything a compiler or a write hook needs to
     // reach the tree without going back to sys.indexes.
@@ -399,7 +399,7 @@ struct TableAccess {
     }
 };
 
-// A pattern as the cache holds it (docs/waystone-concpets.md section 4):
+// A pattern as the cache holds it (docs/spec/waystone-concpets.md section 4):
 // everything about a `sys.patterns` row that DDL alone can change.
 //
 // **The omissions are the point.** `use_count` and `last_seen` are not

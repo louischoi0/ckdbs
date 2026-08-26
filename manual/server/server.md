@@ -2,9 +2,9 @@
 
 Building, running, configuring and operating `kds_server`, verified against
 `src/server/main.cpp`, `scripts/*.sh`, `CMakeLists.txt`, `kds.conf.sample`
-and `docs/client-manual.md` as of 2026-08-10. For the SQL surface see
+and `docs/spec/client-manual.md` as of 2026-08-10. For the SQL surface see
 `manual/sql/sql.md`; for the wire-level command reference see
-`docs/client-manual.md`.
+`docs/spec/client-manual.md`.
 
 ---
 
@@ -27,7 +27,7 @@ Two trees exist by convention:
 - `./build` — Debug. Development and tests.
 - `./build-release` — Release. **Every measurement must come from here** —
   Debug has reported the wrong sign of a change twice
-  (`docs/workplan-aggregate-perf.md`).
+  (`docs/inflight/in-progress/workplan-aggregate-perf.md`).
 
 ```sh
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
@@ -55,7 +55,7 @@ in `<data_file>.wal/` unless `wal_dir` says otherwise.
 
 The listener is **loopback only** (`127.0.0.1`), plain TCP, no TLS, no
 authentication — a development/inspection surface, not a production API.
-The binary wire protocol (KWP/1, `docs/protocol.md`) is specified with a
+The binary wire protocol (KWP/1, `docs/spec/protocol.md`) is specified with a
 handshake and auth stages, but only its frame codec exists in code.
 
 Shutdown: send `STOP` (what `scripts/stop.sh` does), which flushes and
@@ -75,7 +75,7 @@ out-of-range values, each naming the file and line.
 | `data_file` | `kds.db` | Data file path (also the positional argument). |
 | `port` | `15432` | TCP port, loopback only. |
 | `wal_dir` | `<data_file>.wal` | Per-core WAL segment directory. |
-| `cores` | `1` | Reactor cores. **Pinned into the superblock at bootstrap**; a later mount under a different count refuses to start naming both numbers. Above 1: parallel WAL streams only — core 0 still serves every statement (`docs/crosscore.md`). |
+| `cores` | `1` | Reactor cores. **Pinned into the superblock at bootstrap**; a later mount under a different count refuses to start naming both numbers. Above 1: parallel WAL streams only — core 0 still serves every statement (`docs/spec/crosscore.md`). |
 | `inline_cell_width` | `64` | Bytes every `varchar` occupies inside a tuple. **Pinned at bootstrap**, mount-checked; changing it for existing data is a rebuild, no migration. Range 16..4096. |
 | `isolation` | `read committed` | The level a connection starts at; overridable per session (`SET ISOLATION LEVEL`) and per transaction (`BEGIN ISOLATION LEVEL`). |
 | `durability` | `group` | `strict`/`d1`, `group`/`d2`, `relaxed`/`d3` — applied at COMMIT for every logged statement (INSERT/UPDATE/DELETE). Instance-wide; the per-transaction class is a KWP/1 field, not wired. |
@@ -85,7 +85,7 @@ out-of-range values, each naming the file and line.
 | `max_rows_touched` | `100000000` | Per-statement tuple ceiling; exceeding it is `ResourceExhausted`. An availability knob, not a performance one. `0` = unlimited. |
 | `waystone_recording` / `waystone_replay` | `on` / `on` | The Waystone switches. Turning either off must never change a reply (invariant 8). |
 | `access_statistics` | `on` | Per-shape access recording for `SHOW ACCESS`. +1-2% on a point lookup. |
-| `physical_optimizer` | `shadow` | `off` or `shadow`. `on` is **refused at startup** naming the three gates that block every plan (`docs/feat-physical-optimizer.md` §6). |
+| `physical_optimizer` | `shadow` | `off` or `shadow`. `on` is **refused at startup** naming the three gates that block every plan (`docs/spec/feat-physical-optimizer.md` §6). |
 | `decay_half_life` | `600` | Seconds for an untouched decay score to halve. `0` refused. |
 | `cabin_optimizer` | `off` | The Cabin controller (PHY04): `on` lets it CREATE/EXTEND/HEAL/DROP Observational Cabins for `CABIN AUTO` columns. Tuning keys (`cabin_optimizer_page_budget`, `_theta_*_pct`, `_confirm_snapshots`, `_amort_windows` — 64, the build-cost amortization window ratified from `bench/results-cabin-optimizer-days.md` — `_cooldown_half_lives` — 128, the DECAYING dwell, its own parameter since 2026-08-10 and the one that provides overnight survival — and `_snapshot_interval_ms`) documented in `kds.conf.sample`. |
 | `max_insert_rows` | `1024` | Cap on rows in one multi-row `INSERT ... VALUES (...), (...)`. Over-cap refuses the whole statement, inserting nothing. |
@@ -142,7 +142,7 @@ restart preserves why the last run died. Levels are a cost contract:
 `info` (default) is per lifecycle event; `debug` is per request; `trace` is
 per tuple — a development tool, not an operating mode. Successful replies
 are summarized, never echoed; failed replies are logged in full. Component
-tags and per-level detail: `docs/client-manual.md` §1.
+tags and per-level detail: `docs/spec/client-manual.md` §1.
 
 **Health and inspection.** `PING` → `PONG`. `SHOW META` (instance),
 `SHOW TABLES` / `DESCRIBE`, `SHOW BUDGET` (Keystone id headroom, with
@@ -154,11 +154,11 @@ tags and per-level detail: `docs/client-manual.md` §1.
 WAL streams, but core 0 serves every statement today; peers come up alive
 and idle, with `waystone_recording` and `access_statistics` off on peers by
 design. Leave it at 1 until the cross-core pipeline lands
-(`docs/workplan-crosscore.md` P4).
+(`docs/inflight/in-progress/workplan-crosscore.md` P4).
 
 ## 6. What a restart loses — known gaps
 
-The engine-wide list lives in **`docs/known-gaps.md`** — durability and
+The engine-wide list lives in **`docs/inflight/known-gaps.md`** — durability and
 recovery gaps, what a restart loses, the no-purge rule, multicore limits
 and protocol gaps, each entry naming its owning doc. The three an operator
 must know before trusting this server with data: **WAL recovery is not

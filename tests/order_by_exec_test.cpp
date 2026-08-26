@@ -443,7 +443,7 @@ TEST(OrderKeyTest, StringOrderIsByteOrderOverTheWholeValue) {
     EXPECT_EQ(a.value().Compare(a.value()), 0);
 }
 
-// D3 (docs/spec-null.md): a NULL orders above every value - ASC puts it
+// D3 (docs/spec/spec-null.md): a NULL orders above every value - ASC puts it
 // last and the ordinary descending flip puts it first - and two NULLs tie.
 TEST(OrderKeyTest, ANullOrdersAboveEveryValueAndTiesWithItself) {
     parser::AstValue null_value;

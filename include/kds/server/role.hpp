@@ -6,7 +6,7 @@
 
 #include "kds/base/status.hpp"
 
-// The authorization model (docs/protocol.md §14, decided 2026-08-13):
+// The authorization model (docs/spec/protocol.md §14, decided 2026-08-13):
 // three roles ordered by inclusion, held per authenticated user, checked
 // once per statement against the class the dispatcher routes on.
 //
