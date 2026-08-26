@@ -30,6 +30,7 @@ std::size_t Utf8PrefixLen(std::string_view text, std::size_t cap) noexcept {
 StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t session_id,
                                                                    std::uint64_t sequence,
                                                                    std::uint64_t target_oid,
+                                                                   Role role,
                                                                    std::string_view text) {
     if (text.empty()) {
         return Status::InvalidArgument("statement shipping: an empty statement is not a statement");
@@ -49,6 +50,7 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
     out.session_id = session_id;
     out.sequence = sequence;
     out.target_oid = target_oid;
+    out.role = static_cast<std::uint8_t>(role);
     out.text_len = static_cast<std::uint16_t>(text.size());
     std::memcpy(out.text, text.data(), text.size());
     return out;
@@ -109,6 +111,20 @@ StatusOr<std::string_view> ShippedStatementTextOf(const ShippedStatementRequestP
     return std::string_view(request.text, request.text_len);
 }
 
+StatusOr<Role> ShippedStatementRoleOf(const ShippedStatementRequestPayload& request) {
+    switch (static_cast<Role>(request.role)) {
+        case Role::kReadOnly: return Role::kReadOnly;
+        case Role::kReadWrite: return Role::kReadWrite;
+        case Role::kAdmin: return Role::kAdmin;
+    }
+    // Not `kReadOnly` as a lenient default: a byte outside the enum means
+    // the two ends disagree about what a rank is, and a statement run under
+    // a guessed rank is a statement run under no authorization at all.
+    return Status::InvalidArgument("statement shipping: request names role " +
+                                   std::to_string(request.role) +
+                                   ", which is not a role this build knows");
+}
+
 // ---- The owner's half ------------------------------------------------------
 
 void StatementShipServer::OnRequest(const sched::MessageHeader& header,
@@ -144,6 +160,13 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
         Reply(requester, request_id, session_id, sequence, text.status(), {});
         return;
     }
+    // Before the executor, because a rank this core cannot read is a
+    // refusal and not an execution - and a refusal must cost nothing.
+    auto role = ShippedStatementRoleOf(request);
+    if (!role.ok()) {
+        Reply(requester, request_id, session_id, sequence, role.status(), {});
+        return;
+    }
     if (!execute_) {
         // SS1 ships the wire and nothing else. Stated as a refusal rather
         // than left to a null call, because a handler that crashes and a
@@ -159,7 +182,14 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     // owner's group commit means parking (the header's D3 argument), so
     // the reply closure captures by value and nothing it needs outlives
     // this frame.
-    execute_(session_id, sequence, request.target_oid, std::string(text.value()),
+    ShippedStatement statement;
+    statement.requester = requester;
+    statement.session_id = session_id;
+    statement.sequence = sequence;
+    statement.target_oid = request.target_oid;
+    statement.role = role.value();
+    statement.text.assign(text.value());
+    execute_(std::move(statement),
              [this, requester, request_id, session_id, sequence](const Status& status,
                                                                  std::string_view reply_text) {
                  Reply(requester, request_id, session_id, sequence, status, reply_text);
@@ -312,7 +342,7 @@ Status StatementShipClient::RegisterReplyReceiver() {
 
 Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request_id,
                                  std::uint64_t session_id, std::uint64_t sequence,
-                                 std::uint64_t target_oid, std::string_view text) {
+                                 std::uint64_t target_oid, Role role, std::string_view text) {
     // **One live waiter per request id.** Reusing an id that still has a
     // statement parked on it would replace that statement's waiter with
     // this one's, and the identity check on the reply path cannot catch it -
@@ -338,7 +368,7 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
             " is not a core of this instance, which has " +
             std::to_string(transport_.core_count()));
     }
-    auto request = ShippedStatementRequestOf(session_id, sequence, target_oid, text);
+    auto request = ShippedStatementRequestOf(session_id, sequence, target_oid, role, text);
     // A statement the wire refuses opens no waiter: nothing was sent, so
     // nothing will answer, and a waiter would only cost the statement a
     // deadline before saying what is already known.

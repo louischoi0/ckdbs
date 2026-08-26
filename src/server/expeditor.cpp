@@ -1169,10 +1169,17 @@ Status Expeditor::Serve() {
     // the public `dispatcher()` accessor would then read freed memory.
     // Declared after `scheduler`, so reverse order clears the view first.
     dispatcher_->set_scheduler_view(&scheduler);
-    struct ClearSchedulerView {
+    // The statement-shipping client armed below is the same shape of
+    // borrow - a member holding this reactor - and is cleared by the same
+    // guard, so a dispatch after `Serve` returns refuses as a single-core
+    // one does instead of shipping through a destroyed reactor.
+    struct ClearReactorBorrows {
         CommandDispatcher* dispatcher;
-        ~ClearSchedulerView() { dispatcher->set_scheduler_view(nullptr); }
-    } clear_scheduler_view{&*dispatcher_};
+        ~ClearReactorBorrows() {
+            dispatcher->set_scheduler_view(nullptr);
+            dispatcher->SetStatementShip(nullptr);
+        }
+    } clear_reactor_borrows{&*dispatcher_};
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,
@@ -1427,6 +1434,32 @@ Status Expeditor::Serve() {
         index_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
         if (Status s = index_builds_->RegisterReplyReceiver(); !s.ok()) return s;
         dispatcher_->SetIndexBuilds(&*index_builds_);
+
+        // **Core 0's two halves of statement shipping** (SS1/SS3): the
+        // owner's, because a peer ships core 0 every statement against a
+        // relation core 0 owns, and the arrival core's, because core 0's
+        // own clients name peer-owned relations. Registered before the
+        // dispatcher is told about the client, for `index_builds_`' reason -
+        // a reply must never beat its receiver.
+        //
+        // The executor is built first: the server holds its seam. Both
+        // borrow this function's `scheduler`, exactly as `index_builds_`
+        // does, and nothing pumps them after `Serve` returns.
+        shipped_executor_.emplace(/*core_id=*/0, *dispatcher_, scheduler, clock_, &*logger_);
+        statement_ship_server_.emplace(/*core_id=*/0, scheduler, *transport_,
+                                       shipped_executor_->Seam(), &*logger_);
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kShippedStatementRequest,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    statement_ship_server_->OnRequest(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        statement_ship_client_.emplace(/*core_id=*/0, scheduler, *transport_, clock_,
+                                       &*logger_);
+        if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
+        dispatcher_->SetStatementShip(&*statement_ship_client_);
 
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -

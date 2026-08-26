@@ -152,6 +152,7 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 };
 
 class IndexBuildClient;
+class StatementShipClient;
 
 // A peer-owned relation's `CREATE INDEX` between its two phases on core 0
 // (docs/workplan-peer-writer.md §7c, PW1c-6b-3): the definition core 0
@@ -211,6 +212,28 @@ struct DispatchOutcome {
 // drifting between them; declared here so the spellings, a compatibility
 // surface, can be pinned by a test that owns no socket and no dispatcher.
 std::string ErrorReply(const Status& status);
+
+// **The inverse**, and it exists for exactly one caller: a statement
+// executed on its owner core answers in a rendered line, and what has to
+// cross back to the arrival core is the *code* - because the arrival core
+// re-renders through `ErrorReply` and the `retryable` bit a client's retry
+// loop reads must be the bit the owner meant (SS3,
+// server/shipped_statement_executor.hpp).
+//
+// A dispatcher's outcome carries no `Status`: every handler renders one at
+// its own return, and threading a code back out would touch every write
+// path in this file. Recovering it from the rendered line instead is exact
+// where it matters - the four spellings a client switches on are recovered
+// as themselves - and lossy only where nothing reads it: every other code
+// renders as a bare `ERR <message>`, so all of them come back as one, and
+// the re-render is byte-identical. `ErrorReply(StatusFromErrorReply(line))
+// == line` for every line `ErrorReply` produces, which is the property
+// worth having and the one its test asserts.
+//
+// A line that is not an error reply is `kOk` with the line as its message:
+// the caller has already decided which arm it is on, and this refuses to
+// invent a failure for a success.
+Status StatusFromErrorReply(std::string_view reply);
 
 // Where a tuple lives, as a point lookup reports it. Local to the
 // dispatcher because it is the shape of an answer to "skip the scan and
@@ -933,6 +956,17 @@ public:
     // on, not production.
     void SetIndexBuilds(IndexBuildClient* client) noexcept { index_builds_ = client; }
 
+    // Arms **statement shipping** (SS2, statement_ship_service.hpp): an
+    // autocommit statement whose relation another core owns is carried
+    // there and answered back, where without this it is refused
+    // (`docs/crosscore.md` §6). Installed on every core of a multi-core
+    // instance; `client` must outlive the dispatcher.
+    //
+    // A dispatcher never told refuses exactly as it did before - which is
+    // every single-core instance and every fixture, and is what keeps
+    // `cores = 1` byte-identical.
+    void SetStatementShip(StatementShipClient* client) noexcept { statement_ship_ = client; }
+
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
     // with the same default posture: a dispatcher never told behaves as the
@@ -1289,6 +1323,9 @@ private:
     // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
     // stands (see SetIndexBuilds).
     IndexBuildClient* index_builds_ = nullptr;
+    // SS2's client, on every core of a multi-core instance; null wherever
+    // the cross-core refusal still stands (see SetStatementShip).
+    StatementShipClient* statement_ship_ = nullptr;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;

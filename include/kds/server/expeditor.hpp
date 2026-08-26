@@ -674,6 +674,20 @@ private:
     // used only while that scheduler runs; nothing pumps it after Serve
     // returns.
     std::optional<IndexBuildClient> index_builds_;
+
+    // **Core 0's two halves of statement shipping** (SS1/SS3), armed with
+    // the transport for `index_builds_`' reason. Core 0 is an owner like
+    // any other - a peer's client ships it the statements it owns - and an
+    // arrival core like any other, so it needs both.
+    //
+    // Declared **after** `cores_` would be wrong and **before** it is not
+    // enough to think about: what matters is that the server holds the
+    // executor's seam, so the server is declared last of the two and
+    // destroyed first. Both borrow `dispatcher_`, declared above.
+    std::optional<ShippedStatementExecutor> shipped_executor_;
+    std::optional<StatementShipServer> statement_ship_server_;
+    std::optional<StatementShipClient> statement_ship_client_;
+
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 
     // Core 0's page-id allocator (M5): the only thing that carves the free

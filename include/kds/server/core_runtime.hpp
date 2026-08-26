@@ -17,6 +17,8 @@
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/server/index_build_service.hpp"
+#include "kds/server/shipped_statement_executor.hpp"
+#include "kds/server/statement_ship_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/row_id_lease_service.hpp"
@@ -311,6 +313,16 @@ public:
         return index_builds_.has_value() ? &*index_builds_ : nullptr;
     }
 
+    // This core's half of statement shipping (SS3), exposed for the same
+    // reason: a test drives a shipped statement and reads what the owner
+    // did with it. Null before AttachTransport.
+    ShippedStatementExecutor* shipped_statements() noexcept {
+        return shipped_executor_.has_value() ? &*shipped_executor_ : nullptr;
+    }
+    StatementShipClient* statement_ship() noexcept {
+        return statement_ship_client_.has_value() ? &*statement_ship_client_ : nullptr;
+    }
+
     // This core's transaction-id lease, exposed for the first of those two
     // reasons only: a test drives a grant without a reactor.
     txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
@@ -437,6 +449,25 @@ private:
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
+
+    // **Statement shipping, both halves, on every core** (SS1's rule: an
+    // owner with no request handler and an arrival core with no reply
+    // receiver each cost a shipped statement a full deadline and a false
+    // `UnknownOutcome`, and from the arrival core the two are
+    // indistinguishable from a slow owner). Armed at AttachTransport,
+    // peer or not, because shipping runs in both directions - core 0's
+    // client ships to a peer's server and a peer's client ships to core
+    // 0's.
+    //
+    // **Declaration order is load-bearing**, and in the opposite direction
+    // from the usual: the server holds the executor's `Seam()`, which
+    // captures the executor, so the server must be destroyed *first* and is
+    // therefore declared *last* of the two. Both go below `dispatcher_`,
+    // which the executor borrows, and the reactor that owns their tasks is
+    // dropped ahead of every member by `~CoreRuntime`'s body.
+    std::optional<ShippedStatementExecutor> shipped_executor_;
+    std::optional<StatementShipServer> statement_ship_server_;
+    std::optional<StatementShipClient> statement_ship_client_;
     // The client listener this core accepts on, when per-core listeners are
     // configured (PW5). It borrows the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so

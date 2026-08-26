@@ -151,6 +151,38 @@ std::string ErrorReply(const Status& status) {
     return "ERR " + status.message();
 }
 
+Status StatusFromErrorReply(std::string_view reply) {
+    constexpr std::string_view kPrefix = "ERR ";
+    if (reply.rfind(kPrefix, 0) != 0) return Status::OK();
+    reply.remove_prefix(kPrefix.size());
+
+    // The four spellings above, in the shape `ErrorReply` writes them. The
+    // table is written once and read both ways so the pair cannot drift:
+    // adding a spelling to `ErrorReply` and not here would silently demote
+    // that code to the bare arm, which for kTxnConflict means losing the
+    // retryable bit across the wire.
+    struct Spelling {
+        std::string_view token;
+        StatusCode code;
+    };
+    static constexpr Spelling kSpellings[] = {
+        {"TXN_CONFLICT retryable=1 ", StatusCode::kTxnConflict},
+        {"FK_VIOLATION retryable=0 ", StatusCode::kFkViolation},
+        {"ASSERTION_VIOLATION retryable=0 ", StatusCode::kAssertionViolation},
+        {"UNKNOWN_OUTCOME retryable=0 ", StatusCode::kUnknownOutcome},
+    };
+    for (const Spelling& spelling : kSpellings) {
+        if (reply.rfind(spelling.token, 0) != 0) continue;
+        reply.remove_prefix(spelling.token.size());
+        return Status::FromWire(static_cast<std::uint32_t>(spelling.code), std::string(reply));
+    }
+    // The bare arm. kInvalidArgument stands for every code that renders
+    // bare - which is what makes this lossy, and harmless: `ErrorReply`
+    // renders all of them identically, so the line the client is handed is
+    // the line the owner wrote whichever of them it was.
+    return Status::InvalidArgument(std::string(reply));
+}
+
 // Whether a write is checked against a Bound Cabin - true as of AST07,
 // whose enforcer runs in the three write paths. Still a conjunct rather
 // than a constant `1` in the replies, because enforcement also needs the
