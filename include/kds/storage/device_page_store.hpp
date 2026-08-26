@@ -419,6 +419,17 @@ public:
     // (see SetCoreOwnership), so calling this on one is a defect.
     StatusOr<std::span<std::byte, kPageSize>> FreeMapBytesForRegion(std::uint32_t region);
 
+    // The other half of that seam, and the reason it is public: the
+    // allocator sets bits through the span above, so it is the only writer
+    // the maintained allocated-page count (D8(a)) cannot see. It reports
+    // the run it just marked.
+    //
+    // Narrow on purpose. `pages` is the length of a run every one of whose
+    // bits Reserve() proved clear before setting it, so this can be a plain
+    // add rather than a re-scan - and the proof is next door, in the loop
+    // that probes the whole run before marking any of it.
+    void NoteAllocated(std::uint32_t pages) noexcept { allocated_pages_ += pages; }
+
     // Records that the record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn and, if this is the first record to dirty the
     // frame since it was last written back, adopts `lsn` as its recLSN.
@@ -645,8 +656,30 @@ private:
     // page - region 5 being clean says nothing about region 0.
     struct MapRegion {
         Page free_map{};
-        Page headerless_map{};
+        // **Null until this region holds a headerless page** (FM6, D2(a)).
+        // The headerless class is Waystone directory interior pages and
+        // nothing else - `src/stats/waystone_dir.cpp` is the engine's only
+        // caller of CreateNewHeaderless - so a database with no Waystone
+        // directory has no headerless pages anywhere, and building a bitmap
+        // to say so costs a page of memory and a page of mount I/O per
+        // region to record a fact that is already implied by the bitmap's
+        // absence.
+        //
+        // The id is still **reserved** in free_map at region creation, so
+        // an ordinary allocation can never take it and the bitmap can
+        // always be created later at its computed id. Only the bytes are
+        // deferred, never the reservation - which is why allocated_pages()
+        // still counts two for a fresh region.
+        std::unique_ptr<Page> headerless_map;
         bool dirty = false;
+    };
+
+    // One region's two grant bitmaps (CC7's fault grants, PW1c-4's
+    // exact-page write grants and PW1c-7's stamp claims). Each null until
+    // something is granted into this region.
+    struct RightsRegion {
+        std::unique_ptr<Page> fault;
+        std::unique_ptr<Page> write;
     };
 
     DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept;
@@ -674,6 +707,33 @@ private:
 
     // Whether any resident region has unwritten bits.
     bool maps_dirty() const noexcept;
+
+public:
+    // FM10. Resident is in-existence for the free map (see map_regions_),
+    // so `regions` counts what the file holds and the gap between
+    // `resident_pages` and twice that is what FM6's deferred headerless
+    // bitmaps save.
+    MapResidency map_residency() const noexcept override {
+        MapResidency out;
+        out.regions = map_regions_.size();
+        for (const auto& [region, pages] : map_regions_) {
+            out.resident_pages += 1 + (pages.headerless_map != nullptr ? 1 : 0);
+        }
+        out.coverage_ids = static_cast<std::uint64_t>(out.regions) * kFreeMapBitsPerPage;
+        out.has_headerless = any_headerless_;
+        return out;
+    }
+
+private:
+
+    // Recomputes the maintained count from the resident regions.
+    // (Declared after the public block above; still private.) For the
+    // one path that changes bits without going through a site that can
+    // report them: RefreshFreeMapFromDevice unions in whatever core 0 has
+    // published since, and how many bits that added is not knowable
+    // without counting. O(regions) and rare, where the count it maintains
+    // is O(1) and printed on three paths.
+    void RecountAllocatedPages() noexcept;
 
     // Stamps a checksum unless the page is headerless. The one place that
     // decision is made, so no write path can forget it.
@@ -748,24 +808,45 @@ private:
     std::span<const std::byte, kPageSize> headerless_map_bytes_for(
         PageId page_id) const noexcept {
         const MapRegion* region = FindRegion(FreeMapRegionOf(page_id));
-        return std::span<const std::byte, kPageSize>(region != nullptr ? region->headerless_map
-                                                                       : AbsentRegionPage());
+        const bool present = region != nullptr && region->headerless_map != nullptr;
+        return std::span<const std::byte, kPageSize>(present ? *region->headerless_map
+                                                             : AbsentRegionPage());
     }
-    std::span<std::byte, kPageSize> fault_rights_bytes() noexcept {
-        return std::span<std::byte, kPageSize>(fault_rights_);
+
+    // Creates this region's headerless bitmap if it has none yet. The one
+    // caller is CreateNewHeaderlessUnpinned - the moment the fact the
+    // bitmap records stops being "no".
+    StatusOr<std::span<std::byte, kPageSize>> EnsureHeaderlessMap(PageId page_id);
+    // One region's rights bitmaps, created on first grant into that region
+    // (D10(a)). Null until then, which is the overwhelmingly common state:
+    // a peer holds grants in the handful of regions its relations live in,
+    // not across the id space.
+    RightsRegion& RightsFor(PageId page_id) {
+        return rights_regions_[FreeMapRegionOf(page_id)];
     }
-    std::span<std::byte, kPageSize> write_rights_bytes() noexcept {
-        return std::span<std::byte, kPageSize>(write_rights_);
+    const RightsRegion* FindRights(PageId page_id) const noexcept {
+        auto it = rights_regions_.find(FreeMapRegionOf(page_id));
+        return it == rights_regions_.end() ? nullptr : &it->second;
     }
     // The bit tests, range-checked because the bitmap helper reads an id
     // beyond its coverage as set - stated once, here.
+    // The bit tests. **No id ceiling any more** (D10(a)): these were single
+    // pages indexed by absolute page id, so they capped at one bitmap
+    // page's 65,280 ids and a peer could hold no grant above region 0 -
+    // the free map's ceiling lifting did not lift theirs, because D1's
+    // placement never reached them. They are keyed by region now, like the
+    // map, and a region with no grants answers no without allocating one.
     bool HasFaultRight(PageId page_id) const noexcept {
-        return page_id < kFreeMapBitsPerPage &&
-               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(fault_rights_), page_id);
+        const RightsRegion* rights = FindRights(page_id);
+        return rights != nullptr && rights->fault != nullptr &&
+               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(*rights->fault),
+                                  FreeMapBitIndexOf(page_id));
     }
     bool HasWriteRight(PageId page_id) const noexcept {
-        return page_id < kFreeMapBitsPerPage &&
-               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(write_rights_), page_id);
+        const RightsRegion* rights = FindRights(page_id);
+        return rights != nullptr && rights->write != nullptr &&
+               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(*rights->write),
+                                  FreeMapBitIndexOf(page_id));
     }
 
     PageDevice& device_;
@@ -788,8 +869,12 @@ private:
     // the durable form of the same fact is each page's own stamp, which is
     // what refills them. Core 0 (no lease) never consults either. 16 KiB
     // per store.
-    Page fault_rights_{};
-    Page write_rights_{};
+    // D10(a): keyed by region, mirroring map_regions_, and each half built
+    // only when something is granted into it. Never persisted - the durable
+    // form of the same fact is each page's own stream stamp, which is what
+    // refills them - so unlike the free map there is no format question and
+    // no migration, which is what made growing them the cheap answer.
+    std::map<std::uint32_t, RightsRegion> rights_regions_;
     std::uint64_t stamp_claims_ = 0;
     // First non-system page id; 0 means no readable system range. See
     // SetCoreOwnership.
@@ -812,6 +897,21 @@ private:
     // rest on, and it is why they may answer from an empty page instead of
     // faulting - a `const noexcept` predicate cannot read a device.
     std::map<std::uint32_t, MapRegion> map_regions_;
+
+    // FM6's whole-instance fast path: false until some region holds a
+    // headerless bitmap. IsHeaderless sits on the fault path, the
+    // write-back path and the WAL gate, and for every database with no
+    // Waystone directory this answers all three with no lookup at all.
+    // Seeded at mount from what loaded, and moved by the one writer that
+    // can change it.
+    bool any_headerless_ = false;
+
+    // D8(a): the instance's allocated-page count, maintained rather than
+    // swept. Seeded at mount - which already reads every region, so the
+    // seed is free - and moved by each of the sites that sets a free-map
+    // bit. O(1) at every print, where the sweep it replaced was O(regions)
+    // and is printed at mount, at shutdown and by SHOW META.
+    std::uint32_t allocated_pages_ = 0;
     PageId next_new_page_id_;
 
     // First id that may ever be evicted; everything below is resident by
