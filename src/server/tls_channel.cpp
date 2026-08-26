@@ -228,8 +228,15 @@ struct TlsChannel::Impl {
     // routed application bytes into a discarded buffer" impossible by
     // construction rather than by an invariant three files away. Every
     // fatal path drains the wbio first - a verify failure queues an
-    // alert the peer should hear; a peer whose bytes were never TLS
-    // gets nothing, and both are pinned by tests.
+    // alert the peer should hear, and so, on OpenSSL 3.5.5, does a first
+    // record that was never TLS.
+    //
+    // **Whether an alert exists at all is the library's choice, not this
+    // channel's** (corrected 2026-08-26; this comment used to say a peer
+    // whose bytes were never TLS "gets nothing", which was true of an
+    // older OpenSSL and is not true here). The contract the tests pin is
+    // the one this code can keep: whatever the wbio holds is handed to the
+    // caller verbatim, and nothing the peer sent is ever among it.
 
     Status Handshake(std::string& wire_out) {
         if (init_done()) return Status::OK();

@@ -1,5 +1,7 @@
 #include "kds/sched/scheduler.hpp"
 
+#include <atomic>
+
 #include <algorithm>
 #include <utility>
 
@@ -40,16 +42,33 @@ Status Scheduler::UnregisterIoHandler(IoHandle handle) {
     return io_backend_.Unregister(handle);
 }
 
-void Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) noexcept {
+Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) {
     transport_ = transport;
     core_id_ = core_id;
-    // Registering here, and only here, is what makes "a core that never
-    // attaches is never woken" true by construction rather than by care:
-    // the same call that gives this reactor an inbox gives its peers the
-    // way to say something is in it (core_waker.hpp).
-    if (transport_ != nullptr) {
-        transport_->RegisterWaker(core_id_, CoreWakeHandle{&sleeping_, &io_backend_});
+    if (transport_ == nullptr) return Status::OK();
+
+    // **The wake path** (waker.hpp). Armed here rather than at
+    // construction because this is the first moment a peer exists to be
+    // woken by, and because a single-core reactor must not pay for a
+    // handle it can never need.
+    auto waker = Waker::Create();
+    if (!waker.ok()) return waker.status();
+    waker_.emplace(std::move(waker.value()));
+
+    if (Status s = io_backend_.Register(waker_->handle(), IoInterest::kReadable); !s.ok()) {
+        waker_.reset();
+        return s;
     }
+    // Draining is all the handler does: the wake carries no data, the ring
+    // is the queue, and phase 3 of this same iteration is what reads it.
+    io_handlers_[waker_->handle()] = [this](const IoEvent&) { waker_->Drain(); };
+
+    // Published last, so no peer can find a target that is not yet
+    // registered. Safe unsynchronised: this runs on the startup thread
+    // before this core's worker exists, which is where every other per-core
+    // wiring in this engine is done.
+    transport_->SetWakeTarget(core_id_, WakeTarget{&sleeping_, &*waker_});
+    return Status::OK();
 }
 
 Status Scheduler::RegisterMessageHandler(RingMessageKind kind, MessageHandler handler) {
@@ -322,47 +341,40 @@ bool Scheduler::RunOnce() {
     // pulled to the front, which is where a reactor can actually sleep: 0
     // when anything is runnable, otherwise up to the next timer deadline
     // (sched.md section 7).
-    //
-    // Three things can end that block: an I/O event, the timer that capped
-    // it, and - since the wake path - a peer with a message for this core.
-    // Before the third existed, a ring message waited out the whole block
-    // because the ring is memory and epoll cannot watch it; that cost a
-    // shipped statement a flat ~1.07 ms
-    // (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §4a).
     io_events_scratch_.clear();
-    int idle_timeout_ms = IdleTimeoutMs();
-    bool published_sleeping = false;
-    if (idle_timeout_ms != 0) {
-        // About to block. Publish that first, then re-read the inbox: this
-        // is the sleeper's half of core_waker.hpp's store-load pair, and
-        // both memory orders there are seq_cst because the two sides touch
-        // different locations and nothing weaker orders them against each
-        // other.
-        //
-        // The re-read is a *peek*, never a drain: phase 3 stays the only
-        // place a message leaves the ring (sched.md §2's fixed phase order
-        // is a determinism rule). A peer that pushed just before reading
-        // `sleeping_ == false` is caught here, and this iteration runs
-        // straight through to phase 3 instead of sleeping on top of work
-        // that had already arrived.
+    int timeout_ms = IdleTimeoutMs();
+
+    // **Raise the flag before blocking, then look once more** (waker.hpp).
+    //
+    // The flag is what lets a peer know this reactor must be woken; the
+    // re-check is what closes the window the flag opens. A sender that
+    // enqueued between this iteration's phase-3 drain and the store below
+    // read the flag as clear and skipped the wake, so its message would
+    // wait out the whole block — the millisecond this path exists to
+    // remove. The fence makes the pair a store-buffer, and sequential
+    // consistency forbids both sides reading stale: `TrySend` carries the
+    // argument.
+    //
+    // Only when this iteration would actually sleep. A timeout of 0 is a
+    // reactor with work to do, and it neither needs waking nor may pay two
+    // atomics to say so.
+    const bool may_sleep = timeout_ms != 0 && transport_ != nullptr && waker_.has_value();
+    if (may_sleep) {
         sleeping_.store(true, std::memory_order_seq_cst);
-        // The sleeper's StoreLoad barrier. The store above is already a
-        // full one, but the load that follows is the *ring's* (acquire, on
-        // another object), so the pairing is stated explicitly here rather
-        // than resting on what a seq_cst store happens to compile to. Off
-        // the hot path by construction: this whole branch runs only when
-        // the reactor is about to sleep.
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        published_sleeping = true;
-        if (transport_ != nullptr && transport_->HasPending(core_id_)) idle_timeout_ms = 0;
+        if (transport_->HasPending(core_id_)) {
+            sleeping_.store(false, std::memory_order_seq_cst);
+            timeout_ms = 0;
+            wake_race_skips_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            idle_blocks_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
-    Status io_status = io_backend_.PollReady(idle_timeout_ms, io_events_scratch_);
-    // Only where it was published: a seq_cst store is a fence, and a
-    // saturated reactor takes this path millions of times a second without
-    // ever having claimed to be asleep. Paying a fence per iteration to
-    // clear a flag that is already false is the kind of cost that does not
-    // show up in a microbenchmark and does show up in §7's poll rate.
-    if (published_sleeping) sleeping_.store(false, std::memory_order_seq_cst);
+    Status io_status = io_backend_.PollReady(timeout_ms, io_events_scratch_);
+    // Cleared the moment the block ends, so a wake written from here on is
+    // one this reactor did not need - which costs a syscall, never a
+    // missed message.
+    if (may_sleep) sleeping_.store(false, std::memory_order_seq_cst);
     // A poll failure here is not fatal to the reactor: the loop keeps
     // running and the next iteration may succeed. But it is the top of the
     // stack, so nothing else can report it - it goes to the log, and only

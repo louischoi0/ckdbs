@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -16,6 +17,7 @@
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
+#include "kds/sched/waker.hpp"
 #include "kds/sched/task.hpp"
 
 // The reactor (docs/spec/sched.md sections 2-4). One Scheduler runs on the
@@ -29,16 +31,9 @@
 // Submit()/RegisterIoHandler()/RegisterMessageHandler()/RunOnce()/Run()/
 // Stop() must be called from the single thread that owns this reactor.
 // There is nothing to lock: the ready queues, the handler tables and the
-// consumed-runtime counters are plain (non-atomic) fields.
-//
-// **One exception, and it is the whole of it: `sleeping_`.** A peer's
-// `TrySend` reads that flag to decide whether this reactor needs waking out
-// of its idle block, and calls `IoBackend::Wake()` when it does. So exactly
-// one field and exactly one method are reachable from another thread; the
-// store-load argument that makes the pair race-free lives in
-// core_waker.hpp, and the `seq_cst` on both sides is load-bearing. Past
-// those two, the only atomics near this class remain the two indices inside
-// each SpscRing (workplan-crosscore.md guideline 1).
+// consumed-runtime counters are plain (non-atomic) fields, and the only
+// atomics anywhere near this class are the two indices inside each SpscRing
+// (workplan-crosscore.md guideline 1).
 //
 // **The read-only accessors are covered by that same rule**, and it has to
 // be said because a getter reads as safe: stopped(), iterations(),
@@ -136,7 +131,21 @@ public:
     // existing construction site is untouched and the `cores = 1` build
     // contributes zero messages and zero allocations (workplan guideline
     // 2).
-    void AttachTransport(RingTransport* transport, std::uint32_t core_id) noexcept;
+    // Attaches this reactor to the ring matrix as `core_id`, and **arms
+    // the wake path** (waker.hpp): an eventfd registered with this
+    // reactor's backend, published to the transport so peers can unblock a
+    // sleep that a ring message would otherwise not interrupt.
+    //
+    // No longer `noexcept`, and no longer infallible: creating the eventfd
+    // and registering it can fail. A failure is returned rather than
+    // swallowed because the consequence is silent — every cross-core
+    // message on this core would pay the idle block, which is a
+    // millisecond nobody would think to look for.
+    //
+    // Single-core builds never call this, so they gain no fd, no flag
+    // stores and no syscalls: the fast path is exactly what it was
+    // (guideline 2).
+    Status AttachTransport(RingTransport* transport, std::uint32_t core_id);
 
     // What to run when a message of `kind` arrives. Replaces any previous
     // handler for that kind. Fails with InvalidArgument for `kUnset`, which
@@ -321,19 +330,52 @@ private:
 
     // ---- Cross-core (sched.md §5) ---------------------------------------
     RingTransport* transport_ = nullptr;
-    std::uint32_t core_id_ = 0;
 
-    // "This reactor is about to block, or is blocking." Published for one
-    // reader: a peer's `TrySend`, deciding whether this core needs a wake
-    // (core_waker.hpp carries the store-load argument, and the `seq_cst` on
-    // both sides is load-bearing - do not relax it). The only piece of
-    // scheduler state another thread ever touches, which is why it is the
-    // only atomic here; sched.md invariant 2 is otherwise intact.
+    // **The wake path** (waker.hpp), armed at AttachTransport and absent
+    // on every single-core build.
     //
-    // A `Scheduler` therefore may not move once registered: the transport
-    // holds `&sleeping_`. It has reference members and has never been
-    // movable, so this documents a property rather than adding one.
+    // `sleeping_` is read by *other cores' threads*, which is the one place
+    // in this reactor where that is true and why it is atomic. It is
+    // sequentially consistent on both sides on purpose: the argument that
+    // a message cannot be stranded is the store-buffer one, and it needs
+    // seq_cst — `RealRingTransport::TrySend` carries it in full.
+    std::optional<Waker> waker_;
     std::atomic<bool> sleeping_{false};
+    // Iterations that blocked with the flag raised, and iterations whose
+    // pre-block re-check found work and skipped the block. The second is
+    // the race actually happening, and a run where it stays 0 has not
+    // exercised it.
+    //
+    // **Atomic, unlike every other counter on this class**, and the
+    // exception is deliberate: "is that reactor asleep yet" is a question
+    // only another thread can usefully ask, so the accessors below are the
+    // one pair the class-level "reactor thread only" rule does not cover.
+    // Relaxed, and free: both are touched only on an iteration that was
+    // about to block, which by construction is an iteration with nothing
+    // ready to run.
+    std::atomic<std::uint64_t> idle_blocks_{0};
+    std::atomic<std::uint64_t> wake_race_skips_{0};
+
+public:
+    // The wake path, from this reactor's side. `idle_blocks` counts
+    // iterations that actually blocked with the flag raised;
+    // `wake_race_skips` counts the ones whose pre-block re-check found work
+    // and skipped the block - which *is* the race the flag exists for, so a
+    // run where it stays 0 has not exercised it. Diagnostics and tests, and
+    // the only two accessors on this class that may be read from another
+    // thread (see the members).
+    std::uint64_t idle_blocks() const noexcept {
+        return idle_blocks_.load(std::memory_order_relaxed);
+    }
+    std::uint64_t wake_race_skips() const noexcept {
+        return wake_race_skips_.load(std::memory_order_relaxed);
+    }
+    // Whether this reactor can be woken at all. False on every single-core
+    // build, where nothing can send to it.
+    bool wake_armed() const noexcept { return waker_.has_value(); }
+
+private:
+    std::uint32_t core_id_ = 0;
     // Keyed by the enum's underlying value. A small flat map would do as
     // well; what matters is that nothing iterates it, so its order is never
     // observable (sched.md §8's deterministic-container rule).

@@ -136,6 +136,7 @@ add_library(kds
     src/sched/coro.cpp
     src/sched/spsc_ring.cpp
     src/sched/ring_transport.cpp
+    src/sched/waker.cpp
     src/sched/sim_ring_transport.cpp
     src/sched/epoll_io_backend.cpp
 )

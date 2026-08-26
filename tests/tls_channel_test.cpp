@@ -201,11 +201,16 @@ TEST(TlsChannelTest, LargeTransfer) {
 
 // A plaintext client on a TLS port is a fatal transform error the server
 // reports and closes on - never a crash, never a silent skip (the same
-// posture docs/spec/protocol.md §2 takes for malformed frames). No alert goes
-// back: OpenSSL queues none for a first record that was never TLS, so the
-// peer gets the close and nothing else. Pinned because the channel's
-// fatal path claims to hand the caller whatever alert exists, and "none"
-// is the answer here.
+// posture docs/spec/protocol.md §2 takes for malformed frames).
+//
+// **What is pinned is the channel's contract, not OpenSSL's byte count**
+// (rewritten 2026-08-26). This test used to assert `out.empty()`, on the
+// stated ground that "OpenSSL queues no alert for a first record that was
+// never TLS". That was a claim about a library version, not about this
+// engine: OpenSSL 3.5.5 *does* queue one, so the assertion failed on a
+// channel that was behaving correctly, and it would have failed again on
+// the next version that changed its mind. Whether an alert accompanies the
+// close is the library's choice; what the channel owes is below.
 TEST(TlsChannelTest, PlaintextGarbageIsFatal) {
     TestCert cert = MakeSelfSigned();
     Pair pair = MakePair(cert, cert.cert_pem);
@@ -213,13 +218,40 @@ TEST(TlsChannelTest, PlaintextGarbageIsFatal) {
     Status s = pair.server->OnWireData("SELECT 1\nSELECT 2\n", pair.server_plain, out);
     EXPECT_FALSE(s.ok());
     EXPECT_TRUE(pair.server_plain.empty());
-    EXPECT_TRUE(out.empty());
+
+    // **Nothing the peer sent comes back.** The security-bearing half, and
+    // the one that holds on every version: a channel that echoed an
+    // attacker's bytes onto the wire would be a reflector, and "the alert
+    // buffer happened to be empty" never proved it was not one.
+    EXPECT_EQ(out.find("SELECT"), std::string::npos)
+        << "the fatal path put the peer's own plaintext on the wire";
+
+    // **And whatever is there is a TLS alert**, never arbitrary bytes:
+    // content type 21 in the record header (RFC 8446 §5.1), which is what
+    // makes "the channel hands over what OpenSSL produced" a checkable
+    // claim rather than a description. Empty stays legal - that is what the
+    // older OpenSSL did - so this is "if anything, then an alert", and the
+    // record's *length* is deliberately not asserted: how many records a
+    // version queues is the same kind of fact that broke this test before.
+    if (!out.empty()) {
+        ASSERT_GE(out.size(), 5u) << "wire_out holds " << out.size()
+                                  << " bytes, too few to be a TLS record";
+        EXPECT_EQ(static_cast<unsigned>(static_cast<unsigned char>(out[0])), 21u)
+            << "wire_out does not begin with an alert record";
+    }
 }
 
 // A client that does not trust the server's certificate refuses the
 // handshake; nothing the server sent ever surfaces as plaintext, and the
-// fatal alert *is* drained into wire_out for the caller to flush - the
-// other half of PlaintextGarbageIsFatal's contract.
+// fatal alert *is* drained into wire_out for the caller to flush.
+//
+// **This one may assert the alert exists where its sibling may not**, and
+// the difference is whose rule it is: a peer that rejects a certificate
+// owes the other side a fatal alert by RFC 8446 §6.2, so an empty
+// `wire_out` here would be the channel swallowing it. Whether a *non-TLS*
+// first record produces one is unspecified and version-dependent, which
+// is why `PlaintextGarbageIsFatal` pins the shape of what comes back and
+// not its presence.
 TEST(TlsChannelTest, UntrustedServerCertRefused) {
     TestCert server_cert = MakeSelfSigned();
     TestCert other_cert = MakeSelfSigned();

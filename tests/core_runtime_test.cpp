@@ -813,7 +813,7 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
 
     sched::NullIoBackend io0;
     sched::Scheduler core0(clock_, io0);
-    core0.AttachTransport(&transport.value(), 0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
 
     SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
     RegisterAnchorReceiver(core0, receiver);
@@ -883,7 +883,7 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         ASSERT_TRUE(transport.ok()) << transport.status().message();
         sched::NullIoBackend io0;
         sched::Scheduler core0(clock_, io0);
-        core0.AttachTransport(&transport.value(), 0);
+        ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
         SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
         RegisterAnchorReceiver(core0, receiver);
 
@@ -994,7 +994,7 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
 
     sched::NullIoBackend io0;
     sched::Scheduler core0(clock_, io0);
-    core0.AttachTransport(&transport.value(), 0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
     ASSERT_TRUE(
         RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr).ok());
 
@@ -1110,7 +1110,7 @@ TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOt
 
     sched::NullIoBackend io0;
     sched::Scheduler core0(clock_, io0);
-    core0.AttachTransport(&transport.value(), 0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
     ASSERT_TRUE(
         RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr).ok());
 
@@ -1920,7 +1920,7 @@ TEST_F(CoreRuntimeTest, AnUnacquiredRelationIsAskedForAndTheRegrantLands) {
     ASSERT_TRUE(transport.ok()) << transport.status().message();
     sched::NullIoBackend io0;
     sched::Scheduler core0(clock_, io0);
-    core0.AttachTransport(&transport.value(), 0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
     // The peer's completion checkpoint publishes an anchor here; not what
     // this test is about, so it is accepted and dropped.
     ASSERT_TRUE(core0
@@ -2621,7 +2621,7 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     ASSERT_TRUE(transport.ok()) << transport.status().message();
     rig.transport.emplace(std::move(transport));
     rig.core0.emplace(rig.clock, rig.io0);
-    rig.core0->AttachTransport(&rig.ring(), 0);
+    ASSERT_TRUE(rig.core0->AttachTransport(&rig.ring(), 0).ok());
     ASSERT_TRUE(rig.core0
                     ->RegisterMessageHandler(sched::RingMessageKind::kAnchorWrite,
                                              [](const sched::MessageHeader&,
@@ -4219,7 +4219,7 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
     ASSERT_TRUE(transport.ok()) << transport.status().message();
     sched::NullIoBackend io0;
     sched::Scheduler core0(clock_, io0);
-    core0.AttachTransport(&transport.value(), 0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
     ASSERT_TRUE(core0
                     .RegisterMessageHandler(sched::RingMessageKind::kAnchorWrite,
                                             [](const sched::MessageHeader&,

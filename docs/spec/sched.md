@@ -61,7 +61,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 
 - **Delivery order is per edge only.** Messages on one `(src, dst)` pair arrive in send order; two messages from *different* peers to the same core have no defined relative order, and the real and simulated transports deliberately disagree about it — the real one rotates its peer sweep to avoid starvation, the simulation delivers by injected deadline. Nothing above this layer may depend on cross-peer order.
 - **The receiving handler runs in phase 4, not phase 3.** The drain moves messages off the ring and queues a task per message, under its own loop budget. A handler is a task and must yield like one.
-- **A successful send wakes a sleeping target** (§7, 2026-08-26). `TrySend` is still non-blocking and still fallible, and it costs a syscall only when the target is actually asleep; a *refused* send wakes nobody, since waking a core to find nothing is the spin this exists to remove. The wake is issued after the payload is visible to the reader, never before.
+- **A successful send wakes a sleeping target** (§7, 2026-08-26). `TrySend` stays non-blocking and fallible; it costs a syscall only when the target is actually asleep, and a *refused* send wakes nobody — waking a core to find nothing is the spin the wake exists to remove. The wake follows the push and never precedes it.
 
 Nothing constructs a transport in production yet: with one reactor, phase 3 costs one null test.
 
@@ -74,47 +74,50 @@ Nothing constructs a transport in production yet: with one reactor, phase 3 cost
 
 When phase 4 finds no runnable task:
 
-- **busy-poll mode** — spin on completion queues and rings. Lowest latency; 100% core occupancy. Default for dedicated appliance deployment. **Not built**, and this line has always described an intention rather than a mode the engine has.
-- **blocking mode** — arm eventfd/ring wakeups and block until an event. For development and shared machines. **The block was built from the start; the eventfd wakeup landed 2026-08-26** (the v2.3.0 order's RW1–RW2), and for the two years between them this bullet described a mechanism the code did not have: a reactor blocked in `epoll_wait` and **nothing ended that block when a ring message arrived for it**, because the ring is memory and epoll cannot watch memory. Measured cost of the gap before it closed: a shipped statement's p50 tracked the owner's idle block over a fivefold range, a flat ~1.07 ms with the device in the path and without it (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §4a).
+- **busy-poll mode** — spin on completion queues and rings. Lowest latency; 100% core occupancy. Default for dedicated appliance deployment. **Not built**; this bullet has always described an intention rather than a mode the engine has.
+- **blocking mode** — arm eventfd/ring wakeups and block until an event. For development and shared machines. **The block shipped with the reactor; the eventfd wakeup landed 2026-08-26** (`include/kds/sched/waker.hpp`). Between the two, this bullet described a mechanism the code did not have: a reactor blocked in `epoll_wait` and **nothing ended that block when a ring message arrived**, because a ring is a store to shared memory and epoll cannot watch memory. Measured cost of the gap: a flat ~1.07 ms on every shipped statement, tracking the idle block over a fivefold range of `wal_drain_interval_us` and identical with the device sync in the path and without it (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §4a).
 - Mode is a runtime option per reactor. Code must not assume either mode.
 
-**The wake path, and its one atomic.** `IoBackend::Wake()` is the seam
-(`include/kds/sched/io_backend.hpp`) — injected, never a syscall in engine
-logic, so invariant 8 holds and §8's determinism survives; `EpollIoBackend`
-implements it with an eventfd it owns and keeps in its own epoll set, and
-the sticky counter is what makes a wake that lands just before the block
-harmless. A sender wakes **only a core that is actually asleep**, gated on
-that core's `sleeping_` flag, because an unconditional wake is a syscall per
-message on the sender's critical path and the loaded cells are exactly the
-ones where the target is never asleep. The store-load argument that makes
-the flag race-free — Dekker's, `seq_cst` on both sides, plus the sleeper's
-peek at its own inbox after publishing the flag — is written out at the top
-of `include/kds/sched/core_waker.hpp` and is not restated here. The
-simulated transport deliberately does **not** wake: its reactors are
-multiplexed by a seeded harness, and a second "who runs now" input is the
-nondeterminism §8 forbids.
+**The wake, and its one atomic.** One `Waker` (an eventfd) per reactor,
+armed at `AttachTransport` and registered with that reactor's backend like
+any other readable handle — so a single-core build arms nothing and pays
+nothing. A sender wakes **only a destination that is actually asleep**,
+reading that core's `sleeping` flag first, because an eventfd write is a
+syscall on the sender's critical path and the cells shipping is already fast
+in are exactly the ones where the owner is never asleep. The flag cannot be
+missed: sender and receiver touch the two variables in opposite orders with
+a `seq_cst` fence on **both** sides, so sequential consistency forbids both
+reads returning stale — either the sender sees the flag and writes the wake,
+or the receiver's pre-block re-check sees the message and does not sleep
+(`ring_transport.hpp` carries the argument; `Scheduler::wake_race_skips()`
+counts the second case). **The sender's fence is not optional**: its store
+is the ring's release, and StoreLoad is the one reordering x86 TSO permits.
+The simulated transport does not wake — its reactors are multiplexed by a
+seeded harness, and a second "who runs now" input is the nondeterminism §8
+forbids.
 
-**A block always has a ceiling; `PollReady(-1)` is forbidden.** A lost wake
-must degrade to a bounded latency, never to a hang — `max_idle_block_ms`
-(10 ms) is that bound, and it is what lets the wake path land before every
-park in the engine is proven wakeable. The census below is why that matters.
+**A block always has a ceiling.** `max_idle_block_ms` (10 ms) bounds every
+idle block, so a wake that is somehow missed costs latency and never
+liveness. That is not belt-and-braces; the census below has two entries that
+depend on it.
 
-**Every park and what ends it** (the v2.3.0 order's G2, taken at `bce12d0`;
-this is the table a change to the idle policy must be checked against,
-because the spin that used to hide a missing wake is what makes an
-unclassified park dangerous):
+**Every park and what ends it** (taken at `bce12d0`, re-checked after the
+wake landed). This is the table a change to the idle policy must be checked
+against — the reactor currently spins whenever any coroutine is parked
+(§4), and that spin is what has been hiding whether a park is wakeable at
+all:
 
 | Park site | Predicate | What satisfies it | Ends the block? |
 |---|---|---|---|
 | `extent_lease_service.cpp:110`, `row_id_lease_service.cpp:142`, `trx_id_lease_service.cpp:106` | `WaitFor{&refill.granted}` | core 0's grant reply | ring message → **wake** |
 | `command_dispatcher.cpp:238` | the remote read is done or torn down | the pipeline's reply | ring message → **wake** |
 | `remote_step_service.cpp:600` (`actionable`), `:734` (`output_ok`), `exec/step_vm.cpp:1858` (`resume_gate_`) | pipeline credit, cancel, data | a peer's message | ring message → **wake** |
-| `command_dispatcher.cpp:225` (shipped statement), `:252` (index build), `:266` (assertion build) | `Settled(id)`, **and the deadline is read inside the predicate** | the owner's reply, or the deadline | the reply is a ring message → **wake**; the *deadline* has no timer of its own and is noticed only when the task is next polled, so it is honored to within one idle block. **This is the case D4's ceiling exists for** — with an uncapped block a timed-out shipped statement would never answer |
-| `command_dispatcher.cpp:279` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1723`), with the drain timer as backstop | on-core: nothing to wake, and no rule may let the reactor block between the staging and the hook. This is why "nothing completed this round" is not a safe idle predicate, and any parked-is-not-ready work must treat the hook's own work as progress |
+| `command_dispatcher.cpp:225` (shipped statement), `:252` (index build), `:266` (assertion build) | `Settled(id)`, **with the deadline read inside the predicate** | the owner's reply, or the deadline | the reply is a ring message → **wake**; the *deadline* has no timer of its own and is noticed only when the task is next polled, so it is honored to within one idle block. **This is what the ceiling above is for** — under an unbounded block a timed-out shipped statement would never answer |
+| `command_dispatcher.cpp:279` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1723`), with the drain timer as backstop | on-core: nothing to wake. Any future "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
 
 Nine of the eleven sites are satisfied by a peer's message and are covered
 by the wake. The two that are not are named above with what covers them
-instead — a bounded block, and the post-task hook.
+instead.
 
 ## 8. Deterministic Simulation
 
@@ -133,8 +136,8 @@ The reactor depends only on injectable interfaces: **I/O backend, clock, RNG, cr
 4. Every task yields within its budget; no preemption; no work-stealing.
 5. Every task carries a scheduling-group membership; group pick is share-proportional.
 6. Background work is throttled only via group shares (SLO controller), never via ad-hoc sleeps.
-7. Cross-core interaction goes through the SPSC ring interface only; sends are non-blocking and fallible. **A message delivered to a sleeping core wakes it** (§7): a send that succeeds either finds the target awake or ends its block, and no reactor waits out an idle block on work that has already arrived. The wake follows the push and never precedes it.
-7a. A reactor's idle block is always bounded (`PollReady(-1)` is forbidden), so a wake that is somehow missed costs latency and never liveness.
+7. Cross-core interaction goes through the SPSC ring interface only; sends are non-blocking and fallible. **A message delivered to a sleeping core wakes it** (§7): a successful send either finds the target awake or ends its block, so no reactor waits out an idle block on work that has already arrived.
+7a. A reactor's idle block is always bounded — `PollReady` is never given a negative timeout — so a missed wake costs latency and never liveness.
 8. Engine logic never reads real time, real randomness, or performs direct syscalls; only injected interfaces.
 
 ## 10. Open Decisions `[OPEN — do not assume]`

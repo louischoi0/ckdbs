@@ -36,8 +36,8 @@ protected:
 
         core0_.emplace(clock_, io0_);
         core1_.emplace(clock_, io1_);
-        core0_->AttachTransport(&*transport_, 0);
-        core1_->AttachTransport(&*transport_, 1);
+        ASSERT_TRUE(core0_->AttachTransport(&*transport_, 0).ok());
+        ASSERT_TRUE(core1_->AttachTransport(&*transport_, 1).ok());
 
         ASSERT_TRUE(RegisterExtentGrantHandler(*core0_, *transport_, *allocator_,
                                                /*pages_per_grant=*/64)
@@ -148,7 +148,7 @@ TEST_F(ExtentLeaseServiceTest, AnExhaustedMapIsReportedRatherThanHungOn) {
     storage::ExtentAllocator none(std::span<std::byte, kPageSize>(full), 128);
 
     sched::Scheduler core0(clock_, io0_);
-    core0.AttachTransport(&*transport_, 0);
+    ASSERT_TRUE(core0.AttachTransport(&*transport_, 0).ok());
     ASSERT_TRUE(RegisterExtentGrantHandler(core0, *transport_, none, 64).ok());
 
     storage::LeasedIdSource lease;
@@ -191,7 +191,7 @@ TEST_F(ExtentLeaseServiceTest, AGrantedExtentIsOnTheDeviceBeforeTheGrantLeaves) 
     ASSERT_TRUE(store.value()->Sync().ok());  // a clean map, the shape at any refill
 
     sched::Scheduler core0(clock_, io0_);
-    core0.AttachTransport(&*transport_, 0);
+    ASSERT_TRUE(core0.AttachTransport(&*transport_, 0).ok());
     ASSERT_TRUE(RegisterExtentGrantHandler(core0, *transport_, over_store, 64).ok());
 
     storage::LeasedIdSource lease;

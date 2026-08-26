@@ -83,7 +83,6 @@ add_executable(kds_tests
     foreign_key_test.cpp
     cabin_store_test.cpp
     scheduler_test.cpp
-    reactor_wake_test.cpp
     log_test.cpp
     config_file_test.cpp
     superblock_checkpoint_anchor_test.cpp

@@ -246,8 +246,8 @@ TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
 
     auto transport = RealRingTransport::Create(/*core_count=*/2, 16, 64);
     ASSERT_TRUE(transport.ok());
-    core0.AttachTransport(&transport.value(), 0);
-    core1.AttachTransport(&transport.value(), 1);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
+    ASSERT_TRUE(core1.AttachTransport(&transport.value(), 1).ok());
 
     // Per-request state the reply is routed to. It outlives the wait, which
     // is WaitFor's one requirement.

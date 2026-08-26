@@ -339,7 +339,6 @@ TEST(SubsystemLoggingTest, IoBackendFailureIsLoggedOnceUntilItRecovers) {
         Status Register(sched::IoHandle, sched::IoInterest) override { return Status::OK(); }
         Status Modify(sched::IoHandle, sched::IoInterest) override { return Status::OK(); }
         Status Unregister(sched::IoHandle) override { return Status::OK(); }
-        void Wake() noexcept override {}
 
         bool fail = false;
         int polls = 0;
