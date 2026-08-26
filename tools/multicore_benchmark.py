@@ -6,15 +6,15 @@ relation, run concurrently. Compares `cores = 1` against `cores = N`.
 Two shapes, and which one runs is decided by the flags:
 
 * `--placement creating` (default): every relation is core 0's and core 0
-  serves every statement whatever `cores` says (docs/workplan-crosscore.md
+  serves every statement whatever `cores` says (docs/inflight/in-progress/workplan-crosscore.md
   P6c), so the honest expectation is parity. The harness's original shape,
   kept as the control.
 
 * `--placement rotate --peer-listeners`: the per-core writer shape
-  (docs/workplan-peer-writer.md PW6). Relations rotate over the peer cores,
+  (docs/inflight/in-progress/workplan-peer-writer.md PW6). Relations rotate over the peer cores,
   every core listens (`peer_listeners = on`, PW5), and each relation is
   written from a connection **the kernel accepted on its owner core** - a
-  client cannot choose its core under SO_REUSEPORT (docs/workplan-peer-writer.md
+  client cannot choose its core under SO_REUSEPORT (docs/inflight/in-progress/workplan-peer-writer.md
   §5, kds.conf.sample), so the driver opens connections until every needed
   core has enough, asks each one `SHOW META` for its `core=`, and reports
   how many it had to open. DDL still runs on core 0 only, so the setup
@@ -161,7 +161,7 @@ def start_server(binary, workdir, tag, cores, port, placement="creating",
 
 
 def session_core(conn):
-    """The core serving `conn`, from SHOW META's `core=` (docs/client-manual.md)."""
+    """The core serving `conn`, from SHOW META's `core=` (docs/spec/client-manual.md)."""
     return field(conn.cmd("SHOW META"), "core")
 
 
@@ -212,14 +212,14 @@ def collect_connections(port, needed, max_attempts):
     return got, attempts
 
 
-# The engine's refusals that mean "again, later" (docs/protocol.md §11): the
+# The engine's refusals that mean "again, later" (docs/spec/protocol.md §11): the
 # wire's `retryable=1` - except CC3's cross-core write refusal, which carries
 # the bit and is permanent for a session on the wrong core
-# (docs/workplan-peer-writer.md §5: it repeats forever) - and the three lease
+# (docs/inflight/in-progress/workplan-peer-writer.md §5: it repeats forever) - and the three lease
 # exhaustions a peer answers until its refill grant lands: the row-id lease
 # on a relation's first INSERT (PW1b), the trx-id lease, and the extent lease
 # (a btree insert that could not allocate). Those three carry the bit since
-# 2026-08-25 (they are TxnConflict now - docs/known-gaps.md closes PW6's
+# 2026-08-25 (they are TxnConflict now - docs/inflight/known-gaps.md closes PW6's
 # finding (2)); the message matching below stays as the fallback that reads
 # a server built before that, and is what kept this driver from losing rows
 # to them at v2.0.0-48-g314a06d.
@@ -405,7 +405,7 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
         wall = time.perf_counter() - t0
 
         # What the peer's lease refills cost, from its own SHOW META
-        # (docs/client-manual.md): requests, grants and the longest wait per
+        # (docs/spec/client-manual.md): requests, grants and the longest wait per
         # kind, split into the ring-and-core-0 leg and this reactor's
         # resume leg. Read after the workload from one fresh session per
         # writer core; the lease-refill trace's instrument.
@@ -434,7 +434,7 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
             expected = rows // 2 + (1 if name == names[0] else 0)
             got = counts.get(name, "")
             # A multi-line reply travels as one line with `\n` escaped
-            # (docs/client-manual.md): the header, then the value.
+            # (docs/spec/client-manual.md): the header, then the value.
             try:
                 n = int(got.replace("\\n", "\n").split("\n")[-1].split(",")[-1])
             except ValueError:
@@ -505,7 +505,7 @@ def main():
     ap.add_argument("--workdir", default=os.path.expanduser("~/mcbench"),
                     help="where the data files go - a block device, never tmpfs")
     ap.add_argument("--placement", choices=("creating", "rotate"), default="creating",
-                    help="relation placement policy (docs/workplan-crosscore.md P6c). "
+                    help="relation placement policy (docs/inflight/in-progress/workplan-crosscore.md P6c). "
                          "`rotate` puts relations on peer cores; with --peer-listeners "
                          "each is written from a session on its owner core, without it "
                          "the driver probes and reports NOT RUN.")
@@ -566,7 +566,7 @@ def main():
     if args.placement == "creating":
         print("   (expected ~1.0x at placement=creating whatever the pipeline can do:\n"
               "    every relation is on core 0, so no statement ships - "
-              "docs/workplan-crosscore.md P6c)")
+              "docs/inflight/in-progress/workplan-crosscore.md P6c)")
     elif args.cores == 2:
         print("   (rotation skips the system core, so at cores=2 every relation is\n"
               "    core 1's: this compares the peer write path against core 0's at\n"

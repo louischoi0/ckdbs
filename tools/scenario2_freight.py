@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Freight and cargo: the schema and reference data for scenario 2.
 
-The plan this implements is `docs/scenario2-freight.md`, tasks `S2-01`
+The plan this implements is `docs/inflight/in-progress/scenario2-freight.md`, tasks `S2-01`
 through `S2-03` of its §9: it builds the eight relations, loads the reference
 data, drives the eight-statement booking transaction from `--bookers`
 concurrent processes, accounts for every outcome separately - committed,
@@ -69,7 +69,7 @@ from bench_common import Phase, report, write_json
 from benchmark import read_durability
 from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 
-# ---- schema (docs/scenario2-freight.md §2) -------------------------------
+# ---- schema (docs/inflight/in-progress/scenario2-freight.md §2) -------------------------------
 #
 # Column 0 of every relation is the Keystone primary key: system-generated,
 # never supplied on INSERT (invariant 11). It is written out in each column
@@ -119,7 +119,7 @@ SCHEMA = {
 CREATE_ORDER = ("organizations", "ships", "operations", "cargos", "fees",
                 "recipes", "freights", "charges")
 
-# ---- the foreign keys (docs/impl-foreign-keys.md) ------------------------
+# ---- the foreign keys (docs/spec/impl-foreign-keys.md) ------------------------
 #
 # `--fk` declares these three, as (child, column, parent):
 FOREIGN_KEYS = (
@@ -134,7 +134,7 @@ FOREIGN_KEYS = (
 # three fire on the forward check only - nothing in this workload deletes a
 # parent, which is the honest shape of an insert-dominated OLTP run.
 
-# ---- the Cabin (docs/feat-cabin.md) --------------------------------------
+# ---- the Cabin (docs/spec/feat-cabin.md) --------------------------------------
 #
 # `--cabin` declares one, on exactly this column:
 CABIN_RELATION, CABIN_COLUMN, CABIN_TYPE = "recipes", "cargo_type", "int32"
@@ -373,7 +373,7 @@ def explain_ddl_failure(base, suffix, reply, cabin, fk):
         cols = ", ".join(f"{c}.{col} -> {p}"
                          for c, col, p in FOREIGN_KEYS if c == base)
         abort(f"--fk: this server does not understand REFERENCES.\n"
-              f"  {cols} needs a build with docs/impl-foreign-keys.md in it "
+              f"  {cols} needs a build with docs/spec/impl-foreign-keys.md in it "
               f"(FK-M1); re-run without --fk, or rebuild the server.", reply)
     if fk and "heap relation" in reply:
         abort(f"--fk: the parent of a foreign key on {base} is a heap relation, "
@@ -385,7 +385,7 @@ def explain_ddl_failure(base, suffix, reply, cabin, fk):
     if cabin and base == CABIN_RELATION and "CABIN" in upper:
         abort(f"--cabin: this server does not understand the column cabin "
               f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} {CABIN_TYPE} CABIN` "
-              f"needs a build with docs/feat-cabin.md in it; re-run without "
+              f"needs a build with docs/spec/feat-cabin.md in it; re-run without "
               f"--cabin, or rebuild the server.", reply)
     if "no room" in reply or "reserved catalog page range" in reply:
         abort(f"could not create {base}_{suffix}: the catalog is out of column "
@@ -579,7 +579,7 @@ def route_code(origin, destination):
     return origin * PORTS + destination
 
 
-# ---- the booking transaction (docs/scenario2-freight.md §3) --------------
+# ---- the booking transaction (docs/inflight/in-progress/scenario2-freight.md §3) --------------
 #
 # The measured unit (S2-1): one cargo placed on one voyage. Eight statements
 # under one BEGIN/COMMIT - two pk lookups, two filtered reads, two ledger
@@ -622,7 +622,7 @@ COMMITTED, REJECTED_CAPACITY, REJECTED_CREDIT, CONFLICTED, FAILED = (
 # customer by bookers carrying the same shipper's cargo - and a workload can
 # be heavy on one and free of the other. `read` covers a conflict raised
 # before either update, which today means only a foreign-key check meeting an
-# in-flight writer (docs/impl-foreign-keys.md reuses kTxnConflict for it);
+# in-flight writer (docs/spec/impl-foreign-keys.md reuses kTxnConflict for it);
 # `commit` covers one raised by COMMIT itself.
 AXIS_OPERATIONS, AXIS_ORGANIZATIONS = "operations", "organizations"
 AXIS_READ, AXIS_COMMIT = "read", "commit"
@@ -655,7 +655,7 @@ def sum_value(rows):
 
 def is_conflict(reply):
     """`ERR TXN_CONFLICT retryable=1 ...` - the one error worth
-    special-casing (docs/client-manual.md). Every other ERR is a defect in
+    special-casing (docs/spec/client-manual.md). Every other ERR is a defect in
     this driver or in the engine, and is counted as one."""
     return reply.startswith("ERR") and "TXN_CONFLICT" in reply
 
@@ -983,7 +983,7 @@ def run_bookings(client, tables, state, args, phases, rng, target, deadline_wall
     }
 
 
-# ---- several bookers (docs/scenario2-freight.md §5) ----------------------
+# ---- several bookers (docs/inflight/in-progress/scenario2-freight.md §5) ----------------------
 
 def partition(operations, orgs, cargos, bookers, contend):
     """One (operations, orgs, cargos) slice per booker.
@@ -1064,7 +1064,7 @@ def result_state_booked(state):
     return {k: v for k, v in state.booked_cbm.items() if v}
 
 
-# ---- the reporter (docs/scenario2-freight.md §6) -------------------------
+# ---- the reporter (docs/inflight/in-progress/scenario2-freight.md §6) -------------------------
 
 MANIFEST_PHASES = ("manifest-scan", "voyage-rollup", "customer-statement")
 
@@ -1184,7 +1184,7 @@ def merge_bookers(results, elapsed):
     return merged
 
 
-# ---- verification (docs/scenario2-freight.md §4) -------------------------
+# ---- verification (docs/inflight/in-progress/scenario2-freight.md §4) -------------------------
 
 def verify(client, tables, state, sample, rng, trust_belief=True):
     """I1-I4, on a sample. Returns (checks, failures, first).
@@ -1270,14 +1270,14 @@ def verify(client, tables, state, sample, rng, trust_belief=True):
     return checks, failures, first
 
 
-# ---- the capability probe (docs/scenario2-freight.md §6) -----------------
+# ---- the capability probe (docs/inflight/in-progress/scenario2-freight.md §6) -----------------
 
 def probe_reads(exec_, tables, sample_op, sample_org):
     """Runs each read the later tasks depend on, once, and reports which the
     server accepts.
 
     The third one is why this function exists. **Nothing in this repo
-    aggregates over a joined chain today**: `docs/feat-aggregate.md` AG1
+    aggregates over a joined chain today**: `docs/spec/feat-aggregate.md` AG1
     puts the fold over the statement's RowSink and leaves the compiled chain
     byte-identical, so a group key resolving to a *second* step's column
     should work - but 'should' is not a measurement, and the reporter of
@@ -1327,7 +1327,7 @@ def print_probe(results):
         print()
         print(f"  {len(refused)} refused. The fallback for 'customer statement' is a")
         print( "  per-organization filtered aggregate; a refusal anywhere else is a")
-        print( "  blocker for S2-02, not a fallback (docs/scenario2-freight.md §10).")
+        print( "  blocker for S2-02, not a fallback (docs/inflight/in-progress/scenario2-freight.md §10).")
     print()
 
 
@@ -1501,10 +1501,10 @@ def main():
                              "which is what makes a booking's fee count vary "
                              "(default: 6)")
     parser.add_argument("--fk", action="store_true",
-                        help="declare the three foreign keys (docs/impl-foreign-keys.md)")
+                        help="declare the three foreign keys (docs/spec/impl-foreign-keys.md)")
     parser.add_argument("--cabin", action="store_true",
                         help=f"declare a Cabin on {CABIN_RELATION}.{CABIN_COLUMN} "
-                             f"(docs/feat-cabin.md)")
+                             f"(docs/spec/feat-cabin.md)")
     parser.add_argument("--echo", action="store_true",
                         help="print every statement and its reply to stderr. Not "
                              "free: a write per statement")

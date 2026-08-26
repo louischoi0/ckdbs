@@ -12,7 +12,7 @@
 #include "kds/storage/index/index_page.hpp"
 #include "kds/txn/manager.hpp"
 
-// **The index contract** (docs/feat-index.md §1, workplan IX12), modelled on
+// **The index contract** (docs/spec/feat-index.md §1, workplan IX12), modelled on
 // `waystone_contract_test.cpp` and holding an index to a *higher* bar than
 // that file holds a trail to.
 //
@@ -170,7 +170,7 @@ const std::vector<std::string>& Queries() {
         // And the whole relation, which every configuration must agree on.
         "SELECT id, owner, qty, sym FROM b",
 
-        // ---- Paginated statements (docs/parser-v2.md I11, V09) ---------
+        // ---- Paginated statements (docs/spec/parser-v2.md I11, V09) ---------
         //
         // A limited index step must slice, never reorder: the walk
         // collects in index-key order and emission is pk order (§8a), so

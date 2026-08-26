@@ -10,7 +10,7 @@
 #include "kds/storage/page_header.hpp"
 
 // The waystone page: the recorded trail of one pattern instance
-// (docs/waystone-concpets.md §§1, 6).
+// (docs/spec/waystone-concpets.md §§1, 6).
 //
 // A *pattern* is the shape of a statement, reduced at parse time to
 // `pattern_id`; a *pattern instance* is that shape with its arguments

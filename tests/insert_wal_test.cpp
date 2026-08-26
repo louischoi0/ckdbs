@@ -217,7 +217,7 @@ TEST_F(InsertWalTest, NoWalManagerMeansNoRecordsAndTheInsertStillWorks) {
 // cell of kds.inline_cell_width bytes whatever it holds. So a wide row is a
 // row with many columns. These tests used to insert one 500-byte varchar,
 // which is now refused - a value that long belongs in the var-heap, which
-// is specified but not built (docs/rule-fixed-length-tuple.md section 5).
+// is specified but not built (docs/rules/rule-fixed-length-tuple.md section 5).
 //
 // 20 cells of the default 64 bytes plus the Keystone word is a 1288-byte
 // row, so roughly six fit a page and growth happens well inside the loops
@@ -238,7 +238,7 @@ std::string WideInsert() {
 
 TEST_F(InsertWalTest, ALeafDivisionLogsBothPagesAsImagesAndNoPageInit) {
     // A caller-supplied key that sorts inside a full leaf divides it
-    // (docs/heap-and-tuple.md §4.1), which moves versions onto a page no
+    // (docs/spec/heap-and-tuple.md §4.1), which moves versions onto a page no
     // other record describes.
     //
     // `is_new_page` means "a PAGE_INIT is enough, because the HEAP_INSERT
@@ -249,7 +249,7 @@ TEST_F(InsertWalTest, ALeafDivisionLogsBothPagesAsImagesAndNoPageInit) {
     // and lose every version the division moved.
     //
     // This test exists because nothing reads the log back yet
-    // (docs/known-gaps.md), so a wrong record set is otherwise invisible
+    // (docs/inflight/known-gaps.md), so a wrong record set is otherwise invisible
     // until recovery is built and the data is already gone.
     CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
     std::string sql = "CREATE TABLE t (id int64";
@@ -348,7 +348,7 @@ TEST_F(InsertWalTest, ASpilledValueIsLoggedBeforeTheTupleThatPointsAtIt) {
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
 
     // Long enough to spill: the cell holds a pointer, the bytes go to the
-    // var-heap (docs/rule-fixed-length-tuple.md section 5).
+    // var-heap (docs/rules/rule-fixed-length-tuple.md section 5).
     const std::string spilled(500, 's');
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('" + spilled + "')").response.substr(0, 8),
               "INSERTED");
@@ -696,7 +696,7 @@ TEST(DurabilityClassNames, EveryClassRoundTripsThroughItsName) {
 }
 
 
-// ---- INDEX_INSERT (docs/feat-index.md §12.1, workplan IX08) --------------
+// ---- INDEX_INSERT (docs/spec/feat-index.md §12.1, workplan IX08) --------------
 
 TEST_F(InsertWalTest, AnIndexEntryIsLoggedBeforeTheRowItPointsAt) {
     // The direction is forced, not stylistic: if the index record is durable

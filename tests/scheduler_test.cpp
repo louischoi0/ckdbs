@@ -219,7 +219,7 @@ TEST_F(SchedulerTimerTest, ATimerCallbackCanSubmitATaskThatRunsTheSameIteration)
 }
 
 TEST_F(SchedulerTimerTest, AParkedTaskIsPolledAtMostOncePerIteration) {
-    // The lease-refill trace (docs/workplan-peer-writer.md PW7): a parked
+    // The lease-refill trace (docs/inflight/in-progress/workplan-peer-writer.md PW7): a parked
     // coroutine answers kSuspended in nanoseconds, and the loop budget used
     // to re-poll it until the budget ran out - 64 polls an iteration, every
     // one charged to its group's share.

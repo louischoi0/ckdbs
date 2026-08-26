@@ -28,7 +28,7 @@
 //
 // Durability: dirty pages reach the data file on the checkpoint cadence
 // (`checkpoint_interval_ms`), on SYNC, and at clean shutdown. A crash loses
-// at most what changed since the last of those - the WAL (docs/wal.md)
+// at most what changed since the last of those - the WAL (docs/spec/wal.md)
 // closes the remainder of the gap once mutations are logged.
 //
 // Configuration precedence, applied in this order: built-in defaults, then
@@ -43,7 +43,7 @@ constexpr const char* kUsage =
     "       kds_server --add-user <name> [--role readonly|readwrite|admin]\n"
     "                  [--users-file <path>] [--config <path>]\n"
     "\n"
-    "  --config <path>   key = value settings file; see docs/client-manual.md\n"
+    "  --config <path>   key = value settings file; see docs/spec/client-manual.md\n"
     "  <data_file>       positional, overrides data_file from the config\n"
     "  --add-user <name> provision a SCRAM-SHA-256 user into the users file\n"
     "                    (prompts for the password; the server does not run)\n"
@@ -96,7 +96,7 @@ std::string PromptPassword(const char* prompt) {
 // identifiable in one round trip - the same enumeration oracle the mock
 // exists to close, through a different attribute. Raising the count is
 // future work tied to teaching the mock the deployment's own number
-// (docs/protocol.md §14).
+// (docs/spec/protocol.md §14).
 int AddUser(const std::string& users_file, const std::string& username,
             kds::server::Role role) {
     const std::uint32_t iterations = kds::server::scram::kDefaultIterations;

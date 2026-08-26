@@ -140,7 +140,7 @@ add_library(kds
 )
 target_include_directories(kds PUBLIC include)
 
-# The TLS wire channel (docs/protocol.md §1, direct TLS decided
+# The TLS wire channel (docs/spec/protocol.md §1, direct TLS decided
 # 2026-08-13). OpenSSL is the engine's first external dependency, so it
 # stays behind an option: OFF builds every subsystem except
 # src/server/tls_channel.cpp, and a config with `tls = on` is then

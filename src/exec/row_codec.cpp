@@ -234,8 +234,8 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             // failure rather than an assert for a hand-built schema.
             return Status::Unsupported(
                 "column '" + NameOf() +
-                "' has type float, which this engine does not store (docs/spec-types.md TY1)");
-        // ---- DATE / TIMESTAMP / DECIMAL (docs/spec-types.md TY7) -------
+                "' has type float, which this engine does not store (docs/spec/spec-types.md TY1)");
+        // ---- DATE / TIMESTAMP / DECIMAL (docs/spec/spec-types.md TY7) -------
         //
         // **This is the only gate.** Each accepts two shapes and no others:
         // the *literal* a client wrote, as a string, which is parsed and
@@ -491,7 +491,7 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
                 return Status::Corruption(
                     "column '" + std::string(catalog::NameView(col.name)) +
                     "' cell is tagged kNull while the null bitmap says present "
-                    "(docs/spec-null.md §3)");
+                    "(docs/spec/spec-null.md §3)");
             }
             if (decoded.value().tag == storage::CellTag::kSpilled) {
                 // Recorded, not fetched: R1 forbids a page fetch while the
@@ -580,7 +580,7 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
 //
 // `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to a
 // comparison whose right side is **already the scaled integer 1234**
-// (docs/spec-types.md §3.1). The string is parsed once, here, by the same
+// (docs/spec/spec-types.md §3.1). The string is parsed once, here, by the same
 // routines `EncodeOneValue` calls - one parser, two callers, zero drift -
 // so a literal that stores and a literal that compares can never come to
 // disagree about what it means.
@@ -805,7 +805,7 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                 return Status::InvalidArgument(
                     "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
                     "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
-                    "opt in - docs/spec-null.md) (byte " +
+                    "opt in - docs/spec/spec-null.md) (byte " +
                     std::to_string(values[i - 1].byte_offset) + ")");
             }
             catalog::SetNullBit(out, layout, i);
@@ -1086,7 +1086,7 @@ std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value) {
         case parser::ValueType::kStr:
             return value.str_val;
         // The scale is part of the value's meaning, so `12.30` and not
-        // `12.3` (docs/spec-types.md §3.3). This is the one kind that
+        // `12.3` (docs/spec/spec-types.md §3.3). This is the one kind that
         // carries enough to render itself, so it ignores `type_val`
         // entirely - a decimal read out of a column and a decimal folded
         // by SUM render the same way with no caller having to know which
@@ -1147,7 +1147,7 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         if (!a.ok() || !b.ok()) return false;
         return ApplyCompare(a.value(), b.value(), op);
     }
-    // ---- DECIMAL (docs/spec-types.md §3.1, TY05) -----------------------
+    // ---- DECIMAL (docs/spec/spec-types.md §3.1, TY05) -----------------------
     //
     // Unscaled integers, compared directly - which is only valid because
     // **the scales are equal**, and they are equal because the compiler

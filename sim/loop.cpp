@@ -517,7 +517,7 @@ void Reconcile(Iteration& it) {
         // No fabrication: every row read back must be one the oracle
         // accepted, byte for byte, or one whose outcome the engine left
         // unknown by answering its write with an error. This also catches a
-        // docs/txn.md section 8 ghost — a row whose statement was never
+        // docs/spec/txn.md section 8 ghost — a row whose statement was never
         // acknowledged.
         std::set<std::string> accepted_rendered;
         for (const auto& [id, row] : accepted) {

@@ -13,7 +13,7 @@
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 
-// V01 - the golden corpus (docs/parser-v2-workplan.md).
+// V01 - the golden corpus (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // This test does not decide whether the parser is *right*. It decides
 // whether it still does what it did, which is a different and, for the

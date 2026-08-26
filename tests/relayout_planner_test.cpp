@@ -13,7 +13,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// The physical-optimizer planner (docs/feat-physical-optimizer.md §5,
+// The physical-optimizer planner (docs/spec/feat-physical-optimizer.md §5,
 // workplan PX05). Two claims carry the acceptance: the math is a pure
 // function a test can pin without an engine, and the bare form fetches no
 // relation page - proven here with a counting store, on top of being true

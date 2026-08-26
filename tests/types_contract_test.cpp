@@ -12,7 +12,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// **The types contract** (docs/spec-types.md §6, workplan TY08).
+// **The types contract** (docs/spec/spec-types.md §6, workplan TY08).
 //
 // One test per numbered item, in order, and regression-mandatory from the
 // moment this file exists: these are the eight statements the types work

@@ -24,7 +24,7 @@
 //               the durable image must be clean. The "every acknowledged
 //               row whose commit record is durable survives" assertion is
 //               written here and **[GATED: recovery]** — nothing reads the
-//               WAL back yet (docs/txn.md section 8), so the loop *counts*
+//               WAL back yet (docs/spec/txn.md section 8), so the loop *counts*
 //               the rows recovery owes (`gated_missing_rows`) instead of
 //               failing on them. The gate flips the day recovery lands:
 //               set kRecoveryImplemented below to true and the counter

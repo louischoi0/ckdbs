@@ -10,7 +10,7 @@
 #include "kds/sched/ring_message.hpp"
 
 // One directed core-to-core channel: a single-producer, single-consumer
-// lock-free ring (docs/sched.md §5, docs/workplan-crosscore.md P1).
+// lock-free ring (docs/spec/sched.md §5, docs/inflight/in-progress/workplan-crosscore.md P1).
 //
 // ---- Concurrency protocol ----------------------------------------------
 //

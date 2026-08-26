@@ -5,7 +5,7 @@
 
 #include "kds/parser/parser.hpp"
 
-// V07 - predicate-position subqueries (docs/parser-v2-workplan.md).
+// V07 - predicate-position subqueries (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // Four forms are in scope, and they are in scope *only* in predicate
 // position: scalar comparison, `IN`/`NOT IN`, `EXISTS`/`NOT EXISTS`.

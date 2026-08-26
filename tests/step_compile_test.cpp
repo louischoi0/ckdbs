@@ -11,7 +11,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// V14 - the step compiler (docs/parser-v2-workplan.md).
+// V14 - the step compiler (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // Two properties carry this task, and neither is about any single chain:
 //
@@ -292,7 +292,7 @@ TEST_F(StepCompileTest, AJoinPredicateIsAConjunctLikeAnyOther) {
     EXPECT_EQ(chain.steps[1].residual[0].rhs.kind, OperandKind::kColumn);
 }
 
-// ---- Equality propagation (docs/parser-v2.md §5) --------------------------
+// ---- Equality propagation (docs/spec/parser-v2.md §5) --------------------------
 
 TEST_F(StepCompileTest, ALiteralOnTheJoinKeyPropagatesToTheOtherSide) {
     // `acct.id = 7` plus `trade.acct_id = acct.id` implies
@@ -818,7 +818,7 @@ TEST_F(StepCompileTest, ACorrelatedSubChainProbesTheCabinThroughTheFrame) {
 // ---- The walked-join build annotation (workplan JB1) ----------------------
 //
 // The compile half of the statement-local inner build
-// (docs/spec-join-inner-build.md). Two contracts, and every test here pins
+// (docs/spec/spec-join-inner-build.md). Two contracts, and every test here pins
 // one of them: **exactly** the walked-join shape carries the annotation, and
 // an annotated step is a kScan by every other measure - kinds, residuals,
 // read_columns and class are what they were before the arm existed, by

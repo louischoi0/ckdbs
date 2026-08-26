@@ -55,7 +55,7 @@ class WalManager;
 //     kUserOidStart in well_known.hpp. This was a KNOWN GAP until
 //     2026-08-08 - the counter was in-memory and restarted every boot,
 //     so a clean restart plus one CREATE TABLE produced two relations
-//     sharing an oid (docs/keystoneid-k0-findings.md §6).
+//     sharing an oid (docs/rules/keystoneid-k0-findings.md §6).
 //
 // Logging (component tag "catalog"): catalog pages are the pages whose
 // contents explain every other page, so the writes are logged at Info
@@ -125,7 +125,7 @@ public:
     // and tests).
     //
     // `core_count` is the instance-pinned `cores`
-    // (docs/workplan-crosscore.md M6), and is here for the same reason and
+    // (docs/inflight/in-progress/workplan-crosscore.md M6), and is here for the same reason and
     // under the same rule: it is fixed for the life of the database, and
     // CreateTable() needs it to assign `sys.tables.owner_core`. The catalog
     // does not *decide* placement - catalog/core_placement.hpp does - it
@@ -204,7 +204,7 @@ public:
 
     // Called after every DDL that invalidates cached facts - i.e. from
     // BumpVersion(), the single choke point, and from nowhere else
-    // (docs/workplan-crosscore.md P6).
+    // (docs/inflight/in-progress/workplan-crosscore.md P6).
     //
     // On the system core this is what broadcasts `kCatalogInvalidate` so
     // peers drop their caches and re-read. Hooking the choke point rather
@@ -334,7 +334,7 @@ public:
 
     // Allocates one fresh object oid, **unique for the life of the
     // database** and not merely for the life of the process
-    // (docs/keystoneid-k0-findings.md §6).
+    // (docs/rules/keystoneid-k0-findings.md §6).
     //
     // The counter is not stored anywhere. It is *recovered* on first use by
     // reading back the highest oid the catalog already carries, and every
@@ -435,7 +435,7 @@ public:
     // exist" without the caller already knowing a name to look up.
     StatusOr<std::vector<SysObjectRow>> ListTables(const txn::ReadView* view = nullptr);
 
-    // ALTER TABLE's two catalog writes (docs/spec-alter.md AL2, AL5,
+    // ALTER TABLE's two catalog writes (docs/spec/spec-alter.md AL2, AL5,
     // workplan ALT02): rewrite one fixed-width Name field in place - same
     // size, no relayout - then BumpVersion(), with no in-place-cache
     // exception, because a name is read by resolution itself. Identity is
@@ -449,7 +449,7 @@ public:
     Status RenameTable(Oid table_oid, std::string_view new_name);
     Status RenameColumn(Oid table_oid, std::string_view old_name, std::string_view new_name);
 
-    // DROP TABLE's catalog half (docs/spec-drop-table.md DT1-DT3, workplan
+    // DROP TABLE's catalog half (docs/spec/spec-drop-table.md DT1-DT3, workplan
     // DT02). The sys.objects row is **retyped to kTypeDroppedTable, never
     // retired** - the rows are GenerateUserOid()'s counter, so the row
     // must stay to keep the dead oid from being reissued, while name
@@ -476,7 +476,7 @@ public:
                       std::uint64_t trx_id = kBootstrapXid,
                       std::vector<CatalogRowChange>* written = nullptr);
 
-    // T3's contiguous id range (docs/workplan-t3.md T3-3): one catalog
+    // T3's contiguous id range (docs/inflight/in-progress/workplan-t3.md T3-3): one catalog
     // write bumps next_id by `count` and returns the first id - issuance
     // inside the range is monotone by construction. Refused whole when it
     // would cross the 40-bit ceiling; an aborted statement burns the whole
@@ -531,7 +531,7 @@ public:
     // rather than wrapped.
     StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
-    // What an `INSERT` that **supplies** the pk calls (docs/heap-and-tuple.md
+    // What an `INSERT` that **supplies** the pk calls (docs/spec/heap-and-tuple.md
     // section 4.1): admits a caller-named id and moves the relation's
     // high-water mark past it. Every relation may be inserted into either
     // way; which of the two functions runs is a property of the row, not of
@@ -576,7 +576,7 @@ public:
     // Fails with NotFound if no sys.tables row names `table_oid`.
     Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id);
 
-    // ---- sys.patterns (docs/waystone-concpets.md section 4) --------------
+    // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 
     // The pattern `pattern_id` names, served from the cache after the first
     // lookup. The pointer is reference-stable and stays valid until the
@@ -761,7 +761,7 @@ public:
     Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
                                   PageId anchor_page_id);
 
-    // ---- sys.access_stats (docs/heap-and-tuple.md §7) --------------------
+    // ---- sys.access_stats (docs/spec/heap-and-tuple.md §7) --------------------
 
     // Counts one execution of an access shape, creating its row the first
     // time the shape is seen.
@@ -787,7 +787,7 @@ public:
     // `SHOW ACCESS`.
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 
-    // ---- sys.cabins (docs/feat-cabin.md §10) -----------------------------
+    // ---- sys.cabins (docs/spec/feat-cabin.md §10) -----------------------------
 
     // Declares a Cabin on one non-pk column and returns its `cabin_id`.
     //
@@ -832,7 +832,7 @@ public:
     // this per step (catalog_cache.hpp's absence rule).
     StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
 
-    // ---- Foreign keys (docs/impl-foreign-keys.md, FK-M1) ----------------
+    // ---- Foreign keys (docs/spec/impl-foreign-keys.md, FK-M1) ----------------
 
     // Records that `child_rel_oid`'s column `child_column_no` references
     // `parent_rel_oid`'s Keystone id, and returns the new `fk_id`.
@@ -918,7 +918,7 @@ public:
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr);
 
-    // ---- Secondary indexes (docs/feat-index.md §12) --------------------
+    // ---- Secondary indexes (docs/spec/feat-index.md §12) --------------------
 
     // What CREATE INDEX has settled by the time it reaches the catalog.
     // The widths are computed by the caller from the key columns
@@ -976,7 +976,7 @@ public:
     //
     // `CreateIndex` is this plus the write, so there is still exactly one
     // implementation of each refusal. It is public because the DDL layer
-    // **backfills before it publishes** (docs/feat-index.md §10a) - and a
+    // **backfills before it publishes** (docs/spec/feat-index.md §10a) - and a
     // declaration that could never work should be refused by name before it
     // walks a relation, not after, and certainly not as a page-type error
     // from inside the build.
@@ -1066,7 +1066,7 @@ private:
     Status BootstrapPatternDefs();
 
     // Phase 6 of Bootstrap(): creates sys.assertions, the *second* row-codec
-    // catalog relation (docs/feat-assertion.md §8.2, workplan AST03). Same
+    // catalog relation (docs/spec/feat-assertion.md §8.2, workplan AST03). Same
     // shape as the phase above it and for the same reason - it stores the
     // declaration's text verbatim - so the two read as one pattern rather
     // than as a special case and a copy of it.

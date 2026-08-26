@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// The allocation bitmap page (PageType::kFreeMap, docs/page.md section 5):
+// The allocation bitmap page (PageType::kFreeMap, docs/spec/page.md section 5):
 // one bit per page id, 1 = allocated. This is what makes "which page ids
 // exist" a durable fact rather than an in-memory side table.
 //
@@ -18,7 +18,7 @@
 // constant - one file, one answer to "id -> (map page, bit)".
 //
 // The ALLOC/FREE WAL records remain page.md section 5's unbuilt work (D9
-// of docs/workplan-multi-free-map.md); the map is unlogged and repaired
+// of docs/inflight/in-progress/workplan-multi-free-map.md); the map is unlogged and repaired
 // at recovery by RaiseAllocationFloor.
 //
 // Bit addressing is explicit shift/mask over the page body - a persisted
@@ -70,10 +70,10 @@ std::uint32_t FreeMapCountAllocated(std::span<const std::byte, kPageSize> page) 
 
 
 // ---------------------------------------------------------------------
-// Placement: which bitmap pages cover an id (docs/page.md section 5)
+// Placement: which bitmap pages cover an id (docs/spec/page.md section 5)
 // ---------------------------------------------------------------------
 //
-// D1 of docs/workplan-multi-free-map.md section 7, settled 2026-08-26 as
+// D1 of docs/inflight/in-progress/workplan-multi-free-map.md section 7, settled 2026-08-26 as
 // that section's candidate A. Region N is the ids
 // [N * kFreeMapBitsPerPage, (N+1) * kFreeMapBitsPerPage), and its two
 // bitmaps are the first two ids inside it:

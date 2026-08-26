@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/wire/row_codec.hpp"
 
-// The cross-core step pipeline's data plane (docs/crosscore.md §3-§4,
+// The cross-core step pipeline's data plane (docs/spec/crosscore.md §3-§4,
 // workplan P4a): the tag every pipeline message carries, the payload codecs
 // for BATCH / EOF / CREDIT / CANCEL / ERROR, per-edge credit accounting,
 // and the batch builder over the KWP row encoder.

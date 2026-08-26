@@ -1,6 +1,6 @@
 // fdatasync overlap probe - standalone, deliberately outside the server.
 //
-// The question (docs/workplan-peer-writer.md PW6 §7, left open): can two or
+// The question (docs/inflight/in-progress/workplan-peer-writer.md PW6 §7, left open): can two or
 // more cores overlap `fdatasync` on one volume? If they cannot, the ceiling
 // on multi-core ingest throughput belongs to the I/O backend decision and
 // not to the cross-core architecture, and every ingest ratio in the

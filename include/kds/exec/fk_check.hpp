@@ -9,7 +9,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/read_view.hpp"
 
-// The two foreign-key checks (docs/impl-foreign-keys.md §§2-3, FK-M2 and
+// The two foreign-key checks (docs/spec/impl-foreign-keys.md §§2-3, FK-M2 and
 // FK-M3): does the parent a child row names exist, and does any child still
 // reference a parent about to be deleted.
 //
@@ -44,7 +44,7 @@
 //
 // Both take a read view minted **at check time**, not the statement's, and
 // judge by `txn::CheckVisibility` - latest state, in-flight writers visible
-// as such. See docs/impl-foreign-keys.md §4 and the note in
+// as such. See docs/spec/impl-foreign-keys.md §4 and the note in
 // txn/visibility.hpp for why that is a different question from what a
 // reader asks, and why it never walks the undo chain.
 //

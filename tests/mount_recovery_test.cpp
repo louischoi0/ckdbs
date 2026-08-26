@@ -327,7 +327,7 @@ TEST_F(MountRecoveryTest, TheAnchorItPublishesIsHonestAboutTheDurableEnd) {
 // ---- RC09: what an operator can read afterwards --------------------------
 
 TEST_F(MountRecoveryTest, PhasesAreTimedWhenAClockIsSuppliedAndSayWhenTheyAreNot) {
-    // `docs/wal.md` §13 asks for recovery phase timings. The property worth a
+    // `docs/spec/wal.md` §13 asks for recovery phase timings. The property worth a
     // test is not the numbers - they are wall clock - but the **flag**: four
     // zeroes from an untimed run and four zeroes from an instant one are the
     // same bytes, and an operator tuning RTO has to be able to tell them apart.

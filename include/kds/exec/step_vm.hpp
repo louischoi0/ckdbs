@@ -17,7 +17,7 @@
 #include "kds/storage/visit.hpp"
 #include "kds/txn/visibility.hpp"
 
-// Executes a compiled StepChain (docs/parser-v2-workplan.md V17).
+// Executes a compiled StepChain (docs/inflight/in-progress/parser-v2-workplan.md V17).
 //
 // ---- What this is not --------------------------------------------------
 //
@@ -133,7 +133,7 @@ struct StepStats {
     // was pruned, and `rows_examined` is what tells those apart.
     std::uint64_t range_pages_pruned = 0;
 
-    // Secondary index (docs/feat-index.md §§1, 7).
+    // Secondary index (docs/spec/feat-index.md §§1, 7).
     //
     // `index_entries_scanned` counts entries the walk read between its two
     // bounds; `index_rows_resolved` counts the pks it then descended for.
@@ -153,7 +153,7 @@ struct StepStats {
     std::uint64_t index_entries_filtered = 0;
     std::uint64_t index_rows_resolved = 0;
 
-    // Cabin (docs/feat-cabin.md §7's "ANALYZE narrates all three").
+    // Cabin (docs/spec/feat-cabin.md §7's "ANALYZE narrates all three").
     //
     // `cabin_hits` counts probes served from an observed value's entry set -
     // authoritatively, so the relation was **not** walked; `cabin_misses`
@@ -252,7 +252,7 @@ struct ExecStats {
 // for that step alone. Deleting every trail in the database changes
 // latency and nothing else (invariant 8).
 // `cabins`, when given, is the core-local Cabin store (stats/cabin_store.hpp,
-// docs/feat-cabin.md). **Passing it cannot change what this returns either**,
+// docs/spec/feat-cabin.md). **Passing it cannot change what this returns either**,
 // and the argument is a third variation on the same theme: a Cabin supplies a
 // set of *locations*, each of which is then read and filtered by the code a
 // walk would have fed - visibility, the residual (which still carries the
@@ -261,7 +261,7 @@ struct ExecStats {
 // relation. Deleting every Cabin in the database costs latency and nothing
 // else, one value at a time (spec §1's corollary).
 // `snapshot` is the read view every tuple is filtered through, plus the
-// undo log an invisible writer is stepped back through (docs/txn.md §4).
+// undo log an invisible writer is stepped back through (docs/spec/txn.md §4).
 // **It is applied at exactly one place** - `AcceptTupleAt` - which every
 // access kind funnels into: the chain walk, the btree descent, the probe
 // memo, a Waystone replay and a Cabin resolve. That is what makes Waystone

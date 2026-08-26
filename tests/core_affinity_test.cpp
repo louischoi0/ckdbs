@@ -10,7 +10,7 @@
 #include "kds/server/session.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// Which core may run a statement (docs/crosscore.md CC3 and §6).
+// Which core may run a statement (docs/spec/crosscore.md CC3 and §6).
 //
 // Two rules with different lifetimes, and the tests are grouped that way
 // because the difference matters:

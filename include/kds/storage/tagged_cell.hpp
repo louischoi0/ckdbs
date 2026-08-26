@@ -9,8 +9,8 @@
 #include "kds/base/status.hpp"
 
 // The tagged cell: the fixed-width slot every variable-width value
-// occupies inside a tuple (docs/rule-fixed-length-tuple.md section 3,
-// docs/heap-and-tuple.md section 3.3).
+// occupies inside a tuple (docs/rules/rule-fixed-length-tuple.md section 3,
+// docs/spec/heap-and-tuple.md section 3.3).
 //
 // ---- Why a fixed cell at all --------------------------------------------
 //

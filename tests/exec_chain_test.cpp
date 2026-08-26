@@ -20,7 +20,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
-// V17 - the step VM, linear chains (docs/parser-v2-workplan.md).
+// V17 - the step VM, linear chains (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // The tests that matter here are **equivalences**, not single results:
 //

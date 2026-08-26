@@ -7,7 +7,7 @@ runs on every one of them and `AbortTxn` runs on none. This driver is the
 abort half, and it exists because that half acquired a page write:
 `AbortTxn` now does a page read-modify-write plus a `StampPageLsn` per aborted
 reservation, to set `kEntryOrphaned` on the entry the reservation wrote
-(`docs/feat-assertion.md` §7, AS6b). The claim made for that change is that it
+(`docs/spec/feat-assertion.md` §7, AS6b). The claim made for that change is that it
 is "what commit was already paying to clear `kEntryReserved`". This driver is
 what tests the claim, because the two paths batch differently:
 
@@ -61,7 +61,7 @@ transactions, so a machine that gets busier partway through costs every arm
 equally instead of inventing a result. With `--server-pid` / `--ab-server-pid`
 the server's own CPU (`/proc/<pid>/stat`, utime+stime) is sampled around each
 block and reported as **server CPU per transaction**, which is the meter
-`docs/workplan-aggregate-perf.md` requires for a per-statement fixed cost:
+`docs/inflight/in-progress/workplan-aggregate-perf.md` requires for a per-statement fixed cost:
 client latency carries the Python socket stack, which is most of a small
 statement.
 

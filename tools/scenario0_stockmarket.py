@@ -34,7 +34,7 @@ point-lookup write workload, on a server that dispatches every client on
 one thread.
 
 Optionally (`--cabin`, off by default) that reporting query is given a
-**Cabin** on `accounts.user_id` (docs/feat-cabin.md) - a store that is
+**Cabin** on `accounts.user_id` (docs/spec/feat-cabin.md) - a store that is
 authoritative for the values queries have actually observed. The reporter's
 `WHERE user_id = <n>` is then served from an observed value's entry set
 instead of walking the relation, and the two `UPDATE accounts` statements in
@@ -51,7 +51,7 @@ identical with it and without it.
 
 Optionally (`--fk`, off by default) the relationship this data has always
 had is **declared**: `trades.account_id REFERENCES accounts`
-(docs/impl-foreign-keys.md). Every trade leg then probes the account it
+(docs/spec/impl-foreign-keys.md). Every trade leg then probes the account it
 names before the row is written, and a leg naming no account is refused
 instead of stored. Referential integrity stops being a property of how this
 driver generates ids and becomes one of the database.
@@ -91,7 +91,7 @@ Three things this tool is NOT, and cannot be, on today's engine:
 3. **Money is int64 minor units** (cents), never a decimal. `float` and
    `decimal` columns are refused at CREATE TABLE - under the fixed-length
    rule a relation's row size is a schema constant, and their on-disk width
-   is still an open decision (docs/client-manual.md section 3).
+   is still an open decision (docs/spec/client-manual.md section 3).
 
 Storage organization is chosen per relation, and the choices are the
 measurement as much as the workload is:
@@ -158,7 +158,7 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # the instance's whole capacity - the catalog's pages did not chain, so
 # `sys.columns` held ~68 rows and the third consecutive run on one data file
 # failed - and it is now ~0.3% of it, since the catalog relations chain
-# (docs/keystoneid-k0-findings.md). The schema is left lean anyway: there is
+# (docs/rules/keystoneid-k0-findings.md). The schema is left lean anyway: there is
 # still no `notional` column on trades (it is qty * price) and no
 # `unrealized` on the profit relation, because a derived column is a column
 # to keep consistent for no answer it makes possible.
@@ -188,7 +188,7 @@ SCHEMA = {
 # enforces it - which is the baseline `--fk` is measured against.
 CREATE_ORDER = ("users", "assets", "accounts", "trades", "user_periodic_profit")
 
-# ---- the foreign key (docs/impl-foreign-keys.md) -------------------------
+# ---- the foreign key (docs/spec/impl-foreign-keys.md) -------------------------
 #
 # `--fk` declares one, on exactly this column:
 FK_CHILD, FK_COLUMN, FK_PARENT = "trades", "account_id", "accounts"
@@ -212,7 +212,7 @@ FK_CHILD, FK_COLUMN, FK_PARENT = "trades", "account_id", "accounts"
 # scan. The two `UPDATE accounts` statements pay nothing - accounts declares
 # no outgoing key, and the SET lists touch no fk column.
 
-# ---- the Cabin (docs/feat-cabin.md) --------------------------------------
+# ---- the Cabin (docs/spec/feat-cabin.md) --------------------------------------
 #
 # `--cabin` declares one, on exactly this column:
 CABIN_RELATION, CABIN_COLUMN = "accounts", "user_id"
@@ -428,7 +428,7 @@ def create_tables(exec_, suffix, cabin=False, fk=False):
             if fk and base == FK_CHILD and "REFERENCES" in reply.upper():
                 abort(f"--fk: this server does not understand REFERENCES.\n  "
                       f"`{FK_COLUMN} int64 REFERENCES {FK_PARENT}_{suffix}` needs a build "
-                      f"with docs/impl-foreign-keys.md in it (FK-M1); re-run without "
+                      f"with docs/spec/impl-foreign-keys.md in it (FK-M1); re-run without "
                       f"--fk, or rebuild the server.", reply)
             if fk and base == FK_CHILD and "heap relation" in reply:
                 abort(f"--fk: {FK_PARENT} is a heap relation, and a foreign key "
@@ -440,7 +440,7 @@ def create_tables(exec_, suffix, cabin=False, fk=False):
             if cabin and "CABIN" in reply.upper():
                 abort(f"--cabin: this server does not understand the column cabin "
                       f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} int64 CABIN` needs a "
-                      f"build with docs/feat-cabin.md in it; re-run without --cabin, or "
+                      f"build with docs/spec/feat-cabin.md in it; re-run without --cabin, or "
                       f"rebuild the server.", reply)
             # This used to be the likeliest failure by a wide margin: the
             # catalog's column page did not chain, so the instance held ~68
@@ -672,7 +672,7 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
                     if txn:
                         # A failed statement poisons the session: the engine
                         # admits only ROLLBACK/ABORT/SYNC/STOP/PING until it
-                        # is unwound (docs/txn.md). Sending the rest would
+                        # is unwound (docs/spec/txn.md). Sending the rest would
                         # measure the refusal path, not the workload.
                         break
                     continue
@@ -953,7 +953,7 @@ def print_cabin(meta):
         return
     if cabin is None:
         print("  cabin               requested, but the server reports none - is this "
-              "build older than docs/feat-cabin.md?")
+              "build older than docs/spec/feat-cabin.md?")
         print()
         return
     if cabin["observed"] is None:
@@ -1147,7 +1147,7 @@ def main():
 
     parser.add_argument("--txn", dest="txn", action="store_true", default=False,
                         help="wrap each business transaction's four statements in "
-                             "BEGIN/COMMIT (docs/txn.md), instead of sending them as "
+                             "BEGIN/COMMIT (docs/spec/txn.md), instead of sending them as "
                              "four autocommit statements. Default off, so the baseline "
                              "stays what it has always been. It is the largest single "
                              "lever on this workload - four durability points become "
@@ -1159,7 +1159,7 @@ def main():
 
     parser.add_argument("--fk", dest="fk", action="store_true", default=False,
                         help=f"declare a foreign key on {FK_CHILD}.{FK_COLUMN} -> "
-                             f"{FK_PARENT} (docs/impl-foreign-keys.md): every trade leg "
+                             f"{FK_PARENT} (docs/spec/impl-foreign-keys.md): every trade leg "
                              f"then probes the account it names before it is written, "
                              f"and a leg naming no account is refused instead of "
                              f"stored. Default off, so the baseline stays what it has "
@@ -1171,7 +1171,7 @@ def main():
 
     parser.add_argument("--cabin", dest="cabin", action="store_true", default=False,
                         help=f"declare a Cabin on {CABIN_RELATION}.{CABIN_COLUMN} "
-                             f"(docs/feat-cabin.md): the reporting job's "
+                             f"(docs/spec/feat-cabin.md): the reporting job's "
                              f"`WHERE {CABIN_COLUMN} = <n>` is then served from an "
                              f"observed value's entry set instead of walking the "
                              f"relation. Default off, so the baseline stays what it "
@@ -1191,7 +1191,7 @@ def main():
     parser.add_argument("--sync", action="store_true",
                         help="send SYNC after the run and time it - UPDATE is unlogged, "
                              "so without this the balance moves survive only a clean "
-                             "shutdown (docs/wal.md)")
+                             "shutdown (docs/spec/wal.md)")
     parser.add_argument("--json", metavar="PATH", help="also write results as JSON")
     parser.add_argument("--server-log", metavar="PATH",
                         help="the server's log at --log-level debug: adds its own "
@@ -1457,7 +1457,7 @@ def main():
 
     report(phases, meta, footer=[
         "the four statements are NOT atomic as this tool runs them: the engine has "
-        "BEGIN/COMMIT (docs/txn.md, built) but this tool does not use them, so a "
+        "BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a "
         "failure between them leaves a trade recorded against balances that never "
         "moved. `torn` in the scenario block below counts those.",
         "balances are computed client-side because UPDATE ... SET takes a literal, not "
@@ -1471,7 +1471,7 @@ def main():
           "a SYNC or a clean shutdown. Do not measure this on tmpfs, where fsync is "
           "free and every durability class looks identical.",
         (f"--cabin declares a Cabin on {CABIN_RELATION}.{CABIN_COLUMN} "
-         "(docs/feat-cabin.md): the reporter's non-pk equality is then served from an "
+         "(docs/spec/feat-cabin.md): the reporter's non-pk equality is then served from an "
          "observed value's entry set instead of walking the relation, and the account "
          "UPDATEs pay a directory probe each for it. A Cabin may only change which "
          "rows are *looked at* - the trades, the balances and the --verify verdict "

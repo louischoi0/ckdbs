@@ -4,7 +4,7 @@
 Why this driver exists. A tuple is fixed-length, so a `varchar` longer than
 `inline_cell_width - 3` does not live in the row: it is appended to the
 relation's var-heap chain and the cell carries a pointer
-(`docs/heap-and-tuple.md` §3.4). That append is three different amounts of
+(`docs/spec/heap-and-tuple.md` §3.4). That append is three different amounts of
 work depending on whether it fits the current tail page:
 
     fits          one VARHEAP_APPEND record

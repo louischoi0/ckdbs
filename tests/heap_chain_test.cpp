@@ -331,7 +331,7 @@ TEST(HeapChainTest, AVisitorsErrorStopsTheWalk) {
     EXPECT_EQ(visits, 3);
 }
 
-// ---- Stoppable walks (docs/parser-v2.md I15 rule 4) ----------------------
+// ---- Stoppable walks (docs/spec/parser-v2.md I15 rule 4) ----------------------
 //
 // The property in all three: kStop ends the walk with **Status::OK()**, so
 // a caller can tell "I found what I wanted" from "something broke" without
@@ -569,7 +569,7 @@ TEST(HeapChainTest, ADamagedHintFallsBackToTheHeadAndHeals) {
     EXPECT_EQ(hint, tail.value());
 }
 
-// ---- ChainAppendBatch (docs/workplan-t3.md TS02) --------------------------
+// ---- ChainAppendBatch (docs/inflight/in-progress/workplan-t3.md TS02) --------------------------
 
 // The strongest claim available: the batch fill and the sequential row
 // loop produce byte-identical pages. Same payloads, two fresh stores,

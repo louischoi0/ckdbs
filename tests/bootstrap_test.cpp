@@ -149,7 +149,7 @@ TEST(BootstrapTest, AnIllegalCellWidthIsRefusedBeforeAnythingIsCreated) {
     EXPECT_FALSE(store.Get(server::kSuperBlockPageId).ok());
 }
 
-// ---- The pinned core count (docs/workplan-crosscore.md M6) -------------
+// ---- The pinned core count (docs/inflight/in-progress/workplan-crosscore.md M6) -------------
 //
 // Same shape as the width above and for a reason of the same weight: WAL
 // streams are per core, so the count decides how many streams the database

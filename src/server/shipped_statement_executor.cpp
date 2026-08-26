@@ -112,7 +112,7 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
     // `ReadHorizon()`, which stalls the undo purge, and answers `IsInFlight`
     // true forever, which the unfiltered catalog read consults. Rolled back
     // the way a dropped connection's is (tcp_server.cpp's close path,
-    // docs/txn.md section 10-8) and then refused - a caller must not be told
+    // docs/spec/txn.md section 10-8) and then refused - a caller must not be told
     // a transaction is open on a session it can never use again.
     // Unreachable from the dispatch fork, which ships only autocommit
     // shapes, and refused here for the same reason the stop flag below is.

@@ -42,7 +42,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
 
         server::SuperBlock sb = decoded.value();
 
-        // The pinned-width check (docs/rule-fixed-length-tuple.md section
+        // The pinned-width check (docs/rules/rule-fixed-length-tuple.md section
         // 4). On-disk tuple layout depends on the width, so running with a
         // different one would not fail - it would decode every row at the
         // wrong offsets. Both numbers are named because the operator's next
@@ -60,7 +60,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
             return mismatch;
         }
 
-        // The pinned-core-count check (docs/workplan-crosscore.md M6). Both
+        // The pinned-core-count check (docs/inflight/in-progress/workplan-crosscore.md M6). Both
         // numbers are named for the reason the width's message gives, and
         // the message says what the operator's actual options are - because
         // unlike the width, this one has a legitimate fix that is not a

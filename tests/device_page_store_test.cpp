@@ -184,7 +184,7 @@ TEST(DevicePageStoreTest, SyncedStateSurvivesReopen) {
 }
 
 // Without a WAL this store is restart-durable, not crash-durable
-// (docs/wal.md is the missing piece). Pin that boundary down so nobody
+// (docs/spec/wal.md is the missing piece). Pin that boundary down so nobody
 // mistakes the Flush ordering for a crash guarantee.
 TEST(DevicePageStoreTest, UnsyncedWorkIsLostOnCrash) {
     auto device = MakeDevice();
@@ -379,7 +379,7 @@ TEST(DevicePageStoreTest, ChecksumsAreStampedOnWriteAndVerifiedOnLoad) {
 // ---- Headerless pages ---------------------------------------------------
 //
 // A headerless page's payload tiles 8 KiB exactly and carries no common
-// header (docs/page.md section 1), so byte 4 -
+// header (docs/spec/page.md section 1), so byte 4 -
 // where every other page keeps its checksum - is data. These tests are
 // about the two moments that would destroy it: the stamp on write-out and
 // the verify on read-back.
@@ -786,7 +786,7 @@ TEST(DevicePageStoreOwnershipTest, ALeasedCoreMayNotFaultAForeignPage) {
 }
 
 TEST(DevicePageStoreOwnershipTest, APeerAdoptsTheDeviceMapBeforeCallingASystemPageAbsent) {
-    // G1 (docs/known-gaps.md): a peer's free-map copy is a **mount-time
+    // G1 (docs/inflight/known-gaps.md): a peer's free-map copy is a **mount-time
     // snapshot**, advanced only by a relation fault/write grant. Core 0
     // allocating a system page after that - a catalog page, which a peer
     // must read to resolve any relation of its own - left an id the peer's
@@ -1052,7 +1052,7 @@ TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
 
 // ---- The multi-page free map (FM2-FM5) --------------------------------
 //
-// docs/workplan-multi-free-map.md, D1 settled as candidate A: region N is
+// docs/inflight/in-progress/workplan-multi-free-map.md, D1 settled as candidate A: region N is
 // the ids [N*65280, (N+1)*65280), its free map at N*65280+1 and its
 // headerless map at +2.
 

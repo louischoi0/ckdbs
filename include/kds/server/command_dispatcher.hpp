@@ -143,7 +143,7 @@ namespace kds::server {
 struct MountRecovery;
 
 // The `physical_optimizer` config key's two legal states
-// (docs/feat-physical-optimizer.md R3). There is deliberately no `kOn`:
+// (docs/spec/feat-physical-optimizer.md R3). There is deliberately no `kOn`:
 // the config layer refuses `on` at startup naming §6's gates, so a mode a
 // mover would need cannot exist before the mover does.
 enum class PhysicalOptimizerMode : std::uint8_t {
@@ -156,7 +156,7 @@ class StatementShipClient;
 class ShippedStatementExecutor;
 
 // A peer-owned relation's `CREATE INDEX` between its two phases on core 0
-// (docs/workplan-peer-writer.md §7c, PW1c-6b-3): the definition core 0
+// (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-3): the definition core 0
 // prepared and sent - the oid issued, the root the owner's to fill - and
 // what phase 2 needs to answer the client. Carried by value across the
 // park: the statement's frame is the one thing that survives it.
@@ -209,7 +209,7 @@ struct DispatchOutcome {
     std::optional<PendingShippedStatement> pending_shipped = std::nullopt;
 
     // The commit this statement staged, when the client may not be told
-    // about it until the log is durable (`durability = group`, docs/wal.md
+    // about it until the log is durable (`durability = group`, docs/spec/wal.md
     // D2). `kNoLsn` means there is nothing to wait for - every relaxed
     // statement, every read, and every strict commit, which synced on its
     // own stack before returning.
@@ -226,8 +226,8 @@ struct DispatchOutcome {
     wal::Lsn pending_lsn = wal::kNoLsn;
 };
 
-// The one spelling of an error reply on the newline protocol (docs/txn.md
-// §5, docs/protocol.md §11): `ERR <TOKEN> retryable=<b> <message>` for the
+// The one spelling of an error reply on the newline protocol (docs/spec/txn.md
+// §5, docs/spec/protocol.md §11): `ERR <TOKEN> retryable=<b> <message>` for the
 // codes a client library switches on - TXN_CONFLICT, FK_VIOLATION,
 // ASSERTION_VIOLATION - and `ERR <message>` for everything else. Every
 // dispatcher path reports through it, which is what keeps the shape from
@@ -368,7 +368,7 @@ public:
     //                            "kind=<Lookup|Probe|Range|FilterScan|Scan>
     //                             rel=<s> columns=[<s>,...] uses=<n>
     //                             last_seen=<n>". The physical optimizer's
-    //                            input (docs/heap-and-tuple.md §7), keyed
+    //                            input (docs/spec/heap-and-tuple.md §7), keyed
     //                            by *columns* and never by values - so
     //                            `WHERE flag = 1` and `WHERE flag = 2` are
     //                            one shape, which is what keeps the list
@@ -497,7 +497,7 @@ public:
     //
     // ---- Why both forms exist -------------------------------------------
     //
-    // This is the seam `docs/workplan-crosscore.md` P4 needs: a statement
+    // This is the seam `docs/inflight/in-progress/workplan-crosscore.md` P4 needs: a statement
     // that reaches another core has to send and then *wait*, and a function
     // returning a finished reply cannot. Making it a coroutine is what lets
     // the executor grow a suspension point later without the server around
@@ -524,7 +524,7 @@ public:
     txn::IsolationLevel default_isolation() const noexcept { return default_isolation_; }
 
 private:
-    // ---- Transaction control (docs/txn.md sections 1, 6) ----------------
+    // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
     DispatchOutcome HandleBegin(std::string_view args, Session& session);
     DispatchOutcome HandleCommit(Session& session);
     DispatchOutcome HandleRollback(Session& session);
@@ -579,7 +579,7 @@ private:
     DispatchOutcome HandleShowAccess();
 
     // `SHOW BUDGET` - every relation's Keystone id consumption
-    // (`docs/keystoneid-invariant.md` K-M4). Listed for *every* relation
+    // (`docs/rules/keystoneid-invariant.md` K-M4). Listed for *every* relation
     // including the catalog's own, because two of those - sys.patterns and
     // sys.pattern_defs - genuinely issue ids, and a listing that hid them
     // would hide the only relations whose consumption an operator does not
@@ -706,20 +706,20 @@ private:
     DispatchOutcome HandleCreatePattern(std::string_view line);
     DispatchOutcome HandleDropPattern(std::string_view line);
 
-    // `CREATE CABIN` / `DROP CABIN` (docs/feat-cabin.md §10). One handler
+    // `CREATE CABIN` / `DROP CABIN` (docs/spec/feat-cabin.md §10). One handler
     // for both: they share a parse and a reply shape, and differ only in
     // which catalog call they reach. Takes the whole statement line, like
     // the pattern handlers, because the parser is what resolves the two
     // identifiers.
     DispatchOutcome HandleCabin(std::string_view line);
 
-    // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec-alter.md,
+    // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec/spec-alter.md,
     // workplan ALT03). One handler for both forms, for HandleCabin's
     // reason; the AL4 assertion RESTRICT and the AL7 system-relation
     // refusal live here, before the catalog write.
     DispatchOutcome HandleAlter(std::string_view line, Session& session);
 
-    // `DROP TABLE <name>` (docs/spec-drop-table.md, workplan DT03). The
+    // `DROP TABLE <name>` (docs/spec/spec-drop-table.md, workplan DT03). The
     // DT3 RESTRICT gate lives here - a referencing foreign key and an
     // assertion each refuse naming the blocker - before the catalog's
     // tombstone-and-retire; the in-memory Cabin sets are forgotten after.
@@ -736,12 +736,12 @@ private:
     // Cabin exists but has never been probed" visible.
     DispatchOutcome HandleShowCabins();
 
-    // `CREATE INDEX` / `DROP INDEX` (docs/feat-index.md §10). One handler
+    // `CREATE INDEX` / `DROP INDEX` (docs/spec/feat-index.md §10). One handler
     // for both, for HandleCabin's reason: they share a parse and a reply
     // shape and differ only in which catalog call they reach.
     // Emits one INDEX_INSERT per index mutation, or a full page image per
     // page a split restructured. Called **before** the HEAP_INSERT or
-    // HEAP_OVERWRITE the entries point at (docs/feat-index.md §12.1): a
+    // HEAP_OVERWRITE the entries point at (docs/spec/feat-index.md §12.1): a
     // dangling entry is dropped by verification, a row with no entry is
     // lost.
     Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
@@ -761,7 +761,7 @@ private:
     DispatchOutcome FinishIndexBuild(const PendingIndexBuild& build, Session& session);
     DispatchOutcome HandleShowIndexes(Session& session);
 
-    // `CREATE ASSERTION` / `DROP ASSERTION` (docs/feat-assertion.md §3,
+    // `CREATE ASSERTION` / `DROP ASSERTION` (docs/spec/feat-assertion.md §3,
     // workplan AST03). One handler for both, for HandleCabin's reason.
     //
     // **This is the catalog half only.** It validates the declaration
@@ -793,7 +793,7 @@ private:
     // `QualityOf`) - this handler renders and never computes.
     DispatchOutcome HandleShowCabinOptimizer();
 
-    // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
+    // ---- Foreign-key checks (docs/spec/impl-foreign-keys.md §§2-4) -----------
     //
     // The write paths' three entry points. They live here rather than in
     // `exec/` because they are what turns a verdict into a *reply* - which
@@ -828,7 +828,7 @@ private:
     // execution is what parser-v2.md I11 forbids.
     std::string RelationNameOf(catalog::Oid oid);
 
-    // Every declared foreign key (docs/impl-foreign-keys.md §1). One line
+    // Every declared foreign key (docs/spec/impl-foreign-keys.md §1). One line
     // per sys.fkeys row: which relation references which, through which
     // column. Prints `action=RESTRICT` unconditionally, because v1 has one
     // action (F2) - a stored action field would have exactly one value.
@@ -865,7 +865,7 @@ private:
                                             const std::vector<parser::AstValue>& values,
                                             WriteScope& scope, InsertRowResult& out);
 
-    // T3, the sorted heap fill (docs/workplan-t3.md). The gate is T3-2's,
+    // T3, the sorted heap fill (docs/inflight/in-progress/workplan-t3.md). The gate is T3-2's,
     // conservative and only able to widen: heap-clustered, nothing that
     // maintains per-row (no index, no Cabin, no assertion), no spillable
     // schema. FK stays allowed - its checks run per row before anything
@@ -877,7 +877,7 @@ private:
 
     // The already-parsed half of InsertInner: everything after the parse -
     // cap, manager guard, resolution, affinity, the T3 gate, the row loop.
-    // Split out for the KWP load session (docs/workplan-kwp-load.md KW5),
+    // Split out for the KWP load session (docs/inflight/in-progress/workplan-kwp-load.md KW5),
     // whose rows arrive binary and never had text - BI2's "same write
     // path" made literal, since this IS the path a T1 statement takes.
     // `line` is the statement's text, for the one thing only text can do:
@@ -996,7 +996,7 @@ public:
     // Arms **statement shipping** (SS2, statement_ship_service.hpp): an
     // autocommit statement whose relation another core owns is carried
     // there and answered back, where without this it is refused
-    // (`docs/crosscore.md` §6). Installed on every core of a multi-core
+    // (`docs/spec/crosscore.md` §6). Installed on every core of a multi-core
     // instance; `client` must outlive the dispatcher.
     //
     // A dispatcher never told refuses exactly as it did before - which is
@@ -1021,7 +1021,7 @@ public:
         shipped_statements_ = executor;
     }
 
-    // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
+    // The physical optimizer's shadow surface (docs/spec/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
     // with the same default posture: a dispatcher never told behaves as the
     // documented configuration - shadow on, the spec's `[PROPOSED]` 600 s
@@ -1069,7 +1069,7 @@ public:
     }
 
     // This core's reactor, for `SHOW META`'s group-accounting block
-    // (`docs/sched.md` §4's last bullet, owed since `bench/v2.1.0` §11-5).
+    // (`docs/spec/sched.md` §4's last bullet, owed since `bench/v2.1.0` §11-5).
     // The scheduler outlives this dispatcher on every core: core 0's is a
     // local in `Expeditor::Serve`, a peer's is `CoreRuntime::scheduler_`.
     // Null wherever no reactor runs the dispatcher - every socket-free test
@@ -1098,7 +1098,7 @@ public:
     }
 
 private:
-    // The aggregated SELECT path (docs/feat-aggregate.md AG1): the same
+    // The aggregated SELECT path (docs/spec/feat-aggregate.md AG1): the same
     // execution, with an `Aggregator` in the sink and the fold's output
     // emitted after it. `header` is the column-heading line the caller
     // already built.
@@ -1145,7 +1145,7 @@ private:
     void RecordOptimizerSignals(const std::optional<stats::InstanceKey>& instance,
                                 const exec::StepChain& chain, const exec::ExecStats& stats);
 
-    // ---- The Cabin write hook (docs/feat-cabin.md §5) --------------------
+    // ---- The Cabin write hook (docs/spec/feat-cabin.md §5) --------------------
     //
     // **This is what "observed ⇒ complete" costs**, and the whole reason a
     // Cabin can be authoritative where a Waystone trail cannot: absence has
@@ -1182,7 +1182,7 @@ private:
                         std::span<const parser::AstValue> previous = {});
     DispatchOutcome HandleUpdate(std::string_view line, Session& session);
 
-    // `DELETE FROM <t> [WHERE ...]` (docs/txn.md sections 4.3, 6).
+    // `DELETE FROM <t> [WHERE ...]` (docs/spec/txn.md sections 4.3, 6).
     //
     // A **delete-mark**, never a physical removal: the slot keeps its bytes
     // and gains kSlotFlagDeleted, and the deleter's id goes in the tuple's
@@ -1248,7 +1248,7 @@ private:
     // page: kHeap for a chain, kBtreeLeaf for a tree.
     // `spills` are the var-heap values this tuple's cells point at. They
     // are logged *first*, before the HEAP_INSERT, which is the ordering
-    // docs/rule-fixed-length-tuple.md section 5 requires: a replay must
+    // docs/rules/rule-fixed-length-tuple.md section 5 requires: a replay must
     // never reach a tuple whose pointer resolves to nothing. A crash
     // between the two leaves an unreferenced value for purge, which is the
     // harmless direction.
@@ -1285,7 +1285,7 @@ private:
     //
     // Shared by INSERT and UPDATE deliberately. The first two records were
     // missing entirely and the third was missing on the UPDATE path
-    // (`docs/known-gaps.md`'s var-heap entry), and two copies of this
+    // (`docs/inflight/known-gaps.md`'s var-heap entry), and two copies of this
     // sequence is two chances to lose one of them again.
     //
     // The caller owes the *ordering*: these records precede the HEAP_INSERT or
@@ -1579,7 +1579,7 @@ private:
     // (session.hpp's hop limit).
     //
     // Shipping is **unconditional** where those hold, per D6: whether to
-    // ship or to refuse by load is placement policy (`docs/crosscore.md`
+    // ship or to refuse by load is placement policy (`docs/spec/crosscore.md`
     // §9's open decision) and does not ride along. What it converts is what
     // the pretasks measured as refused - 80-92% of an unrouted client's
     // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`

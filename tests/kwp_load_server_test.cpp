@@ -20,7 +20,7 @@
 #include "kds/wire/row_codec.hpp"
 
 // KL06 - the KWP v0 load endpoint, end to end over real sockets
-// (docs/workplan-kwp-load.md). The text listener rides beside it in every
+// (docs/inflight/in-progress/workplan-kwp-load.md). The text listener rides beside it in every
 // test for two reasons: verification reads go through the surface a client
 // would use, and its STOP verb is what ends the reactor - KWP v0 has no
 // stop of its own, deliberately.

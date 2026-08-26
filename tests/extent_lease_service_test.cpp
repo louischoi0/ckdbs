@@ -173,7 +173,7 @@ TEST_F(ExtentLeaseServiceTest, AnExhaustedMapIsReportedRatherThanHungOn) {
 }
 
 TEST_F(ExtentLeaseServiceTest, AGrantedExtentIsOnTheDeviceBeforeTheGrantLeaves) {
-    // PW3b's finding (workplan-peer-writer.md §6, docs/known-gaps.md): the
+    // PW3b's finding (workplan-peer-writer.md §6, docs/inflight/known-gaps.md): the
     // peer will commit rows into this run, so the run has to be *allocated
     // on the device* before it may - or a crash frees it, and the next
     // mount's allocator hands it out over those rows. The handler therefore

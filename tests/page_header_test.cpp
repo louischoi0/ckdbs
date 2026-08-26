@@ -217,7 +217,7 @@ TEST(PageHeaderTest, UnformattedPageTypeHasNoSupportedVersion) {
     EXPECT_EQ(MaxSupportedFormatVersion(PageType::kInvalid), 0u);
 }
 
-// ---- Relayout epoch (docs/feat-physical-optimizer.md R4, workplan PX03) --
+// ---- Relayout epoch (docs/spec/feat-physical-optimizer.md R4, workplan PX03) --
 
 TEST(PageHeaderTest, RelayoutEpochRoundTripsAndBumpsByOne) {
     Page page{};

@@ -128,7 +128,7 @@ TEST(FreeMapTest, OutOfRangeIndexIsInertNotWrapping) {
 }
 
 
-// ---- Placement arithmetic (FM1, docs/workplan-multi-free-map.md) ----
+// ---- Placement arithmetic (FM1, docs/inflight/in-progress/workplan-multi-free-map.md) ----
 
 // Ids worth checking: the two region heads either side of a boundary, the
 // map pages themselves, the last id of a region, and the top of the id

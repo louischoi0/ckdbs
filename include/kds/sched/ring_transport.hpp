@@ -9,7 +9,7 @@
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/spsc_ring.hpp"
 
-// The cross-core transport seam (docs/sched.md §5, docs/workplan-crosscore.md
+// The cross-core transport seam (docs/spec/sched.md §5, docs/inflight/in-progress/workplan-crosscore.md
 // M9 and P1).
 //
 // **This interface is the only channel between cores.** Workplan guideline
@@ -111,7 +111,7 @@ private:
     std::vector<std::uint32_t> next_peer_;
 };
 
-// Per-core-pair ring sizing (docs/sched.md §10 leaves it `[OPEN]`).
+// Per-core-pair ring sizing (docs/spec/sched.md §10 leaves it `[OPEN]`).
 //
 // Both `[PROPOSED]`: they are the parameters `RealRingTransport::Create()`
 // takes, held beside it so there is one place to change them when the

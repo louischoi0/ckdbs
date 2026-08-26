@@ -330,11 +330,52 @@ TEST_F(ShippedStatementExecutorTest, AShippedStatementMayNotLeaveATransactionOpe
     // with the statement, so a transaction it adopted would stay `active_`
     // forever - pinning `ReadHorizon()`, stalling the undo purge, and
     // answering `IsInFlight` true for the life of the process. A dropped
-    // connection is rolled back (docs/txn.md section 10-8); so is this.
+    // connection is rolled back (docs/spec/txn.md section 10-8); so is this.
     const Answer out = Ship("BEGIN", /*session_id=*/99, /*sequence=*/1);
     ASSERT_TRUE(out.answered);
     EXPECT_EQ(out.status.code(), StatusCode::kUnsupported) << out.status.message();
     EXPECT_EQ(txns_->ActiveCount(), 0u) << "a shipped BEGIN left a transaction running";
+}
+
+// **DISABLED, and it fails rather than passes** (A1 of the post-SS5
+// verification order). The order requires that a duplicate whose record the
+// memory bound dropped be answered `UnknownOutcome`; this executor runs it
+// again, which against an engine-issued pk is a second row. The behaviour is
+// the one this header already states - "an early eviction is the one
+// condition under which a duplicate could reach an empty record and be
+// re-executed" - so what the order asks for is a change to it, and every
+// available fix is a policy decision the operator owns (refuse the 4097th
+// shipping session rather than evict; carry a retry bit on the request; keep
+// a tombstone under a second bound). It is written now, and kept failing
+// rather than deleted or weakened, so that whichever fix lands has its
+// acceptance test already in the tree.
+//
+// Not reachable today: nothing re-sends a landed request (`SendRetryTask`
+// retries only a send the ring refused, `sched/send_retry.hpp`), so no live
+// path produces a duplicate at all. This is the retry paths a routing layer
+// will bring, met early.
+TEST_F(ShippedStatementExecutorTest, DISABLED_ADuplicateWhoseRecordWasEvictedEarlyIsNotReExecuted) {
+    // A1 of the post-SS5 verification order: force the bounded record past
+    // its bound, then retry a statement whose entry is gone. The record is
+    // the only thing standing between a retry and a second row against an
+    // engine-issued pk, so what the owner does when it no longer holds one
+    // is the case the whole scheme rests on.
+    const std::uint64_t kVictim = 1;
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", kVictim, /*sequence=*/1).status.ok());
+    // One record per distinct session, up to and past the cap: the victim's
+    // is the oldest, so it is the one the memory bound drops first.
+    for (std::uint64_t s = 2; s <= kShippedDedupMaxRecords + 1; ++s) {
+        ASSERT_TRUE(Ship("INSERT INTO t VALUES (8)", s, /*sequence=*/1).status.ok());
+    }
+    ASSERT_GT(executor_->early_evictions(), 0u) << "the cap did not bite; the test proves nothing";
+
+    const std::uint64_t before = executor_->executed();
+    const Answer again = Ship("INSERT INTO t VALUES (7)", kVictim, /*sequence=*/1);
+    ASSERT_TRUE(again.answered);
+    EXPECT_EQ(again.status.code(), StatusCode::kUnknownOutcome) << again.status.message();
+    EXPECT_FALSE(IsRetryable(again.status.code()));
+    EXPECT_EQ(executor_->executed(), before)
+        << "the duplicate ran a second time because its record was gone";
 }
 
 }  // namespace

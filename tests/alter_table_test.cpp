@@ -10,7 +10,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// ALT04 - the oid-identity proof (docs/spec-alter.md AL2).
+// ALT04 - the oid-identity proof (docs/spec/spec-alter.md AL2).
 //
 // The claim the feature rests on: every cross-object reference is by oid,
 // so a rename dangles nothing. One scenario per reference class, each

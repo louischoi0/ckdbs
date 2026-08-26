@@ -9,7 +9,7 @@
 #include "kds/wal/analysis.hpp"
 #include "kds/wal/log_device.hpp"
 
-// Recovery's redo phase (docs/wal.md §12-2,
+// Recovery's redo phase (docs/spec/wal.md §12-2,
 // docs/workplan-wal-recovery.md RC03): replay the log forward from the
 // redo start so the pages hold exactly what they held at the crash -
 // **uncommitted changes and undo pages included**, because that state is

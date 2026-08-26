@@ -7,7 +7,7 @@
 
 #include "kds/storage/page_header.hpp"
 
-// Codec tests for the waystone page (docs/waystone-concpets.md §6). No
+// Codec tests for the waystone page (docs/spec/waystone-concpets.md §6). No
 // PageStore and no directory: this is encode/decode over one page buffer,
 // which is the level the offsets, the bounds and the identity check live
 // at.

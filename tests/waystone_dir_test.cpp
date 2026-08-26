@@ -12,7 +12,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
-// The per-pattern waystone directory (docs/waystone-concpets.md §5). What
+// The per-pattern waystone directory (docs/spec/waystone-concpets.md §5). What
 // is pinned here beyond the walk itself: that an unpopulated range is a
 // *miss* rather than an error, that allocation is sparse, that a collision
 // resolves through the waystone header and never into a foreign trail, and

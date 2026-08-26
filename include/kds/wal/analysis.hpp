@@ -10,7 +10,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
-// Recovery's analysis phase (docs/wal.md §12-1,
+// Recovery's analysis phase (docs/spec/wal.md §12-1,
 // docs/workplan-wal-recovery.md RC02): one forward scan of a core's stream
 // that answers the two questions redo and undo are about to ask - **which
 // pages need replaying, and which transactions were left unfinished.**
@@ -42,7 +42,7 @@
 //
 // ---- The three outcomes, and why abort is not a loser -------------------
 //
-// `docs/txn.md` §6 writes rollback's compensations as **ordinary logged
+// `docs/spec/txn.md` §6 writes rollback's compensations as **ordinary logged
 // page mutations**, and appends `TXN_ABORT` after them. A stream is a
 // sequential prefix - if the abort record is durable, every compensation
 // before it is too - so a transaction with a durable `TXN_ABORT` has

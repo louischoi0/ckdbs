@@ -101,7 +101,7 @@ Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
                                std::uint32_t cores, catalog::PlacementPolicy placement);
 
-// EV4 (docs/spec-eviction.md §6), under the operator invariant of
+// EV4 (docs/spec/spec-eviction.md §6), under the operator invariant of
 // 2026-08-24: the key is an instance total and every core's share is
 // equal - `frames / min(cores, hardware cores)` as ratified, which is
 // `frames / cores` on every instance that exists, because Expeditor::Open
@@ -123,14 +123,14 @@ public:
         std::uint16_t port = 15432;
 
         // Resident-frame budget for the **whole instance**, divided evenly
-        // per core with the remainder to core 0 (docs/spec-eviction.md §6
+        // per core with the remainder to core 0 (docs/spec/spec-eviction.md §6
         // EV4 - built 2026-08-24; docs/workplan-pageref.md MG06); 0 =
         // unbounded. The sweep arms only on a core whose share is nonzero,
         // and a nonzero total below `cores` is refused at boot
         // (CheckFrameBudget) rather than rounded to an unbounded share.
         std::size_t buffer_pool_frames = 0;
 
-        // Direct TLS on the text port (docs/protocol.md §1, decided
+        // Direct TLS on the text port (docs/spec/protocol.md §1, decided
         // 2026-08-13): with `tls = on` the first byte every client sends
         // is a ClientHello, and there is no plaintext fallback and no
         // STARTTLS-style upgrade on the same port. Off by default because
@@ -153,7 +153,7 @@ public:
         std::string tls_cert_file;
         std::string tls_key_file;
 
-        // Connection authentication (docs/protocol.md D8's auth stage,
+        // Connection authentication (docs/spec/protocol.md D8's auth stage,
         // on the text protocol until KWP P07). `auth = off` (default)
         // admits every connection, today's behaviour; `auth = scram`
         // requires every connection to complete a SCRAM-SHA-256
@@ -208,16 +208,16 @@ public:
         std::uint64_t max_rows_touched = exec::kDefaultRowTouchBudget;
 
         // BI3's per-statement row cap for a multi-row INSERT
-        // (docs/spec-bulkinsert.md, `max_insert_rows`). A refusal, never a
+        // (docs/spec/spec-bulkinsert.md, `max_insert_rows`). A refusal, never a
         // truncation; must be at least 1.
         std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows;
 
-        // KWP v0's load endpoint (`kwp_port`, docs/workplan-kwp-load.md).
+        // KWP v0's load endpoint (`kwp_port`, docs/inflight/in-progress/workplan-kwp-load.md).
         // 0 - the default - opens no socket at all: the endpoint exists
         // only when asked for. Loopback only, like the text port.
         std::uint16_t kwp_port = 0;
 
-        // ---- `isolation` (docs/txn.md section 1) -----------------------
+        // ---- `isolation` (docs/spec/txn.md section 1) -----------------------
         //
         // The level a session starts at, and therefore the level an
         // autocommit statement runs at. **READ COMMITTED is the default**,
@@ -234,7 +234,7 @@ public:
         // by the loader, and refused there naming the removal rather than
         // falling to the unknown-key error - it decided what a `CREATE
         // TABLE` naming no key-mode word meant, and there is no longer a
-        // mode to decide (docs/heap-and-tuple.md §4.1).
+        // mode to decide (docs/spec/heap-and-tuple.md §4.1).
 
         // Whether a successful SELECT records a Waystone trail
         // (`waystone_recording`, default on).
@@ -257,12 +257,12 @@ public:
         // `sys.access_stats` (`access_statistics`, default on).
         //
         // Independent of Waystone: this is the physical optimizer's input
-        // (docs/heap-and-tuple.md §7), not a trail. Default on because a
+        // (docs/spec/heap-and-tuple.md §7), not a trail. Default on because a
         // history that starts when someone remembers to enable it is a
         // history that does not exist when the optimizer arrives.
         bool access_statistics = true;
 
-        // ---- Physical optimizer (docs/feat-physical-optimizer.md) -------
+        // ---- Physical optimizer (docs/spec/feat-physical-optimizer.md) -------
 
         // R3's mode: `off` or `shadow` (default). Shadow costs nothing at
         // rest - the planner is pull-only, computed when `SHOW RELAYOUT`
@@ -323,7 +323,7 @@ public:
         // of its own until a measured workload argues for one.
         stats::CabinOptimizerConfig CabinOptimizerSettings() const;
 
-        // ---- Cabin (docs/feat-cabin.md) ---------------------------------
+        // ---- Cabin (docs/spec/feat-cabin.md) ---------------------------------
 
         // Whether Cabins may be built and served (`cabins`, default on).
         //
@@ -363,7 +363,7 @@ public:
         std::size_t cabin_max_values = 4096;
         std::size_t cabin_max_entries_per_value = 4096;
 
-        // AG11's caps (docs/feat-aggregate.md §6), both `[PROPOSED]` and
+        // AG11's caps (docs/spec/feat-aggregate.md §6), both `[PROPOSED]` and
         // both held here for the reason the Cabin pair above are: nothing
         // may depend on either number, only on the rule they enforce - a
         // cap **fails the statement**, never truncates the group set and
@@ -409,7 +409,7 @@ public:
         sched::MonoTimeNs wal_drain_interval_ns = 1'000'000;  // 1 ms
 
         // How long a `relaxed` commit may sit unsynced - D3's loss window
-        // (docs/wal.md). Exposed because it is not only a durability dial:
+        // (docs/spec/wal.md). Exposed because it is not only a durability dial:
         // the sync that enforces it runs on the reactor thread, so whatever
         // statement is in flight when it fires pays the device's full
         // latency. Measured on an EBS volume, the default produces one
@@ -420,7 +420,7 @@ public:
         sched::MonoTimeNs relaxed_flush_interval_ns = 10'000'000;  // 10 ms
 
         // How many bytes every variable-width value occupies inside a
-        // tuple (docs/heap-and-tuple.md section 3.3). It is read from
+        // tuple (docs/spec/heap-and-tuple.md section 3.3). It is read from
         // configuration exactly once - at the bootstrap of a *new*
         // database, which pins it into the superblock; every mount after
         // that validates this value against the pinned one and refuses to
@@ -435,7 +435,7 @@ public:
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth;
 
         // How many reactor cores this instance runs
-        // (docs/workplan-crosscore.md M6). Pinned into the superblock at
+        // (docs/inflight/in-progress/workplan-crosscore.md M6). Pinned into the superblock at
         // the bootstrap of a *new* database and validated against it on
         // every mount after, exactly as `inline_cell_width` is - and for a
         // reason of the same weight: WAL streams are per core, so the count
@@ -606,7 +606,7 @@ private:
 
     std::optional<stats::CabinStore> cabin_store_;
 
-    // ---- The transaction stack (docs/txn.md) ---------------------------
+    // ---- The transaction stack (docs/spec/txn.md) ---------------------------
     //
     // Declared before the dispatcher, which holds a pointer into it, and
     // torn down after it - the same construction-order rule every other
@@ -642,7 +642,7 @@ private:
 
     std::unique_ptr<wal::FileLogDevice> log_device_;
     std::unique_ptr<wal::WalManager> wal_;
-    // ---- The fan-out (docs/workplan-crosscore.md P2) --------------------
+    // ---- The fan-out (docs/inflight/in-progress/workplan-crosscore.md P2) --------------------
     //
     // Cores 1..N-1, each on its own pinned thread. Empty at `cores = 1`, and
     // so is `transport_` - guideline 2's "the ring layer contributes zero

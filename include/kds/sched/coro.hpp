@@ -11,18 +11,18 @@
 #include "kds/sched/task.hpp"
 
 // C++20 stackless coroutines as the engine's task representation
-// (`docs/sched.md` §3, settled 2026-08-05).
+// (`docs/spec/sched.md` §3, settled 2026-08-05).
 //
 // ---- The decision, and what it costs ------------------------------------
 //
 // sched.md §3 left task representation open between callback/future chains,
-// stackless coroutines and stackful fibers, and `docs/rules.md` §7 listed
+// stackless coroutines and stackful fibers, and `docs/rules/rules.md` §7 listed
 // coroutines under the undecided language-feature whitelist. **Coroutines.**
 //
 // The thing that forced it: every cross-core operation is a request whose
 // answer arrives later, and the engine had no way to express "wait" that was
 // not either blocking the reactor or rewriting a call chain into a state
-// machine by hand. `docs/workplan-crosscore.md` P4's step pipeline is exactly
+// machine by hand. `docs/inflight/in-progress/workplan-crosscore.md` P4's step pipeline is exactly
 // that shape - send `STEP_OPEN`, then await batches - and it could not be
 // written at all. Callbacks would work and would invert every one of the 22
 // allocation sites and the whole executor; fibers would give the most natural
@@ -283,7 +283,7 @@ inline AwaitCoro operator co_await(Coro&& child) noexcept {
 //
 // It exists because the executor is about to grow suspension points, and
 // the thing it must never do is suspend while holding a **page span**. The
-// existing rule (`docs/parser-v2.md` I15's R1, enforced by
+// existing rule (`docs/spec/parser-v2.md` I15's R1, enforced by
 // `exec/step_vm.cpp`'s PageSpanGuard) already forbids a page *fetch* under
 // a live span, because nothing pins the frame the span points into.
 // Suspending under one is strictly worse: the span stays live not for the
@@ -389,7 +389,7 @@ inline std::unique_ptr<CoroTask> MakeCoroTask(SchedulingGroup group, Coro coro,
 // ---- Awaitables ---------------------------------------------------------
 
 // `co_await Yield{}` - give the core back and continue on a later
-// iteration. This is `docs/sched.md` §3's mandatory cooperative yield,
+// iteration. This is `docs/spec/sched.md` §3's mandatory cooperative yield,
 // which until now could only be spelled by returning `kSuspended` from a
 // hand-written task and remembering where you were.
 struct Yield {

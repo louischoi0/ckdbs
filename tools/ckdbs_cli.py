@@ -148,7 +148,7 @@ def format_reply(reply):
     """Renders a reply for display.
 
     The wire protocol allows exactly one line back per command (see
-    docs/client-manual.md section 2) - a raw newline byte in a reply would
+    docs/spec/client-manual.md section 2) - a raw newline byte in a reply would
     desync this client's "read up to the next \\n" framing. Commands that
     want a readable multi-line dump (e.g. SHOW PAGE) instead join sections
     with the literal two-character escape "\\n", which is unescaped here

@@ -162,7 +162,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             "core " + std::to_string(config.core_id) + ": its log names transaction id " +
             std::to_string(recovered.value().next_trx_id - 1) +
             ", above the ceiling the superblock carries; the system core owns page 0 and grants "
-            "this core its id blocks (docs/workplan-peer-writer.md PW1)");
+            "this core its id blocks (docs/inflight/in-progress/workplan-peer-writer.md PW1)");
     }
 
     // **No completion checkpoint here** (RC08), and the reason is the same one
@@ -216,7 +216,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                     "lease source is not installed");
     });
     // Transaction ids come from a leased block on a peer, exactly as row
-    // ids do above (`docs/workplan-peer-writer.md` PW1). Installed here
+    // ids do above (`docs/inflight/in-progress/workplan-peer-writer.md` PW1). Installed here
     // rather than at AttachTransport because a peer without a transport
     // must fail its first write with the lease's retryable exhaustion, not
     // with the superblock refusal above - the refusal names a wiring bug,
@@ -238,7 +238,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         /*recorder=*/nullptr, /*replay_enabled=*/false, /*access_statistics=*/false,
         /*cabins=*/nullptr, &*runtime->txn_manager_, config.isolation, config.core_id);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
-    // list, docs/client-manual.md) - `Expeditor::Open`'s wiring, per core
+    // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.
     runtime->dispatcher_->set_recovery(&runtime->recovery_);
     // `SHOW META`'s group-accounting block on this core (sched.md §4). Set
@@ -514,7 +514,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         return s;
     }
 
-    // **This core's checkpointer** (PW3, docs/workplan-peer-writer.md), and
+    // **This core's checkpointer** (PW3, docs/inflight/in-progress/workplan-peer-writer.md), and
     // it can only be built here: the anchor publishes over the ring, so it
     // cannot exist before the ring does.
     //

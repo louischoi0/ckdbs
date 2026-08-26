@@ -8,7 +8,7 @@
 
 #include "kds/catalog/well_known.hpp"
 
-// The KWP/1 row encoding (docs/protocol.md D5 and §6).
+// The KWP/1 row encoding (docs/spec/protocol.md D5 and §6).
 //
 // The format's only real guarantee is that the encoder and the decoder
 // agree, so most of these are round trips. What they are pinning beyond

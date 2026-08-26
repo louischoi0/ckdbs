@@ -5,7 +5,7 @@ observed rather than fixed.
 PW7 recorded that the reactor spins whenever a parked coroutine is present,
 because `Scheduler::IdleTimeoutMs` returns 0 as soon as any ready queue is
 non-empty and a parked task still sits in one (src/sched/scheduler.cpp:196-199,
-docs/workplan-peer-writer.md:325). It saw the symptom as a trx-id refill whose
+docs/inflight/in-progress/workplan-peer-writer.md:325). It saw the symptom as a trx-id refill whose
 39 ms spanned 108,150 reactor iterations. That was on a host with one writer
 core. This measures what it costs at three.
 

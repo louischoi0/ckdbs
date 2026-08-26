@@ -2,7 +2,7 @@
 """T4 - what a reactor's time is actually spent on, per core, read from
 outside the process for the first time.
 
-`docs/sched.md` §4's last bullet: *"reactor time spent outside task polls (the
+`docs/spec/sched.md` §4's last bullet: *"reactor time spent outside task polls (the
 drain, the idle block) is charged to no group"*. `bench/v2.1.0` §11-5 could
 not report on it - the counter was private and `SHOW META` did not print it -
 and §8 could only infer the spin from a lease-refill leg spanning

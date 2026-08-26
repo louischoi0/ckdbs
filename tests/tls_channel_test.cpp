@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-// The TLS channel's contract suite (docs/protocol.md §1): both ends of a
+// The TLS channel's contract suite (docs/spec/protocol.md §1): both ends of a
 // real TLS 1.3 handshake pumped against each other entirely through the
 // WireChannel interface - no socket, no fd, every byte movement scripted
 // by the test. The certificate is generated here and thrown away, so the
@@ -201,7 +201,7 @@ TEST(TlsChannelTest, LargeTransfer) {
 
 // A plaintext client on a TLS port is a fatal transform error the server
 // reports and closes on - never a crash, never a silent skip (the same
-// posture docs/protocol.md §2 takes for malformed frames). No alert goes
+// posture docs/spec/protocol.md §2 takes for malformed frames). No alert goes
 // back: OpenSSL queues none for a first record that was never TLS, so the
 // peer gets the close and nothing else. Pinned because the channel's
 // fatal path claims to hand the caller whatever alert exists, and "none"

@@ -20,7 +20,7 @@
 // statement-shipping work order): a single-statement transaction that
 // arrives on a core which does not own its target relation is carried to
 // the owner, executed there, and answered back through the arrival core -
-// where today it is refused (`docs/crosscore.md` §6, and the 80-92%
+// where today it is refused (`docs/spec/crosscore.md` §6, and the 80-92%
 // refusal rate `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
 // §9b measured).
 //
@@ -60,7 +60,7 @@
 // tens of bytes; a `SELECT`'s can be any size, so a read whose reply
 // overflows is refused by name too. That is a real bound on D1's read half
 // and it is stated here rather than discovered later. Raising either means
-// raising the ring's payload, which is `docs/crosscore.md` §9's open
+// raising the ring's payload, which is `docs/spec/crosscore.md` §9's open
 // sizing decision and not this row's to take.
 //
 // ---- The waiter, and the two ways it ends ------------------------------
@@ -82,7 +82,7 @@
 //     pk. D4 requires the arrival core to say **unknown outcome** and to
 //     say it in a code no retry loop follows. `Status::UnknownOutcome` is
 //     that code, added for this and non-retryable by construction
-//     (`IsRetryable` is one code wide, by `docs/protocol.md` §11).
+//     (`IsRetryable` is one code wide, by `docs/spec/protocol.md` §11).
 //
 // **A statement parked when the reactor is destroyed never replies**, and
 // that is correct rather than a leak: `~CoroTask` destroys a suspended

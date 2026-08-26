@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// The two page formats of a secondary index (docs/feat-index.md §4,
+// The two page formats of a secondary index (docs/spec/feat-index.md §4,
 // workplan IX02): the leaf that holds entries and the internal node that
 // routes a descent.
 //

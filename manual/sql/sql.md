@@ -175,7 +175,7 @@ decisions land.
   see the relation as gone; if the transaction rolls back, it returns.
   The rows are never at risk — data pages are untouched — but the schema
   change is early. Isolating it needs undo records for catalog rows,
-  which is not built (`docs/spec-ddl-transactional.md` §5a).
+  which is not built (`docs/spec/spec-ddl-transactional.md` §5a).
 
 ### ALTER TABLE (built 2026-08-10, AL1-AL9 / ALT01-ALT05)
 
@@ -607,7 +607,7 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
 - Nothing is reserved: columns and tables may still be named `limit`,
   `offset`, `order`, `asc`, `desc`.
 
-KWP/1's portal suspension (`docs/protocol.md`) remains the designed
+KWP/1's portal suspension (`docs/spec/protocol.md`) remains the designed
 protocol-level pagination surface; only its frame codec is built.
 
 ### ANALYZE
@@ -682,7 +682,7 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
 **Durability class.** Three classes exist — `strict` (D1, fsync per commit),
 `group` (D2, default), `relaxed` (D3) — but the class is set by the
 `durability` **config key**, instance-wide. The per-transaction durability
-field is a KWP/1 protocol feature (`docs/protocol.md`), and KWP is not
+field is a KWP/1 protocol feature (`docs/spec/protocol.md`), and KWP is not
 wired: **no SQL or text-protocol spelling selects a durability class per
 transaction today.** Specified, not built.
 
@@ -694,7 +694,7 @@ Dispatcher commands, not parser statements:
 
 | Command | Answers |
 |---|---|
-| `SHOW META` | instance metadata (superblock, format version, config), plus what the last mount's recovery did — records scanned, transactions committed and rolled back, per-phase timings, and `catalog_recovered=0`, which is a standing statement that DDL is unlogged rather than a number that will change (`docs/client-manual.md` has the field list) |
+| `SHOW META` | instance metadata (superblock, format version, config), plus what the last mount's recovery did — records scanned, transactions committed and rolled back, per-phase timings, and `catalog_recovered=0`, which is a standing statement that DDL is unlogged rather than a number that will change (`docs/spec/client-manual.md` has the field list) |
 | `SHOW TABLES` | the relation list |
 | `SHOW PAGE <id> [VALUES]` | one page's header and slots; `VALUES` hex-dumps tuple payloads |
 | `SHOW PATTERNS` | `sys.patterns` — registered patterns, ids, Waystone state |

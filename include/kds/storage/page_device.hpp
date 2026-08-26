@@ -26,7 +26,7 @@
 // the boundary: the caller always owns the buffer, the buffer always
 // outlives the call, and nothing returns a span into device-owned memory.
 //
-// The run forms exist because docs/page.md section 13 names them as the
+// The run forms exist because docs/spec/page.md section 13 names them as the
 // concrete payoff of the single-file layout (S5): page-id order is
 // literally file order, so an id-sorted batch of adjacent pages is one
 // sequential transfer. The default implementations just loop, so an

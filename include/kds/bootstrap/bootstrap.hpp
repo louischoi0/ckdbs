@@ -45,13 +45,13 @@ struct BootstrapResult {
 // (storage/tagged_cell.hpp). On the fresh path it is **pinned** into the
 // new superblock; on the existing path it is **validated** against the
 // pinned one and a disagreement refuses the mount with InvalidArgument,
-// naming both values (docs/rule-fixed-length-tuple.md section 4). The check
+// naming both values (docs/rules/rule-fixed-length-tuple.md section 4). The check
 // is not pedantry: on-disk tuple layout is computed from the width, so a
 // database opened under a different one decodes every row at the wrong
 // offsets rather than failing.
 //
 // `cores` is the running configuration's `cores`
-// (docs/workplan-crosscore.md M6), and is pinned and validated by exactly
+// (docs/inflight/in-progress/workplan-crosscore.md M6), and is pinned and validated by exactly
 // the same rule and at exactly the same two moments. Its check is not about
 // tuple layout but about the WAL: streams are per core, so a database
 // created for N cores holds N streams, and mounting it at M leaves the

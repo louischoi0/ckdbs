@@ -13,7 +13,7 @@
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
 
-// docs/txn.md sections 10-5, 10-6, 10-7 and 10-8, end to end: two sessions
+// docs/spec/txn.md sections 10-5, 10-6, 10-7 and 10-8, end to end: two sessions
 // on **one dispatcher**, which is what the shared-dispatcher design makes
 // the interesting case. Deterministic and socket-free (rules.md section 4).
 //
@@ -379,7 +379,7 @@ TEST(TxnSessionNoManagerTest, TransactionControlIsRefusedWithoutAManager) {
               true);
 }
 
-// ---- DELETE (docs/txn.md sections 4.3, 6) --------------------------------
+// ---- DELETE (docs/spec/txn.md sections 4.3, 6) --------------------------------
 
 TEST_F(TxnSessionTest, DeleteMarksRatherThanRemovesAndAnOlderViewStillSeesTheRow) {
     Session setup;
@@ -465,7 +465,7 @@ TEST_F(TxnSessionTest, AnUpdateSkipsARowAlreadyDeleted) {
 // ---- Transactional DDL at the SQL surface (DT3b) ------------------------
 
 TEST_F(TxnSessionTest, ARolledBackCreateTableLeavesNoRelation) {
-    // What `docs/txn.md` §7 said was a known limitation until 2026-08-15:
+    // What `docs/spec/txn.md` §7 said was a known limitation until 2026-08-15:
     // "CREATE TABLE inside an explicit transaction is not rolled back by
     // ROLLBACK". This is that sentence becoming false.
     Session s;
@@ -1085,7 +1085,7 @@ TEST_F(TxnSessionTest, AnOlderOpenTransactionHoldsTheMarksUntilItResolves) {
     EXPECT_GE(freed.value(), 1u);
 }
 
-// The undo purge's SHOW META pair (docs/workplan-undo-purge.md UP3):
+// The undo purge's SHOW META pair (docs/inflight/in-progress/workplan-undo-purge.md UP3):
 // present whenever a manager is, and live pages count at least the page
 // a write created.
 TEST_F(TxnSessionTest, ShowMetaCarriesTheUndoPurgeCounters) {

@@ -6,7 +6,7 @@
 // tagged with the check that produced it so a corrupted byte names its
 // category.
 //
-// What it checks, against docs/heap-and-tuple.md's numbered invariants:
+// What it checks, against docs/spec/heap-and-tuple.md's numbered invariants:
 //
 //   kPageHeader     page header validates; on the device-backed overload,
 //                   every allocated non-headerless page is readable (which
@@ -38,7 +38,7 @@
 // relations (`sys.*`) are checked at the catalog level only — their rows
 // are typed catalog codecs, not user tuples, so the per-tuple checks do
 // not apply to them (sys.pattern_defs, the one exception, is skipped with
-// them). The documented-gap ghost detector (docs/txn.md section 8) lives
+// them). The documented-gap ghost detector (docs/spec/txn.md section 8) lives
 // in the loop's oracle reconciliation, not here: an uncommitted-but-
 // surviving row is structurally indistinguishable from a committed one,
 // which is precisely the gap.
@@ -46,7 +46,7 @@
 // The sweep never mutates and holds no page span across a cross-page
 // fetch: per-tuple facts that need another page (undo pointers, spilled
 // cells) are collected during the walk and resolved after it — the same
-// span discipline docs/parser-v2.md I15 R1 imposes on the executor.
+// span discipline docs/spec/parser-v2.md I15 R1 imposes on the executor.
 
 #include <cstdint>
 #include <string>

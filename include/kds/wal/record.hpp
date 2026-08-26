@@ -8,7 +8,7 @@
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 
-// WAL record and segment codec (docs/wal.md sections 4.1 and 4.2). This
+// WAL record and segment codec (docs/spec/wal.md sections 4.1 and 4.2). This
 // file is format only: it turns records into bytes and back, and knows
 // nothing about rings, devices, or when anything is flushed.
 //
@@ -63,13 +63,13 @@ enum class RecordType : std::uint8_t {
     kUndoWrite = 14,       // undo-page append: before-image + the chain link
     kFree = 15,            // SpaceManager release, the counterpart of kAlloc
     // var-heap append: a spilled value's bytes and the slot they landed in
-    // (docs/rule-fixed-length-tuple.md section 5). Logged because a
+    // (docs/rules/rule-fixed-length-tuple.md section 5). Logged because a
     // var-heap value is *authoritative data* - losing one loses a committed
     // value, not a hint - which is what separates this page class from the
     // advisory waystone family.
     kVarHeapAppend = 16,
     // A secondary-index entry appended to a leaf: the slot it landed in and
-    // its bytes (docs/feat-index.md §12.1). Logged because an index is
+    // its bytes (docs/spec/feat-index.md §12.1). Logged because an index is
     // maintained on every write and a missing entry is a **lost row**, not a
     // lost hint - the same argument that makes the var-heap authoritative.
     //
@@ -84,7 +84,7 @@ enum class RecordType : std::uint8_t {
     // page images, and those images are taken after the entry is in - so
     // emitting this as well would apply it twice.
     kIndexInsert = 17,
-    // ---- The assertion records (docs/feat-assertion.md §7, AST05) --------
+    // ---- The assertion records (docs/spec/feat-assertion.md §7, AST05) --------
     //
     // A Bound Cabin is an authoritative constraint substrate, so its
     // maintenance is logged on the var-heap's and the index's argument:
@@ -158,7 +158,7 @@ enum class RecordType : std::uint8_t {
     // Appending them later is exactly what this enum's append-only rule is
     // for.
     //
-    // The PL handoff (docs/spec-page-lsn-cross-stream.md §9 rule 1,
+    // The PL handoff (docs/spec/spec-page-lsn-cross-stream.md §9 rule 1,
     // workplan-peer-writer.md PW1c-1): *this page left this stream at this
     // LSN*, appended by the outgoing owner after the page is flushed
     // durable and before the incoming owner is granted write rights. The
@@ -355,7 +355,7 @@ inline constexpr std::size_t kSegmentHeaderSize = 4096;
 static_assert(kSegmentUsedSize <= kSegmentHeaderSize);
 
 inline constexpr std::uint64_t kSegmentMagic = 0x314C41575344584BULL;  // "KXDSWAL1"
-// **2 since 2026-08-12**, and the bump is the D2 decision `docs/known-gaps.md`
+// **2 since 2026-08-12**, and the bump is the D2 decision `docs/inflight/known-gaps.md`
 // carried: two record payloads moved under the licence "free today, no WAL
 // stream has ever been read back", and `6d7b91b` - inside the same handful of
 // commits - is what makes streams get read back.

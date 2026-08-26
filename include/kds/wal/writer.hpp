@@ -25,7 +25,7 @@
 //
 // ---- The rule this bends, and how far ------------------------------------
 //
-// `docs/rules.md` §3 makes the engine thread-per-core, shared-nothing, and
+// `docs/rules/rules.md` §3 makes the engine thread-per-core, shared-nothing, and
 // permits a lock only at a partition boundary with a justification naming
 // what it protects and its acquisition order. This is that boundary - the
 // engine on one side, the device on the other - and this comment is that

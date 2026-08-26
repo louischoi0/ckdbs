@@ -6,7 +6,7 @@
 #include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
 
-// One client connection's transaction state (docs/txn.md sections 1, 5, 6).
+// One client connection's transaction state (docs/spec/txn.md sections 1, 5, 6).
 //
 // ---- Why this type has to exist ------------------------------------------
 //

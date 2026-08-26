@@ -14,7 +14,7 @@
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
 
-// docs/txn.md sections 1, 5 and 6: the two levels' read views,
+// docs/spec/txn.md sections 1, 5 and 6: the two levels' read views,
 // first-updater-wins, and rollback's compensations.
 //
 // Deterministic and socket-free (rules.md section 4): an InMemoryPageStore
@@ -477,7 +477,7 @@ TEST_F(TxnManagerTest, SlotExhaustionIsOutOfSpaceAndAReleaseReopensIt) {
     EXPECT_TRUE(reopened.ok());
 }
 
-// ---- The undo purge, end to end (docs/workplan-undo-purge.md D1) -----------
+// ---- The undo purge, end to end (docs/inflight/in-progress/workplan-undo-purge.md D1) -----------
 //
 // The manager installs its ReadHorizon() on the log at construction, so
 // the two mechanisms compose without a call site: while a writer runs,

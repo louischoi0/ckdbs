@@ -56,7 +56,7 @@ TEST(AnchorPageTest, IndexRootsInsertUpdateAndLookUp) {
 
 TEST(AnchorPageTest, AForgedEntryCountIsCorruptionNeverALoopBound) {
     // The 3f07eda review's C1, pinned: nr_index duplicates a schema
-    // constant, so it is checked redundancy (docs/rules.md) - a count the
+    // constant, so it is checked redundancy (docs/rules/rules.md) - a count the
     // page cannot hold refuses, in both the read and the write direction.
     // Unchecked, it was an ASan-demonstrated out-of-bounds read with an
     // out-of-bounds write one branch over.

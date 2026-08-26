@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prices the T2 KWP load stream (docs/spec-bulkinsert.md §3, KL02-KL06).
+"""Prices the T2 KWP load stream (docs/spec/spec-bulkinsert.md §3, KL02-KL06).
 
 Drives the KWP v0 binary load endpoint (`kwp_port`) with pre-encoded D5
 chunks and measures rows/s and per-chunk latency, against the same

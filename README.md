@@ -53,7 +53,7 @@ Every tuple's first column is a mandatory 64-bit **Keystone word**: `id:40 | fla
 
 Self-imposed constraints:
 
-- **The pk is unique for the life of the relation, and where it comes from is the `INSERT`'s choice** (`docs/heap-and-tuple.md` §4.1, per-relation key mode built 2026-08-11 and removed 2026-08-25). Name a value in the pk's position and that value *is* the key; omit it and the engine issues one from `sys.tables.next_id`. Both work on every relation, row by row. The cursor is *persistent*, never derived as `max(id) + 1` — deriving it would reissue the identity of a deleted row — and it is a **high-water mark on what has been placed**, so an issued id always clears every key the caller has named.
+- **The pk is unique for the life of the relation, and where it comes from is the `INSERT`'s choice** (`docs/spec/heap-and-tuple.md` §4.1, per-relation key mode built 2026-08-11 and removed 2026-08-25). Name a value in the pk's position and that value *is* the key; omit it and the engine issues one from `sys.tables.next_id`. Both work on every relation, row by row. The cursor is *persistent*, never derived as `max(id) + 1` — deriving it would reissue the identity of a deleted row — and it is a **high-water mark on what has been placed**, so an issued id always clears every key the caller has named.
 - **A named key at or above the mark ascends; below it, only a btree relation takes one.** The two prove uniqueness differently, and that is the whole difference: the mark proves it without reading a page, the clustered btree's descent proves it by landing on the one leaf that may hold the key. So a semi-sorted heap chain — which has no descent — refuses a key below its mark, which is exactly the ascent its tail append, its page-wise ordering and its tail-page-only duplicate check all rest on.
 - **The pk cannot be updated.** It is the tuple's identity, not a field of it; an `UPDATE` naming it is refused at compile time as `Unsupported`, with the byte position of the column. Naming a key at insert and changing one afterwards are unrelated permissions; only the first was granted.
 - **The pk is stored once.** Carried only by the Keystone word, never also as a body column — two copies are how two copies come to disagree. A supplied id is written in the statement's first position and still lands only there.
@@ -317,7 +317,7 @@ Known limits, stated: managed state and the decision log are **memory-resident**
 
 ## Invariants — the self-imposed constraints
 
-Never violated, never "temporarily" bypassed. Each is a capability given up for a guarantee; the owning spec is `docs/heap-and-tuple.md` §8.
+Never violated, never "temporarily" bypassed. Each is a capability given up for a guarantee; the owning spec is `docs/spec/heap-and-tuple.md` §8.
 
 | # | Invariant | Bought |
 |---|---|---|
@@ -338,29 +338,29 @@ Never violated, never "temporarily" bypassed. Each is a capability given up for 
 
 ## Specifications
 
-The design is specification-first: every subsystem has a spec carrying its decisions, its open questions, and its required tests. `docs/heap-and-tuple.md` is authoritative — where it and another document disagree, it wins.
+The design is specification-first: every subsystem has a spec carrying its decisions, its open questions, and its required tests. `docs/spec/heap-and-tuple.md` is authoritative — where it and another document disagree, it wins.
 
 | Subsystem | Spec |
 |---|---|
-| Row storage, heap, Keystone, invariants *(authoritative)* | `docs/heap-and-tuple.md`, `docs/rule-fixed-length-tuple.md`, `docs/page.md` |
-| Pattern-keyed access trails | `docs/waystone-concpets.md`, `docs/spec-create-pattern-user-defined-patterns-v1.md` |
-| Value-observed authoritative store | `docs/feat-cabin.md` |
-| Physical optimizer (relayout + Cabin controller) | `docs/feat-physical-optimizer.md` |
-| Transactions & MVCC | `docs/txn.md` |
-| Logging and durability | `docs/wal.md` |
-| Query language, step chains, joins, subqueries | `docs/parser-v2.md` |
-| Aggregation | `docs/feat-aggregate.md` |
-| Secondary indexes | `docs/feat-index.md` |
-| Group-level assertions | `docs/feat-assertion.md` |
-| Foreign keys | `docs/impl-foreign-keys.md` |
-| Types (DATE, TIMESTAMP, DECIMAL, DECIMAL128) | `docs/spec-types.md` |
-| Buffer-pool eviction | `docs/spec-eviction.md` |
-| Cross-core execution & scheduling | `docs/crosscore.md`, `docs/sched.md` |
-| Wire protocol | `docs/protocol.md`, `docs/protocol-wp.md` |
-| DDL (`ALTER TABLE`, `DROP TABLE`, bulk insert) | `docs/spec-alter.md`, `docs/spec-drop-table.md`, `docs/spec-bulkinsert.md` |
-| Id issue-once contract | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
-| C++ rules | `docs/rules.md` |
-| **What is missing, and what a restart loses** | **`docs/known-gaps.md`** |
+| Row storage, heap, Keystone, invariants *(authoritative)* | `docs/spec/heap-and-tuple.md`, `docs/rules/rule-fixed-length-tuple.md`, `docs/spec/page.md` |
+| Pattern-keyed access trails | `docs/spec/waystone-concpets.md`, `docs/spec/spec-create-pattern-user-defined-patterns-v1.md` |
+| Value-observed authoritative store | `docs/spec/feat-cabin.md` |
+| Physical optimizer (relayout + Cabin controller) | `docs/spec/feat-physical-optimizer.md` |
+| Transactions & MVCC | `docs/spec/txn.md` |
+| Logging and durability | `docs/spec/wal.md` |
+| Query language, step chains, joins, subqueries | `docs/spec/parser-v2.md` |
+| Aggregation | `docs/spec/feat-aggregate.md` |
+| Secondary indexes | `docs/spec/feat-index.md` |
+| Group-level assertions | `docs/spec/feat-assertion.md` |
+| Foreign keys | `docs/spec/impl-foreign-keys.md` |
+| Types (DATE, TIMESTAMP, DECIMAL, DECIMAL128) | `docs/spec/spec-types.md` |
+| Buffer-pool eviction | `docs/spec/spec-eviction.md` |
+| Cross-core execution & scheduling | `docs/spec/crosscore.md`, `docs/spec/sched.md` |
+| Wire protocol | `docs/spec/protocol.md`, `docs/inflight/in-progress/protocol-wp.md` |
+| DDL (`ALTER TABLE`, `DROP TABLE`, bulk insert) | `docs/spec/spec-alter.md`, `docs/spec/spec-drop-table.md`, `docs/spec/spec-bulkinsert.md` |
+| Id issue-once contract | `docs/rules/keystoneid-invariant.md`, `docs/rules/keystoneid-k0-findings.md` |
+| C++ rules | `docs/rules/rules.md` |
+| **What is missing, and what a restart loses** | **`docs/inflight/known-gaps.md`** |
 
 ## Glossary
 
@@ -437,7 +437,7 @@ One line per area. "Verdict" is the results file's own conclusion, not a re-inte
 | Secondary index read | selective equality, 10k rows | 9.7× vs own walk | PG picks the same plan shape | index pays where selectivity does | `results-index.md` |
 | Index build | `CREATE INDEX`, 10k rows | 8.68 ms | 4.06 ms | **PG ~2× faster** at scale | `results-index.md` |
 | Index INSERT overhead | one index, `relaxed` | +0.6–2.1% | +0.8–1.2% | comparable, both small | `results-index.md` |
-| Aggregation scaling | 1 → thousands of groups | +46% | +454% (HashAggregate) | fold cost tracks group count better | `docs/workplan-aggregate-perf.md` |
+| Aggregation scaling | 1 → thousands of groups | +46% | +454% (HashAggregate) | fold cost tracks group count better | `docs/inflight/in-progress/workplan-aggregate-perf.md` |
 | Aggregation, no index-only scan | `COUNT(*)` over indexed col | costs a full resolve | PG Index Only Scan ~10% cheaper | honest structural gap, gated on a visibility witness | `results-index.md` §7 |
 | Bulk INSERT, durable | 1,000-row `VALUES`, rows/s | **210,165** | 81,400 (`sync=on`) | 2.6× at the widest batch, 1.07× at batch 1 | `results-bulk-insert.md` |
 | Whole-transaction booking | 4 reads, ~6.6 writes, FK-checked | **3,663 µs** | 4,072 µs | KDS ahead 10%; the *decomposition* is the finding | `results-scenario2-freight.md` |
@@ -514,7 +514,7 @@ get the number back.
 
 Under active development, specification-first: every subsystem has a spec with explicit open decisions and required tests in [`docs/`](docs/) — start with `heap-and-tuple.md` (authoritative) and `rules.md`.
 
-**Read [`docs/known-gaps.md`](docs/known-gaps.md) before relying on anything.** It is the engine-wide list of what is missing and what a restart loses, kept deliberately blunt. The headline entries: **WAL recovery is not implemented** (the log is written and never read back); nothing purges anywhere, because readers are deliberately unregistered; cross-core execution has just begun — a rotated relation's single-step `SELECT` executes on its owning core, and everything else is still served by core 0 until the rest of the step pipeline lands; Cabin entry sets, the assertion registry, and the Cabin controller's managed state are memory-resident and rebuilt by traffic after a restart; and there is no auth, no TLS, loopback only.
+**Read [`docs/inflight/known-gaps.md`](docs/inflight/known-gaps.md) before relying on anything.** It is the engine-wide list of what is missing and what a restart loses, kept deliberately blunt. The headline entries: **WAL recovery is not implemented** (the log is written and never read back); nothing purges anywhere, because readers are deliberately unregistered; cross-core execution has just begun — a rotated relation's single-step `SELECT` executes on its owning core, and everything else is still served by core 0 until the rest of the step pipeline lands; Cabin entry sets, the assertion registry, and the Cabin controller's managed state are memory-resident and rebuilt by traffic after a restart; and there is no auth, no TLS, loopback only.
 
 [`manual/`](manual/) is the user-facing surface, verified against code rather than against specs.
 

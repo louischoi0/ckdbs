@@ -10,7 +10,7 @@
 #include "kds/catalog/oid.hpp"
 
 // Which core may run a statement, and what happens when the answer is "not
-// this one" (docs/crosscore.md CC3 and §6, workplan-crosscore.md P4).
+// this one" (docs/spec/crosscore.md CC3 and §6, workplan-crosscore.md P4).
 //
 // ---- What this is, and what it deliberately is not ----------------------
 //
@@ -27,7 +27,7 @@
 //   `STEP_OPEN` and must then *wait* for batches - so building one means
 //   making the whole statement path suspendable. Task representation
 //   (callbacks vs coroutines vs fibers) is an explicitly open decision
-//   (`docs/sched.md` §3 and §10, CLAUDE.md), and rewriting the executor into
+//   (`docs/spec/sched.md` §3 and §10, CLAUDE.md), and rewriting the executor into
 //   a state machine would settle it by precedent, at the largest possible
 //   scale, without anybody deciding it.
 //
@@ -119,7 +119,7 @@ private:
 
 // The refusal a cross-core **write** gets.
 //
-// Retryable, and shaped like the first-updater-wins abort `docs/txn.md`
+// Retryable, and shaped like the first-updater-wins abort `docs/spec/txn.md`
 // already defines, because it is the same thing from the client's side: the
 // transaction cannot proceed and re-running it may work. A client that
 // already retries on `TXN_CONFLICT` needs no new code.
@@ -136,7 +136,7 @@ Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_co
                                 std::string_view relation);
 
 // The refusal every DDL verb gets on a non-system core
-// (docs/workplan-peer-writer.md PW4).
+// (docs/inflight/in-progress/workplan-peer-writer.md PW4).
 //
 // A peer's catalog is read-only by construction (M5: the catalog pages
 // have one writer, core 0), so a CREATE/ALTER/DROP dispatched there has no
@@ -158,7 +158,7 @@ Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb);
 
 // The refusal a write to a relation **this core owns** gets while the
 // core does not hold write rights over the relation's creation pages
-// (docs/workplan-peer-writer.md PW1c-7).
+// (docs/inflight/in-progress/workplan-peer-writer.md PW1c-7).
 //
 // Every grant is memory-resident, so a crash before the acquisition
 // restamp, a restart, or a message lost to a full ring leaves a relation
@@ -194,7 +194,7 @@ private:
 
 // The refusal a write gets on the owner of a relation whose index is being
 // built there, or built and not yet published by core 0's commit
-// (docs/workplan-peer-writer.md §7c, PW1c-6b-2). Retryable: the window
+// (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-2). Retryable: the window
 // closes when core 0 says `done`, and the retry then writes - and it must
 // close, because a row written inside it would be in nobody's index
 // (index_build_service.hpp says why).

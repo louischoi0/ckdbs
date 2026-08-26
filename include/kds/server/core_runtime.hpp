@@ -36,7 +36,7 @@
 #include "kds/wal/file_log_device.hpp"
 #include "kds/wal/manager.hpp"
 
-// One core's stack (docs/workplan-crosscore.md P2): the reactor and
+// One core's stack (docs/inflight/in-progress/workplan-crosscore.md P2): the reactor and
 // everything below it that is *not* shared.
 //
 // `page.md` §6 puts the intent in one line - "multi-core adds instances, not
@@ -113,7 +113,7 @@ public:
         std::uint32_t core_count = 1;
 
         // This core's share of the instance frame budget
-        // (`buffer_pool_frames`, docs/spec-eviction.md §6: the key is a
+        // (`buffer_pool_frames`, docs/spec/spec-eviction.md §6: the key is a
         // total, divided evenly per core - EV4). 0 = unbounded, the same
         // meaning SetFrameBudget gives it. Core 0's share - the even part
         // plus the division remainder - is applied by Expeditor::Open at
@@ -153,7 +153,7 @@ public:
         // `superblock_` is default-constructed, so the field reads 0 here
         // and a mount would compare its recovered stream against nothing.
         // Zero means "core 0 had none to give", which is only true before a
-        // database exists (PW1, docs/workplan-peer-writer.md).
+        // database exists (PW1, docs/inflight/in-progress/workplan-peer-writer.md).
         std::uint64_t next_trx_id = 0;
     };
 
@@ -216,7 +216,7 @@ public:
     Status Sync();
 
     // Runs one checkpoint to completion and publishes its anchor **through
-    // core 0** (PW3, docs/workplan-peer-writer.md; remote_checkpoint_anchor.hpp
+    // core 0** (PW3, docs/inflight/in-progress/workplan-peer-writer.md; remote_checkpoint_anchor.hpp
     // carries why that send is one-way). A no-op on a core with no
     // checkpointer - core 0's is `Expeditor`'s, and a runtime with no
     // transport has nowhere to publish to.
@@ -225,7 +225,7 @@ public:
     // it, and a test drives it without a reactor.
     Status Checkpoint();
 
-    // **The shutdown checkpoint** (PW3b, docs/workplan-peer-writer.md) - the
+    // **The shutdown checkpoint** (PW3b, docs/inflight/in-progress/workplan-peer-writer.md) - the
     // third of core 0's three checkpoint points, which PW3 left a peer
     // without: a graceful restart replayed up to one `checkpoint_interval`
     // of every peer's stream. Flushes this core's pages, runs one checkpoint

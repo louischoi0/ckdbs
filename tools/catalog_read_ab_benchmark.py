@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What an unfiltered catalog read costs an ordinary statement (DT9).
 
-`docs/spec-ddl-transactional.md` §5a's DT9 changed one arm of the catalog's
+`docs/spec/spec-ddl-transactional.md` §5a's DT9 changed one arm of the catalog's
 `ScanAll`: a delete-marked catalog row now counts as deleted only once its
 deleter is no longer in flight, which costs a `TransactionManager::IsInFlight`
 walk of `live_` per delete-marked row. The claim under test is that this is

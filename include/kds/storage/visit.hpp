@@ -7,7 +7,7 @@
 #include "kds/base/status.hpp"
 
 // What a relation walk's visitor tells the walk to do next
-// (docs/parser-v2.md I15 rule 4, workplan V03).
+// (docs/spec/parser-v2.md I15 rule 4, workplan V03).
 //
 // Both walks over a relation's tuples - heap::ChainVisit over a page chain
 // and btree::BtreeVisit over the leaf siblings - used to run to the end of

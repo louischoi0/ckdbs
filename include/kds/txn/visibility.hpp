@@ -10,12 +10,12 @@
 #include "kds/txn/undo_log.hpp"
 
 // The visibility predicate: which version of a tuple a read view is
-// entitled to (docs/txn.md section 4.3). It is the **first consumer of
+// entitled to (docs/spec/txn.md section 4.3). It is the **first consumer of
 // `Tuple::deleted`**, which the engine has set and never read.
 //
 // ---- Two phases, and the reason is structural ----------------------------
 //
-// docs/parser-v2.md I15 R1 forbids a page-frame span being live across a
+// docs/spec/parser-v2.md I15 R1 forbids a page-frame span being live across a
 // nested page fetch, and stepping back an undo record *is* a page fetch.
 // The step VM decodes under exactly such a span (`PageSpanGuard`), so a
 // predicate that walked undo where it is called from would break R1 on
@@ -96,7 +96,7 @@ StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
                                          std::uint64_t undo_ptr,
                                          std::vector<std::byte>& payload);
 
-// ---- Check visibility (docs/impl-foreign-keys.md §4) ---------------------
+// ---- Check visibility (docs/spec/impl-foreign-keys.md §4) ---------------------
 //
 // What a **constraint check** is entitled to see, which is not what a reader
 // is. A foreign key check cannot read at the statement snapshot: a parent

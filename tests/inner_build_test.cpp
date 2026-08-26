@@ -60,7 +60,7 @@ TEST(InnerBuildTest, AWalkReplaysWalkOrderNotPkOrder) {
     // walk: ids ascend, so the walk encounters them ascending and replay
     // is ascending as a *consequence*. Bucket two is an EXPLICIT walk: a
     // caller-supplied id can be appended below existing ids
-    // (docs/heap-and-tuple.md §4.1), so page-slot order diverges from pk
+    // (docs/spec/heap-and-tuple.md §4.1), so page-slot order diverges from pk
     // order — and walk order is the emission contract. A map that sorted
     // by pk (the Cabin recording's move, WalkAndRecord) would pass the
     // first bucket and every other test here while changing replies on an

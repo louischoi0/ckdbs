@@ -11,7 +11,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// `sys.access_stats` (docs/heap-and-tuple.md §7): how often each access
+// `sys.access_stats` (docs/spec/heap-and-tuple.md §7): how often each access
 // *shape* ran, and when it last ran.
 //
 // The decision this file exists to pin is the keying. A shape is
@@ -134,7 +134,7 @@ TEST_F(AccessStatsTest, EveryAccessKindIsRecordedTheSameWay) {
     EXPECT_TRUE(Shape(exec::AccessKind::kScan, "b", 0).has_value());
 }
 
-// ---- Secondary indexes (docs/feat-index.md §8, workplan IX16) -----------
+// ---- Secondary indexes (docs/spec/feat-index.md §8, workplan IX16) -----------
 
 TEST_F(AccessStatsTest, AnIndexAccessIsRecordedByTheSameCallAsEveryOther) {
     // IX16's whole claim: the two new kinds needed no recording code, because

@@ -8,8 +8,8 @@
 
 #include "kds/parser/parser.hpp"
 
-// V09 - the pagination tail (docs/parser-v2.md I11,
-// docs/parser-v2-workplan.md V09).
+// V09 - the pagination tail (docs/spec/parser-v2.md I11,
+// docs/inflight/in-progress/parser-v2-workplan.md V09).
 //
 // Three things this file holds down, in descending order of how expensive
 // they would be to get wrong:
@@ -256,7 +256,7 @@ TEST(ParserPaginationTest, AGroupByAloneIsAggregatedForTheTail) {
     EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
 }
 
-// `[AMENDED 2026-08-24 — docs/workplan-having.md HV4]` This was a refusal
+// `[AMENDED 2026-08-24 — docs/inflight/in-progress/workplan-having.md HV4]` This was a refusal
 // for as long as the sort could not order what a fold emits. It parses now,
 // and the parser stores what was written: which relation a name belongs to,
 // and whether it is a grouping key, stay the compiler's.

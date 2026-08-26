@@ -7,7 +7,7 @@ server on one data file within a few seconds of each other:
 
   1. a selective non-pk equality, indexed against the walk that replaces it;
   2. the same statement with and without `COVERING`, to price
-     `docs/feat-index.md` §7's claim that covering buys the **avoided
+     `docs/spec/feat-index.md` §7's claim that covering buys the **avoided
      descents** and nothing else - it is explicitly not an index-only scan;
   3. INSERT with 0, 1 and 2 indexes, and an UPDATE that moves an indexed key
      (which appends) against one that touches only a non-indexed column
@@ -302,7 +302,7 @@ def create_indexes(client, tags, names, suffix, phase):
                 if "unsupported" in lowered or "expected" in lowered:
                     abort(f"this server does not understand CREATE INDEX.\n"
                           f"  `{stmt}`\n  Secondary indexes need a build with "
-                          f"docs/feat-index.md in it.", reply)
+                          f"docs/spec/feat-index.md in it.", reply)
                 if "heap" in lowered:
                     abort(f"CREATE INDEX refused a heap relation - SCHEMA was "
                           f"edited; feat-index.md §3 requires BTREE.", reply)

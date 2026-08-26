@@ -12,7 +12,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// T1 bulk insert (docs/spec-bulkinsert.md §2, BI2-BI5, BI9; workplan
+// T1 bulk insert (docs/spec/spec-bulkinsert.md §2, BI2-BI5, BI9; workplan
 // BLK01-BLK04).
 //
 // The two claims everything else hangs off:
@@ -287,7 +287,7 @@ TEST_F(BulkInsertTest, IndexesSeeEveryBulkRow) {
     EXPECT_EQ(Run("SELECT id FROM t WHERE owner = 1"), "id\\n1\\n3\\n5");
 }
 
-// ---- T3: the sorted heap fill (docs/workplan-t3.md) -----------------------
+// ---- T3: the sorted heap fill (docs/inflight/in-progress/workplan-t3.md) -----------------------
 //
 // The contract is byte-identical behavior across the gate: a statement
 // that takes the sorted fill and one that takes the row loop answer the

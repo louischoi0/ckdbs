@@ -24,7 +24,7 @@ bookers silently lose updates**, the workload's invariant checker catches it,
 and REPEATABLE READ removes every one of them for no throughput that this
 machine can measure.
 
-The workload is `docs/scenario2-freight.md`'s freight and cargo book, driven
+The workload is `docs/inflight/in-progress/scenario2-freight.md`'s freight and cargo book, driven
 by `tools/scenario2_freight.py`. How to run it: `bench/docs/README.md`.
 
 ## 1. The run
@@ -127,9 +127,9 @@ Every wait is measured client-side as a statement's round trip, so each
 carries the socket and the Python driver. That overhead cannot be subtracted,
 only acknowledged. KDS exposes no server-side wait-event instrumentation, so
 *within* a statement the split between page I/O, latch and CPU is not visible
-from here — that gap is `docs/observability.md`'s, and it is unbuilt. Lock
+from here — that gap is `docs/inflight/in-progress/observability.md`'s, and it is unbuilt. Lock
 wait does not exist in this engine at all: there is no lock manager and no
-waiting, by design (`docs/txn.md`), so a write conflict is an immediate
+waiting, by design (`docs/spec/txn.md`), so a write conflict is an immediate
 retryable error rather than a queue. Conflict wait is therefore structurally
 zero here and non-zero only in §11.
 
@@ -271,7 +271,7 @@ two engines are within 9% of each other on the *ratio*, which is what makes
 this the cost of the durability guarantee rather than an artefact of either
 implementation.
 
-`docs/scenario2-freight.md`'s decision S2-2 chose explicit transactions for
+`docs/inflight/in-progress/scenario2-freight.md`'s decision S2-2 chose explicit transactions for
 **correctness** — eight statements that must be one unit. On this machine
 they are also a 5.7× throughput win on ckdbs and a 5.2× win on PostgreSQL,
 and nothing trades against it.
@@ -377,7 +377,7 @@ reproduce across repeats, which is what makes them comparable)*
 
 Recording cost no throughput this workload can resolve (§6 row 8) and 5.2 MB
 of file. The mechanism is the step-kind trust table doing exactly what
-`docs/waystone-concpets.md` specifies, and `SHOW PATTERNS` and `SHOW ACCESS`
+`docs/spec/waystone-concpets.md` specifies, and `SHOW PATTERNS` and `SHOW ACCESS`
 on the baseline's file name the three cases exactly:
 
 - `operations` and `organizations` — probed by `WHERE id = <n>` over 2,000
@@ -400,7 +400,7 @@ make the cleanest possible case for it: `SHOW ACCESS` reports 1,526 uses on
 `operations`, 1,525 on `organizations` and 1,500 on `cargos` — the same
 traffic to within 2% — and the first two cost 640 pages between them while
 the third costs nothing at all. Nothing bounds instances per pattern today
-(`docs/waystone-concpets.md` §9's retention and eviction, workplan items
+(`docs/spec/waystone-concpets.md` §9's retention and eviction, workplan items
 P15–P17), and the bound this measurement argues for is one on instance
 cardinality rather than on statements executed.
 
@@ -471,7 +471,7 @@ credit limit is now being enforced against a number that under-reports what
 the customer owes, which is exactly the failure this workload was built to be
 able to detect.
 
-**The engine is not misbehaving.** `docs/txn.md` specifies first-updater-wins
+**The engine is not misbehaving.** `docs/spec/txn.md` specifies first-updater-wins
 with no waiting: an `UPDATE` is refused when its target was written by a
 *concurrent uncommitted* transaction. Two read-modify-write transactions that
 overlap in time but commit in sequence are not that case, and under READ
@@ -482,7 +482,7 @@ lost-update hazard of RC, and PostgreSQL at RC has it too.
 What is specific to KDS is **how little the workload can do about it**. There
 is no `SELECT ... FOR UPDATE`, and `UPDATE ... SET c = c + n` is not
 expressible — the grammar takes a literal on the right-hand side
-(`docs/client-manual.md`). A running total cannot be incremented atomically
+(`docs/spec/client-manual.md`). A running total cannot be incremented atomically
 at any isolation level; it can only be read, computed client-side, and
 written back. That leaves exactly one remedy available today, and it works:
 REPEATABLE READ fixes the read view at `BEGIN`, so a row written by anyone
@@ -557,7 +557,7 @@ and a 600-second interval on a run that lasts three seconds simply removes
 checkpointing from the measurement rather than tuning it. What the cell
 establishes is where a quarter of the tail lives, which is the input a real
 decision about checkpoint cadence would need — and that cadence is an open
-decision, `docs/wal.md` §15's.
+decision, `docs/spec/wal.md` §15's.
 
 ## 14. Versus PostgreSQL
 
@@ -676,7 +676,7 @@ been vacuumed, so both carry slack this run did not try to remove.
   it in the checkpointer; what remains is 2,300–2,800 µs at p99 against a p0
   of 1,057 µs with the checkpointer removed, and the engine exposes no
   wait-event instrumentation that could split that into device, WAL writer
-  and reactor. `docs/observability.md` owns that, unbuilt.
+  and reactor. `docs/inflight/in-progress/observability.md` owns that, unbuilt.
 - **What contention does past eight bookers**, on a box with two vCPUs. The
   eight-booker rows are already oversubscribed 4:1, so their absolute
   throughput is a scheduling result as much as an engine one.
@@ -714,7 +714,7 @@ booking rate on this workload and measuring 1.18×.**
 
 **The data file is smaller than the rows in it would suggest, and
 `SHOW META` names why:** after a full load and 1,500 bookings the undo chain
-holds **2 live pages against 1,256 recycled**. `docs/workplan-undo-purge.md`'s
+holds **2 live pages against 1,256 recycled**. `docs/inflight/in-progress/workplan-undo-purge.md`'s
 UP1–UP3 plateau claim is met on a real workload here for the first time, and
 the consequence is that ckdbs's data pages now hold this workload in **19%
 fewer bytes than PostgreSQL spends on it**.
@@ -793,7 +793,7 @@ runs `wal_init_zero = on`, `wal_recycle = on` and `wal_segment_size = 16 MB`
 renames spent segments instead of creating new ones, which is why its
 `pg_wal` directory holds a stable set of 16 MiB files and its booking maximum
 never exceeds 17 ms. ckdbs already zero-fills; what it does not do is
-recycle, and `docs/wal.md` owns whether it should.
+recycle, and `docs/spec/wal.md` owns whether it should.
 
 Where it landed, per cell, is deterministic rather than random. `base1`'s
 own checkpoint anchors put the LSN at **60,762,680** five seconds before the
@@ -906,10 +906,10 @@ and the file's earlier sections, which do not, could not have seen it.
 each carries the socket and the Python driver; that cannot be subtracted, only
 acknowledged. **Lock wait does not exist in this engine** — no lock manager,
 no waiting, a write conflict is an immediate retryable error
-(`docs/txn.md`) — so conflict wait is structurally zero on a single booker
+(`docs/spec/txn.md`) — so conflict wait is structurally zero on a single booker
 and non-zero only in §11's contended cells. Within a statement, the split
 between page I/O, latch and CPU is **not measurable**: there is no
-server-side wait-event instrumentation. `docs/observability.md` owns that gap
+server-side wait-event instrumentation. `docs/inflight/in-progress/observability.md` owns that gap
 and it is unbuilt.
 
 | wait type | µs | share |
@@ -981,7 +981,7 @@ on a live server at the two points of one 100,000-cargo cell:
 
 The chain **plateaus at two live pages** while 1,256 pages are recycled into
 the log's next growth — 10.3 MB of undo that a non-purging engine would be
-carrying. This is the first measurement of `docs/workplan-undo-purge.md`'s
+carrying. This is the first measurement of `docs/inflight/in-progress/workplan-undo-purge.md`'s
 UP1–UP3 on a real workload rather than a unit test, and it is what makes the
 space comparison in §16.8 come out the way it does.
 
@@ -1113,7 +1113,7 @@ step 1 Probe cargos   AS c key=0:0.3
 
 The inner side binds to `cargos.id`, which is the Keystone primary key, so
 the structure ladder stops at its **first** arm — the pk probe. The build is
-the ladder's *last* arm (`docs/spec-join-inner-build.md` §5), reached only
+the ladder's *last* arm (`docs/spec/spec-join-inner-build.md` §5), reached only
 when the pk, both index and both Cabin arms decline. Nothing in this schema
 can reach it. `bench/results-scenario3-library.md` is where that arm is
 measured.
@@ -1142,7 +1142,7 @@ moved.
 | §2, baseline TPS | 511.7 (mean of 3) | 432.1 raw, **529.6 roll-excluded** | the segment roll fell inside the booking phase in all three cells here, and §2 does not table a maximum, so where it fell in that run is unrecorded |
 | §14, ckdbs ÷ PostgreSQL | 1.22× | 0.94× raw, **1.18× roll-excluded** | the same one event |
 | §14, commit median | 1,171.7 vs 1,210.8 µs (3% apart) | **1,177.9 vs 1,177.1 µs (0.07%)** | tighter interleaving; the finding is unchanged and sharper |
-| §14, space | ckdbs data pages 18% *more* than PostgreSQL's workload | ckdbs data pages **19% fewer** | `undo_pages_recycled = 1,256`, `undo_pages_live = 2` — the undo purge (UP1–UP3, `docs/workplan-undo-purge.md`) |
+| §14, space | ckdbs data pages 18% *more* than PostgreSQL's workload | ckdbs data pages **19% fewer** | `undo_pages_recycled = 1,256`, `undo_pages_live = 2` — the undo purge (UP1–UP3, `docs/inflight/in-progress/workplan-undo-purge.md`) |
 | §10, Waystone's cost | +640 / +320 pages | +671 / +313 pages | unchanged |
 | §8, derived column | 1.84× ckdbs, 1.18× PostgreSQL | 2.07× / 1.16× | one cell a side both times; direction reproduces |
 
@@ -1153,10 +1153,10 @@ No cell moved for either of the commit's two features.
 - **Whether recycling a WAL segment would remove the stall.** §16.2 locates
   it and names the code, and points out that PostgreSQL recycles where this
   engine creates. It does not measure a recycling implementation, because
-  none exists — that is `docs/wal.md`'s decision to take.
+  none exists — that is `docs/spec/wal.md`'s decision to take.
 - **Where inside the 0.47–0.79 s the time goes.** `Prewrite` is 64 `pwrite`s
   and an `fsync`; splitting those needs instrumentation the engine does not
-  have (`docs/observability.md`).
+  have (`docs/inflight/in-progress/observability.md`).
 - **Whether the undo purge costs anything.** §16.7 measures what it
   *recovers*. The purge's own CPU is inside statements whose medians are
   unchanged, which bounds it below this driver's resolution but does not

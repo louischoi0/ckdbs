@@ -12,7 +12,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/server/superblock.hpp"
 
-// docs/txn.md section 10-2: ids are monotonic, never 1, never reissued
+// docs/spec/txn.md section 10-2: ids are monotonic, never 1, never reissued
 // across a simulated restart, a crash burns the block remainder, and past
 // kMaxTxnId is OutOfRange.
 

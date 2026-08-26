@@ -43,7 +43,7 @@ inline constexpr Oid kTypeDecimal = 29;
 inline constexpr Oid kTypeUint64 = 30;
 inline constexpr Oid kTypeInt64 = kTypeInt;
 
-// docs/spec-types.md TY1. Appended rather than inserted, like every oid
+// docs/spec/spec-types.md TY1. Appended rather than inserted, like every oid
 // above them: these are seeded into `sys.types` at bootstrap and a moved
 // oid would change what an existing catalog row means.
 inline constexpr Oid kTypeDate = 31;
@@ -56,7 +56,7 @@ inline constexpr Oid kTypeTimestamp = 32;
 inline constexpr Oid kTypeDecimalWide = 33;
 
 // A dropped relation's sys.objects row is *retyped* to this, never
-// retired (docs/spec-drop-table.md DT2): GenerateUserOid() recovers its
+// retired (docs/spec/spec-drop-table.md DT2): GenerateUserOid() recovers its
 // floor from the highest oid on the catalog pages - the rows are the
 // counter - so the row must stay to keep the dead oid from being
 // reissued, while every name lookup filters on kTypeTable and so frees
@@ -85,14 +85,14 @@ inline constexpr Oid kSysColumnsTable = 111;
 inline constexpr Oid kSysTablesTable = 112;
 inline constexpr Oid kSysIndexesTable = 113;
 
-// sys.patterns (docs/waystone-concpets.md section 4): one row per observed
+// sys.patterns (docs/spec/waystone-concpets.md section 4): one row per observed
 // query shape, keyed by the parse-time fingerprint. A pattern is a catalog
 // object because it is the durable, inspectable statement of what this
 // database is asked to do - and because the waystone directory for a
 // pattern has to be rooted somewhere that survives a restart.
 inline constexpr Oid kSysPatternsTable = 114;
 
-// sys.pattern_defs (docs/spec-create-pattern-user-defined-patterns-v1.md
+// sys.pattern_defs (docs/spec/spec-create-pattern-user-defined-patterns-v1.md
 // section 4.2): the name and source text of a *declared* pattern, joined to
 // sys.patterns by pattern_id. An auto-registered pattern has no row here and
 // keeps printing as a bare hex id.
@@ -119,7 +119,7 @@ inline constexpr Oid kSysPatternDefsTable = 115;
 // are the pages being built is a question with no answer yet.
 inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
 
-// sys.assertions (docs/feat-assertion.md §8.2, workplan AST03): one row per
+// sys.assertions (docs/spec/feat-assertion.md §8.2, workplan AST03): one row per
 // declared assertion - a group-level upper-bound constraint over one
 // relation.
 //
@@ -143,14 +143,14 @@ inline constexpr Oid kSysAssertionsTable = 116;
 // before the oid sequence has pages to recover its position from.
 inline constexpr Oid kSysAssertionsColumnOidBase = 140;
 
-// sys.access_stats (docs/heap-and-tuple.md §7): one row per access *shape*
+// sys.access_stats (docs/spec/heap-and-tuple.md §7): one row per access *shape*
 // - `(kind, rel_id, column_mask)` - with how often it ran and when it last
 // ran. A fixed-offset typed row like its neighbours, not a row-codec
 // relation: everything in it is fixed-width, so none of sys.pattern_defs'
 // reasons apply.
 inline constexpr Oid kSysAccessStatsTable = 130;
 
-// sys.cabins (docs/feat-cabin.md §10): one row per Cabin - a
+// sys.cabins (docs/spec/feat-cabin.md §10): one row per Cabin - a
 // `(relation, non-pk column)` store authoritative for observed values.
 // Fixed-offset typed rows like every catalog relation except
 // sys.pattern_defs, since nothing in the row is variable-width.
@@ -161,7 +161,7 @@ inline constexpr Oid kSysAccessStatsTable = 130;
 // every Cabin, which is invariant-preserving by C1's own terms.
 inline constexpr Oid kSysCabinsTable = 131;
 
-// sys.fkeys (docs/impl-foreign-keys.md §1): one row per foreign key - a
+// sys.fkeys (docs/spec/impl-foreign-keys.md §1): one row per foreign key - a
 // child relation's column that references a parent relation's Keystone id.
 // Fixed-offset typed rows like every catalog relation except
 // sys.pattern_defs, since nothing in the row is variable-width.
@@ -169,7 +169,7 @@ inline constexpr Oid kSysCabinsTable = 131;
 // **There is no parent-column field, and that is F1, not an omission.** A
 // foreign key references the parent's engine pk and never a business key,
 // so the parent side is fixed by the invariant that issues it: ids are
-// issue-once (docs/keystoneid-invariant.md K1) and a pk cannot be updated
+// issue-once (docs/rules/keystoneid-invariant.md K1) and a pk cannot be updated
 // (invariant 11), which is what buys ON UPDATE CASCADE never having to
 // exist and a stored reference being able to dangle but never to
 // mis-attribute.
@@ -184,7 +184,7 @@ inline constexpr Oid kSysFkeysTable = 132;
 // This was a KNOWN GAP until 2026-08-08: the counter was in-memory only and
 // restarted here every boot, so two objects created in different runs shared
 // an oid and resolving it returned whichever row the scan reached first
-// (docs/keystoneid-k0-findings.md §6). It is fixed by *recovering* the
+// (docs/rules/keystoneid-k0-findings.md §6). It is fixed by *recovering* the
 // position rather than persisting it, which is why no format changed and why
 // an existing data file is repaired simply by being opened. sys.patterns
 // rows still take their oid from a persistent per-relation sequence; that
@@ -280,7 +280,7 @@ inline constexpr PageId kCatalogPageAssertions = 14;
 // One list, because two places now need "all of them at once" and a
 // hand-written second copy is how a page added later gets left out of one
 // of them: `Catalog::Bootstrap()` creates them, and multicore flushes them
-// before telling peers to re-read (docs/workplan-crosscore.md P6). A page
+// before telling peers to re-read (docs/inflight/in-progress/workplan-crosscore.md P6). A page
 // missing from the flush would leave a peer permanently unable to see the
 // relation it describes.
 //
@@ -363,7 +363,7 @@ inline constexpr std::array<PageId, kCatalogPageSpanSize> kEveryCatalogPage =
 // rather than one from a real transaction.
 inline constexpr std::uint64_t kBootstrapXid = 1;
 
-// The first id a real transaction may be issued (docs/txn.md section 4.2).
+// The first id a real transaction may be issued (docs/spec/txn.md section 4.2).
 // 2, so kBootstrapXid is never reissued - which is what makes it safe for
 // every read view to trust that id unconditionally and permanently.
 inline constexpr std::uint64_t kFirstUserTrxId = 2;
@@ -388,7 +388,7 @@ inline constexpr std::uint32_t kTypeValBool = 8;
 inline constexpr std::uint32_t kTypeValVarchar = 9;
 inline constexpr std::uint32_t kTypeValChar = 10;
 
-// ---- docs/spec-types.md TY1 / TY9 --------------------------------------
+// ---- docs/spec/spec-types.md TY1 / TY9 --------------------------------------
 //
 // **Purely additive**, and that is the whole migration story: no existing
 // `type_val` changes meaning, so no existing relation does either.
@@ -406,7 +406,7 @@ inline constexpr std::uint32_t kTypeValChar = 10;
 inline constexpr std::uint32_t kTypeValDate = 11;
 inline constexpr std::uint32_t kTypeValTimestamp = 12;
 
-// The wide decimal (docs/spec-types.md TY2's "future separate type",
+// The wide decimal (docs/spec/spec-types.md TY2's "future separate type",
 // built 2026-08-07): `decimal(p, s)` with `19 <= p <= 38`, stored as an
 // **int128 unscaled value in 16 LE bytes** - a different schema constant
 // coexisting with the 8-byte type, never a widening of it. Selected by
@@ -422,7 +422,7 @@ enum class ClusteredType : std::uint8_t {
 };
 
 // Whether a relation has ever taken a primary key that did not ascend
-// (docs/heap-and-tuple.md section 4.1, rewritten 2026-08-25). An **observed
+// (docs/spec/heap-and-tuple.md section 4.1, rewritten 2026-08-25). An **observed
 // fact**, not a declaration: no DDL word sets it, `Catalog::CreateTable`
 // cannot choose it, and it moves exactly once - the first time
 // `Catalog::AdmitExplicitRowId` admits an id below `sys.tables.next_id`.
@@ -448,7 +448,7 @@ enum class ClusteredType : std::uint8_t {
 // A heap-clustered relation can never reach kUnordered: `AdmitExplicitRowId`
 // refuses a below-the-mark id there outright, because the semi-sorted chain's
 // tail append, its page-wise ordering and its tail-page-only duplicate check
-// all rest on the ascent (docs/heap-and-tuple.md section 3.1b).
+// all rest on the ascent (docs/spec/heap-and-tuple.md section 3.1b).
 enum class KeyOrder : std::uint8_t {
     // Every id placed on this relation so far was above every id before it.
     kAscending = 0,

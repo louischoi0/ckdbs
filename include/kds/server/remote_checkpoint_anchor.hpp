@@ -10,7 +10,7 @@
 #include "kds/wal/checkpointer.hpp"
 
 // A checkpoint anchor for a core that does not own the superblock
-// (docs/workplan-crosscore.md M5, P2).
+// (docs/inflight/in-progress/workplan-crosscore.md M5, P2).
 //
 // The superblock is core 0's - it is page 0, and M5 gives the system core
 // every fixed structure. So a checkpoint completing on core 3 cannot write
@@ -24,7 +24,7 @@
 // No reply, no completion, no retry beyond the ring's own.
 //
 // That is sound because of *when* an anchor is published: only after this
-// core's `CHECKPOINT_END` record is already durable (`docs/wal.md` §8-3).
+// core's `CHECKPOINT_END` record is already durable (`docs/spec/wal.md` §8-3).
 // The anchor is a statement about where recovery may **start**, so losing
 // one costs a longer replay next boot and can never cost a wrong answer -
 // recovery falls back to the previous anchor, or to the start of the stream.
@@ -33,7 +33,7 @@
 //
 // One-way is also what keeps P2 free of the question that blocks everything
 // else: a reply would need the sending task to suspend and resume, and task
-// representation is an open decision (`docs/sched.md` §3). An anchor write is
+// representation is an open decision (`docs/spec/sched.md` §3). An anchor write is
 // the one cross-core operation that genuinely does not need an answer, which
 // is why it is the one P2 wires up.
 //

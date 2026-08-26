@@ -6,7 +6,7 @@ Where grammar_v2_check.py asserts and exits non-zero, this one explains.
 It sends the same kinds of statement in the order the grammar grew
 (V04 lexer -> V05 joins -> V06 projection -> V07 subqueries) and prints
 each reply with a one-line note on what it demonstrates, so the shape of
-the language is visible without reading docs/parser-v2.md first.
+the language is visible without reading docs/spec/parser-v2.md first.
 
 The language **runs** as of V18: joins pair rows through a pk probe, select
 lists emit exactly the columns named, and every subquery form - EXISTS,

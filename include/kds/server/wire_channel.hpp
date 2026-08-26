@@ -6,7 +6,7 @@
 #include "kds/base/status.hpp"
 
 // The byte-transform seam between a socket and the protocol above it
-// (docs/protocol.md §1: TLS sits below whichever protocol the port
+// (docs/spec/protocol.md §1: TLS sits below whichever protocol the port
 // speaks). TcpServer reads and writes *wire* bytes; a connection with a
 // WireChannel installed passes them through it, and one without a channel
 // is exactly the plaintext path that existed before this seam did.

@@ -8,7 +8,7 @@ adjacent lines and neither needs a code change to add.
     tools/run_sql.py adhoc/subqueries.sql --quiet     only failures
 
 Script format. One statement per line - the wire protocol is one line in,
-one line out (docs/client-manual.md), so a statement cannot span lines
+one line out (docs/spec/client-manual.md), so a statement cannot span lines
 here either. Blank lines are skipped. A line starting with `--` is a
 comment, and four spellings of comment are directives that apply to the
 **next statement**:

@@ -13,7 +13,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// End-to-end cover for caller-supplied primary keys (docs/heap-and-tuple.md
+// End-to-end cover for caller-supplied primary keys (docs/spec/heap-and-tuple.md
 // §4.1). The unit-level pieces are tested where they live - the admission
 // gate in catalog_test.cpp, the leaf division in btree_test.cpp, the grammar
 // in parser_test.cpp - and this file is the one place all of them run
@@ -429,7 +429,7 @@ protected:
     std::optional<CommandDispatcher> d_;
 };
 
-// ---- Rollback across a division (BI4, docs/txn.md §6) --------------------
+// ---- Rollback across a division (BI4, docs/spec/txn.md §6) --------------------
 //
 // The trail records a row as `(page_id, slot)`, because for most of this
 // engine's life a row's address was stable for life. A leaf division breaks

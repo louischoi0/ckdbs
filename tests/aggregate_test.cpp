@@ -10,7 +10,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/row_codec.hpp"
 
-// AG03 - the fold itself (docs/feat-aggregate.md §5,
+// AG03 - the fold itself (docs/spec/feat-aggregate.md §5,
 // docs/workplan-aggregate.md).
 //
 // Driven by a hand-built `ChainFrame` rather than by executing a chain,

@@ -240,7 +240,7 @@ Status TwoStepPipelineEligible(const exec::StepChain& chain) {
     // **An index or Cabin probe joins the walked class**, because that is
     // what it ships as (`ShippedForm`): the same outer-row requirement,
     // the same 4c gated-walk buffering. The history of refusing these
-    // kinds outright is docs/known-gaps.md's closed entry.
+    // kinds outright is docs/inflight/known-gaps.md's closed entry.
     const bool joins_the_outer_row = [&] {
         for (const exec::StepPredicate& pred : inner.residual) {
             if (pred.lhs.up == 0 && pred.lhs.rel_slot == 0) return true;

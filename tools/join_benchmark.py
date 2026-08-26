@@ -6,7 +6,7 @@ Two tables, 10000 rows each by default, and three join shapes that differ
 in exactly one thing: **which access kind the step compiler assigns the
 inner relation**. That choice is not an executor implementation note - it
 is simultaneously the probe strategy and Waystone's lookup/search line
-(docs/parser-v2.md section 1, include/kds/exec/step_chain.hpp), so the gap
+(docs/spec/parser-v2.md section 1, include/kds/exec/step_chain.hpp), so the gap
 between these phases is the same gap between what a recorded trail may
 one day *replace* and what it may only prefetch for.
 
@@ -49,7 +49,7 @@ What this tool still measures well:
    the join-point shape, then runs `ANALYZE` on the live inline statement
    and compares the two `pattern_id`s. That equality is the whole
    load-bearing claim of CREATE PATTERN
-   (docs/spec-create-pattern-user-defined-patterns-v1.md section 3.2). If
+   (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 3.2). If
    it ever stops holding, every declared pattern silently matches nothing
    - no error, no failed query, just a feature that quietly does not
    work. This tool fails loudly on it.

@@ -14,9 +14,9 @@ against each other says something a single-structure benchmark cannot:
 
     a FilterScan     walk the whole chain, keep the rows that match
     a Cabin          authoritative *only for values queries have observed*
-                     (docs/feat-cabin.md) - a hit needs no relation opened
+                     (docs/spec/feat-cabin.md) - a hit needs no relation opened
     a secondary index  authoritative for every value, always maintained
-                     (docs/feat-index.md)
+                     (docs/spec/feat-index.md)
 
 PostgreSQL answers it exactly one way, with a btree index, which is what
 makes it a clean baseline here rather than a second set of numbers.
@@ -103,7 +103,7 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # ---- the schema ----------------------------------------------------------
 #
 # Every relation is BTREE, and that is a hard requirement rather than a
-# preference: `docs/feat-index.md` §3 permits a secondary index only on a
+# preference: `docs/spec/feat-index.md` §3 permits a secondary index only on a
 # btree-clustered relation, because an index entry names a pk and resolving
 # one needs a pk descent. A HEAP relation here would make `--index-mode`
 # fail at CREATE INDEX with a refusal naming the storage form.
@@ -173,7 +173,7 @@ INDEX_MODES["all"] = (INDEX_MODES["single"] + INDEX_MODES["composite"]
 
 # The Cabin is the other accelerator for a non-pk equality, and the reason
 # this scenario can say something about *which* structure to reach for. One
-# column only: docs/feat-cabin.md C3 keeps a Cabin single-column.
+# column only: docs/spec/feat-cabin.md C3 keeps a Cabin single-column.
 CABIN_RELATION = "loans"
 CABIN_COLUMN = "user_id"
 CABIN_TYPE = "int64"
@@ -325,7 +325,7 @@ def explain_ddl_failure(base, reply, cabin):
     if cabin and base == CABIN_RELATION and "CABIN" in upper:
         abort(f"--cabin: this server does not understand the column cabin "
               f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} {CABIN_TYPE} "
-              f"CABIN` needs a build with docs/feat-cabin.md in it; re-run "
+              f"CABIN` needs a build with docs/spec/feat-cabin.md in it; re-run "
               f"without --cabin, or rebuild the server.", reply)
     if "no room" in reply or "reserved catalog page range" in reply:
         abort(f"could not create {base}: the catalog is out of column space.\n"
@@ -367,7 +367,7 @@ def explain_index_failure(stmt, reply):
     if "unsupported" in lowered or "expected" in lowered:
         abort(f"this server does not understand CREATE INDEX.\n"
               f"  `{stmt}`\n"
-              f"  Secondary indexes need a build with docs/feat-index.md in "
+              f"  Secondary indexes need a build with docs/spec/feat-index.md in "
               f"it (IX05 for the grammar, IX09 for the backfill). Re-run "
               f"with --index-mode none, or rebuild the server.", reply)
     if "heap" in lowered:
@@ -664,7 +664,7 @@ def read_phases(client, tables, users, books, args, rng):
     phases.append(p)
 
     # A join chain: a pk Lookup on loans feeding a pk Probe into users.
-    # Written order is execution order (docs/parser-v2.md), so this is a
+    # Written order is execution order (docs/spec/parser-v2.md), so this is a
     # Lookup then a Probe and never reordered.
     p = Phase("join-loan-user", "loans JOIN users ON user_id = id")
     for _ in range(ops):

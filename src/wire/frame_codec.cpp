@@ -5,7 +5,7 @@ namespace kds::wire {
 std::array<std::byte, kFrameHeaderSize> FrameHeader::Encode() const noexcept {
     std::array<std::byte, kFrameHeaderSize> out{};
 
-    // Explicit little-endian byte assembly (docs/protocol.md D5) rather
+    // Explicit little-endian byte assembly (docs/spec/protocol.md D5) rather
     // than a memcpy of the struct - host byte order is not assumed
     // portable (see file comment in kwp.hpp).
     out[kLengthOffset + 0] = static_cast<std::byte>(length & 0xFFu);

@@ -14,7 +14,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/sched/send_retry.hpp"
 
-// C++20 stackless coroutines as the task representation (docs/sched.md §3,
+// C++20 stackless coroutines as the task representation (docs/spec/sched.md §3,
 // settled 2026-08-05).
 //
 // The last test is the one that matters: a **cross-core request/response**,

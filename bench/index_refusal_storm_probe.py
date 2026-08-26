@@ -2,7 +2,7 @@
 """G2: does a REFUSED `CREATE INDEX` still consume pages?
 
 The defect (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
-§8d-1, `docs/workplan-peer-writer.md` PW1c-9): `CREATE INDEX` builds the
+§8d-1, `docs/inflight/in-progress/workplan-peer-writer.md` PW1c-9): `CREATE INDEX` builds the
 whole index tree and seeds the relation's anchor slot **afterwards**, so a
 refusal raised at the seed had already allocated an index tree -- and
 nothing in this engine frees a page. A client that keeps retrying therefore

@@ -29,7 +29,7 @@ distribution:
 
 The three join phases exist to price **one decision**: the step compiler
 marks a join step `Probe` when its equality binds the relation's primary
-key and `Scan` otherwise (docs/parser-v2.md section 1). Same statement
+key and `Scan` otherwise (docs/spec/parser-v2.md section 1). Same statement
 shape, same driving relation, same number of output rows - and the second
 one walks the whole inner relation per outer row. The gap between
 join-probe and join-scan is what that access kind is worth, and it is the
@@ -53,7 +53,7 @@ without both is misleading:
 
 1. **Index behaviour depends on --clustered.** A heap relation has no
    index at all: a `WHERE id = <n>` SELECT or UPDATE is a full scan of
-   the relation's whole page chain (docs/client-manual.md section 3), so
+   the relation's whole page chain (docs/spec/client-manual.md section 3), so
    both phases' QPS fall roughly as 1/--rows and neither number means
    anything without the row count beside it. The way out is
    `--clustered btree`: the relation *is* a B+ tree on the pk, so a point
@@ -124,7 +124,7 @@ SMALL_RANGE = 30000
 
 # UPDATE is an in-place (HOT-style) overwrite with no relocation fallback:
 # a new value that outgrows the row's original slot reservation is an ERR
-# (docs/client-manual.md section 3). So the update phase only ever rewrites
+# (docs/spec/client-manual.md section 3). So the update phase only ever rewrites
 # the fixed-width c_int column, and the varchar is written once at insert
 # time at a constant length.
 TEXT_LEN = 16
@@ -178,7 +178,7 @@ def create_table(conn, table, clustered):
     """Creates the run's table in one storage organization or the other.
 
     The trailing HEAP/BTREE word is the CREATE TABLE storage clause
-    (docs/client-manual.md section 3): HEAP is a chain of heap pages, BTREE
+    (docs/spec/client-manual.md section 3): HEAP is a chain of heap pages, BTREE
     is a clustered B+ tree over the same leaf format. It is a create-time
     property with no ALTER, so the two are only ever compared across runs.
     """

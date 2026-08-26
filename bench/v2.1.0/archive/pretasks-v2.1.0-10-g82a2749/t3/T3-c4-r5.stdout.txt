@@ -32,4 +32,4 @@
 == comparison ==
    multi-core / single-core throughput: 1.191x
    (expected ~1.0x at placement=creating whatever the pipeline can do:
-    every relation is on core 0, so no statement ships - docs/workplan-crosscore.md P6c)
+    every relation is on core 0, so no statement ships - docs/inflight/in-progress/workplan-crosscore.md P6c)

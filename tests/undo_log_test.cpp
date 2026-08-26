@@ -18,7 +18,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
-// docs/txn.md section 10-1 (the log half) and 10-4: appends chain pages
+// docs/spec/txn.md section 10-1 (the log half) and 10-4: appends chain pages
 // when one fills, a walk is bounded rather than hanging, the UNDO_WRITE
 // mapping round-trips, and an undo page image rebuilt from the records read
 // **off the device** is identical to the live page.
@@ -306,7 +306,7 @@ TEST_F(UndoLogTest, AnAppendLogsPageInitThenUndoWrite) {
     EXPECT_EQ(write.value().fields.offset, UndoPtrOffset(ptr.value()));
     // The payload carries the record's tail now, not the bare image: the
     // target fields ride with it so redo can rebuild a chain that names
-    // its tuples (docs/txn.md section 3.5).
+    // its tuples (docs/spec/txn.md section 3.5).
     auto tail = DecodeUndoRecordTail(write.value().tail);
     ASSERT_TRUE(tail.ok()) << tail.status().message();
     EXPECT_EQ(StringOf(tail.value().image), "before");
@@ -417,7 +417,7 @@ TEST_F(UndoLogTest, AnUnloggedLogStillAppendsAndReads) {
     EXPECT_EQ(StringOf(version.value().image), "before");
 }
 
-// ---- The purge (docs/workplan-undo-purge.md, D1-D3) -----------------------
+// ---- The purge (docs/inflight/in-progress/workplan-undo-purge.md, D1-D3) -----------------------
 
 // Growth is the trigger and the recycle list feeds the allocation: once
 // the horizon passes a page's newest writer, the next growth reuses that

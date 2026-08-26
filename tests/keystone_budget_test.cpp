@@ -15,7 +15,7 @@
 #include "kds/storage/keystone.hpp"
 
 // K-M4: an operator can see budget consumption without arithmetic, and
-// crossing the threshold is visible (`docs/keystoneid-invariant.md` §5).
+// crossing the threshold is visible (`docs/rules/keystoneid-invariant.md` §5).
 //
 // Two halves, tested separately on purpose. The arithmetic is a pure
 // function of one integer, so its edges - the kFirstRowId offset, the

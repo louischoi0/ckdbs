@@ -11,7 +11,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/sim_ring_transport.hpp"
 
-// The transport seam (docs/workplan-crosscore.md M9): two implementations,
+// The transport seam (docs/inflight/in-progress/workplan-crosscore.md M9): two implementations,
 // one interface, and the property that makes the simulated one usable as a
 // stand-in - **at zero injected delay they deliver identically**.
 //

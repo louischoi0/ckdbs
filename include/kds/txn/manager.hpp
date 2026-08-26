@@ -16,7 +16,7 @@
 #include "kds/wal/checkpointer.hpp"
 #include "kds/wal/manager.hpp"
 
-// The transaction manager (docs/txn.md sections 1, 5, 6).
+// The transaction manager (docs/spec/txn.md sections 1, 5, 6).
 //
 // ---- What it does not have ------------------------------------------------
 //
@@ -30,7 +30,7 @@
 // (docs/workplan-reader-registration.md) record which snapshots exist so a
 // purge can prove no live view still needs a version, and two purges are
 // built on that: the catalog delete-mark purge, and the undo purge this
-// class arms on the log at construction (docs/workplan-undo-purge.md).
+// class arms on the log at construction (docs/inflight/in-progress/workplan-undo-purge.md).
 // Both are horizon-only - they free nothing a live view can reach - so the
 // error stays structurally unreachable by decision, not by omission.
 //
@@ -215,7 +215,7 @@ public:
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
                        wal::WalManager* wal = nullptr) noexcept
         : ids_(ids), undo_(undo), store_(store), wal_(wal) {
-        // Arms the undo purge (docs/workplan-undo-purge.md): the log's
+        // Arms the undo purge (docs/inflight/in-progress/workplan-undo-purge.md): the log's
         // only appender is this manager, so `this` is alive at every call
         // by construction. Structural, like the snapshot lease - a
         // manager-owned log purges, a bare one (tests, tools) does not.
@@ -257,7 +257,7 @@ public:
     // life a row's address was stable for life (row_codec.hpp). A btree leaf
     // division breaks that: it moves half a leaf's tuples to another page and
     // renumbers the slots of the ones that stay
-    // (`docs/heap-and-tuple.md` §4.1). Only a relation taking an out-of-order key can trigger
+    // (`docs/spec/heap-and-tuple.md` §4.1). Only a relation taking an out-of-order key can trigger
     // one mid-statement, but when it does, every entry this transaction
     // recorded earlier names a slot that is out of range or holds a
     // different row - and compensating that blindly is not a failed

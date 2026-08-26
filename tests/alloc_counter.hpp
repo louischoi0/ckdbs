@@ -14,8 +14,8 @@
 // predicate per allocation and nothing else.
 //
 // Two users today, asserting the same property in different places: the
-// aggregate fold's zero-allocations-per-row rule (docs/feat-aggregate.md
-// §5) and the row codec's int-only decode (docs/spec-types.md TY5).
+// aggregate fold's zero-allocations-per-row rule (docs/spec/feat-aggregate.md
+// §5) and the row codec's int-only decode (docs/spec/spec-types.md TY5).
 
 namespace kds::test_support {
 

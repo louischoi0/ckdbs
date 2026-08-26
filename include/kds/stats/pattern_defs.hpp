@@ -11,7 +11,7 @@
 #include "kds/storage/page_store.hpp"
 
 // `sys.pattern_defs`: the name and source text of a *declared* pattern
-// (docs/spec-create-pattern-user-defined-patterns-v1.md section 4.2).
+// (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 4.2).
 //
 // One row per user-declared pattern, joined to `sys.patterns` by
 // `pattern_id`. An auto-registered pattern has no row here at all - it holds
@@ -36,7 +36,7 @@
 //
 // ---- Two rules every function below honours ------------------------------
 //
-// **Decode before descending** (docs/parser-v2.md I15 rule R1). A var-heap
+// **Decode before descending** (docs/spec/parser-v2.md I15 rule R1). A var-heap
 // fetch must never happen while a heap-page span is live, so the scan
 // decodes each row inside the walk - which touches no page but the one it is
 // already on - and resolves the spilled cells *after* the walk has released

@@ -17,7 +17,7 @@
 #include "kds/exec/step_chain.hpp"
 #include "kds/parser/ast.hpp"
 
-// The fold (docs/feat-aggregate.md §5, workplan AG03).
+// The fold (docs/spec/feat-aggregate.md §5, workplan AG03).
 //
 // ---- It is a consumer of the row stream, not a step -------------------
 //
@@ -49,7 +49,7 @@
 // Every aggregate's running state supports `Merge`, such that folding a row
 // stream in one pass and folding two disjoint partitions of it then merging
 // give the same output rows. Nothing in v1 calls it. It exists because it
-// is what lets `docs/crosscore.md`'s step pipeline ship *partial
+// is what lets `docs/spec/crosscore.md`'s step pipeline ship *partial
 // aggregates* - group count on the wire, not row count - without touching
 // the step VM, and a v1 that quietly broke it would take that option away
 // silently. `AVG` landed 2026-08-07 carried as the `(sum, count)` pair
@@ -133,7 +133,7 @@ public:
     // (AG6) survives a merge with a defined partition order.
     //
     // **Nothing in v1 calls it, and the test is its only consumer.** It
-    // exists because it is what lets `docs/crosscore.md`'s step pipeline
+    // exists because it is what lets `docs/spec/crosscore.md`'s step pipeline
     // ship *partial aggregates* - a remote core folding its own partition
     // and shipping states, the home core merging - without touching the
     // step VM. A v1 that quietly broke it would take that option away

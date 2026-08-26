@@ -1,9 +1,9 @@
 # SS-B — statement shipping, measured against the memo that predicted it
 
-`docs/known-gaps.md` recorded the engine's own position on this build:
+`docs/inflight/known-gaps.md` recorded the engine's own position on this build:
 **"Statement shipping is built and unmeasured."** The wire, the waiter, the
 owner-side execution, the dispatch fork and the counters were in; none of
-`docs/memo-shipping-and-group-commit.md` §8's three claims had been judged.
+`docs/inflight/in-progress/memo-shipping-and-group-commit.md` §8's three claims had been judged.
 This run judges them, under the order in
 `instructions/v2.2.0/measurement-after-s5.md`.
 
@@ -255,7 +255,7 @@ request that arrives at an idle owner therefore waits for that owner's next
 **This is the finding of the run**, and it is not about shipping: any
 cross-core message to an idle core pays it. Shipping is simply the first
 feature that puts one on a client's critical path twice per statement. It is
-handed to `docs/sched.md` §4's owner; a wake on the ring send, or a
+handed to `docs/spec/sched.md` §4's owner; a wake on the ring send, or a
 sub-millisecond block expressed in nanoseconds, would remove most of §3's
 47%.
 
@@ -407,7 +407,7 @@ departure to separate into a per-page component.
 run's evidence.** That is a statement about this cell only: nothing here says
 a tail page never serializes, only that at `cores = 4` with up to fourteen
 sessions on one ascending btree tail there is no residual for it to explain.
-`docs/workplan-stride-forest.md` keeps its own SF-V0 premise probe, which
+`docs/inflight/in-progress/workplan-stride-forest.md` keeps its own SF-V0 premise probe, which
 this host still cannot run at `cores > 4` without SMT siblings sharing
 physical cores.
 
@@ -458,7 +458,7 @@ consequence on this box because two CPUs happened to be free.
 **Either answer closes pretasks §8c honestly, and this is the answer.** The
 waiters do not cost *throughput* here; they cost CPU, and they will cost
 throughput on any host where the arrival cores are not idle. This is handed
-to `docs/sched.md` §4's owner together with §14's other scheduler findings;
+to `docs/spec/sched.md` §4's owner together with §14's other scheduler findings;
 this run fixes nothing.
 
 The seated arm at K = 16 (8,773 ips) is the highest `group` cell in this
@@ -501,7 +501,7 @@ far more row-id and extent leases than 127 did. This probe deliberately does
 not retry, so these count as refusals; a client that follows the `retryable=1`
 bit clears them, which is what every other driver in `bench/` does.
 
-**`docs/known-gaps.md`'s 80–92% entry closes with this number: 0.0% CC3, 0
+**`docs/inflight/known-gaps.md`'s 80–92% entry closes with this number: 0.0% CC3, 0
 counted by the engine, four cells out of four.**
 
 ### 8b. The residue, by class — the 2PC evidence base's first reading
@@ -559,7 +559,7 @@ shapes, two (`in_explicit_txn`, `subquery_write`) are the write population
 2PC would have to carry, at 100% refusal with a retryable bit that will never
 clear; one (`two_owner_read`) is 87.5% refused and 12.5% already served by
 P4d; one (`overlong_read`) is a shipping-internal bound, not a 2PC question,
-and §14's finding 7 hands it over. `docs/known-gaps.md`'s R6 entry stays open and should
+and §14's finding 7 hands it over. `docs/inflight/known-gaps.md`'s R6 entry stays open and should
 now point here.
 
 ### 8c. Where the 992-byte cap actually bites
@@ -843,7 +843,7 @@ Each tagged **measured** or **source-read**, each with its site.
    `Scheduler::DrainInbox()` at `src/sched/scheduler.cpp:62`. **This is not a
    shipping defect** — any cross-core message to an idle core pays it;
    shipping is the first feature to put one on a client's critical path.
-   *Owner: `docs/sched.md` §4. This run fixes nothing.*
+   *Owner: `docs/spec/sched.md` §4. This run fixes nothing.*
 2. **The millisecond is shared, not serialized.** Under `relaxed`, shipped
    throughput is linear at ≈ 880 × S while p50 holds at 1,080 µs and the
    owner sits at 2–8% busy (§4b). **measured.** It is therefore invisible
@@ -853,18 +853,18 @@ Each tagged **measured** or **source-read**, each with its site.
    0.059–0.068 µs — the memo's falsifier-2 spin signature exactly (§7).
    **measured**, mechanism **source-read** at
    `src/sched/scheduler.cpp:196-199` and `include/kds/sched/coro.hpp:425`.
-   *Owner: `docs/sched.md` §4; this closes pretasks §8c.*
+   *Owner: `docs/spec/sched.md` §4; this closes pretasks §8c.*
 4. **The 80–92% cross-core write refusal is gone.** 0 CC3 refusals in 4,800
    unrouted write attempts over 20 runs at `cores` 4 and 8, engine counter 0
    from every core in every run (§8a). **measured.** *Closes
-   `docs/known-gaps.md`'s 80–92% entry with its number.*
+   `docs/inflight/known-gaps.md`'s 80–92% entry with its number.*
 5. **The R6 residue is two write shapes, and one read shape that is already
    half-converted.** `in_explicit_txn` and `subquery_write` refuse 100% with
    a retryable bit that never clears; `two_owner_read` refuses 87.5% and is
    answered correctly for the other 12.5% by P4d's pipeline when the session
    lands on core 0 (`src/server/command_dispatcher.cpp:5130-5148`,
    **source-read**; the split **measured** in §8b and reproduced separately).
-   *`docs/known-gaps.md`'s R6 entry stays open and should point here.*
+   *`docs/inflight/known-gaps.md`'s R6 entry stays open and should point here.*
 6. **The abandoned transaction's real cost is WAL volume, not the lease.**
    64.02 bytes per shipped statement into an otherwise-idle stream — a 13%
    rise in instance WAL — against 2.3 µs/statement of amortised refill and no
@@ -906,7 +906,7 @@ Each tagged **measured** or **source-read**, each with its site.
     further away rather than nearer.
 12. **94–98% unaccounted reactor time reproduces**, at 92.2–99.9% across
     every core in every cell here (§5's table). **measured.** Unchanged, not
-    this run's to fix; still owed to `docs/sched.md` §4.
+    this run's to fix; still owed to `docs/spec/sched.md` §4.
 
 ---
 

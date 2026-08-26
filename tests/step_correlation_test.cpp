@@ -12,7 +12,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 
 // V15 - correlation analysis and sub-chain placement
-// (docs/parser-v2-workplan.md).
+// (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // One question decides where a subquery runs: **does any reference inside
 // it point outward?**
