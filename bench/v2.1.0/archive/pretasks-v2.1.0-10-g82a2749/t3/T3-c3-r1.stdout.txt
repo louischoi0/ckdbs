@@ -1,0 +1,35 @@
+/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 3 --tables 6 --rows 2000 --placement creating --workdir /home/ubuntu/mcbench2/t3/c3-r1 --port 19660
+
+
+== single-core: cores=1, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0
+   host: workdir on ext4, 1-minute load 0.91 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=11.98s  aggregate=3,506 stmt/s  errors=0
+   insert        n= 12001  p50=   2382us  p99=   2969us
+   point-select  n= 12000  p50=     84us  p99=   1199us
+   update        n= 12000  p50=   2360us  p99=   2731us
+   delete        n=  6000  p50=   2205us  p99=   2635us
+   scan          n=     6  p50=   1502us  p99=   1624us
+
+== multi-core: cores=3, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0
+   host: workdir on ext4, 1-minute load 0.92 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=10.13s  aggregate=4,147 stmt/s  errors=0
+   insert        n= 12001  p50=   1753us  p99=   2254us
+   point-select  n= 12000  p50=     85us  p99=    870us
+   update        n= 12000  p50=   2120us  p99=   2608us
+   delete        n=  6000  p50=   2123us  p99=   2610us
+   scan          n=     6  p50=   1254us  p99=   1305us
+
+== comparison ==
+   multi-core / single-core throughput: 1.183x
+   (expected ~1.0x at placement=creating whatever the pipeline can do:
+    every relation is on core 0, so no statement ships - docs/workplan-crosscore.md P6c)

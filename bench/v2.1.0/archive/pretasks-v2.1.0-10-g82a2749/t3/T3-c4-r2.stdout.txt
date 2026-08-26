@@ -1,0 +1,35 @@
+/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 4 --tables 6 --rows 2000 --placement creating --workdir /home/ubuntu/mcbench2/t3/c4-r2 --port 19696
+
+
+== single-core: cores=1, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0
+   host: workdir on ext4, 1-minute load 0.95 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=11.95s  aggregate=3,516 stmt/s  errors=0
+   insert        n= 12001  p50=   2277us  p99=   2894us
+   point-select  n= 12000  p50=     87us  p99=   1245us
+   update        n= 12000  p50=   2270us  p99=   2736us
+   delete        n=  6000  p50=   2447us  p99=   2834us
+   scan          n=     6  p50=   1633us  p99=   2277us
+
+== multi-core: cores=4, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0
+   host: workdir on ext4, 1-minute load 0.96 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=9.94s  aggregate=4,224 stmt/s  errors=0
+   insert        n= 12001  p50=   1823us  p99=   2376us
+   point-select  n= 12000  p50=     90us  p99=    820us
+   update        n= 12000  p50=   1912us  p99=   2534us
+   delete        n=  6000  p50=   2143us  p99=   2684us
+   scan          n=     6  p50=   1372us  p99=   1421us
+
+== comparison ==
+   multi-core / single-core throughput: 1.202x
+   (expected ~1.0x at placement=creating whatever the pipeline can do:
+    every relation is on core 0, so no statement ships - docs/workplan-crosscore.md P6c)
