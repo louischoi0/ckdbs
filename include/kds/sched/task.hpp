@@ -46,6 +46,24 @@ public:
 
     virtual PollResult Poll() = 0;
 
+    // Did the last Poll() actually run any of this task's code?
+    //
+    // `kSuspended` answers two different questions with one word: a task
+    // that ran and yielded, and a task that was asked whether its condition
+    // holds, answered no, and executed nothing. The reactor's idle policy
+    // needs them apart — a queue holding only the second kind has no work
+    // in it, and treating it as runnable is what made a reactor with any
+    // parked coroutine spin at ~90% of a core doing nothing but re-asking
+    // a predicate (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md`
+    // §7, `docs/spec/sched.md` §7).
+    //
+    // **The default is `true`, and the direction is the point.** A task
+    // that does not track this is treated as having advanced, which costs
+    // one wasted iteration and can never cost a missed wake. Only
+    // `CoroTask` — the one place a park is a real, detectable state —
+    // answers otherwise.
+    virtual bool advanced_in_last_poll() const noexcept { return true; }
+
     SchedulingGroup group() const noexcept { return group_; }
 
 private:

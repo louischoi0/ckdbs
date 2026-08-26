@@ -1710,12 +1710,17 @@ Status Expeditor::Serve() {
     // bounds a kRelaxed commit's loss window and what resolves a kGroup
     // batch no committer is waiting on; a tick with nothing staged does no
     // I/O, so the interval is chosen for the loss window, not for cost.
-    auto drain = [this] {
+    auto drain = [this]() -> bool {
+        // The bool is the post-task hook's answer to the idle policy: a
+        // tick with a commit staged did work a parked statement is waiting
+        // on (Scheduler::SetPostTaskHook). Read before the drain clears it.
+        const bool had_staged_commits = wal_->HasPendingGroupCommits();
         if (Status s = wal_->DrainOnce(); !s.ok()) {
             // Same shape as the checkpoint timer: no caller to return
             // to, so the log is the only place this becomes visible.
             logger_->Error("wal", "drain failed: " + s.message());
         }
+        return had_staged_commits;
     };
 
     // **The group committer.** Once per reactor iteration, after every

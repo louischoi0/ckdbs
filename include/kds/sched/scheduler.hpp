@@ -254,7 +254,17 @@ public:
     // Cheap when there is nothing to do - the WAL's drain returns
     // immediately when nothing is staged - so it is called unconditionally
     // rather than gated on whether a task ran.
-    void SetPostTaskHook(std::function<void()> hook) { post_task_hook_ = std::move(hook); }
+    //
+    // **It returns whether it did anything, and that is load-bearing.** The
+    // idle policy (§7, `IdleTimeoutMs`) lets the reactor sleep on an
+    // iteration where nothing advanced, and this hook is the one source of
+    // progress that is neither a task poll nor an event: a statement parks
+    // on `durable_lsn` and it is *this* that moves it. A hook that answered
+    // "nothing happened" while it was syncing would let the reactor block
+    // between the staging and the wake-up, adding the drain interval to
+    // every commit - the one regression this whole change must not cause.
+    // `false` is for a tick that found nothing staged and did no I/O.
+    void SetPostTaskHook(std::function<bool()> hook) { post_task_hook_ = std::move(hook); }
 
     bool RunOnce();
 
@@ -292,7 +302,12 @@ private:
         }
     };
 
-    bool RunReadyTasks();
+    // Runs phase 4. `advanced` is set when any polled task actually ran
+    // code - a task that completed, or one that suspended having executed
+    // something (Task::advanced_in_last_poll). A round in which every poll
+    // found a predicate still false leaves it alone, and that is what lets
+    // the reactor sleep instead of re-asking forever.
+    bool RunReadyTasks(bool& advanced);
     bool DrainInbox();
     // The share-proportional pick over the groups with tasks still unpolled
     // this round (`remaining`, RunReadyTasks' count-down).
@@ -355,6 +370,12 @@ private:
     // ready to run.
     std::atomic<std::uint64_t> idle_blocks_{0};
     std::atomic<std::uint64_t> wake_race_skips_{0};
+    // Idle blocks taken with tasks still sitting in the ready queues - all
+    // of them parked. Every one of these is an iteration the reactor used
+    // to spin through (§7's "parked is not ready"), so this counter is the
+    // fix's own measure of itself: zero on a build without parks, and
+    // climbing on exactly the workload that used to burn a core.
+    std::atomic<std::uint64_t> parked_idle_blocks_{0};
 
 public:
     // The wake path, from this reactor's side. `idle_blocks` counts
@@ -369,6 +390,11 @@ public:
     }
     std::uint64_t wake_race_skips() const noexcept {
         return wake_race_skips_.load(std::memory_order_relaxed);
+    }
+    // Blocks taken while parked tasks were queued - the spin that used to
+    // happen instead. See the member.
+    std::uint64_t parked_idle_blocks() const noexcept {
+        return parked_idle_blocks_.load(std::memory_order_relaxed);
     }
     // Whether this reactor can be woken at all. False on every single-core
     // build, where nothing can send to it.
@@ -386,13 +412,22 @@ private:
     std::vector<std::byte> message_payload_scratch_;
     std::uint64_t messages_drained_ = 0;
     std::uint64_t iterations_ = 0;
+    // Tasks ever queued (Submit). Only ever compared across one RunOnce, to
+    // notice work that appeared mid-iteration; the absolute value is not
+    // meaningful and it is allowed to wrap.
+    std::uint64_t submits_ = 0;
+    // Whether the previous full iteration changed anything - the input to
+    // "parked is not ready" (IdleTimeoutMs). **Starts true**: a reactor
+    // that has never iterated has not established that there is nothing to
+    // do, and must not open by sleeping on a queue it has not looked at.
+    bool last_iteration_advanced_ = true;
 
     std::vector<Timer> timers_;                  // heap, LaterDeadlineFirst
     std::unordered_set<TimerId> cancelled_timers_;
     TimerId next_timer_id_ = kInvalidTimerId + 1;
 
     bool stopped_ = false;
-    std::function<void()> post_task_hook_;
+    std::function<bool()> post_task_hook_;
 };
 
 }  // namespace kds::sched

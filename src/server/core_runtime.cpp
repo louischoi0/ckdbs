@@ -886,12 +886,20 @@ void CoreRuntime::Run() {
     // which today is every core but 0 (see the header) - so arming them
     // costs a timer and buys the property that a core which *starts*
     // logging needs no new wiring.
-    auto drain = [this] {
+    auto drain = [this]() -> bool {
+        // The bool is for the post-task hook below, and through it for the
+        // idle policy: **a tick that had a commit staged did work that a
+        // parked statement is waiting on**, and a reactor told otherwise
+        // would sleep between the staging and the wake-up, putting the
+        // drain interval on every commit (Scheduler::SetPostTaskHook).
+        // Read before the drain, which is what clears it.
+        const bool had_staged_commits = wal_->HasPendingGroupCommits();
         if (Status s = wal_->DrainOnce(); !s.ok() && log_ != nullptr &&
                                           log_->enabled(LogLevel::kError)) {
             log_->Error("wal", "core " + std::to_string(config_.core_id) +
                                    ": drain failed: " + s.message());
         }
+        return had_staged_commits;
     };
 
     // **After every iteration's tasks**, which is what makes group commit a

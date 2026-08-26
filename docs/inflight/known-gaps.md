@@ -866,7 +866,23 @@ still waits on its own gate, so:
   grant burns its CPU (108,150 iterations in one 39 ms refill) — and **the
   group accounting charges nobody for reactor time outside polls** (the
   drain's fdatasync above all), which is why a low-share group's debt was
-  so slow to clear. Both are `docs/spec/sched.md` §4's. The spin is **unfixed**;
+  so slow to clear. Both are `docs/spec/sched.md` §4's. **The spin is fixed
+  2026-08-26** (worktree `v2.3.0-reactor-wake`, the v2.3.0 order's RW3):
+  `IdleTimeoutMs` no longer reads a non-empty queue as work to do. A block
+  is permitted after a full iteration in which *nothing advanced* — no
+  event, timer or message, no task that ran a line or finished, no task
+  newly queued, and no work from the post-task hook — where "ran a line" is
+  `Task::advanced_in_last_poll`, answered by `CoroTask` from whether the
+  poll resumed the coroutine at all and defaulting to `true` everywhere
+  else, so an untracked task type keeps the reactor awake rather than being
+  slept through. The hook's clause is the load-bearing one: a committing
+  statement parks on `durable_lsn` and only the hook moves it, so a hook
+  that synced and reported nothing would have put the WAL drain interval on
+  every commit — `SetPostTaskHook` therefore takes a `std::function<bool()>`
+  and both drain sites answer with `HasPendingGroupCommits()`.
+  `SHOW META`/`Scheduler::parked_idle_blocks()` counts the blocks that used
+  to be spins. The old text, for what it was:
+  the spin was **unfixed**;
   the accounting gap is **unfixed but no longer invisible** — since
   2026-08-26 (T4 of the statement-shipping pretasks) `SHOW META` prints
   `sched_wall_us`, `sched_iterations` and per group

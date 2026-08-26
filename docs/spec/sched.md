@@ -47,6 +47,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 - Each group has a **share weight**. The scheduler tracks consumed runtime per group (measured via the injected clock) and, past the two floors below, picks the next task from the runnable group with the lowest share-normalized consumed runtime (Seastar-style proportional scheduling). Consumption counters decay periodically so history does not dominate.
 - **Two floors under the share law (2026-08-25, `docs/inflight/in-progress/workplan-peer-writer.md` PW7).** Within one reactor iteration a task is polled **at most once** — a task that suspends is not re-polled until the next iteration, and a task submitted by a poll waits for the next iteration — and every group with a task ready when the iteration began is polled **at least once**, whatever its ratio says, in fixed group order (`foreground`, `maintenance`, `system`: a saturated reactor hands the first poll of every iteration to `foreground`, a systematic 1-in-64 bias stated rather than hidden). The loop budget is clamped at construction to at least the group count, or the second floor could not hold. Both were forced by a trace, not a preference: a parked coroutine answers `kSuspended` in nanoseconds, and the loop budget re-polled a peer's parked lease-refill task up to 64 times an iteration, charging each poll to the `system` group (share 50); the group then owed the `foreground` (share 1000) twenty times that, and because a statement's time is the WAL drain's fdatasync — outside every group's account — the debt took hundreds of iterations to clear, during which the *next* refill sat unpolled (546 ms, 395 iterations, measured on the tree committed as `v2.0.0-52-g2c6ae23`). The share law still governs everything past one poll per group. **The consequence, stated**: a coroutine chain that used to advance up to 64 steps inside one iteration now advances one per iteration, each iteration paying one `PollReady` — paid for on the four-writer cell (0.99–1.03×), **unmeasured on the shape that pays most**, P4d's cross-core step pipeline under load. The accounting gap it exposed stands: reactor time spent outside task polls (the drain, the idle block) is charged to no group.
 - **The accounting gap is measurable from outside since 2026-08-26** (T4 of the statement-shipping pretasks). The gap itself is unchanged - reactor time outside task polls is still charged to no group - but it can now be *read* rather than argued about. `SHOW META` prints `sched_wall_us` (reactor wall clock since its first iteration), `sched_iterations`, and per group `sched_<group>_polled_us`, `sched_<group>_polls` and `sched_<group>_consumed_us`. **Two counters per group, and the distinction is load-bearing**: `consumed_us` is the share law's own input and is *halved periodically* (`MaybeDecayConsumedRuntime`) so history does not dominate the pick, which makes it a scheduling weight and never a total; `polled_us` and `polls` are cumulative and never decay. So `sched_wall_us - sum(sched_*_polled_us)` is the time charged to nobody - the `PollReady` idle block on a quiet reactor, the WAL drain's `fdatasync` on a committing one - and a spin is visible as `polls` climbing while `polled_us` does not. `bench/v2.1.0` §11-5 recorded this as *not measurable from outside the process on this tree* and owed it to whoever next touched this section; this is that debt paid. The counters cost two integer adds per poll, on the poll path.
+- **A parked coroutine is not runnable, and since 2026-08-26 the idle policy knows it.** The two floors above are about how a *ready* task is picked; this is about what "ready" means. A task that suspends goes back on its queue, so a queue is not a test of whether there is work — and reading one for the other made a reactor holding a single parked waiter spin at ~90% of a core, 3.1M polls a second at 0.059 µs each, the cost per poll flat while the count climbed (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §7). §7 carries the rule and its one hazard; what belongs here is the consequence for this section's accounting: **an idle block is still charged to no group**, so the time that used to appear as `system`-group polls now appears as unaccounted wall clock. The gap did not grow — the same nanoseconds were always outside every group's account — but its *shape* changed, and a reading of `sched_wall_us - Σ polled_us` taken before this date is not comparable with one taken after.
 - **SLO feedback:** a per-core controller observes foreground latency (e.g., p99 over a sliding window). When latency exceeds the configured SLO, it reduces `maintenance` shares; when there is headroom, it restores them gradually. This is the single mechanism by which "SLO-aware relayout throttling" is implemented — relayout code itself never self-throttles with sleeps.
 - Group accounting is core-local. There is no global coordinator; per-core controllers act independently.
 
@@ -101,11 +102,31 @@ idle block, so a wake that is somehow missed costs latency and never
 liveness. That is not belt-and-braces; the census below has two entries that
 depend on it.
 
+**Parked is not ready.** `IdleTimeoutMs` does not read a non-empty queue as
+work to do. A block is permitted only after a full iteration in which
+**nothing advanced**: no I/O event, no timer, no message drained, no task
+that completed or executed a line, no task newly submitted, and no work
+from the post-task hook. "Executed a line" is `Task::advanced_in_last_poll`
+— `CoroTask` answers it from whether the poll resumed the coroutine at all,
+and every other task type inherits `true`, so an untracked task keeps the
+reactor awake rather than being slept through. The block therefore arrives
+one iteration after the last advancing one: the reactor sleeps on evidence
+it has collected, never on a prediction.
+
+**The hazard, because it is the one that would make a worse engine.** The
+group commit parks on `durable_lsn`, and the only thing that moves it is the
+post-task hook running after phase 4 (`expeditor.cpp`). A rule that let the
+reactor block between the staging and the hook's sync would put the WAL
+drain interval on *every commit* — trading a spin for a durability
+regression. That is why `SetPostTaskHook` takes a `std::function<bool()>`
+and why both drain sites answer it with `HasPendingGroupCommits()`, read
+before the drain clears it.
+
 **Every park and what ends it** (taken at `bce12d0`, re-checked after the
-wake landed). This is the table a change to the idle policy must be checked
-against — the reactor currently spins whenever any coroutine is parked
-(§4), and that spin is what has been hiding whether a park is wakeable at
-all:
+wake and the park rule landed). This is the table a change to the idle
+policy must be checked against, and the reason it had to exist before the
+spin was removed: while the reactor span, a park with no wake source was
+indistinguishable from one that had a wake it never needed.
 
 | Park site | Predicate | What satisfies it | Ends the block? |
 |---|---|---|---|
@@ -134,6 +155,7 @@ The reactor depends only on injectable interfaces: **I/O backend, clock, RNG, cr
 2. All scheduler state is core-local; no locks in the reactor or scheduler.
 3. Reactor phases execute in the fixed order of §2.
 4. Every task yields within its budget; no preemption; no work-stealing.
+4a. A queue is not a claim of work: a task parked on a condition is not runnable, and the reactor may sleep while holding one (§7). A task type that cannot tell a park from a yield inherits `advanced_in_last_poll() == true` and keeps the reactor awake — the safe answer, never the accurate-looking one.
 5. Every task carries a scheduling-group membership; group pick is share-proportional.
 6. Background work is throttled only via group shares (SLO controller), never via ad-hoc sleeps.
 7. Cross-core interaction goes through the SPSC ring interface only; sends are non-blocking and fallible. **A message delivered to a sleeping core wakes it** (§7): a successful send either finds the target awake or ends its block, so no reactor waits out an idle block on work that has already arrived.

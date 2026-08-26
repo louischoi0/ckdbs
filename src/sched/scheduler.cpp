@@ -24,6 +24,11 @@ Scheduler::Scheduler(const Clock& clock, IoBackend& io_backend, SchedulerConfig 
 void Scheduler::Submit(TaskPtr task) {
     int idx = SchedulingGroupIndex(task->group());
     ready_queues_[static_cast<std::size_t>(idx)].push_back(std::move(task));
+    // Counted, not flagged: RunOnce compares the count across its whole
+    // body, so a task queued by an io handler in phase 1 and one queued by
+    // another task in phase 4 are both seen, and neither needs to know the
+    // idle policy exists.
+    ++submits_;
 }
 
 Status Scheduler::RegisterIoHandler(IoHandle handle, IoInterest interest, IoHandler handler) {
@@ -220,8 +225,29 @@ bool Scheduler::HasReadyTask() const noexcept {
 }
 
 int Scheduler::IdleTimeoutMs() const noexcept {
-    // Anything runnable means do not sleep at all.
-    if (HasReadyTask()) return 0;
+    // **Anything runnable means do not sleep at all - and a parked
+    // coroutine is not runnable** (sched.md §7).
+    //
+    // A task that suspends goes back on its queue, so a queue is a poor
+    // test of whether there is work: a statement waiting for a peer's reply
+    // sits in one for the whole wait, answering "still false" to a
+    // predicate a few nanoseconds at a time. Reading that as runnable is
+    // what made a reactor with a single parked waiter burn ~90% of a core
+    // (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §7: 3.1M
+    // polls/s at 0.059 µs each, the cost per poll flat while the count
+    // climbed).
+    //
+    // The test is therefore not "is a queue non-empty" but "did the last
+    // full iteration change anything" - any I/O event, any timer, any
+    // message drained, any task that completed or executed a line, any
+    // task newly submitted, or the post-task hook doing work. If none of
+    // that happened, polling the same queue again cannot produce a
+    // different answer, and only an outside event can: the three that
+    // exist are an fd, the timer that caps this block, and a peer's wake.
+    //
+    // Conservative in the one direction that matters: anything unaccounted
+    // reads as *advanced*, costing a wasted iteration, never a missed wake.
+    if (HasReadyTask() && last_iteration_advanced_) return 0;
 
     int timeout = config_.max_idle_block_ms;
     if (timeout < 0) timeout = 0;
@@ -267,7 +293,7 @@ void Scheduler::MaybeDecayConsumedRuntime() {
     for (std::uint64_t& c : consumed_ns_) c /= 2;
 }
 
-bool Scheduler::RunReadyTasks() {
+bool Scheduler::RunReadyTasks(bool& advanced) {
     // The round's population is what was ready when it began: a task polled
     // this round that suspends goes to the back of its queue and is not
     // polled again until the next iteration - `remaining` counts it out,
@@ -305,6 +331,13 @@ bool Scheduler::RunReadyTasks() {
         ran_any = true;
         ++polled;
 
+        // **Did this poll do anything?** A completed task plainly did; a
+        // suspended one only if it executed code rather than re-asking a
+        // predicate that is still false (Task::advanced_in_last_poll). This
+        // is the whole input to the idle policy's "parked is not ready",
+        // and it is read before the task is moved back onto its queue.
+        if (result == PollResult::kDone || task->advanced_in_last_poll()) advanced = true;
+
         if (result == PollResult::kSuspended) {
             ready_queues_[idx].push_back(std::move(task));
         }
@@ -336,6 +369,18 @@ bool Scheduler::RunOnce() {
         run_started_ = true;
     }
     bool did_work = false;
+    // **Did this iteration change anything?** Stricter than `did_work` and
+    // kept separate from it: `did_work` says the reactor was busy, this
+    // says the world moved. A round of polls that all found their
+    // predicates still false is `did_work == true` and `advanced == false`,
+    // and it is exactly the round the reactor may sleep after. Read by the
+    // *next* iteration's IdleTimeoutMs.
+    //
+    // A task submitted mid-iteration counts, wherever it came from - an io
+    // handler, a message, another task - which is why the count is taken
+    // across the whole body rather than at any one phase.
+    bool advanced = false;
+    const std::uint64_t submits_at_entry = submits_;
 
     // Phase 1: drain I/O completions. The wait is phase 6's idle policy
     // pulled to the front, which is where a reactor can actually sleep: 0
@@ -359,6 +404,12 @@ bool Scheduler::RunOnce() {
     // reactor with work to do, and it neither needs waking nor may pay two
     // atomics to say so.
     const bool may_sleep = timeout_ms != 0 && transport_ != nullptr && waker_.has_value();
+    // The block this iteration is about to take is one the reactor used to
+    // spin through whenever a parked task was queued. Counted where the
+    // decision is visible.
+    if (timeout_ms != 0 && HasReadyTask()) {
+        parked_idle_blocks_.fetch_add(1, std::memory_order_relaxed);
+    }
     if (may_sleep) {
         sleeping_.store(true, std::memory_order_seq_cst);
         std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -398,26 +449,50 @@ bool Scheduler::RunOnce() {
         if (it != io_handlers_.end()) {
             it->second(ev);
             did_work = true;
+            // An outside event: whatever a parked task is waiting for, this
+            // is one of the three things that can have changed it.
+            advanced = true;
         }
     }
 
     // Phase 2: expire timers. Min-heap, not the hierarchical timing wheel
     // of sched.md section 6 - see SubmitAt()'s comment on why, and on what
     // replacing it would cost.
-    if (ExpireTimers()) did_work = true;
+    if (ExpireTimers()) {
+        did_work = true;
+        advanced = true;
+    }
 
     // Phase 3: drain cross-core inboxes (sched.md section 5). A no-op with
     // no transport attached, which is every single-core build.
-    if (DrainInbox()) did_work = true;
+    if (DrainInbox()) {
+        did_work = true;
+        advanced = true;
+    }
 
     // Phase 4: run ready tasks under the loop budget.
-    if (RunReadyTasks()) did_work = true;
+    if (RunReadyTasks(advanced)) did_work = true;
 
     // Phase 4.5: the post-task hook (see SetPostTaskHook). One call per
     // iteration, after every task that could stage work has had its turn -
     // which is what lets one device sync cover every commit staged this
     // iteration instead of one per commit.
-    if (post_task_hook_) post_task_hook_();
+    //
+    // **Its answer feeds the idle policy**, and this is the one place the
+    // "parked is not ready" rule could have broken a durability path: a
+    // committing statement parks on `durable_lsn`, and the only thing that
+    // moves it is this hook. A hook that synced and said nothing happened
+    // would let the next iteration block before re-polling the waiter,
+    // putting the drain interval on every commit.
+    if (post_task_hook_ && post_task_hook_()) {
+        did_work = true;
+        advanced = true;
+    }
+
+    // A task submitted at any point this iteration is work nobody has
+    // looked at yet, whoever queued it.
+    if (submits_ != submits_at_entry) advanced = true;
+    last_iteration_advanced_ = advanced;
 
     // Phase 5: submit pending I/O. Phase 1's Register/Modify/Unregister
     // calls above take effect synchronously (no batching) - batched

@@ -332,6 +332,15 @@ public:
     PollResult Poll() override {
         if (handle_ == nullptr) return PollResult::kDone;
 
+        // What the idle policy reads back (Task::advanced_in_last_poll).
+        // A Poll that resumes nothing executed none of this coroutine's
+        // code: it asked a predicate, got false, and returned. The reactor
+        // may sleep on a queue of those; it may not sleep on a task that
+        // ran. Counted from `resumes_` rather than a separate flag so the
+        // two can never disagree.
+        const std::uint64_t resumes_at_entry = resumes_;
+        last_poll_advanced_ = true;
+
         // One Poll runs the chain until it genuinely parks or finishes -
         // the multi-resume loop is what a flat coroutine gets for free by
         // running through ready awaits in one resume, owed equally to a
@@ -345,7 +354,14 @@ public:
             // The wait check, before the resume: a coroutine parked on a
             // condition that still does not hold costs one predicate call
             // this iteration and is not entered at all.
-            if (!Coro::ConsumeWaitIfSatisfied(active)) return PollResult::kSuspended;
+            if (!Coro::ConsumeWaitIfSatisfied(active)) {
+                // The park. Advanced only if an earlier turn of this same
+                // loop already resumed something - a chain that ran two
+                // frames and then parked did work, and the reactor must
+                // not sleep on it.
+                last_poll_advanced_ = (resumes_ != resumes_at_entry);
+                return PollResult::kSuspended;
+            }
 
             ++resumes_;
             active.resume();
@@ -374,10 +390,15 @@ public:
     // header describes.
     std::uint64_t resumes() const noexcept { return resumes_; }
 
+    bool advanced_in_last_poll() const noexcept override { return last_poll_advanced_; }
+
 private:
     std::coroutine_handle<Coro::promise_type> handle_;
     DoneFn on_done_;
     std::uint64_t resumes_ = 0;
+    // Starts true: a task that has never been polled is not a parked one,
+    // and the idle policy must not read "never ran" as "nothing to do".
+    bool last_poll_advanced_ = true;
 };
 
 // Makes a submittable task out of a coroutine.

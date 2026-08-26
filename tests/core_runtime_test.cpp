@@ -2695,7 +2695,11 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // that is precisely what a shipped write does, since joining the
     // owner's group commit is the whole point of shipping (D3). The
     // index-build tests never needed it: their write happens on core 0.
-    rig.peer->scheduler().SetPostTaskHook([&rig] { (void)rig.peer->wal().DrainOnce(); });
+    rig.peer->scheduler().SetPostTaskHook([&rig] {
+        const bool staged = rig.peer->wal().HasPendingGroupCommits();
+        (void)rig.peer->wal().DrainOnce();
+        return staged;
+    });
 
     // Rows the owner wrote and core 0 never saw - what the build must find.
     const std::string ins =

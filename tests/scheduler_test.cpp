@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/sched/clock.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/ring_transport.hpp"
@@ -839,6 +840,180 @@ TEST_F(SchedulerWakeTest, ARefusedSendWakesNobody) {
     ASSERT_FALSE(transport.value().TrySend(header, {}).ok()) << "the ring should be full";
     EXPECT_EQ(transport.value().wakes_sent(), 1u)
         << "a refused send woke the target anyway, for a message it does not have";
+}
+
+// ---- Parked is not ready (sched.md §7) ---------------------------------
+//
+// A task that suspends goes back on its queue, so "the queue is non-empty"
+// was never the same question as "there is work to do". Reading one for the
+// other is what made a reactor holding one parked coroutine spin at ~90% of
+// a core, asking a predicate three million times a second
+// (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §7).
+//
+// The rule these pin: the reactor may block only after a full iteration in
+// which **nothing advanced** - no event, no timer, no message, no task that
+// ran a line or finished, no task newly queued, and no work from the
+// post-task hook. The last clause has its own test, because getting it
+// wrong would put the WAL drain interval on every commit, which is a worse
+// engine than the spin.
+
+class SchedulerParkTest : public ::testing::Test {
+protected:
+    ManualClock clock_;
+};
+
+TEST_F(SchedulerParkTest, AReactorWhoseOnlyTaskIsParkedBlocks) {
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    RecordingIoBackend io;
+    Scheduler scheduler(clock_, io, config);
+
+    bool never = false;
+    auto waiter = [&never]() -> Coro {
+        co_await WaitFor{&never};
+        co_return Status::OK();
+    };
+    scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, waiter()));
+
+    // The block arrives one iteration after the last advancing one, and
+    // that lag is the rule working rather than a rough edge: the reactor
+    // sleeps on evidence it has collected, never on a prediction.
+    //
+    // 1: the task has never been polled - not parked, merely unexamined.
+    //    The poll starts the coroutine, which runs to its `co_await`.
+    // 2: still awake, because iteration 1 ran code.
+    // 3: iteration 2's poll executed nothing, so now it may sleep.
+    for (int i = 0; i < 3; ++i) scheduler.RunOnce();
+
+    ASSERT_EQ(io.timeouts.size(), 3u);
+    EXPECT_EQ(io.timeouts[0], 0) << "a task nobody has polled yet is not a parked one";
+    EXPECT_EQ(io.timeouts[1], 0) << "the iteration that started the coroutine was progress";
+    EXPECT_EQ(io.timeouts[2], 1000) << "the reactor spun on a parked coroutine";
+    EXPECT_GE(scheduler.parked_idle_blocks(), 1u);
+
+    // And it stays asleep: nothing about the next iteration is different.
+    scheduler.RunOnce();
+    ASSERT_EQ(io.timeouts.size(), 4u);
+    EXPECT_EQ(io.timeouts[3], 1000);
+}
+
+TEST_F(SchedulerParkTest, ATaskThatRunsKeepsTheReactorAwake) {
+    // The other direction, and the one a wrong rule breaks silently: a
+    // coroutine that resumes, does work and parks again has advanced, and
+    // sleeping on it would stall a chain mid-flight.
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    RecordingIoBackend io;
+    Scheduler scheduler(clock_, io, config);
+
+    int steps = 0;
+    auto stepper = [&steps]() -> Coro {
+        for (int i = 0; i < 3; ++i) {
+            ++steps;
+            co_await Yield{};
+        }
+        co_return Status::OK();
+    };
+    scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, stepper()));
+
+    for (int i = 0; i < 4; ++i) scheduler.RunOnce();
+    EXPECT_EQ(steps, 3);
+    for (std::size_t i = 0; i < io.timeouts.size() && i < 4; ++i) {
+        EXPECT_EQ(io.timeouts[i], 0) << "iteration " << i << " slept while a task was advancing";
+    }
+}
+
+TEST_F(SchedulerParkTest, APollThatFinishesATaskCountsAsProgress) {
+    // A parked coroutine alongside a task that completes. The completion is
+    // progress, so the iteration after it must not sleep even though the
+    // only thing left in the queue is a park - something finished, and what
+    // it did may be what the parked task is waiting for.
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    RecordingIoBackend io;
+    Scheduler scheduler(clock_, io, config);
+
+    bool never = false;
+    auto waiter = [&never]() -> Coro {
+        co_await WaitFor{&never};
+        co_return Status::OK();
+    };
+    scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, waiter()));
+    scheduler.RunOnce();  // 1: coroutine starts and parks
+    scheduler.RunOnce();  // 2: parked, nothing else - the last awake one
+
+    scheduler.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kForeground,
+                                                     [] { return PollResult::kDone; }));
+    scheduler.RunOnce();  // 3: the new task completes; the park is still there
+    scheduler.RunOnce();  // 4: must not have slept on the way in
+
+    ASSERT_EQ(io.timeouts.size(), 4u);
+    EXPECT_EQ(io.timeouts[3], 0)
+        << "the iteration that finished a task was not counted as progress";
+}
+
+TEST_F(SchedulerParkTest, ANonCoroutineTaskIsNeverTreatedAsParked) {
+    // `Task::advanced_in_last_poll` defaults to true, and the default is
+    // the safety margin: a task type that does not track parking keeps the
+    // reactor awake rather than being slept through.
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    RecordingIoBackend io;
+    Scheduler scheduler(clock_, io, config);
+
+    scheduler.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kForeground,
+                                                     [] { return PollResult::kSuspended; }));
+    for (int i = 0; i < 3; ++i) scheduler.RunOnce();
+    for (int timeout : io.timeouts) {
+        EXPECT_EQ(timeout, 0) << "a task that does not report parking was slept through";
+    }
+    EXPECT_EQ(scheduler.parked_idle_blocks(), 0u);
+}
+
+TEST_F(SchedulerParkTest, TheHooksWorkIsProgressSoACommitDoesNotWaitOutABlock) {
+    // **D5's hazard, and the reason the hook returns a bool.** This is the
+    // group commit's shape: a statement stages, parks on a durability
+    // watermark, and the *only* thing that moves that watermark is the
+    // post-task hook running after phase 4. If a hook that synced were
+    // counted as "nothing happened", the next iteration would block before
+    // re-polling the waiter, and every commit would gain the drain
+    // interval - here, a full second.
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    RecordingIoBackend io;
+    Scheduler scheduler(clock_, io, config);
+
+    bool durable = false;
+    bool finished = false;
+    const std::function<bool()> is_durable = [&durable] { return durable; };
+    auto committer = [&is_durable]() -> Coro {
+        co_await WaitUntil{&is_durable};
+        co_return Status::OK();
+    };
+    scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, committer(),
+                                  [&finished](const Status&) { finished = true; }));
+
+    // The hook syncs on the iteration after the statement has staged, and
+    // says so. One tick, then nothing more to do.
+    int hook_calls = 0;
+    scheduler.SetPostTaskHook([&] {
+        ++hook_calls;
+        if (hook_calls == 2 && !durable) {
+            durable = true;
+            return true;  // this tick did the work the waiter is parked on
+        }
+        return false;
+    });
+
+    scheduler.RunOnce();  // 1: task polled, parks
+    scheduler.RunOnce();  // 2: still parked; hook makes it durable and says so
+    ASSERT_FALSE(finished) << "the waiter is only re-polled on the next iteration";
+    scheduler.RunOnce();  // 3: must not have blocked on the way in
+    EXPECT_TRUE(finished) << "the commit waited out an idle block the hook should have prevented";
+
+    ASSERT_GE(io.timeouts.size(), 3u);
+    EXPECT_EQ(io.timeouts[2], 0)
+        << "the reactor blocked between the hook's work and the waiter's next poll";
 }
 
 }  // namespace
