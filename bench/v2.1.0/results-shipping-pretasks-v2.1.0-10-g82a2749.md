@@ -563,3 +563,265 @@ divided by a null cell before it is quoted** — which is the finding with the
 longest reach, because it applies to every number this driver has ever
 produced.
 
+---
+
+## 8. T4 — the reactor's time, and why the parked population could not be built
+
+Statement shipping parks a waiter on the **arrival** core for every shipped
+statement while the **owner** core executes it. `bench/v2.1.0` §8 measured
+what that does to a reactor today — the trx-id refill leg spanning
+19,000–24,000 reactor iterations under load, because `IdleTimeoutMs` returns
+0 while any ready queue is non-empty (`src/sched/scheduler.cpp:196-199`,
+**source-read**) — and §11-5 recorded that the *accounting* half of the
+question could not be answered from outside the process at all.
+
+### 8a. The instrument — the one engine change this run is allowed
+
+`bench/v2.1.0` §11-5 states the problem exactly: the per-group counter is
+`std::array<std::uint64_t, kNumSchedulingGroups> consumed_ns_` at
+`include/kds/sched/scheduler.hpp:250`, **a private member with no accessor**,
+and `SHOW META` does not print it — so reporting whether group accounting
+diverges from wall time *"requires adding instrumentation to the engine,
+which is a code change and outside what a measurement run may do"*. It was
+left owed to whoever next touched `docs/sched.md` §4.
+
+It is paid here. `SHOW META` now prints, per core:
+
+```
+sched_wall_us=<reactor wall clock since its first iteration>
+sched_iterations=<RunOnce calls>
+sched_<group>_polled_us=<cumulative time inside that group's task polls>
+sched_<group>_polls=<how many polls it got>
+sched_<group>_consumed_us=<the share law's own counter>
+```
+
+for `foreground`, `maintenance` and `system`.
+
+**There are two counters per group, and the distinction is the whole reason
+the accessor could not simply expose `consumed_ns_`.** That counter is the
+share law's *input* and is **halved periodically**
+(`Scheduler::MaybeDecayConsumedRuntime`, so history does not dominate the
+pick) — it says what the next pick will weigh, never how much time a group
+has had. `polled_us` and `polls` are new, cumulative and never decayed. So
+
+    sched_wall_us − Σ sched_<group>_polled_us
+
+is the reactor time charged to **no** group — the `PollReady` idle block on a
+quiet reactor, the WAL drain's `fdatasync` on a committing one, timer
+callbacks, the io drain — which is the quantity `docs/sched.md` §4's last
+bullet names and could not previously be read. And a **spin** has a
+signature of its own here: `polls` climbing while `polled_us` does not,
+because a parked coroutine answers `kSuspended` in nanoseconds.
+
+The cost is two integer adds per task poll, on the poll path, and one pointer
+compare per `SHOW META`. It is stated rather than measured: the operator's
+2026-08-24 amendment suspends the interleaved A/B overhead measurement for
+v2-stage work, so this run does **not** claim the instrument is free.
+
+The block is **absent** rather than zeroed where no reactor is attached — a
+socket-free test has no answer, and printing zeroes would be one. That is the
+rule the recovery block already follows.
+
+**Its own review is part of the deliverable**, because an instrument that is
+wrong is worse than no instrument. A `critics-developer` pass over the change
+found three defects before any number was taken with it: the dangling view on
+`Serve`'s twenty early returns (§2's correction 4), a comment in
+`core_runtime.cpp` that asserted the opposite of what `~CoreRuntime` does
+(the destructor resets the scheduler *ahead* of the dispatcher, which the
+header documents at length), and a test assertion — `find("=1")` — that
+`SHOW META` satisfies through `ddl_durable=1` whatever the counters say. All
+three are fixed; the accessors' concurrency protocol is now written into
+`scheduler.hpp`'s protocol block, and `docs/client-manual.md`'s field list
+carries both new blocks.
+
+
+### 8b. The measurement: 94–98% of a loaded reactor's wall time is charged to no group
+
+**measured** — `bench/reactor_accounting_probe.py`, 3 reps per cell, one
+`SHOW META` reading session held per core for the whole run (the counters are
+core-local, so a delta must come from the same reactor twice), an idle window
+and a loaded window on the same mount, `errors=0` and `retries=0` in every
+cell:
+
+| cores | sessions | owner | ips | insert p50 | owner polls | owner polled | **unaccounted** | polls/s | ns per poll |
+|---|---|---|---|---|---|---|---|---|---|
+| 4 | 1 | 3 | 864 | 1,147 µs | 12,701 | 0.172 s | **97.1%** | 2,116 | 13,548 |
+| 4 | 4 | 3 | 1,886 | 2,165 µs | 22,698 | 0.228 s | **96.2%** | 3,781 | 10,080 |
+| 4 | 8 | 3 | 3,603 | 2,242 µs | 43,354 | 0.338 s | **94.4%** | 7,221 | 7,578 |
+| 8 | 1 | 5 | 981 | 990 µs | 12,647 | 0.148 s | **97.5%** | 2,107 | 10,620 |
+| 8 | 4 | 5 | 2,040 | 1,915 µs | 24,559 | 0.182 s | **97.0%** | 4,090 | 7,378 |
+| 8 | 8 | 5 | 4,069 | 1,916 µs | 48,958 | 0.254 s | **95.8%** | 8,154 | 4,923 |
+
+Windows are 6 s loaded and 4 s idle; "unaccounted" is
+`sched_wall_us − Σ sched_<group>_polled_us` over `sched_wall_us`.
+
+**The gap `docs/sched.md` §4 names is 94–98%.** A writing core spends between
+0.15 and 0.34 seconds of every six inside task polls; the rest — the WAL
+drain's `fdatasync` above all — is charged to no scheduling group at all. The
+share law is therefore arbitrating over **4–6%** of the reactor's time, which
+is the quantitative form of PW7's finding that a low-share group's debt took
+hundreds of iterations to clear: the debt is denominated in a currency the
+core barely spends.
+
+**The system core is quieter still.** Core 0 under the same load takes
+13–51 polls in six seconds and is 98.7–99.6% unaccounted — it is not doing
+the work, and it is not spinning either.
+
+**At idle every reactor takes exactly one poll per window and blocks.** The
+idle arm reads 1 poll and 100% unaccounted on every core at every cell, which
+is the same conclusion `bench/v2.1.0` §8a reached from per-core CPU (2.8–3.9%
+at rest) and now reads directly off the engine.
+
+**No spin is visible in this shape**, and the instrument is what makes that
+sayable: a spin is polls climbing while polled time does not, and here polls
+track the work — 2 polls per insert at every cell, with `ns per poll` falling
+as sessions rise because more of each poll's cost is amortised. §8's
+19,000-iteration refill legs need a *parked* coroutine, and this workload
+produced no lease-refill retries at all.
+
+### 8c. The parked population could not be built, and the reasons are measurements
+
+T4 asks for a probe that **holds K coroutines parked** (K = 1, 4, 16). It
+cannot be built from outside this engine, and three attempts each failed for
+a reason worth recording rather than a reason worth retrying:
+
+1. **A cross-core `SELECT` would park the reading core and does not run.**
+   From a core-0 session against a peer-owned relation, both
+   `SELECT * FROM t WHERE balance > 0` and `SELECT COUNT(*) FROM t` are
+   refused: *"relation 't' is owned by core 3 and this statement is running
+   on core 0; cross-core reads need the step pipeline, which is not built"*.
+   The P4d pipeline exists in process; it is not reachable this way.
+2. **A shipped `CREATE INDEX` parks correctly but cannot be repeated.**
+   Looping build/drop on peer-owned relations drove a `cores = 4` instance
+   into `ERR page id not found` on **every** subsequent write, permanently,
+   after ~58 builds — while the identical churn on `cores = 1` ran 400 builds
+   clean and grew the file from 32 MB to 70 MB (**measured**, twice). §8d
+   states what that is.
+3. **A single build per parker is refused when the owner's extent lease is
+   spent**, which after a bulk load it always is:
+   *"extent lease: this core's lease of 64 pages is spent; a refill must be
+   granted before it can allocate again"*. Retrying it — which the
+   `TXN_CONFLICT retryable=1` spelling explicitly invites — made things
+   worse, not better: 6,670 refused attempts in 30 seconds exhausted the
+   **single-page free map** (*"no run of 64 contiguous free pages remains
+   below the free map's coverage (65280 ids)"*), after which every core's
+   refill failed and the instance never recovered.
+
+So the deliverable T4 can honestly make is §8b's: the price of the *parked
+population the engine creates for itself* — which is the population shipping
+would multiply — rather than an injected one. **What remains unmeasured is
+stated rather than implied**: nobody has priced K parked coroutines per core
+at K = 16, and nothing here says what shipping's steady-state waiters cost.
+
+### 8d. Two defects found on the way, reported because they bound shipping
+
+Both are on the peer path, both were found by driving it harder than any test
+does, and neither is worked around silently.
+
+- **A refused shipped `CREATE INDEX` consumes free-map pages.** A retryable
+  refusal is a statement the client is told to retry; here each refused
+  attempt leaks the pages its build allocated before refusing, so a
+  conforming retry loop walks a `cores = 4` instance from healthy to
+  *"the free map is full"* in half a minute. The free map is one page
+  covering **65,280 ids** (~510 MiB) and `docs/workplan-multi-free-map.md`
+  is unbuilt — this run is evidence that its ceiling is reachable by a
+  client doing what the wire tells it to do.
+- **Sustained shipped builds leave a peer-owned relation permanently
+  unwritable** (`ERR page id not found` on every later INSERT, not
+  retryable), where the same churn on one core is clean at 400 builds. The
+  mechanism is not established here and this run does not guess at it; the
+  reproduction is `bench/parked_coroutine_probe.py`'s first form and the
+  capacity probe archived beside it.
+
+**Both matter to statement shipping specifically**, because the shipped-DDL
+path is the exact shape shipping generalises: an arrival core parking on an
+owner core's work. A design that ships DML through machinery whose DDL
+sibling leaks on refusal would inherit the leak.
+
+---
+
+## 9. T5 — the cross-core write refusal counters, and their before-shipping reading
+
+`docs/crosscore.md` §6 specifies a per-core counter keyed
+(home core, target core, relation) and calls it *"the input the future
+placement/2PC decision will be made from"*. **One instrument, two eras**:
+read now, it says how often today's engine refuses a write because the
+session is on the wrong core; read after shipping lands, the same counter
+reports only the residue shipping cannot convert — a genuine multi-core
+transaction, which is what 2PC would have to be designed for.
+
+### 9a. What was actually missing, and what the undercount is now
+
+The instructions describe the counters as *"specified and **unbuilt**
+(source-read, no implementation sites)"*. On this tree the class
+(`CrossCoreWriteCounters`, `include/kds/server/core_affinity.hpp`) and **both
+recording sites** (`CheckWriteAffinity`, `src/server/command_dispatcher.cpp:2954`
+and `:2963`) already existed, **source-read**. What was missing was any way
+to *read* them from outside the process — which is the whole of what a metric
+is for. `SHOW META` now prints, per core:
+
+```
+cross_core_write_refusals=<total>
+cross_core_write_refusal_keys=<distinct (home,target,relation) keys>
+cross_core_write_refusal_detail=<home>&gt;<target>:<oid>=<count>[,...]   (capped at 16, and says so)
+```
+
+**The undercount the instructions ask to be stated has been retired**, and
+the one that is real now is stated in its place. The named class — *"the
+peer-listener guard refuses foreign writes before parsing"* — was
+`PeerWriteRefused`, **deleted at PW1c-5** on 2026-08-24, whose workplan row
+says the change *"reverses PW5's recorded undercount"*. `docs/crosscore.md`
+§6 still asserted it and is corrected in place. What the counter genuinely
+cannot see today: **DDL on a peer** (`PeerDdlRefused` fires by verb before
+any relation is resolved) and anything refused before resolution at all. The
+two owner-core refusals — `RelationWriteRightsPending` and
+`IndexBuildPending` — are excluded **by decision**: the write is not
+cross-core, it is this core's own write waiting on a grant or a build window,
+and counting it would inflate the 2PC evidence with cases 2PC does not
+address.
+
+### 9b. The baseline: four in five write statements are refused when the client does not route
+
+Every driver in `bench/` hunts for a session on the relation's owner core,
+because otherwise it could not write at all — so every one of them reports
+zero refusals by construction. `bench/refusal_baseline_probe.py` deliberately
+takes the sessions the kernel gives it and writes round-robin over every
+relation, which is what an application that has never heard of core placement
+does.
+
+**measured**, `--tables 6 --rows 200`:
+
+| cores | sessions | write attempts | accepted | refused | **refusal rate** | CC3 class | lease-refill class |
+|---|---|---|---|---|---|---|---|
+| 4 | 4 | 800 | 127 | 673 | **0.841** | 667 | 6 |
+| 4 | 8 | 1,600 | 322 | 1,278 | **0.799** | 1,266 | 12 |
+| 8 | 4 | 800 | 61 | 739 | **0.924** | 734 | 5 |
+| 8 | 8 | 1,600 | 253 | 1,347 | **0.842** | 1,334 | 13 |
+
+**The engine's counters agree with the driver's own count exactly, in all
+four cells** — 667/667, 1,266/1,266, 734/734, 1,334/1,334 — which is what
+turns the stated undercount from an assertion into a checked claim: no CC3
+refusal escapes the counter, and the classes that do escape are the ones
+named above.
+
+The per-key detail is the shape §6 wants the 2PC decision made from. One
+cell's core 0, verbatim:
+
+```
+cross_core_write_refusals=400 cross_core_write_refusal_keys=6
+cross_core_write_refusal_detail=0>1:4004=68,0>1:4016=66,0>2:4008=66,
+                                0>2:4020=66,0>3:4000=68,0>3:4012=66
+```
+
+— six relations, three target cores, evenly hit, from a home core that owns
+none of them.
+
+**The reading, for the era it records**: on this engine, with relations
+rotated and sessions taken as they come, **80–92% of write statements are
+refused**, and the fraction rises with the core count because a session's
+chance of landing on the right core is 1/W. Every one of those refusals is a
+statement that shipping would convert into work. After shipping lands, the
+same counter should read the residue — writes that span *two* owners in one
+transaction — and that residue, not this number, is what 2PC has to be
+designed for.
+

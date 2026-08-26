@@ -31,6 +31,15 @@
 // consumed-runtime counters are plain (non-atomic) fields, and the only
 // atomics anywhere near this class are the two indices inside each SpscRing
 // (workplan-crosscore.md guideline 1).
+//
+// **The read-only accessors are covered by that same rule**, and it has to
+// be said because a getter reads as safe: stopped(), iterations(),
+// messages_drained() and the group-accounting block below all read plain
+// fields the reactor's thread writes without synchronization, so calling
+// one from another thread while Run() proceeds is a data race - the same
+// one kShutdown exists to avoid for stopped(). Every caller today reaches
+// them from the reactor's own thread (`SHOW META` runs as a task on it) or
+// after a join; a future off-core reader needs a message, not a getter.
 
 namespace kds::sched {
 
@@ -170,6 +179,47 @@ public:
 
     std::size_t armed_timers() const noexcept { return timers_.size(); }
 
+    // ---- Group accounting, read from outside (sched.md §4) --------------
+    //
+    // §4's last bullet states the gap this exists to make measurable:
+    // *"reactor time spent outside task polls (the drain, the idle block) is
+    // charged to no group"*. `bench/v2.1.0` §11-5 could not report on it at
+    // all - `consumed_ns_` is private, `SHOW META` never printed it, and a
+    // measurement run may not add instrumentation - and left it owed by
+    // whoever next touched §4. These are that accessor.
+    //
+    // Two counters per group, because one cannot answer the question:
+    //
+    // * `consumed_ns()` is the **scheduling** quantity - the share law's
+    //   input - and it is *periodically halved* (MaybeDecayConsumedRuntime),
+    //   so history does not dominate the pick. It says what the next pick
+    //   will weigh, never how much time a group has had.
+    // * `polled_ns_total()` and `polls_total()` are cumulative and never
+    //   decay. `sum(polled_ns_total) / run_wall_ns()` is the fraction of
+    //   reactor wall time spent inside task polls; one minus it is the time
+    //   charged to no group, which is the number §4 owes.
+    //
+    // Reading these costs nothing; keeping them costs two integer adds per
+    // poll, on the poll path, stated rather than hidden.
+    std::uint64_t consumed_ns(SchedulingGroup group) const noexcept {
+        return consumed_ns_[static_cast<std::size_t>(SchedulingGroupIndex(group))];
+    }
+    std::uint64_t polled_ns_total(SchedulingGroup group) const noexcept {
+        return polled_ns_total_[static_cast<std::size_t>(SchedulingGroupIndex(group))];
+    }
+    std::uint64_t polls_total(SchedulingGroup group) const noexcept {
+        return polls_total_[static_cast<std::size_t>(SchedulingGroupIndex(group))];
+    }
+    // Wall time since this reactor's first RunOnce(), by the injected clock.
+    // Zero before the first iteration - never a negative or a made-up span,
+    // which is what a construction-time origin would give a scheduler that
+    // was built and not yet run.
+    std::uint64_t run_wall_ns() const noexcept {
+        if (!run_started_) return 0;
+        const MonoTimeNs now = clock_.Now();
+        return now > run_start_ns_ ? now - run_start_ns_ : 0;
+    }
+
     // Runs one iteration of the fixed-order phase loop (sched.md section
     // 2). Returns true if any task ran, any I/O event was drained, any
     // timer fired, or any cross-core message was received.
@@ -248,6 +298,16 @@ private:
 
     std::array<std::deque<TaskPtr>, kNumSchedulingGroups> ready_queues_;
     std::array<std::uint64_t, kNumSchedulingGroups> consumed_ns_{};
+    // The undecayed pair; the accessors above say why.
+    std::array<std::uint64_t, kNumSchedulingGroups> polled_ns_total_{};
+    std::array<std::uint64_t, kNumSchedulingGroups> polls_total_{};
+    // Set on the first RunOnce(), so run_wall_ns() spans iterations rather
+    // than a lifetime that may have begun long before the reactor started.
+    // The flag rather than a zero sentinel: an injected test clock legally
+    // reads 0 at its first tick, and a sentinel would then report a
+    // never-started reactor forever.
+    MonoTimeNs run_start_ns_ = 0;
+    bool run_started_ = false;
     std::unordered_map<IoHandle, IoHandler> io_handlers_;
     std::vector<IoEvent> io_events_scratch_;
 
