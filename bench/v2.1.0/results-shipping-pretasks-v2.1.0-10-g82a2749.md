@@ -1,6 +1,6 @@
 # What must be measured before statement shipping — the pretask run
 
-**Batching a commit is worth 60× on one core, and it is what decides every
+**Batching a commit is worth 79× on one core, and it is what decides every
 multi-core ratio in this run.** The same relations and the same rows run at
 876 inserts/s with one commit per row and **69,454** with one commit per
 thousand — one core, two sessions, nothing else changed
@@ -14,19 +14,24 @@ which is 21–23 µs against a ~0.9 ms sync.
 linearly with sessions.** One relation, N sessions, all on its owner core —
 the shape `bench/v2.1.0` §10 says its matrix cannot see, and the shape
 statement shipping would create on purpose — runs at ≈ 490 × S inserts/s on
-core 0 and ≈ 590 × S on a peer, with insert p50 pinned near 1.7–2.0 ms
-whatever S is (§5). Sessions on one core do not queue for the device; they
-share a trip to it. **A peer core beats core 0 at the identical shape by
-15–20%**, reproducibly at every session count.
+core 0 and ≈ 590 × S on a peer, with insert p50 pinned near 1.5–2.0 ms from
+two sessions upward (§5). Sessions on one core do not queue for the device;
+they share a trip to it. **A peer core beats core 0 at the identical shape by
+7–19% (median 16%)**, at every session count.
 
-**These are the two numbers the shipping workplan was owed**, and
+**And the "four-core-server effect" that has bounded every multi-core ratio
+since `bench/v2.1.0` is not the engine.** Three helper processes that do
+nothing but wake once a millisecond, pinned beside a **one-core** server,
+reproduce a four-core server to within 0.2%; seven reproduce an eight-core
+server to within 0.1% (§7b). What a `cores = 1` baseline really differs by is
+how much of the box is asleep.
+
+**These are the numbers the shipping workplan was owed**, and
 `docs/memo-shipping-and-group-commit.md` (T6) does the arithmetic they
 license: shipping re-concentrates onto one owner exactly what rotation
 divides across W cores, which is the mechanism that made rotation lose at two
 sessions per core — so shipping is predicted to be positive in the regime
 rotation is negative in.
-
-Sections still in flight are marked **NOT YET RUN** and carry no numbers.
 
 ---
 
@@ -35,7 +40,7 @@ Sections still in flight are marked **NOT YET RUN** and carry no numbers.
 | | |
 |---|---|
 | Version | **`v2.1.0`** — the operator-named version of record; no `v2.2.0` tag exists and this run does not mint one |
-| `git describe --tags` at the measured commit | **`v2.1.0-10-g82a2749`** for T1, T2 and T3 (the engine is byte-identical to `2b00f12`; `82a2749` adds only `bench/` drivers) |
+| `git describe --tags` at the measured commit | **`v2.1.0-10-g82a2749`** for T1; `v2.1.0-12-g4455b7c` (§3a), `v2.1.0-11-g8b35a42` (§3b), `v2.1.0-13-g56b20d2` (T2), `v2.1.0-14-g265c93b` (T3), `v2.1.0-15-g5989f13` (T4), `v2.1.0-16-gd0abd5a` (T5). **Every one of those commits before T4 is `bench/` only** — the engine under T1, T2, T3 and both gates is byte-identical to `2b00f12`; T4 adds the scheduler accessors and T5 the `SHOW META` counters, and §8a/§9a say so |
 | Worktree | `worktree-v2.2.0-pretasks-stmtshipping` |
 | Date | 2026-08-26 UTC |
 | Host CPU | Intel Xeon Platinum 8488C, **8 logical / 4 physical cores**, 2 threads/core, 1 socket, 1 NUMA node, SMT on, KVM guest |
@@ -111,7 +116,18 @@ confirms its own instructions is not measuring:
    waited out `wait_quiet`'s 180 s timeout. It scales with the CPU count now,
    and the orchestrator gained resume so an interrupted sweep re-uses
    finished repetitions instead of re-measuring them.
-4. **T4's own instrument shipped a dangling pointer, caught before it
+4. **The headline arithmetic was wrong by a third, and a numeric audit
+   caught it.** This file first said batching was worth "60×"; 69,454 / 876
+   is **79×**, and 60 is what a *cross-cell* mix gives (52,581 at
+   `cores = 8` over 876 at `cores = 2`) — a comparison the sentence does not
+   make. Corrected here, and in `CLAUDE.md`'s milestone row; the commit
+   message of `8b35a42` carries the wrong figure and cannot be rewritten
+   after a push, so it is corrected by this note rather than silently. The
+   same audit corrected eleven other quoted ranges — §8b's share-law
+   fraction, §10's sample floor, §5's latency band and peer margin, §7a's
+   "roughly a third", §3a's "within noise" — each to what the archive
+   actually holds.
+5. **T4's own instrument shipped a dangling pointer, caught before it
    produced a number.** The first form set the dispatcher's scheduler view to
    a function-local reactor in `Expeditor::Serve` and cleared it after the
    worker join — with **twenty** early `return`s in between, any of which
@@ -161,9 +177,10 @@ the quote — separate files means separate inodes, so this answers *"N cores,
 N WAL streams"*, the engine's shape, and not *"N cores, one shared file"*.
 
 **Read T1a's `cores = 8` cell against this and it stops being a puzzle.**
-Seven writer cores commit 3,400/s aggregate (§4) — the device's 7-stream
-ceiling of 3,102 to within noise — while the single-core arm, batching 14
-sessions onto **one** stream, does 3,482/s. Both arms hit the same wall from
+Seven writer cores commit 3,400/s aggregate (§4) — **within 10%** of the
+device's seven-stream figure of 3,102, and 7% above that arm's measured
+maximum of 3,170 — while the single-core arm, batching 14 sessions onto
+**one** stream, does 3,482/s. Both arms hit the same wall from
 opposite directions: one by opening more streams, one by putting more commits
 in each trip. **On this host the aggregate sync ceiling is ~3,100–3,770/s
 however it is reached**, which is the fact any scaling claim about writer
@@ -202,9 +219,9 @@ headroom**, and only the `batch ≥ 100` ratios are withheld.
 
 ---
 
-## 4. T1a — one commit per `--batch` rows, and what it does to §6's law
+## 4. T1a — one commit per `--batch` rows, and what it does to `bench/v2.1.0` §6's law
 
-`bench/v2.1.0` §6 explains its whole matrix with one expression,
+That file's §6 explains its whole matrix with one expression,
 `1000 × writer_cores / (470 × sessions)`, and both halves of it are about
 **commits**: a writer core is capped at the device's single-stream
 `fdatasync` rate, and core 0 beats that cap by batching whatever accumulated
@@ -233,7 +250,7 @@ per cell, `--rows 2000` per relation, `--tables` two per writer core
 | 8 | 7 | 1000 | 1.013 | 1.007–1.014 | 52,581 | 51,856 | 53 | 52 |
 
 **The per-core sync cap is an autocommit artifact, and the size of the
-artifact is 60×.** On one core, the same relations and the same rows run at
+artifact is 79×.** On one core, the same relations and the same rows run at
 876 inserts/s with a commit per row and **69,454** with a commit per thousand
 — `cores = 2`'s single-core arm, which is the cleanest read because it holds
 sessions constant at 2. Nothing about the engine's per-core sync rate
@@ -250,16 +267,24 @@ At `batch = 1` the ratio is whatever §6's law says for that session count —
 At `batch = 10` rotation wins **2.86× / 2.89×**, its best cell anywhere in
 this run. At `batch = 1000` every ratio falls to 0.94–1.09.
 
-The reason the ends differ is the reason §6 gives, read in both directions.
-At `batch = 1` the single-core arm is *already* batching — 14 sessions on
-core 0 commit 3,482/s, three and a half times the volume's single-stream sync
-rate — so there is little left for spreading to win. At `batch = 1000`
-neither arm is sync-bound at all, and the ratio measures something else
-entirely, which is the next paragraph.
+The reason the ends differ is `bench/v2.1.0` §6's *mechanism*, though **not
+its fitted expression**, and the difference is worth stating rather than
+glossing. That file's `1000 × writer_cores / (470 × sessions)` was fitted to
+its own host and its own five-phase workload; applied to these insert-only
+cells it predicts 1.06 for both `batch = 1` rows against measured 2.035 and
+0.976, and predicts 2,820 and 6,580 commits/s against measured 1,394 and
+3,482. **The constants do not transfer and are not used here.** What does
+transfer is the mechanism: at `batch = 1` the single-core arm is *already*
+batching — 14 sessions on core 0 commit 3,482/s, **3.1×** the volume's
+single-stream sync rate (§3a's 1,118/s) — so there is little left for
+spreading to win, while at 6 sessions it manages only 1,394/s and there is.
+At `batch = 1000` neither arm is sync-bound at all and the ratio measures
+something else entirely, which is the next paragraph.
 
 **At `batch ≥ 100` these cells are at the harness's ceiling, not the
-engine's, and are reported as unresolved.** Every configuration lands in
-49,000–69,000 ips regardless of how many writer cores it has: `cores = 2`
+engine's, and are reported as unresolved.** At `batch = 1000` every
+configuration lands in 51,856–69,454 ips regardless of how many writer cores
+it has: `cores = 2`
 with **one** writer core does 65,971 at `batch = 1000` and `cores = 8` with
 **seven** does 52,581. A seven-fold difference in engine parallelism moving
 the number by −20% is not an engine result. §3b's ceiling probe measures what
@@ -314,14 +339,17 @@ why the three multi arms sit on cores 1, 3 and 5 rather than all on core 1.
 **The serialized baseline is not flat: it scales linearly with sessions, and
 the latency does not move.** From two sessions upward, aggregate throughput
 is very nearly proportional to the session count while insert p50 sits pinned
-at 1.7–2.0 ms. That is the group committer seen from the inside of one core:
+in a band — 1.7–2.0 ms on core 0 and on the `cores = 2`/`cores = 4` peers,
+1.5 ms on the `cores = 8` peer, and flat in `S` within each arm. That is the group committer seen from the inside of one core:
 each reactor iteration ends in one `fdatasync`, and the more sessions have a
 commit staged when it runs, the more rows that one sync covers. Sessions do
 not queue for the device; they *share* a trip to it.
 
 **One session is the exception, and it is the interesting one.** At S = 1
-there is nothing to batch with, so the insert costs exactly one sync
-(p50 ≈ 1.0 ms) and throughput is the device's single-stream rate. At S = 2
+there is nothing to batch with, so the insert costs about one sync
+(p50 798–1,104 µs) and throughput lands at 80–109% of the device's
+single-stream rate (895–1,220 ips against §3a's 1,118/s — the `cores = 8`
+peer exceeds it, which §5a takes up). At S = 2
 the latency roughly doubles while throughput barely moves — two sessions
 whose commits do not land in the same iteration serialize on two syncs — and
 only from S = 4 does the batch grow fast enough to hold latency flat while
@@ -335,8 +363,10 @@ four physical cores is worth stating, because it means the constant is a
 property of the *mechanism* — one sync per reactor iteration, shared by
 whoever is staged — and not of the machine it was first measured on.
 
-**The peer core beats core 0 at the identical shape**, by 15–20% on
-throughput and 13% on p50, reproducibly across every session count. Core 0
+**The peer core beats core 0 at the identical shape**, at every session
+count: by 6.9–19.2% on throughput (median 15.6%) and 4.7–15.7% on p50
+(median 13%) over the `cores = 2` and `cores = 4` arms — `cores = 8` runs
+higher still and is §5a's. Core 0
 carries the listener, the catalog, the lease-granting services and the
 system-core role; a peer carries its relation and nothing else. This is the
 same asymmetry §7's control chases from the other direction, and T3 examines
@@ -348,7 +378,7 @@ is that a single hot relation is a serialization point; that is true of the
 is what sets throughput here. And shipping's arrival-core cost has to be paid
 against a number that grows with concurrency rather than a ceiling: an owner
 core absorbing N shipped writers is on this curve, not on a per-core sync
-cap. §6 of the memo (`docs/memo-shipping-and-group-commit.md`) does that
+cap. §5 of the memo (`docs/memo-shipping-and-group-commit.md`) does that
 arithmetic.
 
 ### 5a. What `cores = 8` adds, and what it costs
@@ -362,8 +392,10 @@ path itself. Eight sessions give 5,252 ips against core 0's 4,038, **1.30×**.
 
 That is the four-core-server effect `bench/v2.1.0` §11-3 flagged, reproduced
 here on a machine with twice the cores and growing with the core count.
-**§7 discriminates it.** Until then it is an observation, and every ratio in
-this document that compares a multi-core arm against `cores = 1` carries it.
+**§7 discriminates it, and the answer is that it is not the engine**: a
+one-core server with seven dummy processes waking beside it reaches the same
+number. Every ratio in this document that compares a multi-core arm against
+`cores = 1` carries it, and §7b says what it is.
 
 ---
 
@@ -372,7 +404,7 @@ this document that compares a multi-core arm against `cores = 1` carries it.
 ## 6. T2 — the crossover is a step, not a slope, and it is the *busiest* core that sets it
 
 `bench/v2.1.0` §7 measured rotation winning **1.751×** at one writing session
-per writer core and **0.989×** at two, and §11-1 left the boundary between
+per writer core and **0.989×** at two, and its §11-1 left the boundary between
 them "bracketed but not located". Locating it is what any placement policy
 needs, and what shipping needs in order to decide when to ship rather than
 refuse under load.
@@ -436,10 +468,11 @@ denominator.
 The pinned number is the device's, and it can be checked against §3a
 directly. This workload is 5/7 commit-bound (insert + update + delete out of
 insert / point-select / update / delete / scan), so 4,365 stmt/s is
-**3,117 commits/s** — against §3a's measured 8-stream ceiling of
-**3,102/s**. The seven writer cores are not slow; they are *at the device's
-limit for seven concurrent streams*, which is 18% below what four streams
-manage.
+**3,117 commits/s** — against §3a's measured **seven**-stream figure of
+**3,101.7/s** (the eight-stream arm reads 3,102.3, so the label does not
+matter to the number). The seven writer cores are not slow; they are *at the
+device's limit for seven concurrent streams*, which is 18% below what four
+streams manage.
 
 The single-core arm has no such limit because it is not opening streams — it
 is filling one. Fourteen sessions on core 0 commit 6,158/s through a device
@@ -458,13 +491,13 @@ core, and the margin grows with load.
 
 ---
 
-## 7. T3 — the four-core-server effect: one candidate dead, one harness bias found, the rest not separable
+## 7. T3 — the four-core-server effect is not the engine at all
 
 `bench/v2.1.0` §7 measured `cores = 4` with **everything on core 0 and
 nothing cross-core happening at all** beating `cores = 1` by 1.071× aggregate
-and 1.457× on insert p50, and §11-3 left it undiscriminated with three named
-candidates: four WAL anchors, per-core extent leases, background work moving
-off core 0. It is currently a larger effect than rotation's whole
+and 1.457× on insert p50, and `bench/v2.1.0` §11-3 left it undiscriminated,
+with the three candidates its §7 names: four WAL anchors, per-core extent
+leases, background work moving off core 0. It is currently a larger effect than rotation's whole
 contribution, so every multi-core ratio needs it subtracted.
 
 ### 7a. The null cell, which changes how every other ratio is read
@@ -496,51 +529,77 @@ bias does not touch.
 
 Divided through by the null cell, the residual four-core-server effect on
 this host is **1.03× at 2 cores, 1.08× at 3, 1.09× at 4 and 1.22× at 8** —
-real, monotone in the core count, and roughly a third of what the raw ratios
-show.
+real, monotone in the core count, and between a fifth and two thirds of the
+raw excess (22%, 42%, 47% and 64% of it survives, in core order).
 
-### 7b. The candidate configuration cannot reach — and it is dead
+### 7b. The candidate configuration cannot reach — and it accounts for **all** of it
 
-The three candidates §11-3 names are all *engine* state, and none of them has
-a knob: `wal_anchor_count` is a **high-water mark of anchor slots ever
-published** (`src/server/superblock.cpp:174`, **source-read**), not a
+The three candidates `bench/v2.1.0` §7 names are all *engine* state, and none
+of them has a knob: `wal_anchor_count` is a **high-water mark of anchor slots
+ever published** (`src/server/superblock.cpp:174`, **source-read**), not a
 setting; per-core extent leases are unconditional above `cores = 1`; and
 background work has no toggle.
 
 There is a fourth candidate that list does not name, and it *is* testable
 from outside: **the peer reactors are idle but not asleep**. A reactor with
-nothing to do blocks in `PollReady` for at most `max_idle_block_ms` = 10 ms,
-so every peer core wakes ~100 times a second forever — which on a server CPU
-is the difference between a deep C-state and a merely idle core, and which
-would scale with the core count exactly as the measured effect does.
+nothing to do blocks in `PollReady` for at most `max_idle_block_ms` = 10 ms
+(`include/kds/sched/scheduler.hpp:79`, **source-read** at `82a2749`) *or*
+until the next timer is due, whichever is sooner — and the WAL drain's 1 ms
+timer is the one that fires. **measured**, off T4's own instrument
+(`sched_iterations / sched_wall_us` over every idle window in §8b):
+**931–947 reactor iterations per second on every core**. So each peer core
+wakes about a thousand times a second forever, which on a server CPU is the
+difference between a deep C-state and a merely idle core — and which would
+scale with the core count exactly as the measured effect does.
 
 **measured** — `bench/idle_wakers_probe.py --wakers 3,7 --cores-arms 1,4,8
---tables 6 --rows 2000 --reps 3`, insert phase only, arms **interleaved by
-repetition** so drift cannot land on one of them, helper processes pinned one
-per otherwise-unused CPU and doing nothing but `sleep(10 ms)` in a loop:
+--wake-ms 1.0 --tables 6 --rows 2000 --reps 3`, insert phase only, arms
+**interleaved by repetition** so drift cannot land on one of them, helper
+processes pinned one per otherwise-unused CPU and doing nothing but
+`sleep(1 ms)` in a loop:
 
 | arm | ips (median) | spread | insert p50 | against `cores = 1` |
 |---|---|---|---|---|
-| `cores = 1`, no wakers | 2,743 | 2,519–2,864 | 2,198 µs | 1.000 |
-| `cores = 1`, **3 wakers** | 2,628 | 2,588–3,080 | 2,256 µs | **0.958** |
-| `cores = 1`, **7 wakers** | 2,661 | 2,633–3,196 | 2,234 µs | **0.970** |
-| `cores = 4`, no wakers | 2,965 | 2,837–3,388 | 1,966 µs | **1.081** |
-| `cores = 8`, no wakers | 3,090 | 3,045–3,879 | 1,891 µs | **1.127** |
+| `cores = 1`, no wakers | 2,694 | 2,592–2,719 | 2,300 µs | 1.000 |
+| `cores = 1`, **3 wakers** | 2,993 | 2,725–3,051 | 1,967 µs | **1.111** |
+| `cores = 1`, **7 wakers** | 3,138 | 3,069–3,874 | 1,871 µs | **1.165** |
+| `cores = 4`, no wakers | 2,988 | 2,903–3,695 | 1,963 µs | **1.109** |
+| `cores = 8`, no wakers | 3,138 | 3,053–4,088 | 1,857 µs | **1.165** |
 
-**Supplying the wake cadence from outside the process reproduces none of the
-effect** — it is slightly *negative*, which is what adding processes to a box
-usually is — while the same probe's `cores = 4` and `cores = 8` arms show
-1.081× and 1.127× in the same interleaved run. The candidate is dead by
-measurement rather than by argument, and this probe's ratios are the
-cleanest estimate of the residual effect in this document, because it has no
-A/B ordering to be biased by.
+**Three helper processes that do nothing but wake reproduce a four-core
+server to within 0.2%, and seven reproduce an eight-core server to within
+0.1%** — 1.111 against 1.109, and 1.165 against 1.165. The insert p50s match
+too (1,967 against 1,963; 1,871 against 1,857).
+
+**So the four-core-server effect is not the engine.** It is this host's
+idle-CPU behaviour, bought by having *something* wake on the other cores at
+about a kilohertz, and a single-core server with dummy sleepers beside it
+gets all of it. `bench/v2.1.0` §11-3's three candidates — four WAL anchors,
+per-core extent leases, background work moving off core 0 — are not merely
+unseparated; **they are unnecessary**, because the whole effect is accounted
+for without them.
+
+**This experiment got the wrong answer first, and the instrument corrected
+it.** The first run used `--wake-ms 10.0`, taken from `max_idle_block_ms`,
+and found *nothing* — 0.958× at three wakers and 0.970× at seven, which read
+as "the candidate is dead". A numeric audit against T4's `sched_iterations`
+showed the reactors actually iterate ~940 times a second, not 100, so the
+control had been injecting a tenth of the cadence it meant to imitate. Both
+runs are archived (`idle_wakers.json` at 10 ms, `idle_wakers_1ms.json` at
+1 ms); the 10 ms arm is kept because it is the evidence that the effect is
+*specifically* about wake frequency, not about process count — the same
+number of helpers, woken ten times less often, does nothing at all.
 
 ### 7c. What `SHOW META` says, and where this stops
 
 **measured**, one `SHOW META` per arm after the same workload: across
-`cores` 1, 2, 3, 4 and 8 every field is identical — `undo_pages_live=2`,
-`undo_pages_recycled=64`, `recovery_records=0`, `catalog_marks_purged=0` —
-**except `wal_anchor_count`, which is the core count**. And that one cannot
+`cores` 1, 2, 3, 4 and 8 every **state** field is identical —
+`undo_pages_live=2`, `undo_pages_recycled=64`, `recovery_records=0`,
+`catalog_marks_purged=0` — **except `wal_anchor_count`, which is the core
+count**. (The fields that cannot be identical across five separate mounts do
+vary: `create_time`, `last_mount_time`, and the mount's own
+`recovery_analysis_us` / `recovery_redo_us` / `recovery_checkpoint_us`
+timings.) And that one cannot
 be the cause: with `creating` placement only core 0 ever writes, so the other
 anchors are allocated slots nothing touches.
 
@@ -549,19 +608,27 @@ saturated in any arm — every CPU sits at 1.3–7.1% busy, and core 0 is not
 distinguishable from the rest, because the driver's own threads float across
 the box while the single reactor is pinned.
 
-**So this is where T3 stops, exactly as its instructions require.** Of the
-four candidates, one is dead (the idle-wake cadence), one is visible but
-excluded by its own semantics (`wal_anchor_count`), and the remaining two —
-per-core extent leases and background work — have no configuration that
-separates them on this engine. Finding out would mean patching the engine,
-which a measurement run may not do.
+**So T3 does not stop where its instructions expected.** The instruction says
+that if configuration cannot separate the candidates, say so and stop. It
+cannot — but it did not have to, because §7b's control accounts for the whole
+effect from outside the engine, and the three engine-side candidates are left
+with nothing to explain. `wal_anchor_count` is excluded by its own semantics
+as well; per-core extent leases and background work remain unseparated *and
+unneeded*.
 
-**What this run does establish about it**: the effect is real, it is
-**1.08–1.13×** rather than the 1.20–1.34× the raw A/B shows, it grows with
-the core count, and **any future multi-core ratio on this harness must be
-divided by a null cell before it is quoted** — which is the finding with the
-longest reach, because it applies to every number this driver has ever
-produced.
+**What this run establishes**: the four-core-server effect is **1.11–1.17×**
+on this host, it grows with the core count, it is **entirely reproducible on
+a one-core server by waking the other CPUs**, and it belongs to the machine
+rather than to the engine. Two consequences travel further than the number:
+
+- **Any multi-core ratio on this harness must be divided by a null cell
+  before it is quoted** (§7a), and
+- **any multi-core ratio measured against a `cores = 1` baseline is also
+  measuring how awake the rest of the box is.** A `cores = 1` server leaves
+  seven CPUs idle in a way a `cores = 8` server never does, and that
+  difference alone is worth 1.17× here. It is not an artifact of this
+  harness; it would be present in any comparison shaped that way, including
+  every `cores = 1` versus `cores = N` number in `bench/v2.1.0`.
 
 ---
 
@@ -572,8 +639,8 @@ statement while the **owner** core executes it. `bench/v2.1.0` §8 measured
 what that does to a reactor today — the trx-id refill leg spanning
 19,000–24,000 reactor iterations under load, because `IdleTimeoutMs` returns
 0 while any ready queue is non-empty (`src/sched/scheduler.cpp:196-199`,
-**source-read**) — and §11-5 recorded that the *accounting* half of the
-question could not be answered from outside the process at all.
+**source-read**) — and that file's §11-5 recorded that the *accounting* half of
+the question could not be answered from outside the process at all.
 
 ### 8a. The instrument — the one engine change this run is allowed
 
@@ -658,7 +725,7 @@ Windows are 6 s loaded and 4 s idle; "unaccounted" is
 **The gap `docs/sched.md` §4 names is 94–98%.** A writing core spends between
 0.15 and 0.34 seconds of every six inside task polls; the rest — the WAL
 drain's `fdatasync` above all — is charged to no scheduling group at all. The
-share law is therefore arbitrating over **4–6%** of the reactor's time, which
+share law is therefore arbitrating over **2–6%** of the reactor's time, which
 is the quantitative form of PW7's finding that a low-share group's debt took
 hundreds of iterations to clear: the debt is denominated in a currency the
 core barely spends.
@@ -669,13 +736,14 @@ the work, and it is not spinning either.
 
 **At idle every reactor takes exactly one poll per window and blocks.** The
 idle arm reads 1 poll and 100% unaccounted on every core at every cell, which
-is the same conclusion `bench/v2.1.0` §8a reached from per-core CPU (2.8–3.9%
-at rest) and now reads directly off the engine.
+is the same conclusion `bench/v2.1.0` §8a reached from per-core CPU
+(1.4–3.9% on a mounted, idle instance) and now reads directly off the engine.
 
 **No spin is visible in this shape**, and the instrument is what makes that
 sayable: a spin is polls climbing while polled time does not, and here polls
-track the work — 2 polls per insert at every cell, with `ns per poll` falling
-as sessions rise because more of each poll's cost is amortised. §8's
+track the work — 2.005–2.006 polls per insert at the four- and eight-session
+cells, 2.15 and 2.45 at the one-session cells, with `ns per poll` falling as
+sessions rise because more of each poll's cost is amortised. `bench/v2.1.0` §8's
 19,000-iteration refill legs need a *parked* coroutine, and this workload
 produced no lease-refill retries at all.
 
@@ -804,7 +872,8 @@ turns the stated undercount from an assertion into a checked claim: no CC3
 refusal escapes the counter, and the classes that do escape are the ones
 named above.
 
-The per-key detail is the shape §6 wants the 2PC decision made from. One
+The per-key detail is the shape `docs/crosscore.md` §6 wants the 2PC
+decision made from. One
 cell's core 0, verbatim:
 
 ```
@@ -817,11 +886,109 @@ cross_core_write_refusal_detail=0>1:4004=68,0>1:4016=66,0>2:4008=66,
 none of them.
 
 **The reading, for the era it records**: on this engine, with relations
-rotated and sessions taken as they come, **80–92% of write statements are
-refused**, and the fraction rises with the core count because a session's
+rotated and sessions taken as they come, **79.9–92.4% of write statements
+are refused**, and the fraction rises with the core count because a session's
 chance of landing on the right core is 1/W. Every one of those refusals is a
 statement that shipping would convert into work. After shipping lands, the
 same counter should read the residue — writes that span *two* owners in one
 transaction — and that residue, not this number, is what 2PC has to be
 designed for.
 
+---
+
+## 10. What this does not measure
+
+Stated plainly so no headline is quoted for something it cannot support.
+
+- **Not statement shipping.** It is unbuilt. Every cell here measures the
+  engine as it is; T6's memo says what shipping is *predicted* to do and
+  marks every input as measured or predicted.
+- **Not `fdatasync` on one shared file.** §3a measures N streams on N inodes,
+  which is the engine's shape. N cores on one file is a materially worse
+  number this run does not have.
+- **Not the engine's batched-insert ceiling.** §3b shows the `batch ≥ 100`
+  cells sitting at the harness's own limit. A driver that is not CPython, or
+  one process per session, would be needed to resolve them.
+- **Not read scaling, and not any full-workload phase but insert.** T1's
+  probes are insert-only by design; T2 and T3 run the five-phase driver, and
+  their scan percentiles rest on 1–14 samples exactly as `bench/v2.1.0` §5
+  warned.
+- **Not a PostgreSQL comparison.** The comparisons this run can make are
+  `cores = 1` against `cores = N` on one commit, and cell against cell at
+  identical workload. PostgreSQL answers neither and is not installed here.
+- **Not tail behaviour under a long run.** Every cell is seconds to a minute;
+  nothing here says what an hour of ingest does to the free map, the undo
+  chain, or the buffer pool.
+- **Overhead was not measured**, per the operator's 2026-08-24 amendment.
+  The T4 and T5 instruments are stated as costing what they cost — two
+  integer adds per task poll, and a map insert on a refusal path — and that
+  is an argument, not a measurement.
+
+## 11. What this leaves open, and for whom
+
+1. **The engine's real batched-insert throughput.** §3b withholds it. The
+   number matters for shipping, because it is the ceiling the owner core runs
+   into once the sync has been amortised away, and this harness cannot see
+   it.
+2. **Whether a batch can span cores.** `bench/v2.1.0` §11-2 posed it and this
+   run sharpens it: §3a says four streams is where this device peaks and past
+   it the aggregate *falls*, so the question "should W cores each sync" now
+   has a device-side answer as well as an architectural one. Still open, and
+   still not this file's to decide.
+3. **The reactor spin.** T4 prices the population the engine creates from
+   outside; whether the idle policy should become park-aware is
+   `docs/sched.md` §4's decision and is untouched here. §7b adds a wrinkle
+   that decision should know about: the 1 ms wake cadence a reactor keeps
+   while idle is worth **1.17×** to whatever else runs on the box, so an idle
+   policy that blocked longer would be giving that up.
+4. **What a `cores = 1` baseline really controls for.** §7b shows it differs
+   from a `cores = N` server by how much of the machine is awake, which is
+   worth more here than anything cross-core. Whether future multi-core
+   numbers should be quoted against a `cores = 1` server *with wakers* is a
+   harness decision this run raises and does not make.
+5. **2PC's evidence base.** T5's counter now reads from outside the process.
+   One reading is recorded (§9); the before-era it establishes is only worth
+   what the workloads read against it are, and nothing here claims a
+   representative workload.
+
+---
+
+## Reproducing
+
+Every cell, in the order it ran. `build-release` only.
+
+```
+# the two gates
+g++ -O2 -std=c++20 -pthread tools/fdatasync_probe.cpp -o build-release/fdatasync_probe
+build-release/fdatasync_probe /home/ubuntu/mcbench2 5 3 1,2,3,4,5,6,7,8
+bench/client_ceiling_probe.py --workdir ~/mcbench2/ceiling --threads 1,2,4,6,8,14
+
+# T1a and T1b
+bench/run_t1.py --workdir ~/mcbench2/t1 --cores 2,4,8 --reps 5 \
+    --archive bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/t1
+
+# T2
+bench/run_t2.py --workdir ~/mcbench2/t2 --cores 2,4,8 --reps 5 --quiet-load 3.0 \
+    --archive bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/t2
+
+# T3
+bench/run_t3.py --workdir ~/mcbench2/t3 --cores 1,2,3,4,8 --reps 5 --attr-reps 3 \
+    --archive bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/t3
+bench/idle_wakers_probe.py --workdir ~/mcbench2/t3w1 --wakers 3,7 --cores-arms 1,4,8 \\
+    --wake-ms 1.0   # 10.0 is the first, under-injected run, archived beside it
+
+# T4 (on the instrumented build) and T5
+bench/reactor_accounting_probe.py --workdir ~/mcbench2/t4a --cores 4 --sessions 4
+bench/refusal_baseline_probe.py --workdir ~/mcbench2/t5 --cores 4 --sessions 8
+```
+
+Raw per-run JSON for every cell is archived beside this file under
+`bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/`. No data file and no WAL
+segment is archived.
+
+**The engine differs between sections, and §1 lists which commit each was
+measured at.** T1, T2, T3 and both gates ran on an engine byte-identical to
+`2b00f12` (their commits add `bench/` files only). T4's cells ran at
+`v2.1.0-15-g5989f13`, which adds the scheduler's two undecayed counters, and
+T5's at `v2.1.0-16-gd0abd5a`, which adds the `SHOW META` refusal block.
+Neither instrument is on a path any other section's cells touch.

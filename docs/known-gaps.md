@@ -572,6 +572,50 @@ delete-mark purge (`spec-ddl-transactional.md` §5d) and the undo purge
 the log's own growth, so this run's chain plateaus). Everything else
 still waits on its own gate, so:
 
+- **Every `cores = 1` versus `cores = N` ratio in `bench/` is partly a
+  measurement of how awake the machine is** — found 2026-08-26
+  (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §7b). A
+  reactor with nothing to do still wakes about a thousand times a second (the
+  1 ms WAL drain timer, **measured** at 931–947 iterations/s per idle core off
+  the new `sched_iterations` field), so a `cores = N` server keeps N CPUs out
+  of deep idle that a `cores = 1` server leaves asleep. **measured**: three
+  helper processes doing nothing but `sleep(1 ms)`, pinned beside a
+  *one-core* server, reproduce a four-core server's advantage to within 0.2%
+  (1.111× against 1.109×) and seven reproduce an eight-core server's to
+  within 0.1% (1.165× against 1.165×). So `bench/v2.1.0` §11-3's
+  "four-core-server effect" and its three engine-side candidates — four WAL
+  anchors, per-core extent leases, background work moving off core 0 — are
+  **unnecessary**, not merely unseparated. Anything quoting a `cores = 1`
+  baseline is quoting this too. A separate finding in the same section: the
+  driver's null cell (`cores = 1` against `cores = 1`) reads **1.099**, not
+  1.000, because its second arm always runs later — so every A/B ratio this
+  harness has produced carries a ~10% ordering bias, `bench/v2.1.0`'s C1 and
+  C2 controls included.
+- **A refused shipped `CREATE INDEX` still consumes free-map pages, and the
+  refusal invites the retry that exhausts them** — found 2026-08-26 by T4's
+  probe (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d,
+  worktree `worktree-v2.2.0-pretasks-stmtshipping`). A `CREATE INDEX` shipped
+  to a peer whose extent lease is spent is refused
+  `TXN_CONFLICT retryable=1`, which tells the client to retry; each refused
+  attempt leaks the pages its build allocated before refusing. **measured**:
+  6,670 refused attempts over 30 s exhausted the free map — *"no run of 64
+  contiguous free pages remains below the free map's coverage (65280 ids)"* —
+  after which every core's extent refill failed and the instance never
+  recovered. Two things this bounds: the single-page free map's ceiling
+  (65,280 ids, ~510 MiB; `docs/workplan-multi-free-map.md` is unbuilt) is
+  reachable by a client doing exactly what the wire tells it to do, and any
+  DML shipping built on the same machinery inherits the leak.
+- **Sustained shipped index builds leave a peer-owned relation permanently
+  unwritable** — same run, same section. Looping `CREATE INDEX`/`DROP INDEX`
+  against peer-owned relations drove a `cores = 4` instance into
+  `ERR page id not found` on **every** later write to an unrelated
+  peer-owned relation, not retryable, after ~58 builds; the identical churn
+  at `cores = 1` ran 400 builds clean and grew the file from 32 MB to 70 MB.
+  The mechanism is **not established** — the run reports the reproduction and
+  declines to guess — and the two candidates it could not separate are the
+  orphaned pages `DROP INDEX` leaves (reclamation gated) and the peer's own
+  view of what is allocated. Reproduces with `bench/parked_coroutine_probe.py`
+  driven in a loop.
 - undo pages from a **previous run** leak: a restart abandons the old
   chain and the recycle list is memory-resident, so those pages stay
   allocated until UP4's mount-time reclaim exists (they always leaked;
