@@ -85,9 +85,11 @@ complete rather than waiting for the remaining phases. These were prepared,
 committed as runnable scripts, queued, and **stopped before they ran**. None
 of them is reported anywhere below as anything but unrun.
 
-The one exception is the **C2 control**, which was queued unrun in the first
-version of this document and has since been run in full (5 reps). §7 carries
-it, and it resolves what was then the run's largest gap.
+Two entries have since been run and are no longer in the table below. The
+**C2 control** (§7) resolves what was then the run's largest gap, and **H2**
+now has its full five reps (§4). The remaining phases are queued and running
+at the time of writing; this file will be updated when they land, and until
+then they are unrun and are reported as unrun.
 
 | Phase | State | What it would have answered |
 |---|---|---|
@@ -95,7 +97,6 @@ it, and it resolves what was then the run's largest gap.
 | **Per-core CPU attributed to the insert phase** (`bench/percore_insert_probe.py`) | **NOT RUN** | Whether core 0 is idle or a bottleneck under rotation, per configuration |
 | **Restart ownership at 3 writer cores** (`bench/restart_ownership_check.py`) | **NOT RUN** | PW1c-7's stamp-carried ownership across a restart, first exercise at ≥3 cores |
 | **Drain cadence sweep** (`bench/drain_cadence_probe.py`) | **NOT RUN** | Direct confirmation of §6 by varying `wal_drain_interval_us` |
-| **H2** (20,000 rows) | **2 of 5 reps** | Reported as 2 reps and labelled, never as 5 |
 
 One finding that the PW7 phase would have carried is worth recording even
 unrun, because it changes what that phase can ever produce:
@@ -163,7 +164,7 @@ imbalance reads as poor scaling.
 | cell | invocation delta | reps | ratio median | spread |
 |---|---|---|---|---|
 | **H1** headline | `--cores 4 --tables 6 --rows 2000 --placement rotate --peer-listeners` | 5 | **1.051** | 1.008–1.070 |
-| **H2** | H1 at `--rows 20000` | **2** | **1.024** | 1.019–1.030 |
+| **H2** | H1 at `--rows 20000` | 5 | **1.024** | 1.019–1.030 |
 | **H3** | H1 at `--tables 3` | 5 | **1.927** | 1.886–1.947 |
 | **H4a** | `--cores 2 --tables 2` | 5 | **1.034** | 0.983–1.052 |
 | **H4b** | `--cores 3 --tables 4` | 5 | **1.058** | 1.005–1.080 |
@@ -184,10 +185,13 @@ H3 1.927 (64%), H4b 1.058 against a 2× ceiling at two writer cores, H4a 1.034
 against a 1× ceiling — H4a has exactly one writer core, so parity is its
 honest expectation and it meets it.
 
-**H2 answers its question, on two reps.** Amortising per-statement fixed
-costs over ten times the rows does not raise the ratio; it lowers it slightly
-(1.024 against H1's 1.051). Whatever bounds this workload is not a
-per-statement fixed cost.
+**H2 answers its question, now on five reps** (1.019, 1.019, 1.024, 1.027,
+1.030 — a 1.1% spread, the tightest cell in the matrix). Amortising
+per-statement fixed costs over ten times the rows does not raise the ratio; it
+lowers it slightly, to 1.024 against H1's 1.051. Insert p50 barely moves
+either — 2,021 µs single against 1,952 multi, against H1's 2,000/1,910 at a
+tenth the rows. **Whatever bounds this workload is not a per-statement fixed
+cost**, which is what §6 then identifies.
 
 **The comparison baseline.** `bench/results-multicore.md`'s 1.05× is *not*
 quoted here as "the old speedup". It is a parity baseline from before the
