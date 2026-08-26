@@ -37,7 +37,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 from multicore_benchmark import (  # noqa: E402
-    Conn, collect_connections, field, wait_for_port,
+    Conn, collect_connections, field, is_retryable, wait_for_port,
 )
 
 
@@ -79,20 +79,40 @@ class Window:
         return False
 
 
-def insert_worker(conn, name, rows, out, index):
+def insert_worker(conn, name, rows, out, index, deadline_s=10.0):
     """One relation's INSERTs from its own session. Latencies are not the
-    point here - the CPU window around every worker is."""
+    point here - the CPU window around every worker is.
+
+    A peer answers its first INSERT with a lease-refill refusal until the
+    grant lands, and those carry retryable=1 (PW1b); the benchmark driver
+    retries them for exactly this reason. Without the retry this probe lost
+    rows on the peer arm and still divided by the row count it *meant* to
+    insert, overstating that arm's throughput.
+    """
     errors = 0
+    retries = 0
+    inserted = 0
     first_error = None
     t0 = time.time()
     for i in range(1, rows + 1):
-        r = conn.cmd(f"INSERT INTO {name} (id, owner, balance) "
-                     f"VALUES ({i}, 'o{i % 7}', {i * 10})")
-        if r.startswith("ERR"):
+        # The Keystone pk is implicit - a column list is refused
+        # (tools/multicore_benchmark.py:288). Only the non-pk values go here.
+        stmt = f"INSERT INTO {name} VALUES ('o{i % 7}', {i * 10})"
+        end = time.time() + deadline_s
+        while True:
+            r = conn.cmd(stmt)
+            if not r.startswith("ERR"):
+                inserted += 1
+                break
+            if is_retryable(r) and time.time() < end:
+                retries += 1
+                continue
             errors += 1
             if first_error is None:
                 first_error = r
+            break
     out[index] = dict(name=name, seconds=time.time() - t0, errors=errors,
+                      retries=retries, inserted=inserted,
                       first_error=first_error)
 
 
@@ -157,9 +177,14 @@ def run_config(args, cores, placement, listeners, tag, port):
         result["insert_busy"] = w.busy
         result["insert_seconds"] = w.seconds
         result["per_relation"] = [r for r in out if r]
+        # Divide by rows that actually landed: a lost row must lower this
+        # number, never leave it flattering the arm that lost it.
+        inserted = sum(r["inserted"] for r in out if r)
+        result["inserted"] = inserted
         result["inserts_per_second"] = (
-            len(names) * args.rows / w.seconds if w.seconds else 0.0)
+            inserted / w.seconds if w.seconds else 0.0)
         result["errors"] = sum(r["errors"] for r in out if r)
+        result["retries"] = sum(r["retries"] for r in out if r)
 
         counts = {}
         for n in names:

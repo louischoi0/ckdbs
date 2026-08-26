@@ -96,23 +96,81 @@ MATRIX
 PW7 BEFORE / AFTER  (H1 shape, adjacent in time)
 ==============================================================================
 
-### HEAD 5ad2455 (floors present): NO RUNS FOUND
+### HEAD 5ad2455 (floors present)  (5/5 usable reps)
+  ratio median=1.048  spread=0.981..1.082  all=[1.082, 1.07, 0.981, 1.022, 1.048]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=16', 'retries: insert=17', 'retries: insert=20', 'retries: insert=16', 'retries: insert=14']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               1981        1905     1.040        2487        2146   12001
+  point-select          259         260     0.996        1139         994   12000
+  update               2034        1940     1.048        2239        2147   12000
+  delete               2003        1928     1.039        2218        2137   6000
+  scan                 1410        1355     1.041        1478        1470   6
+  aggregate stmt/s: single=3981  multi=4172
+  per-core busy (whole invocation, both configs): cpu0=0.096  cpu1=0.133  cpu2=0.125  cpu3=0.133
+  refills (rep 1): core 1: rowid 2/2 wait_max=0.8ms (submit 0.0ms/0it, to-grant 0.7ms/1175it, resume 0.0ms/1it), trxid 3/3 wait_max=9.2ms (submit 0.0ms/0it, to-grant 9.2ms/16822it, resume 1.0ms/1it), extent 1/1 wait_max=5.8ms (submit 0.0ms/0it, to-grant 4.9ms/4it, resume 0.9ms/1it); core 2: rowid 2/2 wait_max=1.6ms (submit 0.0ms/0it, to-grant 1.6ms/629it, resume 0.0ms/1it), trxid 3/3 wait_max=9.1ms (submit 0.0ms/0it
 
-### 9c0528a (pre-PW7 tree, no instrument): NO RUNS FOUND
+### 9c0528a (pre-PW7 tree, no instrument)  (5/5 usable reps)
+  ratio median=1.057  spread=0.976..1.072  all=[1.072, 1.047, 1.057, 1.069, 0.976]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=16', 'retries: insert=19', 'retries: insert=33', 'retries: insert=14', 'retries: insert=23']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               2003        1910     1.049        2471        2142   12001
+  point-select          259         263     0.985        1098        1010   12000
+  update               2045        1948     1.050        2276        2163   12000
+  delete               2021        1939     1.042        2266        2121   6000
+  scan                 1428        1381     1.034        1512        1445   6
+  aggregate stmt/s: single=3926  multi=4156
+  per-core busy (whole invocation, both configs): cpu0=0.096  cpu1=0.135  cpu2=0.149  cpu3=0.121
+  refills (rep 1): core 1: none reported; core 2: none reported; core 3: none reported
 
-### HEAD with scheduler.cpp reverted to 2c6ae23^ (floors out, instrument in): NO RUNS FOUND
+### HEAD with scheduler.cpp reverted to 2c6ae23^ (floors out, instrument in)  (5/5 usable reps)
+  ratio median=1.027  spread=0.981..1.044  all=[0.987, 1.035, 0.981, 1.044, 1.027]
+  errors across reps: 0
+  verify (multi-core): {'survivors as expected (1000, and one more in bench0 for the probe row)'}
+  retries (multi-core): ['retries: insert=23', 'retries: insert=18', 'retries: insert=32', 'retries: insert=29', 'retries: insert=19']
+  phase          single p50   multi p50  p50 gain  single p99   multi p99   n/run
+  insert               1958        1915     1.022        2377        2149   12001
+  point-select          260         266     0.977        1122         993   12000
+  update               2031        1951     1.041        2299        2177   12000
+  delete               2015        1939     1.039        2315        2128   6000
+  scan                 1387        1374     1.009        1780        1435   6
+  aggregate stmt/s: single=4038  multi=4151
+  per-core busy (whole invocation, both configs): cpu0=0.099  cpu1=0.144  cpu2=0.150  cpu3=0.132
+  refills (rep 1): core 1: rowid 2/2 wait_max=1.4ms (submit 0.1ms/0it, to-grant 1.3ms/109it, resume 0.0ms/0it), trxid 3/3 wait_max=930.7ms (submit 924.4ms/934it, to-grant 9.2ms/1520it, resume 0.0ms/0it), extent 1/1 wait_max=597.3ms (submit 590.9ms/604it, to-grant 6.4ms/394it, resume 0.0ms/0it); core 2: rowid 2/2 wait_max=1.3ms (submit 0.1ms/0it, to-grant 1.2ms/228it, resume 0.0ms/0it), trxid 3/3 wait_max=93.4ms (sub
 
 ==============================================================================
 PER-CORE INSERT
 ==============================================================================
-  not present
+  multi: cores=4 ips=3286.452670950342 secs=3.651353359222412 errors=0
+    owner_cores={'pc0': 3, 'pc1': 1, 'pc2': 2, 'pc3': 3, 'pc4': 1, 'pc5': 2}
+    idle  busy={'cpu0': 0.0182, 'cpu1': 0.0224, 'cpu2': 0.0163, 'cpu3': 0.0367}
+    insert busy={'cpu0': 0.0891, 'cpu1': 0.1429, 'cpu2': 0.1393, 'cpu3': 0.132}
+  single: cores=1 ips=2944.071607210417 secs=4.075987815856934 errors=0
+    owner_cores={'pc0': 0, 'pc1': 0, 'pc2': 0, 'pc3': 0, 'pc4': 0, 'pc5': 0}
+    idle  busy={'cpu0': 0.0302, 'cpu1': 0.0162, 'cpu2': 0.0161, 'cpu3': 0.0262}
+    insert busy={'cpu0': 0.0416, 'cpu1': 0.0548, 'cpu2': 0.0749, 'cpu3': 0.0496}
+  insert ips ratio = 1.1162950870153392
 
 ==============================================================================
 RESTART OWNERSHIP
 ==============================================================================
-  not present
+  owner_cores={'rst0': 3, 'rst1': 1, 'rst2': 2, 'rst3': 3, 'rst4': 1, 'rst5': 2}
+  shutdown=stopped shutdown2=stopped
+  problems=[]
+    rst0: before=2000 after=2000 scan=2000 owner=3
+    rst1: before=2000 after=2000 scan=2000 owner=1
+    rst2: before=2000 after=2000 scan=2000 owner=2
+    rst3: before=2000 after=2000 scan=2000 owner=3
+    rst4: before=2000 after=2000 scan=2000 owner=1
+    rst5: before=2000 after=2000 scan=2000 owner=2
 
 ==============================================================================
 DRAIN CADENCE
 ==============================================================================
-  not present
+  drain= 1000us  single=  3723.6 ips p50=1372.6us | multi=  3554.1 ips p50=1871.9us | ratio=0.954  lost=0  retries=0/86
+  drain=  500us  single=  3376.2 ips p50=1984.9us | multi=  3624.0 ips p50=1858.1us | ratio=1.073  lost=0  retries=0/77
+  drain=  250us  single=  3356.7 ips p50=1978.7us | multi=  3642.8 ips p50=1869.8us | ratio=1.085  lost=0  retries=0/23
+  drain=  100us  single=  4061.3 ips p50=1291.9us | multi=  3626.3 ips p50=1870.2us | ratio=0.893  lost=0  retries=0/55

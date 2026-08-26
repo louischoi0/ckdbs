@@ -1,0 +1,108 @@
+{
+  "cores": 4,
+  "tables": 6,
+  "rows": 2000,
+  "placement": "rotate",
+  "peer_listeners": true,
+  "before": {
+    "rst0": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "probe_key": "2000"
+    },
+    "rst1": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "probe_key": "2000"
+    },
+    "rst2": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "probe_key": "2000"
+    },
+    "rst3": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "probe_key": "2000"
+    },
+    "rst4": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "probe_key": "2000"
+    },
+    "rst5": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "probe_key": "2000"
+    }
+  },
+  "after": {
+    "rst0": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "scan": 2000,
+      "owner_core": 3
+    },
+    "rst1": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "scan": 2000,
+      "owner_core": 1
+    },
+    "rst2": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "scan": 2000,
+      "owner_core": 2
+    },
+    "rst3": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "scan": 2000,
+      "owner_core": 3
+    },
+    "rst4": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "scan": 2000,
+      "owner_core": 1
+    },
+    "rst5": {
+      "count": 2000,
+      "probe": "id,owner,balance\\n2000,o5,20000",
+      "scan": 2000,
+      "owner_core": 2
+    }
+  },
+  "owner_cores": {
+    "rst0": 3,
+    "rst1": 1,
+    "rst2": 2,
+    "rst3": 3,
+    "rst4": 1,
+    "rst5": 2
+  },
+  "problems": [],
+  "writer_connect_attempts": 34,
+  "insert_seconds": 11.43440294265747,
+  "insert_retries": {
+    "rst0": 3,
+    "rst1": 3,
+    "rst2": 3,
+    "rst3": 2,
+    "rst4": 2,
+    "rst5": 2
+  },
+  "probe_keys": {
+    "rst0": "2000",
+    "rst1": "2000",
+    "rst2": "2000",
+    "rst3": "2000",
+    "rst4": "2000",
+    "rst5": "2000"
+  },
+  "shutdown": "stopped",
+  "reader_connect_attempts": 22,
+  "meta_after_restart": "version=0 create_time=0 last_mount_time=0 wal_anchor_count=0 cabin_optimizer=off core=3 catalog_marks_purged=0 undo_pages_live=0 undo_pages_recycled=0 extent_refill_requests=0 extent_refill_grants=0 extent_refill_wait_max_us=0 extent_refill_submit_lag_max_us=0 extent_refill_grant_lag_max_us=0 extent_refill_resume_lag_max_us=0 extent_refill_submit_lag_max_iters=0 extent_refill_grant_lag_max_iters=0 extent_refill_resume_lag_max_iters=0 trxid_refill_requests=1 trxid_refill_grants=1 trxid_refill_wait_max_us=15926 trxid_refill_submit_lag_max_us=1 trxid_refill_grant_lag_max_us=15924 trxid_refill_resume_lag_max_us=0 trxid_refill_submit_lag_max_iters=0 trxid_refill_grant_lag_max_iters=28963 trxid_refill_resume_lag_max_iters=1 rowid_refill_requests=0 rowid_refill_grants=0 rowid_refill_wait_max_us=0 rowid_refill_submit_lag_max_us=0 rowid_refill_grant_lag_max_us=0 rowid_refill_resume_lag_max_us=0 rowid_refill_submit_lag_max_iters=0 rowid_refill_grant_lag_max_iters=0 rowid_refill_resume_lag_max_iters=0 index_build_windows=0 index_build_window_age_max_us=0 recovery_records=2 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=40369 recovery_redo_us=40404 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=992 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0",
+  "shutdown2": "stopped"
+}

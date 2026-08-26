@@ -58,6 +58,11 @@ CELLS = {
     # rotation rather than to running a 4-core server at all - C1 showed the
     # 6-relation control is not at parity.
     "C2":  dict(cores=4, tables=3, rows=2000,  placement="creating", listeners=False),
+    # PW7's own shape: four writing sessions on ONE peer core, which is the
+    # condition its lease-refill collapse needed (docs/workplan-peer-writer.md:325,
+    # "four writers on core 1"). H1 spreads two sessions over three cores and
+    # does not provoke it, so a before/after on H1 tests nothing.
+    "P7":  dict(cores=2, tables=4, rows=2000,  placement="rotate",   listeners=True),
 }
 
 PHASES = ("insert", "point-select", "update", "delete", "scan")

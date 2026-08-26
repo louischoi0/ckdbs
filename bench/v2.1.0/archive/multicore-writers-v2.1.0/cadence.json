@@ -1,0 +1,210 @@
+[
+  {
+    "drain_us": 1000,
+    "single": {
+      "tag": "s1000",
+      "cores": 1,
+      "drain_us": 1000,
+      "owner_cores": {
+        "cd0": 0,
+        "cd1": 0,
+        "cd2": 0,
+        "cd3": 0,
+        "cd4": 0,
+        "cd5": 0
+      },
+      "seconds": 1.611,
+      "inserts": 6000,
+      "inserts_per_second": 3723.6,
+      "latency_us": {
+        "p50": 1372.6,
+        "p99": 2290.2,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 0,
+      "lost_rows": []
+    },
+    "multi": {
+      "tag": "m1000",
+      "cores": 4,
+      "drain_us": 1000,
+      "owner_cores": {
+        "cd0": 3,
+        "cd1": 1,
+        "cd2": 2,
+        "cd3": 3,
+        "cd4": 1,
+        "cd5": 2
+      },
+      "seconds": 1.688,
+      "inserts": 6000,
+      "inserts_per_second": 3554.1,
+      "latency_us": {
+        "p50": 1871.9,
+        "p99": 2156.2,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 86,
+      "lost_rows": []
+    },
+    "ratio": 0.954
+  },
+  {
+    "drain_us": 500,
+    "single": {
+      "tag": "s500",
+      "cores": 1,
+      "drain_us": 500,
+      "owner_cores": {
+        "cd0": 0,
+        "cd1": 0,
+        "cd2": 0,
+        "cd3": 0,
+        "cd4": 0,
+        "cd5": 0
+      },
+      "seconds": 1.777,
+      "inserts": 6000,
+      "inserts_per_second": 3376.2,
+      "latency_us": {
+        "p50": 1984.9,
+        "p99": 2411.4,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 0,
+      "lost_rows": []
+    },
+    "multi": {
+      "tag": "m500",
+      "cores": 4,
+      "drain_us": 500,
+      "owner_cores": {
+        "cd0": 3,
+        "cd1": 1,
+        "cd2": 2,
+        "cd3": 3,
+        "cd4": 1,
+        "cd5": 2
+      },
+      "seconds": 1.656,
+      "inserts": 6000,
+      "inserts_per_second": 3624.0,
+      "latency_us": {
+        "p50": 1858.1,
+        "p99": 2184.1,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 77,
+      "lost_rows": []
+    },
+    "ratio": 1.073
+  },
+  {
+    "drain_us": 250,
+    "single": {
+      "tag": "s250",
+      "cores": 1,
+      "drain_us": 250,
+      "owner_cores": {
+        "cd0": 0,
+        "cd1": 0,
+        "cd2": 0,
+        "cd3": 0,
+        "cd4": 0,
+        "cd5": 0
+      },
+      "seconds": 1.787,
+      "inserts": 6000,
+      "inserts_per_second": 3356.7,
+      "latency_us": {
+        "p50": 1978.7,
+        "p99": 2363.3,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 0,
+      "lost_rows": []
+    },
+    "multi": {
+      "tag": "m250",
+      "cores": 4,
+      "drain_us": 250,
+      "owner_cores": {
+        "cd0": 3,
+        "cd1": 1,
+        "cd2": 2,
+        "cd3": 3,
+        "cd4": 1,
+        "cd5": 2
+      },
+      "seconds": 1.647,
+      "inserts": 6000,
+      "inserts_per_second": 3642.8,
+      "latency_us": {
+        "p50": 1869.8,
+        "p99": 2137.5,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 23,
+      "lost_rows": []
+    },
+    "ratio": 1.085
+  },
+  {
+    "drain_us": 100,
+    "single": {
+      "tag": "s100",
+      "cores": 1,
+      "drain_us": 100,
+      "owner_cores": {
+        "cd0": 0,
+        "cd1": 0,
+        "cd2": 0,
+        "cd3": 0,
+        "cd4": 0,
+        "cd5": 0
+      },
+      "seconds": 1.477,
+      "inserts": 6000,
+      "inserts_per_second": 4061.3,
+      "latency_us": {
+        "p50": 1291.9,
+        "p99": 2178.0,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 0,
+      "lost_rows": []
+    },
+    "multi": {
+      "tag": "m100",
+      "cores": 4,
+      "drain_us": 100,
+      "owner_cores": {
+        "cd0": 3,
+        "cd1": 1,
+        "cd2": 2,
+        "cd3": 3,
+        "cd4": 1,
+        "cd5": 2
+      },
+      "seconds": 1.655,
+      "inserts": 6000,
+      "inserts_per_second": 3626.3,
+      "latency_us": {
+        "p50": 1870.2,
+        "p99": 2157.4,
+        "n": 6000
+      },
+      "errors": 0,
+      "retries": 55,
+      "lost_rows": []
+    },
+    "ratio": 0.893
+  }
+]

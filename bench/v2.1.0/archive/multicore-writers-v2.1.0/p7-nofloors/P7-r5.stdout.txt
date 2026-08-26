@@ -1,0 +1,37 @@
+/usr/bin/python3 tools/multicore_benchmark.py --server /home/ubuntu/ckdbs-nofloors/build-release/kds_server --cores 2 --tables 4 --rows 2000 --placement rotate --workdir /home/ubuntu/mcbench/p7nofloors/P7-r5 --port 18816 --peer-listeners
+
+
+== single-core: cores=1, 4 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0
+   host: workdir on ext4, 1-minute load 0.56 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=10.14s  aggregate=2,762 stmt/s  errors=0
+   insert        n=  8001  p50=   1981us  p99=   2285us
+   point-select  n=  8000  p50=    138us  p99=   1077us
+   update        n=  8000  p50=   1973us  p99=   2145us
+   delete        n=  4000  p50=   1959us  p99=   2215us
+   scan          n=     4  p50=   1389us  p99=   1391us
+
+== multi-core: cores=2, 4 relations x 2000 rows ==
+   placement: bench0 owner_core=1  bench1 owner_core=1  bench2 owner_core=1  bench3 owner_core=1
+   host: workdir on ext4, 1-minute load 0.63 at start
+   ddl session on core 0 after 1 connection(s); 4 writer session(s) on cores [1] after 5 connection(s)
+   refills: core 1: rowid 4/4 wait_max=1184.6ms (submit 0.6ms/1it, to-grant 1184.5ms/1969it, resume 0.0ms/0it), trxid 6/6 wait_max=299.3ms (submit 296.9ms/496it, to-grant 3.5ms/713it, resume 0.0ms/0it), extent 1/1 wait_max=756.7ms (submit 753.2ms/758it, to-grant 3.5ms/6it, resume 0.0ms/0it)
+   verify: bench0 expected 1001 got 'count(*)\\n1003'; bench2 expected 1000 got 'count(*)\\n1011'; bench3 expected 1000 got 'count(*)\\n1012'
+   retries: insert=2184
+   wall=13.14s  aggregate=2,131 stmt/s  errors=0
+   insert        n=  8001  p50=   1957us  p99=   2215us
+   point-select  n=  8000  p50=   1032us  p99=   1174us
+   update        n=  8000  p50=   2008us  p99=   2197us
+   delete        n=  4000  p50=   1960us  p99=   2122us
+   scan          n=     4  p50=   1398us  p99=   1534us
+
+== comparison ==
+   multi-core / single-core throughput: 0.772x
+   (rotation skips the system core, so at cores=2 every relation is
+    core 1's: this compares the peer write path against core 0's at
+    equal parallelism - a cost, not a scaling number; cores >= 3 is
+    where two writer cores exist)

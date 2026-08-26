@@ -1,0 +1,184 @@
+{
+  "cores": 4,
+  "tables": 6,
+  "rows": 2000,
+  "multi": {
+    "tag": "multi",
+    "cores": 4,
+    "placement": "rotate",
+    "peer_listeners": true,
+    "owner_cores": {
+      "pc0": 3,
+      "pc1": 1,
+      "pc2": 2,
+      "pc3": 3,
+      "pc4": 1,
+      "pc5": 2
+    },
+    "idle_busy": {
+      "cpu0": 0.0182,
+      "cpu1": 0.0224,
+      "cpu2": 0.0163,
+      "cpu3": 0.0367
+    },
+    "insert_busy": {
+      "cpu0": 0.0891,
+      "cpu1": 0.1429,
+      "cpu2": 0.1393,
+      "cpu3": 0.132
+    },
+    "insert_seconds": 3.651353359222412,
+    "per_relation": [
+      {
+        "name": "pc0",
+        "seconds": 3.607577085494995,
+        "errors": 0,
+        "retries": 2,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc1",
+        "seconds": 3.6477649211883545,
+        "errors": 0,
+        "retries": 2,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc2",
+        "seconds": 3.627469062805176,
+        "errors": 0,
+        "retries": 2,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc3",
+        "seconds": 3.60896372795105,
+        "errors": 0,
+        "retries": 26,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc4",
+        "seconds": 3.649967908859253,
+        "errors": 0,
+        "retries": 3,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc5",
+        "seconds": 3.630624771118164,
+        "errors": 0,
+        "retries": 23,
+        "inserted": 2000,
+        "first_error": null
+      }
+    ],
+    "inserted": 12000,
+    "inserts_per_second": 3286.452670950342,
+    "errors": 0,
+    "retries": 58,
+    "counts": {
+      "pc0": "count(*)\\n2000",
+      "pc1": "count(*)\\n2000",
+      "pc2": "count(*)\\n2000",
+      "pc3": "count(*)\\n2000",
+      "pc4": "count(*)\\n2000",
+      "pc5": "count(*)\\n2000"
+    }
+  },
+  "single": {
+    "tag": "single",
+    "cores": 1,
+    "placement": "creating",
+    "peer_listeners": false,
+    "owner_cores": {
+      "pc0": 0,
+      "pc1": 0,
+      "pc2": 0,
+      "pc3": 0,
+      "pc4": 0,
+      "pc5": 0
+    },
+    "idle_busy": {
+      "cpu0": 0.0302,
+      "cpu1": 0.0162,
+      "cpu2": 0.0161,
+      "cpu3": 0.0262
+    },
+    "insert_busy": {
+      "cpu0": 0.0416,
+      "cpu1": 0.0548,
+      "cpu2": 0.0749,
+      "cpu3": 0.0496
+    },
+    "insert_seconds": 4.075987815856934,
+    "per_relation": [
+      {
+        "name": "pc0",
+        "seconds": 4.07178807258606,
+        "errors": 0,
+        "retries": 0,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc1",
+        "seconds": 4.073560476303101,
+        "errors": 0,
+        "retries": 0,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc2",
+        "seconds": 4.0753843784332275,
+        "errors": 0,
+        "retries": 0,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc3",
+        "seconds": 4.070326089859009,
+        "errors": 0,
+        "retries": 0,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc4",
+        "seconds": 4.072340726852417,
+        "errors": 0,
+        "retries": 0,
+        "inserted": 2000,
+        "first_error": null
+      },
+      {
+        "name": "pc5",
+        "seconds": 4.072158575057983,
+        "errors": 0,
+        "retries": 0,
+        "inserted": 2000,
+        "first_error": null
+      }
+    ],
+    "inserted": 12000,
+    "inserts_per_second": 2944.071607210417,
+    "errors": 0,
+    "retries": 0,
+    "counts": {
+      "pc0": "count(*)\\n2000",
+      "pc1": "count(*)\\n2000",
+      "pc2": "count(*)\\n2000",
+      "pc3": "count(*)\\n2000",
+      "pc4": "count(*)\\n2000",
+      "pc5": "count(*)\\n2000"
+    }
+  },
+  "insert_ips_ratio": 1.1162950870153392
+}

@@ -1,0 +1,37 @@
+/usr/bin/python3 tools/multicore_benchmark.py --server /home/ubuntu/ckdbs-nofloors/build-release/kds_server --cores 2 --tables 4 --rows 2000 --placement rotate --workdir /home/ubuntu/mcbench/p7nofloors/P7-r1 --port 18800 --peer-listeners
+
+
+== single-core: cores=1, 4 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0
+   host: workdir on ext4, 1-minute load 0.55 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=10.31s  aggregate=2,715 stmt/s  errors=0
+   insert        n=  8001  p50=   1980us  p99=   2266us
+   point-select  n=  8000  p50=    138us  p99=    603us
+   update        n=  8000  p50=   1988us  p99=   2178us
+   delete        n=  4000  p50=   1980us  p99=   2211us
+   scan          n=     4  p50=   1405us  p99=   1995us
+
+== multi-core: cores=2, 4 relations x 2000 rows ==
+   placement: bench0 owner_core=1  bench1 owner_core=1  bench2 owner_core=1  bench3 owner_core=1
+   host: workdir on ext4, 1-minute load 0.65 at start
+   ddl session on core 0 after 1 connection(s); 4 writer session(s) on cores [1] after 5 connection(s)
+   refills: core 1: rowid 4/4 wait_max=1677.6ms (submit 1669.8ms/1823it, to-grant 7.8ms/1179it, resume 0.0ms/0it), trxid 7/7 wait_max=423.3ms (submit 415.4ms/435it, to-grant 19.6ms/4414it, resume 2.3ms/0it), extent 1/1 wait_max=582.7ms (submit 574.9ms/560it, to-grant 7.8ms/1179it, resume 0.0ms/0it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=3980
+   wall=14.19s  aggregate=1,974 stmt/s  errors=0
+   insert        n=  8001  p50=   2004us  p99=   2257us
+   point-select  n=  8000  p50=   1027us  p99=   1197us
+   update        n=  8000  p50=   2021us  p99=   2213us
+   delete        n=  4000  p50=   1952us  p99=   2126us
+   scan          n=     4  p50=   1365us  p99=   1475us
+
+== comparison ==
+   multi-core / single-core throughput: 0.727x
+   (rotation skips the system core, so at cores=2 every relation is
+    core 1's: this compares the peer write path against core 0's at
+    equal parallelism - a cost, not a scaling number; cores >= 3 is
+    where two writer cores exist)

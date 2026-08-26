@@ -60,8 +60,9 @@ def insert_worker(conn, name, rows, out, index, deadline_s):
     retries = 0
     first_error = None
     for i in range(1, rows + 1):
-        stmt = (f"INSERT INTO {name} (id, owner, balance) "
-                f"VALUES ({i}, 'o{i % 7}', {i * 10})")
+        # The Keystone pk is implicit; a column list is refused
+        # (tools/multicore_benchmark.py:288).
+        stmt = f"INSERT INTO {name} VALUES ('o{i % 7}', {i * 10})"
         end = time.time() + deadline_s
         while True:
             t0 = time.perf_counter()

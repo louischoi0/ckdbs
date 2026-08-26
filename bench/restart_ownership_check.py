@@ -232,8 +232,7 @@ def main():
         for name in names:
             w = writers[name]
             for i in range(1, args.rows + 1):
-                r, n = write_row(w, f"INSERT INTO {name} (id, owner, balance) "
-                                    f"VALUES ({i}, 'o{i % 7}', {i * 10})",
+                r, n = write_row(w, f"INSERT INTO {name} VALUES ('o{i % 7}', {i * 10})",
                                  args.retry_deadline)
                 retries[name] += n
                 if r.startswith("ERR"):
@@ -245,20 +244,35 @@ def main():
         # passed the row count and still says something about the refill path.
         findings["insert_retries"] = {k: v for k, v in retries.items() if v}
 
-        # The known key every half re-reads: the last row written.
-        probe_key = args.rows
+        # The known key every half re-reads. The pk is engine-issued, so it
+        # is *discovered* rather than assumed: the last row written carries a
+        # unique `balance`, and the id it was given is what the point-SELECT
+        # after the restart must return. Assuming `id == args.rows` would be
+        # an untested premise standing in for the thing under test.
+        probe_balance = args.rows * 10
+        probe_keys = {}
         for name in names:
             w = writers[name]
             cnt = count_of(w.cmd(f"SELECT COUNT(*) FROM {name}"))
-            probe = w.cmd(f"SELECT id, owner, balance FROM {name} "
-                          f"WHERE id = {probe_key}")
-            findings["before"][name] = dict(count=cnt, probe=probe)
+            found = w.cmd(f"SELECT id, owner, balance FROM {name} "
+                          f"WHERE balance = {probe_balance}")
+            key = probe_id(found)
+            probe_keys[name] = key
+            probe = (w.cmd(f"SELECT id, owner, balance FROM {name} "
+                           f"WHERE id = {key}") if key is not None else found)
+            findings["before"][name] = dict(count=cnt, probe=probe,
+                                            probe_key=key)
             if cnt != args.rows:
                 findings["problems"].append(
                     f"{name}: before restart rows in={args.rows} out={cnt}")
-            if probe_id(probe) != str(probe_key):
+            if key is None:
                 findings["problems"].append(
-                    f"{name}: before restart probe key {probe_key} -> {probe!r}")
+                    f"{name}: before restart could not find the probe row "
+                    f"(balance={probe_balance}) -> {found!r}")
+            elif probe_id(probe) != key:
+                findings["problems"].append(
+                    f"{name}: before restart probe key {key} -> {probe!r}")
+        findings["probe_keys"] = probe_keys
 
         setup.close()
         first_conn = writers[names[0]]
@@ -297,8 +311,9 @@ def main():
             c = readers[name]
             after_owner = owner_of(c, name)
             cnt = count_of(c.cmd(f"SELECT COUNT(*) FROM {name}"))
-            probe = c.cmd(f"SELECT id, owner, balance FROM {name} "
-                          f"WHERE id = {args.rows}")
+            key = probe_keys.get(name)
+            probe = (c.cmd(f"SELECT id, owner, balance FROM {name} "
+                           f"WHERE id = {key}") if key is not None else "ERR no key")
             scan = count_of(c.cmd(f"SELECT COUNT(*) FROM {name} WHERE balance >= 0"))
             findings["after"][name] = dict(count=cnt, probe=probe, scan=scan,
                                            owner_core=after_owner)
@@ -308,9 +323,9 @@ def main():
             if scan != args.rows:
                 findings["problems"].append(
                     f"{name}: after restart scan={scan} != inserted {args.rows}")
-            if probe_id(probe) != str(args.rows):
+            if key is None or probe_id(probe) != key:
                 findings["problems"].append(
-                    f"{name}: after restart probe key {args.rows} -> {probe!r}")
+                    f"{name}: after restart probe key {key} -> {probe!r}")
             if after_owner is None:
                 findings["problems"].append(
                     f"{name}: after restart DESCRIBE reports no owner_core - "

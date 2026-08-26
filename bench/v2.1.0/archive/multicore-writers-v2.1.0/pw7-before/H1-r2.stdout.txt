@@ -1,0 +1,33 @@
+/usr/bin/python3 tools/multicore_benchmark.py --server /home/ubuntu/ckdbs-pw7-before/build-release/kds_server --cores 4 --tables 6 --rows 2000 --placement rotate --workdir /home/ubuntu/mcbench/pw7before/H1-r2 --port 17504 --peer-listeners
+
+
+== single-core: cores=1, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0
+   host: workdir on ext4, 1-minute load 0.60 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=10.58s  aggregate=3,970 stmt/s  errors=0
+   insert        n= 12001  p50=   2002us  p99=   2462us
+   point-select  n= 12000  p50=    258us  p99=   1026us
+   update        n= 12000  p50=   2048us  p99=   2344us
+   delete        n=  6000  p50=   2002us  p99=   2345us
+   scan          n=     6  p50=   1410us  p99=   1807us
+
+== multi-core: cores=4, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=3  bench1 owner_core=1  bench2 owner_core=2  bench3 owner_core=3  bench4 owner_core=1  bench5 owner_core=2
+   host: workdir on ext4, 1-minute load 0.66 at start
+   ddl session on core 0 after 1 connection(s); 6 writer session(s) on cores [1, 2, 3] after 10 connection(s)
+   refills: core 1: none reported; core 2: none reported; core 3: none reported
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=19
+   wall=10.10s  aggregate=4,158 stmt/s  errors=0
+   insert        n= 12001  p50=   1909us  p99=   2179us
+   point-select  n= 12000  p50=    248us  p99=   1002us
+   update        n= 12000  p50=   1947us  p99=   2163us
+   delete        n=  6000  p50=   1939us  p99=   2110us
+   scan          n=     6  p50=   1381us  p99=   1445us
+
+== comparison ==
+   multi-core / single-core throughput: 1.047x

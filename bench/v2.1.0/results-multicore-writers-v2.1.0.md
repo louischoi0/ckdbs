@@ -31,10 +31,12 @@ four-core-server artifact accounts for only 1.067× of it. So at one writing
 session per core rotation delivers a genuine 1.751× of a 3× ceiling, and at
 two it delivers nothing.
 
-**This run is incomplete and was published deliberately at the operator's
-instruction.** §2 lists precisely what did not run, including the PW7
-before/after comparison and the restart exercise. Nothing unrun is reported
-as a pass anywhere below.
+**Every phase of this run has now been measured**, including the two that
+were published unrun in this file's first version. Two of them changed what it
+says: the drain-cadence sweep **refuted** the mechanism §6 first proposed
+(§6a), and the PW7 comparison had to be re-shaped before it tested anything
+(§8a), where it then reproduced PW7's collapse and its fix — 0.765 against
+1.081 — on two independent trees. §2 records those corrections.
 
 ---
 
@@ -78,39 +80,45 @@ They are never mixed in one sentence.
 
 ---
 
-## 2. What did not run
+## 2. What ran, and what this file corrected about itself
 
-The operator directed that the results be written and pushed from what was
-complete rather than waiting for the remaining phases. These were prepared,
-committed as runnable scripts, queued, and **stopped before they ran**. None
-of them is reported anywhere below as anything but unrun.
+Every phase the first version of this document listed as unrun has since been
+run. The table is kept as the record of what was owed:
 
-Two entries have since been run and are no longer in the table below. The
-**C2 control** (§7) resolves what was then the run's largest gap, and **H2**
-now has its full five reps (§4). The remaining phases are queued and running
-at the time of writing; this file will be updated when they land, and until
-then they are unrun and are reported as unrun.
+| Phase | State |
+|---|---|
+| **C2 control** (3 relations, all on core 0) | run, 5 reps — §7 |
+| **H2** to five reps | run — §4 |
+| **PW7 before/after**, three trees | run — §8 |
+| **P7**, PW7's own four-sessions-on-one-core shape | run, 3 trees x 5 reps — §8 |
+| **Per-core CPU attributed to the insert phase** | run — §5a |
+| **Restart ownership at three writer cores** | run, **PASS** — §9b |
+| **Drain cadence sweep** | run — §6a, and it **refuted** a claim this file made |
 
-| Phase | State | What it would have answered |
-|---|---|---|
-| **PW7 before/after** — HEAD, `9c0528a`, and a floors-reverted HEAD | **NOT RUN** | Whether PW7's share-law floors hold at three writer cores. All three trees were built and ready |
-| **Per-core CPU attributed to the insert phase** (`bench/percore_insert_probe.py`) | **NOT RUN** | Whether core 0 is idle or a bottleneck under rotation, per configuration |
-| **Restart ownership at 3 writer cores** (`bench/restart_ownership_check.py`) | **NOT RUN** | PW1c-7's stamp-carried ownership across a restart, first exercise at ≥3 cores |
-| **Drain cadence sweep** (`bench/drain_cadence_probe.py`) | **NOT RUN** | Direct confirmation of §6 by varying `wal_drain_interval_us` |
+Three corrections this run made to itself, recorded because a benchmark that
+only ever confirms itself is not measuring:
 
-One finding that the PW7 phase would have carried is worth recording even
-unrun, because it changes what that phase can ever produce:
-`include/kds/server/lease_refill_stats.hpp` is **absent at `9c0528a`** and
-present at HEAD (**source-read**). PW7 shipped its lag instrument and its fix
-in the same commit `2c6ae23`, so the tree the run instructions name as
-"before" cannot report lag legs at all — only throughput and lost rows are
-comparable across it. That is why a third tree (HEAD with
-`src/sched/scheduler.cpp` reverted to `2c6ae23^`, keeping the instrument and
-dropping the floors) was prepared; it is built and unrun.
+1. **The cadence sweep refuted §6's mechanism as originally written.** The
+   first version attributed the per-core commit cap to the 1 ms
+   `wal_drain_interval_us`. Varying that interval over a 10x range does not
+   move throughput (§6a). The cap is the device's single-stream `fdatasync`
+   *latency*, which is ~0.94 ms and merely coincides with the 1 ms default.
+   The per-core-sync-bound conclusion survives; the attribution to the
+   configured interval does not, and is withdrawn.
+2. **The PW7 comparison the run instructions prescribe tests nothing.** H1
+   spreads two sessions over three cores; PW7's collapse needs four sessions
+   on **one** peer core. On H1 all three trees are indistinguishable. The
+   shape-matched cell (P7) shows the defect and the fix plainly (§8).
+3. **Three probes were measuring nothing at all on their first run.** They
+   used `INSERT INTO t (cols) VALUES (...)`; ckdbs's Keystone pk is implicit
+   and a column list is refused (`tools/multicore_benchmark.py:288`). Every
+   insert errored. A fourth defect followed: the per-core probe did not retry
+   the peer's retryable first-INSERT lease refusal (PW1b) and divided by rows
+   it *intended* to insert rather than rows that landed, overstating the peer
+   arm. Both fixed; the numbers below are from the fixed runs. **No number
+   from the broken runs appears anywhere in this file.**
 
-Also not measured, and not measurable by this harness at all — see §10.
-
----
+Not measurable by this harness at all — see §10.
 
 ## 3. The gate: `fdatasync` overlaps on this volume
 
@@ -170,6 +178,7 @@ imbalance reads as poor scaling.
 | **H4b** | `--cores 3 --tables 4` | 5 | **1.058** | 1.005–1.080 |
 | **C1** control | `--cores 4 --tables 6 --placement creating`, no peer listeners | 5 | **1.071** | 0.988–1.093 |
 | **C2** control | `--cores 4 --tables 3 --placement creating` | 5 | **1.067** | 1.016–1.103 |
+| **P7** PW7's shape | `--cores 2 --tables 4 --placement rotate --peer-listeners` | 5 | **1.081** | 1.022–1.091 |
 
 Verbatim, the headline invocation:
 
@@ -179,6 +188,9 @@ tools/multicore_benchmark.py --server build-release/kds_server \
     --placement rotate --peer-listeners --workdir /home/ubuntu/mcbench/H1-r1 \
     --port 15600
 ```
+
+P7 is not a scaling cell: at `cores = 2` there is one writer core, so its
+ceiling is 1× and its purpose is §8a's before/after, not throughput.
 
 **Every cell against the 3× ceiling**: H1 1.051 (35% of ceiling), H2 1.024,
 H3 1.927 (64%), H4b 1.058 against a 2× ceiling at two writer cores, H4a 1.034
@@ -238,6 +250,30 @@ against PW7's 48 µs figure — but that figure
 (`docs/workplan-peer-writer.md:325`, **source-read**) is *three writing
 sessions on one peer core*, not three writer cores, so it is not the same
 shape. The nearest cell here is H3's 124 µs at one session per core.
+
+### 5a. Which cores actually do work — core 0 is not a bottleneck
+
+**measured** — `bench/percore_insert_probe.py --cores 4 --tables 6 --rows 2000`,
+which runs one configuration and one phase and samples only that window (the
+matrix sampler spans both configurations and cannot attribute). 12,000 rows
+inserted in both arms, **0 errors**, 58 retryable lease refusals retried on
+the peer arm, every relation back at 2,000.
+
+| core | rotated over 1-3 | everything on core 0 |
+|---|---|---|
+| cpu0 | **8.9%** | 4.2% |
+| cpu1 | 14.3% | 5.5% |
+| cpu2 | 13.9% | 7.5% |
+| cpu3 | 13.2% | 5.0% |
+
+Insert-only throughput 3,286.5 ips rotated against 2,944.1 — **1.116x**,
+slightly better than the full workload's 1.051 because the insert phase has
+no read to slow down.
+
+**Core 0 is the least busy core under rotation**, at 8.9% against the writer
+cores' 13-14%, and nothing anywhere is near saturated. So the answer to the
+run instructions' question is: core 0 is idle, not a bottleneck, and the
+constraint is not any core's CPU. (Idle windows on the same mounts: 1.6-3.7%.)
 
 **Scan scaling is reported separately and is weak evidence.** H3's 2.861×
 (1,396 → 488 µs) reproduces across five reps and is large enough to be real;
@@ -303,8 +339,41 @@ where sessions-per-core falls to 1 and there was no batch to lose.
 
 **No constant was changed in response, and none is proposed here.**
 `wal_drain_interval_us` trades durability latency against throughput and is
-the operator's to set. `bench/drain_cadence_probe.py` exists to test this
-section directly by varying it; it was **not run** (§2).
+the operator's to set.
+
+### 6a. The cadence sweep, which refuted this section as first written
+
+The first version of this file attributed the per-core cap to the 1 ms
+`wal_drain_interval_us` default, and predicted that shortening the interval
+would raise throughput. **measured** —
+`bench/drain_cadence_probe.py --tables 6 --rows 1000 --cores 4`, zero rows
+lost at every setting:
+
+| `wal_drain_interval_us` | single-core ips | multi-core ips | ratio |
+|---|---|---|---|
+| 1000 (default) | 3,723.6 | 3,554.1 | 0.954 |
+| 500 | 3,376.2 | 3,624.0 | 1.073 |
+| 250 | 3,356.7 | 3,642.8 | 1.085 |
+| 100 | 4,061.3 | 3,626.3 | 0.893 |
+
+**The prediction failed.** Over a 10x range of the interval the multi-core arm
+is flat at 3,554-3,643 ips, and the single-core arm's variation is noise with
+no trend. The configured cadence is not what paces a committing INSERT.
+
+The explanation is in the same source already cited: the group committer is
+installed as a **post-task hook** — *"once per reactor iteration"* — and only
+*additionally* on the timer (`src/server/expeditor.cpp:1650-1660`,
+**source-read**). The hook is the live path; the timer is a backstop. So the
+per-core cap is the device's single-stream `fdatasync` **latency**, ~0.94 ms
+from §3's 1,066/s, which merely coincides with the 1 ms default closely
+enough to look causal.
+
+**What survives and what is withdrawn.** The measured fact — every writer core
+runs at 965-1,071 commits/s, which is §3's single-stream sync rate — is
+unchanged, and so is the batching account of why splitting sessions costs.
+The attribution of that cap to the configured interval is **withdrawn**. A
+constant this run might have been tempted to propose would have been the
+wrong lever.
 
 ---
 
@@ -394,10 +463,8 @@ iterations.
 
 **The submit leg is 0.0 ms over 0 reactor iterations on every kind, on all
 three cores.** That is the leg PW7 traced at 546 ms over 395 iterations
-before its two floors, and at three writer cores it is at zero. This is
-consistent with the floors working here, but it is **not** the before/after
-comparison §2 records as unrun — no pre-floors tree was measured, so this
-observes the fixed engine only.
+before its two floors. §8a is the before/after that shows it is the floors
+doing it.
 
 The remaining wait is sent→grant, and the trxid leg's 10.4 ms spans
 **18,822–23,965 reactor iterations**. That is PW7's second open item visible
@@ -405,6 +472,63 @@ at three writer cores: `Scheduler::IdleTimeoutMs` returns 0 whenever any ready
 queue is non-empty and a parked task still occupies one
 (`src/sched/scheduler.cpp:196-199`, **source-read**), so a reactor with a
 parked coroutine spins rather than blocking.
+
+### 8a. PW7 before and after, on three trees — and the shape that matters
+
+Three trees were measured, because the tree the run instructions name as
+"before" cannot answer the question alone:
+`include/kds/server/lease_refill_stats.hpp` is **absent at `9c0528a`** and
+present at HEAD (**source-read**) — PW7 shipped its lag instrument and its fix
+in one commit, `2c6ae23`. So a third tree was built: **HEAD with the two
+floors disabled in `src/sched/scheduler.cpp` and everything else, instrument
+included, left alone**. (Reverting the file wholesale does not compile: the
+floors changed `PickNextGroup`'s signature. Floor one is disabled by letting a
+re-queued suspended task become eligible again within the round, floor two by
+removing the guaranteed per-group poll.)
+
+**On H1 the comparison is null, and that is a statement about H1, not about
+the floors.** Medians over 5 reps each, zero rows lost in every arm: HEAD with
+floors **1.048**, `9c0528a` **1.057**, HEAD floors-disabled **1.027**. All
+noise. H1 puts *two* sessions on each of three cores; PW7's collapse needs
+*four sessions on one peer core*. **The prescribed comparison does not provoke
+the defect it is meant to test.**
+
+So the shape was matched. Cell **P7** — `--cores 2 --tables 4`, four writing
+sessions on the single writer core, PW7's own shape — 5 reps per tree,
+`errors=0` and every relation at its row count everywhere:
+
+| tree | median | range | multi-core aggregate |
+|---|---|---|---|
+| HEAD, floors **present** | **1.081** | 1.022–1.091 | 2,982 stmt/s |
+| `9c0528a`, pre-floors | **0.765** | 0.730–0.779 | 2,088 |
+| HEAD, floors **disabled** | **0.742** | 0.714–0.860 | 1,993 |
+
+**PW7's collapse is reproduced and the floors remove it** — a 37% throughput
+recovery at the shape that provokes it. PW7's own record
+(`docs/workplan-peer-writer.md:325`, **source-read**) reports the four-writer
+cell at **0.61–0.80x before** and 1.034x after; this run measures 0.73–0.78
+before and 1.081 after, on a host that can actually run three writer cores.
+
+**The two "before" arms agree**, which is what makes this attributable.
+`9c0528a` differs from HEAD by ~20 unrelated commits (the key-mode deletion,
+PW1c-6b, PW3b); the floors-disabled tree differs by exactly the two floors.
+Both collapse to the same place, so the effect is the floors and not the
+intervening work.
+
+The instrument says the same thing directly. Trx-id refill on H1, floors
+present against floors disabled (**measured**, `SHOW META`):
+
+| core | floors present | floors disabled |
+|---|---|---|
+| 1 | 9.2 ms, **submit 0.0 ms / 0 iters** | **930.7 ms, submit 924.4 ms / 934 iters** |
+| 2 | 9.1 ms, submit 0.0 ms / 0 iters | 93.4 ms, submit 18.2 ms / 17 iters |
+| 3 | 9.1 ms, submit 0.0 ms / 0 iters | 422.6 ms, submit 26.6 ms / 27 iters |
+
+That is PW7's signature exactly — a submit→sent leg of hundreds of
+milliseconds spanning hundreds of reactor iterations — and **it is present on
+H1 even though H1's throughput does not move.** The stall is real on this
+shape; the workload simply does not convert it into throughput. Which is
+precisely why the lag legs, and not the ratio, are the diagnostic.
 
 **That spin is load-conditional, not idle-conditional.** **measured**,
 `bench/idle_cpu_probe.py --cores 4 --seconds 15`: baseline with no server
@@ -420,7 +544,8 @@ H1 gives cpu0 11.1%, cpu1 13.9%, cpu2 13.2%, cpu3 14.4%; H3 gives 6.9 / 9.2 /
 both the `cores = 1` and `cores = N` configurations, so it cannot attribute
 work to a configuration, and it therefore does **not** answer the run
 instructions' "is core 0 idle or a bottleneck". `bench/percore_insert_probe.py`
-was written to answer that and **did not run** (§2).
+answers it directly, and §5a carries the result: core 0 is the *least* busy
+core under rotation.
 
 ---
 
@@ -440,10 +565,23 @@ C1 none. Those are the retryable lease-refill refusals a peer answers its
 first INSERT with (PW1b), and the driver's bounded retry is what keeps them
 from becoming lost rows.
 
-### 9b. The restart exercise did not run
+### 9b. Restart ownership at three writer cores: PASS
 
-PW1c-7's stamp-carried ownership across a restart at ≥3 writer cores is
-**NOT RUN** (§2). `bench/restart_ownership_check.py` is committed and ready.
+**measured** — `bench/restart_ownership_check.py --cores 4 --tables 6 --rows 2000`:
+six rotated relations written from their owner cores (1, 2, 3), the instance
+stopped gracefully with `STOP`, the same data file mounted again, every
+relation re-read. **PASS, no problems.** All six back at 2,000 rows, the scan
+count agreeing with the insert count, the point-SELECT returning the row that
+was written, and `owner_core` unchanged across the restart (3/1/2/3/1/2).
+
+This is the first exercise of PW1c-7's stamp-carried ownership at three writer
+cores. Two details make it a test rather than a formality: the shutdown is
+checked to be the graceful path, because a SIGTERM or SIGKILL would turn the
+second mount into a crash-recovery test and a weaker claim; and the probe key
+is **discovered** (by the last row's unique `balance`) rather than assumed to
+be the row count, since the Keystone pk is engine-issued and assuming
+`id == rows` would substitute an untested premise for the thing under test.
+The discovered keys were in fact 2,000 on every relation.
 
 ### 9c. The suite
 
@@ -522,16 +660,18 @@ Open, in the order that a next step would need them:
    Between those two points is a boundary this run brackets but does not
    locate, and it is the number any placement policy would need. **Not
    decided here.**
-2. **The four-core-server effect** C1 exposes (insert p50 1.457× with
+2. **What actually sets the per-core commit cap.** §6a withdrew the cadence
+   attribution: the cap tracks the device's single-stream `fdatasync`
+   latency, and the drain interval is not the lever. Whether a batch can span
+   cores at all, or whether per-core drains are inherent to thread-per-core,
+   is the architecture question this run poses and does not answer.
+3. **The four-core-server effect** C1 exposes (insert p50 1.457× with
    everything on core 0). Undiscriminated. Whatever it is, it is currently
    larger than anything rotation contributes.
-3. **The group-commit interaction with placement** (§6). Whether a batch that
-   spans cores is possible at all, or whether per-core drains are inherent to
-   the thread-per-core design, is an architecture question this run poses and
-   does not answer. **No constant was picked and none is proposed.**
-4. **PW7's floors at three writer cores** — built, ready, unrun (§2),
-   including the floors-reverted tree that is the only way to get lag legs
-   for a "before".
+4. **PW7's floors are validated (§8a)** at the shape that provokes the
+   defect, on two independent "before" arms. What is *not* settled is why H1
+   carries the 924 ms submit stall without losing throughput — a stall that
+   large going unpriced is itself worth understanding.
 5. **PW7's two open items** stand: the reactor spin, now seen spanning
    ~19,000–24,000 iterations on the trxid leg under load while costing
    nothing at idle; and `fdatasync` time charged to no scheduler group,

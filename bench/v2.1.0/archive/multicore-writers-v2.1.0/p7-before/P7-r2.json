@@ -1,0 +1,115 @@
+{
+  "configs": {
+    "single-core": {
+      "cores": 1,
+      "phases": {
+        "insert": {
+          "n": 8001,
+          "p50_us": 1969,
+          "p99_us": 2295
+        },
+        "point-select": {
+          "n": 8000,
+          "p50_us": 136,
+          "p99_us": 1068
+        },
+        "update": {
+          "n": 8000,
+          "p50_us": 1981,
+          "p99_us": 2128
+        },
+        "delete": {
+          "n": 4000,
+          "p50_us": 1975,
+          "p99_us": 2120
+        },
+        "scan": {
+          "n": 4,
+          "p50_us": 1359,
+          "p99_us": 1457
+        }
+      },
+      "verify": "survivors as expected (1000, and one more in bench0 for the probe row)",
+      "placement": "bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0",
+      "refills": "none (no peer listener)",
+      "retries": "retries: none",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 10.34,
+      "aggregate_stmt_s": 2709.0,
+      "errors": 0
+    },
+    "multi-core": {
+      "cores": 2,
+      "phases": {
+        "insert": {
+          "n": 8001,
+          "p50_us": 1988,
+          "p99_us": 2257
+        },
+        "point-select": {
+          "n": 8000,
+          "p50_us": 1032,
+          "p99_us": 1166
+        },
+        "update": {
+          "n": 8000,
+          "p50_us": 2010,
+          "p99_us": 2217
+        },
+        "delete": {
+          "n": 4000,
+          "p50_us": 1957,
+          "p99_us": 2236
+        },
+        "scan": {
+          "n": 4,
+          "p50_us": 1499,
+          "p99_us": 2106
+        }
+      },
+      "verify": "bench0 expected 1001 got 'count(*)\\\\n1002'; bench2 expected 1000 got 'count(*)\\\\n1042'; bench3 expected 1000 got 'count(*)\\\\n1042'",
+      "placement": "bench0 owner_core=1  bench1 owner_core=1  bench2 owner_core=1  bench3 owner_core=1",
+      "refills": "core 1: none reported",
+      "retries": "retries: insert=2373",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 13.41,
+      "aggregate_stmt_s": 2088.0,
+      "errors": 0
+    }
+  },
+  "ratio": 0.771,
+  "raw_lines": 35,
+  "cell": "P7",
+  "rep": 2,
+  "invocation": "/usr/bin/python3 tools/multicore_benchmark.py --server /home/ubuntu/ckdbs-pw7-before/build-release/kds_server --cores 2 --tables 4 --rows 2000 --placement rotate --workdir /home/ubuntu/mcbench/p7before/P7-r2 --port 18704 --peer-listeners",
+  "returncode": 0,
+  "timed_out": false,
+  "elapsed_s": 25.588135480880737,
+  "load_before": 0.55517578125,
+  "load_after": 0.7080078125,
+  "cpu": {
+    "cpu0": {
+      "mean": 0.040629791675817414,
+      "peak": 0.34782608695652173,
+      "samples": 51
+    },
+    "cpu1": {
+      "mean": 0.09432544935525732,
+      "peak": 0.43137254901960786,
+      "samples": 51
+    },
+    "cpu2": {
+      "mean": 0.0564602412090517,
+      "peak": 0.3125,
+      "samples": 51
+    },
+    "cpu3": {
+      "mean": 0.05007526344960339,
+      "peak": 0.375,
+      "samples": 51
+    }
+  },
+  "usable": true
+}
