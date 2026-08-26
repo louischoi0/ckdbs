@@ -28,8 +28,8 @@ protected:
 
         core0_.emplace(clock_, io0_);
         core1_.emplace(clock_, io1_);
-        core0_->AttachTransport(&*transport_, 0);
-        core1_->AttachTransport(&*transport_, 1);
+        ASSERT_TRUE(core0_->AttachTransport(&*transport_, 0).ok());
+        ASSERT_TRUE(core1_->AttachTransport(&*transport_, 1).ok());
 
         // Core 0's own sequence, and the one the grant handler carves from.
         // Sharing it is the property under test in `TwoConsumers...` below.
@@ -178,7 +178,7 @@ TEST_F(TrxIdLeaseServiceTest, AGrantThatCannotBeCarvedIsReportedRatherThanHungOn
     txn::TrxIdSequence refusing(unwritable,
                                 [] { return Status::IoError("the superblock page is gone"); });
     sched::Scheduler failing_core0(clock_, io0_);
-    failing_core0.AttachTransport(&*transport_, 0);
+    ASSERT_TRUE(failing_core0.AttachTransport(&*transport_, 0).ok());
     ASSERT_TRUE(
         RegisterTrxIdGrantHandler(failing_core0, *transport_, refusing, kTrxIdLeasePerGrant,
                                   nullptr)

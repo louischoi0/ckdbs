@@ -1,5 +1,7 @@
 #include "kds/sched/scheduler.hpp"
 
+#include <atomic>
+
 #include <algorithm>
 #include <utility>
 
@@ -40,9 +42,33 @@ Status Scheduler::UnregisterIoHandler(IoHandle handle) {
     return io_backend_.Unregister(handle);
 }
 
-void Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) noexcept {
+Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) {
     transport_ = transport;
     core_id_ = core_id;
+    if (transport_ == nullptr) return Status::OK();
+
+    // **The wake path** (waker.hpp). Armed here rather than at
+    // construction because this is the first moment a peer exists to be
+    // woken by, and because a single-core reactor must not pay for a
+    // handle it can never need.
+    auto waker = Waker::Create();
+    if (!waker.ok()) return waker.status();
+    waker_.emplace(std::move(waker.value()));
+
+    if (Status s = io_backend_.Register(waker_->handle(), IoInterest::kReadable); !s.ok()) {
+        waker_.reset();
+        return s;
+    }
+    // Draining is all the handler does: the wake carries no data, the ring
+    // is the queue, and phase 3 of this same iteration is what reads it.
+    io_handlers_[waker_->handle()] = [this](const IoEvent&) { waker_->Drain(); };
+
+    // Published last, so no peer can find a target that is not yet
+    // registered. Safe unsynchronised: this runs on the startup thread
+    // before this core's worker exists, which is where every other per-core
+    // wiring in this engine is done.
+    transport_->SetWakeTarget(core_id_, WakeTarget{&sleeping_, &*waker_});
+    return Status::OK();
 }
 
 Status Scheduler::RegisterMessageHandler(RingMessageKind kind, MessageHandler handler) {
@@ -316,7 +342,39 @@ bool Scheduler::RunOnce() {
     // when anything is runnable, otherwise up to the next timer deadline
     // (sched.md section 7).
     io_events_scratch_.clear();
-    Status io_status = io_backend_.PollReady(IdleTimeoutMs(), io_events_scratch_);
+    int timeout_ms = IdleTimeoutMs();
+
+    // **Raise the flag before blocking, then look once more** (waker.hpp).
+    //
+    // The flag is what lets a peer know this reactor must be woken; the
+    // re-check is what closes the window the flag opens. A sender that
+    // enqueued between this iteration's phase-3 drain and the store below
+    // read the flag as clear and skipped the wake, so its message would
+    // wait out the whole block — the millisecond this path exists to
+    // remove. The fence makes the pair a store-buffer, and sequential
+    // consistency forbids both sides reading stale: `TrySend` carries the
+    // argument.
+    //
+    // Only when this iteration would actually sleep. A timeout of 0 is a
+    // reactor with work to do, and it neither needs waking nor may pay two
+    // atomics to say so.
+    const bool may_sleep = timeout_ms != 0 && transport_ != nullptr && waker_.has_value();
+    if (may_sleep) {
+        sleeping_.store(true, std::memory_order_seq_cst);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (transport_->HasPending(core_id_)) {
+            sleeping_.store(false, std::memory_order_seq_cst);
+            timeout_ms = 0;
+            ++wake_race_skips_;
+        } else {
+            ++idle_blocks_;
+        }
+    }
+    Status io_status = io_backend_.PollReady(timeout_ms, io_events_scratch_);
+    // Cleared the moment the block ends, so a wake written from here on is
+    // one this reactor did not need - which costs a syscall, never a
+    // missed message.
+    if (may_sleep) sleeping_.store(false, std::memory_order_seq_cst);
     // A poll failure here is not fatal to the reactor: the loop keeps
     // running and the next iteration may succeed. But it is the top of the
     // stack, so nothing else can report it - it goes to the log, and only

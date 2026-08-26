@@ -40,8 +40,8 @@ protected:
 
         arrival_.emplace(clock_, io0_);
         owner_.emplace(clock_, io1_);
-        arrival_->AttachTransport(&*transport_, 0);
-        owner_->AttachTransport(&*transport_, 1);
+        ASSERT_TRUE(arrival_->AttachTransport(&*transport_, 0).ok());
+        ASSERT_TRUE(owner_->AttachTransport(&*transport_, 1).ok());
 
         client_.emplace(/*core_id=*/0, *arrival_, *transport_, clock_);
         ASSERT_TRUE(client_->RegisterReplyReceiver().ok());

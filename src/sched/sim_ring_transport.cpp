@@ -72,6 +72,18 @@ Status SimRingTransport::TrySend(const MessageHeader& header,
     return Status::OK();
 }
 
+bool SimRingTransport::HasPending(std::uint32_t dst_core) const {
+    if (dst_core >= core_count_) return false;
+    // Deliverable *now*, which is the question the caller is asking - a
+    // message whose simulated delay has not elapsed is not something this
+    // reactor could take if it skipped its block.
+    const MonoTimeNs now = clock_->Now();
+    for (const Pending& p : pending_) {
+        if (p.header.dst_core == dst_core && p.deadline <= now) return true;
+    }
+    return false;
+}
+
 bool SimRingTransport::TryReceive(std::uint32_t dst_core, MessageHeader& header,
                                   std::vector<std::byte>& payload) {
     if (dst_core >= core_count_) return false;

@@ -1211,7 +1211,12 @@ Status Expeditor::Serve() {
         if (!transport.ok()) return transport.status();
         transport_.emplace(std::move(transport.value()));
 
-        scheduler.AttachTransport(&*transport_, /*core_id=*/0);
+        // Arms core 0's wake path too (sched/waker.hpp): core 0 is a
+        // destination like any other, and a peer's reply to a statement
+        // it shipped lands here.
+        if (Status s = scheduler.AttachTransport(&*transport_, /*core_id=*/0); !s.ok()) {
+            return s;
+        }
 
         // The receiving half of a peer's STOP (CoreRuntime::ListenAndAttach
         // routes it here): stop core 0's reactor, after which Serve's tail

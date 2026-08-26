@@ -274,7 +274,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
 }
 
 Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
-    scheduler_->AttachTransport(&transport, config_.core_id);
+    if (Status s = scheduler_->AttachTransport(&transport, config_.core_id); !s.ok()) {
+        return s;
+    }
 
     // Stops *this* reactor, from this reactor's own thread - which is the
     // whole reason shutdown is a message (ring_message.hpp's kShutdown).

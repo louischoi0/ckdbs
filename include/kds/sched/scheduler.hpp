@@ -1,10 +1,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -15,6 +17,7 @@
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
+#include "kds/sched/waker.hpp"
 #include "kds/sched/task.hpp"
 
 // The reactor (docs/spec/sched.md sections 2-4). One Scheduler runs on the
@@ -128,7 +131,21 @@ public:
     // existing construction site is untouched and the `cores = 1` build
     // contributes zero messages and zero allocations (workplan guideline
     // 2).
-    void AttachTransport(RingTransport* transport, std::uint32_t core_id) noexcept;
+    // Attaches this reactor to the ring matrix as `core_id`, and **arms
+    // the wake path** (waker.hpp): an eventfd registered with this
+    // reactor's backend, published to the transport so peers can unblock a
+    // sleep that a ring message would otherwise not interrupt.
+    //
+    // No longer `noexcept`, and no longer infallible: creating the eventfd
+    // and registering it can fail. A failure is returned rather than
+    // swallowed because the consequence is silent — every cross-core
+    // message on this core would pay the idle block, which is a
+    // millisecond nobody would think to look for.
+    //
+    // Single-core builds never call this, so they gain no fd, no flag
+    // stores and no syscalls: the fast path is exactly what it was
+    // (guideline 2).
+    Status AttachTransport(RingTransport* transport, std::uint32_t core_id);
 
     // What to run when a message of `kind` arrives. Replaces any previous
     // handler for that kind. Fails with InvalidArgument for `kUnset`, which
@@ -313,6 +330,37 @@ private:
 
     // ---- Cross-core (sched.md §5) ---------------------------------------
     RingTransport* transport_ = nullptr;
+
+    // **The wake path** (waker.hpp), armed at AttachTransport and absent
+    // on every single-core build.
+    //
+    // `sleeping_` is read by *other cores' threads*, which is the one place
+    // in this reactor where that is true and why it is atomic. It is
+    // sequentially consistent on both sides on purpose: the argument that
+    // a message cannot be stranded is the store-buffer one, and it needs
+    // seq_cst — `RealRingTransport::TrySend` carries it in full.
+    std::optional<Waker> waker_;
+    std::atomic<bool> sleeping_{false};
+    // Iterations that blocked with the flag raised, and iterations whose
+    // pre-block re-check found work and skipped the block. The second is
+    // the race actually happening, and a run where it stays 0 has not
+    // exercised it.
+    std::uint64_t idle_blocks_ = 0;
+    std::uint64_t wake_race_skips_ = 0;
+
+public:
+    // The wake path, from this reactor's side. `idle_blocks` counts
+    // iterations that actually blocked with the flag raised;
+    // `wake_race_skips` counts the ones whose pre-block re-check found work
+    // and skipped the block - which *is* the race the flag exists for, so a
+    // run where it stays 0 has not exercised it. Diagnostics and tests.
+    std::uint64_t idle_blocks() const noexcept { return idle_blocks_; }
+    std::uint64_t wake_race_skips() const noexcept { return wake_race_skips_; }
+    // Whether this reactor can be woken at all. False on every single-core
+    // build, where nothing can send to it.
+    bool wake_armed() const noexcept { return waker_.has_value(); }
+
+private:
     std::uint32_t core_id_ = 0;
     // Keyed by the enum's underlying value. A small flat map would do as
     // well; what matters is that nothing iterates it, so its order is never

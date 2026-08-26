@@ -1,17 +1,22 @@
 #include "kds/sched/scheduler.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
+#include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/ring_transport.hpp"
+#include "kds/sched/waker.hpp"
 
 // Phase-2 timers, driven off a ManualClock so "an interval elapsed" is a
 // statement about the injected clock and never about wall time (rules.md
@@ -453,7 +458,7 @@ TEST_F(SchedulerInboxTest, AReceivedMessageBecomesATaskInTheSendersGroup) {
     ASSERT_TRUE(transport.ok());
 
     Scheduler scheduler(clock_, io_);
-    scheduler.AttachTransport(&transport.value(), /*core_id=*/1);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
 
     SchedulingGroup ran_in = SchedulingGroup::kSystem;
     std::string got_payload;
@@ -495,7 +500,7 @@ TEST_F(SchedulerInboxTest, TheHandlerRunsInPhaseFourAndNotInsideTheDrain) {
     ASSERT_TRUE(transport.ok());
 
     Scheduler scheduler(clock_, io_, config);
-    scheduler.AttachTransport(&transport.value(), 1);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
 
     bool handled = false;
     ASSERT_TRUE(scheduler
@@ -519,7 +524,7 @@ TEST_F(SchedulerInboxTest, AMessageWithNoHandlerIsDroppedAndNotFatal) {
     ASSERT_TRUE(transport.ok());
 
     Scheduler scheduler(clock_, io_);
-    scheduler.AttachTransport(&transport.value(), 1);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
 
     ASSERT_TRUE(transport.value()
                     .TrySend(MessageTo(1, RingMessageKind::kStepCancel,
@@ -547,7 +552,7 @@ TEST_F(SchedulerInboxTest, TheDrainIsBoundedByItsLoopBudget) {
     ASSERT_TRUE(transport.ok());
 
     Scheduler scheduler(clock_, io_, config);
-    scheduler.AttachTransport(&transport.value(), 1);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
     ASSERT_TRUE(scheduler
                     .RegisterMessageHandler(
                         RingMessageKind::kStepBatch,
@@ -591,7 +596,7 @@ TEST_F(SchedulerInboxTest, PhaseOrderIsUnchangedByTheDrain) {
     ASSERT_TRUE(transport.ok());
 
     Scheduler scheduler(clock_, io_);
-    scheduler.AttachTransport(&transport.value(), 1);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), 1).ok());
 
     std::vector<std::string> order;
     scheduler.SubmitAt(0, [&] { order.push_back("timer"); });
@@ -610,6 +615,169 @@ TEST_F(SchedulerInboxTest, PhaseOrderIsUnchangedByTheDrain) {
 
     scheduler.RunOnce();
     EXPECT_EQ(order, (std::vector<std::string>{"timer", "message"}));
+}
+
+// ---- The wake path (sched/waker.hpp) ------------------------------------
+//
+// A reactor with nothing to run blocks in its I/O backend, and until this
+// existed a ring message could not interrupt that block: sockets and timers
+// are things the kernel knows about, a store to shared memory is not. The
+// cost was measured rather than guessed - SS-B put a flat 1,064 µs on every
+// shipped statement, tracking the idle block over a fivefold range
+// (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §4a).
+//
+// These tests use the **real** epoll backend, because the thing under test
+// is an fd and a block; a NullIoBackend never blocks and would pass them
+// without the feature existing.
+
+class SchedulerWakeTest : public ::testing::Test {
+protected:
+    SystemClock clock_;
+};
+
+TEST_F(SchedulerWakeTest, AWakerIsReadableOnceWrittenAndNotBefore) {
+    auto waker = Waker::Create();
+    ASSERT_TRUE(waker.ok()) << waker.status().message();
+    auto backend = EpollIoBackend::Create();
+    ASSERT_TRUE(backend.ok()) << backend.status().message();
+    ASSERT_TRUE(backend.value().Register(waker.value().handle(), IoInterest::kReadable).ok());
+
+    std::vector<IoEvent> events;
+    ASSERT_TRUE(backend.value().PollReady(0, events).ok());
+    EXPECT_TRUE(events.empty()) << "an unwritten waker must not report readable";
+
+    waker.value().Wake();
+    ASSERT_TRUE(backend.value().PollReady(0, events).ok());
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].handle, waker.value().handle());
+    EXPECT_EQ(waker.value().wakes(), 1u);
+    EXPECT_EQ(waker.value().wake_failures(), 0u);
+
+    // Drained, it goes quiet again - and N wakes before a drain are one
+    // wake, which is the correct reading: the ring is the queue and this
+    // only says "look at it".
+    waker.value().Wake();
+    waker.value().Wake();
+    waker.value().Drain();
+    events.clear();
+    ASSERT_TRUE(backend.value().PollReady(0, events).ok());
+    EXPECT_TRUE(events.empty());
+}
+
+TEST_F(SchedulerWakeTest, ASingleCoreReactorArmsNoWakeAtAll) {
+    // Guideline 2: no transport, no fd, no flag stores, no syscalls. The
+    // fast path is what it was.
+    NullIoBackend io;
+    Scheduler scheduler(clock_, io);
+    EXPECT_FALSE(scheduler.wake_armed());
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.idle_blocks(), 0u);
+}
+
+TEST_F(SchedulerWakeTest, AMessageAlreadyQueuedIsNotSleptThrough) {
+    // The pre-block re-check, driven deterministically: with a message
+    // already in the ring and an idle block of a full second, `RunOnce`
+    // must decline to block at all. Without the re-check this test takes a
+    // second and the message waits it out.
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+    auto backend = EpollIoBackend::Create();
+    ASSERT_TRUE(backend.ok());
+
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    Scheduler scheduler(clock_, backend.value(), config);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+    ASSERT_TRUE(scheduler.wake_armed());
+
+    bool handled = false;
+    ASSERT_TRUE(scheduler
+                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                                            [&](const MessageHeader&,
+                                                std::span<const std::byte>) { handled = true; })
+                    .ok());
+
+    MessageHeader header{};
+    header.src_core = 0;
+    header.dst_core = 1;
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
+    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
+
+    // One iteration: phase 3 drains and phase 4 runs what it queued. A
+    // second is deliberately not taken - it would find an empty inbox and
+    // block the full second, which is correct behaviour and would only
+    // measure the timeout.
+    const auto started = std::chrono::steady_clock::now();
+    scheduler.RunOnce();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    EXPECT_TRUE(handled);
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 500)
+        << "the reactor slept on an inbox that was not empty";
+    EXPECT_GE(scheduler.wake_race_skips(), 1u)
+        << "the pre-block re-check is what must have found it";
+}
+
+TEST_F(SchedulerWakeTest, AMessageToABlockedReactorArrivesWithoutWaitingOutTheBlock) {
+    // **The fix itself.** Core 1 blocks for a full second with nothing to
+    // do; core 0 sends. The message must arrive in a small fraction of that
+    // block, and before this path existed it could not - it waited for the
+    // block to expire on its own, which is the millisecond SS-B measured on
+    // every shipped statement (there, twice).
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+    auto backend = EpollIoBackend::Create();
+    ASSERT_TRUE(backend.ok());
+
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    Scheduler scheduler(clock_, backend.value(), config);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+
+    std::atomic<bool> handled{false};
+    ASSERT_TRUE(scheduler
+                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                                            [&](const MessageHeader&,
+                                                std::span<const std::byte>) {
+                                                handled.store(true);
+                                            })
+                    .ok());
+
+    std::thread reactor([&] { scheduler.Run(); });
+
+    // Let core 1 reach its block. This is the one place a sleep is the
+    // point rather than a smell: the test is about what happens to a
+    // reactor that is *already* asleep.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ASSERT_GE(scheduler.idle_blocks(), 1u) << "the reactor never blocked; the test proves nothing";
+
+    MessageHeader header{};
+    header.src_core = 0;
+    header.dst_core = 1;
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
+    const auto sent = std::chrono::steady_clock::now();
+    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
+
+    while (!handled.load() &&
+           std::chrono::steady_clock::now() - sent < std::chrono::milliseconds(900)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    const auto latency = std::chrono::steady_clock::now() - sent;
+
+    scheduler.Stop();
+    // The stop flag is read by the reactor's own thread, so it needs a wake
+    // of its own to be noticed promptly - which this path now provides for
+    // free. A send is what carries it.
+    (void)transport.value().TrySend(header, {});
+    reactor.join();
+
+    EXPECT_TRUE(handled.load()) << "the message never arrived";
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(latency).count(), 100)
+        << "the message waited out the idle block instead of interrupting it";
+    EXPECT_GE(transport.value().wakes_sent(), 1u)
+        << "the sender never wrote a wake, so the arrival was luck";
 }
 
 }  // namespace

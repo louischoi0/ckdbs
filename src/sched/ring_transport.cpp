@@ -1,5 +1,6 @@
 #include "kds/sched/ring_transport.hpp"
 
+#include <atomic>
 #include <string>
 
 namespace kds::sched {
@@ -31,7 +32,53 @@ Status RealRingTransport::TrySend(const MessageHeader& header,
             std::to_string(header.dst_core) + " is outside the " + std::to_string(core_count_) +
             " cores this instance runs");
     }
-    return RingFor(header.src_core, header.dst_core).TrySend(header, payload);
+    if (Status sent = RingFor(header.src_core, header.dst_core).TrySend(header, payload);
+        !sent.ok()) {
+        return sent;
+    }
+
+    // **The wake** (waker.hpp). The message is published; if the
+    // destination is asleep it will not see it until its idle block
+    // expires, which was measured at a millisecond and is what this exists
+    // to remove.
+    //
+    // **Why the flag cannot be missed**, which is the whole correctness of
+    // this path. Two threads, two variables, in opposite orders:
+    //
+    //   sender:   publish the message, then read `sleeping`
+    //   receiver: set `sleeping`, then read the ring
+    //
+    // The fence below and its twin in `Scheduler::RunOnce` make that the
+    // store-buffer pattern, where sequential consistency forbids *both*
+    // reads returning the stale value. So at least one of two things
+    // happens: the sender sees the flag and writes the wake, or the
+    // receiver sees the message and does not sleep. Never neither - which
+    // would be a message stranded for the whole block - and both is
+    // harmless, costing one skipped sleep.
+    const WakeTarget& target = wake_[header.dst_core];
+    if (target.sleeping == nullptr) return Status::OK();
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (!target.sleeping->load(std::memory_order_seq_cst)) return Status::OK();
+    target.waker->Wake();
+    wakes_sent_.fetch_add(1, std::memory_order_relaxed);
+    return Status::OK();
+}
+
+bool RealRingTransport::HasPending(std::uint32_t dst_core) const {
+    if (dst_core >= core_count_) return false;
+    // Every peer's ring into this core, `size()`'s acquire loads doing the
+    // ordering work the header's contract asks for. Non-destructive and
+    // O(cores) - it runs once per iteration, and only on an iteration that
+    // was about to block.
+    for (std::uint32_t src = 0; src < core_count_; ++src) {
+        if (!RingFor(src, dst_core).empty()) return true;
+    }
+    return false;
+}
+
+void RealRingTransport::SetWakeTarget(std::uint32_t core, WakeTarget target) {
+    if (core >= core_count_) return;
+    wake_[core] = target;
 }
 
 bool RealRingTransport::TryReceive(std::uint32_t dst_core, MessageHeader& header,
