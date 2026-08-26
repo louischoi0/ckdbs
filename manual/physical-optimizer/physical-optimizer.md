@@ -2,7 +2,7 @@
 
 Operating the physical optimizer: what it observes, how to read
 `SHOW RELAYOUT`, the config keys, and why v1 enacts nothing. Verified
-against `docs/feat-physical-optimizer.md`, `HandleShowRelayout`
+against `docs/spec/feat-physical-optimizer.md`, `HandleShowRelayout`
 (`src/server/command_dispatcher.cpp`), `kds.conf.sample` and
 `include/kds/stats/` as of 2026-08-10. The spec owns every decision cited
 here (R1-R12, PO1-PO10); this manual is the operator's view.
@@ -130,11 +130,11 @@ controller's S1/S2 signals (Part II) — same score, their own names.
 ## 4. Why nothing is enacted — the three gates
 
 Every v1 plan kind is blocked by a named gate, each owned by an open
-decision elsewhere (`docs/feat-physical-optimizer.md` §6):
+decision elsewhere (`docs/spec/feat-physical-optimizer.md` §6):
 
 | Plan | Would do | Blocked on |
 |---|---|---|
-| `compact` | drop delete-marked tuples past the reader horizon, reclaim pages | **Gate 1 — reader horizon**: readers are deliberately unregistered (`docs/txn.md` §9); a mover that guesses a horizon is partial recovery in different clothes |
+| `compact` | drop delete-marked tuples past the reader horizon, reclaim pages | **Gate 1 — reader horizon**: readers are deliberately unregistered (`docs/spec/txn.md` §9); a mover that guesses a horizon is partial recovery in different clothes |
 | `cluster` | co-locate a hot set on fewer pages | **Gate 2 — ordered-between**: it would break the between-pages ordering `kRange` tail pruning reads; the legal form is `[OPEN]`, to be chosen from shadow data |
 | `defrag` | rewrite a chain onto contiguous page ids | **Gate 3 — cross-relation page reuse**: a reallocated page can hold a colliding per-relation Keystone id at a recorded slot, and `PAGE_INIT` resets the epoch, so trail validation would pass wrongly |
 

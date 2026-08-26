@@ -266,7 +266,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // Still *known*, so the refusal can say what happened rather than
         // "unknown key". The setting decided what a CREATE TABLE naming no
         // key-mode word meant; there is no longer a mode for it to decide
-        // (docs/heap-and-tuple.md section 4.1), and an instance that kept
+        // (docs/spec/heap-and-tuple.md section 4.1), and an instance that kept
         // the line would be reading a preference the engine cannot honor
         // either way - which is the misunderstanding this file's
         // unknown-key rule exists to prevent.
@@ -350,13 +350,13 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         } else if (mode == "on") {
             // Refused naming every gate, so the operator learns what is
             // missing rather than what word to try next
-            // (docs/feat-physical-optimizer.md §6).
+            // (docs/spec/feat-physical-optimizer.md §6).
             return Status::InvalidArgument(
                 file.origin() +
                 ": physical_optimizer = on is not available: every relayout plan is blocked - "
                 "compact on the reader horizon (readers are unregistered, txn.md §9), cluster "
                 "on the ordered-between property kRange pruning reads, defrag on cross-relation "
-                "page reuse breaking trail validation (docs/feat-physical-optimizer.md §6). "
+                "page reuse breaking trail validation (docs/spec/feat-physical-optimizer.md §6). "
                 "Use 'shadow' for the report, 'off' to silence it.");
         } else {
             return Status::InvalidArgument(file.origin() + ": physical_optimizer '" + v.value() +
@@ -377,7 +377,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(
                 file.origin() + ": decay_half_life " + std::to_string(v.value()) +
                 " is outside 1.." + std::to_string(kMaxHalfLifeSeconds) +
-                " (seconds; docs/feat-physical-optimizer.md R1)");
+                " (seconds; docs/spec/feat-physical-optimizer.md R1)");
         }
         decay_half_life_ns = v.value() * 1'000'000'000ULL;
     }
@@ -1148,7 +1148,7 @@ Status Expeditor::Serve() {
     }
 #endif
 
-    // KWP v0's load endpoint (docs/workplan-kwp-load.md KW1): a second
+    // KWP v0's load endpoint (docs/inflight/in-progress/workplan-kwp-load.md KW1): a second
     // listener, existing only when asked for - kwp_port 0 means no socket
     // is opened at all, so the default instance's surface is unchanged.
     std::optional<KwpLoadServer> kwp_listener;
@@ -1484,7 +1484,7 @@ Status Expeditor::Serve() {
         }
 
         // The transaction-id lease's grant side (PW1,
-        // `docs/workplan-peer-writer.md`): a peer's kTrxIdLease request is
+        // `docs/inflight/in-progress/workplan-peer-writer.md`): a peer's kTrxIdLease request is
         // answered with a block from core 0's **own** sequence, through the
         // same `Carve()` its own windows come from. Sharing that one carve
         // is what keeps two consumers of one ceiling from colliding, and it

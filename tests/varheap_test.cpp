@@ -10,7 +10,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 
-// The var-heap page class and chain (docs/rule-fixed-length-tuple.md
+// The var-heap page class and chain (docs/rules/rule-fixed-length-tuple.md
 // section 5).
 //
 // The properties under test are the ones the design leans on, not the API
@@ -180,7 +180,7 @@ TEST_F(VarHeapChainTest, GrowthReportsThePageItCreatedAndTheTailItLinked) {
     // The report the WAL needs and did not have: a VARHEAP_APPEND describes
     // neither the page's creation nor the link that reaches it, so recovery
     // met an append naming a page nothing created and refused the mount
-    // (docs/known-gaps.md's var-heap entry).
+    // (docs/inflight/known-gaps.md's var-heap entry).
     auto root = CreateChain(store_, /*owner_oid=*/0);
     ASSERT_TRUE(root.ok());
 

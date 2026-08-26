@@ -9,7 +9,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/txn/trx_id_lease.hpp"
 
-// The transaction id sequence (docs/txn.md section 4.2, section 10-2).
+// The transaction id sequence (docs/spec/txn.md section 4.2, section 10-2).
 //
 // ---- Bump-ahead, and what it does and does not buy ------------------------
 //
@@ -31,7 +31,7 @@
 // so a clean shutdown and an explicit SYNC are covered - but a crash
 // between the ceiling being raised in memory and the page reaching the
 // platter loses the raise, and the next boot reissues the block. That is
-// the same shape of exposure `docs/keystoneid-k0-findings.md` records for
+// the same shape of exposure `docs/rules/keystoneid-k0-findings.md` records for
 // `sys.tables.next_id`, and it closes the same way: logged catalog writes
 // and recovery, neither of which exists. It is stated here rather than
 // discovered later.
@@ -44,7 +44,7 @@
 //
 // ---- Two consumers of one ceiling (PW1) -----------------------------------
 //
-// Since `docs/workplan-peer-writer.md` PW1 the superblock's ceiling has two
+// Since `docs/inflight/in-progress/workplan-peer-writer.md` PW1 the superblock's ceiling has two
 // consumers: core 0's own sequence, and the blocks core 0 carves for peers
 // that may not write page 0. `Carve()` below is the single place either one
 // takes a block from, which is what keeps them from colliding - the same
@@ -163,7 +163,7 @@ private:
     // `next_` and `ceiling_` keep the offsets they had before PW1, ahead of
     // what it added. Reordering them measured inside `kds_txn_bench`'s own
     // noise floor either way, so this is free rather than proven -
-    // `docs/workplan-peer-writer.md` carries the numbers and the null
+    // `docs/inflight/in-progress/workplan-peer-writer.md` carries the numbers and the null
     // control that made them unusable.
     std::uint64_t next_;
     std::uint64_t ceiling_;

@@ -5,7 +5,7 @@
 
 #include "kds/parser/parser.hpp"
 
-// AG01 - the aggregate grammar (docs/feat-aggregate.md §2,
+// AG01 - the aggregate grammar (docs/spec/feat-aggregate.md §2,
 // docs/workplan-aggregate.md).
 //
 // Three things this file is here to hold down, in descending order of how
@@ -274,7 +274,7 @@ TEST(ParserAggregateTest, CountDistinctStarIsRefused) {
     EXPECT_TRUE(MentionsByte(parsed.status(), 22));
 }
 
-// ---- HAVING (docs/workplan-having.md HV-1) --------------------------------
+// ---- HAVING (docs/inflight/in-progress/workplan-having.md HV-1) --------------------------------
 //
 // AG7 refused this clause by text at exactly this position for as long as
 // there was no post-fold consumer to hand it to. HV1 puts one at the AG1

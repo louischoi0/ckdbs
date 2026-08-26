@@ -8,7 +8,7 @@
 // other engine subsystem takes a `const Clock&` and calls Now() instead of
 // touching std::chrono directly. ManualClock is the deterministic
 // counterpart used by tests (and, later, the simulation harness in
-// docs/sched.md section 8).
+// docs/spec/sched.md section 8).
 
 namespace kds::sched {
 

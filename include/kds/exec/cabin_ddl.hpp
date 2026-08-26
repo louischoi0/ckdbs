@@ -9,7 +9,7 @@
 #include "kds/parser/ast.hpp"
 
 // `CREATE CABIN` / `DROP CABIN`: the checks and the catalog writes behind
-// them (docs/feat-cabin.md §10, docs/cabin-workplan.md CB03).
+// them (docs/spec/feat-cabin.md §10, docs/cabin-workplan.md CB03).
 //
 // ---- The error / warning line --------------------------------------------
 //

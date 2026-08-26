@@ -140,7 +140,7 @@ Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* w
     } else {
         // The link edit, then a full page image of the old tail: no record
         // type describes a link edit, which is the same reason heap chain
-        // growth images its predecessor (docs/wal.md).
+        // growth images its predecessor (docs/spec/wal.md).
         auto old_tail = store.Get(tail_);
         if (!old_tail.ok()) return old_tail.status();
         auto opened = BoundCabinPage::Open(old_tail.value().bytes());

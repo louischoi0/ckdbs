@@ -193,7 +193,7 @@ public:
     // map write is FlushMaps' guarded no-op and only the sync runs.
     Status PersistMaps();
 
-    // ---- The writeback primitive (docs/spec-eviction.md §4, EVT03) ------
+    // ---- The writeback primitive (docs/spec/spec-eviction.md §4, EVT03) ------
     //
     // Durable → checksum → write → clean, for exactly these ids, skipping
     // any that are non-resident or already clean. **The single code path**
@@ -238,7 +238,7 @@ public:
     // it in production until then - the same stance the sweep itself takes.
     std::size_t MaintainFreeReserve(std::size_t pool_frames, std::size_t watermark);
 
-    // ---- Scan ring (docs/spec-eviction.md §5, EVT06) --------------------
+    // ---- Scan ring (docs/spec/spec-eviction.md §5, EVT06) --------------------
     //
     // The real cyclic ring: a page absent from the pool is faulted into
     // the ring's next slot, whose previous occupant is dropped from the
@@ -259,7 +259,7 @@ public:
     // default) disables it. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
 
-    // ---- Core ownership (docs/workplan-crosscore.md M5, P2) -------------
+    // ---- Core ownership (docs/inflight/in-progress/workplan-crosscore.md M5, P2) -------------
     //
     // Binds this store to `core_id` and, for a core that is not the system
     // core, to the lease it allocates from (storage/extent_lease.hpp).
@@ -293,7 +293,7 @@ public:
         // The same boundary by the same definition, so it is adopted rather
         // than restated: everything below `system_page_limit` is a fixed
         // system structure, and a fixed system structure is resident by
-        // class (docs/workplan-eviction.md EV3).
+        // class (docs/inflight/in-progress/workplan-eviction.md EV3).
         SetResidentLimit(system_page_limit);
     }
 
@@ -361,7 +361,7 @@ public:
     void GrantFaultPages(Extent extent);
 
     // Write rights over **exact pages** this core does not own by lease
-    // (PW1c-4, `docs/workplan-peer-writer.md` §8 rule 1): the pages core 0
+    // (PW1c-4, `docs/inflight/in-progress/workplan-peer-writer.md` §8 rule 1): the pages core 0
     // formatted for a relation this core owns, granted at DDL publish only
     // after their handoff records are durable (PL §9 rule 1's ordering,
     // the sender's to keep). Exact-page and never extent-granular,
@@ -466,7 +466,7 @@ public:
     // device. Ids that are not resident are skipped.
     //
     // **This is what makes a peer's cache invalidation mean anything**
-    // (docs/workplan-crosscore.md P6). A peer holds catalog pages this
+    // (docs/inflight/in-progress/workplan-crosscore.md P6). A peer holds catalog pages this
     // store faulted at some earlier moment; core 0 then does a DDL and
     // flushes. Dropping the *catalog* cache is not enough - the next scan
     // would read the same stale frame back and reach the same conclusion.
@@ -484,7 +484,7 @@ public:
     // `log` must outlive the store.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
-    // ---- Frame reclamation (docs/workplan-eviction.md EV01-EV02) -------
+    // ---- Frame reclamation (docs/inflight/in-progress/workplan-eviction.md EV01-EV02) -------
     //
     // Read that document's §0 before changing anything here. The short of
     // it: raw spans from `Get()` are only safe because nothing evicts, so
@@ -510,7 +510,7 @@ public:
     StatusOr<PageRef> PinnedGetForRead(PageId page_id) { return GetForRead(page_id); }
 
     // Whether `page_id` belongs to a **pinned class**
-    // (`docs/spec-eviction.md` EV3): never a sweep candidate at any
+    // (`docs/spec/spec-eviction.md` EV3): never a sweep candidate at any
     // pressure. v1's classes are the fixed catalog pages and - when AST04
     // lands - Bound Cabin pages.
     //
@@ -587,7 +587,7 @@ public:
     // still holds one, so enabling the sweep before the `PageRef` migration
     // would be a use-after-free. It exists now so the pinned-class guarantee
     // a Bound Cabin rests on is testable before that migration lands.
-    // The CLOCK usage counter's ceiling (`docs/spec-eviction.md` EV1,
+    // The CLOCK usage counter's ceiling (`docs/spec/spec-eviction.md` EV1,
     // `[PROPOSED] 5`). A cap and not a free-running count: it bounds how
     // many sweep rotations a hot frame can survive, so a page that fell out
     // of use cannot hold a frame for an unbounded time on the strength of
@@ -645,7 +645,7 @@ private:
     // - and the fault seam turned that staleness into a permanent
     // `NotFound`, because nothing on the failing path ever asked the device
     // again: it left a peer-owned relation unwritable for the rest of the
-    // mount (`docs/known-gaps.md`, G1).
+    // mount (`docs/inflight/known-gaps.md`, G1).
     //
     // So: before a leased store calls a page absent, it adopts the device's
     // truth once - the same operation the grant receivers perform, at the
@@ -674,7 +674,7 @@ private:
         // back; 0 when nothing logged touched it. See StampPageLsn().
         wal::Lsn rec_lsn = 0;
 
-        // ---- Reclamation state (docs/workplan-eviction.md EV01) --------
+        // ---- Reclamation state (docs/inflight/in-progress/workplan-eviction.md EV01) --------
         //
         // How many live `PageRef`s hold this frame. **Plain, non-atomic,
         // core-local** - `page.md` §6 makes that the model rather than a
@@ -683,7 +683,7 @@ private:
         // (EV4 answers OutOfSpace instead of waiting).
         std::uint32_t pins = 0;
 
-        // The CLOCK usage counter (`docs/spec-eviction.md` EV1 / §3.1-2):
+        // The CLOCK usage counter (`docs/spec/spec-eviction.md` EV1 / §3.1-2):
         // **saturating on access, decremented by the sweep, reclaimed at
         // zero.** A counter rather than a single reference bit, so a page
         // touched five times outlives one touched once - which a bit cannot
@@ -931,7 +931,7 @@ private:
     // regions in ascending id order - deterministic, and the order
     // WriteBack's run coalescing would want if map pages ever joined it.
     //
-    // **Not frames.** D4 of docs/workplan-multi-free-map.md keeps them
+    // **Not frames.** D4 of docs/inflight/in-progress/workplan-multi-free-map.md keeps them
     // store-owned, which is what makes FlushMaps' write-maps-after-data
     // ordering trivially true and keeps them out of the checkpoint dirty
     // table and away from PageRef. The cost accepted is this second

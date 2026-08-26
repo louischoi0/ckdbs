@@ -6,12 +6,12 @@
 #include "kds/base/status.hpp"
 
 // A per-statement bound on how much work one statement may do
-// (docs/parser-v2-workplan.md V19).
+// (docs/inflight/in-progress/parser-v2-workplan.md V19).
 //
 // ---- Why a statement needs a bound at all -------------------------------
 //
 // Nothing suspends mid-statement. The engine is thread-per-core and
-// cooperative (docs/rules.md §3): a statement runs to completion on the
+// cooperative (docs/rules/rules.md §3): a statement runs to completion on the
 // core it started on, and no scheduler takes the core away from it. So a
 // statement that reads an unbounded number of rows does not merely run
 // slowly - it holds a core for as long as it takes, and every other client

@@ -246,7 +246,7 @@ StatusOr<DecodedUndoRecord> DecodeUndoRecordTail(std::span<const std::byte> tail
     DecodedUndoRecord out{};
     const std::byte* p = tail.data();
     // prior_trx_id / prior_undo_ptr are not in these bytes: they ride as
-    // fields of the WAL payload (docs/txn.md §3.5) and the caller fills
+    // fields of the WAL payload (docs/spec/txn.md §3.5) and the caller fills
     // them.
     std::memcpy(&out.fields.target_page_id, p + (kUndoRecTargetPageIdOffset - kUndoRecordTailOffset),
                 sizeof(out.fields.target_page_id));

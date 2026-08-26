@@ -372,7 +372,7 @@ TEST(FingerprintTest, ABareNumericIsTheQuotedStringOfItsSpelling) {
 }
 
 TEST(FingerprintTest, TheKeyModeWordNeededNoFingerprintVersionBump) {
-    // PK03, and its removal in 2026-08-25 (docs/heap-and-tuple.md §4.1) -
+    // PK03, and its removal in 2026-08-25 (docs/spec/heap-and-tuple.md §4.1) -
     // one test, because both directions are the easy half of the bump rule.
     // `ASSIGNED` and `EXPLICIT` lexed as ordinary identifiers before either
     // change and hash as ordinary identifiers after: adding them moved no

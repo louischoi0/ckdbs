@@ -24,7 +24,7 @@
 
 namespace kds::parser {
 
-// Words the grammar reserves (docs/parser-v2-workplan.md V04). Reserved
+// Words the grammar reserves (docs/inflight/in-progress/parser-v2-workplan.md V04). Reserved
 // means a statement cannot use one as a column or table name - `SELECT *
 // FROM t WHERE in = 1` stops parsing here rather than reading `in` as an
 // identifier.
@@ -79,7 +79,7 @@ enum class TokenType {
     // qualified name's grammar does not move.
     //
     // **A bare numeric is sugar for the quoted string of its spelling,
-    // exactly** (docs/spec-types.md TY3 phase 2): the parser produces the
+    // exactly** (docs/spec/spec-types.md TY3 phase 2): the parser produces the
     // same AstValue `'12.34'` produces, and the fingerprint hashes the same
     // argument bytes, so `= 12.34` and `= '12.34'` are one statement
     // everywhere - one pattern, one arg_hash, one meaning. The column's
@@ -119,7 +119,7 @@ enum class TokenType {
     // insensitive.
     //
     // Accepted by exactly one production - the body of `CREATE PATTERN`
-    // (docs/spec-create-pattern-user-defined-patterns-v1.md section 3.1).
+    // (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 3.1).
     // Everywhere else the parser refuses it with a position; the token is
     // *reserved* for the extended protocol's named binds (D4), and nothing
     // wires that yet.

@@ -11,7 +11,7 @@
 
 // `CREATE PATTERN` / `DROP PATTERN`: the validation chain and the catalog
 // writes behind them
-// (docs/spec-create-pattern-user-defined-patterns-v1.md section 6).
+// (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 6).
 //
 // ---- Why a declaration is validated this hard ----------------------------
 //

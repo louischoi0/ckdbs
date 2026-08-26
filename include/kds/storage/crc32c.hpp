@@ -5,14 +5,14 @@
 #include <span>
 
 // CRC32C (Castagnoli, polynomial 0x1EDC6F41) - the page checksum function
-// confirmed in docs/page.md section 10. Used to detect torn or corrupted
+// confirmed in docs/spec/page.md section 10. Used to detect torn or corrupted
 // pages: computed at flush, verified on every load from disk, never on a
 // buffer hit.
 //
 // Two implementations are exported deliberately. The software table
 // version is the *definition* of the function and always available; the
 // x86-64 SSE4.2 version is a performance twin that must agree with it bit
-// for bit (docs/page.md section 18-5 makes that equivalence a test
+// for bit (docs/spec/page.md section 18-5 makes that equivalence a test
 // requirement). Crc32c() dispatches to the hardware path once per process
 // when the CPU supports it. Keeping the software path reachable by name
 // also keeps the deterministic simulator (rules.md section 4) independent

@@ -8,7 +8,7 @@
 #include "kds/server/role.hpp"
 #include "kds/server/scram.hpp"
 
-// The connection-level authentication gate (docs/protocol.md D8's auth
+// The connection-level authentication gate (docs/spec/protocol.md D8's auth
 // stage, on the text protocol until KWP P07 exists). TcpServer routes
 // every line of an unauthenticated connection here instead of to the
 // dispatcher, so a statement cannot run - and STOP cannot stop the
@@ -60,7 +60,7 @@ struct UserRecord {
 
 // Where user records come from - an interface so the file-backed v1
 // store and a future catalog-backed one (per-relation grants' territory,
-// docs/protocol.md §14) are interchangeable under the gate.
+// docs/spec/protocol.md §14) are interchangeable under the gate.
 class CredentialStore {
 public:
     virtual ~CredentialStore() = default;

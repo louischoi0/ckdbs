@@ -12,7 +12,7 @@
 #include "kds/parser/lexer.hpp"
 #include "kds/parser/parser.hpp"
 
-// V13 - grammar hygiene and fuzz (docs/parser-v2-workplan.md).
+// V13 - grammar hygiene and fuzz (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // The parser is the one subsystem reachable from an unauthenticated
 // client with arbitrary bytes, so its contract is narrower than "mostly

@@ -257,7 +257,7 @@ this scale.
 
 **6a. The row-id lease, and what a second-long refill looks like.** The first INSERT into a
 relation on a peer is refused until the row-id refill grant lands (PW1b, the
-documented and deliberate contract — `docs/workplan-peer-writer.md` §7a) and
+documented and deliberate contract — `docs/inflight/in-progress/workplan-peer-writer.md` §7a) and
 the driver retries it at 0.5 ms. Relation 1 clears in 2.3–2.7 ms after two
 retries; relation 2 in 5.2–6.8 ms after five, because the refill request
 runs one-in-flight per core (`row_id_refill_in_flight_`,
@@ -331,7 +331,7 @@ workload tell the client to retry in prose and carry no bit: the row-id
 lease's (`include/kds/catalog/row_id_lease.hpp:99`), the trx-id lease's
 (`include/kds/txn/trx_id_lease.hpp:65`), and the extent lease's above. The
 driver special-cases the first; the third cost this run its rows. A client
-library built on `docs/protocol.md` §11's bit — "authoritative client
+library built on `docs/spec/protocol.md` §11's bit — "authoritative client
 guidance … part of the compatibility surface" — would have retried none of
 them. The UPDATE phase's 1, 28 and 29 retries in the C runs *were* bit-carrying
 refusals (`TXN_CONFLICT retryable=1`, the only spelling the driver matches
@@ -484,7 +484,7 @@ in a statement's latency: INSERT, UPDATE and DELETE medians on core 1 are
 within 1.8% of core 0's at three row-set sizes, the pk lookup is 25 µs
 against 26, the round trip 29 µs against 31, and the throughput ratio
 (0.977) is inside the control's (0.982). PW1–PW5 delivered a write path with
-no per-statement tax. `docs/workplan-peer-writer.md` §1 calls the missing
+no per-statement tax. `docs/inflight/in-progress/workplan-peer-writer.md` §1 calls the missing
 number "the binding constraint"; this is the half of it a two-CPU host can
 supply.
 
@@ -505,7 +505,7 @@ loss and, with it, the desynchronisation that produced the 943 µs reads.
 **Every session on a core pays every other session's fsync, reads
 included.** This is the finding with the widest reach, and it is not a
 peer finding — the probe puts it at 973 µs on core 0 and 962 µs on core 1.
-`docs/wal.md` §6 has the drain in the `system` group and the commit
+`docs/spec/wal.md` §6 has the drain in the `system` group and the commit
 "suspended on a flush future", and `kds.conf.sample`'s `cores` key has
 reactors that "are pinned and never block"; at `314a06d` the drain's
 `fdatasync` runs on the reactor thread and
@@ -520,7 +520,7 @@ workload a core's capacity is ~1,000 commits a second at this device's
 fdatasync, and a read colocated with those commits inherits their latency.**
 An asynchronous sync — the drain submitting the fdatasync to an I/O thread
 or `io_uring` and the reactor continuing — is the change that would make a
-core's reads independent of its writes; it is `docs/heap-and-tuple.md` §8's
+core's reads independent of its writes; it is `docs/spec/heap-and-tuple.md` §8's
 open "I/O backend" decision, and this is its first data point.
 
 **The wire's `retryable` bit is not the retry contract the engine
@@ -551,7 +551,7 @@ architectural cost rather than a device fact.
   (§6a's 0.5–1.75 s, per the servers' logs), the trx-id lease spent
   mid-run, the extent lease spent (§6b) — where an idle round trip is
   2–7 ms. Core 0 logged no failed grant; the mechanism is untraced.
-  `docs/workplan-peer-writer.md` should carry it as the next item with the
+  `docs/inflight/in-progress/workplan-peer-writer.md` should carry it as the next item with the
   trace that decides it: `SHOW META` counters per lease kind (requests,
   grants, the longest request-to-grant wait in drain ticks) and a
   debug-level run of cell C at 200 rows.
@@ -559,7 +559,7 @@ architectural cost rather than a device fact.
   (§6b), and its refusal is not retried by the only client that retries the
   row-id lease's. PW1c-6's grant extension owns the lease; the bit owns the
   refusal (§6c).
-- **`docs/wal.md` §6 and `kds.conf.sample`'s `cores` comment describe a
+- **`docs/spec/wal.md` §6 and `kds.conf.sample`'s `cores` comment describe a
   reactor that does not block, and the drain blocks it** (§7, §10). The spec should carry the measured
   cost — 0.9 ms of every commit spent with the reactor in `fdatasync`, paid
   by every colocated read — until the I/O backend decision retires it.

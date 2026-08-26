@@ -124,7 +124,7 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
                                            "' is listed in sys.objects and has no sys.tables row "
                                            "after recovery: " +
                                            row.status().message() +
-                                           " (docs/known-gaps.md: DDL is unlogged, RV3)");
+                                           " (docs/inflight/known-gaps.md: DDL is unlogged, RV3)");
             }
             continue;
         }
@@ -150,7 +150,7 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
                     log->Error("recovery", "relation '" + name + "' has no " + owned.what +
                                                " page " + std::to_string(owned.page_id) +
                                                " after recovery: " + page.status().message() +
-                                               " (docs/known-gaps.md: DDL is unlogged, RV3)");
+                                               " (docs/inflight/known-gaps.md: DDL is unlogged, RV3)");
                 }
                 break;  // One finding per relation; it is already unusable.
             }

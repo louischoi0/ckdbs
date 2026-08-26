@@ -376,7 +376,7 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
                 "SUM over a uint64 column is not supported (byte " +
                 std::to_string(stmt.sum_column.byte_offset) +
                 "); a group's running aggregate is a checked int64 "
-                "(docs/feat-assertion.md §10)");
+                "(docs/spec/feat-assertion.md §10)");
         }
         if (col.type_val != catalog::kTypeValInt64) {
             return Status::InvalidArgument(
@@ -384,7 +384,7 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
                 "' is type_val=" + std::to_string(col.type_val) + " (byte " +
                 std::to_string(stmt.sum_column.byte_offset) +
                 "); v1 restricts the aggregate to a checked int64 "
-                "(docs/feat-assertion.md §3.1)");
+                "(docs/spec/feat-assertion.md §3.1)");
         }
     }
 
@@ -565,7 +565,7 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
                 "reviving assertion \"" + def.name + "\": its SUM column '" +
                 stmt_value.sum_column.name + "' is type_val=" +
                 std::to_string(col.type_val) +
-                ", and an assertion's SUM column must be int64 (docs/feat-assertion.md §3.1, §10)");
+                ", and an assertion's SUM column must be int64 (docs/spec/feat-assertion.md §3.1, §10)");
         }
     }
 

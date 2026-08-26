@@ -10,7 +10,7 @@
 #include "kds/sched/scheduler.hpp"
 
 // Re-delivery of a relation's grants over the ring
-// (`RingMessageKind::kRelationGrantRequest`; docs/workplan-peer-writer.md
+// (`RingMessageKind::kRelationGrantRequest`; docs/inflight/in-progress/workplan-peer-writer.md
 // PW1c-7).
 //
 // Every fault grant and write grant a peer holds is memory-resident, and

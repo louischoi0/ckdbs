@@ -14,7 +14,7 @@
 // the final sync and the shutdown checkpoint never ran and the next mount
 // recovered as if from a crash. The only route to `Expeditor::Serve`'s shutdown
 // tail was a client typing `STOP`, which is not how anything is operated
-// (`docs/known-gaps.md`).
+// (`docs/inflight/known-gaps.md`).
 //
 // ---- Why a signalfd and not a handler ------------------------------------
 //
@@ -44,7 +44,7 @@
 // thread this process will ever have - the writer, the peer-core reactors, all
 // of them.
 //
-// Platform layer (`docs/rules.md` §4): this file is the only place in the engine
+// Platform layer (`docs/rules/rules.md` §4): this file is the only place in the engine
 // that calls `sigprocmask` or `signalfd`, and the reactor above it only ever
 // sees an fd.
 

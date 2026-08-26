@@ -19,7 +19,7 @@ class OptimizerSignals;
 
 // The Cabin runtime store: the observed sets, the sighting counter, and the
 // policy that decides when a value becomes observed
-// (docs/feat-cabin.md §§3-5, docs/cabin-workplan.md CB04).
+// (docs/spec/feat-cabin.md §§3-5, docs/cabin-workplan.md CB04).
 //
 // ---- What "observed" means, precisely -----------------------------------
 //
@@ -101,7 +101,7 @@ struct CabinEntry {
     PageId page_id = kInvalidPageId;
 
     // The page's relayout epoch at the time the entry was written or last
-    // healed (docs/feat-physical-optimizer.md R4; recorded and compared for
+    // healed (docs/spec/feat-physical-optimizer.md R4; recorded and compared for
     // real since workplan PX04 - the field was here from C6, written 0
     // while the engine had no epoch, precisely so there would be nowhere
     // for the check *not* to happen the day it landed). Compared in
@@ -181,7 +181,7 @@ public:
 
     // Executions of a value before its set is recorded.
     //
-    // `n = 2` for a Cabin the engine created: the policy `docs/parser-v2.md`
+    // `n = 2` for a Cabin the engine created: the policy `docs/spec/parser-v2.md`
     // J5 settled for trails, reused rather than invented a second time. The
     // first miss only counts, the second records. Two is the smallest n that
     // excludes the one-shot query, and a Cabin's per-value cost - a

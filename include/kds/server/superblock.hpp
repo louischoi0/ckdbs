@@ -70,14 +70,14 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // sys.pattern_defs: the file would mount and then fail on the first access
 // the statistics path tried to record, naming a table that every build
 // after this one creates at bootstrap.
-// 7 -> 8: bootstrap gained `sys.cabins` (docs/feat-cabin.md §10) on a fixed
+// 7 -> 8: bootstrap gained `sys.cabins` (docs/spec/feat-cabin.md §10) on a fixed
 // page id a pre-existing file does not have - the third repeat of the
 // 5 -> 6 shape. Worth stating once for all three: a *new bootstrap
 // relation* is as breaking as a row layout change and less obvious about
 // it, because the file mounts cleanly and then fails on the first
 // statement that reaches for a table which does not exist. The refusal at
 // the door is the whole point.
-// 8 -> 9: the transaction manager added `next_trx_id` (docs/txn.md section
+// 8 -> 9: the transaction manager added `next_trx_id` (docs/spec/txn.md section
 // 4.2). Unlike the four bumps above it this one adds a *field*, not a
 // relation - and it is exactly as breaking, because the field sits past the
 // WAL anchor table where a version-8 image holds zeroes. A zero there reads
@@ -85,7 +85,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // the id that means "no transaction" and then reissue kBootstrapXid, the
 // one id every read view trusts unconditionally. Refusing at the door is
 // the only safe reading of a zero we cannot distinguish from a real value.
-// 9 -> 10: multicore added `core_count` (docs/workplan-crosscore.md M6), and
+// 9 -> 10: multicore added `core_count` (docs/inflight/in-progress/workplan-crosscore.md M6), and
 // `sys.tables` grew `owner_core` (M1). Either alone is a bump by the rules
 // above - the first is a field past `next_trx_id` where a version-9 image
 // holds zeroes, and a zero core count is not "unset", it is "boot with no
@@ -94,7 +94,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // recovery under a changed core count is [OPEN] (wal.md section 3): a
 // database whose streams were written by N cores must not be mounted by M
 // until something decides what happens to the other streams.
-// 10 -> 11: bootstrap gained `sys.fkeys` (docs/impl-foreign-keys.md §1) on a
+// 10 -> 11: bootstrap gained `sys.fkeys` (docs/spec/impl-foreign-keys.md §1) on a
 // fixed page id a pre-existing file does not have - the fourth repeat of the
 // 5 -> 6 shape, and the one where mounting anyway would be worst. A
 // version-10 file has no page 13, so `CREATE TABLE ... REFERENCES` would
@@ -102,7 +102,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // lands - every write path would read an empty foreign-key list and enforce
 // nothing. A constraint that silently does not run is not a degraded mode.
 // 11 -> 12: `SysIndexRow` was rewritten for multi-column and covering
-// indexes (docs/feat-index.md §12, workplan IX03) - a root page, a name, and
+// indexes (docs/spec/feat-index.md §12, workplan IX03) - a root page, a name, and
 // two column arrays where there had been one `col_pos`.
 //
 // **The reason here is not the reason the four bumps above had, and the
@@ -118,7 +118,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 //
 // The price is the usual one and is not reduced by any of that: every
 // pre-existing data file stops mounting.
-// 12 -> 13: bootstrap gained `sys.assertions` (docs/feat-assertion.md §8.2,
+// 12 -> 13: bootstrap gained `sys.assertions` (docs/spec/feat-assertion.md §8.2,
 // workplan AST03) on fixed page 14 - the **fifth repeat of the 5 -> 6
 // shape**, and it carries a second break the four before it did not.
 //
@@ -139,7 +139,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 //
 // The price is the usual one and, here, exactly what is wanted: every
 // pre-existing data file stops mounting.
-// 13 -> 14: `sys.tables` grew `key_mode` (docs/heap-and-tuple.md section
+// 13 -> 14: `sys.tables` grew `key_mode` (docs/spec/heap-and-tuple.md section
 // 4.1, workplan-key-mode.md PK01) - the **sixth repeat of the catalog-row-
 // layout break** 4 -> 5 first recorded, and the second time SysTableRow
 // specifically has been the row that grew (9 -> 10 was `owner_core`).
@@ -152,7 +152,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // first catalog read, naming a size rather than a version - precisely the
 // opaque failure 4 -> 5 exists to convert into a refusal at the door.
 //
-// Worth recording because it was nearly missed: `docs/page.md` section 16
+// Worth recording because it was nearly missed: `docs/spec/page.md` section 16
 // says no shipped format exists, which is true of the *page* layout and not
 // of the catalog rows, and the spec amendment quoted it at the wrong
 // subject before this list was read. The authority on whether a catalog row
@@ -165,7 +165,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 //
 // **No bump on 2026-08-25, and the reason is worth recording** because this
 // list is where a missed one would be found. The key mode was removed
-// (docs/heap-and-tuple.md section 4.1), and the byte the 13 -> 14 entry
+// (docs/spec/heap-and-tuple.md section 4.1), and the byte the 13 -> 14 entry
 // above bought was **repurposed in place** rather than dropped: same offset,
 // same width, and `SysTableRow::key_order` reads the two old values as the
 // facts they already implied - kAssigned's 0 as "every id here ascended",
@@ -202,7 +202,7 @@ struct SuperBlockFields {
     // Every later mount validates the running configuration against this
     // and refuses to start on a disagreement, naming both numbers
     // (bootstrap.cpp). Changing it for existing data is a rebuild, which is
-    // Unsupported (docs/rule-fixed-length-tuple.md V5).
+    // Unsupported (docs/rules/rule-fixed-length-tuple.md V5).
     //
     // It occupies what was `reserved2` through version 3 - a u32 in exactly
     // this position, which is why the anchor table below did not move. The
@@ -210,7 +210,7 @@ struct SuperBlockFields {
     // is refused outright rather than read with a zero here.
     std::uint32_t inline_cell_width;
 
-    // ---- The transaction id ceiling (docs/txn.md section 4.2) -----------
+    // ---- The transaction id ceiling (docs/spec/txn.md section 4.2) -----------
     //
     // The next transaction id **never yet issued**, which is not the same
     // as the next one to hand out: ids are allocated a block at a time and
@@ -228,7 +228,7 @@ struct SuperBlockFields {
     // and moving it would rewrite every anchor's position for no gain.
     std::uint64_t next_trx_id;
 
-    // ---- The pinned core count (docs/workplan-crosscore.md M6) ----------
+    // ---- The pinned core count (docs/inflight/in-progress/workplan-crosscore.md M6) ----------
     //
     // How many reactor cores this database was created for. Like
     // `inline_cell_width` above it, configuration proposes the value once -
@@ -403,7 +403,7 @@ public:
     // disagrees is refused rather than reconciled.
     std::uint32_t core_count() const noexcept { return fields_.core_count; }
 
-    // ---- The transaction id ceiling (docs/txn.md section 4.2) -----------
+    // ---- The transaction id ceiling (docs/spec/txn.md section 4.2) -----------
     //
     // The next id never yet issued. `txn::TrxIdSequence` owns the policy
     // around it - block size, the durable write, and refusing to wrap - and

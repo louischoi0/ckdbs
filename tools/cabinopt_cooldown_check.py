@@ -2,7 +2,7 @@
 """Does `cabin_optimizer_amort_windows` reach the live controller's DROP
 cooldown, or only its struct? A two-arm behavioural check.
 
-`docs/feat-physical-optimizer.md` §II.4 fuses one number into both sides of
+`docs/spec/feat-physical-optimizer.md` §II.4 fuses one number into both sides of
 the cost model: the admission bar is `P_rel / T_amort` and the DROP cooldown
 is `2 x T_amort` decay half-lives. The key was ratified at 64 on 2026-08-10.
 A results document that measures a workload at the new default is worthless

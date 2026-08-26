@@ -247,7 +247,7 @@ reproducible across all five reps (984–993 µs). It is the signature of §6.
 93 → 124 µs in H3 (0.750), reproducible across five reps; 137 → 143 in H4b;
 255 → 255 in H1; 71 → 66 in H4a. §4.2 of the run instructions asks this
 against PW7's 48 µs figure — but that figure
-(`docs/workplan-peer-writer.md:325`, **source-read**) is *three writing
+(`docs/inflight/in-progress/workplan-peer-writer.md:325`, **source-read**) is *three writing
 sessions on one peer core*, not three writer cores, so it is not the same
 shape. The nearest cell here is H3's 124 µs at one session per core.
 
@@ -505,7 +505,7 @@ sessions on the single writer core, PW7's own shape — 5 reps per tree,
 
 **PW7's collapse is reproduced and the floors remove it** — a 37% throughput
 recovery at the shape that provokes it. PW7's own record
-(`docs/workplan-peer-writer.md:325`, **source-read**) reports the four-writer
+(`docs/inflight/in-progress/workplan-peer-writer.md:325`, **source-read**) reports the four-writer
 cell at **0.61–0.80x before** and 1.034x after; this run measures 0.73–0.78
 before and 1.081 after, on a host that can actually run three writer cores.
 
@@ -685,15 +685,15 @@ Open, in the order that a next step would need them:
    (`src/server/command_dispatcher.cpp`, **source-read**). Reporting whether
    group accounting diverges from wall time therefore requires *adding*
    instrumentation to the engine, which is a code change and outside what a
-   measurement run may do. Owed by whoever next touches `docs/sched.md` §4,
+   measurement run may do. Owed by whoever next touches `docs/spec/sched.md` §4,
    not by this file.
 
-One passage elsewhere is affected. `docs/known-gaps.md:738` states that
+One passage elsewhere is affected. `docs/inflight/known-gaps.md:738` states that
 *"every cross-core number in `bench/` is a cost measured with the parallelism
 removed, never a speedup"*. **That is now false**: the parallelism is present
 here, and with its own control subtracted H3 measures a genuine **1.751×**
 (§7). This is the first measured cross-core speedup in `bench/`. The passage
-has been **retired in place** in `docs/known-gaps.md`, carrying both bounds
+has been **retired in place** in `docs/inflight/known-gaps.md`, carrying both bounds
 that go with the number — the gain appears only at one writing session per
 writer core, and this host is 4 logical / 2 physical. The same edit records
 the group-commit constraint (§6) as an entry of its own under *Concurrency

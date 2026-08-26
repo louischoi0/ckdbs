@@ -8,7 +8,7 @@
 #include "kds/exec/step_chain.hpp"
 #include "kds/stats/waystone.hpp"
 
-// A recorded trail, indexed for replay (docs/waystone-workplan.md P11/P13).
+// A recorded trail, indexed for replay (docs/inflight/in-progress/waystone-workplan.md P11/P13).
 //
 // The read side of what `exec::TrailCollector` writes. Built once when a
 // statement opens, consulted once per keyed step, and thrown away with the
@@ -30,7 +30,7 @@
 //
 // ---- Rule 0 is the lookup key, deliberately ------------------------------
 //
-// `docs/waystone-workplan.md` P13's amendment adds a rule the storage-level
+// `docs/inflight/in-progress/waystone-workplan.md` P13's amendment adds a rule the storage-level
 // checks cannot supply: **re-derive the probe key from the current outer row
 // and require it to equal the entry's `pk`**. Every rule in spec section 2
 // validates the trail against *storage*, and none looks at the query - so if

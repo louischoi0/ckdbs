@@ -90,7 +90,7 @@ StatusOr<Extent> ExtentAllocator::Reserve(std::uint32_t count) {
         }
         // The design ceiling bounds the last region, which is partial:
         // Extent::end() is PageId arithmetic and must not reach past the
-        // id space (docs/workplan-multi-free-map.md §4, finding 1).
+        // id space (docs/inflight/in-progress/workplan-multi-free-map.md §4, finding 1).
         if (static_cast<std::uint64_t>(base) + start + count > kMaxPageCount) {
             return Status::OutOfSpace(
                 "extent lease: no run of " + std::to_string(count) +

@@ -6,7 +6,7 @@
 #include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
 
-// `Compile(AST) -> StepChain` (docs/parser-v2-workplan.md V14).
+// `Compile(AST) -> StepChain` (docs/inflight/in-progress/parser-v2-workplan.md V14).
 //
 // This is the seam the whole v2 plan is built around. The parser is a
 // bolt-on to the existing recursive-descent one and will be replaced by

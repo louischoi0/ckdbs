@@ -26,7 +26,7 @@
 #include "kds/wal/record.hpp"
 
 // K-M1: what the engine *does* with Keystone ids today
-// (`docs/keystoneid-invariant.md` §5).
+// (`docs/rules/keystoneid-invariant.md` §5).
 //
 // The milestone's own wording is why this file exists: "failing tests that
 // *demonstrate* any reuse that exists today ... reuse behavior of the
@@ -38,7 +38,7 @@
 // suite nobody can make green is a test that gets deleted or ignored, and
 // this hazard needs to survive until recovery lands. Each carries the
 // condition under which it must be inverted, and
-// `docs/keystoneid-k0-findings.md` cites both by name.
+// `docs/rules/keystoneid-k0-findings.md` cites both by name.
 //
 // What is deliberately *not* here: any fix. K0 is an audit.
 
@@ -64,7 +64,7 @@ protected:
     //
     // Every digit run in the reply is an id: the text protocol's row
     // separator is the two-character escape `\n` rather than a newline
-    // (docs/client-manual.md), and the only header this projection carries
+    // (docs/spec/client-manual.md), and the only header this projection carries
     // is the column name "id", which has no digits in it.
     std::vector<std::uint64_t> Ids(const std::string& rel) {
         std::vector<std::uint64_t> ids;
@@ -336,7 +336,7 @@ protected:
 // only because nothing reads the log back; the moment recovery redoes those
 // HEAP_INSERTs, one id belongs to two tuples.
 //
-// **Invert this test when recovery lands** (`docs/wal.md`): the assertion
+// **Invert this test when recovery lands** (`docs/spec/wal.md`): the assertion
 // must become "the allocator resumes above every logged id".
 TEST_F(KeystoneIdWalCrashTest, ACrashReissuesIdsThatTheDurableLogStillClaims) {
     {
@@ -445,12 +445,12 @@ TEST_F(KeystoneIdWalCrashTest, ASyncedShutdownLeavesTheSequenceAboveEveryLoggedI
 //
 // The gap itself is known and documented (`catalog.hpp`'s header,
 // `well_known.hpp`'s kUserOidStart), and sys.patterns rows avoid it on
-// purpose. What is new is that `docs/keystoneid-invariant.md` builds a
+// purpose. What is new is that `docs/rules/keystoneid-invariant.md` builds a
 // stated guarantee on top of it without naming it. Same posture as the WAL
 // test above: green, and pinning a bug.
 TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
     // **Inverted 2026-08-08.** This test used to pin the bug
-    // docs/keystoneid-k0-findings.md §6 describes - `GenerateUserOid()` was
+    // docs/rules/keystoneid-k0-findings.md §6 describes - `GenerateUserOid()` was
     // an in-memory counter seeded at kUserOidStart and never read back, so a
     // clean restart plus one CREATE TABLE produced two relations sharing an
     // oid, and resolving that oid returned the *first* row carrying it. Both
@@ -498,7 +498,7 @@ TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
         auto c_oid = cat.FindTableOidByName("c");
         ASSERT_TRUE(c_oid.ok());
 
-        // The property §1.2 of docs/keystoneid-invariant.md claims and could
+        // The property §1.2 of docs/rules/keystoneid-invariant.md claims and could
         // not previously deliver: an oid names one object for the life of the
         // database. Everything keyed on (oid, pk) - the access statistics,
         // trail entries, any future change feed - depends on it.

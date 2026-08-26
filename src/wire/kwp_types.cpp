@@ -1,6 +1,6 @@
 #include "kds/wire/kwp_types.hpp"
 
-// Payload codecs for KWP v0's frames (docs/workplan-kwp-load.md KL01).
+// Payload codecs for KWP v0's frames (docs/inflight/in-progress/workplan-kwp-load.md KL01).
 // Encode and decode are exact mirrors, and decode trusts nothing: a short
 // or malformed payload is InvalidArgument with the frame named, never a
 // partially-filled struct - the same posture the frame codec takes one

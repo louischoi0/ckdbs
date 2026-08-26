@@ -6,7 +6,7 @@
 #include "kds/base/status.hpp"
 
 // Injectable readiness-polling interface consumed by the reactor's "drain
-// I/O completions" phase (docs/sched.md phase 1). rules.md #4 requires
+// I/O completions" phase (docs/spec/sched.md phase 1). rules.md #4 requires
 // file/disk I/O to be injectable so engine logic can run under
 // deterministic simulation; this is the socket-readiness analog of that
 // rule, scoped to what TcpServer needs today (level-triggered readiness,

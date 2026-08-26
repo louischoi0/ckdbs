@@ -6,7 +6,7 @@ file again, and read every relation back.
 Why this exists. PW1c-7 made ownership survive a restart by the PL-C stamp -
 a leased store claims own-stamped pages on the fault, and an unacquired
 creation page is re-delivered on request through the publish CREATE TABLE
-runs (docs/workplan-peer-writer.md §8). Every exercise of that path so far
+runs (docs/inflight/in-progress/workplan-peer-writer.md §8). Every exercise of that path so far
 ran on a host with one writer core, because `cores` cannot exceed
 `hardware_concurrency()` and rotation skips the system core. This is the
 first exercise with three.
@@ -106,7 +106,7 @@ def reply_rows(reply):
     r"""The data rows of a SELECT reply, as lists of field strings.
 
     A multi-line reply travels as one wire line with `\n` escaped
-    (docs/client-manual.md, and the driver's own verify at
+    (docs/spec/client-manual.md, and the driver's own verify at
     tools/multicore_benchmark.py:437): a comma-separated header line, then
     one line per row. `None` for an error reply, so a caller cannot read a
     refusal as an empty result.

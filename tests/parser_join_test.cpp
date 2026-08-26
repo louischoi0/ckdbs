@@ -5,7 +5,7 @@
 
 #include "kds/parser/parser.hpp"
 
-// V05 - joins and aliases (docs/parser-v2-workplan.md).
+// V05 - joins and aliases (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // The corpus (tests/testdata/parser_corpus.txt) pins the verdict of every
 // form here; this file pins the *shape* the accepted ones parse into,

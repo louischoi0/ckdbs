@@ -10,7 +10,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// V09's execution half - the emission quota (docs/parser-v2.md I11).
+// V09's execution half - the emission quota (docs/spec/parser-v2.md I11).
 //
 // The contract this file pins is the one the whole design hangs on:
 //

@@ -578,7 +578,7 @@ void MeasurePhases(Instance& db, int accounts, int iterations, const std::string
 // how many **WAL bytes** were written, and whether a **sync** happened. A
 // relation growing a page is the structural event to look for - it logs a
 // full 8 KB page image (the FPI `LogInsert` writes when a chain grows, and
-// which `docs/wal.md` prices at ~+50% log volume) and every 64th one also
+// which `docs/spec/wal.md` prices at ~+50% log volume) and every 64th one also
 // extends the file, since `EnsureCapacity` rounds to a whole extent.
 struct Tagged {
     std::size_t index = 0;

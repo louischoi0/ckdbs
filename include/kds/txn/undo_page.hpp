@@ -8,11 +8,11 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// Undo page layout and the undo record codec (docs/txn.md section 3).
+// Undo page layout and the undo record codec (docs/spec/txn.md section 3).
 //
 // An undo page holds the before-images that let a reader reconstruct the
 // version of a tuple its snapshot is entitled to see, and that let an
-// aborting transaction put the bytes back. It closes docs/wal.md section
+// aborting transaction put the bytes back. It closes docs/spec/wal.md section
 // 15's "Undo-page layout details (UNDO_WRITE targets)".
 //
 // ---- Headered, and not by preference -------------------------------------
@@ -54,7 +54,7 @@ struct UndoPageHeaderFields {
     std::uint16_t flags;
     // O(1) "is this page empty". The live purge keeps its bound in memory
     // and never reads this; what still wants it is UP4's mount-time
-    // reclaim of a previous run's pages (docs/workplan-undo-purge.md),
+    // reclaim of a previous run's pages (docs/inflight/in-progress/workplan-undo-purge.md),
     // whose sweep would otherwise walk every record to learn a page holds
     // nothing.
     std::uint16_t nr_records;
@@ -76,7 +76,7 @@ struct UndoPageHeaderFields {
     // The log's previous undo page - **not** the previous page of any one
     // transaction, which sharing makes unanswerable. It chains the pages
     // in creation order. **Historical once page reuse starts**: the purge
-    // (docs/workplan-undo-purge.md) recycles a settled page without
+    // (docs/inflight/in-progress/workplan-undo-purge.md) recycles a settled page without
     // rewriting the link that points at it, so a device walk can revisit
     // a reused page - which is why UndoLog::PageCount() counts the
     // in-memory chain instead. The purge keeps its per-page bound in
@@ -199,7 +199,7 @@ inline constexpr std::size_t kUndoRecPkOffset = 36;
 // from 92 to 108 bytes and a page holds ~17 % fewer of them. That is the
 // price of a chain that can be walked without the log. It used to compound
 // with the reclamation gap, undo pages being unpurgeable; since
-// `docs/workplan-undo-purge.md` it costs a higher steady-state page count
+// `docs/inflight/in-progress/workplan-undo-purge.md` it costs a higher steady-state page count
 // instead, ~17 % more growths per unit of undo written.
 //
 // The two new fields are appended rather than fitted into `reserved`, which
@@ -307,7 +307,7 @@ Status UndoPtrIsPlausible(std::uint64_t ptr);
 // ---- The record tail, as the WAL carries it ------------------------------
 //
 // An UNDO_WRITE record logs the undo record's bytes from `target_page_id`
-// onward - `docs/txn.md` §3.5's `payload.image = record bytes
+// onward - `docs/spec/txn.md` §3.5's `payload.image = record bytes
 // [+16, +28 + image_len)`. The two chain-link fields before that offset
 // ride as payload *fields* instead, because prior_trx_id names a different
 // transaction from the record's envelope and repeating it inside the bytes

@@ -41,7 +41,7 @@
 #include "kds/storage/memory_page_device.hpp"
 
 // One core's stack, and the shutdown protocol that stops it
-// (docs/workplan-crosscore.md P2).
+// (docs/inflight/in-progress/workplan-crosscore.md P2).
 //
 // These are the engine's **first threaded tests**. They are deliberately
 // narrow: what is under test is that a reactor comes up on its own thread,
@@ -464,7 +464,7 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
 // `Catalog::AllocateRowId()` bumps `next_id` on the sys.tables page, and a
 // peer may not write the catalog. That one is P5's shape - a leased range
 // of row ids, exactly like the page-id lease - and
-// `docs/keystoneid-invariant.md` K-M2's bump-ahead allocator is the same
+// `docs/rules/keystoneid-invariant.md` K-M2's bump-ahead allocator is the same
 // mechanism.
 
 TEST_F(CoreRuntimeTest, AGrantedPeerFaultsARelationsDataPagesReadOnly) {
@@ -721,7 +721,7 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
 
 TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblock) {
     // The row-id lease's twin, and the door PW1 opened
-    // (`docs/workplan-peer-writer.md`): before it, a peer's TrxIdSequence
+    // (`docs/inflight/in-progress/workplan-peer-writer.md`): before it, a peer's TrxIdSequence
     // constructed spent and its persist callback refused, so a peer could
     // not begin a *single* transaction - every write died at its first id,
     // ahead of any page. Reads never noticed: a read view mints from
@@ -853,7 +853,7 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
     // PW3b. Core 0 checkpoints at three points - the completion checkpoint
     // at mount, the cadence, and the way out - and PW3 gave a peer the first
     // two. Without the third a graceful restart replayed every peer's stream
-    // from its last cadence tick (docs/known-gaps.md; the core-0 property is
+    // from its last cadence tick (docs/inflight/known-gaps.md; the core-0 property is
     // the sim harness's AMountAfterACleanStopDoesNotRereadTheRunsWholeLog).
     //
     // The shape is Serve's tail after the worker join: Sync(), then
@@ -1604,7 +1604,7 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
     //
     // The three `tc.tag` statements above are the walked join, which is
     // the shape the statement-local inner build serves
-    // (docs/spec-join-inner-build.md): locally the inner step builds a map
+    // (docs/spec/spec-join-inner-build.md): locally the inner step builds a map
     // on its first outer row and probes it thereafter, while the shipped
     // side gets `ShippedForm`'s walk with the annotation cleared. So the
     // equivalence those rows assert is **build against shipped walk**, not
@@ -1623,7 +1623,7 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
 
     // ---- The structure-served shapes ship as their walk -----------------
     //
-    // docs/known-gaps.md's closed entry named its own blind spot: "no
+    // docs/inflight/known-gaps.md's closed entry named its own blind spot: "no
     // cross-core test declares an index, which is why no suite catches
     // it." This block is that test. An index or Cabin probe cannot cross
     // the descriptor; before the ship-time downgrade every shape below
@@ -3498,7 +3498,7 @@ TEST_F(CoreRuntimeTest, AParkedShippedStatementDestroyedUnderItsWaiterLeaksTheWa
     rig.Pump(64);
     EXPECT_EQ(rig.ship->waiting(), 1u)
         << "a destroyed park now reclaims its waiter - update this invariant, and "
-           "docs/known-gaps.md's entry for it";
+           "docs/inflight/known-gaps.md's entry for it";
     // The owner ran it regardless, so the row is there and the answer went
     // to a waiter nobody will ever read.
     EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
@@ -3807,8 +3807,8 @@ TEST_F(CoreRuntimeTest, AShippedWriteToACabinedPeerRelationIsRefusedByTheOwnersS
 // registry and refuses correctly.
 //
 // The fix is not "let the peer enforce" (it cannot); it is to make the gate
-// read what the FK and Cabin arms read. That crosses `docs/feat-assertion.md`'s
-// enforcement claim and `docs/crosscore.md`'s peer contract, so it is
+// read what the FK and Cabin arms read. That crosses `docs/spec/feat-assertion.md`'s
+// enforcement claim and `docs/spec/crosscore.md`'s peer contract, so it is
 // reported rather than taken here.
 TEST_F(CoreRuntimeTest, DISABLED_AShippedWriteToAnAssertionCoveredPeerRelationIsRefused) {
     ForeignIndexRig rig(clock_);
@@ -3870,6 +3870,91 @@ TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersIsNotShippedAndKeepsItsRefusa
     // Nothing crossed: the owner ran nothing, and no waiter was opened.
     EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << out.response;
     EXPECT_EQ(rig.ship->shipped(), 0u) << out.response;
+    EXPECT_EQ(rig.ship->waiting(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, AnalyzeOfAPeerOwnedRelationIsNotShipped) {
+    // The read fork runs on the *stripped* text (`ANALYZE` is a dispatcher
+    // prefix, not a parser keyword), so shipping it would send a bare
+    // `SELECT` and answer a request for a plan with a result set. Refused
+    // exactly as it was before shipping existed.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "no_ship_analyze");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("ANALYZE SELECT * FROM no_ship_analyze", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("owned by core 1"), std::string::npos) << out.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
+    EXPECT_EQ(rig.ship->waiting(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, AStatementWhoseSubqueryNamesASecondCoresRelationIsNotShipped) {
+    // **A sub-chain reads real pages.** The compiler leaves a correlated
+    // sub-chain - and every value-bearing uncorrelated one, `IN` included -
+    // on the *step* that carries its outer column, not in `hoisted`, so a
+    // walk over `hoisted` and `steps` alone does not see it. Shipping such
+    // a chain sends it to the outer relation's owner, which then faults the
+    // other core's pages: refused in a Debug build by the shared-nothing
+    // check, and in a **release** build performed, judging visibility
+    // against the wrong core's transaction manager. It answered an empty
+    // result set where the row matched.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "sub_ship");
+
+    // A relation core 0 owns. Rotation skips the system core, so the policy
+    // is switched for this one relation and switched back.
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    auto core0_oid =
+        rig.catalog2->CreateTable(catalog::kNamespacePublic, "sub_core0", TwoColumnSchema(),
+                                  catalog::ClusteredType::kBtree);
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    ASSERT_TRUE(core0_oid.ok()) << core0_oid.status().message();
+    auto row = rig.catalog2->GetSysTableRow(core0_oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 0u);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+
+    ASSERT_EQ(rig.dispatcher->Dispatch("INSERT INTO sub_core0 VALUES (10)").response.rfind("ERR",
+                                                                                          0),
+              std::string::npos);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+
+    // The read: outer on the peer, sub-chain on core 0.
+    DispatchOutcome out;
+    auto statement =
+        rig.Start("SELECT * FROM sub_ship WHERE v IN (SELECT v FROM sub_core0)", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << out.response;
+
+    // The write half: UPDATE and DELETE never compile a chain, so their
+    // fork resolves the target relation's owner and nothing else. A
+    // subquery predicate keeps the affinity refusal.
+    DispatchOutcome upd;
+    auto update =
+        rig.Start("UPDATE sub_ship SET v = 7 WHERE v IN (SELECT v FROM sub_core0)", upd);
+    ASSERT_TRUE(rig.Drive(*update)) << upd.response;
+    EXPECT_EQ(upd.response.rfind("ERR ", 0), 0u) << upd.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << upd.response;
+
+    DispatchOutcome del;
+    auto remove = rig.Start("DELETE FROM sub_ship WHERE v IN (SELECT v FROM sub_core0)", del);
+    ASSERT_TRUE(rig.Drive(*remove)) << del.response;
+    EXPECT_EQ(del.response.rfind("ERR ", 0), 0u) << del.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << del.response;
+
+    // And the local-outer form, which shipping never reaches: this is
+    // `CheckReadAffinity` alone, which used to pass it and read the peer's
+    // pages from core 0.
+    const std::string local_outer =
+        rig.dispatcher->Dispatch("SELECT * FROM sub_core0 WHERE v IN (SELECT v FROM sub_ship)")
+            .response;
+    EXPECT_EQ(local_outer.rfind("ERR ", 0), 0u) << local_outer;
+    EXPECT_NE(local_outer.find("owned by core 1"), std::string::npos) << local_outer;
     EXPECT_EQ(rig.ship->waiting(), 0u);
 }
 

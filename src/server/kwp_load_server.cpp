@@ -12,7 +12,7 @@
 
 #include "kds/catalog/catalog.hpp"
 
-// KWP v0's socket half (docs/workplan-kwp-load.md KL02/KL03). The syscall
+// KWP v0's socket half (docs/inflight/in-progress/workplan-kwp-load.md KL02/KL03). The syscall
 // idioms are tcp_server.cpp's, including the MSG_NOSIGNAL lesson: a client
 // hanging up without reading must cost a closed connection, never the
 // process. Everything engine-shaped goes through CommandDispatcher's

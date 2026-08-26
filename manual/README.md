@@ -2,7 +2,7 @@
 
 The user-facing manual, one section per audience, each verified against
 code rather than specs. Engine internals live in `docs/`; the engine-wide
-gap list is `docs/known-gaps.md`.
+gap list is `docs/inflight/known-gaps.md`.
 
 | Section | Covers |
 |---|---|

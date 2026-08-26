@@ -19,7 +19,7 @@ class WalManager;
 }
 
 // `sys.assertions`: the declaration of every group-level constraint on this
-// instance (docs/feat-assertion.md §8.2, workplan AST03).
+// instance (docs/spec/feat-assertion.md §8.2, workplan AST03).
 //
 // ---- What is stored, and what deliberately is not -----------------------
 //
@@ -47,7 +47,7 @@ class WalManager;
 //
 // ---- Two rules every function below honours ------------------------------
 //
-// **Decode before descending** (docs/parser-v2.md I15 rule R1). A var-heap
+// **Decode before descending** (docs/spec/parser-v2.md I15 rule R1). A var-heap
 // fetch must never happen while a heap-page span is live, so a scan decodes
 // each row inside the walk and resolves the spilled cells *after* the walk
 // has released every span. That is why the readers cannot stop early on a

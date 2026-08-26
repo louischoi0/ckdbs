@@ -12,7 +12,7 @@
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` (docs/feat-index.md §10,
+// `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` (docs/spec/feat-index.md §10,
 // workplan IX05): the grammar, the DDL layer under it, and the reply.
 //
 // Two things these are really about.
@@ -263,7 +263,7 @@ TEST_F(IndexDdlTest, AnIndexOnACabinedColumnWarnsWithoutRefusing) {
 }
 
 TEST_F(IndexDdlTest, ARefusalOnAFullAnchorCostsNoPages) {
-    // G2 (the statement-shipping work order; `docs/known-gaps.md`): the
+    // G2 (the statement-shipping work order; `docs/inflight/known-gaps.md`): the
     // anchor slot was seeded *after* the tree was built, so once the entry
     // table filled, every attempt allocated a whole index tree and threw
     // it away - and nothing in this engine frees a page. Measured on a

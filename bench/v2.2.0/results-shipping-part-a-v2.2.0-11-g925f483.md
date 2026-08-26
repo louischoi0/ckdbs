@@ -22,7 +22,7 @@ is **measured** with its invocation or **source-read** with `path:line`.
 |---|---|---|
 | A1 duplicate delivery | **pass** | 3 tests; row count is the verdict |
 | A1 dedup record evicted | **finding 1** | the duplicate re-executes; test in the tree, disabled |
-| A2 disconnect / timeout | **pass** | 3 tests; contract written into `docs/client-manual.md` |
+| A2 disconnect / timeout | **pass** | 3 tests; contract written into `docs/spec/client-manual.md` |
 | A3 ring saturation | **pass** | 40 statements over a 16-slot ring, none dropped; storm map delta 0 |
 | A4 per-session ordering | **pass** | 2 tests, one with a retried first statement |
 | A5 shape gates | **finding 2** | FK and Cabin hold; the **assertion** gate does not fire on a peer |
@@ -111,7 +111,7 @@ has it already written.
   today and the thing that breaks the day a cancellation path is added, so it
   is asserted rather than assumed.
 
-Two consequences are now stated in `docs/client-manual.md` rather than left
+Two consequences are now stated in `docs/spec/client-manual.md` rather than left
 to be discovered: `UNKNOWN_OUTCOME` means read the data back, never retry;
 and a connection that drops mid-statement may find the statement applied.
 
@@ -138,7 +138,7 @@ once each, and 0.44 µs of real `TrySend` work per poll. So it is not the
 pathological shape A3 names (polls climbing while `polled_us` stays flat):
 `polled_us` tracks polls, because each poll attempts a send. It is
 nonetheless unbounded re-polling with no backoff and no ceiling, which is
-`docs/sched.md` §10's open `ring_full` retry protocol, named there and
+`docs/spec/sched.md` §10's open `ring_full` retry protocol, named there and
 unchanged here.
 
 **Nothing allocates on the refusal path.** The G2 storm in its DML form: 180
@@ -212,8 +212,8 @@ that mounts after the assertion exists rebuilds its registry and refuses
 correctly.
 
 The fix is not "let the peer enforce" — it cannot. It is to make the gate
-read what the FK and Cabin arms read. That crosses `docs/feat-assertion.md`'s
-"complete and enforcing" claim and `docs/crosscore.md`'s peer contract, so it
+read what the FK and Cabin arms read. That crosses `docs/spec/feat-assertion.md`'s
+"complete and enforcing" claim and `docs/spec/crosscore.md`'s peer contract, so it
 is reported rather than taken inside a verification task.
 
 ## 6. A6 — the G1 class at DML volume
@@ -302,10 +302,11 @@ this run does not have.
 ## The suite
 
 **2,720 of 2,721 Debug**, with 2 disabled — the two findings' tests. The one
-failure is `TlsChannelTest.PlaintextGarbageIsFatal`, which SS5 recorded as
-failing identically on a clean build of its own base commit `62b6b6f`:
-pre-existing on this host, and nothing here touches TLS. Thirteen tests were
-added (2,708 → 2,721).
+failure is `TlsChannelTest.PlaintextGarbageIsFatal`, and it is not this
+change's: `docs/inflight/bugs/tls-plaintext-garbage-alert-bytes.md` traces it
+to **OpenSSL 3.5.5 on this host**, which queues an alert for a first record
+that was never TLS where the test's pinned claim says it queues none. The
+fatal path itself is intact. Thirteen tests were added (2,708 → 2,721).
 
 ## What Part A did not do
 

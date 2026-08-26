@@ -36,7 +36,7 @@ each is stated here so a quoted number carries it.
    both sides. `SELECT model_id, sum(pnl_bp) ... GROUP BY model_id` would
    return eight rows instead of thousands and would be enormously faster
    here - and it is now expressible on the ckdbs side too, since
-   `docs/parser-v2.md` I14 was resolved by `docs/feat-aggregate.md`. It is
+   `docs/spec/parser-v2.md` I14 was resolved by `docs/spec/feat-aggregate.md`. It is
    still not written into that phase, for the original reason: rewriting one
    engine's statement makes the two tools time different questions, and this
    phase's job is to price the join.
@@ -541,7 +541,7 @@ def run_read_phases(client, suffix, symbols, session_count, bar_count, ops,
 # index, and may parallelise the scan under them. ckdbs makes no plan choice
 # at all - it walks the relation and folds outside the executor, which is
 # what keeps the compiled chain identical to the same statement without a
-# GROUP BY (docs/feat-aggregate.md AG1).
+# GROUP BY (docs/spec/feat-aggregate.md AG1).
 #
 # The high-cardinality shape is where that asymmetry was expected to show
 # most. **It is where PostgreSQL loses** (bench/results-scenario1-vs-pg.md):

@@ -6,7 +6,7 @@
 #include "kds/storage/keystone.hpp"
 
 // How much of a relation's lifetime id budget has been spent
-// (`docs/keystoneid-invariant.md` K4 and K-M4).
+// (`docs/rules/keystoneid-invariant.md` K4 and K-M4).
 //
 // K4 turns 2^40 from a live-row bound into a **lifetime issuance budget per
 // relation**, and that is the whole reason this file exists as arithmetic
@@ -35,7 +35,7 @@ namespace kds::catalog {
 
 // The share of a relation's budget at which consumption becomes a warning.
 //
-// `[PROPOSED: 90%]` in `docs/keystoneid-invariant.md` K-M4 and still
+// `[PROPOSED: 90%]` in `docs/rules/keystoneid-invariant.md` K-M4 and still
 // proposed: nothing has yet argued for a particular number, and the honest
 // input for one is how long a relation takes to cross the remaining 10% at
 // its own insert rate (§3's table), which is per-deployment. Named here so

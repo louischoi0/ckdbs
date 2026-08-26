@@ -14,7 +14,7 @@
 //
 // ---- What this is not ---------------------------------------------------
 //
-// Not per-request tracing. `docs/observability.md` proposes a separate span
+// Not per-request tracing. `docs/inflight/in-progress/observability.md` proposes a separate span
 // tracer for "where did those 4 ms go", and the two must not merge: a trace
 // is high-volume, per-request, and off by default; a log is low-volume,
 // per-event, and always on. Merging them produces a log nobody can read and

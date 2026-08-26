@@ -12,7 +12,7 @@
 #include "kds/wal/manager.hpp"
 
 // The undo log: where before-images go, and how a reader walks back to the
-// version its snapshot is entitled to (docs/txn.md section 3).
+// version its snapshot is entitled to (docs/spec/txn.md section 3).
 //
 // ---- One current page, shared by every transaction -----------------------
 //
@@ -75,7 +75,7 @@
 //
 // ---- The purge: pages recycle within the log ------------------------------
 //
-// (docs/workplan-undo-purge.md, D1-D3 ratified 2026-08-19; this section
+// (docs/inflight/in-progress/workplan-undo-purge.md, D1-D3 ratified 2026-08-19; this section
 // replaced "Nothing is ever freed" when the reader-registration
 // prerequisite fell.)
 //
@@ -122,7 +122,7 @@ inline constexpr std::uint32_t kMaxUndoChainLength = 1u << 16;
 // One version-chain step, as `Walk` reports it. The image is **copied**,
 // not viewed: the next step fetches another page, and a store is free to
 // move its frames when it hands one out. That copy is also what keeps the
-// nested-access rule (docs/parser-v2.md I15 R1) satisfiable on the read
+// nested-access rule (docs/spec/parser-v2.md I15 R1) satisfiable on the read
 // path - see visibility.hpp, which is the walk's one production caller.
 struct UndoVersion {
     UndoRecordType type = UndoRecordType::kInvalid;
@@ -194,7 +194,7 @@ public:
     // current page serves everyone, and a transaction ending changes nothing
     // about it.
 
-    // ---- The purge (header note above; docs/workplan-undo-purge.md) -----
+    // ---- The purge (header note above; docs/inflight/in-progress/workplan-undo-purge.md) -----
 
     // Arms purge-on-growth: `horizon` answers the manager's ReadHorizon()
     // when called. Null disarms (the default, and the pre-purge behaviour).

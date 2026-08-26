@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What a fold costs (docs/feat-aggregate.md, workplan AG10).
+"""What a fold costs (docs/spec/feat-aggregate.md, workplan AG10).
 
 The measurement this bench exists to make is a *difference*, not a
 throughput. AG1 places aggregation outside the executor and compiles the

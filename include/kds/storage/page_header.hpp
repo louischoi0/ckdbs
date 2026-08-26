@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 
 // The common 32-byte page header that sits at offset 0 of every *headered*
-// page - heap, B+ tree, undo, catalog, superblock, free map (docs/page.md
+// page - heap, B+ tree, undo, catalog, superblock, free map (docs/spec/page.md
 // sections 1 and 2, CONFIRMED layout). Type-specific content begins at
 // kPageBodyOffset.
 //
@@ -53,7 +53,7 @@ inline constexpr std::size_t kPageLsnOffset = 8;
 // Offset 16 is the word that was `reserved0`, whose comment nominated
 // exactly this use — which is why the field's arrival is not a format
 // event: every page ever written already carries 0 here, and 0 reads as
-// "never relayouted" (docs/feat-physical-optimizer.md R4).
+// "never relayouted" (docs/spec/feat-physical-optimizer.md R4).
 inline constexpr std::size_t kPageRelayoutEpochOffset = 16;
 // Offset 24 was `reserved1`, consumed by `owner_oid` the same way offset 16
 // was consumed above (page.md §2a): every page ever written already carries
@@ -158,7 +158,7 @@ constexpr bool StampIsForeign(std::uint16_t stamp, std::uint32_t core_id) noexce
     return stamp != 0 && stamp != StreamStampFor(core_id);
 }
 
-// ---- Relayout epoch (docs/feat-physical-optimizer.md R4) ----------------
+// ---- Relayout epoch (docs/spec/feat-physical-optimizer.md R4) ----------------
 //
 // Bumped only by the physical optimizer's mover when tuples on the page
 // move; INSERT, UPDATE and DELETE never bump it, because the fixed-length

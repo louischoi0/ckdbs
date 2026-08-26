@@ -19,7 +19,7 @@
 #include "kds/wal/manager.hpp"
 
 // Building a peer-owned relation's index on the core that owns it
-// (docs/workplan-peer-writer.md §7c, decided 2026-08-25; PW1c-6b-2 is the
+// (docs/inflight/in-progress/workplan-peer-writer.md §7c, decided 2026-08-25; PW1c-6b-2 is the
 // owner's half and the ring, PW1c-6b-3 core 0's two phases).
 //
 // `CREATE INDEX` is core 0's statement - the catalog has one writer - but
@@ -45,7 +45,7 @@
 //
 // The window is sound only because of what `Backfill` indexes: **every
 // version** the relation holds, uncommitted and delete-marked included
-// (docs/feat-index.md §10a). A rollback on the owner writes pages without
+// (docs/spec/feat-index.md §10a). A rollback on the owner writes pages without
 // passing the dispatcher's gate - compensation goes through the
 // transaction manager, not a statement - so a window that refused
 // statements alone would still see pages change under the build if the
@@ -69,7 +69,7 @@
 //
 // `done(committed)` is sent when the commit record is *appended*, not when
 // it is durable - the durability wait is the statement's, taken after
-// (docs/wal.md D2). A crash in between loses the commit: recovery rolls
+// (docs/spec/wal.md D2). A crash in between loses the commit: recovery rolls
 // core 0's DDL back and retires the row, and the tree the owner built -
 // logged under kNoTxnId in the owner's stream, redone regardless - is
 // orphaned with the entries the owner's maintenance wrote into it

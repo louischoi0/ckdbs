@@ -12,13 +12,13 @@
 #include "kds/server/lease_refill_stats.hpp"
 #include "kds/storage/extent_lease.hpp"
 
-// Refilling a core's page-id lease over the ring (docs/workplan-crosscore.md
+// Refilling a core's page-id lease over the ring (docs/inflight/in-progress/workplan-crosscore.md
 // M5 and P5, `RingMessageKind::kExtentLease`).
 //
 // P2 built the lease and left the refill out, because a refill is a request
 // whose answer arrives later and there was no way to write one. This is the
 // first thing in the engine built on the coroutine decision
-// (`docs/sched.md` §3, `sched/coro.hpp`): `co_await WaitFor{&granted}`, in
+// (`docs/spec/sched.md` §3, `sched/coro.hpp`): `co_await WaitFor{&granted}`, in
 // straight-line code, on a reactor that never blocks.
 //
 // ---- Why the refill is a background task and not part of allocation -----

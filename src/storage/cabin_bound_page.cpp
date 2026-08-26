@@ -28,7 +28,7 @@ inline constexpr std::size_t kOffNextPage = kPageBodyOffset + 4;    // u32
 static_assert(kOffNextPage + 4 <= kEntriesOffset, "the page header fits before the entries");
 
 // Explicit little-endian load/store. Not a memcpy of a struct and not a
-// bitfield: `docs/rules.md` forbids both for a persisted format, because
+// bitfield: `docs/rules/rules.md` forbids both for a persisted format, because
 // struct padding and bitfield layout are implementation-defined and this
 // format has to read the same on every architecture.
 void Store64(std::span<std::byte> at, std::uint64_t value) noexcept {

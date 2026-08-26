@@ -7,12 +7,12 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// A Bound Cabin's entry page (`docs/feat-assertion.md` §5.1, workplan AST04).
+// A Bound Cabin's entry page (`docs/spec/feat-assertion.md` §5.1, workplan AST04).
 //
 // ---- What a Bound Cabin is, in one line -----------------------------------
 //
 // A Cabin that is required to have observed everything, forever
-// (`docs/feat-cabin.md` §12). The observational class is lazy, evictable and
+// (`docs/spec/feat-cabin.md` §12). The observational class is lazy, evictable and
 // advisory; this one is eager, **pinned** and authoritative, because an
 // assertion's admission check reads its group aggregate and a missing entry
 // would be a wrong answer rather than a slow one.
@@ -53,12 +53,12 @@
 //
 // Concurrency: core-local. A relation's pages belong to its home core, and an
 // assertion is single-relation (AS8), so the whole structure is one core's
-// (`docs/feat-assertion.md` §6.1). No latches, no atomics.
+// (`docs/spec/feat-assertion.md` §6.1). No latches, no atomics.
 
 namespace kds::storage::cabin {
 
 // `flags` bit 0: the entry was written by a statement that has not committed
-// (`docs/feat-assertion.md` §6.2 step 3). Cleared at commit, and the entry
+// (`docs/spec/feat-assertion.md` §6.2 step 3). Cleared at commit, and the entry
 // plus its delta are removed at abort.
 //
 // **A reservation counts in the aggregate from the moment of admission**,
@@ -89,7 +89,7 @@ inline constexpr std::uint8_t kEntryDeparture = 0x4;
 // that rides on purge - but they are no longer any group's, and this is what
 // says so on the page itself.
 //
-// **Why the page has to carry it** (`docs/feat-assertion.md` §7, the AS6b
+// **Why the page has to carry it** (`docs/spec/feat-assertion.md` §7, the AS6b
 // decision taken 2026-08-12). A live abort removes the entry from the group's
 // list in memory, so the directory is right and `VerifyAgainstEntries` holds.
 // A *recovered* directory rebuilds that linkage by scanning these pages
@@ -120,7 +120,7 @@ inline constexpr std::uint8_t kEntryOrphaned = 0x8;
 // One entry, exactly 32 bytes on disk (§5.1's normative width).
 //
 // A plain struct with explicit encode/decode rather than a memcpy'd overlay:
-// `docs/rules.md` forbids compiler bitfields in a persisted format, and the
+// `docs/rules/rules.md` forbids compiler bitfields in a persisted format, and the
 // pk/flags/reserved word is packed by shift and mask for the same reason the
 // Keystone word is (invariant 6 - bitfield layout is implementation-defined
 // and this format must be architecture-portable).

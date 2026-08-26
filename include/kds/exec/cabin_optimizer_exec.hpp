@@ -11,7 +11,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// The cabin optimizer's effectful half (docs/feat-physical-optimizer.md
+// The cabin optimizer's effectful half (docs/spec/feat-physical-optimizer.md
 // §II.3/§II.5, PO4/PO5/PO8, workplan PHY04): `Apply(ActionSet)` - and the
 // per-tick `Tick()` that strings snapshot → Decide → Apply together for
 // the expeditor's cadence task.

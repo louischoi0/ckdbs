@@ -7,7 +7,7 @@
 #include "kds/base/status.hpp"
 #include "kds/server/wire_channel.hpp"
 
-// The TLS wire channel (docs/protocol.md §1): OpenSSL driven entirely
+// The TLS wire channel (docs/spec/protocol.md §1): OpenSSL driven entirely
 // through memory BIOs, so the channel is the pure byte transformer
 // wire_channel.hpp requires - it owns no fd, performs no I/O, and both
 // ends of a handshake can be pumped against each other in a unit test
@@ -22,7 +22,7 @@
 // Lock/atomic protocol: none. A context is immutable after creation and
 // safe to share across channels on one core; a channel belongs to one
 // connection on one reactor thread, like the connection buffers it
-// feeds (docs/rules.md §3).
+// feeds (docs/rules/rules.md §3).
 //
 // OpenSSL stays behind this header: no <openssl/*> include appears
 // outside the KDS_WITH_TLS translation units (CMakeLists.txt), which is

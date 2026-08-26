@@ -9,7 +9,7 @@
 #include "kds/parser/ast.hpp"
 #include "kds/server/command_dispatcher.hpp"
 
-// The assertion violation surface (docs/feat-assertion.md §4.4, AS9,
+// The assertion violation surface (docs/spec/feat-assertion.md §4.4, AS9,
 // workplan AST08): the message format, its type-correct group-key rendering,
 // the enforced-ceiling rule, and the wire spelling.
 //
@@ -65,7 +65,7 @@ TEST(AssertionViolationMessage, SumSpellsItsColumnAndVarcharKeysRenderAsText) {
 
 TEST(AssertionViolationMessage, ADateGroupKeyRendersAsADateNotAnEpochDay) {
     // The reason the two-argument FormatValue is mandatory here
-    // (docs/spec-types.md §3.3): a DATE decodes to the integer it is, and an
+    // (docs/spec/spec-types.md §3.3): a DATE decodes to the integer it is, and an
     // error message showing `trade_date=0` would be a number nobody declared.
     const std::vector<GroupKeyPart> group = {
         {"trade_date", catalog::kTypeValDate, Int(0)},
@@ -93,11 +93,11 @@ TEST(AssertionViolationMessage, TheBoundIsTheEnforcedCeilingNotTheDeclaredLitera
 }
 
 TEST(AssertionViolationWire, ErrLineSpellsTheTokenAndRetryableZero) {
-    // The newline-protocol spelling, FK_VIOLATION's shape (docs/protocol.md
+    // The newline-protocol spelling, FK_VIOLATION's shape (docs/spec/protocol.md
     // §11 makes the token and the retryable bit compatibility surfaces).
     // The KWP error-frame mapping is deliberately absent: KWP has no caller,
     // and its ErrorCategory gains assertion's entry with the error registry
-    // (docs/protocol-wp.md P12) beside FK's, which is also still to land.
+    // (docs/inflight/in-progress/protocol-wp.md P12) beside FK's, which is also still to land.
     const Status s = Status::AssertionViolation(
         "assertion \"limit\" group (id=1): COUNT(*) would exceed bound 5");
     EXPECT_EQ(server::ErrorReply(s),

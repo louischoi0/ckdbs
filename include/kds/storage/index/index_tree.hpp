@@ -11,7 +11,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
 
-// The secondary index B+ tree (docs/feat-index.md §4, workplan IX02).
+// The secondary index B+ tree (docs/spec/feat-index.md §4, workplan IX02).
 //
 // ---- Why this is not storage/btree/ -------------------------------------
 //

@@ -16,7 +16,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 
 // V18 - the step VM's nested half: sub-chains, negation, cardinality
-// (docs/parser-v2-workplan.md).
+// (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // Three things here are easy to get subtly wrong, and each has its own
 // section below:

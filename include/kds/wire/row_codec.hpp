@@ -12,13 +12,13 @@
 #include "kds/catalog/schema.hpp"
 #include "kds/parser/ast.hpp"
 
-// The KWP/1 row encoding (docs/protocol.md D5 and §6): how a result row
+// The KWP/1 row encoding (docs/spec/protocol.md D5 and §6): how a result row
 // becomes bytes.
 //
 // ---- One encoder, two consumers -----------------------------------------
 //
 // This is deliberately **not** part of the wire path, and it is not part of
-// the cross-core path either - it is below both. `docs/crosscore.md` CC2
+// the cross-core path either - it is below both. `docs/spec/crosscore.md` CC2
 // requires a `STEP_BATCH` payload to be "rows in the KWP binary encoding -
 // the same encoder the wire path uses... one encoder, two consumers; no
 // second row format", and this file is what makes that literal rather than
@@ -57,7 +57,7 @@
 //
 // Covers exactly what the engine can store (`src/exec/row_codec.cpp`): the
 // signed ints, `uint64`, `bool`, `char`, `varchar`, and - since the types
-// work (`docs/spec-types.md`) - `date`, `timestamp` and `decimal(p, s)`.
+// work (`docs/spec/spec-types.md`) - `date`, `timestamp` and `decimal(p, s)`.
 // `float` is refused at CREATE TABLE, so no column can hold one and
 // nothing here encodes one.
 //

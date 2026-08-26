@@ -39,7 +39,7 @@ namespace {
 // registered trips the guard.
 //
 // Core-local rather than atomic: the engine is thread-per-core and a chain
-// executes on one core (docs/rules.md §3). An atomic here would suggest a
+// executes on one core (docs/rules/rules.md §3). An atomic here would suggest a
 // cross-core protocol that does not exist.
 thread_local int g_live_spans = 0;
 thread_local bool g_guard_tripped = false;
@@ -163,13 +163,13 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
             return Status::InvalidArgument(
                 "a coroutine parked on a wait beneath a synchronous walk boundary; awaits "
                 "belong at the page boundary, never beneath a visitor "
-                "(docs/workplan-crosscore.md P4d-3)");
+                "(docs/inflight/in-progress/workplan-crosscore.md P4d-3)");
         }
     }
     return coro.result();
 }
 
-// ---- The resumable walk (docs/spec-join-inner-build.md §6, JB6) ---------
+// ---- The resumable walk (docs/spec/spec-join-inner-build.md §6, JB6) ---------
 //
 // A stopping sub-chain's walk is cut short by its own sink, so the map it
 // filled covers a *prefix* of the relation. Making that partiality safe
@@ -658,7 +658,7 @@ private:
         co_return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
     }
 
-    // ---- Cabin (docs/feat-cabin.md §4) -----------------------------------
+    // ---- Cabin (docs/spec/feat-cabin.md §4) -----------------------------------
     //
     // A non-pk equality on a cabined column: probe the Cabin's observed set,
     // and fall back to the walk when the value has not been observed.
@@ -861,7 +861,7 @@ private:
                  ((step.filter_columns >> step.build->col_pos) & 1) != 0));
     }
 
-    // The walked join's lazy build (docs/spec-join-inner-build.md §2,
+    // The walked join's lazy build (docs/spec/spec-join-inner-build.md §2,
     // workplan JB3): the annotated step's first walk runs exactly as
     // written and buckets, as a side effect, every row passing the step's
     // non-correlated residual - including rows failing the current outer
@@ -916,7 +916,7 @@ private:
         co_return walked;
     }
 
-    // The stopping sub-chain's prefix map (docs/spec-join-inner-build.md
+    // The stopping sub-chain's prefix map (docs/spec/spec-join-inner-build.md
     // §6, workplan JB6). An `EXISTS`-class sub-chain's walk is cut by its
     // own sink at the first qualifying row, so the map it filled covers a
     // *prefix* of the relation. This does not complete the map - it makes
@@ -1107,7 +1107,7 @@ private:
         co_return Status::OK();
     }
 
-    // A secondary-index probe or range (docs/feat-index.md §§1, 7).
+    // A secondary-index probe or range (docs/spec/feat-index.md §§1, 7).
     //
     // **Two phases, as ServeFromCabin is, and for a related reason.** Phase 1
     // walks the index between the bounds the compiler encoded and collects
@@ -1925,7 +1925,7 @@ private:
         // that never spills allocates nothing extra.
         spills_.clear();
 
-        // ---- MVCC, phase 1 (docs/txn.md section 4.3) --------------------
+        // ---- MVCC, phase 1 (docs/spec/txn.md section 4.3) --------------------
         //
         // **This is the one place visibility is applied**, and every access
         // kind reaches it: the chain walk, the btree descent, the probe
@@ -1946,7 +1946,7 @@ private:
         // The page's relayout epoch at the moment of access, captured under
         // the span because the trail record below runs after its release -
         // recorded so replay's rule 2 has something real to compare
-        // (docs/feat-physical-optimizer.md R4, PX04). One u64 load per
+        // (docs/spec/feat-physical-optimizer.md R4, PX04). One u64 load per
         // accepted tuple.
         std::uint64_t observed_epoch = 0;
         {
@@ -2060,7 +2060,7 @@ private:
         StepStats& step_stats = stats_.For(step.step_id);
         ++step_stats.rows_examined;
 
-        // ---- Cabin recording (docs/feat-cabin.md §4's miss path) ---------
+        // ---- Cabin recording (docs/spec/feat-cabin.md §4's miss path) ---------
         //
         // **Before the residual, and that is the whole subtlety.** The set
         // being recorded is the set of rows whose *key column* equals the
@@ -2290,7 +2290,7 @@ private:
     std::vector<PendingSpill> spills_;
 
     // The read view every tuple is filtered through, and the log an
-    // invisible writer is stepped back through (docs/txn.md section 4).
+    // invisible writer is stepped back through (docs/spec/txn.md section 4).
     // Held by value: a Snapshot is a POD and copying one is cheaper than
     // a pointer indirection on every row.
     txn::Snapshot snapshot_;
@@ -2364,7 +2364,7 @@ private:
     PageId memo_page_ = kInvalidPageId;
     std::uint16_t memo_slot_ = 0;
 
-    // ---- Cabin (docs/feat-cabin.md) --------------------------------------
+    // ---- Cabin (docs/spec/feat-cabin.md) --------------------------------------
     //
     // The core-local observed sets, or null when no Cabin is configured.
     // Shared with every sub-chain for the reason the collector and the

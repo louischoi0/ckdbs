@@ -13,7 +13,7 @@
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/txn/read_view.hpp"
 
-// docs/txn.md section 10-3, the whole group: kBootstrapXid always visible,
+// docs/spec/txn.md section 10-3, the whole group: kBootstrapXid always visible,
 // own writes visible, trx_id >= up_to_trx_id invisible, in-flight
 // invisible, undo_ptr == 0 with an invisible writer means no version, a
 // delete-mark read from both sides, a three-version chain read from three

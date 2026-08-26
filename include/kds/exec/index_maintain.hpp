@@ -9,7 +9,7 @@
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
 
-// The secondary-index write hook (docs/feat-index.md §2, workplan IX06):
+// The secondary-index write hook (docs/spec/feat-index.md §2, workplan IX06):
 // one implementation, called from the same three doors `fk_check.hpp` uses.
 //
 // ---- Every maintenance action is an append (IX2) -------------------------
@@ -33,7 +33,7 @@
 // Cabin (§1's corollary), so its hook can absorb any failure; an index has no
 // such move, because an index missing an entry is not slower, it is *wrong*.
 // Inside an explicit transaction the failure poisons the session exactly as
-// any other statement failure does (`docs/txn.md`: failure atomicity is per
+// any other statement failure does (`docs/spec/txn.md`: failure atomicity is per
 // transaction, not per statement).
 //
 // ---- The rule that decides whether the feature is usable -----------------
@@ -49,7 +49,7 @@
 // `exec::CoerceLiteralToColumn` - the one path from a written literal to a
 // value the engine keys on. A second coercion is how the Cabin came to key
 // its writes on one form and its reads on another, silently losing every row
-// inserted after a value was observed (`docs/spec-types.md` §3.1).
+// inserted after a value was observed (`docs/spec/spec-types.md` §3.1).
 //
 // **Covered columns come from `row`**, the encoded tuple, sliced at the
 // layout's offsets. They are stored as their inline cell bytes verbatim, so

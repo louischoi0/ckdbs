@@ -80,7 +80,7 @@ struct SysTableRow {
     // says may not be cached, and this one is cached on every TableAccess.
     PageId varheap_page_id;
 
-    // The core that owns this relation (docs/workplan-crosscore.md M1).
+    // The core that owns this relation (docs/inflight/in-progress/workplan-crosscore.md M1).
     //
     // **Ownership is a catalog fact and nothing else.** No code may derive
     // it from a page id, a hash, or the topology - that is workplan
@@ -104,7 +104,7 @@ struct SysTableRow {
     std::uint32_t owner_core;
 
     // Whether an id has ever landed here out of order (well_known.hpp's
-    // KeyOrder, docs/heap-and-tuple.md section 4.1).
+    // KeyOrder, docs/spec/heap-and-tuple.md section 4.1).
     //
     // **Unlike every other field on this row it is not a DDL fact**, and it
     // is the one thing TableAccess caches that a plain INSERT can move: the
@@ -187,7 +187,7 @@ struct SysColumnRow {
     //              `type_val` alone.
     //
     // The decimal reading is an **overload of an existing field, chosen
-    // over widening this row** (docs/spec-types.md TY9, workplan TY02).
+    // over widening this row** (docs/spec/spec-types.md TY9, workplan TY02).
     // Widening it is a data-file format change: `SysColumnRow` has no spare
     // byte, so `(p, s)` would have cost a superblock version bump and every
     // pre-existing data file would stop mounting - which is what the last
@@ -209,7 +209,7 @@ struct SysColumnRow {
     bool notnull = true;
 
     // Whether this column may carry a Cabin, and on whose initiative
-    // (docs/feat-cabin.md). One of the kCabinPolicy* values below.
+    // (docs/spec/feat-cabin.md). One of the kCabinPolicy* values below.
     //
     // **A schema property, not a Cabin's property.** A Cabin can be created
     // and dropped; the policy says what is *permitted* for this column and
@@ -240,7 +240,7 @@ static_assert(offsetof(SysColumnRow, len) == SysColumnRow::kLenOffset);
 static_assert(offsetof(SysColumnRow, notnull) == SysColumnRow::kNotNullOffset);
 static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicyOffset);
 
-// ---- decimal(p, s) packed into `len` (docs/spec-types.md TY9) ----------
+// ---- decimal(p, s) packed into `len` (docs/spec/spec-types.md TY9) ----------
 //
 // Explicit shift and mask, never a compiler bitfield: invariant 6 forbids
 // one for any persisted format, because their layout is
@@ -271,7 +271,7 @@ inline constexpr std::uint8_t DecimalScaleOf(std::uint32_t len) noexcept {
 // `DESCRIBE` and a `sys.columns` come to disagree about one column.
 std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name);
 
-// ---- Per-column cabin policy (docs/feat-cabin.md §8) -------------------
+// ---- Per-column cabin policy (docs/spec/feat-cabin.md §8) -------------------
 //
 // Declared at `CREATE TABLE`, per column, and fixed for the relation's life
 // (there is no `ALTER TABLE`). It answers one question: **who is allowed to
@@ -358,7 +358,7 @@ static_assert(offsetof(SysTypeRow, len) == SysTypeRow::kLenOffset);
 
 // ---- sys.indexes -----------------------------------------------------
 //
-// One row per secondary index (docs/feat-index.md §12, workplan IX03).
+// One row per secondary index (docs/spec/feat-index.md §12, workplan IX03).
 //
 // The row this replaces described a **single-column** index: one `col_pos`,
 // no root page, no name. Nothing ever wrote it - `HasUnindexedEqualityFilter`
@@ -455,7 +455,7 @@ static_assert(offsetof(SysIndexRow, covered_cols) == SysIndexRow::kCoveredColsOf
 
 // ---- sys.patterns ----------------------------------------------------
 //
-// One row per observed query shape (docs/waystone-concpets.md section 4).
+// One row per observed query shape (docs/spec/waystone-concpets.md section 4).
 // `pattern_id` is the lookup key, not `oid`: callers arrive holding a
 // fingerprint computed at parse (parser/fingerprint.hpp) and never an oid,
 // which is the reverse of every other catalog relation here.
@@ -535,7 +535,7 @@ struct SysPatternRow {
 
     // Policy bits. Today only kPatternPinned, which says what retention may
     // do to this pattern's waystones
-    // (docs/spec-create-pattern-user-defined-patterns-v1.md section 4.1).
+    // (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 4.1).
     std::uint16_t flags;
 
     // Who created this row: kOriginAuto or kOriginUser.
@@ -605,7 +605,7 @@ inline constexpr std::uint16_t kPatternPinned = 0x1;
 // ---- sys.access_stats -------------------------------------------------
 //
 // How often each **access shape** ran, and when it last ran
-// (`docs/heap-and-tuple.md` §7). One row per
+// (`docs/spec/heap-and-tuple.md` §7). One row per
 // `(kind, rel_id, column_mask)`: the physical optimizer's input, and the
 // first thing in this engine to collect the "access statistics" §7 has
 // described since it was written.
@@ -690,7 +690,7 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 //
 // One row per Cabin: a per-`(relation, non-pk column)` store that is
 // **authoritative for the values queries have observed** and for nothing
-// else (`docs/feat-cabin.md` §10, C1).
+// else (`docs/spec/feat-cabin.md` §10, C1).
 //
 // What is *in* this row is the whole of what survives a restart, and that
 // is deliberate. §9 makes Cabin pages unlogged-authoritative: the
@@ -788,7 +788,7 @@ constexpr bool IsCabinServing(const SysCabinRow& row) noexcept {
 // ---- sys.fkeys --------------------------------------------------------
 //
 // One row per foreign key: a column of a child relation whose value is a
-// **parent relation's Keystone id** (`docs/impl-foreign-keys.md` §1, F1).
+// **parent relation's Keystone id** (`docs/spec/impl-foreign-keys.md` §1, F1).
 //
 // The row is what a foreign key *is*; the checks it drives are FK-M2 and
 // FK-M3 and read nothing else. Two fields that a reader expects and will

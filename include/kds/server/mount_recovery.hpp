@@ -105,7 +105,7 @@ struct MountRecovery {
     bool page_floor_raised = false;
     std::uint64_t next_trx_id = 0;
 
-    // ---- What it cost (RC09, `docs/wal.md` §13) ----
+    // ---- What it cost (RC09, `docs/spec/wal.md` §13) ----
     //
     // `timings.timed` is false when no clock was supplied, which is what keeps
     // four zeroes from reading as "instant" (`wal/recovery.hpp`).
@@ -175,7 +175,7 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
 // The other half - rows whose relation the catalog lost - **cannot be computed
 // at all**: resolving a page to its relation needs a page->relation index,
 // `page.md` has none, and its absence is already the named blocker on page reuse
-// (`docs/feat-physical-optimizer.md` §6 gate 3). Building the set instead means
+// (`docs/spec/feat-physical-optimizer.md` §6 gate 3). Building the set instead means
 // walking every page of every relation at every mount. So `SHOW META` reports
 // this number and states the other case in words; RC09's task entry carries the
 // full argument.
@@ -219,7 +219,7 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
                                            exec::AssertionEnforcer& enforcer,
                                            MountRecovery report, Logger* log);
 
-// Recovery's completion checkpoint (RC08, `docs/wal.md` §12-4): the last step
+// Recovery's completion checkpoint (RC08, `docs/spec/wal.md` §12-4): the last step
 // of a mount, and what bounds the *next* crash's work.
 //
 // ---- Why a mount without one is a mount that gets slower ------------------

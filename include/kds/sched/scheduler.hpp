@@ -17,7 +17,7 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/task.hpp"
 
-// The reactor (docs/sched.md sections 2-4). One Scheduler runs on the
+// The reactor (docs/spec/sched.md sections 2-4). One Scheduler runs on the
 // calling thread. Still missing from sched.md's blueprint: worker-thread
 // spawning and CPU pinning (workplan-crosscore.md P2), the hierarchical
 // timing wheel, and the SLO-feedback controller. The cross-core inbox

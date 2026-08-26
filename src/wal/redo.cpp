@@ -160,7 +160,7 @@ Status ApplySlotRetire(std::span<std::byte, kPageSize> page, const DecodedRecord
 
 // The record carries the undo record's **tail** - its bytes from
 // `target_page_id` onward - plus the two chain links as payload fields
-// (docs/txn.md §3.5). Reassembling those two halves is the whole applier,
+// (docs/spec/txn.md §3.5). Reassembling those two halves is the whole applier,
 // and it is only possible because `LogUndoWrite` was corrected on
 // 2026-08-10 to log the tail: before that the three fields naming *which
 // tuple* a before-image belongs to lived on the page and nowhere in the
@@ -471,7 +471,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         return Status::Corruption(
             "redo: page " + std::to_string(*poisoned.begin()) +
             " failed its checksum and no full page image restored it; the log cannot heal this "
-            "page (docs/page.md §10)");
+            "page (docs/spec/page.md §10)");
     }
     return stats;
 }

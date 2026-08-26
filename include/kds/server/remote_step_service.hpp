@@ -23,7 +23,7 @@ namespace kds::txn {
 class TransactionManager;
 }
 
-// The remote step server (docs/crosscore.md §2-§4, workplan P4b): an owning
+// The remote step server (docs/spec/crosscore.md §2-§4, workplan P4b): an owning
 // core takes a STEP_OPEN, executes the described step against its **local**
 // relation state, and streams STEP_BATCHes to the downstream core under
 // credit, EOF at the end, ERROR with the code and the retryable bit on any
@@ -297,7 +297,7 @@ private:
     // (crosscore.md CC4). **No view crosses a core**: each stage mints its
     // own from *its* core through `txn::AutocommitSnapshot`, once, held
     // across its parks - which is the per-core weakening of REPEATABLE
-    // READ `docs/known-gaps.md` records. Null (the reactorless protocol
+    // READ `docs/inflight/known-gaps.md` records. Null (the reactorless protocol
     // tests) means every writer visible, exactly the pre-MVCC behaviour.
     txn::TransactionManager* txns_;
     // The row-touch ceiling every stage on this core runs under - **this

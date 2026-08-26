@@ -239,7 +239,7 @@ bool DevicePageStore::IsHeaderless(PageId page_id) const noexcept {
     // engine's only creator of them - the answer is no, with no lookup.
     if (!any_headerless_) return false;
     // A map page's class is arithmetic, never a lookup. §3 of
-    // docs/workplan-multi-free-map.md needs this to be true rather than
+    // docs/inflight/in-progress/workplan-multi-free-map.md needs this to be true rather than
     // merely convenient: this predicate sits on the fault path, the
     // write-back path and the WAL gate, so answering it by reading a map
     // would be a recursion if a map page could ever be the question. Both
@@ -1264,7 +1264,7 @@ Status DevicePageStore::EvictClean(std::span<const PageId> page_ids) {
         }
         // A pinned frame is one somebody holds a live `PageRef` into, so
         // dropping it here is the use-after-free the handle exists to
-        // prevent (docs/workplan-eviction.md EV01). This path predates pins
+        // prevent (docs/inflight/in-progress/workplan-eviction.md EV01). This path predates pins
         // and its callers - a peer dropping stale catalog pages - never hold
         // one, so the check guards against a future caller rather than
         // against normal operation, exactly as the dirty check above does.
@@ -1315,7 +1315,7 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 
 
 
-// ---- Frame reclamation (docs/workplan-eviction.md EV01-EV02) -------------
+// ---- Frame reclamation (docs/inflight/in-progress/workplan-eviction.md EV01-EV02) -------------
 
 void DevicePageStore::PinFrame(PageId page_id) noexcept {
     // Called by the base pinned accessors immediately after the raw fetch
@@ -1336,7 +1336,7 @@ void DevicePageStore::PinFrame(PageId page_id) noexcept {
     if (live_pins_ > kPinCeiling) {
         std::fprintf(stderr,
                      "DevicePageStore: %zu live pins exceeds kPinCeiling %zu "
-                     "(docs/workplan-pageref.md MG04)\n",
+                     "(docs/spec/page.md §3)\n",
                      live_pins_, kPinCeiling);
         std::abort();
     }
@@ -1366,7 +1366,7 @@ bool DevicePageStore::IsPinnedClass(PageId page_id) const noexcept {
     // Half one: the reserved low ids. Needed because the fixed catalog pages
     // are formatted kHeap like any user relation, so the kind cannot tell
     // them apart - the finding recorded at the declaration and in
-    // docs/workplan-eviction.md EVT01.
+    // docs/inflight/in-progress/workplan-eviction.md EVT01.
     if (page_id < first_evictable_page_id_) return true;
 
     // Half two: the page kind, which is what EV3 actually specifies and what

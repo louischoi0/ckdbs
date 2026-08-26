@@ -5,7 +5,7 @@
 
 #include "kds/exec/step_chain.hpp"
 
-// The emission quota - V09's execution half (docs/parser-v2.md I11).
+// The emission quota - V09's execution half (docs/spec/parser-v2.md I11).
 //
 // ---- Why this is a sink decorator and not a step -------------------------
 //

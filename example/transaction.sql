@@ -23,7 +23,7 @@
 -- one in §5 (changing the level mid-transaction), one in §5 (SERIALIZABLE),
 -- and four in §6 (the bad column, then the three refusals that follow it).
 --
--- Spec: docs/txn.md. Command reference: docs/client-manual.md §3.
+-- Spec: docs/spec/txn.md. Command reference: docs/spec/client-manual.md §3.
 -- ===========================================================================
 
 
@@ -73,7 +73,7 @@ SELECT * FROM accounts;
 --
 -- An UPDATE's bytes are put back, an INSERT's slot is retired, and a
 -- DELETE's mark is cleared — each by the compensation its trail entry names
--- (docs/txn.md §6). Undo pages are not freed; nothing purges.
+-- (docs/spec/txn.md §6). Undo pages are not freed; nothing purges.
 -- ---------------------------------------------------------------------------
 
 BEGIN;
@@ -168,7 +168,7 @@ BEGIN ISOLATION LEVEL SERIALIZABLE;
 -- ---------------------------------------------------------------------------
 -- 6. A failed statement poisons the transaction
 --
--- **Failure atomicity is per transaction, not per statement** (docs/txn.md
+-- **Failure atomicity is per transaction, not per statement** (docs/spec/txn.md
 -- §6). A statement that fails inside an explicit transaction does not undo
 -- the ones before it — the connection enters `failed-txn` and answers only
 -- ROLLBACK / ABORT / SYNC / STOP / PING until you roll back. That is a
@@ -277,7 +277,7 @@ SELECT * FROM accounts;                           -- alice is 900
 --     readers are deliberately unregistered, which is what makes purge
 --     impossible today.
 --   * **Recovery does not exist.** An uncommitted row that survives a crash
---     reads as *committed* on the next boot (docs/txn.md §8). This is a
+--     reads as *committed* on the next boot (docs/spec/txn.md §8). This is a
 --     stated, accepted gap, not an oversight — closing it needs a persisted
 --     commit watermark, which is recovery.
 -- ---------------------------------------------------------------------------

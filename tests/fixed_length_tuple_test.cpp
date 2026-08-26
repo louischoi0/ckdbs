@@ -19,7 +19,7 @@
 #include "kds/storage/varheap.hpp"
 #include "kds/storage/visit.hpp"
 
-// The fixed-length rule, end to end (docs/rule-fixed-length-tuple.md
+// The fixed-length rule, end to end (docs/rules/rule-fixed-length-tuple.md
 // section 8).
 //
 // The test that names the feature is TupleAddressesSurviveARandomizedUpdate

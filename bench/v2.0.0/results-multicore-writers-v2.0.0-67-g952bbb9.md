@@ -6,9 +6,9 @@ relation at its expected row count, and the peer's lease refills wait
 milliseconds: the row-id refill's longest wait is 3.0–3.3 ms, the extent
 refill's 4.9–5.8 ms, the trx-id refill's 7.4–26.5 ms, and not one of the
 three was ever refused mid-run** — every refusal in every peer's log is the
-row-id lease's first-INSERT refusal that `docs/workplan-peer-writer.md` §7a
-makes the contract. Those are the numbers `docs/known-gaps.md` and
-`docs/workplan-peer-writer.md` PW7 record as owed from a `bench/v2.0.0/`
+row-id lease's first-INSERT refusal that `docs/inflight/in-progress/workplan-peer-writer.md` §7a
+makes the contract. Those are the numbers `docs/inflight/known-gaps.md` and
+`docs/inflight/in-progress/workplan-peer-writer.md` PW7 record as owed from a `bench/v2.0.0/`
 file, and this file is it, measured on the tree at `v2.0.0-67-g952bbb9`.
 
 The rest of the matrix says what it said before the scheduler's floors,
@@ -297,7 +297,7 @@ peer's warn-level logs, read after the run, hold **only row-id refusals** —
 7 per B run and 18/18/20 per C run, every one an `INSERT` of a relation's
 first row refused with `row-id lease for relation oid N is spent; retry
 after the refill grant lands` — and not one `transaction-id lease` or
-`extent lease` refusal in any of the ten peer logs. `docs/workplan-peer-writer.md`
+`extent lease` refusal in any of the ten peer logs. `docs/inflight/in-progress/workplan-peer-writer.md`
 PW7's row claims this cell at 0.99–1.03× with no lost rows; at
 `v2.0.0-67-g952bbb9` it measures 1.030× (1.007 / 1.026 / 1.057) with every
 relation at its expected count.
@@ -344,7 +344,7 @@ session after each peer configuration:
 
 Every request was granted, and **the submit→sent leg is zero in every
 row** — the request task is polled in the iteration it is submitted, which
-is the floor `docs/sched.md` §4 states. The three legs that remain each
+is the floor `docs/spec/sched.md` §4 states. The three legs that remain each
 say something about the engine at this commit:
 
 - **The row-id refill's longest wait is 3.0–3.3 ms under four writers**
@@ -365,7 +365,7 @@ say something about the engine at this commit:
   late enough to refuse an allocation.
 - **The trx-id refill's ring leg is 5.8–33 ms over 13,531–91,547
   iterations** — 0.35–0.45 µs per iteration — which is the peer's reactor
-  spinning while it waits: `docs/known-gaps.md` records that a reactor with
+  spinning while it waits: `docs/inflight/known-gaps.md` records that a reactor with
   a parked coroutine drops its idle block to zero, and these counts are
   what that looks like. The wait itself is core 0's side of the grant (the
   ceiling raise is persisted before the reply, `src/server/expeditor.cpp:1434`)
@@ -562,13 +562,13 @@ per-relation start-up cost of a few milliseconds and nothing else.** On
 `agent-a88b32b3e80c45166` at `952bbb9` every refill request in ten peer
 configurations was granted, the submit leg is zero in every one — the
 request task is polled in the iteration it is submitted, which is exactly
-what `docs/sched.md` §4's first floor promises — and the longest row-id
+what `docs/spec/sched.md` §4's first floor promises — and the longest row-id
 wait under four writers is 3.3 ms. The two legs that carry time are both
 the device's: the resume leg is one reactor iteration long because that
 iteration holds a `fdatasync`, and the extent leg holds core 0's map sync
 before the grant leaves. The four-writer cell's throughput, its four
 per-phase rates, its write medians and its read median are core 0's, and
-its verify is clean at 2,000 and at 10,000 rows. `docs/workplan-peer-writer.md`
+its verify is clean at 2,000 and at 10,000 rows. `docs/inflight/in-progress/workplan-peer-writer.md`
 PW7's claim for this cell — 0.99–1.03×, no lost rows — holds at this
 commit, measured on its own evidence.
 
@@ -580,7 +580,7 @@ and the throughput ratio (0.990 at two writers, 1.030 at four) is inside
 what the control does to itself. PW1–PW5's write path — the row-id lease,
 the trx-id lease, the PL-B handoff's write grant and the peer's own WAL
 stream — has no per-statement tax this harness can resolve. Still
-unmeasured, and the binding constraint `docs/workplan-peer-writer.md` §1
+unmeasured, and the binding constraint `docs/inflight/in-progress/workplan-peer-writer.md` §1
 names: whether a second writer *core* adds capacity, which needs a third
 CPU (§2, §11).
 
@@ -591,7 +591,7 @@ read beside a committing session at 1,088 µs on core 0 and 1,083 on core
 1,122–1,170 µs on both cores, 2% of reads, against PostgreSQL's 337. The
 drain's `fdatasync` runs on the reactor thread at this commit and blocks
 it ~1 ms per commit, so a saturating writer takes ~90% of its core's wall
-clock out of service for everyone else on it. `docs/wal.md` §6 has the
+clock out of service for everyone else on it. `docs/spec/wal.md` §6 has the
 drain in the `system` group and the commit "suspended on a flush future",
 and `kds.conf.sample`'s `cores` key has reactors that "are pinned and never
 block"; the measurement says otherwise for reads on a committing core. The
@@ -602,14 +602,14 @@ at the tail** — in this file only at the tail, because nothing
 desynchronises the sessions any more; a workload whose readers and writers
 are not in phase would see it at the median, as the probe does. An
 asynchronous sync — the drain handing the `fdatasync` to an I/O thread or
-`io_uring` and the reactor continuing — is `docs/heap-and-tuple.md` §8's
+`io_uring` and the reactor continuing — is `docs/spec/heap-and-tuple.md` §8's
 open I/O-backend decision, and this is its second data point at the same
 size as the first.
 
 **A peer waiting on a grant spins.** The trx-id refill's 13,531–119,885
 iterations over 6–50 ms are a reactor polling at 0.4 µs per iteration with
-nothing to run but the ring check — `docs/known-gaps.md`'s "a reactor with
-any parked coroutine spins", and `docs/sched.md` §4's accounting gap beside
+nothing to run but the ring check — `docs/inflight/known-gaps.md`'s "a reactor with
+any parked coroutine spins", and `docs/spec/sched.md` §4's accounting gap beside
 it (reactor time outside polls is charged to no group). It costs this
 workload nothing measurable, because the peer's other sessions are in the
 kernel for most of every millisecond anyway; on a host where the peer
@@ -637,7 +637,7 @@ rather than a device fact.
   the host.
 - **The drain's `fdatasync` on the reactor is the read tail at four
   sessions and the read median for any out-of-phase reader** (§7, §10).
-  `docs/wal.md` §6 and `kds.conf.sample`'s `cores` comment describe a
+  `docs/spec/wal.md` §6 and `kds.conf.sample`'s `cores` comment describe a
   reactor that does not block; the spec should carry the measured cost
   until the I/O-backend decision retires it.
 - **Three refusals promise a retry without the wire's bit** (§6c) —

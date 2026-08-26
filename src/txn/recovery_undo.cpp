@@ -61,7 +61,7 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
             std::to_string(rec.target_page_id) + " slot " + std::to_string(rec.target_slot) +
             " (found " + (here.has_value() ? std::to_string(here.value()) : std::string("nothing")) +
             "); a leaf division moved it and recovery cannot re-locate a row - "
-            "docs/workplan-wal-recovery.md §4a");
+            "docs/spec/wal.md");
     }
 
     switch (rec.type) {

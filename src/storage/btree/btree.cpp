@@ -129,7 +129,7 @@ StatusOr<std::uint64_t> MaxLiveId(heap::PageView& leaf) {
 // covers it, appends land past every key already there, and dead slots keep
 // their position so retirement does not disturb the order.
 //
-// **A caller-supplied id breaks that** (docs/heap-and-tuple.md section 4.1):
+// **A caller-supplied id breaks that** (docs/spec/heap-and-tuple.md section 4.1):
 // a caller-supplied id may sort anywhere, so it can be appended into a slot
 // below its neighbours, and SplitLeafAndInsert redistributes by key rather
 // than by slot position. Which is why the fallback below is not decoration:
@@ -387,7 +387,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
     return out;
 }
 
-// ---- Dividing a full leaf (docs/heap-and-tuple.md section 4.1) ------------
+// ---- Dividing a full leaf (docs/spec/heap-and-tuple.md section 4.1) ------------
 //
 // Reached only when a caller-supplied id sorts *inside* a full leaf. A
 // monotonic sequence never gets here: it always appends past the leaf's
@@ -660,7 +660,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // an *append*: a fresh leaf, nothing moved, which is what a monotonic id
     // sequence produces and is handled below. When `id` sorts inside the
     // leaf - which only a caller-supplied, possibly descending id can do
-    // (docs/heap-and-tuple.md section 4.1) - the leaf must genuinely divide,
+    // (docs/spec/heap-and-tuple.md section 4.1) - the leaf must genuinely divide,
     // which is SplitLeaf's job.
     auto max_id = MaxLiveId(leaf);
     if (!max_id.ok()) return max_id.status();
@@ -674,7 +674,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // below has to hand it on. While ids were monotonic the leaf reached by
     // an append-split was always the rightmost one, so this was always
     // kInvalidPageId and CreateEmptyAs's default happened to be right. A
-    // caller-supplied id (docs/heap-and-tuple.md section 4.1) reaches a full
+    // caller-supplied id (docs/spec/heap-and-tuple.md section 4.1) reaches a full
     // leaf in the *middle* of the chain - `id` above everything in it, still
     // below the next leaf's min_key - and dropping the link there truncates
     // the chain: every leaf past the splice vanishes from every sequential

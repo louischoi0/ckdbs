@@ -14,7 +14,7 @@
 // The transaction-id lease over the ring (`RingMessageKind::kTrxIdLease`,
 // reserved by workplan P1 and unsent until now): how a peer that may not
 // write the superblock obtains blocks of transaction ids
-// (`docs/workplan-peer-writer.md` PW1).
+// (`docs/inflight/in-progress/workplan-peer-writer.md` PW1).
 //
 // `row_id_lease_service.hpp`'s shape exactly, applied to the sequence that
 // is per-instance rather than per-relation - which is why no payload here
@@ -30,7 +30,7 @@
 //
 // ---- The block size, and why nobody re-decides it -----------------------
 //
-// `kTrxIdBlockSize` = 4096, the floor `docs/keystoneid-invariant.md` K-M2
+// `kTrxIdBlockSize` = 4096, the floor `docs/rules/keystoneid-invariant.md` K-M2
 // established by measurement (below it the durable bump stops amortizing).
 // The grant reuses it rather than introducing a second number for the same
 // question. A parameter everywhere, like every such constant here.

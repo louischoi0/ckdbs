@@ -61,7 +61,7 @@ bool FindColumnPos(const catalog::Schema& schema, std::string_view name, std::ui
 
 // Resolves one written column name to a compiled reference.
 //
-// The two rules, from docs/parser-v2.md's resolution section:
+// The two rules, from docs/spec/parser-v2.md's resolution section:
 //
 //   qualified     `a.x` names a relation or alias in this chain's FROM
 //                 list or an enclosing one.
@@ -399,7 +399,7 @@ bool IsOwnColumn(const ColumnRef& ref, std::uint16_t slot) {
     return ref.up == 0 && ref.rel_slot == slot;
 }
 
-// ---- Equality propagation (docs/parser-v2.md §5) -------------------------
+// ---- Equality propagation (docs/spec/parser-v2.md §5) -------------------------
 //
 // From `A = B` - two columns of this chain - and `B = <literal>`, append
 // the implied `A = <literal>`, so the step owning A can be keyed instead
@@ -564,7 +564,7 @@ bool HasUnindexedEqualityFilter(const catalog::TableAccess& access, const Step& 
     return false;
 }
 
-// ---- Index selection (docs/feat-index.md §9) ----------------------------
+// ---- Index selection (docs/spec/feat-index.md §9) ----------------------------
 //
 // **`f(shape, catalog)`, and nothing else.** No statistics, no cardinality
 // estimate, no property of the data - because a recorded pattern must not
@@ -740,7 +740,7 @@ bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow&
     return a.type_val == b.type_val && a.len == b.len;
 }
 
-// The correlated index probe (docs/feat-index.md §8a), or nullopt: an index
+// The correlated index probe (docs/spec/feat-index.md §8a), or nullopt: an index
 // whose **leading** key column is bound by equality to a column of an
 // *earlier* step or an enclosing chain - a join key - so the descent is
 // keyed per outer row instead of the relation being walked per outer row.
@@ -846,7 +846,7 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
     return std::nullopt;
 }
 
-// The correlated cabin probe (docs/feat-cabin.md §4a), or nullopt: a
+// The correlated cabin probe (docs/spec/feat-cabin.md §4a), or nullopt: a
 // cabined column bound by equality to an earlier step's or an enclosing
 // chain's column - the join shape, IX17's selection one trust class over.
 // Reached only after the literal form declined; first qualifying conjunct
@@ -890,7 +890,7 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
     return std::nullopt;
 }
 
-// The walked-join annotation (docs/spec-join-inner-build.md §5, workplan
+// The walked-join annotation (docs/spec/spec-join-inner-build.md §5, workplan
 // JB1), or nullopt. Still `f(shape, catalog)` - the residual and two schema
 // descriptors are all it reads - and declining is never a wrong answer,
 // only a forgone build. Two declines are this loop's own, spec §8's by
@@ -1728,7 +1728,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- The post-fold consumers, until HV-2 and HV-4 --------------------
     //
     // HV-1 parses `HAVING` and an aggregated `ORDER BY`; the fold's filter
-    // and the fold's sort are the next two tasks (docs/workplan-having.md).
+    // and the fold's sort are the next two tasks (docs/inflight/in-progress/workplan-having.md).
     // Refused here, positioned, and **never dropped**: a clause parsed,
     // accepted and silently ignored is the failure parser-v2.md I11 records
     // having already made once on a catalog view, and it is worse than the
@@ -1837,7 +1837,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         chain.sort_keys.clear();
 
         // ...and on a relation that has taken an out-of-order key, "the order
-        // the chain already emits" is not quite true (docs/heap-and-tuple.md
+        // the chain already emits" is not quite true (docs/spec/heap-and-tuple.md
         // §4.1): a page's slots are in insertion order, which equals key
         // order only while every id was appended above every id already
         // there. An id admitted below the relation's high-water mark was not.

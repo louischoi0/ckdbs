@@ -254,7 +254,7 @@ namespace {
 // column, which is the shape a secondary index serves locally and the
 // descriptor cannot ship. Each test reshapes only the step whose kind it
 // is about: the plan test makes the inner a kProbe, the downgrade tests
-// (docs/feat-index.md §8a) a structure kind.
+// (docs/spec/feat-index.md §8a) a structure kind.
 struct DowngradeFixture {
     catalog::Schema outer_schema;
     catalog::Schema inner_schema;
@@ -415,7 +415,7 @@ TEST(SessionStepPipelineTest, AStructureServedInnerStepShipsAsItsWalk) {
     // The hole this closes: an inner step of IX17's kind used to fail
     // eligibility outright, so CREATE INDEX on a peer relation's join
     // column turned the join's answers into affinity ERRs
-    // (docs/known-gaps.md's closed entry). It now plans, and the
+    // (docs/inflight/known-gaps.md's closed entry). It now plans, and the
     // consuming stage receives the walk the step would fall back to
     // anyway: kScan, no aux, the join equality still in the residual.
     DowngradeFixture fx;

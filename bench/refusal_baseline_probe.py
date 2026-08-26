@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """T5 - the before-shipping reading of the cross-core write refusal counters.
 
-`docs/crosscore.md` §6 specifies a per-core counter keyed (home core, target
+`docs/spec/crosscore.md` §6 specifies a per-core counter keyed (home core, target
 core, relation) and calls it *"the input the future placement/2PC decision
 will be made from"*. One instrument, two eras: read **now**, it says how
 often today's engine refuses a write because the session is on the wrong

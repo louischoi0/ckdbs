@@ -7,7 +7,7 @@
 #include "kds/stats/waystone_dir.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// Writing and reading one instance's trail (docs/waystone-workplan.md P08).
+// Writing and reading one instance's trail (docs/inflight/in-progress/waystone-workplan.md P08).
 //
 // The round-trip is the least interesting thing here - the page codec has
 // its own tests. What is pinned below is the three ways a trail must

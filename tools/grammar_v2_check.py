@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end check of the v2 SQL grammar (docs/parser-v2.md, tasks V04-V07)
+"""End-to-end check of the v2 SQL grammar (docs/spec/parser-v2.md, tasks V04-V07)
 against a running ckdbs server.
 
 Unlike tools/demo_queries.py, this script is NOT a demo and "no errors" is
@@ -25,7 +25,7 @@ relation's rows, which looks like it worked.
     status code (src/server/command_dispatcher.cpp), so this script cannot
     tell Unsupported from InvalidArgument over the wire - it matches on
     message text instead. KWP/1 has an ErrorCategory field for exactly
-    this (include/kds/wire/kwp.hpp, docs/protocol.md section 11) but
+    this (include/kds/wire/kwp.hpp, docs/spec/protocol.md section 11) but
     nothing speaks KWP/1 yet. The unit tests assert the real codes;
     tests/parser_*_test.cpp is where that is pinned.
 

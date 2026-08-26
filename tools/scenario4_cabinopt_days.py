@@ -221,7 +221,7 @@ def abort(message, reply=None):
 
 
 def server_cpu_seconds(pid):
-    """utime+stime of one server process (docs/workplan-aggregate-perf.md's
+    """utime+stime of one server process (docs/inflight/in-progress/workplan-aggregate-perf.md's
     meter: client latency cannot resolve server fixed costs). Resolution is
     one jiffy per read; per-block sums over a session stay within ~10%."""
     if not pid:

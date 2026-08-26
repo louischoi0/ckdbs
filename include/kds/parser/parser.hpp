@@ -71,11 +71,11 @@ private:
     StatusOr<IndexStmt> ParseIndex(bool drop);
 
     // `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
-    // (docs/spec-alter.md AL7), with `ALTER` already consumed. Every other
+    // (docs/spec/spec-alter.md AL7), with `ALTER` already consumed. Every other
     // form under ALTER is refused here, by name and position (AL1).
     StatusOr<AlterStmt> ParseAlter();
 
-    // `{CREATE | DROP} ASSERTION ...` (docs/feat-assertion.md §3), with the
+    // `{CREATE | DROP} ASSERTION ...` (docs/spec/feat-assertion.md §3), with the
     // leading two words already consumed. One production for both, for
     // ParseCabin's reason - see AssertionStmt (ast.hpp).
     StatusOr<AssertionStmt> ParseAssertion(bool drop);
@@ -88,7 +88,7 @@ private:
     // takes: `feat-assertion.md` §3 declares no ceiling on it, and inventing
     // one here would settle a number nothing has measured. An index's lists
     // pass their own `[PROPOSED]` caps, which are refusals and never
-    // truncations (docs/feat-index.md §13).
+    // truncations (docs/spec/feat-index.md §13).
     Status ParseDeclaredColumnList(std::vector<IndexColumnRef>& out, const char* what,
                                    std::size_t cap);
 
@@ -138,7 +138,7 @@ private:
     Status ParseGroupBy(SelectStmt& stmt);
 
     // `HAVING <agg> <op> <val> [AND ...]`, with the word already consumed
-    // (docs/workplan-having.md HV-1). Shape only: that the left side is an
+    // (docs/inflight/in-progress/workplan-having.md HV-1). Shape only: that the left side is an
     // aggregate the fold can answer, and that the right side is a literal,
     // are this production's; whether the aggregate typechecks and whether a
     // plain column is a grouping key are the compiler's.
@@ -146,7 +146,7 @@ private:
 
     // The pagination tail of a query block: `[ORDER BY <key> [ASC]]
     // [LIMIT <n>] [OFFSET <m>]` (spec I11, workplan V09, amended by
-    // docs/workplan-having.md HV4). Every refusal lives here with the
+    // docs/inflight/in-progress/workplan-having.md HV4). Every refusal lives here with the
     // production - subquery position, an ordinal, an expression, an
     // aggregate key on a statement with no fold to answer it, `LIMIT` over
     // a fold - so there is one answer to what the tail admits.

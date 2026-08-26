@@ -5,7 +5,7 @@
 
 #include "kds/parser/parser.hpp"
 
-// V06 - projection and qualified names (docs/parser-v2-workplan.md).
+// V06 - projection and qualified names (docs/inflight/in-progress/parser-v2-workplan.md).
 //
 // Two rules, and the second is the one with teeth:
 //

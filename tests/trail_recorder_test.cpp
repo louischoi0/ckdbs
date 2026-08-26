@@ -13,7 +13,7 @@
 #include "kds/stats/trail_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// The trail recorder end to end (docs/waystone-workplan.md P09/P10): what
+// The trail recorder end to end (docs/inflight/in-progress/waystone-workplan.md P09/P10): what
 // decides an instance is worth remembering, and what it writes.
 //
 // The last test in this file is the one that matters most. Everything else

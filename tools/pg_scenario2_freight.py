@@ -434,7 +434,7 @@ def book_once(client, tables, state, args, phases, rng, day):
     return COMMITTED
 
 
-# ---- the reporter (docs/scenario2-freight.md §6) -------------------------
+# ---- the reporter (docs/inflight/in-progress/scenario2-freight.md §6) -------------------------
 
 def make_manifest(args, operations, orgs):
     """The reporter's state. The ckdbs driver runs its reporter in a second

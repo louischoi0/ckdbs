@@ -11,7 +11,7 @@
 #include "kds/sched/ring_message.hpp"
 #include "kds/server/step_pipeline.hpp"
 
-// The session side of a remote read (docs/crosscore.md §2, workplan P4c):
+// The session side of a remote read (docs/spec/crosscore.md §2, workplan P4c):
 // opens a pipeline for one shipped step, collects its batches, grants a
 // credit back per batch drained, and completes - with rows or with the
 // remote error - when EOF or STEP_ERROR arrives. The completion flag is a

@@ -47,7 +47,7 @@ written idiomatically, and each is stated here so a quoted number carries it.
    existed, so the default is not a limitation being matched - it is the
    *statement count* being matched. Wrapping turns four commits into one and
    roughly quarters the fsync bill, which prices a feature ckdbs also has
-   (docs/txn.md is built) rather than the statement throughput both tools set
+   (docs/spec/txn.md is built) rather than the statement throughput both tools set
    out to measure - so it is a flag on both, off on both, and meaningful only
    when set on both. Unwrapped, the tool counts partial applications and
    prints them as `torn`, the same as the ckdbs side; wrapped, `torn` is zero
@@ -92,7 +92,7 @@ scenario0_stockmarket.py rather than reimplemented, so the two runs cannot drift
 
 ## The `--cabin` counterpart
 
-ckdbs's `--cabin` gives `accounts.user_id` a **Cabin** (docs/feat-cabin.md):
+ckdbs's `--cabin` gives `accounts.user_id` a **Cabin** (docs/spec/feat-cabin.md):
 a store authoritative for the values queries have actually observed, which
 serves the reporter's `WHERE user_id = <n>` from an observed value's entry set
 instead of walking the relation, and charges each account UPDATE a directory
@@ -215,7 +215,7 @@ FK_CHILD, FK_COLUMN, FK_PARENT = "trades", "account_id", "accounts"
 #   - PostgreSQL takes a `KEY SHARE` row lock on the parent for each check,
 #     so two traders inserting against one account serialize briefly on it.
 #     ckdbs takes no lock: a check that meets an in-flight writer fails fast
-#     and retryably (docs/impl-foreign-keys.md F3). This scenario gives each
+#     and retryably (docs/spec/impl-foreign-keys.md F3). This scenario gives each
 #     trader a disjoint account partition, so the lock is uncontended here -
 #     which is a property of the workload, not of either engine.
 #   - Neither engine indexes the *child* column for it. That only matters

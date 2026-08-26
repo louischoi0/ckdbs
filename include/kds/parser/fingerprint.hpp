@@ -8,7 +8,7 @@
 
 // Query-template fingerprinting: the parse-time reduction of a statement
 // to its function form - `patternX(a, b)` - as a pair of integers
-// (docs/waystone-concpets.md sections 1 and 3, docs/parser.md I1). This is
+// (docs/spec/waystone-concpets.md sections 1 and 3, docs/parser.md I1). This is
 // the gate every other Waystone task sits behind: without a stable
 // pattern identity there is nothing to key a waystone on.
 //
@@ -196,7 +196,7 @@ constexpr bool IsCurrentFingerprintVersion(std::uint32_t stored) noexcept {
 
 // The function form of one statement: which pattern, and with what
 // arguments. Both halves are meaningless on their own - a waystone is
-// keyed on the pair (docs/waystone-concpets.md section 5).
+// keyed on the pair (docs/spec/waystone-concpets.md section 5).
 struct Fingerprint {
     // Identifies the statement's shape. The key of a `sys.patterns` row.
     std::uint64_t pattern_id = 0;
@@ -299,7 +299,7 @@ private:
     bool valid_ = false;     // ...and it was patternable, and nothing failed to lex
     bool complete_ = false;  // kEof has been fed
 
-    // BI5's suppression (docs/spec-bulkinsert.md §2.4): an INSERT's shape
+    // BI5's suppression (docs/spec/spec-bulkinsert.md §2.4): an INSERT's shape
     // is its **first row's**. Once the first top-level paren group of an
     // INSERT-headed stream has closed, later tokens fold literals into
     // arg_hash and nothing into the shape - so `VALUES (1)` and

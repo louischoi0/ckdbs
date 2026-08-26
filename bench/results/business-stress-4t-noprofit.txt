@@ -23,7 +23,7 @@ account-update           77214         644    2375.4   1998.2   5947.8  12010.1 
   trade-insert: heap chain tail append, WAL-logged
   account-update: in-place overwrite after a clustered-btree descent, unlogged
 
-  the four statements are NOT atomic: there is no transaction manager and no BEGIN/COMMIT on this engine (docs/txn.md is specification, not code), so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+  the four statements are NOT atomic: there is no transaction manager and no BEGIN/COMMIT on this engine (docs/spec/txn.md is specification, not code), so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
   balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
   money is int64 minor units - float/decimal columns are refused at CREATE TABLE under the fixed-length rule.
   INSERT is the one logged statement (durability=group); UPDATE and CREATE TABLE are unlogged, so the balance moves survive only a SYNC or a clean shutdown. Do not measure this on tmpfs, where fsync is free and every durability class looks identical.
@@ -37,7 +37,7 @@ business scenario
   TPS                        321.7   committed transactions/sec
   statements/sec           1,286.9   4 statements per transaction
   committed                 38,607
-  torn                           0   partially applied; no rollback exists (docs/txn.md)
+  torn                           0   partially applied; no rollback exists (docs/spec/txn.md)
   underfunded                   21   skipped before any statement was sent
   per trader          #0:9,712  #1:9,547  #2:9,752  #3:9,596
 

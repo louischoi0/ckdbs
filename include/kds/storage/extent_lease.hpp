@@ -10,7 +10,7 @@
 #include "kds/storage/page_device.hpp"
 
 // Page-id extents: how a core that does not own the free map allocates
-// pages (docs/workplan-crosscore.md M5 and P5, docs/page.md §7).
+// pages (docs/inflight/in-progress/workplan-crosscore.md M5 and P5, docs/spec/page.md §7).
 //
 // ---- Why leases exist, and why they are not an optimization -------------
 //
@@ -20,14 +20,14 @@
 // effortful: there are 22 synchronous allocation sites deep in the storage
 // layer (btree split, heap chain growth, var-heap append, undo pages), and
 // nothing in the engine can suspend mid-call. Task representation is an
-// explicitly open decision (`docs/sched.md` §3 and §10, CLAUDE.md), so
+// explicitly open decision (`docs/spec/sched.md` §3 and §10, CLAUDE.md), so
 // converting those call sites into resumable state machines would settle it
 // by precedent, in the worst possible place to settle it.
 //
 // A lease removes the question. A core reserves a **run of ids up front**
 // and then allocates from it with no message, no suspension and no change to
 // any of those 22 sites. This is exactly the "per-core prealloc batching"
-// `docs/page.md` §7 deferred; it lands with the fan-out because per-core
+// `docs/spec/page.md` §7 deferred; it lands with the fan-out because per-core
 // page stores do not work without it.
 //
 // The same trade `txn::TrxIdSequence` already makes for transaction ids, and
@@ -68,7 +68,7 @@ struct Extent {
     // One past the last id. Safe to compute: Reserve() refuses a run that
     // would reach kMaxPageCount, so this never wraps - the guard moved with
     // the ceiling when the free map became multi-page (FM4, and
-    // docs/workplan-multi-free-map.md §4's first named boundary case).
+    // docs/inflight/in-progress/workplan-multi-free-map.md §4's first named boundary case).
     PageId end() const noexcept { return first + count; }
 
     bool Contains(PageId page_id) const noexcept {
@@ -91,7 +91,7 @@ class DevicePageStore;
 // It does not own the map: `DevicePageStore` holds the bytes and is the
 // only thing that writes them back. **A reservation is therefore durable
 // only once the store has flushed a map it knows is dirty, and this class
-// has to be what tells it** (PW3b's finding, docs/workplan-peer-writer.md):
+// has to be what tells it** (PW3b's finding, docs/inflight/in-progress/workplan-peer-writer.md):
 // the store marks its map dirty when `free_map_bytes()` is *taken*, so an
 // allocator that cached that span reserved into a map the next flush
 // skipped as clean - every refill core 0 granted after its last flush
@@ -105,7 +105,7 @@ class DevicePageStore;
 // **It holds no page.** Before the free map became multi-page it borrowed
 // one span for its lifetime, which is also why one bitmap page's coverage
 // and the whole id space were the same number. Since FM4 it holds the store
-// and asks for a region at a time (docs/workplan-multi-free-map.md).
+// and asks for a region at a time (docs/inflight/in-progress/workplan-multi-free-map.md).
 class ExtentAllocator {
 public:
     // Over the live map of the store whose ids are being carved - the
@@ -142,7 +142,7 @@ public:
     // accurate, since nobody else may have them.
     //
     // **A reservation never crosses a free-map region** (D3(a) of
-    // docs/workplan-multi-free-map.md). A run that would straddle abandons
+    // docs/inflight/in-progress/workplan-multi-free-map.md). A run that would straddle abandons
     // the tail of the region it started in and restarts in the next, which
     // costs at most count-1 ids per boundary - under 0.1% at the default
     // extent size, and permanently, since nothing frees. What it buys: one

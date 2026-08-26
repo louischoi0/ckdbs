@@ -963,7 +963,7 @@ TEST(SimOracleTest, AnUnknownRowCostsOnlyTheCountsItCouldChange) {
 
 // ---- What this harness found: the Cabin's rolled-back set ----------------
 //
-// **[GATED: cabin rollback]**, `docs/known-gaps.md`. Found by SIM06's first
+// **[GATED: cabin rollback]**, `docs/inflight/known-gaps.md`. Found by SIM06's first
 // fault-free sweep (seed 2, profile colliding, mode clean) and shrunk to
 // these six statements by SIM07's minimizer, 1200 ops -> 9 in 933 replays.
 //
@@ -984,7 +984,7 @@ TEST(SimOracleTest, AnUnknownRowCostsOnlyTheCountsItCouldChange) {
 // baked into another session's banked set.
 //
 // **Fixed** by declining to record from a view that can still be
-// contradicted (`docs/feat-cabin.md` §6a): a recording walk banks nothing
+// contradicted (`docs/spec/feat-cabin.md` §6a): a recording walk banks nothing
 // while any transaction is in flight, its own included. Written gated, it
 // ran SKIPPED for as long as the gap stood and is an ordinary regression
 // test now.

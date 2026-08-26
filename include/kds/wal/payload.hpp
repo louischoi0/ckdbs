@@ -213,7 +213,7 @@ StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in
 
 // ---- INDEX_INSERT --------------------------------------------------------
 //
-// One entry appended to one secondary-index leaf (docs/feat-index.md §12.1).
+// One entry appended to one secondary-index leaf (docs/spec/feat-index.md §12.1).
 // The record's `page_id` names the leaf, and the leaf's own header carries
 // the widths - so redo needs neither the index's oid nor its layout, and
 // there is no second place for either to be wrong.
@@ -300,7 +300,7 @@ StatusOr<HeapDeleteUnmarkPayload> DecodeHeapDeleteUnmark(std::span<const std::by
 // Physical retirement, deliberately a different record from the delete-mark
 // above.
 //
-// **Who owns it depends on who emitted it** (docs/txn.md section 6's
+// **Who owns it depends on who emitted it** (docs/spec/txn.md section 6's
 // amendment). This comment used to say no transaction owns a SLOT_RETIRE
 // and its envelope therefore carries kNoTxnId. That is true of a purge
 // pass and false of a rollback compensation, which *is* owned by the
@@ -342,7 +342,7 @@ struct UndoWritePayload {
     std::uint16_t offset;          // byte offset within the undo page
     // Bytes of the undo record's **tail** that follow - its bytes from
     // `target_page_id` onward, not the bare before-image
-    // (docs/txn.md section 3.5). So this is
+    // (docs/spec/txn.md section 3.5). So this is
     // `txn::kUndoRecordTailHeaderSize + image_len`, and the fields naming
     // *which tuple* the image belongs to are inside it. Encode/decode the
     // tail through txn::EncodeUndoRecordTail / DecodeUndoRecordTail; there
@@ -482,7 +482,7 @@ StatusOr<CheckpointEndPayload> DecodeCheckpointEnd(std::span<const std::byte> in
 // ---- ASSERT_RESERVE / ASSERT_BUILD ---------------------------------------
 //
 // One Bound Cabin entry landing in the page the envelope names
-// (docs/feat-assertion.md §7, workplan AST05). One shape for both record
+// (docs/spec/feat-assertion.md §7, workplan AST05). One shape for both record
 // types, HEAP_INSERT/HEAP_OVERWRITE's precedent: a reservation and a build
 // row write identical bytes and differ in ownership - RESERVE is txn-owned
 // with kEntryReserved set in the entry, BUILD is DDL-owned (kNoTxnId) with
@@ -540,7 +540,7 @@ static_assert(offsetof(AssertEntryPayload, group_id) == kAssertEntryGroupIdOffse
 // would compare a layout with a format and could never hold; every offset that
 // the codec actually uses is asserted instead, which is the property that
 // matters. (This is the same shape as the RV10 asserts that shipped broken at
-// RC06 - see `docs/known-gaps.md`.)
+// RC06 - see `docs/inflight/known-gaps.md`.)
 static_assert(kAssertEntryFixedSize == 20);
 
 struct DecodedAssertEntry {
@@ -678,7 +678,7 @@ StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in);
 // One chunk of one Bound Cabin's group headers as of a checkpoint. It is the
 // durable base assertion replay folds onto, which is what lets the fold start
 // at the last checkpoint instead of at the cabin's birth
-// (`docs/feat-assertion.md` §7).
+// (`docs/spec/feat-assertion.md` §7).
 //
 // **Headers only, never the entry lists.** A group's entry list is O(all
 // writes, forever) - `BoundCabin::Apply` appends one pair per checked write and

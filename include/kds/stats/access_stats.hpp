@@ -6,7 +6,7 @@
 #include "kds/exec/step_chain.hpp"
 
 // Recording what a statement's steps actually did, per access *shape*
-// (`docs/heap-and-tuple.md` §7).
+// (`docs/spec/heap-and-tuple.md` §7).
 //
 // §7 has said "KDS collects access statistics and uses them to physically
 // optimize tuple placement" since the spec was written, immediately followed

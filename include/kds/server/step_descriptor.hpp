@@ -7,7 +7,7 @@
 #include "kds/base/status.hpp"
 #include "kds/exec/step_chain.hpp"
 
-// The STEP_OPEN step descriptor (docs/crosscore.md §3, workplan P4a second
+// The STEP_OPEN step descriptor (docs/spec/crosscore.md §3, workplan P4a second
 // half): a compiled `exec::Step` serialized with full fidelity so the
 // owning core executes exactly the step the session core compiled - kind,
 // relation oid, key operand, residual predicates, range hint, projection
@@ -53,7 +53,7 @@ bool ShipsAsWalk(exec::AccessKind kind);
 // residual alone fully expresses the predicate, step_chain.hpp) - and
 // every other kind passes through unchanged. Before this, a structure
 // step made the whole statement fall out of the remote path onto the
-// affinity refusal (docs/known-gaps.md's closed entry).
+// affinity refusal (docs/inflight/known-gaps.md's closed entry).
 exec::Step ShippedForm(exec::Step step);
 
 // Serializes `step`. Fails with Unsupported for the refused classes above

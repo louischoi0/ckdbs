@@ -648,7 +648,7 @@ TEST(BtreeTest, AVisitorsErrorStopsTheWalk) {
     EXPECT_EQ(visits, 3);
 }
 
-// ---- Stoppable walks (docs/parser-v2.md I15 rule 4) ----------------------
+// ---- Stoppable walks (docs/spec/parser-v2.md I15 rule 4) ----------------------
 //
 // The leaf-sibling walk gets the same contract as the heap chain, tested
 // the same way, because BtreeVisit and ChainVisit exist to be handed the
@@ -765,7 +765,7 @@ TEST(BtreeTest, APayloadWhoseKeystoneDisagreesWithTheIdIsRefused) {
         << "two disagreeing copies of a tuple's identity is a defect, not a choice of which wins";
 }
 
-// ---- Dividing a full leaf (docs/heap-and-tuple.md §4.1, PK04) ------------
+// ---- Dividing a full leaf (docs/spec/heap-and-tuple.md §4.1, PK04) ------------
 //
 // Reached only by a caller-supplied id that sorts inside a full leaf. Until
 // the key-mode amendment these inserts were refused outright, because ids

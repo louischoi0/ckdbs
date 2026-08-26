@@ -70,7 +70,7 @@ std::int64_t SignedMax(std::uint32_t width) {
 
 // A signed integer column of `width` bytes: int8/16/32/64, date and
 // timestamp all land here, because all six *are* integers in this engine
-// (docs/spec-types.md: a DATE is epoch days, a TIMESTAMP is epoch micros)
+// (docs/spec/spec-types.md: a DATE is epoch days, a TIMESTAMP is epoch micros)
 // and share one arm rather than one each.
 Status EncodeSignedInt(const catalog::SysColumnRow& col, const parser::AstValue& value,
                        std::uint32_t width, std::span<std::byte> out) {
@@ -78,7 +78,7 @@ Status EncodeSignedInt(const catalog::SysColumnRow& col, const parser::AstValue&
         return Status::InvalidArgument(
             "index key column '" + NameOf(col) +
             "' expects an integer in its storage form; the value is not one. A written literal "
-            "must pass through exec::CoerceLiteralToColumn first (docs/spec-types.md §3.1)");
+            "must pass through exec::CoerceLiteralToColumn first (docs/spec/spec-types.md §3.1)");
     }
     if (value.int_val < SignedMin(width) || value.int_val > SignedMax(width)) {
         return Status::OutOfRange("index key column '" + NameOf(col) + "' holds " +
@@ -134,7 +134,7 @@ StatusOr<std::uint32_t> IndexKeyColumnWidth(const catalog::SysColumnRow& col) {
         case kTypeValFloat:
             return Status::Unsupported(
                 "index key column '" + NameOf(col) +
-                "' has type float, which this engine does not store (docs/spec-types.md TY1)");
+                "' has type float, which this engine does not store (docs/spec/spec-types.md TY1)");
         default:
             return Status::InvalidArgument("index key column '" + NameOf(col) +
                                            "' has an unrecognized type_val " +
@@ -234,7 +234,7 @@ Status EncodeIndexKeyColumn(const catalog::SysColumnRow& col, const parser::AstV
             }
             // At one fixed scale the unscaled integers order exactly as the
             // decimals do, which is the property that made the type
-            // expressible at all (docs/spec-types.md TY2).
+            // expressible at all (docs/spec/spec-types.md TY2).
             PutBe(payload, SignFlipped(value.int_val, 8), 8);
             return Status::OK();
         }

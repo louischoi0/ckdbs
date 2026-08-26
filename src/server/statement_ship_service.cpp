@@ -10,7 +10,7 @@ namespace {
 
 // The longest prefix of `text` that fits in `cap` bytes **and does not end
 // inside a UTF-8 sequence**. The newline protocol's strings are UTF-8
-// (docs/protocol.md §2) and at least one client decodes them strictly
+// (docs/spec/protocol.md §2) and at least one client decodes them strictly
 // (tools/multicore_benchmark.py, the driver this version is measured with),
 // so a message cut through a multi-byte character - engine messages carry
 // '§' routinely - would reach that client as a decode error rather than as
@@ -56,7 +56,7 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
             " bytes and a shipped statement carries at most " +
             std::to_string(kShippedStatementTextMax) +
             "; run it on the core that owns the relation, or raise the ring payload "
-            "(docs/crosscore.md §9's sizing decision)");
+            "(docs/spec/crosscore.md §9's sizing decision)");
     }
     ShippedStatementRequestPayload out{};
     out.session_id = session_id;

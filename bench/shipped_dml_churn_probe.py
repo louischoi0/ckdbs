@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A6: does sustained *shipped DML* leave a peer-owned relation unwritable?
 
-The G1 defect (`docs/known-gaps.md`, `docs/workplan-peer-writer.md` PW1c-8)
+The G1 defect (`docs/inflight/known-gaps.md`, `docs/inflight/in-progress/workplan-peer-writer.md` PW1c-8)
 appeared after ~58 shipped `CREATE INDEX`es on a peer-owned relation: a
 catalog page core 0 allocated between grants stayed invisible to the peer,
 and from then on every write to that relation answered `ERR page id not

@@ -199,7 +199,7 @@ TEST(ExpeditorConfigTest, ZeroCheckpointIntervalKeepsItsDisabledMeaning) {
     EXPECT_EQ(config.checkpoint_interval_ns, 0u);
 }
 
-// ---- TLS (docs/protocol.md §1, direct TLS decided 2026-08-13) ---------
+// ---- TLS (docs/spec/protocol.md §1, direct TLS decided 2026-08-13) ---------
 
 TEST(ExpeditorConfigTest, TlsKeysParseAndDefaultOff) {
     Expeditor::Config config;
@@ -280,7 +280,7 @@ TEST(ExpeditorConfigTest, KnownKeysCoverEveryKeyTheOverlayReads) {
     }
 }
 
-// ---- Aggregation caps (docs/feat-aggregate.md §6, AG11) ---------------
+// ---- Aggregation caps (docs/spec/feat-aggregate.md §6, AG11) ---------------
 
 TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     Expeditor::Config config;
@@ -297,7 +297,7 @@ TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     EXPECT_EQ(config.aggregate_max_distinct, 256u);
 }
 
-// ---- Physical optimizer (docs/feat-physical-optimizer.md R1/R3) --------
+// ---- Physical optimizer (docs/spec/feat-physical-optimizer.md R1/R3) --------
 
 TEST(ExpeditorConfigTest, PhysicalOptimizerParsesOffAndShadowDefaultingToShadow) {
     Expeditor::Config config;
@@ -451,7 +451,7 @@ TEST(ExpeditorConfigTest, ZeroGroupsIsAcceptedAndMeansRefuseEveryFold) {
     EXPECT_EQ(config.aggregate_max_groups, 0u);
 }
 
-// ---- `cores` (docs/workplan-crosscore.md M6) --------------------------
+// ---- `cores` (docs/inflight/in-progress/workplan-crosscore.md M6) --------------------------
 
 TEST(ExpeditorConfigTest, CoresParsesAndDefaultsToOne) {
     Expeditor::Config config;

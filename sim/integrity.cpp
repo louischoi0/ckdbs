@@ -476,7 +476,7 @@ private:
                 continue;
             }
             // **The chain walk was retired by the undo purge**
-            // (docs/workplan-undo-purge.md, review finding 2). A settled
+            // (docs/inflight/in-progress/workplan-undo-purge.md, review finding 2). A settled
             // page recycles, so a committed tuple's undo_ptr may point
             // into bytes that now belong to newer records - legal on a
             // healthy database, and exactly the pointer no production

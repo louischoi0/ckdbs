@@ -11,7 +11,7 @@
 #include "kds/storage/page_store.hpp"
 
 // Writing and reading one pattern instance's trail
-// (docs/waystone-workplan.md P08).
+// (docs/inflight/in-progress/waystone-workplan.md P08).
 //
 // This is the layer that turns what the executor saw
 // (`exec::TouchedTuple`, five integers) into the on-disk entry format
@@ -44,7 +44,7 @@
 //
 // **`page_epoch` is recorded for real since 2026-08-09** (workplan PX04):
 // the executor observes the page's relayout epoch at access
-// (`storage/page_header.hpp`, `docs/feat-physical-optimizer.md` R4), this
+// (`storage/page_header.hpp`, `docs/spec/feat-physical-optimizer.md` R4), this
 // layer narrows it to the entry format's u32, and replay compares it in
 // `exec/tuple_verify.hpp` - spec section 2's rule 2, enforceable at last.
 // The entry layout did not change: the field was always here, written 0
