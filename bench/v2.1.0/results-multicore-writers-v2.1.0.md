@@ -681,8 +681,13 @@ One passage elsewhere is affected. `docs/known-gaps.md:738` states that
 *"every cross-core number in `bench/` is a cost measured with the parallelism
 removed, never a speedup"*. **That is now false**: the parallelism is present
 here, and with its own control subtracted H3 measures a genuine **1.751×**
-(§7). This is the first measured cross-core speedup in `bench/`. **Reported
-with its location; not edited** — the passage is the owning doc's to change.
+(§7). This is the first measured cross-core speedup in `bench/`. The passage
+has been **retired in place** in `docs/known-gaps.md`, carrying both bounds
+that go with the number — the gain appears only at one writing session per
+writer core, and this host is 4 logical / 2 physical. The same edit records
+the group-commit constraint (§6) as an entry of its own under *Concurrency
+and multicore*, retires "PW6's number is unmeasured", and adds §8a's
+validation to the PW7 lease-refill entry.
 
 ---
 

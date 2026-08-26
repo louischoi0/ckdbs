@@ -599,6 +599,35 @@ still waits on its own gate, so:
 
 ## Concurrency and multicore
 
+- **Rotation divides the group-commit batch, so spreading writers over
+  cores does not add write throughput** (found 2026-08-26 on the first
+  host with three writer cores,
+  `bench/v2.1.0/results-multicore-writers-v2.1.0.md` §6-§7, at `v2.1.0`).
+  A core's commits are drained by a group committer that turns whatever has
+  accumulated into **one** device `fdatasync` — a post-task hook every
+  reactor iteration (`src/server/expeditor.cpp:1650-1657`), installed the
+  same way on every peer (`src/server/core_runtime.cpp:718-734`). Spreading
+  N writing sessions over W cores therefore divides that batch by W, and
+  each of the W cores is independently capped at the volume's
+  **single-stream** `fdatasync` rate. Measured: every multi-core cell runs
+  at 965–1,071 commits/s **per writer core** against a probe-measured
+  1,066/s single-stream rate, while the single-core arm scales linearly
+  with sessions because its batch grows. The result is that at two sessions
+  per writer core rotation runs **0.989×** of the same four-core server not
+  rotating, and only at one session per core (no batch to lose) does it win
+  — 1.751× over its own control. Nothing is CPU-bound anywhere near this:
+  core 0 sits at 8.9% and the writer cores at 13–14%.
+  **Not a cadence problem, and the obvious lever is the wrong one**: the
+  same run varied `wal_drain_interval_us` over a 10× range and throughput
+  did not move (flat at 3,554–3,643 ips), because the timer is only a
+  backstop to the per-iteration hook. The cap is `fdatasync` *latency*
+  (~0.94 ms), which merely coincides with the 1 ms default. **Open, and
+  deliberately undecided by that run**: whether a commit batch can span
+  cores at all, or whether per-core drains are inherent to thread-per-core;
+  and where between one and two sessions per core the crossover actually
+  sits, which is the number any placement policy would need. No constant
+  was changed.
+
 - ~~**Lease refills lag under load on a peer** (found 2026-08-25 by PW6's
   four-writer cell, `bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md` §6a-§6b): with
   four active sessions on one peer the row-id, trx-id and extent refills
@@ -623,7 +652,28 @@ still waits on its own gate, so:
   two-writer peer path runs at 0.990× against a 0.944× control of identical
   engines, whose 0.866 outlier that file's §3 explains as one unattributed
   485 ms stall of core 0's reactor; a point-SELECT beside a committing
-  session is 1,088/1,083 µs on core 0/core 1 against 37/35 alone). What
+  session is 1,088/1,083 µs on core 0/core 1 against 37/35 alone).
+  **Independently validated at three writer cores 2026-08-26** at `v2.1.0`
+  (`bench/v2.1.0/results-multicore-writers-v2.1.0.md` §8a), on the first
+  host that can run them, and the validation needed the *shape* rather than
+  the cell: the six-relation cell spreads two sessions over three cores and
+  cannot provoke the defect at all — with floors, without floors and at
+  `9c0528a` it measures 1.048 / 1.027 / 1.057, indistinguishable. At PW7's
+  own shape (four sessions on one peer core) the collapse reproduces —
+  **0.765× at `9c0528a` and 0.742× with the floors disabled on HEAD,
+  against 1.081× with them**, matching PW7's reported 0.61–0.80× before —
+  and the two independent pre-floors arms agreeing is what attributes it to
+  the floors rather than to the ~20 commits between the trees. The
+  instrument says it directly: trx-id submit lag **0.0 ms over 0 reactor
+  iterations** with the floors against **924.4 ms over 934** without, and
+  that stall is present on the six-relation cell *even where throughput does
+  not move* — so the lag legs, not the ratio, are the diagnostic. Note for
+  anyone repeating this: `include/kds/server/lease_refill_stats.hpp` does
+  not exist at `9c0528a`, PW7 having shipped instrument and fix in one
+  commit, so a pre-floors *tree* cannot report lag at all; the floors must
+  be disabled in place on HEAD, and reverting `src/sched/scheduler.cpp`
+  wholesale does not compile because the floors changed `PickNextGroup`'s
+  signature. What
   stands from the finding: **a
   reactor with any parked coroutine spins** — `IdleTimeoutMs` counts a
   parked task as ready and drops the idle block to 0, so a peer waiting on a
@@ -734,9 +784,20 @@ still waits on its own gate, so:
   which is why every cross-core test and benchmark builds its rows
   in-process. Reproduce in ten seconds with
   `tools/multicore_benchmark.py --placement rotate`, which probes and
-  reports rather than erroring per row. Until one of the three lands,
+  reports rather than erroring per row. ~~Until one of the three lands,
   every cross-core number in `bench/` is a *cost* measured with the
-  parallelism removed, never a speedup.
+  parallelism removed, never a speedup.~~ **Retired by measurement
+  2026-08-26** (`bench/v2.1.0/results-multicore-writers-v2.1.0.md`, at
+  `v2.1.0`): the writer half landed with PW1c, and on the first host with
+  three writer cores rotation measures a **speedup, not a cost** — 1.751x
+  its own control at one writing session per writer core, with the
+  four-core-server artifact (1.067x) subtracted. It is the first measured
+  cross-core speedup in `bench/`. Two bounds go with the number and are
+  not optional: the gain **only** appears at one session per core (at two
+  it is 0.989x of not rotating at all, because spreading N sessions over W
+  cores divides the group-commit batch by W), and the host is 4 logical /
+  2 physical cores, so the 3x ceiling is bounded by SMT before it is
+  bounded by anything architectural.
   **Scoped 2026-08-21, and three of its blockers closed the same day** —
   `docs/workplan-peer-writer.md` owns the series and names what actually
   blocks it, which is not the listener. PW1 (transaction-id leases), PW1b
@@ -784,7 +845,13 @@ still waits on its own gate, so:
   named: leases and grants are memory-resident, and the probe found a
   restart loses every page a peer allocated itself, not only its grants;
   the PL-C stamp now carries ownership (`docs/workplan-peer-writer.md`
-  §8). What still stands of this entry: PW6's number is unmeasured; a
+  §8). What still stands of this entry: ~~PW6's number is unmeasured~~ —
+  **measured 2026-08-26 at `v2.1.0`**, and it says rotation does not scale
+  writes on the non-interfering-relations shape (1.051x at six relations
+  against a 3x ceiling, 0.989x against the same four-core server not
+  rotating); the same file validates PW7's scheduler floors at the shape
+  that provokes them (0.765x -> 1.081x, two independent pre-floors arms
+  agreeing) and passes restart-ownership at three writer cores; a
   peer listener with tls/auth is refused at boot (PW5); and the
   owner-built `CREATE INDEX` carries §5e's two named gaps — a build
   window that could expire before a late core-0 commit (unreachable at
