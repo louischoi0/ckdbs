@@ -342,7 +342,7 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                     false};
         }
     }
-    if (outcome.pending_lsn == wal::kNoLsn && outcome.pending_shipped.has_value()) {
+    if (outcome.pending_shipped.has_value()) {
         // Unreachable: `MayShip` refuses without `may_park_`, which only
         // `DispatchAsync` sets. Written as a refusal rather than left to a
         // null dereference because of *which* refusal it would have to be -
@@ -3149,7 +3149,16 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     // parse that found the relation foreign, which is why there is one to
     // end at all.
     if (out.pending_shipped.has_value()) {
-        (void)AbandonWriteForShipping(session, scope);
+        if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
+            // Not a refusal - the statement is already on its way to its
+            // owner, and the only refusal legal after that is
+            // `UnknownOutcome`. Logged rather than dropped because
+            // `EndWrite`'s abort arm returns without releasing the
+            // transaction when the enforcer fails, which is the leaked-
+            // transaction class the SS3 review already fixed once.
+            log_->Warn("ship", "the local scope of a shipped statement did not end cleanly: " +
+                                   s.message());
+        }
         return out;
     }
 
@@ -3229,28 +3238,82 @@ DispatchOutcome CommandDispatcher::FinishShippedStatement(
     return out;
 }
 
+namespace {
+
+// **Every relation a chain reads, in one walk.** Three places hold steps
+// and all three read real pages: the chain's own steps, its *hoisted*
+// sub-chains, and the sub-chains attached to a **step** - which is where
+// `step_compiler.cpp` §3 leaves a correlated sub-chain *and* every
+// value-bearing uncorrelated one (`IN` / `NOT IN` / the scalar form),
+// since their set is row-independent but their comparison is not.
+//
+// Walking only the first two is a **wrong answer, not a missed refusal**:
+// the shared-nothing fault check in `DevicePageStore::ResidentBytes` is
+// `#ifndef NDEBUG`, so in a release build a step reading a relation this
+// core does not own faults the page anyway and judges its visibility
+// against the wrong core's transaction manager. Measured: on a two-core
+// rig `SELECT * FROM peer_rel WHERE v IN (SELECT v FROM core0_rel)`
+// answered an empty result set instead of the matching row.
+//
+// `fn` stops the walk by answering false, which both callers below use as
+// their refusal.
+using StepVisitor = std::function<bool(const exec::Step&)>;
+
+bool VisitRelationSteps(const std::vector<exec::Step>& steps, const StepVisitor& fn) {
+    for (const exec::Step& step : steps) {
+        if (!fn(step)) return false;
+        for (const exec::SubChain& sub : step.sub_chains) {
+            if (!VisitRelationSteps(sub.steps, fn)) return false;
+        }
+    }
+    return true;
+}
+
+bool VisitRelationSteps(const exec::StepChain& chain, const StepVisitor& fn) {
+    for (const exec::SubChain& sub : chain.hoisted) {
+        if (!VisitRelationSteps(sub.steps, fn)) return false;
+    }
+    return VisitRelationSteps(chain.steps, fn);
+}
+
+// **A write predicate that reaches a second relation** (`Condition::subquery`,
+// parser/ast.hpp). UPDATE and DELETE never compile a chain, so their fork
+// resolves the *target* relation's owner and nothing else - a shipped
+// `UPDATE t SET ... WHERE v IN (SELECT v FROM u)` would have its row set
+// decided on the owner by reading `u`'s pages, which the owner may not own
+// and which a release build does not refuse to fault. Measured: on a
+// two-core rig that statement answered `UPDATED 0` where the row matched.
+//
+// Refused rather than resolved: a subquery naming the *same* relation
+// would be safe to ship, but proving that means resolving every nested
+// SELECT's relations through the catalog on the write path, and what the
+// refusal costs is the affinity answer these statements had before
+// shipping - never a wrong one.
+bool AnySubqueryPredicate(const std::vector<parser::Condition>& where) {
+    for (const parser::Condition& cond : where) {
+        if (cond.has_subquery()) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
 std::optional<std::uint32_t> CommandDispatcher::SoleForeignOwner(const exec::StepChain& chain) {
     std::optional<std::uint32_t> owner;
-    auto scan = [&](const std::vector<exec::Step>& steps) -> bool {
-        for (const exec::Step& step : steps) {
-            auto access = catalog_.InitTableAccess(step.rel_oid);
-            if (!access.ok()) return false;
-            const std::uint32_t core = access.value()->owner_core;
-            // A relation this core owns: no other core can read its pages,
-            // so the statement is not shippable whole.
-            if (core == core_id_) return false;
-            // Two foreign owners: R6's multi-owner statement, which stays
-            // refused rather than being split.
-            if (owner.has_value() && *owner != core) return false;
-            owner = core;
-        }
+    const bool shippable = VisitRelationSteps(chain, [&](const exec::Step& step) {
+        auto access = catalog_.InitTableAccess(step.rel_oid);
+        if (!access.ok()) return false;
+        const std::uint32_t core = access.value()->owner_core;
+        // A relation this core owns: no other core can read its pages,
+        // so the statement is not shippable whole.
+        if (core == core_id_) return false;
+        // Two foreign owners: R6's multi-owner statement, which stays
+        // refused rather than being split.
+        if (owner.has_value() && *owner != core) return false;
+        owner = core;
         return true;
-    };
-    for (const exec::SubChain& sub : chain.hoisted) {
-        if (!scan(sub.steps)) return std::nullopt;
-    }
-    if (!scan(chain.steps)) return std::nullopt;
-    return owner;
+    });
+    return shippable ? owner : std::nullopt;
 }
 
 Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& scope) {
@@ -3478,24 +3541,27 @@ DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
 }
 
 Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
-    // Every step, hoisted sub-chains included: a sub-chain reads a real
-    // relation and is exactly as unable to reach another core's pages.
-    auto check = [this](const std::vector<exec::Step>& steps) -> Status {
-        for (const exec::Step& step : steps) {
-            auto access = catalog_.InitTableAccess(step.rel_oid);
-            if (!access.ok()) return access.status();
-            if (access.value()->owner_core != core_id_) {
-                return CrossCoreReadUnsupported(core_id_, access.value()->owner_core,
-                                                step.rel_name);
-            }
+    // Every step a sub-chain of any kind can reach, through the one walk
+    // `VisitRelationSteps` states (above `SoleForeignOwner`). It used to
+    // scan the hoisted sub-chains and the chain's own steps only, which
+    // left `WHERE x IN (SELECT ... FROM <another core's relation>)` and
+    // every correlated sub-chain unchecked - and a release build does not
+    // refuse that fault, it performs it.
+    Status refusal = Status::OK();
+    VisitRelationSteps(chain, [&](const exec::Step& step) {
+        auto access = catalog_.InitTableAccess(step.rel_oid);
+        if (!access.ok()) {
+            refusal = access.status();
+            return false;
         }
-        return Status::OK();
-    };
-
-    for (const exec::SubChain& sub : chain.hoisted) {
-        if (Status s = check(sub.steps); !s.ok()) return s;
-    }
-    return check(chain.steps);
+        if (access.value()->owner_core != core_id_) {
+            refusal =
+                CrossCoreReadUnsupported(core_id_, access.value()->owner_core, step.rel_name);
+            return false;
+        }
+        return true;
+    });
+    return refusal;
 }
 
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
@@ -3572,19 +3638,11 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // refreshed by InsertOneRow when a root repoint invalidates it.
     const catalog::TableAccess* ta = access.value();
 
-    // **The fork** (SS2): a relation this core does not own is carried to
-    // the owner and answered from there, where every one of these
-    // statements used to be refused - 80-92% of an unrouted client's
-    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
-    // §9b). Unconditionally, per D6: whether to ship or to refuse by load
-    // is placement policy (`docs/crosscore.md` §9's open decision) and does
-    // not ride along.
-    //
-    // **After the shape resolution and before the affinity check**, so
-    // every refusal that is not about ownership keeps its exact spelling
-    // and its exact wire bit. What is not shipped - an explicit
-    // transaction, a statement that arrived shipped, a core with no ring -
-    // falls through to `CheckWriteAffinity` and refuses as it always did.
+    // **The fork** (SS2), whose conditions and their reasons are stated
+    // once, on `MayShip` (command_dispatcher.hpp). Here because this is
+    // after the shape resolution and before the affinity check, so every
+    // refusal that is not about ownership keeps its exact spelling and its
+    // exact wire bit.
     if (!line.empty() && ta->owner_core != core_id_ && MayShip(*scope.session)) {
         return ShipStatement(line, ta->oid, ta->owner_core, stmt.table_name, *scope.session);
     }
@@ -4909,7 +4967,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // view is taken - so two SELECTs in one transaction can see different
     // data, which is the level's entire definition.
     auto snapshot = SnapshotFor(session);
-    if (!snapshot.ok()) return {"ERR " + snapshot.status().message(), false};
+    // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse with a
+    // TxnConflict (a spent transaction-id lease on a peer), and the
+    // wire's `retryable=1` is what a client's retry loop reads. The
+    // DELETE site has always rendered it this way; these two did not,
+    // so the same refusal carried the bit on one verb and lost it on
+    // the other (the SS2 review's cut 2).
+    if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false};
 
     // An explicit Parser rather than the free `Parse()`, so the statement's
     // fingerprint can be taken **from the parse itself** (parser.hpp). It
@@ -5089,7 +5153,15 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // catches what falls through them, which on a peer is every plain
         // read of a foreign relation (pretasks §8c-1 measured that the
         // pipeline is not reachable from dispatch for one).
-        if (MayShip(session)) {
+        //
+        // **Not under ANALYZE**, for the reason the two pipeline paths
+        // above exclude it and one more: `line` here is the *stripped*
+        // text, so shipping it would send a bare `SELECT` and answer a
+        // request for a plan with a result set. Refused exactly as it was
+        // before shipping existed; shipping the `ANALYZE` spelling itself
+        // is a separate decision, since the owner would then describe a
+        // run this core did not perform.
+        if (!analyze && MayShip(session)) {
             if (std::optional<std::uint32_t> owner = SoleForeignOwner(chain.value());
                 owner.has_value() && !chain.value().steps.empty()) {
                 return ShipStatement(line, chain.value().steps[0].rel_oid, *owner,
@@ -5477,13 +5549,28 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     // writes, and it must not see a row a SELECT in the same transaction
     // would not - so it takes the snapshot the same way.
     auto snapshot = SnapshotFor(session);
-    if (!snapshot.ok()) return {"ERR " + snapshot.status().message(), false};
+    // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse with a
+    // TxnConflict (a spent transaction-id lease on a peer), and the
+    // wire's `retryable=1` is what a client's retry loop reads. The
+    // DELETE site has always rendered it this way; these two did not,
+    // so the same refusal carried the bit on one verb and lost it on
+    // the other (the SS2 review's cut 2).
+    if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false};
 
     DispatchOutcome out = UpdateInner(line, scope, snapshot.value().snap);
 
     // Shipped: HandleInsert's branch, for its reason.
     if (out.pending_shipped.has_value()) {
-        (void)AbandonWriteForShipping(session, scope);
+        if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
+            // Not a refusal - the statement is already on its way to its
+            // owner, and the only refusal legal after that is
+            // `UnknownOutcome`. Logged rather than dropped because
+            // `EndWrite`'s abort arm returns without releasing the
+            // transaction when the enforcer fails, which is the leaked-
+            // transaction class the SS3 review already fixed once.
+            log_->Warn("ship", "the local scope of a shipped statement did not end cleanly: " +
+                                   s.message());
+        }
         return out;
     }
 
@@ -5525,20 +5612,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // statement, including across AllocateRowId() (catalog.hpp).
     const catalog::TableAccess& ta = *access.value();
 
-    // **The fork** (SS2): a relation this core does not own is carried to
-    // the owner and answered from there, where every one of these
-    // statements used to be refused - 80-92% of an unrouted client's
-    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
-    // §9b). Unconditionally, per D6: whether to ship or to refuse by load
-    // is placement policy (`docs/crosscore.md` §9's open decision) and does
-    // not ride along.
-    //
-    // **After the shape resolution and before the affinity check**, so
-    // every refusal that is not about ownership keeps its exact spelling
-    // and its exact wire bit. What is not shipped - an explicit
-    // transaction, a statement that arrived shipped, a core with no ring -
-    // falls through to `CheckWriteAffinity` and refuses as it always did.
-    if (ta.owner_core != core_id_ && MayShip(*scope.session)) {
+    // **The fork** (SS2): `MayShip` states the conditions and why each is
+    // one. Here, after the shape resolution and before the affinity check,
+    // so every refusal that is not about ownership keeps its spelling and
+    // its wire bit - and a WHERE naming a second relation is refused with
+    // them, since this fork resolves nothing about it
+    // (`AnySubqueryPredicate` says why).
+    if (ta.owner_core != core_id_ && !AnySubqueryPredicate(stmt.where) &&
+        MayShip(*scope.session)) {
         return ShipStatement(line, ta.oid, ta.owner_core, stmt.table_name, *scope.session);
     }
 
@@ -6228,7 +6309,16 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
     // Shipped: HandleInsert's branch, for its reason.
     if (out.pending_shipped.has_value()) {
-        (void)AbandonWriteForShipping(session, scope);
+        if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
+            // Not a refusal - the statement is already on its way to its
+            // owner, and the only refusal legal after that is
+            // `UnknownOutcome`. Logged rather than dropped because
+            // `EndWrite`'s abort arm returns without releasing the
+            // transaction when the enforcer fails, which is the leaked-
+            // transaction class the SS3 review already fixed once.
+            log_->Warn("ship", "the local scope of a shipped statement did not end cleanly: " +
+                                   s.message());
+        }
         return out;
     }
 
@@ -6259,20 +6349,14 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     if (!access.ok()) return {"ERR " + access.status().message(), false};
     const catalog::TableAccess& ta = *access.value();
 
-    // **The fork** (SS2): a relation this core does not own is carried to
-    // the owner and answered from there, where every one of these
-    // statements used to be refused - 80-92% of an unrouted client's
-    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
-    // §9b). Unconditionally, per D6: whether to ship or to refuse by load
-    // is placement policy (`docs/crosscore.md` §9's open decision) and does
-    // not ride along.
-    //
-    // **After the shape resolution and before the affinity check**, so
-    // every refusal that is not about ownership keeps its exact spelling
-    // and its exact wire bit. What is not shipped - an explicit
-    // transaction, a statement that arrived shipped, a core with no ring -
-    // falls through to `CheckWriteAffinity` and refuses as it always did.
-    if (ta.owner_core != core_id_ && MayShip(*scope.session)) {
+    // **The fork** (SS2): `MayShip` states the conditions and why each is
+    // one. Here, after the shape resolution and before the affinity check,
+    // so every refusal that is not about ownership keeps its spelling and
+    // its wire bit - and a WHERE naming a second relation is refused with
+    // them, since this fork resolves nothing about it
+    // (`AnySubqueryPredicate` says why).
+    if (ta.owner_core != core_id_ && !AnySubqueryPredicate(stmt.where) &&
+        MayShip(*scope.session)) {
         return ShipStatement(line, ta.oid, ta.owner_core, stmt.table_name, *scope.session);
     }
 
