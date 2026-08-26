@@ -572,6 +572,53 @@ delete-mark purge (`spec-ddl-transactional.md` §5d) and the undo purge
 the log's own growth, so this run's chain plateaus). Everything else
 still waits on its own gate, so:
 
+- **Every `cores = 1` versus `cores = N` ratio in `bench/` is partly a
+  measurement of how awake the machine is** — found 2026-08-26
+  (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §7b). A
+  reactor with nothing to do still wakes about a thousand times a second (the
+  1 ms WAL drain timer, **measured** at 931–947 iterations/s per idle core off
+  the new `sched_iterations` field), so a `cores = N` server keeps N CPUs out
+  of deep idle that a `cores = 1` server leaves asleep. **measured**: three
+  helper processes doing nothing but `sleep(1 ms)`, pinned beside a
+  *one-core* server, reproduce a four-core server's advantage to within 0.2%
+  (1.111× against 1.109×) and seven reproduce an eight-core server's to
+  within 0.1% (1.165× against 1.165×). So `bench/v2.1.0` §11-3's
+  "four-core-server effect" and its three engine-side candidates — four WAL
+  anchors, per-core extent leases, background work moving off core 0 — are
+  **unnecessary**, not merely unseparated. Anything quoting a `cores = 1`
+  baseline is quoting this too. A separate finding in the same section: the
+  driver's null cell (`cores = 1` against `cores = 1`) reads **1.099**, not
+  1.000, because its second arm always runs later — so every A/B ratio this
+  harness has produced carries a ~10% ordering bias, `bench/v2.1.0`'s C1 and
+  C2 controls included.
+- **Sustained shipped `CREATE INDEX` leaves a peer-owned relation
+  permanently unwritable, where core 0 fails cleanly** — found 2026-08-26 by
+  T4's probe (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+  §8d), and **re-confirmed on the merged tree at `b85cd31`**, after
+  FM2-FM5 raised the free-map ceiling. The shape, **measured** twice on each
+  tree: `CREATE INDEX`/`DROP INDEX` in a loop from core 0 against a
+  peer-owned relation succeeds ~58 times, consuming 1,856 pages (15 MB for
+  58 usable indexes on a 3,000-row relation — refused attempts allocate too,
+  ~7.7 pages each), after which **every** later write to that relation
+  answers `ERR page id not found`, which is **not retryable** and does not
+  clear. The identical churn on `cores = 1` runs 279 builds and then refuses
+  by name — *"anchor page holds 679 index entries already; the table is
+  full"* — with the relation still writable afterwards.
+
+  **The asymmetry is the finding**: core 0 turns a bounded resource into an
+  honest refusal that names the bound, and the peer path turns the same
+  exhaustion into a corruption-shaped `NotFound` that poisons the relation
+  for the rest of the mount. The mechanism is not established and this entry
+  declines to guess; the two candidates it could not separate are the pages
+  `DROP INDEX` orphans (reclamation gated) and what a peer counts as
+  allocated. Reproductions: `bench/parked_coroutine_probe.py` driven in a
+  loop, and the two probes archived at
+  `bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/t4/probes/`.
+
+  **This matters to statement shipping specifically**: the shipped-DDL path
+  is the exact shape shipping generalises — an arrival core parking on an
+  owner core's work — so a shipped DML path built on the same machinery
+  would inherit it. It is a precondition, not a performance note.
 - undo pages from a **previous run** leak: a restart abandons the old
   chain and the recycle list is memory-resident, so those pages stay
   allocated until UP4's mount-time reclaim exists (they always leaked;
