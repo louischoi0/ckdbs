@@ -1188,6 +1188,7 @@ Status Expeditor::Serve() {
             dispatcher->SetStatementShip(nullptr);
             dispatcher->SetShippedStatements(nullptr);
             dispatcher->SetIndexBuilds(nullptr);
+            dispatcher->SetAssertionBuilds(nullptr);
         }
     } clear_reactor_borrows{&*dispatcher_};
 
@@ -1449,6 +1450,14 @@ Status Expeditor::Serve() {
         index_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
         if (Status s = index_builds_->RegisterReplyReceiver(); !s.ok()) return s;
         dispatcher_->SetIndexBuilds(&*index_builds_);
+
+        // Core 0's assertion-build client (PW1c-6c), the same shape and the
+        // same ordering rule: a relation another core owns has its Bound
+        // Cabin built there, because the owner's writes are what maintain
+        // it.
+        assertion_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
+        if (Status s = assertion_builds_->RegisterReplyReceiver(); !s.ok()) return s;
+        dispatcher_->SetAssertionBuilds(&*assertion_builds_);
 
         // **Core 0's two halves of statement shipping** (SS1/SS3): the
         // owner's, because a peer ships core 0 every statement against a

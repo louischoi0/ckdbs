@@ -284,6 +284,46 @@ and is mutated only within its cooperative event loop. No latches, no atomic
 CAS loops, no cross-core sharing. v1 assertions are single-relation (AS8), so
 the entire protocol is core-local.
 
+**Made true across cores 2026-08-26** (PW1c-6c,
+`docs/inflight/in-progress/workplan-peer-writer.md` §7d). This paragraph
+said "home core" while the *implementation* built every Bound Cabin on core
+0, and on a multi-core instance the two are different cores. What that cost
+was measured before it was fixed
+(`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2): a
+write to an assertion-covered relation a peer owned was **admitted and not
+checked** — a second row landed in a group under `CHECK COUNT(*) <= 1` — and
+it could not have been checked, because appending an entry to core 0's pages
+is a write the owner is refused. Three consequences, now enforced:
+
+- **`CREATE ASSERTION` on a relation another core owns is built by that
+  core.** Core 0 keeps §3.1's checks, the id and the `sys.assertions` row;
+  the owner scans under its own view, allocates the chain from its own
+  extent lease, logs `ASSERT_BUILD` and AS6a's base into its own stream, and
+  adopts the directory at the end of its build. No page crosses a stream, so
+  PL's handoff is not invoked (`docs/spec/crosscore.md` CC7's owner-builds
+  exception).
+- **The enforcing core is the owning core, at every mount too.** RC07's
+  resume runs per core and takes on only the relations that core owns; the
+  owner's own checkpoint carries the group snapshots (PW3), so the base and
+  the records folded onto it are one stream's.
+- **A peer that knows of an assertion it cannot enforce refuses the
+  relation's writes.** That is the pre-PW1c-6c file — a cabin core 0 built
+  for a peer's relation — and the fail-closed answer to every other way a
+  directory can fail to come back: refusing is recoverable, admitting an
+  unchecked write is not. The operator's repair is `DROP` then `CREATE`,
+  which builds the cabin on the owner. **On core 0 the stance is unchanged**
+  and the refusal does not apply: the gate that carries it is the peer write
+  path's (`CheckWriteAffinity`'s peer branch), and an unrecoverable assertion
+  on a core-0-owned relation still reports `enforcing=0` and admits writes,
+  as it has since RC07. Widening it there would turn a constraint that cannot
+  be rebuilt into a relation that cannot be written, on the single-core
+  configuration too, which is a product decision this task did not take.
+
+`DROP ASSERTION` stays core 0's statement and sends the owner one message to
+forget the directory; a lost one leaves the owner over-enforcing until its
+next mount, which is the fail-closed side of a message with no
+acknowledgement.
+
 ### 6.2 Protocol
 
 On a checked write (per §4.2), executed inline in the step chain:
@@ -490,6 +530,18 @@ assertion on a relation.
 > build reads it refuses the CREATE with `TxnConflict`, retryably —
 > counting it and losing the abort would overstate the group forever, and
 > skipping it and seeing the commit would understate it.
+
+> **[AMENDED at PW1c-6c (2026-08-26).]** The three steps below are three
+> entry points, because on a multi-core instance they do not all run on the
+> same core: `PrepareAssertionDef` (validation and the id) and the publish
+> are core 0's, the catalog having one writer, and **the build is the
+> relation owner's** (§6.1). One consequence is visible in the order: AS6a's
+> base is logged at the end of the *build* rather than after the publish,
+> because the owner cannot see core 0's row and must reply before it exists.
+> What that costs is an `ASSERT_SNAPSHOT` for an assertion whose publish then
+> fails — a base for a cabin no catalog row names, which no mount folds,
+> since a mount folds only what `ListAssertions` returns. The single-core
+> path takes the same order rather than keeping its own.
 
 1. Create-time validation (§3.1).
 2. Full scan of the target relation on its home core (background-group

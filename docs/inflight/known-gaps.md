@@ -1328,6 +1328,42 @@ still waits on its own gate, so:
   undersized" telemetry is the input), and `MaintainFreeReserve`'s
   background trigger still waits on EVT02's bounded pool.
 
+- ~~**A peer cannot enforce an assertion, and does not refuse the write
+  either.**~~ — **closed 2026-08-26** (PW1c-6c,
+  `docs/inflight/in-progress/workplan-peer-writer.md` §7d,
+  `docs/spec/feat-assertion.md` §6.1). Measured first
+  (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2): a
+  shipped write to an assertion-covered, peer-owned relation was **admitted
+  unchecked** — a second row in a group under `CHECK COUNT(*) <= 1` — because
+  the shape gate asked `enforcer_.AnyOn(oid)` of a registry only core 0's
+  mount ever filled. The fix is ownership: the relation's owner builds the
+  Bound Cabin from its own lease, own-stamped, with no handoff, holds its
+  directory, and enforces every write to it, because the cabin is appended to
+  by every such write and only its owner may write its pages. Three residues
+  stay open and are named in §7d: (1) a write that passed its admission check
+  and then parked can reserve after an adoption in between, so one row can be
+  reserved unchecked — `CREATE INDEX` has the identical hole against its
+  window, and both want an atomic gate-to-write span; (2) neither `done` leg
+  is acknowledged, so a lost `done(committed)` leaves the owner's catalog
+  cache stale until the next DDL and a lost `done(aborted)` — a `DROP`'s
+  included — leaves it over-enforcing until its next mount; (3) an assertion
+  in a file written *before* this change has a cabin core 0 built, which its
+  owner may not append to, so the owner refuses that relation's writes by
+  name (`NoteUnenforceable`) until the operator drops and re-creates it.
+
+- **A catalog relation's var-heap is outside the range a peer may read.**
+  `catalog/well_known.hpp` makes every catalog *heap* page live below
+  `kFirstUserPageId` and calls that a correctness requirement, precisely so a
+  peer can read the catalog; a **spilled** value does not — it takes its page
+  from the general supply — so a peer faulting one is refused `may not fault
+  page N`. Found by PW1c-6c, whose mount has to read `sys.assertions`'
+  declarations, and closed *for that relation only* by granting the mount read
+  rights over exactly the pages the rows name (`exec::AssertionSpillPages`,
+  page by page — an extent grant would cover pages the core owns and cost it
+  PW1c-7's stamp-claimed write rights, which a test proved). `sys.pattern_defs`
+  has the same shape and no peer reader today; a general close would put
+  catalog var-heap pages in the reserved low range, which is a format change.
+
 ## Storage and key modes
 
 - ~~**An instance cannot exceed 65,280 pages — 510 MiB of data file**~~ —

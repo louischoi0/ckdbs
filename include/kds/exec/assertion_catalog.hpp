@@ -106,6 +106,39 @@ struct AssertionDef {
 StatusOr<std::vector<AssertionDef>> ListAssertions(catalog::Catalog& catalog,
                                                    storage::PageStore& store);
 
+// The same rows with **`name` and `source_text` left empty**: the fixed
+// columns only - id, target oid, cabin root.
+//
+// It exists for one caller and one property. `sys.assertions`' heap pages
+// are all below `kFirstUserPageId`, which `well_known.hpp` calls a
+// correctness requirement precisely so that a peer core can read the
+// catalog; its **var-heap is not**, because a spilled value takes its page
+// from the general supply. So a peer that resolves the spills may be
+// refused the fetch (`may not fault page N`) and lose the whole scan, while
+// this form cannot be: it reads exactly the pages the walk already holds.
+//
+// What that buys is the fail-closed answer at a peer's mount (PW1c-6c): a
+// core that cannot read *what* an assertion says can still learn *that* one
+// exists on a relation it owns, and refuse the relation's writes rather
+// than admit them unchecked.
+StatusOr<std::vector<AssertionDef>> ListAssertionTargets(catalog::Catalog& catalog,
+                                                          storage::PageStore& store);
+
+// The var-heap pages the stored declarations spill into - **the ids the
+// rows name, with no fetch of any of them**.
+//
+// A peer's mount reads this before it reads the declarations, and grants
+// itself fault rights over exactly these pages (`CoreRuntime::Open`,
+// PW1c-6c). Exactly these, page by page, and never the extent around them:
+// a range grant covers pages this core may *own*, and a page that answers
+// `MayFault` from a grant never reaches `TryClaimByStamp`, so the peer
+// would silently lose the write rights PW1c-7 restores to it on the fault -
+// which is a restarted owner unable to write its own relation. That was
+// measured, not reasoned: an extent-wide grant here failed
+// `APeersOwnPagesSurviveARestartByTheirStamp`.
+StatusOr<std::vector<PageId>> AssertionSpillPages(catalog::Catalog& catalog,
+                                                   storage::PageStore& store);
+
 // The assertion named `name`, case-insensitively, or nullopt.
 //
 // Case-insensitive because every other identifier in this engine is: an
@@ -204,6 +237,73 @@ struct AssertionDdlResult {
 // not open.
 StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::PageStore& store,
                                        const AssertionDef& def);
+
+// ---- The three halves `CREATE ASSERTION` is made of (PW1c-6c) ------------
+//
+// A relation another core owns has its Bound Cabin built **there**, because
+// the cabin is written on every write to that relation and only its owner
+// may write the owner's pages (`docs/inflight/in-progress/workplan-peer-writer.md` §7d).
+// So the statement splits where the index build splits (`exec::PrepareIndexDef`
+// / `exec::BuildIndexTree`, PW1c-6b-1): the catalog half stays on core 0, the
+// page half moves to the owner, and the local `CreateAssertion` below is the
+// three back to back - one implementation, two callers, and a peer-owned
+// relation's assertion is checked by exactly the rules a core-0-owned one is.
+
+// What core 0 resolves before anything is built: the relation, and the id
+// the build's `ASSERT_BUILD` records will carry.
+struct AssertionPrepared {
+    catalog::Oid target_oid = 0;
+    std::uint64_t assertion_id = 0;
+};
+
+// §3.1's create-time checks and the id, and **not one page written**. The
+// four questions that need a schema (does the relation exist, does every
+// `GROUP BY` column exist, does the `SUM` column exist and is it int64),
+// then the two the publish would fail on anyway - a taken name, an
+// over-long declaration - and then `AllocateRowId`, which is a catalog
+// write and so core 0's by construction.
+//
+// Refused before the id is issued, all of it: a refusal here burns nothing
+// and leaks nothing, which is what lets core 0 ask a peer to build only
+// for a declaration that would have been accepted locally.
+StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
+                                                storage::PageStore& store,
+                                                const parser::AssertionStmt& stmt);
+
+// What the page half hands back: the root the publish names, the two
+// numbers the reply reports, and the live directory the **building core's**
+// registry will own.
+struct AssertionCabinBuild {
+    PageId cabin_root = kInvalidPageId;
+    std::size_t rows_incorporated = 0;
+    std::size_t group_count = 0;
+    LiveAssertion live;
+};
+
+// The page half: the AST06 scan into a Bound Cabin of this core's own
+// pages, the live directory resolved from this core's schema, and AS6a's
+// base logged into **this core's stream** - which is what makes the cabin
+// recoverable by the core that will be appending to it.
+//
+// It re-resolves the relation and the columns rather than taking them from
+// `PrepareAssertionDef`: on the cross-core path the two run on different
+// cores against different catalog views, and a build that trusted a
+// resolution it did not make would be building against a schema it never
+// read.
+//
+// **The base is logged before the publish**, where the single-core order
+// logs it after (§8.1a's commit point). The owner cannot wait for core 0's
+// row - it must reply first - so the order is forced there and made the
+// same here rather than left to differ by path. What it costs is an
+// `ASSERT_SNAPSHOT` for an assertion whose publish then fails: a base for a
+// cabin no catalog row names, which no mount ever folds, because a mount
+// folds only what `ListAssertions` returns.
+StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
+                                                  storage::PageStore& store,
+                                                  const parser::AssertionStmt& stmt,
+                                                  std::uint64_t assertion_id,
+                                                  const txn::ReadView& check_view,
+                                                  wal::WalManager* wal);
 
 // `CREATE ASSERTION`: §3.1's remaining create-time checks - the ones only
 // the catalog can answer - then the AST06 build, then the publish.

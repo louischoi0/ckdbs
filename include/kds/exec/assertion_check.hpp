@@ -122,6 +122,25 @@ public:
     bool Holds(std::uint64_t assertion_id) const { return live_.count(assertion_id) != 0; }
     bool AnyOn(catalog::Oid oid) const { return by_oid_.count(oid) != 0; }
 
+    // ---- What this core knows about but cannot enforce (PW1c-6c) --------
+    //
+    // An assertion whose declaration this core can read and whose Bound
+    // Cabin it may **not write**: an assertion built on core 0 for a
+    // relation a peer owns, which is what every such assertion in a file
+    // written before PW1c-6c is. There is no route to enforcing one - the
+    // cabin's pages carry another core's stamp and `MayWrite` refuses them
+    // - so what the knowledge buys is the *refusal*: the relation's owner
+    // declines writes by name instead of admitting them unchecked, which
+    // is the failure `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
+    // Finding 2 measured.
+    //
+    // Deliberately not a `LiveAssertion`: nothing is enforced from this,
+    // and holding a directory nobody may append to would put a second
+    // writer's shape on a chain that already has one.
+    void NoteUnenforceable(catalog::Oid oid, std::uint64_t assertion_id);
+    bool CannotEnforce(catalog::Oid oid) const { return unenforceable_.count(oid) != 0; }
+    std::size_t unenforceable() const noexcept { return unenforceable_.size(); }
+
     // The counters, or nullptr while the registry does not hold the
     // assertion - the caller prints nothing then, rather than zeros that
     // would read as "counted and none happened".
@@ -131,6 +150,10 @@ public:
     }
 
     void Adopt(LiveAssertion assertion);
+    // Forgets `assertion_id` in **both** senses: the live directory if this
+    // core holds one, and the unenforceable record if it holds that
+    // instead. A DROP is the one statement that has to reach whichever of
+    // the two a core is carrying, and it says the id, not which.
     void Evict(std::uint64_t assertion_id);
 
     // The checkpoint's base (AS6a, RC07): every live cabin's group headers,
@@ -191,6 +214,10 @@ private:
 
     std::unordered_map<std::uint64_t, LiveAssertion> live_;
     std::unordered_map<catalog::Oid, std::vector<std::uint64_t>> by_oid_;
+    // The oids of `NoteUnenforceable`, with the ids that made them so - the
+    // ids so that adopting one later clears exactly it and not its
+    // relation's others.
+    std::unordered_map<catalog::Oid, std::vector<std::uint64_t>> unenforceable_;
     std::unordered_map<std::uint64_t, std::vector<Reservation>> pending_;
 };
 

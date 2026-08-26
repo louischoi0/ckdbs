@@ -9,6 +9,7 @@
 
 #include "kds/sched/send_retry.hpp"
 
+#include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -266,6 +267,66 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                                      &runtime->row_id_refill_.stats);
     }
 
+    // **Assertion enforcement, resumed on this core too** (RC07 per core,
+    // PW1c-6c). Here rather than beside `RecoverCoreAtMount` above for
+    // `Expeditor::Open`'s reason - the registry it refills lives on the
+    // dispatcher, which did not exist yet - and still before the listener
+    // binds, so no statement is accepted against an unenforcing constraint.
+    //
+    // It takes on **the relations this core owns and nothing else**: the
+    // core that writes a relation is the core that appends to its Bound
+    // Cabin, so a peer holds the directories for its own relations and core
+    // 0 holds none of them. That is what this call closes - a peer used to
+    // hold no directory at all, so a write to an assertion-covered relation
+    // it owned was admitted with nothing checking it
+    // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2).
+    //
+    // **The one page range it needs and the system range does not cover.**
+    // A catalog relation's heap pages are all below `kFirstUserPageId`
+    // precisely so that a peer can read them (`catalog/well_known.hpp`), but
+    // a *spilled* value is not: `sys.assertions` keeps each declaration's
+    // text in a var-heap page taken from the general supply, so without this
+    // a peer's `ListAssertions` is refused the fetch and no assertion of its
+    // own can be revived.
+    //
+    // Read rights only, and self-granted rather than asked for, which is
+    // sound on three counts and is stated here because the grant model is
+    // core 0's: the pages are a *system* relation's, in the same class as
+    // the range `SetCoreOwnership` already opens; nothing here may write
+    // them (`MayWrite` still refuses every page below the limit and every
+    // page this core has no lease or stamp for); and a var-heap value is
+    // immutable per version (invariant 14), so reading one without a
+    // coherence protocol is strictly safer than the catalog heap reads a
+    // peer already makes (`docs/inflight/known-gaps.md`).
+    //
+    // **Exactly the pages the rows name, one at a time** - the extent
+    // around them would be wrong, and measurably so: a page that answers
+    // `MayFault` from a grant never reaches `TryClaimByStamp`, so an extent
+    // covering pages this core owns would cost it PW1c-7's restored write
+    // rights (`exec::AssertionSpillPages` carries the argument and the test
+    // that proved it).
+    if (is_peer) {
+        if (auto spills = exec::AssertionSpillPages(*runtime->catalog_, *runtime->store_);
+            spills.ok()) {
+            for (const PageId page : spills.value()) {
+                runtime->store_->GrantFaultPages(storage::Extent{page, 1});
+            }
+        } else if (log != nullptr && log->enabled(LogLevel::kError)) {
+            log->Error("recovery", "core " + std::to_string(config.core_id) +
+                                       ": could not read which pages the stored assertion "
+                                       "declarations spill into, so none can be revived here: " +
+                                       spills.status().message());
+        }
+    }
+
+    // `config.anchor` is this core's own WAL anchor, the one recovery just
+    // scanned from, so the two cannot disagree about which checkpoint is
+    // the base.
+    runtime->recovery_ = ResumeAssertionsAfterRecovery(
+        *runtime->catalog_, *runtime->store_, *runtime->log_device_, config.core_id,
+        config.anchor.checkpoint_lsn, runtime->dispatcher_->assertions(), runtime->recovery_,
+        log);
+
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {
         log->Debug("core", "core " + std::to_string(config.core_id) +
                                " ready: wal stream, page store, catalog, dispatcher");
@@ -482,6 +543,33 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             !s.ok()) {
             return s;
         }
+
+        // The owner's half of a peer-owned relation's CREATE ASSERTION
+        // (PW1c-6c, assertion_build_service.hpp), on the same terms: peers
+        // only, the build a `system` task on this reactor, and the
+        // directory adopted into **this** dispatcher's registry, which is
+        // the core of the change - the cabin is written by whoever writes
+        // the relation. `done(committed)` drops the catalog cache so this
+        // core's `SHOW ASSERTIONS` resolves the row core 0 wrote.
+        assertion_builds_.emplace(*catalog_, *store_, &*wal_, &*txn_manager_,
+                                  dispatcher_->assertions(), config_.core_id, *scheduler_,
+                                  transport, [this] { InvalidateCatalog(); }, log_);
+        if (Status s = scheduler_->RegisterMessageHandler(
+                sched::RingMessageKind::kAssertionBuildRequest,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    assertion_builds_->OnRequest(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = scheduler_->RegisterMessageHandler(
+                sched::RingMessageKind::kAssertionBuildDone,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    assertion_builds_->OnDone(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
     }
 
     // **Statement shipping, both halves** (SS1's wiring rule,
@@ -530,13 +618,16 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     checkpoint_anchor_->SetLogger(log_);
     checkpointer_.emplace(*wal_, *checkpoint_target_, *txn_manager_, *checkpoint_anchor_);
     checkpointer_->SetLogger(log_);
-    // AS6a's snapshot source, wired on the same terms core 0 wires it. A
-    // peer's registry is **empty today** - `ResumeAssertionsAfterRecovery`
-    // runs only on core 0 - so this writes no group snapshots. Wired anyway
-    // rather than omitted, because the omission would be the silent kind: a
-    // peer that later enforces would checkpoint without snapshots and the
-    // next mount would find no base to fold from, which is the failure RC07
-    // exists to prevent.
+    // AS6a's snapshot source, wired on the same terms core 0 wires it.
+    //
+    // **A peer's registry holds the assertions on the relations it owns**
+    // since PW1c-6c - its mount resumes them (`CoreRuntime::Open`) and an
+    // owner-built one adopts here at its build - so this writes real group
+    // snapshots, and it must: they are the base this core's *own* next
+    // mount folds its `ASSERT_*` records onto, and no other core's
+    // checkpoint could carry them, because no other core holds the
+    // directory. The wiring predates that and was already right for the
+    // reason RC07 gives; what changed is that it is no longer a no-op.
     checkpointer_->SetAssertionSource(&dispatcher_->assertions());
 
     // **The completion checkpoint** (RC08), which core 0 runs at the end of

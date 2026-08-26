@@ -187,6 +187,17 @@ stops spinning where it used to.
 
 ### Finding 2 — the assertion gate does not fire on a peer (blocking)
 
+> **Closed 2026-08-26** (PW1c-6c, worktree `ss-check-findings2`,
+> `docs/inflight/in-progress/workplan-peer-writer.md` §7d). The measurement
+> below stands as it was taken at `v2.2.0-11-g925f483` and nothing in it is
+> restated; what changed is the engine. The operator's direction was to fix
+> by **ownership** rather than by refreshing the peer's registry, and the
+> paragraph below that reads "the fix is not 'let the peer enforce' — it
+> cannot" is the part that was superseded: it *can*, once the Bound Cabin is
+> built from the owner's own lease and held by the owner, which is what
+> PW1c-6c does. The disabled test named here is enabled and its successors
+> assert the enforcement as well as the refusal.
+
 **A shipped write to an assertion-covered, peer-owned relation is admitted
 and the assertion is not enforced.** Measured: `CHECK COUNT(*) <= 1` declared
 on a peer-owned relation, then a shipped `INSERT` puts a **second row in the
@@ -307,6 +318,13 @@ change's: `docs/inflight/bugs/tls-plaintext-garbage-alert-bytes.md` traces it
 to **OpenSSL 3.5.5 on this host**, which queues an alert for a first record
 that was never TLS where the test's pinned claim says it queues none. The
 fatal path itself is intact. Thirteen tests were added (2,708 → 2,721).
+
+> **The report named above was closed 2026-08-26** (worktree
+> `tls-alert-bytes`) and, per `docs/inflight/bugs/README.md`, deleted — the
+> path no longer resolves and points at git history. The count in this
+> section is what was measured at `v2.2.0-11-g925f483` and stands; what
+> changed afterwards is the test, which now pins the channel's contract
+> (`docs/spec/protocol.md` §1) instead of the library's byte count.
 
 ## What Part A did not do
 

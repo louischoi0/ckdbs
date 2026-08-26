@@ -141,6 +141,14 @@ struct MountRecovery {
     std::uint32_t assertions_enforcing = 0;
     std::uint32_t assertions_unrecovered = 0;
 
+    // Declarations this core read and did **not** take on, because the
+    // relation belongs to another core (PW1c-6c): an assertion is enforced
+    // by the core whose writes maintain its Bound Cabin, so on every other
+    // core it is somebody else's, not a failure. Counted separately from
+    // `assertions_unrecovered` for exactly that reason - folding the two
+    // would make a correctly-partitioned instance look half-broken.
+    std::uint32_t assertions_foreign = 0;
+
     // Nothing to recover: an unwritten log, or one whose whole range the
     // last clean shutdown's checkpoint already covers. The common mount,
     // and the one that must cost nothing.
@@ -209,6 +217,24 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 // than not enforcing: a directory at zero admits every write, so the constraint
 // would appear enforcing and enforce nothing. That is why the pass reports per
 // assertion and why this refuses to adopt on anything less than success.
+//
+// ---- Whose assertions these are (PW1c-6c) --------------------------------
+//
+// **Only the relations `core_id` owns.** An assertion's Bound Cabin is
+// appended to by every write to its relation, so it is maintained by that
+// relation's owner and by nobody else; a second core holding the same
+// directory would hold a stale copy of a structure it may not write, and
+// would report `enforcing=1` for counts that stopped moving at this mount.
+// Assertions on another core's relations are counted (`assertions_foreign`)
+// and skipped.
+//
+// A relation this core owns whose cabin this core may **not write** is the
+// pre-PW1c-6c file: core 0 built the cabin from core 0's lease. It is not
+// adopted - appending would be refused at the first write, and enforcing
+// from a directory nothing maintains is worse than not enforcing - and it
+// is recorded through `AssertionEnforcer::NoteUnenforceable`, which is what
+// makes the owner's write path refuse by name instead of admitting an
+// unchecked write.
 //
 // Called after `RecoverCoreAtMount` and before the listener binds. `from_lsn` is
 // the anchor's `checkpoint_lsn`, which is what makes the scan AS6a's "from the

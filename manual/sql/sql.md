@@ -258,9 +258,23 @@ CREATE ASSERTION <name> ON <table> GROUP BY (<col> [, ...])
   `ERR ASSERTION_VIOLATION retryable=0 ...` naming the group and the
   *enforced* ceiling. CREATE scans the relation synchronously and fails on
   already-violating data; an unsettled (in-flight-written) relation is
-  refused retryably. The one caveat: after a restart the surviving catalog
+  refused retryably. ~~The one caveat: after a restart the surviving catalog
   row honestly reports `enforcing=0` until recovery (which does not exist)
-  can replay the directory — `SHOW ASSERTIONS` shows it.
+  can replay the directory~~ — **stale, corrected 2026-08-26**: recovery has
+  replayed the directory at every mount since 2026-08-12 (RC07), so an
+  assertion enforces immediately after a restart; `SHOW ASSERTIONS` still
+  reports `enforcing=0` for the one whose directory could *not* be rebuilt,
+  which is the honest remainder rather than the ordinary case.
+- **On a multi-core instance an assertion is built and enforced by the core
+  that owns its relation** (2026-08-26). Two consequences a client sees:
+  `CREATE ASSERTION` on such a relation is refused **inside an explicit
+  transaction** and must be run in autocommit — the reply says so and names
+  the owner — and its success line carries `built_by_core=<n>`. On any other
+  core `SHOW ASSERTIONS` prints `enforcing=0 enforced_by_core=<n>` for it:
+  that is a statement about which core holds the directory, not about
+  whether the constraint runs. A relation whose assertion its owner *cannot*
+  enforce — a database file written before this change — refuses writes on
+  that core by name until the assertion is dropped and re-created.
 
 ### CREATE CABIN / DROP CABIN (built, CB01-CB11)
 

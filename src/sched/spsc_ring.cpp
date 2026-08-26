@@ -39,6 +39,9 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kIndexBuildDone: return "INDEX_BUILD_DONE";
         case RingMessageKind::kShippedStatementRequest: return "SHIPPED_STATEMENT_REQUEST";
         case RingMessageKind::kShippedStatementReply: return "SHIPPED_STATEMENT_REPLY";
+        case RingMessageKind::kAssertionBuildRequest: return "ASSERTION_BUILD_REQUEST";
+        case RingMessageKind::kAssertionBuildReply: return "ASSERTION_BUILD_REPLY";
+        case RingMessageKind::kAssertionBuildDone: return "ASSERTION_BUILD_DONE";
     }
     return "unknown";
 }

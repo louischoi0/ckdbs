@@ -177,6 +177,26 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
                                    "resumed: " +
                                        defs.status().message());
         }
+        // **Fail closed on this core's own relations** (PW1c-6c). The scan
+        // that just failed reads the declarations, and a declaration lives
+        // partly in a var-heap page a peer may not fault
+        // (`exec::ListAssertionTargets` says why). Without the text nothing
+        // can be enforced - but *that* an assertion exists is readable, and
+        // it is enough to refuse the relation's writes instead of admitting
+        // them unchecked, which is the failure this whole task exists to
+        // close. A second failure here leaves the report as it was: there
+        // is nothing further to try.
+        auto targets = exec::ListAssertionTargets(catalog, store);
+        if (!targets.ok()) return report;
+        for (const exec::AssertionDef& target : targets.value()) {
+            auto row = catalog.GetSysTableRow(target.target_oid);
+            if (!row.ok() || row.value().owner_core != core_id) {
+                ++report.assertions_foreign;
+                continue;
+            }
+            enforcer.NoteUnenforceable(target.target_oid, target.id);
+            ++report.assertions_unrecovered;
+        }
         return report;
     }
     if (defs.value().empty()) {
@@ -189,13 +209,46 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
     std::vector<exec::LiveAssertion> revived;
     revived.reserve(defs.value().size());
     for (const exec::AssertionDef& def : defs.value()) {
+        // **Whose relation is it** (PW1c-6c). The row rather than the
+        // declaration answers it, and an unreadable row is treated as
+        // another core's: not adopting costs enforcement on this core,
+        // where adopting a directory this core may not maintain costs a
+        // constraint that reports enforcing and does not.
+        auto row = catalog.GetSysTableRow(def.target_oid);
+        if (!row.ok() || row.value().owner_core != core_id) {
+            ++report.assertions_foreign;
+            continue;
+        }
         auto live = exec::ReviveAssertion(catalog, store, def);
         if (!live.ok()) {
+            // Fail closed, as above: this core owns the relation, so this
+            // core is the only one that could have enforced the constraint,
+            // and a write admitted here would be checked by nobody.
+            enforcer.NoteUnenforceable(def.target_oid, def.id);
             ++report.assertions_unrecovered;
             if (log != nullptr) {
                 log->Error("recovery", "assertion \"" + def.name +
                                            "\" cannot be revived, so it will not enforce: " +
                                            live.status().message());
+            }
+            continue;
+        }
+        // The cabin this core would have to append to, tested **after** the
+        // revive, which walked the chain: a leased store claims an
+        // own-stamped page as it reads it (PW1c-7), so asking before the
+        // walk would answer no for a cabin that is in fact this core's.
+        if (!store.MayWrite(live.value().chain.root())) {
+            enforcer.NoteUnenforceable(def.target_oid, def.id);
+            ++report.assertions_unrecovered;
+            if (log != nullptr) {
+                log->Error("recovery",
+                           "assertion \"" + def.name + "\" on a relation core " +
+                               std::to_string(core_id) +
+                               " owns has a Bound Cabin this core may not write (root page " +
+                               std::to_string(live.value().chain.root()) +
+                               "), so it cannot be enforced here and the relation's writes are "
+                               "refused instead; re-create it so its owner builds the cabin "
+                               "(workplan-peer-writer.md PW1c-6c)");
             }
             continue;
         }
@@ -222,6 +275,12 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
         // by re-creating the assertion. What must not happen is adopting the
         // half-built directories, and returning early is what prevents it.
         report.assertions_unrecovered += static_cast<std::uint32_t>(revived.size());
+        // Every one of them is on a relation this core owns - the loop above
+        // kept nothing else - so every one of them has to refuse that
+        // relation's writes rather than leave them unchecked (PW1c-6c).
+        for (const exec::LiveAssertion& one : revived) {
+            enforcer.NoteUnenforceable(one.target_oid, one.assertion_id);
+        }
         if (log != nullptr) {
             log->Error("recovery", "assertion recovery failed, so no assertion will enforce: " +
                                        recovered.status().message());
@@ -239,6 +298,11 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
             // is a directory at zero, and a cabin at zero admits every write - so
             // adopting it would report `enforcing=1` for a constraint enforcing
             // nothing, which is worse than the honest `enforcing=0`.
+            //
+            // And on this core's own relation, `enforcing=0` is not the end
+            // of it: the relation's writes are refused too, because nothing
+            // else can check them (PW1c-6c).
+            enforcer.NoteUnenforceable(revived[i].target_oid, revived[i].assertion_id);
             ++report.assertions_unrecovered;
             continue;
         }
@@ -247,8 +311,10 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
     }
 
     if (log != nullptr) {
-        log->Info("recovery", "assertions resumed: " +
+        log->Info("recovery", "assertions resumed on core " + std::to_string(core_id) + ": " +
                                   std::to_string(report.assertions_enforcing) + " enforcing, " +
+                                  std::to_string(report.assertions_foreign) +
+                                  " on another core's relations, " +
                                   std::to_string(report.assertions_unrecovered) +
                                   " unrecovered");
     }

@@ -131,6 +131,24 @@ enum class RingMessageKind : std::uint16_t {
     // statement opens no window. A shipped statement is one round trip.
     kShippedStatementRequest = 28,
     kShippedStatementReply = 29,
+
+    // core 0 <-> owner core: a peer-owned relation's CREATE ASSERTION,
+    // built by the owner (workplan-peer-writer.md §7d, PW1c-6c;
+    // server/assertion_build_service.hpp). The request carries the
+    // declaration verbatim (`server::AssertionBuildRequestPayload`), the
+    // reply the Bound Cabin root the owner built or why not
+    // (`AssertionBuildReplyPayload`, matched to its request by
+    // `request_id`), and `done` the statement's end
+    // (`AssertionBuildDonePayload`), which keeps or evicts the directory
+    // the owner adopted at the end of its build.
+    //
+    // **A `done` leg but no refusal window**, where the index build has
+    // both: the owner adopts inside its build task, so there is no
+    // interval between the last scanned row and the publish in which a
+    // write would have to be held off.
+    kAssertionBuildRequest = 30,
+    kAssertionBuildReply = 31,
+    kAssertionBuildDone = 32,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -157,6 +175,9 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kIndexBuildDone:
         case RingMessageKind::kShippedStatementRequest:
         case RingMessageKind::kShippedStatementReply:
+        case RingMessageKind::kAssertionBuildRequest:
+        case RingMessageKind::kAssertionBuildReply:
+        case RingMessageKind::kAssertionBuildDone:
             return true;
         case RingMessageKind::kUnset:
             return false;
