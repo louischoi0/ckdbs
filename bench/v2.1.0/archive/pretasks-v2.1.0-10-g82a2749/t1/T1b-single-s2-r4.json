@@ -1,0 +1,6 @@
+{
+  "invocation": "/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/single_relation_probe.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --workdir /home/ubuntu/mcbench2/t1/T1b-single-s2-r4 --arm single --sessions 2 --rows 1000 --port 17108",
+  "returncode": 0,
+  "stdout": "{\n  \"arm\": \"single\",\n  \"cores\": 1,\n  \"sessions\": 2,\n  \"rows\": 1000,\n  \"rows_total\": 2000,\n  \"owner_core\": 0,\n  \"warmup_retries\": 0,\n  \"wall_s\": 2.0184,\n  \"inserted\": 2000,\n  \"inserts_per_second\": 990.9,\n  \"retries\": 0,\n  \"errors\": 0,\n  \"first_error\": null,\n  \"insert_p50_us\": 2014.5,\n  \"insert_p99_us\": 2475.0,\n  \"insert_p0_us\": 1040.9,\n  \"insert_p25_us\": 1894.1,\n  \"insert_p75_us\": 2129.9,\n  \"verify\": \"rows as expected\"\n}\n",
+  "stderr": ""
+}

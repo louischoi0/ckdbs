@@ -52,6 +52,28 @@ def median(vals):
     return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
 
 
+def load_archived(archive, name):
+    """A repetition already on disk, or None. Resume exists because a sweep
+    of this size is interrupted for reasons that have nothing to do with the
+    engine - a mis-set load threshold, in the run this was added for - and
+    re-running finished cells would replace measured numbers with fresh ones
+    for no reason. Only a clean, parseable run is reused; anything else is
+    re-run."""
+    if not archive:
+        return None
+    path = os.path.join(archive, name + ".json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as fh:
+            rec = json.load(fh)
+        if rec.get("returncode") != 0:
+            return None
+        return json.loads(rec["stdout"])
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def run(cmd, timeout, archive, name):
     """One probe invocation. Its stdout is JSON; a non-zero exit or a
     non-JSON stdout is recorded as a failed repetition rather than raised -
@@ -93,9 +115,18 @@ def main():
     ap.add_argument("--cells", default="T1a,T1b")
     ap.add_argument("--port", type=int, default=16500)
     ap.add_argument("--timeout", type=float, default=1800.0)
-    ap.add_argument("--quiet-load", type=float, default=0.6)
+    ap.add_argument("--quiet-load", type=float, default=0.0,
+                    help="start a cell only below this 1-minute load; 0 means "
+                         "0.4 x this machine's CPU count. A fixed 0.6 was the "
+                         "default until it stalled an 8-CPU sweep in "
+                         "wait_quiet's 180 s timeout on every cell - the load "
+                         "a benchmark leaves behind scales with the box, and a "
+                         "threshold that does not will always be tripped by the "
+                         "previous cell")
     ap.add_argument("--settle", type=float, default=2.0)
     args = ap.parse_args()
+    if args.quiet_load <= 0:
+        args.quiet_load = 0.4 * (os.cpu_count() or 1)
 
     cores_list = [int(c) for c in args.cores.split(",") if c.strip()]
     batches = [int(b) for b in args.batches.split(",") if b.strip()]
@@ -117,8 +148,11 @@ def main():
                            "--server", server, "--workdir", wd,
                            "--cores", str(cores), "--rows", str(args.rows_t1a),
                            "--batch", str(batch), "--port", str(port)]
-                    wait_quiet(args.quiet_load)
-                    rc, data, err = run(cmd, args.timeout, args.archive, name)
+                    data = load_archived(args.archive, name)
+                    rc, err = (0, "") if data else (None, "")
+                    if data is None:
+                        wait_quiet(args.quiet_load)
+                        rc, data, err = run(cmd, args.timeout, args.archive, name)
                     port += 6
                     runs.append(dict(cell="T1a", cores=cores, batch=batch, rep=rep,
                                      rc=rc, data=data))
@@ -142,8 +176,11 @@ def main():
                        "--server", server, "--workdir", wd, "--arm", "single",
                        "--sessions", str(s), "--rows", str(args.rows_t1b),
                        "--port", str(port)]
-                wait_quiet(args.quiet_load)
-                rc, data, err = run(cmd, args.timeout, args.archive, name)
+                data = load_archived(args.archive, name)
+                rc, err = (0, "") if data else (None, "")
+                if data is None:
+                    wait_quiet(args.quiet_load)
+                    rc, data, err = run(cmd, args.timeout, args.archive, name)
                 port += 6
                 runs.append(dict(cell="T1b", arm="single", cores=1, sessions=s,
                                  rep=rep, rc=rc, data=data))
@@ -162,8 +199,11 @@ def main():
                            "--server", server, "--workdir", wd, "--arm", "multi",
                            "--cores", str(cores), "--sessions", str(s),
                            "--rows", str(args.rows_t1b), "--port", str(port)]
-                    wait_quiet(args.quiet_load)
-                    rc, data, err = run(cmd, args.timeout, args.archive, name)
+                    data = load_archived(args.archive, name)
+                    rc, err = (0, "") if data else (None, "")
+                    if data is None:
+                        wait_quiet(args.quiet_load)
+                        rc, data, err = run(cmd, args.timeout, args.archive, name)
                     port += 6
                     runs.append(dict(cell="T1b", arm="multi", cores=cores,
                                      sessions=s, rep=rep, rc=rc, data=data))
