@@ -266,6 +266,90 @@ TEST_F(SchedulerTimerTest, AGroupInDebtStillGetsOnePollPerIteration) {
     EXPECT_EQ(fg_polls, 1) << "and the suspended foreground task is polled once, not 64 times";
 }
 
+// ---- Group accounting read from outside (sched.md §4, T4) --------------
+//
+// §4's last bullet - "reactor time spent outside task polls (the drain, the
+// idle block) is charged to no group" - was unmeasurable from outside the
+// process until these accessors existed: `bench/v2.1.0` §11-5 records that
+// the counter was private and `SHOW META` never printed it.
+
+TEST_F(SchedulerTimerTest, PolledTimeAndPollCountsAreChargedToTheTasksGroup) {
+    scheduler_.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kSystem, [&] {
+        clock_.Advance(5'000);
+        return PollResult::kDone;
+    }));
+    scheduler_.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kForeground, [&] {
+        clock_.Advance(2'000);
+        return PollResult::kDone;
+    }));
+    scheduler_.RunOnce();
+
+    EXPECT_EQ(scheduler_.polls_total(SchedulingGroup::kSystem), 1u);
+    EXPECT_EQ(scheduler_.polls_total(SchedulingGroup::kForeground), 1u);
+    EXPECT_EQ(scheduler_.polls_total(SchedulingGroup::kMaintenance), 0u);
+    EXPECT_EQ(scheduler_.polled_ns_total(SchedulingGroup::kSystem), 5'000u);
+    EXPECT_EQ(scheduler_.polled_ns_total(SchedulingGroup::kForeground), 2'000u);
+    EXPECT_EQ(scheduler_.polled_ns_total(SchedulingGroup::kMaintenance), 0u);
+}
+
+TEST_F(SchedulerTimerTest, TheCumulativeCounterSurvivesTheDecayTheShareLawApplies) {
+    // The whole reason there are two counters. `consumed_ns_` is halved once
+    // it passes `decay_threshold_ns` so history does not dominate the pick;
+    // an accounting total that halved itself would understate every group it
+    // described, and by an amount that depends on when it was read.
+    SchedulerConfig config;
+    config.decay_threshold_ns = 1'000;
+    Scheduler sched(clock_, io_, config);
+    sched.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kSystem, [&] {
+        clock_.Advance(4'000);   // past the threshold, so the decay fires
+        return PollResult::kDone;
+    }));
+    sched.RunOnce();
+
+    EXPECT_EQ(sched.polled_ns_total(SchedulingGroup::kSystem), 4'000u)
+        << "the accounting total is cumulative and never decays";
+    EXPECT_EQ(sched.consumed_ns(SchedulingGroup::kSystem), 2'000u)
+        << "the share law's own counter is halved past the threshold";
+}
+
+TEST_F(SchedulerTimerTest, WallTimeIsZeroBeforeTheFirstIterationAndSpansItAfter) {
+    // A clock that legally reads 0 at its first tick is why the start is
+    // flagged rather than sentinelled on a zero timestamp.
+    EXPECT_EQ(scheduler_.run_wall_ns(), 0u);
+    clock_.SetNow(0);
+    scheduler_.RunOnce();
+    EXPECT_EQ(scheduler_.run_wall_ns(), 0u) << "started at t=0, no time has passed yet";
+    clock_.SetNow(7'000);
+    EXPECT_EQ(scheduler_.run_wall_ns(), 7'000u);
+    scheduler_.RunOnce();
+    clock_.SetNow(9'000);
+    EXPECT_EQ(scheduler_.run_wall_ns(), 9'000u) << "the origin is the FIRST iteration";
+}
+
+TEST_F(SchedulerTimerTest, TimeOutsideTaskPollsIsWhatTheAccountingGapMeasures) {
+    // The measurement §4 owes, in miniature: a reactor iteration that
+    // advances the clock outside any poll - which is what the WAL drain's
+    // fdatasync does on a real core - leaves wall time above the sum of the
+    // groups' polled time, and the difference is charged to nobody.
+    clock_.SetNow(0);
+    scheduler_.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kForeground, [&] {
+        clock_.Advance(1'000);
+        return PollResult::kDone;
+    }));
+    scheduler_.RunOnce();
+    clock_.Advance(9'000);   // stands in for the drain: outside every poll
+
+    std::uint64_t polled = 0;
+    for (SchedulingGroup g : {SchedulingGroup::kForeground, SchedulingGroup::kMaintenance,
+                              SchedulingGroup::kSystem}) {
+        polled += scheduler_.polled_ns_total(g);
+    }
+    EXPECT_EQ(polled, 1'000u);
+    EXPECT_EQ(scheduler_.run_wall_ns(), 10'000u);
+    EXPECT_EQ(scheduler_.run_wall_ns() - polled, 9'000u)
+        << "the gap is exactly the time no group was charged for";
+}
+
 TEST_F(SchedulerTimerTest, RunStopsWhenATimerCallbackCallsStop) {
     int fired = 0;
     scheduler_.SubmitEvery(100, [&] {

@@ -293,12 +293,30 @@ did.
 - Every rejected cross-core write increments a per-core observability
   counter keyed by (home core, target core, relation) — the input the
   future placement/2PC decision will be made from. Counters are metrics,
-  not stored state. Two v2 notes: whether the key gains the range
-  boundary is a workplan detail, not a decision; and PW5's peer-listener
-  guard refuses foreign writes *before* the relation is parsed, so those
-  refusals never reach these counters (`docs/workplan-peer-writer.md`
-  §8) — the 2PC evidence undercounts by that class, and anything quoting
-  the counters must say so.
+  not stored state. **Exposed since 2026-08-26** (T5 of the
+  statement-shipping pretasks): `SHOW META` prints
+  `cross_core_write_refusals`, `cross_core_write_refusal_keys` and a
+  capped `cross_core_write_refusal_detail` of `home>target:oid=count`.
+  The recording sites predate it (`CheckWriteAffinity`'s two arms); what
+  was missing was any way to read them from outside the process, which is
+  the whole of what a metric is for. The counter is **core-local**, so a
+  total is one reading per core.
+  Two v2 notes: whether the key gains the range boundary is a workplan
+  detail, not a decision; and **the undercount this bullet used to claim
+  is retired**. It said PW5's peer-listener guard refuses foreign writes
+  before the relation is parsed, so those refusals never reach the
+  counters — that guard (`PeerWriteRefused`) was **deleted at PW1c-5**
+  (`docs/workplan-peer-writer.md` PW1c-5, 2026-08-24: *"a foreign write
+  on a peer flows to `CheckWriteAffinity` again … and the §6 counters see
+  it, reversing PW5's recorded undercount"*), and the passage here simply
+  outlived it. What the counter genuinely cannot see today, stated at the
+  print site as well: **DDL on a peer** (`PeerDdlRefused`, refused by verb
+  before any relation is resolved) and anything refused before resolution
+  at all. The two owner-core refusals — `RelationWriteRightsPending` and
+  `IndexBuildPending` — are excluded **by decision**, not by oversight:
+  the write is not cross-core, it is this core's own write waiting on a
+  grant or a build window, and counting it would inflate the 2PC evidence
+  with cases 2PC does not address.
 - Write-coupled auxiliary placement is §6a's. The v1 sentence — unique
   indexes, Cabin, Waystone pages, and the var-heap live on the
   relation's owner core, always — is a statement about a one-range

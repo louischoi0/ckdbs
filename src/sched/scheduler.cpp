@@ -271,7 +271,11 @@ bool Scheduler::RunReadyTasks() {
 
         MonoTimeNs start = clock_.Now();
         PollResult result = task->Poll();
-        consumed_ns_[idx] += clock_.Now() - start;
+        const MonoTimeNs spent = clock_.Now() - start;
+        consumed_ns_[idx] += spent;
+        // The undecayed pair; scheduler.hpp's accessors say why.
+        polled_ns_total_[idx] += spent;
+        ++polls_total_[idx];
         ran_any = true;
         ++polled;
 
@@ -299,6 +303,12 @@ bool Scheduler::RunReadyTasks() {
 
 bool Scheduler::RunOnce() {
     ++iterations_;
+    // The wall-clock origin for group accounting (scheduler.hpp's
+    // run_wall_ns): the first iteration, not construction.
+    if (!run_started_) {
+        run_start_ns_ = clock_.Now();
+        run_started_ = true;
+    }
     bool did_work = false;
 
     // Phase 1: drain I/O completions. The wait is phase 6's idle policy

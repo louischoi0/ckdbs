@@ -129,6 +129,11 @@
 // mid-statement must generate the record while holding the page latch
 // instead, which is what wal.md section 8-1 actually asks for.
 
+namespace kds::sched {
+// Only the pointer is held here; `set_scheduler_view` below says what for.
+class Scheduler;
+}  // namespace kds::sched
+
 namespace kds::server {
 
 // What the mount's recovery did (`server/mount_recovery.hpp`), reported by
@@ -975,6 +980,17 @@ public:
         row_id_refill_stats_ = row_id;
     }
 
+    // This core's reactor, for `SHOW META`'s group-accounting block
+    // (`docs/sched.md` §4's last bullet, owed since `bench/v2.1.0` §11-5).
+    // The scheduler outlives this dispatcher on every core: core 0's is a
+    // local in `Expeditor::Serve`, a peer's is `CoreRuntime::scheduler_`.
+    // Null wherever no reactor runs the dispatcher - every socket-free test
+    // - and the block is then omitted rather than printed as zeroes, the
+    // rule the recovery block already follows.
+    void set_scheduler_view(const sched::Scheduler* scheduler) noexcept {
+        scheduler_view_ = scheduler;
+    }
+
     // The assertion registry, exposed for the two things only a mount does:
     // refilling it after recovery (RC07's `ResumeAssertionsAfterRecovery`) and
     // handing it to the checkpointer as AS6a's snapshot source. Every other
@@ -1438,6 +1454,8 @@ private:
     const stats::CabinOptimizer* cabin_controller_ = nullptr;
     const exec::CabinOptimizerExecutor* cabin_executor_ = nullptr;
     CrossCoreWriteCounters cross_core_writes_;
+    // This core's reactor, set_scheduler_view(); null off a reactor.
+    const sched::Scheduler* scheduler_view_ = nullptr;
 
     // Refuses a write to a relation this core may not write, and binds the
     // transaction's home core on the first one that is allowed. See
