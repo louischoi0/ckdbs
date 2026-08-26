@@ -10,6 +10,7 @@
 
 #include "kds/base/log.hpp"
 #include "kds/storage/extent_lease.hpp"
+#include "kds/storage/free_map.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/durability.hpp"
@@ -113,6 +114,13 @@ inline constexpr PageId kFreeMapPageId = 1;
 // page carries no common header, so it is neither checksum-stamped on the
 // way out nor verified on the way in.
 inline constexpr PageId kHeaderlessMapPageId = 2;
+
+// Region 0's pair, by the placement arithmetic in free_map.hpp. These two
+// names stay because they read better at their call sites than
+// FreeMapPageIdFor(0) does, but they are no longer independent facts: if
+// D1's arithmetic ever moves, this is where the engine finds out.
+static_assert(kFreeMapPageId == FreeMapPageIdFor(0));
+static_assert(kHeaderlessMapPageId == HeaderlessMapPageIdFor(0));
 
 class DevicePageStore final : public PageStore {
 public:
