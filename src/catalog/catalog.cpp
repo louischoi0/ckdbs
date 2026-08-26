@@ -1060,6 +1060,30 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     return s;
 }
 
+Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
+                                        std::uint64_t index_oid) {
+    // A relation whose anchor predates PW2 has none, and there is then no
+    // slot to run out of.
+    if (anchor_page == kInvalidPageId) return Status::OK();
+    auto anchor = store_.GetForRead(anchor_page);
+    if (!anchor.ok()) return anchor.status().WithContext("faulting anchor to check index room");
+    // The same two structural checks WriteAnchorRoot makes, for the same
+    // reason: a page that is not this relation's anchor cannot answer for
+    // this relation's table, and reading one as though it were would
+    // refuse - or admit - on another relation's count.
+    if (Status s = storage::ValidatePageHeader(anchor.value().bytes(), PageType::kAnchor);
+        !s.ok()) {
+        return s;
+    }
+    if (storage::GetOwnerOid(anchor.value().bytes()) != expected_owner_oid) {
+        return Status::Corruption(
+            "anchor page " + std::to_string(anchor_page) + " belongs to relation oid " +
+            std::to_string(storage::GetOwnerOid(anchor.value().bytes())) + ", not oid " +
+            std::to_string(expected_owner_oid));
+    }
+    return storage::CheckAnchorRoomForIndex(anchor.value().bytes(), index_oid);
+}
+
 Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
                                 std::uint64_t index_oid, PageId root, std::uint64_t trx_id) {
     auto anchor = store_.Get(anchor_page);
@@ -2899,6 +2923,24 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
 
     if (FindIndexByName(def.name).ok()) {
         return Status::AlreadyExists("catalog: an index named '" + def.name + "' already exists");
+    }
+
+    // The anchor's entry table, asked **here** so that a refusal costs no
+    // pages: both build paths reach the seed only after the whole tree is
+    // allocated, and nothing in this engine frees one. This is the door
+    // both of them already come through, and it is early enough on the
+    // local arm that a refused declaration burns no index oid either -
+    // `PrepareIndexDef` issues that after this returns.
+    //
+    // `kByOwner` asks nothing, and must not: the anchor is then another
+    // core's page, which this core neither seeds nor may fault. The owner
+    // asks for itself when it comes through here with its own `kHere`.
+    if (seed == AnchorSeed::kHere) {
+        if (Status s = CheckAnchorRoomForIndex(access.value()->anchor_page_id, def.table_oid,
+                                               def.index_oid);
+            !s.ok()) {
+            return s;
+        }
     }
     return Status::OK();
 }

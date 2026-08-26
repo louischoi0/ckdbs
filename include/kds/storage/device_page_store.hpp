@@ -377,6 +377,11 @@ public:
     // A diagnostic, and what a test reads to see that a claim happened.
     std::uint64_t stamp_claims() const noexcept { return stamp_claims_; }
 
+    // How many times this store adopted the device's free map because its
+    // own copy called a page absent (AdoptDeviceMapOnMiss). A diagnostic,
+    // and what a test reads to see that the adoption happened.
+    std::uint64_t map_refreshes_on_miss() const noexcept { return map_refreshes_on_miss_; }
+
     // Re-reads the free-map page from the device into this store's copy
     // (peers only - the system core's copy IS the authority). The fix for
     // the 95b45e8 review's C1: a peer's snapshot is taken at Open(), so a
@@ -621,6 +626,46 @@ public:
 
 private:
     using Page = std::array<std::byte, kPageSize>;
+
+    // The one refusal a caller sees when a page id is not allocated here,
+    // carrying the id and - on a leased core - which authority answered.
+    Status NotAllocated(PageId page_id) const;
+
+    // The gate every accessor goes through, so a third one cannot forget
+    // it: the allocation check, the adoption below when it misses, then
+    // the frame. `mark_dirty` is the only thing Get and GetForRead differ
+    // in.
+    StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty);
+
+    // A leased core's free-map copy is a **mount-time snapshot**, and the
+    // only thing that advanced it was a relation fault/write grant
+    // (core_runtime.cpp's two grant receivers). Every page core 0 allocates
+    // between grants is therefore invisible to a peer - a *catalog* page
+    // above all, which a peer must read to resolve any relation of its own
+    // - and the fault seam turned that staleness into a permanent
+    // `NotFound`, because nothing on the failing path ever asked the device
+    // again: it left a peer-owned relation unwritable for the rest of the
+    // mount (`docs/known-gaps.md`, G1).
+    //
+    // So: before a leased store calls a page absent, it adopts the device's
+    // truth once - the same operation the grant receivers perform, at the
+    // one seam where "stale" and "absent" are otherwise indistinguishable.
+    // Returns whether the page is allocated after the adoption.
+    //
+    // The cost is a device read per resident region **on a miss**. That is
+    // an error path everywhere but one: `command_dispatcher.cpp`'s
+    // speculative fault of a creation page while write rights are pending
+    // *expects* the miss, so a client retrying a `RelationWriteRightsPending`
+    // refusal pays one adoption per statement until the grant lands. It
+    // buys what that site is for - `TryClaimByStamp` sits behind this same
+    // gate and could never run while the map was stale.
+    //
+    // A page still absent afterwards is one core 0 has allocated but not
+    // yet flushed, or one that genuinely does not exist; the refusal is the
+    // same for both, but the next statement re-adopts, so the first clears
+    // itself.
+    bool AdoptDeviceMapOnMiss(PageId page_id);
+    void LogAdoptionFailure(PageId page_id, const Status& why) const;
 
     struct Frame {
         std::unique_ptr<Page> bytes;
@@ -876,6 +921,7 @@ private:
     // no migration, which is what made growing them the cheap answer.
     std::map<std::uint32_t, RightsRegion> rights_regions_;
     std::uint64_t stamp_claims_ = 0;
+    std::uint64_t map_refreshes_on_miss_ = 0;
     // First non-system page id; 0 means no readable system range. See
     // SetCoreOwnership.
     PageId system_page_limit_ = 0;

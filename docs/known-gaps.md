@@ -492,6 +492,40 @@ the owner's workplan.
   builds it. The gap stays listed until RC07 ships: today a restart still
   loses every group directory and enforcement does not resume.
 
+- **A heap chain can be left out of page-wise order by an injected write
+  fault** — found 2026-08-26 by the simulation harness on worktree
+  `g1-peer-page-id-not-found` at `449804e`, on a **fresh, date-derived**
+  seed rather than a committed one, and **not caused by the change it was
+  run against** (the same cell fails identically with that change compiled
+  out, and the sim mounts core 0 only — `sim/instance.cpp` passes
+  `core_id=0` and installs no lease — so a peer-side fix cannot reach it).
+
+  Reproduce:
+
+      build-release/ckdbs-sim --seed 20260826003 --ops 1500 --iterations 2 \
+          --mode clean --profile uniform --faults io --fault-rate 40
+
+  and the `zipfian` profile of the same seed fails the same way. The
+  finding:
+
+      [chain-order] page 191: relation 't2': min_key 78 does not exceed a
+      predecessor page's max id 183
+
+  preceded by `page-fail-grow` at op 1418, three more armed page faults, a
+  `log-fail-write`, and a transaction abandoned at op 1481. So an errored
+  **page grow** appears to leave a chain whose page order no longer
+  ascends, which is the ordering `docs/heap-and-tuple.md` §3.1b's tail
+  append and tail-page-only duplicate check rest on — the same ascent that
+  invariant 11's "a named key below the high-water mark is refused on a
+  heap relation" is justified by. `mode=clean` means no crash was
+  injected: the fault path alone produced it, which makes it a live-engine
+  question and not only a recovery one.
+
+  **The seed is deliberately not appended to
+  `tests/testdata/sim_seeds.txt`**: that corpus is regression-mandatory and
+  runs on every build, so a seed joins it when the engine fix lands, not
+  when the failure is found. Whoever fixes this adds it there.
+
 ## What a restart loses (without a crash)
 
 - ~~**A peer's page ownership.** Extent leases and relation grants are
@@ -591,34 +625,69 @@ still waits on its own gate, so:
   1.000, because its second arm always runs later — so every A/B ratio this
   harness has produced carries a ~10% ordering bias, `bench/v2.1.0`'s C1 and
   C2 controls included.
-- **Sustained shipped `CREATE INDEX` leaves a peer-owned relation
-  permanently unwritable, where core 0 fails cleanly** — found 2026-08-26 by
-  T4's probe (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
-  §8d), and **re-confirmed on the merged tree at `b85cd31`**, after
-  FM2-FM5 raised the free-map ceiling. The shape, **measured** twice on each
-  tree: `CREATE INDEX`/`DROP INDEX` in a loop from core 0 against a
-  peer-owned relation succeeds ~58 times, consuming 1,856 pages (15 MB for
-  58 usable indexes on a 3,000-row relation — refused attempts allocate too,
-  ~7.7 pages each), after which **every** later write to that relation
-  answers `ERR page id not found`, which is **not retryable** and does not
-  clear. The identical churn on `cores = 1` runs 279 builds and then refuses
-  by name — *"anchor page holds 679 index entries already; the table is
-  full"* — with the relation still writable afterwards.
+- **A peer's free-map copy went stale between relation grants, and the
+  fault seam turned that into a permanently unwritable relation** — found
+  2026-08-26 by T4's probe
+  (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d),
+  **root-caused and fixed 2026-08-26** on worktree
+  `g1-peer-page-id-not-found` (`docs/workplan-peer-writer.md` PW1c-8), the
+  statement-shipping work order's G1 gate. The entry is kept rather than
+  deleted because the mechanism bounds what a peer may believe, and two
+  residues remain below.
 
-  **The asymmetry is the finding**: core 0 turns a bounded resource into an
-  honest refusal that names the bound, and the peer path turns the same
-  exhaustion into a corruption-shaped `NotFound` that poisons the relation
-  for the rest of the mount. The mechanism is not established and this entry
-  declines to guess; the two candidates it could not separate are the pages
-  `DROP INDEX` orphans (reclamation gated) and what a peer counts as
-  allocated. Reproductions: `bench/parked_coroutine_probe.py` driven in a
+  **The shape, before the fix**: `CREATE INDEX`/`DROP INDEX` in a loop from
+  core 0 against a peer-owned relation succeeded ~58 times, after which
+  **every** later write to that relation answered `ERR page id not found`,
+  not retryable and never clearing. The identical churn on `cores = 1` ran
+  279 builds and then refused by name — *"anchor page holds 679 index
+  entries already; the table is full"* — with the relation still writable.
+  **Re-confirmed** on `b85cd31` after FM2-FM5, and again at `449804e` after
+  the whole multi-free-map series: at **exactly 58 builds** on `cores = 2`,
+  so the free-map rewrite neither caused nor closed it.
+
+  **The mechanism**: a peer's free-map copy is a **mount-time snapshot**,
+  and the only thing that advanced it was a relation fault/write grant
+  (`server/core_runtime.cpp`'s two grant receivers, PW1c-4r's C1). Core 0
+  allocating a page *between* grants is therefore invisible to that peer —
+  a **catalog** page above all, which a peer must read to resolve any
+  relation of its own. `DevicePageStore::IsAllocated` then answered false
+  for a page that exists, and the fault seam reported it as absence. The
+  index churn is simply the fastest way to make core 0 append a catalog
+  page while placing no relation on the peer. Named page: **15**, a catalog
+  heap page whose bit was set on the device and clear in the peer's copy;
+  and one `CREATE TABLE` that rotation placed on the peer **healed** the
+  poisoned relation, which is what proved it. The asymmetry the original
+  entry called the finding follows from this and is no longer a mystery:
+  `cores = 1` has no lease, so core 0's map *is* the authority and there is
+  no snapshot to go stale.
+
+  **The fix**: before a leased store calls a page absent it adopts the
+  device's map once — `AdoptDeviceMapOnMiss`, the grant receivers' own
+  operation, at the one seam where "stale" and "absent" are
+  indistinguishable — and the refusal now names the page id it withheld.
+  400 builds clean afterwards at `cores = 2`, 32 MB → 70 MB, the `cores = 1`
+  shape. One device read per resident region **on a miss**, which is an
+  error path; core 0 never pays it.
+
+  **What is still true after the fix**, both stated rather than fixed:
+
+  - a page core 0 has allocated but **not yet flushed** its map for is
+    still refused `NotFound`, which carries no retryable bit — the next
+    statement re-adopts, so it clears itself rather than poisoning, but a
+    client sees a non-retryable error for a transient condition. The
+    engine's own comment (`MayWrite` in `device_page_store.cpp`) calls this
+    case *"a retryable not found"*, which the status code does not deliver;
+  - a peer reads core 0's catalog **bytes** off the device, so a catalog
+    page core 0 holds dirty is a stale read on the peer. The free-map fix
+    does not reach it, and no coherence protocol exists — one writer per
+    catalog page is the whole of today's discipline.
+
+  Reproductions, unchanged: `bench/parked_coroutine_probe.py` driven in a
   loop, and the two probes archived at
-  `bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/t4/probes/`.
-
-  **This matters to statement shipping specifically**: the shipped-DDL path
-  is the exact shape shipping generalises — an arrival core parking on an
-  owner core's work — so a shipped DML path built on the same machinery
-  would inherit it. It is a precondition, not a performance note.
+  `bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/t4/probes/`. The
+  regression is pinned at unit level by
+  `APeerAdoptsTheDeviceMapBeforeCallingASystemPageAbsent` in
+  `tests/device_page_store_test.cpp`.
 - undo pages from a **previous run** leak: a restart abandons the old
   chain and the recycle list is memory-resident, so those pages stay
   allocated until UP4's mount-time reclaim exists (they always leaked;
@@ -643,6 +712,59 @@ still waits on its own gate, so:
   RESTRICT on assertions; DROP also RESTRICTs on referencing foreign keys.
   Every one of these is an unlogged catalog write like all DDL: a crash
   after it can lose it.
+
+- **A refused `CREATE INDEX` used to keep the pages it had allocated, at 32
+  a time** — found 2026-08-26 by the pretasks
+  (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d-1),
+  **fixed 2026-08-26** on worktree `g1-peer-page-id-not-found`
+  (`docs/workplan-peer-writer.md` PW1c-9), the statement-shipping work
+  order's G2 gate. Kept, because two of the three leaks it names are still
+  open.
+
+  **What it was**: `CREATE INDEX` builds the whole tree and seeds the
+  relation's anchor slot *afterwards*, so once the anchor's 679-entry table
+  filled — and `DROP INDEX` frees no entry, `storage/anchor_page.hpp` says
+  why — every further attempt allocated an index tree and threw it away.
+  Nothing frees. **measured** at `cores = 2` with
+  `bench/index_refusal_storm_probe.py`: 3,259 refusals in 30 s consumed
+  **104,257 pages, exactly 32.0 per attempt**, past the 65,280 ids one
+  free-map region covers. That last detail is the one worth carrying: it
+  was FM's growth that kept the instance alive where the same storm had
+  previously ended at *"free map full"* — the ceiling rising made the leak
+  slower, never smaller.
+
+  **What closed**: the refusal is asked for before either build path
+  allocates (`storage::CheckAnchorRoomForIndex`, the predicate
+  `SetAnchorIndexRoot` already applied, extracted so the check and the
+  write share one bound and one message). The same storm now runs 27,267
+  refusals at a **marginal cost of 0 pages**.
+
+  **What did not**, each still live:
+
+  - a build refused by a **spent extent lease** mid-way keeps its pages.
+    This is D5's other half and hoisting cannot reach it — there the check
+    and the allocation are the same act. Rare, and self-limiting once a
+    refill lands, but not zero;
+  - a build that **succeeds** and is then dropped still orphans its whole
+    tree. That is the gated reclamation leak listed above, not this one;
+  - **`UpdateIndexRoot` is the same violation in a smaller costume**: a
+    root split (`exec/index_maintain.cpp`) allocates and *then* writes the
+    anchor slot, so an index whose slot was never seeded can hit the cap
+    from an ordinary `INSERT` and orphan the split's pages. Reachable only
+    for a data file written before PW2-3's seed existed;
+  - **the write-rights class is untouched.** The pre-check reads through
+    `GetForRead`, which is deliberately more permissive than the write
+    (and must be - `Get` would dirty the frame, making every refusal cost
+    a write-back). So a peer holding read but not write rights on its own
+    anchor passes the check, builds the whole tree, and fails at the seed.
+    "A refusal allocates nothing" is true of the entry-table cap and must
+    not be read wider.
+
+  A refused attempt no longer burns an index oid on the local arm - the
+  check moved into `Catalog::CheckIndexDef`, which runs before
+  `PrepareIndexDef` issues one. On the shipped arm core 0 still issues the
+  oid before the owner refuses, which `PrepareIndexDef` documents as
+  permitted by the row-id sequence.
 
 ## Concurrency and multicore
 

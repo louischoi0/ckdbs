@@ -72,22 +72,44 @@ TEST(AnchorPageTest, AForgedEntryCountIsCorruptionNeverALoopBound) {
     Status write = SetAnchorIndexRoot(Mut(page), 9001, 300);
     ASSERT_FALSE(write.ok());
     EXPECT_EQ(write.code(), StatusCode::kCorruption) << write.message();
+
+    // And in the pre-check, which reads the same count through the same
+    // helper: a forged bound must not become a bound to loop on there
+    // either.
+    EXPECT_EQ(CheckAnchorRoomForIndex(Const(page), 9001).code(), StatusCode::kCorruption);
 }
 
-TEST(AnchorPageTest, TheEntryTableRefusesPastCapacity) {
+TEST(AnchorPageTest, TheEntryTableRefusesPastCapacityAndTheCheckSaysSoFirst) {
+    // The cap, and G2's pre-check beside it in one fixture, because the
+    // check is only worth having if it answers *exactly* what the write
+    // would: `CREATE INDEX` builds the tree and seeds the slot afterwards,
+    // so a refusal raised at the seed costs a whole index tree, and
+    // nothing frees.
     Page page{};
     FormatAnchorPage(Mut(page), 4001, 130);
+    EXPECT_TRUE(CheckAnchorRoomForIndex(Const(page), 7001).ok());
+
     for (std::size_t i = 0; i < kAnchorMaxIndexEntries; ++i) {
-        ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 10000 + i,
-                                       static_cast<PageId>(500 + i))
-                        .ok())
+        // The last entry is the positive boundary: with one slot left both
+        // must still admit, or the check refuses an index that fits.
+        if (i + 1 == kAnchorMaxIndexEntries) {
+            ASSERT_TRUE(CheckAnchorRoomForIndex(Const(page), 10000 + i).ok()) << i;
+        }
+        ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 10000 + i, static_cast<PageId>(500 + i)).ok())
             << i;
     }
+
+    Status checked = CheckAnchorRoomForIndex(Const(page), 99999);
     Status refused = SetAnchorIndexRoot(Mut(page), 99999, 900);
     ASSERT_FALSE(refused.ok());
     EXPECT_EQ(refused.code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(checked.code(), refused.code());
+    EXPECT_EQ(checked.message(), refused.message())
+        << "one refusal, or the check and the write can drift apart";
+
     // An existing entry still updates at capacity - fullness refuses
-    // growth, never a root move.
+    // growth, never a root move - and the check must not refuse one.
+    EXPECT_TRUE(CheckAnchorRoomForIndex(Const(page), 10000).ok());
     EXPECT_TRUE(SetAnchorIndexRoot(Mut(page), 10000, 999).ok());
     EXPECT_EQ(Root(page, 10000), 999u);
 }

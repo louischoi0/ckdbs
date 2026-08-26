@@ -737,6 +737,25 @@ Status DevicePageStore::RefreshFreeMapFromDevice() {
     // A region created privately after the lease was installed (see
     // EnsureRegionResident) is skipped: the device holds no such page, so
     // there is nothing to union and reading would find only zeros.
+    //
+    // **Two things this deliberately does not adopt**, stated because the
+    // rest of the comment reads as "the device's truth" and it is only
+    // half of it:
+    //
+    //   - a region **not resident here at all** stays absent, and
+    //     free_map_bytes_for answers such a region as all zeroes. Loading
+    //     one is AdoptDeviceMapOnMiss's, at the seam that knows which id
+    //     is wanted; doing it here would mean sweeping the whole device
+    //     for regions on every grant.
+    //   - the **headerless** bitmap of each region, which stays a
+    //     mount-time snapshot. Unreachable today - the only creator is
+    //     the Waystone directory (`stats/waystone_dir.cpp`), whose pages
+    //     a peer can reach through neither a relation grant nor a stamp
+    //     claim - but if it ever becomes reachable the asymmetry bites
+    //     the wrong way: an adopted free-map bit over a stale headerless
+    //     bit makes ResidentBytes verify a checksum that was never
+    //     written, so the answer degrades from NotFound to Corruption.
+    //     Union it here when that gate lifts.
     auto fresh = std::make_unique<Page>();
     for (auto& [region, pages] : map_regions_) {
         const PageId free_id = FreeMapPageIdFor(FreeMapRegionBase(region));
@@ -919,17 +938,78 @@ Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetUnpinned(PageId page_id) {
-    if (!IsAllocated(page_id)) {
-        return Status::NotFound("page id not found");
-    }
-    return ResidentBytes(page_id, /*mark_dirty=*/true);
+    return Resolve(page_id, /*mark_dirty=*/true);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForReadUnpinned(PageId page_id) {
-    if (!IsAllocated(page_id)) {
-        return Status::NotFound("page id not found");
+    return Resolve(page_id, /*mark_dirty=*/false);
+}
+
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
+                                                                  bool mark_dirty) {
+    if (!IsAllocated(page_id) && !AdoptDeviceMapOnMiss(page_id)) {
+        return NotAllocated(page_id);
     }
-    return ResidentBytes(page_id, /*mark_dirty=*/false);
+    return ResidentBytes(page_id, mark_dirty);
+}
+
+bool DevicePageStore::AdoptDeviceMapOnMiss(PageId page_id) {
+    // Core 0's copy **is** the free map, so a miss there is an absence and
+    // there is nothing to adopt.
+    if (lease_ == nullptr) return false;
+    // Above the design ceiling no bit exists on any device either, so the
+    // device read below could only confirm what this returns.
+    if (page_id >= kMaxPageCount) return false;
+    ++map_refreshes_on_miss_;
+
+    // A region that was **not resident at this core's mount** is the same
+    // defect one level up, and the FM series is what made it reachable:
+    // RefreshFreeMapFromDevice walks resident regions only, and
+    // free_map_bytes_for answers an absent region as all zeroes - so a page
+    // core 0 placed in a region created after this core started could not
+    // be adopted at all, not even one this core was explicitly granted.
+    // Loaded here, and **only when absent**, because LoadRegionIfPresent
+    // adds the region's allocated count while its emplace would not
+    // overwrite a resident one - calling it on a region already held would
+    // double-count. It does not create a region for a never-written id.
+    const std::uint32_t region = FreeMapRegionOf(page_id);
+    if (FindRegion(region) == nullptr) {
+        if (Status s = LoadRegionIfPresent(region); !s.ok()) {
+            LogAdoptionFailure(page_id, s);
+            return false;
+        }
+        if (IsAllocated(page_id)) return true;
+    }
+
+    if (Status s = RefreshFreeMapFromDevice(); !s.ok()) {
+        LogAdoptionFailure(page_id, s);
+        return false;
+    }
+    return IsAllocated(page_id);
+}
+
+void DevicePageStore::LogAdoptionFailure(PageId page_id, const Status& why) const {
+    // A refresh that keeps failing is the difference between "this id
+    // really is not allocated" and "this core cannot find out", and only
+    // the log separates them - the caller's refusal names the page either
+    // way. The copy is left intact by the scratch-validate-union rule, so
+    // the next miss retries.
+    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("pagestore", "free-map adoption on miss of page " +
+                                     std::to_string(page_id) + " failed: " + why.message());
+    }
+}
+
+Status DevicePageStore::NotAllocated(PageId page_id) const {
+    // redo.cpp:322 learned this on its own path: "page id not found" alone
+    // says nothing about *which* id, and on a leased core nothing about
+    // which authority answered.
+    std::string msg = "page id " + std::to_string(page_id) + " not found";
+    if (lease_ != nullptr) {
+        msg += " (core " + std::to_string(core_id_) +
+               ", leased: not in this core's extent lease and not set in its free-map copy)";
+    }
+    return Status::NotFound(std::move(msg));
 }
 
 Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {

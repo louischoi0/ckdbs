@@ -122,6 +122,18 @@ void IndexBuildServer::OnRequest(const sched::MessageHeader& header,
                                       " covered columns, not a shape an index entry has"));
         return;
     }
+    // Oid 0 is the *clustered* root's discriminator in `WriteAnchorRoot`,
+    // so a request carrying it would move the relation's own root where it
+    // meant to seed an index slot. Refused here rather than in
+    // `CheckIndexDef`, which legitimately sees a zero oid on the local arm:
+    // `PrepareIndexDef` checks before it issues one. On the wire it is
+    // bytes this core did not compute, and this is where those are bounded.
+    if (request.index_oid == 0) {
+        Reply(requester, request_id, request.index_oid, kInvalidPageId,
+              Status::InvalidArgument("index build request carries index oid 0, which names the "
+                                      "clustered root rather than an index slot"));
+        return;
+    }
     // The row is the authority on who owns the relation (CC7), read rather
     // than trusted from the requester: a tree built here for a relation
     // this core does not own is the two-writer route from the other side.
@@ -180,6 +192,10 @@ void IndexBuildServer::Build(std::uint32_t requester, std::uint64_t request_id,
     // Core 0 ran this already; it runs again against *this* core's view of
     // the relation, which is the one the tree is built from. `kHere`: this
     // core owns the relation and seeds its own anchor.
+    // `kHere`, so this asks the anchor's entry table too - and asks it
+    // before a page is allocated, which is what makes the refusal free
+    // (D5, anchor_page.hpp's CheckAnchorRoomForIndex). This core owns the
+    // relation, so the anchor it reads is its own.
     if (Status s = catalog_.CheckIndexDef(def); !s.ok()) return fail(s);
     auto access = catalog_.InitTableAccess(def.table_oid);
     if (!access.ok()) return fail(access.status());

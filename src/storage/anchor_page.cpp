@@ -33,6 +33,17 @@ std::size_t FindEntry(std::span<const std::byte, kPageSize> page, std::uint64_t 
     return nr;
 }
 
+// The one home of the full-table refusal, so the check that runs before a
+// build and the write that runs after it cannot drift apart in wording or
+// in bound.
+Status RoomForANewEntry(std::uint16_t nr) {
+    if (nr >= kAnchorMaxIndexEntries) {
+        return Status::ResourceExhausted("anchor page holds " + std::to_string(nr) +
+                                         " index entries already; the table is full");
+    }
+    return Status::OK();
+}
+
 }  // namespace
 
 void FormatAnchorPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid,
@@ -59,17 +70,22 @@ StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
     return LoadField<std::uint32_t>(page, EntryOffset(i) + sizeof(std::uint64_t));
 }
 
+Status CheckAnchorRoomForIndex(std::span<const std::byte, kPageSize> page,
+                               std::uint64_t index_oid) {
+    auto nr = EntryCount(page);
+    if (!nr.ok()) return nr.status();
+    // An entry that exists is updated in place and needs no slot.
+    if (FindEntry(page, index_oid, nr.value()) != nr.value()) return Status::OK();
+    return RoomForANewEntry(nr.value());
+}
+
 Status SetAnchorIndexRoot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid,
                           PageId root) {
     auto nr = EntryCount(page);
     if (!nr.ok()) return nr.status();
     std::size_t i = FindEntry(page, index_oid, nr.value());
     if (i == nr.value()) {
-        if (nr.value() >= kAnchorMaxIndexEntries) {
-            return Status::ResourceExhausted(
-                "anchor page holds " + std::to_string(nr.value()) +
-                " index entries already; the table is full");
-        }
+        if (Status s = RoomForANewEntry(nr.value()); !s.ok()) return s;
         StoreField<std::uint64_t>(page, EntryOffset(i), index_oid);
         StoreField<std::uint16_t>(page, kAnchorNrIndexOffset,
                                   static_cast<std::uint16_t>(nr.value() + 1));

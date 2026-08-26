@@ -9,6 +9,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/storage/anchor_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 // `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` (docs/feat-index.md §10,
@@ -259,6 +260,51 @@ TEST_F(IndexDdlTest, AnIndexOnACabinedColumnWarnsWithoutRefusing) {
     EXPECT_NE(out.find("CREATED INDEX"), std::string::npos) << out;
     EXPECT_NE(out.find("WARN"), std::string::npos) << out;
     EXPECT_NE(out.find("supersedes"), std::string::npos) << out;
+}
+
+TEST_F(IndexDdlTest, ARefusalOnAFullAnchorCostsNoPages) {
+    // G2 (the statement-shipping work order; `docs/known-gaps.md`): the
+    // anchor slot was seeded *after* the tree was built, so once the entry
+    // table filled, every attempt allocated a whole index tree and threw
+    // it away - and nothing in this engine frees a page. Measured on a
+    // 3,000-row relation at 32 pages an attempt: 3,259 refusals consumed
+    // 104,257 pages in 30 seconds, past the 65,280 ids one free-map region
+    // covers.
+    //
+    // The relation is left empty on purpose: a tree over no rows is one
+    // root page, so a single leaked page fails this where a populated
+    // relation would need 32 to notice.
+    //
+    // 679 round trips is the suite's heaviest single test and the count is
+    // not negotiable - it is `kAnchorMaxIndexEntries`, spelled as the
+    // constant, and the table cannot be filled with fewer. It is also not
+    // linear: every `BumpVersion` drops `TableAccess`, so each build
+    // re-scans a `sys.indexes` that is growing, which is why the relation
+    // holds no rows to make the *pages* cheap.
+    ASSERT_EQ(Run("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3), "CRE");
+    for (std::size_t i = 0; i < storage::kAnchorMaxIndexEntries; ++i) {
+        const std::string name = "fill" + std::to_string(i);
+        ASSERT_NE(Run("CREATE INDEX " + name + " ON t (owner)").response.find("CREATED INDEX"),
+                  std::string::npos)
+            << i;
+        ASSERT_NE(Run("DROP INDEX " + name).response.find("DROPPED INDEX"), std::string::npos)
+            << i;
+    }
+
+    // DROP INDEX frees no anchor entry - no removal exists (anchor_page.hpp
+    // says why) - so the table is full and stays full.
+    // Twice: once to refuse, once to prove the refusal did not change what
+    // the second attempt meets. More would only multiply a leak the first
+    // pair already detects.
+    const std::size_t before = store_.page_count();
+    for (int i = 0; i < 2; ++i) {
+        const std::string out = Run("CREATE INDEX over" + std::to_string(i) + " ON t (owner)")
+                                    .response;
+        EXPECT_EQ(out.substr(0, 3), "ERR") << out;
+        EXPECT_NE(out.find("the table is full"), std::string::npos) << out;
+    }
+    EXPECT_EQ(store_.page_count(), before)
+        << "a refusal allocated pages; that is the leak this test exists for";
 }
 
 TEST_F(IndexDdlTest, UniqueIsRefusedThroughTheDispatcherToo) {

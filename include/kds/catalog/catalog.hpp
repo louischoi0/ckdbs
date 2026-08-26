@@ -897,6 +897,19 @@ public:
     Status WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid, std::uint64_t index_oid,
                            PageId root, std::uint64_t trx_id);
 
+    // What WriteAnchorRoot would refuse for `index_oid`, asked without
+    // writing anything: the same page validation, then
+    // storage::CheckAnchorRoomForIndex, which says why it is worth asking.
+    // `kInvalidPageId` is OK - a relation with no anchor has no table to
+    // fill, and both callers skip the write for the same id.
+    //
+    // Read-only through GetForRead, and that is required rather than
+    // adequate: `Get` dirties the frame at fetch, so asking through it
+    // would make every refused CREATE INDEX cost a write-back of an
+    // unmodified page.
+    Status CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
+                                   std::uint64_t index_oid);
+
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
                               PageId varheap_page_id,

@@ -733,6 +733,120 @@ TEST(DevicePageStoreOwnershipTest, ALeasedCoreMayNotFaultAForeignPage) {
 #endif
 }
 
+TEST(DevicePageStoreOwnershipTest, APeerAdoptsTheDeviceMapBeforeCallingASystemPageAbsent) {
+    // G1 (docs/known-gaps.md): a peer's free-map copy is a **mount-time
+    // snapshot**, advanced only by a relation fault/write grant. Core 0
+    // allocating a system page after that - a catalog page, which a peer
+    // must read to resolve any relation of its own - left an id the peer's
+    // copy has no bit for, and the fault seam turned that staleness into a
+    // permanent NotFound: nothing on the failing path asked the device
+    // again, so the relation stayed unwritable for the rest of the mount.
+    //
+    // The shape here is that sequence, minus the 58 index builds it took to
+    // reach it at the server: the peer opens first (its snapshot predates
+    // the page), core 0 then allocates and flushes.
+    auto device = MakeDevice(64, 0);
+    auto core0 = OpenStore(*device, /*first_new_page_id=*/3);
+    ASSERT_NE(core0, nullptr);
+    auto peer = OpenStore(*device, /*first_new_page_id=*/3);
+    ASSERT_NE(peer, nullptr);
+
+    LeasedIdSource lease(Extent{1000, 4});
+    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+
+    // Core 0 grows the system range after the peer's snapshot was taken,
+    // and publishes both halves - the bytes and the map bit.
+    auto grown = core0->CreateNew();
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    const PageId later_system_page = grown.value().first;
+    ASSERT_LT(later_system_page, 128u) << "the test needs a page in the peer's readable system range";
+    Fill(grown.value().second.bytes(), 3);
+    ASSERT_TRUE(core0->Sync().ok());
+
+    EXPECT_FALSE(peer->IsAllocated(later_system_page))
+        << "the premise: the peer's copy predates this page";
+
+    auto read = peer->GetForRead(later_system_page);
+    ASSERT_TRUE(read.ok()) << read.status().message();
+    EXPECT_TRUE(Matches(read.value().bytes(), 3));
+    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u)
+        << "the adoption is what healed the miss, not an accident of timing";
+
+    // Adopted, so the next read costs nothing: the miss does not repeat.
+    auto again = peer->GetForRead(later_system_page);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u);
+
+    // And an id that genuinely is not allocated anywhere still refuses -
+    // naming itself, which is what the bare "page id not found" withheld.
+    auto absent = peer->GetForRead(120);
+    EXPECT_FALSE(absent.ok());
+    EXPECT_EQ(absent.status().code(), StatusCode::kNotFound);
+    EXPECT_NE(absent.status().message().find("page id 120"), std::string::npos)
+        << absent.status().message();
+    EXPECT_EQ(peer->map_refreshes_on_miss(), 2u);
+}
+
+TEST(DevicePageStoreOwnershipTest, APeerAdoptsARegionThatDidNotExistAtItsMount) {
+    // The same defect one level up, and the FM series is what made it
+    // reachable: RefreshFreeMapFromDevice walks *resident* regions, and an
+    // absent one reads as all zeroes - so before this, a page core 0
+    // placed in a region created after the peer mounted could not be
+    // adopted at all, even one the peer had been granted. The refusal was
+    // permanent for exactly the same reason.
+    auto device = MakeDevice(64, 0);
+    auto core0 = OpenStore(*device, /*first_new_page_id=*/3);
+    ASSERT_NE(core0, nullptr);
+    auto peer = OpenStore(*device, /*first_new_page_id=*/3);
+    ASSERT_NE(peer, nullptr);
+
+    LeasedIdSource lease(Extent{1000, 4});
+    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+
+    // Core 0 grows the map into region 1, which the peer has never seen.
+    const PageId in_region_one = kFreeMapBitsPerPage + 64;
+    ASSERT_TRUE(core0->RaiseAllocationFloor(in_region_one).ok());
+    auto grown = core0->CreateNew();
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    ASSERT_EQ(FreeMapRegionOf(grown.value().first), 1u);
+    Fill(grown.value().second.bytes(), 5);
+    ASSERT_TRUE(core0->Sync().ok());
+
+    // The peer is granted the page: rights alone were never the problem.
+    peer->GrantFaultPages(Extent{grown.value().first, 1});
+    EXPECT_TRUE(peer->MayFault(grown.value().first));
+    EXPECT_FALSE(peer->IsAllocated(grown.value().first))
+        << "the premise: region 1 is not resident here";
+
+    auto read = peer->GetForRead(grown.value().first);
+    ASSERT_TRUE(read.ok()) << read.status().message();
+    EXPECT_TRUE(Matches(read.value().bytes(), 5));
+    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u);
+
+    // Loaded once, counted once: LoadRegionIfPresent adds the region's
+    // allocated count, so adopting a region already held would double it.
+    const std::uint32_t after_first = peer->allocated_pages();
+    auto again = peer->GetForRead(grown.value().first);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(peer->allocated_pages(), after_first);
+    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u);
+}
+
+TEST(DevicePageStoreOwnershipTest, TheSystemCoreDoesNotAdoptItsOwnMap) {
+    // Core 0's copy **is** the free map, so a miss is an absence and there
+    // is nothing to adopt. Pinned because the adoption is a device read on
+    // an error path, and putting it on core 0's misses would price every
+    // genuine NotFound the engine reports.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    auto absent = store->GetForRead(500);
+    EXPECT_FALSE(absent.ok());
+    EXPECT_EQ(absent.status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(store->map_refreshes_on_miss(), 0u);
+}
+
 TEST(DevicePageStoreOwnershipTest, APageStampedByThisStreamIsClaimedWithoutAGrant) {
     // PW1c-7 (workplan-peer-writer.md §8): every lease and grant is
     // memory-resident, so after a restart a core holds rights over none of
