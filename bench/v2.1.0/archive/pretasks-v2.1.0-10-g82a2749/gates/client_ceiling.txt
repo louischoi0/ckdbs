@@ -1,0 +1,167 @@
+  ping    threads=1       50,549 ops/s errors=0
+  select  threads=1       40,999 ops/s errors=0
+  insert  threads=1          943 ops/s errors=0
+  ping    threads=2      107,853 ops/s errors=0
+  select  threads=2       84,033 ops/s errors=0
+  insert  threads=2        1,097 ops/s errors=0
+  ping    threads=4       86,106 ops/s errors=0
+  select  threads=4       85,070 ops/s errors=0
+  insert  threads=4        1,802 ops/s errors=0
+  ping    threads=6       63,467 ops/s errors=0
+  select  threads=6       61,585 ops/s errors=0
+  insert  threads=6        3,194 ops/s errors=0
+  ping    threads=8       56,411 ops/s errors=0
+  select  threads=8       56,029 ops/s errors=0
+  insert  threads=8        3,274 ops/s errors=0
+  ping    threads=14      56,141 ops/s errors=0
+  select  threads=14      55,976 ops/s errors=0
+  insert  threads=14       7,452 ops/s errors=0
+{
+  "arms": {
+    "ping-1": {
+      "threads": 1,
+      "seconds": 3.001,
+      "ops": 151673,
+      "ops_per_second": 50549.2,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-1": {
+      "threads": 1,
+      "seconds": 3.0,
+      "ops": 123012,
+      "ops_per_second": 40999.0,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-1": {
+      "threads": 1,
+      "seconds": 3.001,
+      "ops": 2831,
+      "ops_per_second": 943.2,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-2": {
+      "threads": 2,
+      "seconds": 3.001,
+      "ops": 323629,
+      "ops_per_second": 107853.4,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-2": {
+      "threads": 2,
+      "seconds": 3.001,
+      "ops": 252144,
+      "ops_per_second": 84032.7,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-2": {
+      "threads": 2,
+      "seconds": 3.002,
+      "ops": 3292,
+      "ops_per_second": 1096.7,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-4": {
+      "threads": 4,
+      "seconds": 3.001,
+      "ops": 258443,
+      "ops_per_second": 86106.1,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-4": {
+      "threads": 4,
+      "seconds": 3.0,
+      "ops": 255248,
+      "ops_per_second": 85070.2,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-4": {
+      "threads": 4,
+      "seconds": 3.003,
+      "ops": 5411,
+      "ops_per_second": 1802.1,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-6": {
+      "threads": 6,
+      "seconds": 3.001,
+      "ops": 190474,
+      "ops_per_second": 63467.1,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-6": {
+      "threads": 6,
+      "seconds": 3.001,
+      "ops": 184799,
+      "ops_per_second": 61585.2,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-6": {
+      "threads": 6,
+      "seconds": 3.002,
+      "ops": 9589,
+      "ops_per_second": 3194.5,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-8": {
+      "threads": 8,
+      "seconds": 3.001,
+      "ops": 169292,
+      "ops_per_second": 56411.4,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-8": {
+      "threads": 8,
+      "seconds": 3.001,
+      "ops": 168141,
+      "ops_per_second": 56028.8,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-8": {
+      "threads": 8,
+      "seconds": 3.054,
+      "ops": 10001,
+      "ops_per_second": 3274.3,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-14": {
+      "threads": 14,
+      "seconds": 3.002,
+      "ops": 168519,
+      "ops_per_second": 56141.4,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-14": {
+      "threads": 14,
+      "seconds": 3.002,
+      "ops": 168017,
+      "ops_per_second": 55976.3,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-14": {
+      "threads": 14,
+      "seconds": 3.002,
+      "ops": 22373,
+      "ops_per_second": 7451.5,
+      "errors": 0,
+      "first_error": null
+    }
+  }
+}
+ceiling exit=0

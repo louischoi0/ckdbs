@@ -56,8 +56,12 @@ constexpr std::size_t kRegionPages = 256;
 // that work must not land inside a measured window.
 constexpr auto kSettle = std::chrono::milliseconds(100);
 // The sweep. N=4 vs N=1 is the deliverable; 2 and 3 show the shape between.
-constexpr int kThreadCounts[] = {1, 2, 3, 4};
-constexpr std::size_t kArms = std::size(kThreadCounts);
+// The default sweep, kept at v2.1.0's four arms so that run's invocation
+// reproduces exactly. A host with more cores needs more arms - the question
+// the probe answers is "does the device overlap as many streams as this
+// engine would open", and that bound moves with the machine - so the counts
+// are overridable on the command line (see main).
+constexpr int kDefaultThreadCounts[] = {1, 2, 3, 4};
 
 struct ThreadResult {
     std::uint64_t syncs = 0;
@@ -176,7 +180,8 @@ double Median(std::vector<double> v) {
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
-                     "usage: %s <dir-on-block-device> [reps] [seconds]\n",
+                     "usage: %s <dir-on-block-device> [reps] [seconds] "
+                     "[thread-counts, e.g. 1,2,4,8]\n",
                      argv[0]);
         return 2;
     }
@@ -190,6 +195,41 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Optional fourth argument: the thread counts, comma-separated. Every
+    // arm must be >= 1 - a zero-thread arm would divide the ratio below by
+    // a number nobody measured - and the first arm is the N=1 the ratios
+    // are against, so it is required to be 1 rather than silently assumed.
+    std::vector<int> thread_counts(std::begin(kDefaultThreadCounts),
+                                   std::end(kDefaultThreadCounts));
+    if (argc > 4) {
+        thread_counts.clear();
+        const std::string spec = argv[4];
+        std::size_t pos = 0;
+        while (pos <= spec.size()) {
+            const std::size_t comma = spec.find(',', pos);
+            const std::string tok =
+                spec.substr(pos, comma == std::string::npos ? std::string::npos
+                                                            : comma - pos);
+            if (!tok.empty()) {
+                const int n = std::atoi(tok.c_str());
+                if (n < 1) {
+                    std::fprintf(stderr, "thread count %s is not >= 1\n", tok.c_str());
+                    return 2;
+                }
+                thread_counts.push_back(n);
+            }
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        if (thread_counts.empty() || thread_counts.front() != 1) {
+            std::fprintf(stderr,
+                         "the first thread count must be 1: every ratio printed "
+                         "is against it\n");
+            return 2;
+        }
+    }
+    const std::size_t kArms = thread_counts.size();
+
     std::printf(
         "fdatasync overlap probe: dir=%s reps=%d seconds=%.1f page=%zu\n",
         dir.c_str(), reps, run_seconds, kPageBytes);
@@ -199,10 +239,10 @@ int main(int argc, char** argv) {
     // every repetition of N=4 lets any drift across the run - an SLC cache
     // filling, thermal throttling, a noisy neighbour - land entirely on one
     // arm of the ratio and read as an absence of overlap.
-    std::vector<double> runs[kArms];
+    std::vector<std::vector<double>> runs(kArms);
     for (int r = 0; r < reps; ++r) {
         for (std::size_t a = 0; a < kArms; ++a) {
-            runs[a].push_back(RunOnce(dir, kThreadCounts[a], run_seconds));
+            runs[a].push_back(RunOnce(dir, thread_counts[a], run_seconds));
         }
     }
 
@@ -213,7 +253,7 @@ int main(int argc, char** argv) {
         const double med = Median(runs[a]);
         const auto [lo, hi] =
             std::minmax_element(runs[a].begin(), runs[a].end());
-        std::printf("%-8d %-12.1f %-12.1f %-12.1f %-10.3f\n", kThreadCounts[a],
+        std::printf("%-8d %-12.1f %-12.1f %-12.1f %-10.3f\n", thread_counts[a],
                     med, *lo, *hi, n1 > 0.0 ? med / n1 : 0.0);
     }
     return 0;

@@ -70,6 +70,84 @@ never mixed in one sentence.
 
 ---
 
+## 3. The two gates, run before anything is read
+
+### 3a. The device: this volume overlaps four `fdatasync` streams and then gets worse
+
+`bench/v2.1.0` §3 ran this as a blocking gate, because if the device cannot
+overlap concurrent syncs then every multi-core ingest ratio belongs to the
+I/O backend rather than to the architecture. It must be re-run here: the host
+and the volume are both different.
+
+**measured** — `build-release/fdatasync_probe /home/ubuntu/mcbench2 5 3
+1,2,3,4,5,6,7,8` (5 reps of 3 s per arm, arms **interleaved**, 8192-byte
+page, one file and one fd per thread):
+
+| threads | median syncs/s | min | max | vs N=1 |
+|---|---|---|---|---|
+| 1 | 1,117.7 | 1,055.7 | 1,192.2 | 1.000 |
+| 2 | 1,970.1 | 1,873.1 | 2,021.7 | 1.763 |
+| 3 | 2,800.9 | 2,773.3 | 2,819.1 | 2.506 |
+| 4 | **3,767.5** | 3,735.4 | 3,819.4 | **3.371** |
+| 5 | 3,326.2 | 3,282.4 | 3,367.1 | 2.976 |
+| 6 | 3,104.8 | 3,099.8 | 3,108.4 | 2.778 |
+| 7 | 3,101.7 | 3,099.3 | 3,170.3 | 2.775 |
+| 8 | 3,102.3 | 3,101.8 | 3,107.7 | 2.776 |
+
+**The overlap peaks at four streams and then declines — and four is this
+host's physical core count.** Past N=4 the aggregate falls by 18% and then
+sits flat at ~3,100/s through N=8. The single-stream figure is
+**1,118 syncs/s**, a 0.89 ms sync.
+
+This is a stronger statement than v2.1.0's gate could make: that host was
+measured only to N=4 (its logical count) and read 3.657× as "near-linear to
+N=3". Here the same shape is visible with its top: **near-linear to N=3, a
+knee at N=4, and a decline after it.** The probe's own caveat still bounds
+the quote — separate files means separate inodes, so this answers *"N cores,
+N WAL streams"*, the engine's shape, and not *"N cores, one shared file"*.
+
+**Read T1a's `cores = 8` cell against this and it stops being a puzzle.**
+Seven writer cores commit 3,400/s aggregate (§4) — the device's 7-stream
+ceiling of 3,102 to within noise — while the single-core arm, batching 14
+sessions onto **one** stream, does 3,482/s. Both arms hit the same wall from
+opposite directions: one by opening more streams, one by putting more commits
+in each trip. **On this host the aggregate sync ceiling is ~3,100–3,770/s
+however it is reached**, which is the fact any scaling claim about writer
+cores has to clear first.
+
+### 3b. The harness: what a CPython driver can do at all
+
+T1a's batched cells reach tens of thousands of inserts per second, and at
+that rate the number may be describing the driver rather than the engine.
+
+**measured** — `bench/client_ceiling_probe.py --threads 1,2,4,6,8,14
+--seconds 3`, `cores = 1`, three arms per thread count:
+
+| threads | PING ops/s | point-SELECT ops/s | autocommit INSERT ops/s |
+|---|---|---|---|
+| 1 | 50,549 | 40,999 | 943 |
+| 2 | **107,853** | 84,033 | 1,097 |
+| 4 | 86,106 | 85,070 | 1,802 |
+| 6 | 63,467 | 61,585 | 3,194 |
+| 8 | 56,411 | 56,029 | 3,274 |
+| 14 | 56,141 | 55,976 | 7,452 |
+
+**At fourteen threads the harness tops out near 56,000 statements/s**, and
+T1a's `cores = 8, batch = 1000` cell measured **52,581** — 94% of it. Those
+cells are therefore reported as **unresolved**: the engine may be faster and
+this driver cannot say so.
+
+The attribution is checkable rather than assumed. This probe runs
+`cores = 1`, so its 56,141 is one reactor plus CPython; T1a's 52,581 has
+**seven** writer reactors available. Seven reactors not beating one is not a
+statement about reactors, so the constraint is on the client side of the
+socket. The unbatched cells are nowhere near it — a `batch = 1` cell runs at
+876–3,482 ips against a 56,000 ceiling — so **every conclusion in §4 and §5
+about commit batching is drawn from cells with two orders of magnitude of
+headroom**, and only the `batch ≥ 100` ratios are withheld.
+
+---
+
 ## 4. T1a — one commit per `--batch` rows, and what it does to §6's law
 
 `bench/v2.1.0` §6 explains its whole matrix with one expression,
