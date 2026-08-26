@@ -1022,25 +1022,38 @@ still waits on its own gate, so:
 
 ## Storage and key modes
 
-- **An instance cannot exceed 65,280 pages — 510 MiB of data file.** Not
-  the 16 TiB `docs/page.md` §4 designs for: `page_id` is `u32` with a 2^31
-  ceiling asserted at the device layer, and every persisted page-id field
-  in the engine stores a full 32 bits, so nothing *on disk* is the limit.
-  The limit is that the free map is **one page**, and one bitmap page
-  covers `(8192 − 32) × 8` ids. §5's multi-page free map — free-map pages
-  at computable interval positions — is written but unbuilt, and the
-  single-page ceiling is enforced in four places: `IsAllocated` (an id at
-  or above coverage reads as *not allocated*, so `Get()` answers
-  `NotFound`), `CreateAt` and `RaiseAllocationFloor` (both `OutOfRange`),
-  and `ExtentAllocator::Reserve` (`OutOfSpace`). Reaching it is a hard
-  refusal, not corruption. **It is also acting as the engine's only bound
-  on leaked space**: with nothing freeing pages (see reclamation above), a
-  `DROP TABLE`/rebuild loop stops at 510 MiB today and would run to the
-  design ceiling once the map grows — so lifting this raises the ceiling
-  on orphaned pages exactly as much as on live ones. Survey, placement
-  candidates and the task series:
-  `docs/workplan-multi-free-map.md` (2026-08-22); the placement
-  arithmetic itself stays `[OPEN]` in `docs/page.md` §5.
+- ~~**An instance cannot exceed 65,280 pages — 510 MiB of data file**~~ —
+  **lifted 2026-08-26** (`docs/workplan-multi-free-map.md` FM1-FM5). The
+  free map is a family of pages now, one pair per 65,280-id region at
+  `N × 65,280 + 1` and `+ 2` (D1's candidate A), created as allocation
+  walks into a region and loaded at mount. The four sites that read one
+  bitmap page's coverage as the size of the id space — `IsAllocated`,
+  `CreateAt`, `RaiseAllocationFloor`, `ExtentAllocator::Reserve` — read
+  `kMaxPageCount` instead, so the ceiling is the 2^31-page / 16 TiB design
+  ceiling `docs/page.md` §4 always named. A database inside one region is
+  unchanged: region 0's bitmaps are still ids 1 and 2, so **no superblock
+  version bump and no migration**, and an existing file mounts as it did.
+  **What remains**: a reservation may not cross a region (D3(a)), wasting
+  at most 63 ids per 65,280, permanently, since nothing frees; the
+  headerless map's per-read cost at scale is unaddressed (FM6, D2 open);
+  peer stores get a private in-memory region above region 0 and cannot
+  durably record a headerless page there (FM7, D5 open); and the two
+  *rights* bitmaps still cap at 65,280, so a peer can hold no grant above
+  region 0 (FM7 and D10 — see the next entry).
+- **The consequence of lifting it, now live**: the instance ceiling was
+  **the engine's only bound on leaked space**. With nothing freeing pages
+  (see reclamation above), a `DROP TABLE`/rebuild loop stopped at 510 MiB
+  before 2026-08-26 and now runs to the design ceiling. Not a new defect —
+  the same absent reclamation, with a bigger number in front of it.
+- **A peer core can hold no fault or write grant above page 65,280.**
+  `fault_rights_` and `write_rights_` are single-page bitmaps indexed by
+  absolute page id, so the free map's placement arithmetic does not reach
+  them and lifting the map's ceiling did not lift theirs.
+  `GrantWritePages` drops such an id at an explicit range check,
+  `GrantFaultPages` loses it to `FreeMapAllocate`'s silent no-op, and the
+  refusal then surfaces at `MayFault` rather than at the grant. Reachable
+  only in a database that has grown past region 0 *and* runs more than one
+  core. `docs/workplan-multi-free-map.md` §9's second finding and D10.
 - ~~**Dividing a full btree *internal* node is not implemented**~~ —
   **built 2026-08-11** (`docs/workplan-key-mode.md` PK09). A separator
   promoted into a full parent now divides that node's entries when it sorts

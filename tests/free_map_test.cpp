@@ -1,6 +1,7 @@
 #include "kds/storage/free_map.hpp"
 
 #include <array>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -124,6 +125,80 @@ TEST(FreeMapTest, OutOfRangeIndexIsInertNotWrapping) {
     EXPECT_EQ(page, before);
 
     EXPECT_FALSE(FreeMapFindFirstFree(Const(page), kFreeMapBitsPerPage).has_value());
+}
+
+
+// ---- Placement arithmetic (FM1, docs/workplan-multi-free-map.md) ----
+
+// Ids worth checking: the two region heads either side of a boundary, the
+// map pages themselves, the last id of a region, and the top of the id
+// space. Sampled rather than exhaustive - 2^31 ids is not a unit test.
+std::vector<PageId> PlacementProbeIds() {
+    std::vector<PageId> ids{0, 1, 2, 3, 127, 128, 1000};
+    for (std::uint32_t region : {0u, 1u, 2u, 17u, 32895u}) {
+        const std::uint64_t base = std::uint64_t{region} * kFreeMapBitsPerPage;
+        for (std::uint64_t delta :
+             {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{2}, std::uint64_t{3},
+              std::uint64_t{kFreeMapBitsPerPage} - 1}) {
+            const std::uint64_t id = base + delta;
+            if (id < kMaxPageCount) ids.push_back(static_cast<PageId>(id));
+        }
+    }
+    ids.push_back(kMaxPageCount - 1);
+    return ids;
+}
+
+TEST(FreeMapPlacementTest, EveryIdMapsToExactlyOneMapPageAndBit) {
+    for (PageId id : PlacementProbeIds()) {
+        const PageId map = FreeMapPageIdFor(id);
+        const std::uint32_t bit = FreeMapBitIndexOf(id);
+
+        // Exactness: the pair reconstructs the id, so no two ids can share
+        // one (map page, bit) and none is left uncovered. The map page is
+        // the region head plus one, hence the -1.
+        ASSERT_LT(bit, kFreeMapBitsPerPage) << "id " << id;
+        EXPECT_EQ(map - 1 + bit, id) << "id " << id;
+        EXPECT_EQ(HeaderlessMapPageIdFor(id), map + 1) << "id " << id;
+        EXPECT_LT(map, kMaxPageCount) << "id " << id;
+    }
+}
+
+TEST(FreeMapPlacementTest, MapPagesFallInsideTheirOwnCoverage) {
+    for (PageId id : PlacementProbeIds()) {
+        const PageId free_map = FreeMapPageIdFor(id);
+        const PageId headerless = HeaderlessMapPageIdFor(id);
+
+        // Both map pages of a region are covered by that region's own free
+        // map, at bits 1 and 2 - which is what lets a new region be created
+        // without consulting any other map page.
+        EXPECT_EQ(FreeMapPageIdFor(free_map), free_map) << "id " << id;
+        EXPECT_EQ(FreeMapPageIdFor(headerless), free_map) << "id " << id;
+        EXPECT_EQ(FreeMapBitIndexOf(free_map), 1u) << "id " << id;
+        EXPECT_EQ(FreeMapBitIndexOf(headerless), 2u) << "id " << id;
+    }
+}
+
+TEST(FreeMapPlacementTest, IsMapPageIdAgreesWithTheConstructors) {
+    for (PageId id : PlacementProbeIds()) {
+        const bool is_map = (id == FreeMapPageIdFor(id)) || (id == HeaderlessMapPageIdFor(id));
+        EXPECT_EQ(IsMapPageId(id), is_map) << "id " << id;
+    }
+    // Region 0 is the case every existing test and file already assumes.
+    EXPECT_TRUE(IsMapPageId(1));
+    EXPECT_TRUE(IsMapPageId(2));
+    EXPECT_FALSE(IsMapPageId(0));  // the superblock
+    EXPECT_FALSE(IsMapPageId(3));
+}
+
+TEST(FreeMapPlacementTest, RegionZeroReproducesTodaysFixedIds) {
+    // The compile-time half of this lives at the declarations of
+    // kFreeMapPageId / kHeaderlessMapPageId; stated here too because it is
+    // the reason an existing single-region database needs no migration.
+    EXPECT_EQ(FreeMapPageIdFor(0), 1u);
+    EXPECT_EQ(HeaderlessMapPageIdFor(0), 2u);
+    EXPECT_EQ(FreeMapRegionOf(kFreeMapBitsPerPage - 1), 0u);
+    EXPECT_EQ(FreeMapRegionOf(kFreeMapBitsPerPage), 1u);
+    EXPECT_EQ(FreeMapPageIdFor(kFreeMapBitsPerPage), kFreeMapBitsPerPage + 1);
 }
 
 }  // namespace

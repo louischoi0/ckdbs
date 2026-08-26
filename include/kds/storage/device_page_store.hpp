@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <span>
 #include <unordered_map>
@@ -10,6 +11,7 @@
 
 #include "kds/base/log.hpp"
 #include "kds/storage/extent_lease.hpp"
+#include "kds/storage/free_map.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/durability.hpp"
@@ -113,6 +115,13 @@ inline constexpr PageId kFreeMapPageId = 1;
 // page carries no common header, so it is neither checksum-stamped on the
 // way out nor verified on the way in.
 inline constexpr PageId kHeaderlessMapPageId = 2;
+
+// Region 0's pair, by the placement arithmetic in free_map.hpp. These two
+// names stay because they read better at their call sites than
+// FreeMapPageIdFor(0) does, but they are no longer independent facts: if
+// D1's arithmetic ever moves, this is where the engine finds out.
+static_assert(kFreeMapPageId == FreeMapPageIdFor(0));
+static_assert(kHeaderlessMapPageId == HeaderlessMapPageIdFor(0));
 
 class DevicePageStore final : public PageStore {
 public:
@@ -383,19 +392,32 @@ public:
     // adopts truth, it does not create peer writes.
     Status RefreshFreeMapFromDevice();
 
-    // The live free-map page, for the one caller that carves extents out of
-    // it (storage/extent_lease.hpp's ExtentAllocator). Exposed rather than
-    // wrapped because reservation is *policy* about who gets which ids,
-    // which is not this class's business - what is its business is that the
-    // bytes have a single owner, and handing out a mutable view of them is
-    // exactly as narrow as that ownership.
+    // The live free-map page **of one region**, for the one caller that
+    // carves extents out of it (storage/extent_lease.hpp's ExtentAllocator).
+    // Exposed rather than wrapped because reservation is *policy* about who
+    // gets which ids, which is not this class's business - what is its
+    // business is that the bytes have a single owner, and handing out a
+    // mutable view of them is exactly as narrow as that ownership.
+    //
+    // FM4: a region, not "the map". The allocator can no longer hold one
+    // span for its lifetime, because the id space is no longer one page -
+    // it asks per region, and the bit indices it passes are within-page
+    // (FreeMapBitIndexOf), never absolute ids.
+    //
+    // FM5: **this is the growth point.** A region the device does not hold
+    // yet is formatted here and its own two bits marked, so an allocator
+    // that walks off the end of region N simply asks for region N+1 and
+    // gets one. Fails rather than returns bytes, which is why it is a
+    // StatusOr where the old accessor was infallible: creating a region
+    // touches the device's capacity, and a peer may not create one at all.
+    //
+    // Marks the region dirty on every take, exactly as the single-page
+    // accessor did - the reason it is taken per call and never cached (the
+    // PW3b finding at extent_lease.hpp).
     //
     // **The system core only.** A leased store never allocates from the map
     // (see SetCoreOwnership), so calling this on one is a defect.
-    std::span<std::byte, kPageSize> free_map_bytes() noexcept {
-        maps_dirty_ = true;
-        return std::span<std::byte, kPageSize>(free_map_page_);
-    }
+    StatusOr<std::span<std::byte, kPageSize>> FreeMapBytesForRegion(std::uint32_t region);
 
     // Records that the record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn and, if this is the first record to dirty the
@@ -613,8 +635,45 @@ private:
         std::uint8_t usage = 0;
     };
 
-    DevicePageStore(PageDevice& device, PageId first_new_page_id, const Page& free_map,
-                    const Page& headerless_map, bool maps_dirty) noexcept;
+    // One region's pair of bitmaps: the unit of residency, and the unit of
+    // dirtiness.
+    //
+    // One flag for both pages, deliberately kept from the single-map form:
+    // they are written together, in the same order, at the same points, and
+    // a flag per page would only create a state where one is on disk and
+    // the other is not. What FM2 made per-*region* is the pair, not the
+    // page - region 5 being clean says nothing about region 0.
+    struct MapRegion {
+        Page free_map{};
+        Page headerless_map{};
+        bool dirty = false;
+    };
+
+    DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept;
+
+    // The all-zero page a region that does not exist reads as. Shared and
+    // never written - the const accessors hand out a read-only view of it.
+    static const Page& AbsentRegionPage() noexcept;
+
+    const MapRegion* FindRegion(std::uint32_t region) const noexcept {
+        auto it = map_regions_.find(region);
+        return it == map_regions_.end() ? nullptr : &it->second;
+    }
+
+    // Loads `region` from the device if it holds one, formats a fresh one
+    // if it does not (FM5's growth), and returns it resident either way.
+    // A torn or wrong-typed map page is Corruption and refuses, the rule
+    // Open has always applied to region 0 and RV3 applied to the catalog.
+    StatusOr<MapRegion*> EnsureRegionResident(std::uint32_t region);
+
+    // Loads `region` only if the device already holds it, leaving it
+    // absent otherwise. What mount walks: a region the file is not large
+    // enough to hold, or whose map page reads as never-written, does not
+    // exist and must not be created by the act of looking.
+    Status LoadRegionIfPresent(std::uint32_t region);
+
+    // Whether any resident region has unwritten bits.
+    bool maps_dirty() const noexcept;
 
     // Stamps a checksum unless the page is headerless. The one place that
     // decision is made, so no write path can forget it.
@@ -675,14 +734,22 @@ private:
                                                 bool dirty, bool warm = true);
     Status EnsureAddressable(PageId page_id);
 
-    std::span<const std::byte, kPageSize> free_map_bytes() const noexcept {
-        return std::span<const std::byte, kPageSize>(free_map_page_);
+    // The two bitmaps covering `page_id`, read-only, answering as an empty
+    // map for a region that does not exist. Empty is the *correct* answer
+    // there and not a fallback: a region no mount ever created holds no
+    // allocated page, so every bit in it reads clear. This is what lets
+    // IsAllocated and IsHeaderless stay `const noexcept` across a map that
+    // is no longer wholly resident - see the note above map_regions_.
+    std::span<const std::byte, kPageSize> free_map_bytes_for(PageId page_id) const noexcept {
+        const MapRegion* region = FindRegion(FreeMapRegionOf(page_id));
+        return std::span<const std::byte, kPageSize>(region != nullptr ? region->free_map
+                                                                       : AbsentRegionPage());
     }
-    std::span<std::byte, kPageSize> headerless_map_bytes() noexcept {
-        return std::span<std::byte, kPageSize>(headerless_map_page_);
-    }
-    std::span<const std::byte, kPageSize> headerless_map_bytes() const noexcept {
-        return std::span<const std::byte, kPageSize>(headerless_map_page_);
+    std::span<const std::byte, kPageSize> headerless_map_bytes_for(
+        PageId page_id) const noexcept {
+        const MapRegion* region = FindRegion(FreeMapRegionOf(page_id));
+        return std::span<const std::byte, kPageSize>(region != nullptr ? region->headerless_map
+                                                                       : AbsentRegionPage());
     }
     std::span<std::byte, kPageSize> fault_rights_bytes() noexcept {
         return std::span<std::byte, kPageSize>(fault_rights_);
@@ -728,12 +795,23 @@ private:
     // SetCoreOwnership.
     PageId system_page_limit_ = 0;
 
-    Page free_map_page_;
-    Page headerless_map_page_;
-    // One flag for both maps: they are written together, in the same
-    // order, at the same points, and a separate flag per map would only
-    // create a state where one is on disk and the other is not.
-    bool maps_dirty_;
+    // FM2: the resident map pages, keyed by region (free_map.hpp's
+    // placement arithmetic). Ordered rather than hashed so a flush writes
+    // regions in ascending id order - deterministic, and the order
+    // WriteBack's run coalescing would want if map pages ever joined it.
+    //
+    // **Not frames.** D4 of docs/workplan-multi-free-map.md keeps them
+    // store-owned, which is what makes FlushMaps' write-maps-after-data
+    // ordering trivially true and keeps them out of the checkpoint dirty
+    // table and away from PageRef. The cost accepted is this second
+    // caching mechanism inside the store.
+    //
+    // Every region the device holds is loaded at mount, so "resident" and
+    // "exists" are the same set and a missing key means the region was
+    // never created. That equivalence is what the const accessors above
+    // rest on, and it is why they may answer from an empty page instead of
+    // faulting - a `const noexcept` predicate cannot read a device.
+    std::map<std::uint32_t, MapRegion> map_regions_;
     PageId next_new_page_id_;
 
     // First id that may ever be evicted; everything below is resident by

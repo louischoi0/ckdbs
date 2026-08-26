@@ -123,14 +123,18 @@ TEST(DevicePageStoreTest, CreateNewStartsAtTheConfiguredIdAndAdvances) {
     EXPECT_EQ(third.value().first, 130u);
 }
 
-TEST(DevicePageStoreTest, PageIdBeyondFreeMapCoverageIsOutOfRange) {
+TEST(DevicePageStoreTest, PageIdBeyondTheDesignCeilingIsOutOfRange) {
+    // This pinned kFreeMapBitsPerPage until the free map became multi-page:
+    // one bitmap page's coverage *was* the instance ceiling. FM3 moved the
+    // refusal to where it belongs, and an id one page past region 0 is now
+    // an ordinary page - which the FreeMapRegionTest cases below cover.
     auto device = MakeDevice();
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
 
-    EXPECT_EQ(store->CreateAt(kFreeMapBitsPerPage).status().code(), StatusCode::kOutOfRange);
-    EXPECT_FALSE(store->IsAllocated(kFreeMapBitsPerPage));
-    EXPECT_EQ(store->Get(kFreeMapBitsPerPage).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(store->CreateAt(kMaxPageCount).status().code(), StatusCode::kOutOfRange);
+    EXPECT_FALSE(store->IsAllocated(kMaxPageCount));
+    EXPECT_EQ(store->Get(kMaxPageCount).status().code(), StatusCode::kNotFound);
 }
 
 // The point of the whole class: state written before a Sync() is there
@@ -853,6 +857,187 @@ TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
     auto again = store->GetForRead(page);
     ASSERT_TRUE(again.ok()) << again.status().message();
     EXPECT_TRUE(Matches(again.value().bytes(), 3));
+}
+
+
+// ---- The multi-page free map (FM2-FM5) --------------------------------
+//
+// docs/workplan-multi-free-map.md, D1 settled as candidate A: region N is
+// the ids [N*65280, (N+1)*65280), its free map at N*65280+1 and its
+// headerless map at +2.
+
+TEST(FreeMapRegionTest, ASingleRegionDatabaseWritesExactlyTheTwoMapPages) {
+    // FM2's acceptance property in the form a test can hold: a database
+    // that fits in one region touches the same two map ids it always did,
+    // and creates no third. Byte-identity rests on this plus the codec,
+    // which is unchanged.
+    auto device = MakeDevice(/*extent_pages=*/8, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    for (int i = 0; i < 5; ++i) {
+        auto created = store->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        Fill(created.value().second.bytes(), static_cast<std::uint8_t>(i));
+    }
+    ASSERT_TRUE(store->Flush().ok());
+
+    // Every map page that exists, and no others. Region 1's would be at
+    // 65281/65282, and nothing should have gone near them.
+    Page probe{};
+    auto view = std::span<std::byte, kPageSize>(probe);
+    ASSERT_TRUE(device->ReadPage(kFreeMapPageId, view).ok());
+    EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kFreeMap));
+    ASSERT_TRUE(device->ReadPage(kHeaderlessMapPageId, view).ok());
+    EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kHeaderlessMap));
+    EXPECT_LE(device->page_capacity(), kFreeMapBitsPerPage)
+        << "a one-region database grew the file past region 0";
+
+    // 2 maps + 5 data pages, unchanged from the single-page map.
+    EXPECT_EQ(store->allocated_pages(), 7u);
+}
+
+TEST(FreeMapRegionTest, AllocationCrossesIntoANewRegionAndSkipsItsMapPages) {
+    // FM5: walking off the end of region 0 creates region 1, whose own two
+    // bitmap ids are marked in its own free map - so the next ids handed
+    // out step over them.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    ASSERT_TRUE(store->RaiseAllocationFloor(kFreeMapBitsPerPage - 2).ok());
+
+    const PageId region1 = FreeMapRegionBase(1);
+    const std::vector<PageId> expected = {
+        kFreeMapBitsPerPage - 2,  // the last two ids of region 0
+        kFreeMapBitsPerPage - 1,
+        region1,                  // region 1's first id; +1 and +2 are its maps
+        region1 + 3,
+        region1 + 4,
+    };
+    for (PageId want : expected) {
+        auto created = store->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        EXPECT_EQ(created.value().first, want);
+    }
+
+    // The new region's bitmaps exist, are allocated, and are not placeable.
+    EXPECT_TRUE(store->IsAllocated(FreeMapPageIdFor(region1)));
+    EXPECT_TRUE(store->IsAllocated(HeaderlessMapPageIdFor(region1)));
+    EXPECT_EQ(store->CreateAt(FreeMapPageIdFor(region1)).status().code(),
+              StatusCode::kAlreadyExists);
+    EXPECT_EQ(store->CreateAt(HeaderlessMapPageIdFor(region1)).status().code(),
+              StatusCode::kAlreadyExists);
+}
+
+TEST(FreeMapRegionTest, AGrownMapSurvivesARemount) {
+    // The durability half: region 1's bitmaps must land, and the next mount
+    // must load them - otherwise every page above region 0 reads as
+    // unallocated and the data is silently unreachable.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    const PageId region1 = FreeMapRegionBase(1);
+    PageId written = kInvalidPageId;
+
+    {
+        auto store = OpenStore(*device);
+        ASSERT_NE(store, nullptr);
+        ASSERT_TRUE(store->RaiseAllocationFloor(kFreeMapBitsPerPage).ok());
+
+        auto created = store->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        written = created.value().first;
+        EXPECT_EQ(written, region1);
+        Fill(created.value().second.bytes(), 42);
+        ASSERT_TRUE(store->Flush().ok());
+    }
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    EXPECT_TRUE(store->IsAllocated(written));
+    EXPECT_TRUE(store->IsAllocated(FreeMapPageIdFor(region1)));
+
+    auto got = store->GetForRead(written);
+    ASSERT_TRUE(got.ok()) << got.status().message();
+    EXPECT_TRUE(Matches(got.value().bytes(), 42));
+
+    // Region 0's two maps plus region 1's two plus the one data page.
+    EXPECT_EQ(store->allocated_pages(), 5u);
+}
+
+TEST(FreeMapRegionTest, ATornMapPageRefusesTheMountRatherThanServingIt) {
+    // FM9's rule, applied to what FM2 loads: RV3 converted a torn catalog
+    // page from a mid-statement surprise into a refusal at the door, and a
+    // map page is the same kind of fact about what exists.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    const PageId region1 = FreeMapRegionBase(1);
+    {
+        auto store = OpenStore(*device);
+        ASSERT_NE(store, nullptr);
+        ASSERT_TRUE(store->RaiseAllocationFloor(kFreeMapBitsPerPage).ok());
+        ASSERT_TRUE(store->CreateNew().ok());
+        ASSERT_TRUE(store->Flush().ok());
+    }
+
+    Page corrupt{};
+    auto view = std::span<std::byte, kPageSize>(corrupt);
+    ASSERT_TRUE(device->ReadPage(FreeMapPageIdFor(region1), view).ok());
+    corrupt[kPageBodyOffset + 7] ^= std::byte{0x01};
+    ASSERT_TRUE(device->WritePage(FreeMapPageIdFor(region1),
+                                  std::span<const std::byte, kPageSize>(corrupt))
+                    .ok());
+
+    auto opened = DevicePageStore::Open(*device, 128);
+    EXPECT_FALSE(opened.ok());
+    EXPECT_EQ(opened.status().code(), StatusCode::kCorruption);
+}
+
+TEST(FreeMapRegionTest, TheCeilingIsTheDesignCeilingNotOneBitmapPage) {
+    // FM3. The four sites that read kFreeMapBitsPerPage as the size of the
+    // id space now read kMaxPageCount, and a page above region 0 is an
+    // ordinary page rather than an OutOfRange.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    const PageId above = FreeMapRegionBase(2) + 500;
+    auto created = store->CreateAt(above);
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    Fill(created.value().bytes(), 9);
+    EXPECT_TRUE(store->IsAllocated(above));
+
+    // The allocation floor moved with it. Equal is the legal terminal case
+    // - "no id left" - which CreateNew already reports as OutOfSpace.
+    EXPECT_EQ(store->RaiseAllocationFloor(kMaxPageCount + 1).code(), StatusCode::kOutOfRange);
+    EXPECT_TRUE(store->RaiseAllocationFloor(kMaxPageCount).ok());
+}
+
+TEST(FreeMapRegionTest, ALeasedStoreGetsAPrivateRegionAndNeverReadsTheDevicesMap) {
+    // A peer whose lease lies above region 0 must still be able to record a
+    // headerless page **in memory** - that bit is what stops
+    // StampIfHeadered writing a checksum over a headerless payload - while
+    // reading core 0's live map page here would be an unsynchronised read
+    // of a page core 0 is writing. So the region is private and empty.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    const PageId region1 = FreeMapRegionBase(1);
+    LeasedIdSource lease(Extent{region1 + 100, 4});
+    store->SetCoreOwnership(/*core_id=*/3, &lease, /*system_page_limit=*/128);
+
+    auto created = store->CreateNewHeaderless();
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    EXPECT_EQ(created.value().first, region1 + 100);
+    EXPECT_TRUE(store->IsHeaderless(region1 + 100));
+
+    // Nothing of the peer's reaches the device: FlushMaps drops a leased
+    // store's map writes, as it always has.
+    ASSERT_TRUE(store->Flush().ok());
+    Page probe{};
+    auto view = std::span<std::byte, kPageSize>(probe);
+    ASSERT_TRUE(device->ReadPage(FreeMapPageIdFor(region1), view).ok());
+    EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kInvalid))
+        << "a peer published a free-map region";
 }
 
 }  // namespace
