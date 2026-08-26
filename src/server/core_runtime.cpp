@@ -39,7 +39,18 @@ CoreRuntime::~CoreRuntime() {
     // so this is the contract rather than a live fix - but the header's
     // whole teardown argument is that a member destructor may reach back,
     // and a stale reactor pointer is exactly what that argument forbids.
-    if (dispatcher_.has_value()) dispatcher_->set_scheduler_view(nullptr);
+    if (dispatcher_.has_value()) {
+        dispatcher_->set_scheduler_view(nullptr);
+        // The two shipping borrows, for the same reason. Both name members
+        // declared **below** `dispatcher_` (see the header), so reverse-
+        // order destruction takes them *first* and the dispatcher spends
+        // the rest of this teardown holding pointers to dead objects.
+        // `Expeditor::Serve`'s `ClearReactorBorrows` withdraws the same
+        // pair at its own exit; this is that guard for the runtime that
+        // sets them in `AttachTransport` instead.
+        dispatcher_->SetStatementShip(nullptr);
+        dispatcher_->SetShippedStatements(nullptr);
+    }
     scheduler_.reset();
 }
 

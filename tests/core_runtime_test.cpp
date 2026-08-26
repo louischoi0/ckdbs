@@ -3250,6 +3250,91 @@ TEST_F(CoreRuntimeTest, AShippedStatementDoesNotShipOnward) {
         << answer->status.message();
 }
 
+TEST_F(CoreRuntimeTest, AnalyzeOfAPeerOwnedRelationIsNotShipped) {
+    // The read fork runs on the *stripped* text (`ANALYZE` is a dispatcher
+    // prefix, not a parser keyword), so shipping it would send a bare
+    // `SELECT` and answer a request for a plan with a result set. Refused
+    // exactly as it was before shipping existed.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "no_ship_analyze");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("ANALYZE SELECT * FROM no_ship_analyze", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("owned by core 1"), std::string::npos) << out.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
+    EXPECT_EQ(rig.ship->waiting(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, AStatementWhoseSubqueryNamesASecondCoresRelationIsNotShipped) {
+    // **A sub-chain reads real pages.** The compiler leaves a correlated
+    // sub-chain - and every value-bearing uncorrelated one, `IN` included -
+    // on the *step* that carries its outer column, not in `hoisted`, so a
+    // walk over `hoisted` and `steps` alone does not see it. Shipping such
+    // a chain sends it to the outer relation's owner, which then faults the
+    // other core's pages: refused in a Debug build by the shared-nothing
+    // check, and in a **release** build performed, judging visibility
+    // against the wrong core's transaction manager. It answered an empty
+    // result set where the row matched.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "sub_ship");
+
+    // A relation core 0 owns. Rotation skips the system core, so the policy
+    // is switched for this one relation and switched back.
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    auto core0_oid =
+        rig.catalog2->CreateTable(catalog::kNamespacePublic, "sub_core0", TwoColumnSchema(),
+                                  catalog::ClusteredType::kBtree);
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    ASSERT_TRUE(core0_oid.ok()) << core0_oid.status().message();
+    auto row = rig.catalog2->GetSysTableRow(core0_oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 0u);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+
+    ASSERT_EQ(rig.dispatcher->Dispatch("INSERT INTO sub_core0 VALUES (10)").response.rfind("ERR",
+                                                                                          0),
+              std::string::npos);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+
+    // The read: outer on the peer, sub-chain on core 0.
+    DispatchOutcome out;
+    auto statement =
+        rig.Start("SELECT * FROM sub_ship WHERE v IN (SELECT v FROM sub_core0)", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << out.response;
+
+    // The write half: UPDATE and DELETE never compile a chain, so their
+    // fork resolves the target relation's owner and nothing else. A
+    // subquery predicate keeps the affinity refusal.
+    DispatchOutcome upd;
+    auto update =
+        rig.Start("UPDATE sub_ship SET v = 7 WHERE v IN (SELECT v FROM sub_core0)", upd);
+    ASSERT_TRUE(rig.Drive(*update)) << upd.response;
+    EXPECT_EQ(upd.response.rfind("ERR ", 0), 0u) << upd.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << upd.response;
+
+    DispatchOutcome del;
+    auto remove = rig.Start("DELETE FROM sub_ship WHERE v IN (SELECT v FROM sub_core0)", del);
+    ASSERT_TRUE(rig.Drive(*remove)) << del.response;
+    EXPECT_EQ(del.response.rfind("ERR ", 0), 0u) << del.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u) << del.response;
+
+    // And the local-outer form, which shipping never reaches: this is
+    // `CheckReadAffinity` alone, which used to pass it and read the peer's
+    // pages from core 0.
+    const std::string local_outer =
+        rig.dispatcher->Dispatch("SELECT * FROM sub_core0 WHERE v IN (SELECT v FROM sub_ship)")
+            .response;
+    EXPECT_EQ(local_outer.rfind("ERR ", 0), 0u) << local_outer;
+    EXPECT_NE(local_outer.find("owned by core 1"), std::string::npos) << local_outer;
+    EXPECT_EQ(rig.ship->waiting(), 0u);
+}
+
 TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbort) {
     // The owner's endings over raw payloads, with core 0 a bare scheduler
     // capturing replies - no client, since these are requests a client

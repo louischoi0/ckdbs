@@ -924,6 +924,28 @@ still waits on its own gate, so:
   `cross_core_write_refusals` flat, and no run has checked it), and the
   waiter population's cost at K = 1/4/16, which is the open falsifier the
   pretasks could not fake.
+- **A shipped read whose reply exceeds 992 bytes is answered
+  `UNKNOWN_OUTCOME`, which is the wrong thing to tell a client about a
+  read** (found 2026-08-26 by the SS2 review, not fixed). The ring's
+  payload is 1,024 bytes and a reply header costs 32, so a shipped
+  statement's answer is capped at 992 - roughly 40 wide rows. SS1 chose to
+  **refuse rather than truncate** there, which is right, and to spell the
+  refusal `UnknownOutcome`, which for a *write* is exactly right: the
+  statement committed and its answer is lost. For a **read** it is a lie in
+  the dangerous direction - `retryable=0` plus "the statement's effect
+  stands", told about a statement that had no effect and can simply be run
+  again. Before shipping, the same statement got a clean affinity refusal.
+
+  Not fixed because the fix contradicts a ratified rule rather than an
+  implementation: `statement_ship_service.hpp`'s rule 1 says the only
+  refusal legal after `Ship` returns OK is `UnknownOutcome`, and the owner
+  is the only party that knows the statement mutated nothing. Either the
+  owner gains a way to say "this was a read and its answer does not fit" -
+  a second non-retryable code, or the outcome carrying whether anything was
+  staged - or the cap is raised, which is `docs/spec/crosscore.md` §9's ring
+  sizing decision. The arithmetic and the two sites
+  (`ShippedStatementReplyOf`, `StatementShipServer::Reply`) are
+  unambiguous; what is undecided is which of those three it should be.
 - **What shipping deliberately does not carry, and where the residue is
   read** (2026-08-26). Refused, by scope and not by omission: a statement
   **inside an explicit transaction** (nothing crosses transaction state), a

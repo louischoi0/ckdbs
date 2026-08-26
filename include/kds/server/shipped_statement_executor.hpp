@@ -77,6 +77,17 @@
 // and a statement for a session already running one is `UnknownOutcome`:
 // true, non-retryable, and never a second run.
 //
+// **What that costs, stated because it is not free**: the in-flight
+// refusal is keyed on the session and not on the sequence, so once the
+// arrival core's deadline has fired and freed its client, a genuinely
+// *new* statement on that session meets the original still running here
+// and is answered `UnknownOutcome` about a statement that never started.
+// Conservative rather than unsafe - and the premise above ("a session runs
+// one statement at a time") is exactly what stops being true at the
+// deadline. Keying the in-flight refusal on the sequence would narrow it;
+// it is not narrowed today because nothing retries yet, and a refusal that
+// is too broad is the safe direction to be wrong in.
+//
 // Nothing re-sends a landed request today (`sched::SubmitSendPod` retries
 // only a send the ring refused, which by definition never arrived), so the
 // record is the guard for the retry paths a routing layer will bring, and

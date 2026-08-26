@@ -1008,9 +1008,15 @@ public:
     // other cores' statements, and nothing else in this class would ever
     // read that. A pointer rather than a counters struct because the
     // executor already owns the numbers and a second copy of them is a
-    // second thing to keep true. `executor` must outlive the dispatcher -
-    // which is the reverse of the ordinary direction here, and is why
-    // `CoreRuntime` declares it below the dispatcher and drops it first.
+    // second thing to keep true.
+    //
+    // **The borrow is withdrawn, not outlived.** `CoreRuntime` declares the
+    // executor *below* the dispatcher - the server holds the executor's
+    // `Seam()`, which fixes that order - so reverse destruction drops the
+    // executor first and the dispatcher would keep a dangling pointer.
+    // Both holders therefore call this with `nullptr` at teardown:
+    // `~CoreRuntime`'s body, and `Expeditor::Serve`'s `ClearReactorBorrows`
+    // guard. Same rule as `SetStatementShip` beside it.
     void SetShippedStatements(const ShippedStatementExecutor* executor) noexcept {
         shipped_statements_ = executor;
     }
@@ -1559,12 +1565,29 @@ private:
     // for the pipeline.
     // ---- Statement shipping's fork (SS2) -------------------------------
     //
-    // Whether this statement may be shipped at all. Four questions, each a
-    // decision rather than a guard: is shipping armed (a single-core
-    // instance and every fixture: no); can the statement park (see
-    // `DispatchOutcome::pending_shipped`); is it autocommit (D1 - nothing
-    // crosses transaction state, so an explicit transaction keeps its
-    // refusal); and did it arrive shipped (session.hpp's hop limit).
+    // **Whether this statement may be shipped at all** - the single home
+    // of the fork's conditions, because the four call sites used to carry
+    // this argument verbatim and a decision with four homes is a decision
+    // nobody can amend.
+    //
+    // Four questions, each a decision rather than a guard: is shipping
+    // armed (a single-core instance and every fixture: no, on a null
+    // pointer, which is what keeps that path byte-identical); can the
+    // statement park (see `DispatchOutcome::pending_shipped`); is it
+    // autocommit (D1 - nothing crosses transaction state, so an explicit
+    // transaction keeps its refusal); and did it arrive shipped
+    // (session.hpp's hop limit).
+    //
+    // Shipping is **unconditional** where those hold, per D6: whether to
+    // ship or to refuse by load is placement policy (`docs/spec/crosscore.md`
+    // §9's open decision) and does not ride along. What it converts is what
+    // the pretasks measured as refused - 80-92% of an unrouted client's
+    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+    // §9b).
+    //
+    // Each site adds the one condition only it can ask: a foreign owner, a
+    // predicate that names no second relation, and for reads a chain every
+    // step of which is on one foreign core.
     bool MayShip(const Session& session) const noexcept;
 
     // Sends `line` to `owner_core` and returns the outcome that parks on
