@@ -919,6 +919,10 @@ still waits on its own gate, so:
   D6, so if that claim is right the loss is being paid today and nobody has
   priced it. Nothing here is a throughput claim; the only claims made are
   correctness ones, and per the v2 amendment **overhead was not measured**.
+  Those correctness claims were then **checked**, 2026-08-26:
+  `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` is the
+  post-SS5 order's Part A, five items clean and two findings, both recorded
+  below.
   Also unmeasured: whether the demand converts (the 80–92% refusal rate the
   pretasks measured should go to ~0 shipped-and-executed, with
   `cross_core_write_refusals` flat, and no run has checked it), and the
@@ -951,6 +955,54 @@ still waits on its own gate, so:
   this version is measured against, to save a cost on the path that already
   pays a round trip. SS-B is where the trade is priced; until then the cost
   is charged to the shipped path deliberately.
+- **An assertion declared while a peer is running is invisible to that peer,
+  and a shipped write to that relation is admitted unenforced** (Part A
+  finding 2, 2026-08-26,
+  `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` §5). Measured:
+  `CHECK COUNT(*) <= 1` on a peer-owned relation, then a shipped `INSERT`
+  puts a **second row in the same group**
+  (`DISABLED_AShippedWriteToAnAssertionCoveredPeerRelationIsRefused`).
+  A peer may not write an assertion-covered relation at all — its entry
+  pages are the system core's and carry no write grant — and the gate that
+  says so reads `enforcer_.AnyOn(oid)`, a per-core memory-resident registry
+  populated at mount (RC07) that `CoreRuntime::InvalidateCatalog` does not
+  refresh: it refreshes the free map, evicts the catalog frames and
+  invalidates the catalog cache, and nothing else. The FK and Cabin arms of
+  the same gate hold, because they read `TableAccess`, which *is* refreshed.
+  **Not created by shipping** — a client on the peer's own listener could
+  already reach it — and made ordinary by it, since every core-0 client's
+  write for that relation now takes this path. The bound is a remount. The
+  fix is not to let the peer enforce (it cannot) but to make the gate read
+  what the other two arms read, which crosses `docs/feat-assertion.md`'s
+  "complete and enforcing" claim and `docs/crosscore.md`'s peer contract.
+- **A duplicate whose dedup record the memory bound evicted early is
+  executed again** (Part A finding 1, 2026-08-26, same file §1). Fill
+  `kShippedDedupMaxRecords` (4,096) with distinct sessions and the oldest
+  record is dropped inside its retention; the same (session, sequence)
+  delivered again then runs a second time — against an engine-issued pk, a
+  second row. Measured `executed` 4,097 → 4,098
+  (`DISABLED_ADuplicateWhoseRecordWasEvictedEarlyIsNotReExecuted`).
+  `shipped_statement_executor.hpp` already states this and `early_evictions()`
+  counts it; what Part A asks for is `UnknownOutcome` instead. **Latent**:
+  nothing re-sends a landed request today (`SendRetryTask` retries only a
+  send the ring refused), so no live path produces a duplicate at all — this
+  is the retry paths a routing layer will bring. Three fixes, each a policy
+  call: refuse rather than evict (an availability cliff at 4,096 concurrent
+  shipping sessions per owner), carry a retry bit on the request (five
+  reserved bytes exist), or keep tombstones under a second bound.
+- **Nothing reclaims a shipped statement's waiter if its coroutine is
+  destroyed rather than completed** (Part A, 2026-08-26).
+  `StatementShipClient::Close` is reached only from
+  `FinishShippedStatement`. Unreachable today because
+  `TcpServer::CloseClient` defers teardown while a statement is in flight,
+  so a dropped connection's statement runs to completion and closes its
+  waiter — and this is what breaks the day a cancellation path is added.
+  Asserted from the other side by
+  `AParkedShippedStatementDestroyedUnderItsWaiterLeaksTheWaiter`, which
+  fails loudly if the leak is ever fixed without updating this entry. A
+  second consequence of the same deferral: for a shipped statement it is
+  bounded by the **ten-second ship deadline** rather than by the row-touch
+  budget `CloseClient`'s comment cites.
 - **The WAL drain's fdatasync runs on the reactor thread**, so every session
   on that core — reads included — waits out a committing session's sync:
   point-SELECT 973 µs beside one writer against 37 µs alone

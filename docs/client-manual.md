@@ -213,6 +213,24 @@ printf 'PING\n' | nc 127.0.0.1 15432
   statement without the bit. Every other `ERR` is not retryable.
   After a conflict the connection is in a failed transaction and answers
   only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` until it is rolled back.
+- **`ERR UNKNOWN_OUTCOME retryable=0 ...` means the statement may have run,
+  and a client must not retry it** (2026-08-26, statement shipping). On a
+  multi-core instance a statement whose relation another core owns is
+  carried to that core, executed there and answered back. If the answer
+  does not return within ten seconds, the connection is told the outcome is
+  unknown — because the owner may already have committed it, and this
+  engine issues primary keys, so a retry would insert a *second* row rather
+  than replay an idempotent one. The correct response is to **read the data
+  back**, never to resend. The token is deliberately one no retry loop
+  follows; it is not a `TXN_CONFLICT` and never carries `retryable=1`.
+- **A connection that drops mid-statement may find the statement applied.**
+  That is the documented contract, not an edge case: the server does not
+  cancel a running statement when its client disappears — there is no
+  cancellation in this engine — so a shipped statement already on its way
+  to its owner is executed there whatever happens to the connection. The
+  same holds for the ten-second answer above: the client is told nothing is
+  known, and the row may well be committed. A client that needs certainty
+  after a disconnect or an `UNKNOWN_OUTCOME` reads the data back.
 - **Errors** are just another response line, always prefixed `ERR `. There
   is no separate error channel - a malformed or unrecognized line never
   closes the connection or crashes the server, it just gets an `ERR ...`
