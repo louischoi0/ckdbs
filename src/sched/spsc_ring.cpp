@@ -37,6 +37,8 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kIndexBuildRequest: return "INDEX_BUILD_REQUEST";
         case RingMessageKind::kIndexBuildReply: return "INDEX_BUILD_REPLY";
         case RingMessageKind::kIndexBuildDone: return "INDEX_BUILD_DONE";
+        case RingMessageKind::kShippedStatementRequest: return "SHIPPED_STATEMENT_REQUEST";
+        case RingMessageKind::kShippedStatementReply: return "SHIPPED_STATEMENT_REPLY";
     }
     return "unknown";
 }

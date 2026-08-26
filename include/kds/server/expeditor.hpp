@@ -85,21 +85,6 @@
 
 namespace kds::server {
 
-// Per-core-pair ring sizing (docs/sched.md §10 leaves it `[OPEN]`).
-//
-// Both `[PROPOSED]` and nothing may depend on either: they are the
-// parameters `RealRingTransport::Create()` takes, held here so there is one
-// place to change them when the pipeline gives them a workload to be
-// measured against. 256 slots of 1 KiB is 256 KiB per directed pair - at 4
-// cores, 4 MiB of rings for the whole instance.
-//
-// The payload is deliberately *not* `crosscore.md` §4's 32 KiB batch
-// target: no batch is sent yet, and sizing every ring for a message that
-// does not exist would cost 8 MiB per pair on a promise. P4 raises it when
-// it has something to put in it.
-inline constexpr std::size_t kCoreRingSlots = 256;
-inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
-
 // Refuses a nonzero instance frame budget that would give some core a
 // share of zero - the message says why. Zero total stays legal and means
 // unbounded by request. A free function beside the config for the same

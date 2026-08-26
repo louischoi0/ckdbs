@@ -12,37 +12,11 @@
 namespace kds::server {
 namespace {
 
-template <typename Pod>
-void SendPod(sched::Scheduler& scheduler, sched::RingTransport& transport, std::uint32_t src,
-             std::uint32_t dst, std::uint64_t request_id, sched::RingMessageKind kind,
-             const Pod& pod) {
-    std::byte bytes[sizeof(Pod)];
-    std::memcpy(bytes, &pod, sizeof(Pod));
-    SendIndexBuildMessage(scheduler, transport, src, dst, request_id, kind,
-                          std::span<const std::byte>(bytes, sizeof(bytes)));
-}
-
 std::string NameOf(const char* bytes, std::size_t capacity) {
     return std::string(bytes, ::strnlen(bytes, capacity));
 }
 
 }  // namespace
-
-void SendIndexBuildMessage(sched::Scheduler& scheduler, sched::RingTransport& transport,
-                           std::uint32_t src_core, std::uint32_t dst_core,
-                           std::uint64_t request_id, sched::RingMessageKind kind,
-                           std::span<const std::byte> payload) {
-    sched::MessageHeader header{};
-    header.request_id = request_id;
-    header.src_core = src_core;
-    header.dst_core = dst_core;
-    header.session_core = 0;  // core 0 owns the statement, both ways (the header)
-    header.kind = static_cast<std::uint16_t>(kind);
-    header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-    // The task copies the payload (send_retry.hpp), so the caller's buffer
-    // need not outlive this call.
-    scheduler.Submit(sched::MakeSendRetryTask(transport, header, payload));
-}
 
 StatusOr<IndexBuildRequestPayload> IndexBuildRequestOf(const catalog::Catalog::IndexDef& def) {
     IndexBuildRequestPayload out{};
@@ -245,8 +219,12 @@ void IndexBuildServer::Reply(std::uint32_t requester, std::uint64_t request_id,
     reply.status_code = static_cast<std::uint32_t>(status.code());
     const std::string& msg = status.message();
     std::memcpy(reply.message, msg.data(), std::min(msg.size(), sizeof(reply.message) - 1));
-    SendPod(scheduler_, transport_, core_id_, requester, request_id,
-            sched::RingMessageKind::kIndexBuildReply, reply);
+    // `session_core` is the constant 0 on every leg of this protocol: core
+    // 0 owns the statement in both directions and nothing here reads the
+    // field. Written rather than left to a default so a reader of a
+    // captured header sees it was decided.
+    sched::SubmitSendPod(scheduler_, transport_, core_id_, requester, /*session_core=*/0,
+                         request_id, sched::RingMessageKind::kIndexBuildReply, reply);
 }
 
 void IndexBuildServer::OnDone(const sched::MessageHeader& header,
@@ -354,8 +332,9 @@ Status IndexBuildClient::Request(std::uint32_t owner_core, std::uint64_t request
     if (!request.ok()) return request.status();
     IndexBuildOutcome& out = waiting_.insert_or_assign(request_id, IndexBuildOutcome{}).first->second;
     out.deadline_ns = clock_.Now() + kIndexBuildReplyDeadlineNs;
-    SendPod(scheduler_, transport_, /*src=*/0, owner_core, request_id,
-            sched::RingMessageKind::kIndexBuildRequest, request.value());
+    sched::SubmitSendPod(scheduler_, transport_, /*src=*/0, owner_core, /*session_core=*/0,
+                         request_id, sched::RingMessageKind::kIndexBuildRequest,
+                         request.value());
     return Status::OK();
 }
 
@@ -376,8 +355,8 @@ void IndexBuildClient::Done(std::uint32_t owner_core, std::uint64_t index_oid, b
     IndexBuildDonePayload done{};
     done.index_oid = index_oid;
     done.committed = committed ? 1 : 0;
-    SendPod(scheduler_, transport_, /*src=*/0, owner_core, /*request_id=*/0,
-            sched::RingMessageKind::kIndexBuildDone, done);
+    sched::SubmitSendPod(scheduler_, transport_, /*src=*/0, owner_core, /*session_core=*/0,
+                         /*request_id=*/0, sched::RingMessageKind::kIndexBuildDone, done);
 }
 
 }  // namespace kds::server

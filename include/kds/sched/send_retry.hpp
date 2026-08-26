@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <type_traits>
 #include <span>
 #include <utility>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "kds/base/status.hpp"
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
+#include "kds/sched/scheduler.hpp"
 #include "kds/sched/task.hpp"
 
 // The engine-wide answer to a full ring (docs/workplan-crosscore.md M7,
@@ -109,6 +111,40 @@ inline std::unique_ptr<SendRetryTask> MakeSendRetryTask(RingTransport& transport
                                                         SendRetryTask::DoneFn on_done = {}) {
     return std::make_unique<SendRetryTask>(GroupOf(header), transport, header, payload,
                                            std::move(on_done));
+}
+
+// Fills the header and submits the retry task, for the ten-odd services
+// whose every send is one POD on the `system` group. Each of them had its
+// own file-local `SendPod` plus a `Send*Message` wrapper differing in a
+// line or two, and the statement-shipping wire would have been the second
+// verbatim copy of the first.
+//
+// `session_core` is a parameter because the services genuinely disagree
+// about it: the index build fixes it at 0 (core 0 owns the statement both
+// ways), the lease services echo the requester's, and statement shipping
+// echoes the arrival core's. It is the one field with no defensible
+// default, so it is named at every call site.
+//
+// **The payload is read straight out of `pod`**, with no intermediate
+// buffer: `SendRetryTask` copies into its own storage, and a second copy
+// on the way there cost nothing at 128 bytes on a DDL path but costs a
+// kilobyte per statement on a shipped one.
+template <typename Pod>
+void SubmitSendPod(Scheduler& scheduler, RingTransport& transport, std::uint32_t src_core,
+                   std::uint32_t dst_core, std::uint32_t session_core, std::uint64_t request_id,
+                   RingMessageKind kind, const Pod& pod) {
+    static_assert(std::is_trivially_copyable_v<Pod>,
+                  "a ring payload is memcpy'd whole; it must be trivially copyable");
+    MessageHeader header{};
+    header.request_id = request_id;
+    header.src_core = src_core;
+    header.dst_core = dst_core;
+    header.session_core = session_core;
+    header.kind = static_cast<std::uint16_t>(kind);
+    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
+    scheduler.Submit(MakeSendRetryTask(
+        transport, header,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(&pod), sizeof(pod))));
 }
 
 }  // namespace kds::sched

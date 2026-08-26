@@ -23,6 +23,7 @@ const std::vector<StatusCode>& AllErrorCodes() {
         StatusCode::kIoError,         StatusCode::kTxnConflict, StatusCode::kUnsupported,
         StatusCode::kCardinalityViolation, StatusCode::kResourceExhausted,
         StatusCode::kFkViolation,          StatusCode::kAssertionViolation,
+        StatusCode::kUnknownOutcome,
     };
     return codes;
 }
@@ -45,6 +46,8 @@ Status Make(StatusCode code) {
         case StatusCode::kFkViolation:     return Status::FkViolation("m");
         case StatusCode::kAssertionViolation:
             return Status::AssertionViolation("m");
+        case StatusCode::kUnknownOutcome:
+            return Status::UnknownOutcome("m");
         case StatusCode::kOk:              return Status::OK();
     }
     // Unreachable for a code in AllErrorCodes(); a new enumerator lands

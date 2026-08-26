@@ -88,6 +88,27 @@ enum class StatusCode {
     // a bound exists for. A violation against committed state answers the
     // same way forever, kFkViolation's argument exactly.
     kAssertionViolation,
+    // **A statement whose outcome nobody can state.** A shipped statement
+    // was sent to its relation's owner and no reply arrived before the
+    // deadline (server/statement_ship_service.hpp, the work order's D4):
+    // it may have committed, it may never have run, and this core cannot
+    // tell which.
+    //
+    // **Its whole reason for existing is that it is not retryable.** Every
+    // other refusal in this enum means "nothing happened" - a retry is at
+    // worst wasted work. This one does not, and the engine issues primary
+    // keys, so a client that retried on it would insert the row twice with
+    // two different ids and no way to notice. Folding it into
+    // kTxnConflict, which is where a timeout would naturally land, is
+    // precisely the mistake: that code carries the wire's `retryable` bit
+    // and clients build retry loops on it (docs/protocol.md §11).
+    //
+    // It is also not kIoError, though that is where an unrecognised code
+    // decodes to. IoError says the engine failed to do something; this
+    // says the engine may well have *done* it. A client seeing this must
+    // read its own data back before deciding anything - which is advice
+    // no other code in this enum needs to carry.
+    kUnknownOutcome,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -149,6 +170,9 @@ public:
     static Status AssertionViolation(std::string msg) {
         return Status(StatusCode::kAssertionViolation, std::move(msg));
     }
+    static Status UnknownOutcome(std::string msg) {
+        return Status(StatusCode::kUnknownOutcome, std::move(msg));
+    }
 
     // A status decoded off a wire: the code as the integer it travelled as,
     // and a message the receiver chose. **A code outside the enum degrades
@@ -174,6 +198,7 @@ public:
             case StatusCode::kResourceExhausted: return ResourceExhausted(std::move(msg));
             case StatusCode::kFkViolation: return FkViolation(std::move(msg));
             case StatusCode::kAssertionViolation: return AssertionViolation(std::move(msg));
+            case StatusCode::kUnknownOutcome: return UnknownOutcome(std::move(msg));
         }
         return IoError(std::move(msg));
     }

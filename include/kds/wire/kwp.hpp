@@ -176,6 +176,14 @@ enum class ErrorCategory : std::uint16_t {
     // above: a client cannot fix a spent work budget by fixing its
     // arguments, so folding it into kInvalidArgument would misdirect.
     kResourceExhausted,
+    // Appended for StatusCode::kUnknownOutcome (SS1,
+    // server/statement_ship_service.hpp). It earns a category more
+    // clearly than either above it: every other category in this list
+    // means the statement did not take effect, and this one means nobody
+    // can say whether it did. A client that cannot tell it apart cannot
+    // write a correct retry loop, which is the whole reason categories
+    // mirror engine Status rather than being coarsened.
+    kUnknownOutcome,
 };
 
 // Packs a wire error code as `category u16 << 16 | detail u16` (spec

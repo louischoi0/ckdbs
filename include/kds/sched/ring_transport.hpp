@@ -111,4 +111,25 @@ private:
     std::vector<std::uint32_t> next_peer_;
 };
 
+// Per-core-pair ring sizing (docs/sched.md §10 leaves it `[OPEN]`).
+//
+// Both `[PROPOSED]`: they are the parameters `RealRingTransport::Create()`
+// takes, held beside it so there is one place to change them when the
+// pipeline gives them a workload to be measured against. 256 slots of
+// 1 KiB is 256 KiB per directed pair - at 4 cores, 4 MiB of rings for the
+// whole instance.
+//
+// The payload is deliberately *not* `crosscore.md` §4's 32 KiB batch
+// target: no batch is sent yet, and sizing every ring for a message that
+// does not exist would cost 8 MiB per pair on a promise. P4 raises it when
+// it has something to put in it.
+//
+// **A message struct may now be sized from this** - SS1's shipped
+// statement fills exactly one slot - so raising it widens the longest
+// shippable statement with it, and lowering it narrows one. That coupling
+// is deliberate and asserted at the struct rather than left to be
+// discovered (server/statement_ship_service.hpp).
+inline constexpr std::size_t kCoreRingSlots = 256;
+inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
+
 }  // namespace kds::sched

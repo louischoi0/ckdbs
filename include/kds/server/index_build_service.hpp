@@ -177,18 +177,13 @@ StatusOr<IndexBuildRequestPayload> IndexBuildRequestOf(const catalog::Catalog::I
 // already bounded.
 catalog::Catalog::IndexDef IndexDefOf(const IndexBuildRequestPayload& request);
 
-// The one header every message of this protocol travels under: the
-// `system` group, the send-retry task, and **`session_core` the constant
-// 0 on every leg** - not an echo of the request's, as the lease services
-// do it, because core 0 owns the statement in both directions and nothing
-// on this protocol reads the field. Written rather than left zero by
-// default so a reader of a captured header sees it was decided.
-// `request_id` is 0 for `done`, which belongs to no waiter. Never blocks;
-// the task copies the payload.
-void SendIndexBuildMessage(sched::Scheduler& scheduler, sched::RingTransport& transport,
-                           std::uint32_t src_core, std::uint32_t dst_core,
-                           std::uint64_t request_id, sched::RingMessageKind kind,
-                           std::span<const std::byte> payload);
+// Every message of this protocol travels through `sched::SubmitSendPod` on
+// the `system` group, with **`session_core` the constant 0 on every leg** -
+// not an echo of the request's, as the lease services do it, because core 0
+// owns the statement in both directions and nothing on this protocol reads
+// the field. It is named at each call site rather than defaulted, so a
+// reader of a captured header sees it was decided. `request_id` is 0 for
+// `done`, which belongs to no waiter.
 
 // ---- The owner's half ------------------------------------------------------
 

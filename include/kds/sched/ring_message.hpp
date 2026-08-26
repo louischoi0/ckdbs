@@ -117,6 +117,20 @@ enum class RingMessageKind : std::uint16_t {
     kIndexBuildRequest = 25,
     kIndexBuildReply = 26,
     kIndexBuildDone = 27,
+
+    // arrival core <-> owner core: a single-statement autocommit
+    // transaction executed by the relation's owner and answered through
+    // the core it arrived on (SS1, server/statement_ship_service.hpp).
+    // The request carries `server::ShippedStatementRequestPayload` - the
+    // statement's text and D4's (session, sequence) identity - and the
+    // reply `ShippedStatementReplyPayload`, matched to its waiter by
+    // `request_id`.
+    //
+    // **There is no `done` leg**, where the index build has one: that
+    // exists to close the owner's write-refusal window, and an autocommit
+    // statement opens no window. A shipped statement is one round trip.
+    kShippedStatementRequest = 28,
+    kShippedStatementReply = 29,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -141,6 +155,8 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kIndexBuildRequest:
         case RingMessageKind::kIndexBuildReply:
         case RingMessageKind::kIndexBuildDone:
+        case RingMessageKind::kShippedStatementRequest:
+        case RingMessageKind::kShippedStatementReply:
             return true;
         case RingMessageKind::kUnset:
             return false;

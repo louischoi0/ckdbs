@@ -2982,19 +2982,15 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
     };
     const auto send_request = [&](std::uint64_t request_id,
                                   const IndexBuildRequestPayload& request) {
-        std::byte bytes[sizeof(request)];
-        std::memcpy(bytes, &request, sizeof(request));
-        SendIndexBuildMessage(core0, transport.value(), 0, 1, request_id,
-                              sched::RingMessageKind::kIndexBuildRequest, bytes);
+        sched::SubmitSendPod(core0, transport.value(), 0, 1, /*session_core=*/0, request_id,
+                             sched::RingMessageKind::kIndexBuildRequest, request);
     };
     const auto send_done = [&](std::uint64_t index_oid, bool committed) {
         IndexBuildDonePayload done{};
         done.index_oid = index_oid;
         done.committed = committed ? 1 : 0;
-        std::byte bytes[sizeof(done)];
-        std::memcpy(bytes, &done, sizeof(done));
-        SendIndexBuildMessage(core0, transport.value(), 0, 1, /*request_id=*/0,
-                              sched::RingMessageKind::kIndexBuildDone, bytes);
+        sched::SubmitSendPod(core0, transport.value(), 0, 1, /*session_core=*/0,
+                             /*request_id=*/0, sched::RingMessageKind::kIndexBuildDone, done);
     };
     const auto prepare = [&](const char* sql) {
         parser::Parser parser(sql);

@@ -1190,7 +1190,7 @@ Status Expeditor::Serve() {
     std::vector<std::thread> workers;
     if (config_.cores > 1) {
         auto transport = sched::RealRingTransport::Create(
-            config_.cores, kCoreRingSlots, kCoreRingPayloadBytes);
+            config_.cores, sched::kCoreRingSlots, sched::kCoreRingPayloadBytes);
         if (!transport.ok()) return transport.status();
         transport_.emplace(std::move(transport.value()));
 

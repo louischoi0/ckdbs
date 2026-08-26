@@ -76,6 +76,7 @@ std::string_view StatusCodeName(StatusCode code) {
         // carries them. Named anyway, because the table is total.
         case StatusCode::kFkViolation: return "FkViolation";
         case StatusCode::kAssertionViolation: return "AssertionViolation";
+        case StatusCode::kUnknownOutcome: return "UnknownOutcome";
     }
     return "<unknown>";
 }

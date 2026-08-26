@@ -137,6 +137,17 @@ std::string ErrorReply(const Status& status) {
     if (status.code() == StatusCode::kAssertionViolation) {
         return "ERR ASSERTION_VIOLATION retryable=0 " + status.message();
     }
+    // A shipped statement whose reply never came (SS1,
+    // server/statement_ship_service.hpp). Its own spelling because it is
+    // the one refusal in this function that does **not** mean "nothing
+    // happened": the statement may have committed on its owner. A client
+    // must be able to tell it from the bare `ERR` it would otherwise wear,
+    // because the correct response to it is to read the data back - not to
+    // retry, which against engine-issued primary keys would insert twice.
+    // `retryable=0` explicitly, beside the other two that say it.
+    if (status.code() == StatusCode::kUnknownOutcome) {
+        return "ERR UNKNOWN_OUTCOME retryable=0 " + status.message();
+    }
     return "ERR " + status.message();
 }
 
