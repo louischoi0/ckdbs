@@ -851,7 +851,18 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // where no reactor is attached, the rule the recovery block follows.
     if (scheduler_view_ != nullptr) {
         os << " sched_wall_us=" << scheduler_view_->run_wall_ns() / 1000
-           << " sched_iterations=" << scheduler_view_->iterations();
+           << " sched_iterations=" << scheduler_view_->iterations()
+           // The wake path and the park rule, from this reactor's side
+           // (§7). `sched_idle_blocks` is how often it slept with the flag
+           // raised, `sched_wake_race_skips` how often the pre-block
+           // re-check caught a message the sender had decided not to wake
+           // for - the race the flag exists for, so a run holding at 0 has
+           // not exercised it - and `sched_parked_idle_blocks` the blocks
+           // taken with tasks still queued, every one of which was a spin
+           // before "parked is not ready".
+           << " sched_idle_blocks=" << scheduler_view_->idle_blocks()
+           << " sched_wake_race_skips=" << scheduler_view_->wake_race_skips()
+           << " sched_parked_idle_blocks=" << scheduler_view_->parked_idle_blocks();
         // Indexed by the enum, not paired with it: a fourth group would
         // then fail to compile here rather than print as two.
         static constexpr const char* kGroupNames[sched::kNumSchedulingGroups] = {
