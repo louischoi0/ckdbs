@@ -672,10 +672,21 @@ Open, in the order that a next step would need them:
    defect, on two independent "before" arms. What is *not* settled is why H1
    carries the 924 ms submit stall without losing throughput — a stall that
    large going unpriced is itself worth understanding.
-5. **PW7's two open items** stand: the reactor spin, now seen spanning
-   ~19,000–24,000 iterations on the trxid leg under load while costing
-   nothing at idle; and `fdatasync` time charged to no scheduler group,
-   which this run did not attempt to measure.
+5. **PW7's two open items** stand, and they stand differently.
+   *The reactor spin* is now observed at three writer cores: the trx-id leg
+   spans ~19,000–24,000 reactor iterations under load (§8) while costing
+   nothing measurable at idle, so it is load-conditional.
+   *`fdatasync` time charged to no scheduler group* is **not measurable from
+   outside the process on this tree**, which is a stronger statement than
+   "not attempted": the per-group counter is
+   `std::array<std::uint64_t, kNumSchedulingGroups> consumed_ns_` at
+   `include/kds/sched/scheduler.hpp:250`, a **private member with no
+   accessor**, and `SHOW META` does not print it
+   (`src/server/command_dispatcher.cpp`, **source-read**). Reporting whether
+   group accounting diverges from wall time therefore requires *adding*
+   instrumentation to the engine, which is a code change and outside what a
+   measurement run may do. Owed by whoever next touches `docs/sched.md` §4,
+   not by this file.
 
 One passage elsewhere is affected. `docs/known-gaps.md:738` states that
 *"every cross-core number in `bench/` is a cost measured with the parallelism
