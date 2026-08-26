@@ -22,61 +22,162 @@ bool PageIsAllZero(const std::array<std::byte, kPageSize>& page) noexcept {
 
 }  // namespace
 
-DevicePageStore::DevicePageStore(PageDevice& device, PageId first_new_page_id,
-                                 const Page& free_map, const Page& headerless_map,
-                                 bool maps_dirty) noexcept
-    : device_(device),
-      free_map_page_(free_map),
-      headerless_map_page_(headerless_map),
-      maps_dirty_(maps_dirty),
-      next_new_page_id_(first_new_page_id) {}
+DevicePageStore::DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept
+    : device_(device), next_new_page_id_(first_new_page_id) {}
+
+const DevicePageStore::Page& DevicePageStore::AbsentRegionPage() noexcept {
+    static const Page kZero{};
+    return kZero;
+}
+
+bool DevicePageStore::maps_dirty() const noexcept {
+    for (const auto& [region, pages] : map_regions_) {
+        if (pages.dirty) return true;
+    }
+    return false;
+}
+
+Status DevicePageStore::LoadRegionIfPresent(std::uint32_t region) {
+    const PageId free_id = FreeMapPageIdFor(FreeMapRegionBase(region));
+    if (device_.page_capacity() <= free_id) return Status::OK();
+
+    MapRegion pages;
+    auto view = std::span<std::byte, kPageSize>(pages.free_map);
+    if (Status s = device_.ReadPage(free_id, view); !s.ok()) return s;
+    // An all-zero page reads back as page_type kInvalid, which is what a
+    // sparse never-written page looks like: this region was never created,
+    // and looking must not create it.
+    if (RawPageType(view) == static_cast<std::uint8_t>(PageType::kInvalid)) return Status::OK();
+    if (Status s = ValidateFreeMapPage(view); !s.ok()) return s;
+
+    const PageId headerless_id = HeaderlessMapPageIdFor(FreeMapRegionBase(region));
+    auto hview = std::span<std::byte, kPageSize>(pages.headerless_map);
+    if (device_.page_capacity() > headerless_id) {
+        if (Status s = device_.ReadPage(headerless_id, hview); !s.ok()) return s;
+    }
+    // A database written before the headerless map existed has nothing at
+    // that id, which reads as kInvalid. Treated as "no headerless pages"
+    // rather than an error: that is exactly true of such a database, since
+    // it predates the only thing that creates them. The bit for the page
+    // itself is set here, so the map it is about accounts for it.
+    if (RawPageType(hview) == static_cast<std::uint8_t>(PageType::kInvalid)) {
+        if (Status s = device_.EnsureCapacity(headerless_id + 1); !s.ok()) return s;
+        FormatFreeMapPage(hview, PageType::kHeaderlessMap);
+        FreeMapAllocate(view, FreeMapBitIndexOf(headerless_id));
+        pages.dirty = true;
+    } else if (Status s = ValidateFreeMapPage(hview, PageType::kHeaderlessMap); !s.ok()) {
+        return s;
+    }
+
+    map_regions_.emplace(region, std::move(pages));
+    return Status::OK();
+}
+
+StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
+    std::uint32_t region) {
+    if (auto it = map_regions_.find(region); it != map_regions_.end()) return &it->second;
+
+    // **A leased store never touches the device for a map page.** Every
+    // region it legitimately holds was loaded by Open(), before the lease
+    // was installed (core_runtime.cpp orders it that way); a region reached
+    // after that is one core 0 owns, is writing, and does not latch - so
+    // reading it here would be an unsynchronised read of a live page, which
+    // is the hazard RefreshFreeMapFromDevice exists to handle for region 0
+    // and does not generalise.
+    //
+    // Refusing instead is worse than it looks: this path is reached from
+    // CreateNewHeaderlessUnpinned when a peer's lease lies above region 0,
+    // and the bit it wants to set is what stops StampIfHeadered stamping a
+    // checksum over a headerless page's payload. That bit matters **in
+    // memory** even though it can never be published - FlushMaps drops a
+    // leased store's map writes, and always has.
+    //
+    // So a peer gets a private, empty, never-dirty region: exactly what its
+    // region-0 copy already is, generalised. Durably recording a peer's
+    // headerless pages is FM7's, under D5.
+    if (lease_ != nullptr) {
+        MapRegion pages;
+        FormatFreeMapPage(std::span<std::byte, kPageSize>(pages.free_map));
+        FormatFreeMapPage(std::span<std::byte, kPageSize>(pages.headerless_map),
+                          PageType::kHeaderlessMap);
+        auto [it, inserted] = map_regions_.emplace(region, std::move(pages));
+        return &it->second;
+    }
+
+    if (Status s = LoadRegionIfPresent(region); !s.ok()) return s;
+    if (auto it = map_regions_.find(region); it != map_regions_.end()) return &it->second;
+
+    // FM5: the region does not exist, so this is where the map grows.
+    const PageId free_id = FreeMapPageIdFor(FreeMapRegionBase(region));
+    const PageId headerless_id = HeaderlessMapPageIdFor(FreeMapRegionBase(region));
+    if (headerless_id >= kMaxPageCount) {
+        return Status::OutOfSpace("DevicePageStore: free-map region " + std::to_string(region) +
+                                  " lies beyond the " + std::to_string(kMaxPageCount) +
+                                  "-page design ceiling");
+    }
+    if (Status s = device_.EnsureCapacity(headerless_id + 1); !s.ok()) return s;
+
+    MapRegion pages;
+    auto view = std::span<std::byte, kPageSize>(pages.free_map);
+    FormatFreeMapPage(view);
+    FormatFreeMapPage(std::span<std::byte, kPageSize>(pages.headerless_map),
+                      PageType::kHeaderlessMap);
+    // The region's own two pages, marked in the region's own free map -
+    // self-referential and terminating, which is the property FM1's
+    // placement arithmetic exists to give (free_map.hpp's placement note).
+    FreeMapAllocate(view, FreeMapBitIndexOf(free_id));
+    FreeMapAllocate(view, FreeMapBitIndexOf(headerless_id));
+    pages.dirty = true;
+
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("pagestore", "free-map region " + std::to_string(region) +
+                                     " created, covering ids " +
+                                     std::to_string(FreeMapRegionBase(region)) + ".." +
+                                     std::to_string(FreeMapRegionBase(region) + kFreeMapBitsPerPage - 1));
+    }
+    auto [it, inserted] = map_regions_.emplace(region, std::move(pages));
+    return &it->second;
+}
+
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FreeMapBytesForRegion(
+    std::uint32_t region) {
+    auto pages = EnsureRegionResident(region);
+    if (!pages.ok()) return pages.status();
+    // Dirty on every take, not on every write: the taker is trusted to be
+    // about to change bits, and the alternative - a clean map that a
+    // reservation had already changed - is the PW3b defect.
+    pages.value()->dirty = true;
+    return std::span<std::byte, kPageSize>(pages.value()->free_map);
+}
 
 StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& device,
                                                                  PageId first_new_page_id) {
-    Page free_map{};
-    std::span<std::byte, kPageSize> view(free_map);
+    auto store = std::unique_ptr<DevicePageStore>(new DevicePageStore(device, first_new_page_id));
 
-    // An all-zero page reads back as page_type kInvalid, which is what both
-    // a sparse never-written page and a file abandoned before its first
-    // flush look like - neither carries any allocation, so both are a fresh
-    // database rather than an error.
-    bool fresh = device.page_capacity() <= kFreeMapPageId;
-    if (!fresh) {
-        if (Status s = device.ReadPage(kFreeMapPageId, view); !s.ok()) return s;
-        if (RawPageType(view) == static_cast<std::uint8_t>(PageType::kInvalid)) {
-            fresh = true;
-        } else if (Status s = ValidateFreeMapPage(view); !s.ok()) {
-            return s;
-        }
+    // Region 0 always exists - it holds the superblock, both of its own
+    // bitmaps and the whole catalog - so it is loaded, or created, rather
+    // than merely looked for. A device too small to hold page 1, or one
+    // whose page 1 reads as never-written, is a fresh database: neither
+    // carries any allocation.
+    if (auto region = store->EnsureRegionResident(0); !region.ok()) return region.status();
+
+    // Every further region the file is large enough to hold. Loading them
+    // all is what lets IsAllocated and IsHeaderless stay `const noexcept`
+    // over a map that is no longer one page: a region absent from the
+    // cache is then a region that does not exist, and reads as empty
+    // rather than as unknown. A torn map page refuses the mount here, the
+    // way a torn catalog page has since RV3, rather than surfacing
+    // mid-statement.
+    //
+    // For every database that fits in one region - which is every database
+    // written before this change - the loop body does not run and the
+    // mount reads exactly the two pages it always did.
+    for (std::uint32_t region = 1;; ++region) {
+        const PageId free_id = FreeMapPageIdFor(FreeMapRegionBase(region));
+        if (free_id >= kMaxPageCount || device.page_capacity() <= free_id) break;
+        if (Status s = store->LoadRegionIfPresent(region); !s.ok()) return s;
     }
 
-    Page headerless_map{};
-    std::span<std::byte, kPageSize> hview(headerless_map);
-    if (fresh) {
-        if (Status s = device.EnsureCapacity(kHeaderlessMapPageId + 1); !s.ok()) return s;
-        FormatFreeMapPage(view);
-        FreeMapAllocate(view, kFreeMapPageId);
-        FreeMapAllocate(view, kHeaderlessMapPageId);
-        FormatFreeMapPage(hview, PageType::kHeaderlessMap);
-    } else {
-        // A database written before the headerless map existed has nothing
-        // at that id, which reads as kInvalid. Treated as "no headerless
-        // pages" rather than an error: that is exactly true of such a
-        // database, since it predates the only thing that creates them.
-        if (device.page_capacity() > kHeaderlessMapPageId) {
-            if (Status s = device.ReadPage(kHeaderlessMapPageId, hview); !s.ok()) return s;
-        }
-        if (RawPageType(hview) == static_cast<std::uint8_t>(PageType::kInvalid)) {
-            if (Status s = device.EnsureCapacity(kHeaderlessMapPageId + 1); !s.ok()) return s;
-            FormatFreeMapPage(hview, PageType::kHeaderlessMap);
-            FreeMapAllocate(view, kHeaderlessMapPageId);
-        } else if (Status s = ValidateFreeMapPage(hview, PageType::kHeaderlessMap); !s.ok()) {
-            return s;
-        }
-    }
-
-    auto store = std::unique_ptr<DevicePageStore>(
-        new DevicePageStore(device, first_new_page_id, free_map, headerless_map, fresh));
 #ifndef NDEBUG
     // MG05: `KDS_TEST_FRAME_BUDGET=<n>` puts every debug-build store under
     // eviction pressure without threading a knob through each fixture. Env
@@ -92,7 +193,15 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
 }
 
 bool DevicePageStore::IsHeaderless(PageId page_id) const noexcept {
-    return FreeMapIsAllocated(headerless_map_bytes(), page_id) && IsAllocated(page_id);
+    // A map page's class is arithmetic, never a lookup. §3 of
+    // docs/workplan-multi-free-map.md needs this to be true rather than
+    // merely convenient: this predicate sits on the fault path, the
+    // write-back path and the WAL gate, so answering it by reading a map
+    // would be a recursion if a map page could ever be the question. Both
+    // bitmap classes are headered, so the answer is no.
+    if (IsMapPageId(page_id)) return false;
+    return FreeMapIsAllocated(headerless_map_bytes_for(page_id), FreeMapBitIndexOf(page_id)) &&
+           IsAllocated(page_id);
 }
 
 void DevicePageStore::StampIfHeadered(PageId page_id,
@@ -112,9 +221,15 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
     if (!created.ok()) return created.status();
 
     // Marked after the allocation succeeds and before the caller writes a
-    // byte, so no flush can ever see the page headered.
-    FreeMapAllocate(headerless_map_bytes(), created.value().first);
-    maps_dirty_ = true;
+    // byte, so no flush can ever see the page headered. The region is
+    // resident by construction: the id came from an allocation that had to
+    // load or create its region to hand it out.
+    const PageId headerless_page = created.value().first;
+    auto region = EnsureRegionResident(FreeMapRegionOf(headerless_page));
+    if (!region.ok()) return region.status();
+    FreeMapAllocate(std::span<std::byte, kPageSize>(region.value()->headerless_map),
+                    FreeMapBitIndexOf(headerless_page));
+    region.value()->dirty = true;
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("pagestore",
                     "alloc headerless page=" + std::to_string(created.value().first));
@@ -123,10 +238,10 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
 }
 
 Status DevicePageStore::FlushMaps() {
-    if (!maps_dirty_) return Status::OK();
+    if (!maps_dirty()) return Status::OK();
 
     // **A leased store never writes the maps** - SetCoreOwnership's rule in
-    // as many words, and MayWrite's too: both map pages sit below
+    // as many words, and MayWrite's too: region 0's map pages sit below
     // `system_page_limit_`, which a peer may read and may never write. This
     // is the one write path that reaches `device_.WritePage` without asking
     // MayWrite, so the check has to be here.
@@ -141,40 +256,56 @@ Status DevicePageStore::FlushMaps() {
     // the id redo re-created came out of an extent core 0 reserved, so core
     // 0's map already carries it and core 0's own flush makes it durable.
     if (lease_ != nullptr) {
-        maps_dirty_ = false;
+        for (auto& [region, pages] : map_regions_) pages.dirty = false;
         return Status::OK();
     }
 
-    // The headerless map first, the free map second. Both orderings are
-    // safe, but this one is safe for a reason worth writing down: the free
-    // map is what makes a page id *exist*, so a crash between the two
-    // leaves a headerless bit set for an id nothing allocated - harmless,
-    // since IsHeaderless() also requires allocation. The reverse order
-    // would publish an allocated headerless page whose headerless bit had
-    // not landed, and the next read of it would verify a checksum that was
-    // never written and call the page corrupt.
-    StampPageChecksum(headerless_map_bytes());
-    if (Status s = device_.WritePage(kHeaderlessMapPageId, headerless_map_bytes()); !s.ok()) {
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("pagestore", "headerless-map write failed: " + s.message());
+    // Ascending by region, which `std::map` gives for free. Regions are
+    // independent of one another - a page's reachability rests on its own
+    // region's map and nothing else - so the order across them is a
+    // determinism choice, not a correctness one. Within a region it is
+    // both, and the rule is the one the single-page map always followed.
+    for (auto& [region, pages] : map_regions_) {
+        if (!pages.dirty) continue;
+
+        // The headerless map first, the free map second. Both orderings are
+        // safe, but this one is safe for a reason worth writing down: the
+        // free map is what makes a page id *exist*, so a crash between the
+        // two leaves a headerless bit set for an id nothing allocated -
+        // harmless, since IsHeaderless() also requires allocation. The
+        // reverse order would publish an allocated headerless page whose
+        // headerless bit had not landed, and the next read of it would
+        // verify a checksum that was never written and call the page
+        // corrupt.
+        const PageId base = FreeMapRegionBase(region);
+        auto hbytes = std::span<std::byte, kPageSize>(pages.headerless_map);
+        StampPageChecksum(hbytes);
+        if (Status s = device_.WritePage(HeaderlessMapPageIdFor(base), hbytes); !s.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "headerless-map write failed for region " +
+                                             std::to_string(region) + ": " + s.message());
+            }
+            return s;
         }
-        return s;
+
+        auto fbytes = std::span<std::byte, kPageSize>(pages.free_map);
+        StampPageChecksum(fbytes);
+        if (Status s = device_.WritePage(FreeMapPageIdFor(base), fbytes); !s.ok()) {
+            // The map is what makes a page reachable after a restart, so
+            // losing this write loses pages whose bytes did land.
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "free-map write failed for region " +
+                                             std::to_string(region) + ": " + s.message());
+            }
+            return s;
+        }
+        pages.dirty = false;
     }
 
-    StampPageChecksum(free_map_bytes());
-    if (Status s = device_.WritePage(kFreeMapPageId, free_map_bytes()); !s.ok()) {
-        // The map is what makes a page reachable after a restart, so
-        // losing this write loses pages whose bytes did land.
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("pagestore", "free-map write failed: " + s.message());
-        }
-        return s;
-    }
-
-    maps_dirty_ = false;
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("pagestore", "maps written, " + std::to_string(allocated_pages()) +
-                                     " page(s) allocated");
+                                     " page(s) allocated across " +
+                                     std::to_string(map_regions_.size()) + " region(s)");
     }
     return Status::OK();
 }
@@ -185,7 +316,10 @@ Status DevicePageStore::PersistMaps() {
 }
 
 bool DevicePageStore::IsAllocated(PageId page_id) const noexcept {
-    if (page_id >= kFreeMapBitsPerPage) return false;
+    // FM3: the ceiling is the design ceiling now, not one bitmap page's
+    // coverage. A region that does not exist reads as empty below it,
+    // which is the same answer by a different route.
+    if (page_id >= kMaxPageCount) return false;
     // A leased core's copy of the free map is the one it read at Open(),
     // and core 0 sets the bits for a lease when it *reserves* it - which
     // happens later, in core 0's copy. So this store's map cannot be asked
@@ -195,11 +329,21 @@ bool DevicePageStore::IsAllocated(PageId page_id) const noexcept {
     // counts. The two can only disagree in the direction of the map being
     // behind, because nothing ever frees.
     if (lease_ != nullptr && lease_->Owns(page_id)) return true;
-    return FreeMapIsAllocated(free_map_bytes(), page_id);
+    return FreeMapIsAllocated(free_map_bytes_for(page_id), FreeMapBitIndexOf(page_id));
 }
 
 std::uint32_t DevicePageStore::allocated_pages() const noexcept {
-    return FreeMapCountAllocated(free_map_bytes());
+    // Every region that exists is resident (see map_regions_), so this is
+    // still the instance total and not a resident-only sample - which is
+    // what keeps the number printed at mount, at shutdown and by SHOW META
+    // meaning exactly what it meant. Its *cost* is now O(regions), which
+    // is D8's question and is one page for every database that fits in one
+    // region.
+    std::uint32_t total = 0;
+    for (const auto& [region, pages] : map_regions_) {
+        total += FreeMapCountAllocated(std::span<const std::byte, kPageSize>(pages.free_map));
+    }
+    return total;
 }
 
 Status DevicePageStore::EnsureAddressable(PageId page_id) {
@@ -473,6 +617,10 @@ bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
 }
 
 void DevicePageStore::TryClaimByStamp(PageId page_id, std::unique_ptr<Page>& prefetched) {
+    // The *rights* bitmap's coverage, not the free map's - write_rights_ is
+    // a single page indexed by absolute id and D1's placement does not
+    // reach it. §9's second finding and D10 of
+    // docs/workplan-multi-free-map.md own the rest.
     if (page_id >= kFreeMapBitsPerPage) return;  // no bit could hold the claim
     // A headerless page carries no stamp at all, so the bytes at the stamp's
     // offset are payload - checked here rather than beside the device read,
@@ -528,6 +676,16 @@ Status DevicePageStore::RefreshFreeMapFromDevice() {
     // recovery rebuilt. Union is what makes "strictly forward" a
     // constructed property. ValidateFreeMapPage, not the checksum half
     // alone: Open()'s whole rule.
+    //
+    // Region 0 only, deliberately. A peer answers about its own ids from
+    // its lease (IsAllocated short-circuits on Owns) and about the system
+    // range from region 0, and it never allocates from the map - so a
+    // further region is not a question it can be asked. Widening this is
+    // FM7's, under D5.
+    auto region = map_regions_.find(0);
+    if (region == map_regions_.end()) {
+        return Status::Corruption("DevicePageStore: region 0 is not resident");
+    }
     auto fresh = std::make_unique<Page>();
     auto view = std::span<std::byte, kPageSize>(*fresh);
     if (Status s = device_.ReadPage(kFreeMapPageId, view); !s.ok()) return s;
@@ -536,7 +694,7 @@ Status DevicePageStore::RefreshFreeMapFromDevice() {
         return s;
     }
     for (std::size_t i = kPageBodyOffset; i < kPageSize; ++i) {
-        free_map_page_[i] |= (*fresh)[i];
+        region->second.free_map[i] |= (*fresh)[i];
     }
     return Status::OK();
 }
@@ -567,10 +725,10 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
             "DevicePageStore: core " + std::to_string(core_id_) +
             " may not place a page at a chosen id; the free map belongs to the system core");
     }
-    if (page_id >= kFreeMapBitsPerPage) {
+    if (page_id >= kMaxPageCount) {
         return Status::OutOfRange("DevicePageStore: page id " + std::to_string(page_id) +
-                                  " is beyond the single free-map page's coverage (" +
-                                  std::to_string(kFreeMapBitsPerPage) + " ids)");
+                                  " is beyond the " + std::to_string(kMaxPageCount) +
+                                  "-page design ceiling");
     }
     // An allocated id is in use unless the device proves it was never
     // written - the page redo re-creates after a PAGE_INIT outran its first
@@ -580,15 +738,20 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
     // what is true of both a live page and a never-written one.
     // The two maps live in this object, not in a frame, and may not have
     // reached the device yet - in use by definition.
-    if (page_id == kFreeMapPageId || page_id == kHeaderlessMapPageId ||
+    // Any region's bitmaps, not just region 0's: IsMapPageId is the
+    // arithmetic form of the two fixed ids this check used to name.
+    if (IsMapPageId(page_id) ||
         (IsAllocated(page_id) &&
          (frames_.count(page_id) != 0 || !DeviceHoldsOnlyZeros(page_id)))) {
         return Status::AlreadyExists("page id already in use");
     }
     if (Status s = EnsureAddressable(page_id); !s.ok()) return s;
 
-    FreeMapAllocate(free_map_bytes(), page_id);
-    maps_dirty_ = true;
+    auto region = EnsureRegionResident(FreeMapRegionOf(page_id));
+    if (!region.ok()) return region.status();
+    FreeMapAllocate(std::span<std::byte, kPageSize>(region.value()->free_map),
+                    FreeMapBitIndexOf(page_id));
+    region.value()->dirty = true;
 
     auto bytes = std::make_unique<Page>();
     bytes->fill(std::byte{0});
@@ -623,13 +786,27 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
                               InsertFrame(id.value(), std::move(bytes), /*dirty=*/true));
     }
 
-    auto found = FreeMapFindFirstFree(free_map_bytes(), next_new_page_id_);
-    if (!found.has_value()) {
+    // FM3/FM5: the search crosses regions, and creates the next one when
+    // it runs off the end of the last. Core 0 has no lease
+    // (expeditor.cpp grants leases to cores 1..N-1 only), so this is the
+    // whole of a single-core deployment's allocation and the hint keeps it
+    // to one region's map in the steady state.
+    PageId page_id = kInvalidPageId;
+    for (PageId candidate = next_new_page_id_; candidate < kMaxPageCount;) {
+        const std::uint32_t region = FreeMapRegionOf(candidate);
+        auto bytes = FreeMapBytesForRegion(region);
+        if (!bytes.ok()) return bytes.status();
+        auto found = FreeMapFindFirstFree(bytes.value(), FreeMapBitIndexOf(candidate));
+        if (found.has_value()) {
+            page_id = FreeMapRegionBase(region) + *found;
+            break;
+        }
+        candidate = FreeMapRegionBase(region + 1);
+    }
+    if (page_id == kInvalidPageId) {
         return Status::OutOfSpace("DevicePageStore: no free page id at or above " +
                                   std::to_string(next_new_page_id_));
     }
-
-    const PageId page_id = *found;
     // The raw sibling, not the pinned base accessor, for the reason
     // CreateNewHeaderlessUnpinned() states: this *is* the raw seam, and
     // pinning here takes a pin no handle asked for - balanced only by the
@@ -653,11 +830,11 @@ Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
     // already reports that as OutOfSpace. Above it there is no bit to find
     // and no page to address, so the log named an id this build cannot have
     // written.
-    if (first_allocatable_page_id > kFreeMapBitsPerPage) {
+    if (first_allocatable_page_id > kMaxPageCount) {
         return Status::OutOfRange("DevicePageStore: allocation floor " +
                                   std::to_string(first_allocatable_page_id) +
-                                  " is beyond the single free-map page's coverage (" +
-                                  std::to_string(kFreeMapBitsPerPage) + " ids)");
+                                  " is beyond the " + std::to_string(kMaxPageCount) +
+                                  "-page design ceiling");
     }
     if (first_allocatable_page_id > next_new_page_id_) {
         next_new_page_id_ = first_allocatable_page_id;
@@ -966,7 +1143,7 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // The maps go out with them, and after them: a page is only reachable
     // once the map says its id is allocated, so publishing the map first
     // would let a crash expose a page whose bytes never landed.
-    if (maps_dirty_) {
+    if (maps_dirty()) {
         if (Status s = FlushMaps(); !s.ok()) return s;
         wrote_any = true;
     }

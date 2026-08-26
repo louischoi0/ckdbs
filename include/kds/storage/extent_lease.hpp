@@ -66,7 +66,9 @@ struct Extent {
     bool empty() const noexcept { return count == 0; }
 
     // One past the last id. Safe to compute: Reserve() refuses a run that
-    // would reach kFreeMapBitsPerPage, so this never wraps.
+    // would reach kMaxPageCount, so this never wraps - the guard moved with
+    // the ceiling when the free map became multi-page (FM4, and
+    // docs/workplan-multi-free-map.md §4's first named boundary case).
     PageId end() const noexcept { return first + count; }
 
     bool Contains(PageId page_id) const noexcept {
@@ -99,24 +101,36 @@ class DevicePageStore;
 // committed rows, for the next mount's allocator to hand out over them. So
 // the production form is built over the store, every reservation marks the
 // map, and `Persist()` lands it before a grant leaves core 0.
+//
+// **It holds no page.** Before the free map became multi-page it borrowed
+// one span for its lifetime, which is also why one bitmap page's coverage
+// and the whole id space were the same number. Since FM4 it holds the store
+// and asks for a region at a time (docs/workplan-multi-free-map.md).
 class ExtentAllocator {
 public:
     // Over the live map of the store whose ids are being carved - the
     // production form, per the paragraph above. `store` must outlive this
     // allocator.
     //
-    // Constructing one **marks the store's map dirty**, because taking the
-    // span is what marks it. Harmless (the next flush writes a map that has
-    // not changed) and worth naming, since it is what let this defect's
-    // first regression test pass against the very implementation it was
-    // written to condemn - the PW3b review's C1.
+    // Constructing one no longer marks anything dirty. It used to, because
+    // it took the map's span up front and taking the span is what marks it;
+    // since FM4 it holds no span at all and asks per region per call, so
+    // the spurious dirty at construction is gone while the guarantee that
+    // motivated it - a reservation always dirties the region it wrote - is
+    // unchanged. Worth naming because that side effect is what let the PW3b
+    // defect's first regression test pass against the very implementation
+    // it was written to condemn (that review's C1): a test that leans on
+    // construction to dirty the map is testing nothing now.
     explicit ExtentAllocator(DevicePageStore& store, PageId first_new_page_id) noexcept;
 
     // Over bare bytes, for tests that script a map. The caller owns the
-    // bytes' durability, and Persist() has nothing to do.
+    // bytes' durability, and Persist() has nothing to do. **One page, so
+    // one region, and it is region 0**: this form cannot grow the map, and
+    // a search that leaves region 0 reports OutOfSpace exactly as the
+    // single-page allocator always did.
     explicit ExtentAllocator(std::span<std::byte, kPageSize> free_map,
                              PageId first_new_page_id) noexcept
-        : free_map_(free_map), next_(first_new_page_id) {}
+        : bare_map_(free_map.data()), next_(first_new_page_id) {}
 
     // Reserves `count` **contiguous** free ids and marks every one of them
     // allocated immediately.
@@ -127,10 +141,22 @@ public:
     // live. The cost is that an unspent lease looks like allocated pages -
     // accurate, since nobody else may have them.
     //
+    // **A reservation never crosses a free-map region** (D3(a) of
+    // docs/workplan-multi-free-map.md). A run that would straddle abandons
+    // the tail of the region it started in and restarts in the next, which
+    // costs at most count-1 ids per boundary - under 0.1% at the default
+    // extent size, and permanently, since nothing frees. What it buys: one
+    // dirty map page per reservation, one crash window, one resident
+    // region. It also makes a region the longest possible run, which is
+    // why a count above kFreeMapBitsPerPage is refused outright.
+    //
+    // Over a store, a search that walks off the end of the last region
+    // **creates the next one** (FM5) - growth has no separate call and
+    // nothing to keep in step with the search.
+    //
     // Fails with InvalidArgument for count 0, and OutOfSpace when no
-    // contiguous run that long remains below kFreeMapBitsPerPage. The
-    // single-page free map covers 65,280 ids, which `DevicePageStore`
-    // already documents as the instance ceiling.
+    // contiguous run that long remains below the design ceiling
+    // (kMaxPageCount ids, 16 TiB).
     StatusOr<Extent> Reserve(std::uint32_t count);
 
     // Makes every reservation so far durable: the store writes its map back
@@ -144,12 +170,17 @@ public:
     std::uint64_t reservations() const noexcept { return reservations_; }
 
 private:
-    // The live bytes, fetched from the store per call so each mutation
-    // marks its map dirty - the cached span is the raw-bytes form's only.
-    std::span<std::byte, kPageSize> MapBytes() noexcept;
+    // One region's live bytes, fetched from the store per call so each
+    // mutation marks that region dirty - the cached span is the raw-bytes
+    // form's only. Fails where the store's does: a region a peer may not
+    // create, a device that cannot be grown, a torn map page.
+    StatusOr<std::span<std::byte, kPageSize>> MapBytes(std::uint32_t region);
 
     DevicePageStore* store_ = nullptr;
-    std::span<std::byte, kPageSize> free_map_;
+    // The raw-bytes form's single page, null over a store. A pointer and
+    // not a span because a fixed-extent span has no empty state, and the
+    // store form genuinely holds no page - it asks per region.
+    std::byte* bare_map_ = nullptr;
     // Where the next search starts. Purely a hint - correctness rests on the
     // free map, and a stale value costs a longer scan and never a double
     // allocation.

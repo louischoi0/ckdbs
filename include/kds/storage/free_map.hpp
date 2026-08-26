@@ -109,6 +109,14 @@ inline constexpr std::uint32_t FreeMapRegionOf(PageId page_id) noexcept {
     return page_id / kFreeMapBitsPerPage;
 }
 
+// The first id of a region - the inverse of FreeMapRegionOf, and what
+// turns a bit index back into an id. Here rather than at the two call
+// sites that want it, because re-deriving `region * coverage` elsewhere is
+// exactly the duplication this section exists to prevent.
+inline constexpr PageId FreeMapRegionBase(std::uint32_t region) noexcept {
+    return static_cast<PageId>(static_cast<std::uint64_t>(region) * kFreeMapBitsPerPage);
+}
+
 // The free-map page covering `page_id`.
 inline constexpr PageId FreeMapPageIdFor(PageId page_id) noexcept {
     return static_cast<PageId>(
@@ -141,5 +149,13 @@ inline constexpr bool IsMapPageId(PageId page_id) noexcept {
 // keeps kInvalidPageId unambiguous.
 static_assert(FreeMapPageIdFor(kMaxPageCount - 1) < kMaxPageCount);
 static_assert(HeaderlessMapPageIdFor(kMaxPageCount - 1) < kMaxPageCount);
+
+// Region and bit index are a lossless split of an id, which is what lets
+// the store key its cache by region and address bits within a page.
+static_assert(FreeMapRegionBase(FreeMapRegionOf(0)) + FreeMapBitIndexOf(0) == 0);
+static_assert(FreeMapRegionBase(FreeMapRegionOf(kMaxPageCount - 1)) +
+                  FreeMapBitIndexOf(kMaxPageCount - 1) ==
+              kMaxPageCount - 1);
+static_assert(FreeMapRegionBase(1) == kFreeMapBitsPerPage);
 
 }  // namespace kds::storage

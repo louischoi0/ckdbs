@@ -306,13 +306,17 @@ TEST(HighWaterTest, ALeasedStoreRefusesRatherThanSilentlyDoingNothing) {
     EXPECT_EQ(repair.status().code(), StatusCode::kUnsupported) << repair.status().message();
 }
 
-TEST(HighWaterTest, APageIdBeyondTheFreeMapsCoverageRefusesTheMount) {
+TEST(HighWaterTest, APageIdBeyondTheDesignCeilingRefusesTheMount) {
+    // The log naming a page this build could not have written is a refusal,
+    // not a repair. What "could not have written" means moved when the free
+    // map became multi-page: it was one bitmap page's 65,280 ids, and it is
+    // now the 2^31-page design ceiling (FM3).
     auto device = MakeDevice();
     ASSERT_NE(device, nullptr);
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
 
-    auto repair = RaiseHighWater(*store, Named(storage::kFreeMapBitsPerPage + 10));
+    auto repair = RaiseHighWater(*store, Named(kMaxPageCount + 10));
     ASSERT_FALSE(repair.ok());
     EXPECT_EQ(repair.status().code(), StatusCode::kOutOfRange) << repair.status().message();
 }

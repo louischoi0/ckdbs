@@ -79,9 +79,13 @@ TEST_F(ExtentAllocatorTest, AZeroPageReservationIsRefused) {
     EXPECT_EQ(alloc.Reserve(0).status().code(), StatusCode::kInvalidArgument);
 }
 
-TEST_F(ExtentAllocatorTest, ARunThatWouldLeaveTheMapsCoverageIsOutOfSpace) {
-    // The single free-map page covers 65,280 ids and DevicePageStore already
-    // documents that as the instance ceiling. A lease may not run past it.
+TEST_F(ExtentAllocatorTest, ARunThatWouldLeaveThisAllocatorsOnePageIsOutOfSpace) {
+    // **A page's coverage, not the instance ceiling.** It was both until the
+    // free map became multi-page: over a store the search would now cross
+    // into region 1 and create it (FM5), and the instance ceiling is
+    // kMaxPageCount. The bare-bytes form holds exactly one page, so region 0
+    // is all it has and running past it is still OutOfSpace - which is what
+    // this test now pins.
     ExtentAllocator alloc(AsSpan(map_), kFreeMapBitsPerPage - 4);
 
     auto e = alloc.Reserve(64);
@@ -89,6 +93,16 @@ TEST_F(ExtentAllocatorTest, ARunThatWouldLeaveTheMapsCoverageIsOutOfSpace) {
     EXPECT_EQ(e.status().code(), StatusCode::kOutOfSpace);
     EXPECT_NE(e.status().message().find(std::to_string(kFreeMapBitsPerPage)), std::string::npos)
         << e.status().message();
+}
+
+TEST_F(ExtentAllocatorTest, ARunLongerThanARegionCanNeverBePlaced) {
+    // D3(a) refuses to straddle, so a region is the longest possible
+    // reservation - reported up front rather than after a walk of the whole
+    // id space that could not have succeeded.
+    ExtentAllocator alloc(AsSpan(map_), 128);
+    auto e = alloc.Reserve(kFreeMapBitsPerPage + 1);
+    ASSERT_FALSE(e.ok());
+    EXPECT_EQ(e.status().code(), StatusCode::kOutOfSpace);
 }
 
 // ---- LeasedIdSource ---------------------------------------------------
