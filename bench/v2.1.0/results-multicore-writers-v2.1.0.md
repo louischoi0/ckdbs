@@ -22,10 +22,14 @@ The added cores spend W times the device's sync budget buying back the
 batching the split destroyed.
 
 Rotation therefore wins only where sessions-per-core falls to 1 and there was
-no batch to lose. That cell exists: **one relation per writer core runs
-1.927×**, with insert p50 halving from 1,944 µs to 984 µs. Whether that is
-rotation or the same four-core-server artifact the control exposed is **not
-resolved by this run** — the 3-relation control (C2) was queued and not run.
+no batch to lose. **That cell exists, and its gain is real.** One relation per
+writer core runs 1.927× against `cores = 1`, with insert p50 halving from
+1,944 µs to 984 µs — and against the control that isolates the four-core
+server (C2: the same three relations, the same four-core server, every
+relation on core 0) it runs **1.751×**, 4,053 stmt/s against 2,315. The
+four-core-server artifact accounts for only 1.067× of it. So at one writing
+session per core rotation delivers a genuine 1.751× of a 3× ceiling, and at
+two it delivers nothing.
 
 **This run is incomplete and was published deliberately at the operator's
 instruction.** §2 lists precisely what did not run, including the PW7
@@ -81,9 +85,12 @@ complete rather than waiting for the remaining phases. These were prepared,
 committed as runnable scripts, queued, and **stopped before they ran**. None
 of them is reported anywhere below as anything but unrun.
 
+The one exception is the **C2 control**, which was queued unrun in the first
+version of this document and has since been run in full (5 reps). §7 carries
+it, and it resolves what was then the run's largest gap.
+
 | Phase | State | What it would have answered |
 |---|---|---|
-| **C2 control** (`--cores 4 --tables 3 --placement creating`) | **NOT RUN** | Whether H3's 1.927× is rotation or the same artifact §7 exposes. **This is the most consequential gap in the run.** |
 | **PW7 before/after** — HEAD, `9c0528a`, and a floors-reverted HEAD | **NOT RUN** | Whether PW7's share-law floors hold at three writer cores. All three trees were built and ready |
 | **Per-core CPU attributed to the insert phase** (`bench/percore_insert_probe.py`) | **NOT RUN** | Whether core 0 is idle or a bottleneck under rotation, per configuration |
 | **Restart ownership at 3 writer cores** (`bench/restart_ownership_check.py`) | **NOT RUN** | PW1c-7's stamp-carried ownership across a restart, first exercise at ≥3 cores |
@@ -161,7 +168,7 @@ imbalance reads as poor scaling.
 | **H4a** | `--cores 2 --tables 2` | 5 | **1.034** | 0.983–1.052 |
 | **H4b** | `--cores 3 --tables 4` | 5 | **1.058** | 1.005–1.080 |
 | **C1** control | `--cores 4 --tables 6 --placement creating`, no peer listeners | 5 | **1.071** | 0.988–1.093 |
-| **C2** control | `--cores 4 --tables 3 --placement creating` | **0** | **NOT RUN** | — |
+| **C2** control | `--cores 4 --tables 3 --placement creating` | 5 | **1.067** | 1.016–1.103 |
 
 Verbatim, the headline invocation:
 
@@ -333,13 +340,37 @@ up in C1's insert p50 (1.457×). Candidate explanations — more WAL anchors
 leases, background work moving off core 0 — are **not discriminated here**.
 Stated as an open observation, not an explanation.
 
-**Consequence for H3, and it is the run's largest loose end.** H3's 1.927× is
-measured against a `cores = 1` baseline and carries the same confound. It
-cannot be called a rotation effect until the matching 3-relation control runs.
-Cell **C2** was added for exactly this reason and **did not run** (§2). If C2
-lands near H3's single-core 2,096 stmt/s, H3's gain is real; if it lands near
-H3's multi-core 4,053, it is not. **Until then H3 is an unattributed 1.927×,
-not a demonstrated speedup.**
+### The 3-relation control resolves H3, in rotation's favour
+
+H3's 1.927× is measured against a `cores = 1` baseline and carries the same
+confound, so the matching control was run: **C2**
+(`--cores 4 --tables 3 --rows 2000 --placement creating`), no peer listeners,
+5 reps. **measured**: ratio median **1.067**, spread 1.016–1.103, `errors=0`,
+every rep verified clean.
+
+The absolute aggregates settle it, all three at 3 relations × 2,000 rows:
+
+| configuration | aggregate stmt/s | insert p50 |
+|---|---|---|
+| `cores = 1` | 2,117 | 1,935 µs |
+| `cores = 4`, every relation on core 0 (**C2**) | **2,315** | 1,236 µs |
+| `cores = 4`, rotated over 3 writer cores (**H3**) | **4,053** | **984 µs** |
+
+**Rotation delivers 4,053 / 2,315 = 1.751× over the equivalent control.** The
+four-core-server artifact accounts for 1.067× of H3's 1.927×; the remaining
+1.751× is rotation. **H3's gain is real**, and it is 58% of the 3× ceiling.
+
+This confirms §6 rather than undermining it, and the arithmetic closes: core 0
+serving three sessions does 2,117 × 0.714 = 1,512 commits/s at `cores = 1` and
+2,315 × 0.714 = 1,653 at `cores = 4` — a batch of ~1.4 against the volume's
+1,066/s single-stream rate. Three peers at one session each do
+4,053 × 0.714 = 2,894, or 965 per core with no batching at all. And
+3 × 965 / 1,653 = **1.75**, which is what was measured.
+
+So the two regimes are one law seen at two points. **At one writing session
+per core there is no batch to lose and rotation wins 1.751×. At two, core 0's
+batching keeps pace and rotation wins nothing** (§7's 0.989× at 6 relations).
+The crossover is between one and two sessions per writer core.
 
 ---
 
@@ -482,10 +513,11 @@ machinery (§7's control does no cross-core work and outruns rotation).
 
 Open, in the order that a next step would need them:
 
-1. **C2, the 3-relation control.** Until it runs, H3's 1.927× is
-   unattributed and the only defensible statement about rotation is §7's
-   0.989×. This is one cell and a few minutes; it should be the first thing
-   run.
+1. **Where the crossover actually sits.** C2 (§7) establishes that rotation
+   wins 1.751× at one writing session per writer core and nothing at two.
+   Between those two points is a boundary this run brackets but does not
+   locate, and it is the number any placement policy would need. **Not
+   decided here.**
 2. **The four-core-server effect** C1 exposes (insert p50 1.457× with
    everything on core 0). Undiscriminated. Whatever it is, it is currently
    larger than anything rotation contributes.
@@ -503,10 +535,10 @@ Open, in the order that a next step would need them:
 
 One passage elsewhere is affected. `docs/known-gaps.md:738` states that
 *"every cross-core number in `bench/` is a cost measured with the parallelism
-removed, never a speedup"*. That is no longer strictly true — the parallelism
-is present here and H3 measured 1.927× — but §7 means it is also not yet
-false in the way that matters, because H3 is unattributed. **Reported with
-its location; not edited.** The passage should be revisited once C2 runs.
+removed, never a speedup"*. **That is now false**: the parallelism is present
+here, and with its own control subtracted H3 measures a genuine **1.751×**
+(§7). This is the first measured cross-core speedup in `bench/`. **Reported
+with its location; not edited** — the passage is the owning doc's to change.
 
 ---
 
