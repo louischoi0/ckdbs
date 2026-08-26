@@ -345,17 +345,31 @@ private:
     // pre-block re-check found work and skipped the block. The second is
     // the race actually happening, and a run where it stays 0 has not
     // exercised it.
-    std::uint64_t idle_blocks_ = 0;
-    std::uint64_t wake_race_skips_ = 0;
+    //
+    // **Atomic, unlike every other counter on this class**, and the
+    // exception is deliberate: "is that reactor asleep yet" is a question
+    // only another thread can usefully ask, so the accessors below are the
+    // one pair the class-level "reactor thread only" rule does not cover.
+    // Relaxed, and free: both are touched only on an iteration that was
+    // about to block, which by construction is an iteration with nothing
+    // ready to run.
+    std::atomic<std::uint64_t> idle_blocks_{0};
+    std::atomic<std::uint64_t> wake_race_skips_{0};
 
 public:
     // The wake path, from this reactor's side. `idle_blocks` counts
     // iterations that actually blocked with the flag raised;
     // `wake_race_skips` counts the ones whose pre-block re-check found work
     // and skipped the block - which *is* the race the flag exists for, so a
-    // run where it stays 0 has not exercised it. Diagnostics and tests.
-    std::uint64_t idle_blocks() const noexcept { return idle_blocks_; }
-    std::uint64_t wake_race_skips() const noexcept { return wake_race_skips_; }
+    // run where it stays 0 has not exercised it. Diagnostics and tests, and
+    // the only two accessors on this class that may be read from another
+    // thread (see the members).
+    std::uint64_t idle_blocks() const noexcept {
+        return idle_blocks_.load(std::memory_order_relaxed);
+    }
+    std::uint64_t wake_race_skips() const noexcept {
+        return wake_race_skips_.load(std::memory_order_relaxed);
+    }
     // Whether this reactor can be woken at all. False on every single-core
     // build, where nothing can send to it.
     bool wake_armed() const noexcept { return waker_.has_value(); }

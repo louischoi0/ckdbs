@@ -145,7 +145,7 @@ public:
 private:
     RealRingTransport(std::uint32_t core_count, std::vector<SpscRing> rings)
         : core_count_(core_count), rings_(std::move(rings)),
-          next_peer_(core_count, 0), wake_(core_count) {}
+          wake_(core_count), next_peer_(core_count, 0) {}
 
     // Row-major (src, dst): rings_[src * n + dst].
     SpscRing& RingFor(std::uint32_t src, std::uint32_t dst) noexcept {

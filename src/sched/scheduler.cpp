@@ -365,9 +365,9 @@ bool Scheduler::RunOnce() {
         if (transport_->HasPending(core_id_)) {
             sleeping_.store(false, std::memory_order_seq_cst);
             timeout_ms = 0;
-            ++wake_race_skips_;
+            wake_race_skips_.fetch_add(1, std::memory_order_relaxed);
         } else {
-            ++idle_blocks_;
+            idle_blocks_.fetch_add(1, std::memory_order_relaxed);
         }
     }
     Status io_status = io_backend_.PollReady(timeout_ms, io_events_scratch_);
