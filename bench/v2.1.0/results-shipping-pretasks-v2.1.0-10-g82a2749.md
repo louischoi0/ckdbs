@@ -781,30 +781,51 @@ would multiply — rather than an injected one. **What remains unmeasured is
 stated rather than implied**: nobody has priced K parked coroutines per core
 at K = 16, and nothing here says what shipping's steady-state waiters cost.
 
-### 8d. Two defects found on the way, reported because they bound shipping
+### 8d. The defect found on the way, reported because it bounds shipping
 
-Both are on the peer path, both were found by driving it harder than any test
-does, and neither is worked around silently.
+It is on the peer path, it was found by driving that path harder than any
+test does, and it is not worked around silently. **measured** on two trees:
+`v2.1.0-15-g5989f13` (before the free-map work landed) and again on
+`b85cd31` (after it), with the same shape both times.
 
-- **A refused shipped `CREATE INDEX` consumes free-map pages.** A retryable
-  refusal is a statement the client is told to retry; here each refused
-  attempt leaks the pages its build allocated before refusing, so a
-  conforming retry loop walks a `cores = 4` instance from healthy to
-  *"the free map is full"* in half a minute. The free map is one page
-  covering **65,280 ids** (~510 MiB) and `docs/workplan-multi-free-map.md`
-  is unbuilt — this run is evidence that its ceiling is reachable by a
-  client doing what the wire tells it to do.
-- **Sustained shipped builds leave a peer-owned relation permanently
-  unwritable** (`ERR page id not found` on every later INSERT, not
-  retryable), where the same churn on one core is clean at 400 builds. The
-  mechanism is not established here and this run does not guess at it; the
-  reproduction is `bench/parked_coroutine_probe.py`'s first form and the
-  capacity probe archived beside it.
+**Sustained shipped `CREATE INDEX` leaves a peer-owned relation permanently
+unwritable, where core 0 fails cleanly.** From a core-0 session,
+`CREATE INDEX`/`DROP INDEX` in a loop against a peer-owned relation succeeds
+about **58** times — consuming 1,856 pages, 15 MB for 58 usable indexes on a
+3,000-row relation, and the *refused* attempts allocate too, ~7.7 pages each
+— after which **every** later write to that relation answers
+`ERR page id not found`, which carries no retryable bit and never clears.
+The identical churn at `cores = 1` runs **279** builds and then refuses by
+name — *"anchor page holds 679 index entries already; the table is full"* —
+with the relation still writable afterwards.
+
+**The asymmetry is the finding, not the page count.** Core 0 turns a bounded
+resource into an honest refusal that names the bound; the peer path turns the
+same exhaustion into a corruption-shaped `NotFound` that poisons the relation
+for the rest of the mount. The mechanism is **not established** and this run
+declines to guess: the two candidates it could not separate are the pages
+`DROP INDEX` orphans (reclamation gated) and what a peer counts as
+allocated.
+
+**A ceiling this run met on the way, since raised by other work.** On the
+pre-merge tree a retry loop against the extent-lease refusal — 6,670 refused
+attempts in 30 s — exhausted the **single-page** free map (*"no run of 64
+contiguous free pages remains below the free map's coverage (65280 ids)"*),
+after which every core's refill failed. `free-map` FM2-FM5 landed the same
+day and replaced that 510 MiB ceiling with `kMaxPageCount`; the leak per
+refused attempt is unchanged, so what moved is how long it takes to matter,
+not whether it does.
 
 **Both matter to statement shipping specifically**, because the shipped-DDL
 path is the exact shape shipping generalises: an arrival core parking on an
-owner core's work. A design that ships DML through machinery whose DDL
-sibling leaks on refusal would inherit the leak.
+owner core's work. A shipped DML path built on the same machinery would
+inherit them. This is a precondition, not a performance note.
+
+Reproductions are archived beside this file at
+`archive/pretasks-v2.1.0-10-g82a2749/t4/probes/` — `capacity_probe.py` (the
+`cores = 1` against `cores = 4` discrimination) and `leak_probe.py` (the
+per-refusal page cost) — and `bench/parked_coroutine_probe.py` driven in a
+loop is the original form.
 
 ---
 

@@ -591,31 +591,34 @@ still waits on its own gate, so:
   1.000, because its second arm always runs later — so every A/B ratio this
   harness has produced carries a ~10% ordering bias, `bench/v2.1.0`'s C1 and
   C2 controls included.
-- **A refused shipped `CREATE INDEX` still consumes free-map pages, and the
-  refusal invites the retry that exhausts them** — found 2026-08-26 by T4's
-  probe (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d,
-  worktree `worktree-v2.2.0-pretasks-stmtshipping`). A `CREATE INDEX` shipped
-  to a peer whose extent lease is spent is refused
-  `TXN_CONFLICT retryable=1`, which tells the client to retry; each refused
-  attempt leaks the pages its build allocated before refusing. **measured**:
-  6,670 refused attempts over 30 s exhausted the free map — *"no run of 64
-  contiguous free pages remains below the free map's coverage (65280 ids)"* —
-  after which every core's extent refill failed and the instance never
-  recovered. Two things this bounds: the single-page free map's ceiling
-  (65,280 ids, ~510 MiB; `docs/workplan-multi-free-map.md` is unbuilt) is
-  reachable by a client doing exactly what the wire tells it to do, and any
-  DML shipping built on the same machinery inherits the leak.
-- **Sustained shipped index builds leave a peer-owned relation permanently
-  unwritable** — same run, same section. Looping `CREATE INDEX`/`DROP INDEX`
-  against peer-owned relations drove a `cores = 4` instance into
-  `ERR page id not found` on **every** later write to an unrelated
-  peer-owned relation, not retryable, after ~58 builds; the identical churn
-  at `cores = 1` ran 400 builds clean and grew the file from 32 MB to 70 MB.
-  The mechanism is **not established** — the run reports the reproduction and
-  declines to guess — and the two candidates it could not separate are the
-  orphaned pages `DROP INDEX` leaves (reclamation gated) and the peer's own
-  view of what is allocated. Reproduces with `bench/parked_coroutine_probe.py`
-  driven in a loop.
+- **Sustained shipped `CREATE INDEX` leaves a peer-owned relation
+  permanently unwritable, where core 0 fails cleanly** — found 2026-08-26 by
+  T4's probe (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+  §8d), and **re-confirmed on the merged tree at `b85cd31`**, after
+  FM2-FM5 raised the free-map ceiling. The shape, **measured** twice on each
+  tree: `CREATE INDEX`/`DROP INDEX` in a loop from core 0 against a
+  peer-owned relation succeeds ~58 times, consuming 1,856 pages (15 MB for
+  58 usable indexes on a 3,000-row relation — refused attempts allocate too,
+  ~7.7 pages each), after which **every** later write to that relation
+  answers `ERR page id not found`, which is **not retryable** and does not
+  clear. The identical churn on `cores = 1` runs 279 builds and then refuses
+  by name — *"anchor page holds 679 index entries already; the table is
+  full"* — with the relation still writable afterwards.
+
+  **The asymmetry is the finding**: core 0 turns a bounded resource into an
+  honest refusal that names the bound, and the peer path turns the same
+  exhaustion into a corruption-shaped `NotFound` that poisons the relation
+  for the rest of the mount. The mechanism is not established and this entry
+  declines to guess; the two candidates it could not separate are the pages
+  `DROP INDEX` orphans (reclamation gated) and what a peer counts as
+  allocated. Reproductions: `bench/parked_coroutine_probe.py` driven in a
+  loop, and the two probes archived at
+  `bench/v2.1.0/archive/pretasks-v2.1.0-10-g82a2749/t4/probes/`.
+
+  **This matters to statement shipping specifically**: the shipped-DDL path
+  is the exact shape shipping generalises — an arrival core parking on an
+  owner core's work — so a shipped DML path built on the same machinery
+  would inherit it. It is a precondition, not a performance note.
 - undo pages from a **previous run** leak: a restart abandons the old
   chain and the recycle list is memory-resident, so those pages stay
   allocated until UP4's mount-time reclaim exists (they always leaked;

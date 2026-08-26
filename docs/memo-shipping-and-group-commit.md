@@ -182,14 +182,14 @@ Stated so the prediction is checkable rather than merely plausible:
 4. **The regime is R3 in practice.** If real workloads spread writes evenly
    over ranges, shipping's batching gain never materialises and only its cost
    is real.
-5. **The machinery shipping generalises leaks under refusal.** §8d records
-   two defects on the shipped-DDL path — the shape shipping would extend to
-   DML: a *refused* shipped `CREATE INDEX` consumes free-map pages, so a
-   conforming retry loop exhausted the single-page free map (65,280 ids) in
-   half a minute; and sustained shipped builds left a peer-owned relation
-   permanently unwritable. A shipped DML path built on the same machinery
-   would inherit both unless they are fixed first. This is not a prediction
-   about throughput; it is a precondition.
+5. **The machinery shipping generalises fails badly under exhaustion.** §8d
+   records a defect on the shipped-DDL path — the shape shipping would extend
+   to DML: sustained shipped `CREATE INDEX` leaves a peer-owned relation
+   permanently unwritable with a non-retryable `page id not found` after ~58
+   builds, where the identical churn on core 0 runs 279 and then refuses by
+   name (*"the table is full"*) with the relation intact. Refused attempts
+   allocate too. A shipped DML path built on the same machinery would inherit
+   it. This is not a prediction about throughput; it is a precondition.
 
 ## 7. Inputs, tagged
 
