@@ -319,6 +319,13 @@ to **OpenSSL 3.5.5 on this host**, which queues an alert for a first record
 that was never TLS where the test's pinned claim says it queues none. The
 fatal path itself is intact. Thirteen tests were added (2,708 → 2,721).
 
+> **The report named above was closed 2026-08-26** (worktree
+> `tls-alert-bytes`) and, per `docs/inflight/bugs/README.md`, deleted — the
+> path no longer resolves and points at git history. The count in this
+> section is what was measured at `v2.2.0-11-g925f483` and stands; what
+> changed afterwards is the test, which now pins the channel's contract
+> (`docs/spec/protocol.md` §1) instead of the library's byte count.
+
 ## What Part A did not do
 
 The `critics-developer` review the session workflow requires per step was
