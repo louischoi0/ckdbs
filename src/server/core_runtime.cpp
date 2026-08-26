@@ -471,6 +471,30 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         }
     }
 
+    // **Statement shipping, both halves** (SS1's wiring rule,
+    // statement_ship_service.hpp): every core answers requests and every
+    // core receives replies, because a shipped statement crosses in both
+    // directions - core 0 to an owner peer, and a peer to core 0. The
+    // executor is built first: the server holds its seam.
+    shipped_executor_.emplace(config_.core_id, *dispatcher_, *scheduler_, scheduler_->clock(),
+                              log_);
+    statement_ship_server_.emplace(config_.core_id, *scheduler_, transport,
+                                   shipped_executor_->Seam(), log_);
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kShippedStatementRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                statement_ship_server_->OnRequest(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    statement_ship_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(),
+                                   log_);
+    if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
+    dispatcher_->SetStatementShip(&*statement_ship_client_);
+    // And the owner's half, for this core's `SHOW META` (D7).
+    dispatcher_->SetShippedStatements(&*shipped_executor_);
+
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has
     // armed anything.

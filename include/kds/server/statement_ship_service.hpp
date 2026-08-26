@@ -14,6 +14,7 @@
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/server/role.hpp"
 
 // **Statement shipping, the wire and the waiter** (SS1 of the
 // statement-shipping work order): a single-statement transaction that
@@ -83,6 +84,14 @@
 //     that code, added for this and non-retryable by construction
 //     (`IsRetryable` is one code wide, by `docs/protocol.md` §11).
 //
+// **A statement parked when the reactor is destroyed never replies**, and
+// that is correct rather than a leak: `~CoroTask` destroys a suspended
+// frame without invoking its completion, so nothing calls back into an
+// executor or a server that teardown is dismantling, and the outcome of a
+// statement interrupted mid-flight genuinely is unknown - which is what the
+// arrival core's deadline says. Written here because a reader would
+// otherwise have to derive it from `sched/coro.hpp`.
+//
 // A reply that matches no waiter is the deadline having already fired.
 // There is nothing to do with it but count it: unlike 6b's tree, a
 // committed DML statement cannot be un-done by telling the owner to
@@ -137,16 +146,39 @@ inline constexpr std::size_t kShippedStatementTextMax =
 // arrival core -> owner: the statement, and the identity that makes a
 // duplicate recognisable.
 //
-// `target_oid` is a **cross-check, not the authority**: the owner resolves
-// the relation from the text it parses, and refuses if the two disagree.
-// Carrying it lets that disagreement be caught as a disagreement rather
-// than as a statement quietly running against something else.
+// `target_oid` is **the relation the arrival core routed on, and nothing
+// more**: which oid's owner this request was addressed to.
+//
+// **Retracted 2026-08-26** (the SS3 review): this paragraph used to say the
+// owner cross-checks it against the relation the text resolves to and
+// refuses if the two disagree. Nothing did that, and on inspection nothing
+// should. The owner parses and binds under its own catalog, which is the
+// only authoritative resolution there is (the argument above) - so a
+// disagreement means the arrival core's catalog was behind, and the two
+// outcomes are already right: if the owner's resolution is a relation it
+// owns, running it is the correct answer to what the client asked *by
+// name*; if it is not, `CheckWriteAffinity` refuses, and the hop limit
+// (session.hpp) keeps that refusal from becoming a second ship. A check
+// here could only turn a correct answer into a refusal. It is carried
+// because a log line that names the oid the routing decision was made on is
+// what makes a mis-route legible afterwards.
 struct ShippedStatementRequestPayload {
     std::uint64_t session_id;
     std::uint64_t sequence;
     std::uint64_t target_oid;
     std::uint16_t text_len;
-    std::uint8_t reserved0[6];
+    // The arrival core's **authenticated rank** (role.hpp), carried rather
+    // than assumed (SS3). A `Session` holds `kAdmin` by default - the
+    // auth-off contract - so an owner that minted its own session would run
+    // every shipped statement as admin, and the authorization the arrival
+    // core performed would be the only one there is. Carrying the rank
+    // makes the owner ask `RequiredRole` the same question the arrival core
+    // asked, of the same answer, which is what keeps a wire that crosses an
+    // authorization boundary from widening it. A byte outside the enum is
+    // **refused**, never defaulted: fail-closed is the only reading of an
+    // unreadable rank.
+    std::uint8_t role;
+    std::uint8_t reserved0[5];
     char text[kShippedStatementTextMax];  // not NUL-terminated; text_len bounds it
 };
 static_assert(sizeof(ShippedStatementRequestPayload) == sched::kCoreRingPayloadBytes,
@@ -198,6 +230,7 @@ inline constexpr sched::MonoTimeNs kShippedStatementDeadlineNs = 10ull * 1'000'0
 StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t session_id,
                                                                    std::uint64_t sequence,
                                                                    std::uint64_t target_oid,
+                                                                   Role role,
                                                                    std::string_view text);
 // The reply encode, same discipline: a reply too long to carry is turned
 // into a refusal that says so, never a truncated answer presented as one.
@@ -209,6 +242,10 @@ StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t ses
 // The statement text a request carries, bounded by `text_len` against the
 // array rather than trusted: these are bytes this core did not compute.
 StatusOr<std::string_view> ShippedStatementTextOf(const ShippedStatementRequestPayload& request);
+
+// The rank a request carries, refused rather than defaulted when the byte
+// names no role: a rank this core cannot read is not a rank it may assume.
+StatusOr<Role> ShippedStatementRoleOf(const ShippedStatementRequestPayload& request);
 
 // Both legs travel through `sched::SubmitSendPod` on the `system` group,
 // with `session_core` echoed from the requester so a reader of a captured
@@ -240,18 +277,35 @@ public:
     // shipped statement on the owner's reactor, which is precisely the
     // cost shipping exists to remove.
     //
-    // `text` is taken **by value**: the ring payload it came from dies with
-    // `OnRequest`, and an executor that parks outlives it.
-    // `session_id`/`sequence` are D4's identity, for the dedup record SS3
-    // keeps - passed in rather than looked up here so that this class stays
-    // the transport and nothing else.
+    // The statement is handed over **by value**: the ring payload it came
+    // from dies with `OnRequest`, and an executor that parks outlives it.
+    // Everything the owner needs to run it as the arrival core's client is
+    // in one struct, so that this class stays the transport - it looks
+    // nothing up and decides nothing about execution.
     //
-    // Until SS3, no executor is installed and every request is refused by
-    // name: the wire is built and nothing executes on it, which is a true
-    // statement about this row and is what its tests assert.
-    using ExecuteFn = std::function<void(std::uint64_t session_id, std::uint64_t sequence,
-                                         std::uint64_t target_oid, std::string text,
-                                         ReplyFn reply)>;
+    // `(requester, session_id, sequence)` is D4's identity, for the dedup
+    // record `ShippedStatementExecutor` keeps. **The requester is part of
+    // it**, and that is not decoration: a session id is minted per core, so
+    // two cores mint the same one, and a record keyed on the id alone would
+    // answer one core's statement with another core's outcome - the same
+    // failure the reply path's identity check exists to prevent, one level
+    // down.
+    //
+    // A server built with no executor refuses every request by name: the
+    // wire working and nothing executing on it must not look alike (SS1's
+    // rule, kept because a mis-wired core would otherwise time out per
+    // statement instead of saying what is wrong).
+    struct ShippedStatement {
+        std::uint32_t requester = 0;
+        std::uint64_t session_id = 0;
+        std::uint64_t sequence = 0;
+        std::uint64_t target_oid = 0;
+        // Fail-closed default: a statement whose rank was never set runs at
+        // the lowest one, not at the highest.
+        Role role = Role::kReadOnly;
+        std::string text;
+    };
+    using ExecuteFn = std::function<void(ShippedStatement statement, ReplyFn reply)>;
 
     StatementShipServer(std::uint32_t core_id, sched::Scheduler& scheduler,
                         sched::RingTransport& transport, ExecuteFn execute,
@@ -305,6 +359,9 @@ struct ShippedStatementOutcome {
     std::uint64_t session_id = 0;
     std::uint64_t sequence = 0;
     sched::MonoTimeNs deadline_ns = 0;
+    // When the statement left, so the wait can be measured rather than
+    // inferred from the deadline (D7's `shipped_wait_us_max`).
+    sched::MonoTimeNs sent_ns = 0;
 };
 
 // The arrival core's side: the waiters, the deadline, the send and the
@@ -336,7 +393,8 @@ public:
     // would otherwise replace that statement's waiter and let this one's
     // reply wake it.
     Status Ship(std::uint32_t owner_core, std::uint64_t request_id, std::uint64_t session_id,
-                std::uint64_t sequence, std::uint64_t target_oid, std::string_view text);
+                std::uint64_t sequence, std::uint64_t target_oid, Role role,
+                std::string_view text);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.
@@ -348,6 +406,26 @@ public:
     void Close(std::uint64_t request_id);
 
     std::size_t waiting() const noexcept { return waiting_.size(); }
+
+    // ---- What D7 asks this core to report ------------------------------
+    //
+    // The arrival core's half: what it sent, what came back, and how long
+    // the longest one took. `shipped()` counts statements that **left** -
+    // a refusal from `Ship` sent nothing and is not one of them, which is
+    // what keeps `shipped() - replies()` readable as "still in flight or
+    // lost" rather than as a mix of that and statements that never went.
+    std::uint64_t shipped() const noexcept { return shipped_; }
+    // Answers delivered to the waiter that asked for them. A late reply is
+    // not one (it has no waiter left); it is in `late_*_replies()` above.
+    std::uint64_t replies() const noexcept { return replies_; }
+    // Of those, the ones that carried a refusal. The owner's own refusals
+    // and the wire's, together: from here they are one population - the
+    // statements shipping did not turn into work.
+    std::uint64_t refusals() const noexcept { return refusals_; }
+    // The longest a delivered answer kept its statement parked. The
+    // population this measures is the one SS-B4 prices - a waiter is a
+    // parked coroutine, and this says how long the worst one held one.
+    sched::MonoTimeNs wait_ns_max() const noexcept { return wait_ns_max_; }
 
     // **The two halves of "a reply that matched no waiter", kept apart
     // because they mean opposite things.**
@@ -378,6 +456,10 @@ private:
     std::uint64_t late_executed_replies_ = 0;
     std::uint64_t late_refused_replies_ = 0;
     std::uint64_t identity_mismatches_ = 0;
+    std::uint64_t shipped_ = 0;
+    std::uint64_t replies_ = 0;
+    std::uint64_t refusals_ = 0;
+    sched::MonoTimeNs wait_ns_max_ = 0;
 };
 
 }  // namespace kds::server

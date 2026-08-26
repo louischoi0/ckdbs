@@ -1,6 +1,8 @@
 #include "kds/server/command_dispatcher.hpp"
 
 #include "kds/server/index_build_service.hpp"
+#include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
+#include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
 
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
@@ -117,38 +119,68 @@ std::string HexEncode(std::span<const std::byte> bytes) {
 //
 // The `ERR ` prefix stays, because it is what drives the dispatcher's
 // Warn-vs-Debug logging one level up.
-std::string ErrorReply(const Status& status) {
-    if (status.code() == StatusCode::kTxnConflict) {
-        return "ERR TXN_CONFLICT retryable=1 " + status.message();
-    }
-    // A constraint the statement broke, as opposed to a race it lost. Given
-    // a spelling of its own for the same reason TXN_CONFLICT has one - a
-    // client library switches on it - and carrying `retryable=0` explicitly
-    // rather than by omission, so the two look alike where they are read.
-    if (status.code() == StatusCode::kFkViolation) {
-        return "ERR FK_VIOLATION retryable=0 " + status.message();
-    }
+namespace {
+
+// **The spellings, written once and read both ways.** `ErrorReply` renders
+// from this table and `StatusFromErrorReply` recovers through it, so a code
+// added to one is a code added to both - which is the whole point, because a
+// spelling that reached only the renderer would come back through the bare
+// arm and lose its `retryable` bit on the way (SS3's round trip,
+// command_dispatcher.hpp). The rationale for each entry is on the entry.
+struct ErrorSpelling {
+    StatusCode code;
+    std::string_view token;  // including the trailing space
+};
+inline constexpr ErrorSpelling kErrorSpellings[] = {
+    // The only retryable code (status.hpp): a race the statement lost.
+    {StatusCode::kTxnConflict, "TXN_CONFLICT retryable=1 "},
+    // A constraint the statement *broke*, as opposed to a race it lost.
+    // Given a spelling of its own for the same reason TXN_CONFLICT has one -
+    // a client library switches on it - and carrying `retryable=0`
+    // explicitly rather than by omission, so the two look alike where they
+    // are read.
+    {StatusCode::kFkViolation, "FK_VIOLATION retryable=0 "},
     // The third constraint spelling (docs/feat-assertion.md §4.4, AS9),
-    // shaped exactly like FK_VIOLATION and for its reason. Nothing produces
-    // this Status until AST07 compiles the admission check into the write
-    // paths; the spelling lands first because it is a compatibility surface,
-    // and a client written against it must not see the message arrive as a
-    // bare "ERR ..." in the meantime.
-    if (status.code() == StatusCode::kAssertionViolation) {
-        return "ERR ASSERTION_VIOLATION retryable=0 " + status.message();
-    }
+    // shaped exactly like FK_VIOLATION and for its reason. Its spelling
+    // landed before its producer did, because a client written against it
+    // must not see the message arrive as a bare "ERR ..." in the meantime.
+    {StatusCode::kAssertionViolation, "ASSERTION_VIOLATION retryable=0 "},
     // A shipped statement whose reply never came (SS1,
-    // server/statement_ship_service.hpp). Its own spelling because it is
-    // the one refusal in this function that does **not** mean "nothing
-    // happened": the statement may have committed on its owner. A client
-    // must be able to tell it from the bare `ERR` it would otherwise wear,
-    // because the correct response to it is to read the data back - not to
-    // retry, which against engine-issued primary keys would insert twice.
-    // `retryable=0` explicitly, beside the other two that say it.
-    if (status.code() == StatusCode::kUnknownOutcome) {
-        return "ERR UNKNOWN_OUTCOME retryable=0 " + status.message();
+    // server/statement_ship_service.hpp). Its own spelling because it is the
+    // one refusal here that does **not** mean "nothing happened": the
+    // statement may have committed on its owner. A client must be able to
+    // tell it from the bare `ERR` it would otherwise wear, because the
+    // correct response is to read the data back - not to retry, which
+    // against engine-issued primary keys would insert twice.
+    {StatusCode::kUnknownOutcome, "UNKNOWN_OUTCOME retryable=0 "},
+};
+
+}  // namespace
+
+std::string ErrorReply(const Status& status) {
+    for (const ErrorSpelling& spelling : kErrorSpellings) {
+        if (status.code() == spelling.code) {
+            return "ERR " + std::string(spelling.token) + status.message();
+        }
     }
     return "ERR " + status.message();
+}
+
+Status StatusFromErrorReply(std::string_view reply) {
+    constexpr std::string_view kPrefix = "ERR ";
+    if (reply.rfind(kPrefix, 0) != 0) return Status::OK();
+    reply.remove_prefix(kPrefix.size());
+
+    for (const ErrorSpelling& spelling : kErrorSpellings) {
+        if (reply.rfind(spelling.token, 0) != 0) continue;
+        reply.remove_prefix(spelling.token.size());
+        return Status::FromWire(static_cast<std::uint32_t>(spelling.code), std::string(reply));
+    }
+    // The bare arm. kInvalidArgument stands for every code that renders
+    // bare - which is what makes this lossy, and harmless: `ErrorReply`
+    // renders all of them identically, so the line the client is handed is
+    // the line the owner wrote whichever of them it was.
+    return Status::InvalidArgument(std::string(reply));
 }
 
 // Whether a write is checked against a Bound Cabin - true as of AST07,
@@ -170,7 +202,28 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // That it never suspends is also what makes this change verifiable: the
     // whole suite has to behave exactly as it did, because nothing about
     // when a reply is produced has moved yet.
+    // **The statement may park from here**, which is the whole difference
+    // between this entry point and `Dispatch()` - and the condition
+    // statement shipping is admitted under (SS2). Set and cleared around
+    // the synchronous half, which takes no suspension point, so it never
+    // spans a park and never describes another statement.
+    may_park_ = true;
     *out = DispatchAndStage(line, session);
+    may_park_ = false;
+
+    if (out->pending_shipped.has_value() && statement_ship_ != nullptr) {
+        // The owner's execution (SS2/SS3, statement_ship_service.hpp). The
+        // predicate re-finds the waiter each poll and reads the clock, so
+        // the deadline ends the park with nothing having to wake it -
+        // `pending_index_build`'s shape, and for its reason.
+        const PendingShippedStatement shipped = std::move(*out->pending_shipped);
+        out->pending_shipped.reset();
+        const std::function<bool()> settled = [this, id = shipped.request_id] {
+            return statement_ship_->Settled(id);
+        };
+        co_await sched::WaitUntil{&settled};
+        *out = FinishShippedStatement(shipped);
+    }
 
     if (out->pending_remote.has_value() && remote_reads_ != nullptr) {
         // The remote read (workplan P4c). The predicate re-finds the state
@@ -288,6 +341,21 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                         "remote read needs the reactor path; retry on a served connection")),
                     false};
         }
+    }
+    if (outcome.pending_lsn == wal::kNoLsn && outcome.pending_shipped.has_value()) {
+        // Unreachable: `MayShip` refuses without `may_park_`, which only
+        // `DispatchAsync` sets. Written as a refusal rather than left to a
+        // null dereference because of *which* refusal it would have to be -
+        // the statement is already on its way to an owner that may commit
+        // it, so nothing retryable is available and `UnknownOutcome` is the
+        // only truthful answer (statement_ship_service.hpp's rule 1).
+        statement_ship_->Close(outcome.pending_shipped->request_id);
+        return {ErrorReply(Status::UnknownOutcome(
+                    "statement shipping: a statement reached core " +
+                    std::to_string(outcome.pending_shipped->owner_core) +
+                    " from a path that cannot await its answer; whether it ran cannot be "
+                    "established from here")),
+                false};
     }
     if (outcome.pending_index_build.has_value()) {
         // The same stance for the owner's build (PW1c-6b-3): with no reactor
@@ -705,6 +773,45 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << '=' << count;
             ++printed;
         }
+    }
+
+    // **Statement shipping** (D7 of the statement-shipping work order).
+    // Two halves, because a core is both an arrival core and an owner and
+    // the two say different things: the first four are what this core
+    // *sent*, the last four what it *ran for others*.
+    //
+    // Absent rather than zeroed where nothing is wired, the rule the
+    // recovery and scheduler blocks follow - on a single-core instance
+    // these lines do not exist at all, which is the honest reading of
+    // "shipping is not armed here".
+    //
+    // **`cross_core_write_refusals` above keeps its exact meaning**, and
+    // that is deliberate: before shipping it counted the whole demand, and
+    // after it counts the residue - the writes shipping does *not* convert,
+    // which is R6's multi-owner and in-transaction population and the
+    // evidence base a 2PC decision would be made from. A field whose
+    // meaning changed silently would have destroyed that series.
+    if (statement_ship_ != nullptr) {
+        os << " shipped_statements=" << statement_ship_->shipped()
+           << " shipped_replies=" << statement_ship_->replies()
+           << " shipped_refusals=" << statement_ship_->refusals()
+           << " shipped_wait_us_max=" << statement_ship_->wait_ns_max() / 1000
+           << " shipped_waiting=" << statement_ship_->waiting()
+           << " shipped_late_executed=" << statement_ship_->late_executed_replies()
+           << " shipped_identity_mismatches=" << statement_ship_->identity_mismatches();
+    }
+    if (shipped_statements_ != nullptr) {
+        // The owner's side. `shipped_executed` against the arrival cores'
+        // `shipped_statements` is what SS-B's claim 3 is read from - whether
+        // the ceiling reached is the owner's execution capacity - and
+        // `shipped_running` is the population doing it right now.
+        // `shipped_early_evictions` is the dedup record's honesty check:
+        // non-zero means a duplicate could have been re-executed.
+        os << " shipped_executed=" << shipped_statements_->executed()
+           << " shipped_running=" << shipped_statements_->running()
+           << " shipped_deduped=" << shipped_statements_->deduped()
+           << " shipped_unanswerable=" << shipped_statements_->unanswerable()
+           << " shipped_early_evictions=" << shipped_statements_->early_evictions();
     }
 
     // Group accounting against wall time (`docs/sched.md` §4's last bullet;
@@ -3035,6 +3142,17 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
 
     DispatchOutcome out = InsertInner(line, scope);
 
+    // Shipped (SS2): this core wrote nothing, so its scope ends without a
+    // commit rather than committing an empty transaction - which on a peer
+    // would also spend a leased transaction id's commit path for a
+    // statement that ran somewhere else. The scope was opened before the
+    // parse that found the relation foreign, which is why there is one to
+    // end at all.
+    if (out.pending_shipped.has_value()) {
+        (void)AbandonWriteForShipping(session, scope);
+        return out;
+    }
+
     // The reply is the verdict, which is the same rule Dispatch() itself
     // applies one level up. A statement that answered ERR did not happen as
     // far as the client is concerned, so an autocommit scope unwinds it.
@@ -3044,6 +3162,101 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
         return {ErrorReply(s), false};
     }
     return out;
+}
+
+bool CommandDispatcher::MayShip(const Session& session) const noexcept {
+    return statement_ship_ != nullptr && may_park_ && !session.in_explicit_txn() &&
+           !session.shipped();
+}
+
+DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog::Oid oid,
+                                                 std::uint32_t owner_core,
+                                                 std::string_view relation, Session& session) {
+    // The identity the owner's dedup record keys on (D4). Minted on the
+    // first ship and kept for the session's life, so a duplicate of *this*
+    // statement is recognisable and the session's next statement is not.
+    if (session.ship_id() == 0) session.set_ship_id(next_ship_session_id_++);
+    const std::uint64_t sequence = session.NextShipSequence();
+    const std::uint64_t request_id = next_remote_request_++;
+
+    // `Ship` refuses before it sends - an over-long statement, a core this
+    // instance does not have - so this refusal means the statement did not
+    // run, and may say so in an ordinary spelling. After it returns OK the
+    // only refusal left is `UnknownOutcome`.
+    if (Status s = statement_ship_->Ship(owner_core, request_id, session.ship_id(), sequence,
+                                         oid, session.role(), line);
+        !s.ok()) {
+        return {ErrorReply(s), false};
+    }
+    if (logging(LogLevel::kDebug)) {
+        log_->Debug("ship", "core " + std::to_string(core_id_) + " shipped a statement on '" +
+                                std::string(relation) + "' to core " +
+                                std::to_string(owner_core) + " (request " +
+                                std::to_string(request_id) + ", session " +
+                                std::to_string(session.ship_id()) + " sequence " +
+                                std::to_string(sequence) + ")");
+    }
+    DispatchOutcome pending;
+    pending.pending_shipped =
+        PendingShippedStatement{request_id, owner_core, std::string(relation)};
+    return pending;
+}
+
+DispatchOutcome CommandDispatcher::FinishShippedStatement(
+    const PendingShippedStatement& shipped) {
+    const ShippedStatementOutcome* reply = statement_ship_->Find(shipped.request_id);
+    if (reply == nullptr || !reply->arrived) {
+        // The deadline, or a waiter closed under the statement. **Never
+        // retryable**: the statement may have committed on its owner, and
+        // against engine-issued primary keys a retry inserts a second row.
+        // This is the one refusal D4 exists to produce, and the client is
+        // told what to do with it instead of being invited to retry.
+        statement_ship_->Close(shipped.request_id);
+        return {ErrorReply(Status::UnknownOutcome(
+                    "core " + std::to_string(shipped.owner_core) + " did not answer for '" +
+                    shipped.relation + "' within " +
+                    std::to_string(kShippedStatementDeadlineNs / 1'000'000'000ull) +
+                    " s; whether the statement ran cannot be established - read the data back "
+                    "rather than retrying")),
+                false};
+    }
+    // The owner's own answer, and on the refusal arm its own spelling: the
+    // code crossed, so `ErrorReply` here reproduces the line the owner
+    // wrote, `retryable` bit included (statement_ship_service.hpp).
+    DispatchOutcome out;
+    out.response = reply->status.ok() ? reply->text : ErrorReply(reply->status);
+    statement_ship_->Close(shipped.request_id);
+    return out;
+}
+
+std::optional<std::uint32_t> CommandDispatcher::SoleForeignOwner(const exec::StepChain& chain) {
+    std::optional<std::uint32_t> owner;
+    auto scan = [&](const std::vector<exec::Step>& steps) -> bool {
+        for (const exec::Step& step : steps) {
+            auto access = catalog_.InitTableAccess(step.rel_oid);
+            if (!access.ok()) return false;
+            const std::uint32_t core = access.value()->owner_core;
+            // A relation this core owns: no other core can read its pages,
+            // so the statement is not shippable whole.
+            if (core == core_id_) return false;
+            // Two foreign owners: R6's multi-owner statement, which stays
+            // refused rather than being split.
+            if (owner.has_value() && *owner != core) return false;
+            owner = core;
+        }
+        return true;
+    };
+    for (const exec::SubChain& sub : chain.hoisted) {
+        if (!scan(sub.steps)) return std::nullopt;
+    }
+    if (!scan(chain.steps)) return std::nullopt;
+    return owner;
+}
+
+Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& scope) {
+    return EndWrite(session, scope,
+                    Status::Unsupported("the statement was shipped to the core that owns its "
+                                        "relation; this core wrote nothing"));
 }
 
 Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
@@ -3293,7 +3506,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     if (!std::holds_alternative<parser::InsertStmt>(parsed.value())) {
         return {"ERR expected an INSERT statement", false};
     }
-    return InsertParsed(std::get<parser::InsertStmt>(parsed.value()), scope);
+    return InsertParsed(std::get<parser::InsertStmt>(parsed.value()), scope, line);
 }
 
 DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
@@ -3305,7 +3518,9 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
     if (!opened.ok()) return {ErrorReply(opened.status()), false};
     WriteScope scope = opened.value();
 
-    DispatchOutcome out = InsertParsed(stmt, scope);
+    // No text, so nothing to ship: a KWP load chunk keeps the cross-core
+    // refusal it has always had (command_dispatcher.hpp's note on `line`).
+    DispatchOutcome out = InsertParsed(stmt, scope, /*line=*/{});
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
@@ -3316,7 +3531,7 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
 }
 
 DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
-                                                WriteScope& scope) {
+                                                WriteScope& scope, std::string_view line) {
     // BI3: the row cap, at the first config-aware layer (the parser is a
     // pure syntax layer and deliberately config-blind). A refusal naming
     // the cap and the count, never a truncation.
@@ -3356,6 +3571,23 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // statement, including across AllocateRowId() (catalog.hpp), and
     // refreshed by InsertOneRow when a root repoint invalidates it.
     const catalog::TableAccess* ta = access.value();
+
+    // **The fork** (SS2): a relation this core does not own is carried to
+    // the owner and answered from there, where every one of these
+    // statements used to be refused - 80-92% of an unrouted client's
+    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+    // §9b). Unconditionally, per D6: whether to ship or to refuse by load
+    // is placement policy (`docs/crosscore.md` §9's open decision) and does
+    // not ride along.
+    //
+    // **After the shape resolution and before the affinity check**, so
+    // every refusal that is not about ownership keeps its exact spelling
+    // and its exact wire bit. What is not shipped - an explicit
+    // transaction, a statement that arrived shipped, a core with no ring -
+    // falls through to `CheckWriteAffinity` and refuses as it always did.
+    if (!line.empty() && ta->owner_core != core_id_ && MayShip(*scope.session)) {
+        return ShipStatement(line, ta->oid, ta->owner_core, stmt.table_name, *scope.session);
+    }
 
     // Before anything is written: a relation this core does not own, or a
     // transaction already bound to another core, is refused retryably
@@ -4851,6 +5083,19 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         }
     }
     if (Status affinity = CheckReadAffinity(chain.value()); !affinity.ok()) {
+        // D1's read half, and the same mechanism as the write half rather
+        // than a second one. It sits **below** the two pipeline paths
+        // above, which keep their precedence and their measurements; this
+        // catches what falls through them, which on a peer is every plain
+        // read of a foreign relation (pretasks §8c-1 measured that the
+        // pipeline is not reachable from dispatch for one).
+        if (MayShip(session)) {
+            if (std::optional<std::uint32_t> owner = SoleForeignOwner(chain.value());
+                owner.has_value() && !chain.value().steps.empty()) {
+                return ShipStatement(line, chain.value().steps[0].rel_oid, *owner,
+                                     chain.value().steps[0].rel_name, session);
+            }
+        }
         return {"ERR " + affinity.message(), false};
     }
 
@@ -5236,6 +5481,12 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
 
     DispatchOutcome out = UpdateInner(line, scope, snapshot.value().snap);
 
+    // Shipped: HandleInsert's branch, for its reason.
+    if (out.pending_shipped.has_value()) {
+        (void)AbandonWriteForShipping(session, scope);
+        return out;
+    }
+
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
     if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
@@ -5273,6 +5524,23 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp).
     const catalog::TableAccess& ta = *access.value();
+
+    // **The fork** (SS2): a relation this core does not own is carried to
+    // the owner and answered from there, where every one of these
+    // statements used to be refused - 80-92% of an unrouted client's
+    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+    // §9b). Unconditionally, per D6: whether to ship or to refuse by load
+    // is placement policy (`docs/crosscore.md` §9's open decision) and does
+    // not ride along.
+    //
+    // **After the shape resolution and before the affinity check**, so
+    // every refusal that is not about ownership keeps its exact spelling
+    // and its exact wire bit. What is not shipped - an explicit
+    // transaction, a statement that arrived shipped, a core with no ring -
+    // falls through to `CheckWriteAffinity` and refuses as it always did.
+    if (ta.owner_core != core_id_ && MayShip(*scope.session)) {
+        return ShipStatement(line, ta.oid, ta.owner_core, stmt.table_name, *scope.session);
+    }
 
     // Before anything is written: a relation this core does not own, or a
     // transaction already bound to another core, is refused retryably
@@ -5958,6 +6226,12 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
     DispatchOutcome out = DeleteInner(line, scope, snapshot.value().snap);
 
+    // Shipped: HandleInsert's branch, for its reason.
+    if (out.pending_shipped.has_value()) {
+        (void)AbandonWriteForShipping(session, scope);
+        return out;
+    }
+
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
     if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
@@ -5984,6 +6258,23 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return {"ERR " + access.status().message(), false};
     const catalog::TableAccess& ta = *access.value();
+
+    // **The fork** (SS2): a relation this core does not own is carried to
+    // the owner and answered from there, where every one of these
+    // statements used to be refused - 80-92% of an unrouted client's
+    // writes (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+    // §9b). Unconditionally, per D6: whether to ship or to refuse by load
+    // is placement policy (`docs/crosscore.md` §9's open decision) and does
+    // not ride along.
+    //
+    // **After the shape resolution and before the affinity check**, so
+    // every refusal that is not about ownership keeps its exact spelling
+    // and its exact wire bit. What is not shipped - an explicit
+    // transaction, a statement that arrived shipped, a core with no ring -
+    // falls through to `CheckWriteAffinity` and refuses as it always did.
+    if (ta.owner_core != core_id_ && MayShip(*scope.session)) {
+        return ShipStatement(line, ta.oid, ta.owner_core, stmt.table_name, *scope.session);
+    }
 
     // Before anything is marked: same rule as INSERT and UPDATE
     // (crosscore.md CC3). A delete-mark is a write.

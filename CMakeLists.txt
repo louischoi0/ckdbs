@@ -53,6 +53,7 @@ add_library(kds
     src/server/relation_grant_service.cpp
     src/server/index_build_service.cpp
     src/server/statement_ship_service.cpp
+    src/server/shipped_statement_executor.cpp
     src/server/trx_id_lease_service.cpp
     src/server/step_descriptor.cpp
     src/server/remote_step_service.cpp

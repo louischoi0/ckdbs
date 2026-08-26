@@ -269,11 +269,37 @@ did.
 - A single DML statement is shipped **whole** to the core owning its
   target range and executes there under that core's transaction
   machinery — this is statement shipping, already implied by protocol
-  D3, and involves no pipeline (still unbuilt; reframed by
-  `docs/workplan-peer-writer.md` §8). **Target resolution is pk
-  arithmetic against the directory alone** (§2a): a
-  DML on a split relation whose predicate does not bound its rows to
-  one owned range is a cross-core write, refused retryably until 2PC —
+  D3, and involves no pipeline. **Built 2026-08-26** for the
+  one-range case (SS1–SS4 of the statement-shipping work order): an
+  **autocommit, single-relation** statement — read or write — whose
+  relation another core owns is carried to that core as *text*, parsed
+  and bound there against the owner's own catalog, executed under the
+  owner's ordinary local implicit transaction, and committed through the
+  owner's group committer, which is the whole performance argument
+  (`docs/memo-shipping-and-group-commit.md` §3). The arrival core parks a
+  waiter under a deadline and answers with the owner's own reply, the
+  `retryable` bit included.
+
+  Three things stay refused, and each is a scope statement rather than a
+  gap: a statement **inside an explicit transaction** (nothing crosses
+  transaction state), a statement **spanning two owners** (R6), and a
+  statement on a path that **cannot park** — the synchronous dispatch
+  entry, because sending from a path that cannot wait would leave a
+  statement the owner may have committed with nowhere to deliver its
+  answer. Shipping is **unconditional** where it applies: whether to ship
+  or to refuse by load is placement policy, which is §9's open decision
+  and does not ride along.
+
+  A lost or late answer is **not** a refusal. It is `UNKNOWN_OUTCOME`,
+  non-retryable by construction, because this engine issues primary keys
+  and a blind retry of a statement that may have committed inserts a
+  second row. The owner keeps a bounded per-(arrival core, session)
+  record of what it last answered — and of what it is still running — so
+  a duplicate is answered from the record rather than executed twice.
+
+  **Target resolution is pk arithmetic against the directory alone**
+  (§2a): a DML on a split relation whose predicate does not bound its rows
+  to one owned range is a cross-core write, refused retryably until 2PC —
   the widened CC3 refusal, stated rather than hidden.
 - An explicit transaction acquires a **home core** at its first write
   (the owner of the written range). Any later write targeting a range
@@ -292,7 +318,13 @@ did.
   free to pipeline cross-core under §5.
 - Every rejected cross-core write increments a per-core observability
   counter keyed by (home core, target core, relation) — the input the
-  future placement/2PC decision will be made from. Counters are metrics,
+  future placement/2PC decision will be made from. **Its meaning is
+  unchanged by shipping and that is deliberate** (2026-08-26): before
+  shipping it counted the whole demand; after it counts the *residue* —
+  the writes shipping does not convert, which is exactly the
+  multi-owner and in-transaction population a 2PC decision would be made
+  about. What shipping converts is counted separately, by the
+  `shipped_*` fields below. Counters are metrics,
   not stored state. **Exposed since 2026-08-26** (T5 of the
   statement-shipping pretasks): `SHOW META` prints
   `cross_core_write_refusals`, `cross_core_write_refusal_keys` and a

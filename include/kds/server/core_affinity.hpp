@@ -59,6 +59,26 @@ namespace kds::server {
 // workload actually want cross-core writes, and for which relations?* - and
 // a counter that only starts when somebody remembers to enable it cannot
 // answer that.
+//
+// ---- Two eras, one meaning (2026-08-26, SS4) ---------------------------
+//
+// Statement shipping converts most of what this used to count into work:
+// an autocommit single-relation write is now carried to its owner and run
+// there, and never reaches either `Record` call. **The semantics are
+// deliberately unchanged anyway**, so the series spans the change:
+//
+//   - *before shipping* it counted the whole demand - every write a
+//     wrong-core client issued;
+//   - *after* it counts the **residue** - the writes shipping does not
+//     convert, which is a statement inside an explicit transaction and a
+//     statement spanning two owners.
+//
+// That residue is the better evidence base, not a worse one: it is exactly
+// the population 2PC would address, with the population a routing layer
+// already handles taken out of it. What shipping converts is counted
+// separately by `ShippedStatementExecutor` and `StatementShipClient`
+// (`SHOW META`'s `shipped_*` fields). A reading of this counter must say
+// which era it was taken in; the field name does not.
 class CrossCoreWriteCounters {
 public:
     struct Key {

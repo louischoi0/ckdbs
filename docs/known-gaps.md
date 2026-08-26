@@ -907,6 +907,50 @@ still waits on its own gate, so:
   stops after one round trip instead of spinning to its deadline. The
   review of this change found that case
   (`ADeniedRelationAnswersOnceWithoutTheBitThenAsksAgain`).
+- **Statement shipping is built and unmeasured** (SS1–SS4, 2026-08-26).
+  An autocommit single-relation statement whose relation another core owns
+  now runs on the owner instead of being refused — the wire, the waiter,
+  the owner-side execution, the dispatch fork and the counters are all in.
+  What is **not** done, stated so the build is not read as the version:
+  **SS-B has not run**. Every one of
+  `docs/memo-shipping-and-group-commit.md` §8's three claims is still
+  unjudged, including the one predicting shipping is a small *loss* at or
+  below one session per owner core — this build ships unconditionally by
+  D6, so if that claim is right the loss is being paid today and nobody has
+  priced it. Nothing here is a throughput claim; the only claims made are
+  correctness ones, and per the v2 amendment **overhead was not measured**.
+  Also unmeasured: whether the demand converts (the 80–92% refusal rate the
+  pretasks measured should go to ~0 shipped-and-executed, with
+  `cross_core_write_refusals` flat, and no run has checked it), and the
+  waiter population's cost at K = 1/4/16, which is the open falsifier the
+  pretasks could not fake.
+- **What shipping deliberately does not carry, and where the residue is
+  read** (2026-08-26). Refused, by scope and not by omission: a statement
+  **inside an explicit transaction** (nothing crosses transaction state), a
+  statement **spanning two owners** (R6, which is the 2PC question), and
+  any statement on a path that cannot park. The first two keep their exact
+  CC3 spelling and their retryable bit, and they are what
+  `cross_core_write_refusals` counts from now on — its meaning is
+  unchanged, so the series spans both eras and the residue is directly
+  readable as the 2PC evidence base (`docs/crosscore.md` §6).
+- **A shipped write opens a transaction on the arrival core and abandons
+  it** (SS2, 2026-08-26). The dispatch fork sits where the relation is
+  resolved, which is after `HandleInsert`/`HandleUpdate`/`HandleDelete` have
+  already called `BeginWrite` — so a statement bound for another core spends
+  one transaction id of the arrival core's 4,096-id lease block and appends
+  a `TXN_BEGIN`/`TXN_ABORT` pair to a log that is otherwise idle under
+  shipping, then ends the scope immediately. The transaction lives
+  microseconds and is never held across the park, so it pins no read
+  horizon and blocks no purge; what it costs is a lease refill every ~4,096
+  shipped writes on a core doing no writing, and two buffered appends per
+  statement.
+  **Why it is here rather than fixed**: moving the fork above `BeginWrite`
+  means resolving the relation before the scope exists, which for a *local*
+  write on a multi-core instance is a second parse and a second catalog
+  resolve on every statement — a per-statement cost on exactly the path
+  this version is measured against, to save a cost on the path that already
+  pays a round trip. SS-B is where the trade is priced; until then the cost
+  is charged to the shipped path deliberately.
 - **The WAL drain's fdatasync runs on the reactor thread**, so every session
   on that core — reads included — waits out a committing session's sync:
   point-SELECT 973 µs beside one writer against 37 µs alone

@@ -2400,7 +2400,7 @@ std::string RoundTrip(int fd, std::string_view line) {
 
 }  // namespace
 
-TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesForeignAndRoutesStop) {
+TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteAndRoutesStop) {
     // FINDING 5 of the PW5 review: nothing proved a peer listener serves
     // anything. This is the whole loop over a real socket - a rotated
     // relation is served on the peer that owns it, a core-0 relation is
@@ -2443,11 +2443,20 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesForeignAndRoutes
     // Served: the relation this core owns (empty is fine; not an ERR).
     const std::string own = RoundTrip(fd, "SELECT * FROM rotated");
     EXPECT_EQ(own.rfind("ERR", 0), std::string::npos) << own;
-    // Refused: a relation core 0 owns, with the affinity answer - the
-    // peer has no session-side pipeline, so nothing ships from here.
-    const std::string foreign = RoundTrip(fd, "SELECT * FROM local0");
-    EXPECT_EQ(foreign.rfind("ERR", 0), 0u) << foreign;
-    EXPECT_NE(foreign.find("owned by core 0"), std::string::npos) << foreign;
+    // **The foreign read is no longer asserted here, and that is SS2.** A
+    // relation core 0 owns used to answer "owned by core 0" from this
+    // listener; it now ships to core 0 and is answered there, which is the
+    // whole of what this version changes. It cannot be asserted in *this*
+    // fixture: no core-0 reactor runs in it, so the shipped statement would
+    // wait out the ten-second deadline and answer `UNKNOWN_OUTCOME` -
+    // truthful, and a ten-second test. It is pinned instead where core 0
+    // answers, on the rig that has one
+    // (`AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRows`, and the
+    // write half beside it).
+    //
+    // The `BEGIN`-then-read form is not the substitute it looks like: a
+    // listener-served peer holds no transaction-id lease either, so `BEGIN`
+    // itself refuses and the read that follows is an autocommit read again.
     // Refused: an *unfunded* write to the relation this core owns. The
     // PW1c-5 replacement for the interim guard: this listener-served peer
     // holds no write grant and no row-id lease, so the INSERT dies at the
@@ -2561,6 +2570,10 @@ struct ForeignIndexRig {
     // the contract's other half, and the reason nothing pumps `core0`
     // after this rig starts unwinding.
     std::optional<IndexBuildClient> client;
+    // Core 0's statement-shipping client (SS2), declared with `client` and
+    // for its reason: the dispatcher holds a pointer to it, so it must
+    // outlive the dispatcher.
+    std::optional<StatementShipClient> ship;
     std::optional<CommandDispatcher> dispatcher;
     std::unique_ptr<CoreRuntime> peer;
     catalog::Oid oid = 0;
@@ -2595,7 +2608,11 @@ struct ForeignIndexRig {
 };
 
 void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* table) {
-    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 256);
+    // The full payload, not 256: a shipped statement's request and reply
+    // each fill exactly one slot (statement_ship_service.hpp's
+    // static_asserts), so a narrower ring cannot carry one.
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16,
+                                                      sched::kCoreRingPayloadBytes);
     ASSERT_TRUE(transport.ok()) << transport.status().message();
     rig.transport.emplace(std::move(transport));
     rig.core0.emplace(rig.clock, rig.io0);
@@ -2652,6 +2669,22 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.client.emplace(*rig.core0, rig.ring(), rig.clock);
     ASSERT_TRUE(rig.client->RegisterReplyReceiver().ok());
     rig.dispatcher->SetIndexBuilds(&*rig.client);
+
+    // Core 0's arrival-core half of statement shipping (SS2). The owner's
+    // half is the peer's own, wired by `AttachTransport` above - which is
+    // the production wiring, not a fixture's.
+    rig.ship.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.clock);
+    ASSERT_TRUE(rig.ship->RegisterReplyReceiver().ok());
+    rig.dispatcher->SetStatementShip(&*rig.ship);
+
+    // **The owner's group-commit drain**, which `CoreRuntime::Run()`
+    // installs and this rig has to install itself, because it pumps
+    // `RunOnce()` rather than running the reactor. Without it a statement
+    // that stages a commit on the owner parks on `IsDurable` forever - and
+    // that is precisely what a shipped write does, since joining the
+    // owner's group commit is the whole point of shipping (D3). The
+    // index-build tests never needed it: their write happens on core 0.
+    rig.peer->scheduler().SetPostTaskHook([&rig] { (void)rig.peer->wal().DrainOnce(); });
 
     // Rows the owner wrote and core 0 never saw - what the build must find.
     const std::string ins =
@@ -3010,6 +3043,211 @@ TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationNeedsTheReactorPath) {
     auto access = rig.peer->catalog().InitTableAccess(rig.oid);
     ASSERT_TRUE(access.ok()) << access.status().message();
     EXPECT_TRUE(access.value()->indexes.empty());
+}
+
+// ---- Statement shipping, end to end (SS2/SS3) ---------------------------
+//
+// The rig above is the whole instance a shipped statement crosses: core 0's
+// dispatcher with an arrival-core client, and a peer whose `AttachTransport`
+// wired the owner's server and executor exactly as production does. What
+// these pin is the fork's contract - which statements ship, which keep the
+// refusal they always had, and that a shipped one really executes on the
+// core that owns the relation rather than being simulated on core 0.
+
+TEST_F(CoreRuntimeTest, AWriteToAPeerOwnedRelationIsShippedAndTheOwnerExecutesIt) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_write");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("INSERT INTO shipped_write VALUES (40)", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_EQ(out.response.rfind("INSERTED", 0), 0u) << out.response;
+
+    // It ran **on the owner**: the owner's executor counted it, and the row
+    // is in the owner's relation - which core 0 cannot even fault.
+    ASSERT_NE(rig.peer->shipped_statements(), nullptr);
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
+    EXPECT_EQ(rig.peer->shipped_statements()->running(), 0u);
+    const std::string rows =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM shipped_write").response;
+    EXPECT_NE(rows.find(",40"), std::string::npos) << rows;
+
+    // And the waiter is closed, so nothing leaks per statement.
+    EXPECT_EQ(rig.ship->waiting(), 0u);
+    EXPECT_EQ(rig.ship->late_executed_replies(), 0u);
+    EXPECT_EQ(rig.ship->identity_mismatches(), 0u);
+
+    // D7's two halves, each on the core it describes (SS4). The arrival
+    // core reports what it sent and what came back; the owner reports what
+    // it ran for other cores. Neither number exists on the other core,
+    // which is what makes a reading of a multi-core instance one reading
+    // per core rather than a sum of ambiguous fields.
+    const std::string meta = rig.dispatcher->Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find(" shipped_statements=1 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" shipped_replies=1 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" shipped_refusals=0 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" shipped_waiting=0 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" shipped_wait_us_max="), std::string::npos) << meta;
+    EXPECT_EQ(meta.find(" shipped_executed="), std::string::npos)
+        << "core 0 ran nothing for anyone: " << meta;
+
+    const std::string owner_meta = rig.peer->dispatcher().Dispatch("SHOW META").response;
+    EXPECT_NE(owner_meta.find(" shipped_executed=1 "), std::string::npos) << owner_meta;
+    EXPECT_NE(owner_meta.find(" shipped_running=0 "), std::string::npos) << owner_meta;
+    EXPECT_NE(owner_meta.find(" shipped_deduped=0 "), std::string::npos) << owner_meta;
+    EXPECT_NE(owner_meta.find(" shipped_early_evictions=0 "), std::string::npos) << owner_meta;
+    // The owner shipped nothing itself, so its arrival-core half reads zero
+    // rather than being absent - it *has* a client, it just did not use it.
+    EXPECT_NE(owner_meta.find(" shipped_statements=0 "), std::string::npos) << owner_meta;
+
+    // **And the refusal counter's two eras** (D7): core 0's write was
+    // shipped, not refused, so the field that used to count it stays flat.
+    // A statement shipping converts is a statement that counter no longer
+    // sees, which is what makes its remaining population the 2PC evidence.
+    EXPECT_NE(meta.find(" cross_core_write_refusals=0 "), std::string::npos) << meta;
+}
+
+TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRows) {
+    // D1's read half. This rig installs no pipeline (`SetRemoteReads` is
+    // never called), which is the peer's own situation as the pretasks
+    // measured it: a plain statement cannot reach P4 from dispatch, so the
+    // read either ships or is refused.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_read");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("SELECT * FROM shipped_read", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
+    // The three rows `OpenForeignIndexRig` wrote on the owner, which core 0
+    // has never seen.
+    EXPECT_NE(out.response.find(",10"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find(",20"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find(",30"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response,
+              rig.peer->dispatcher().Dispatch("SELECT * FROM shipped_read").response)
+        << "a shipped read must answer exactly what the owner answers";
+}
+
+TEST_F(CoreRuntimeTest, UpdateAndDeleteShipToTheOwnerToo) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_dml");
+
+    DispatchOutcome updated;
+    auto update = rig.Start("UPDATE shipped_dml SET v = 99 WHERE v = 20", updated);
+    ASSERT_TRUE(rig.Drive(*update)) << updated.response;
+    EXPECT_NE(updated.response.rfind("ERR", 0), 0u) << updated.response;
+
+    DispatchOutcome deleted;
+    auto del = rig.Start("DELETE FROM shipped_dml WHERE v = 10", deleted);
+    ASSERT_TRUE(rig.Drive(*del)) << deleted.response;
+    EXPECT_NE(deleted.response.rfind("ERR", 0), 0u) << deleted.response;
+
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 2u);
+    const std::string rows =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM shipped_dml").response;
+    EXPECT_NE(rows.find(",99"), std::string::npos) << rows;
+    EXPECT_EQ(rows.find(",10"), std::string::npos) << rows;
+    EXPECT_EQ(rows.find(",20"), std::string::npos) << rows;
+}
+
+TEST_F(CoreRuntimeTest, TheOwnersRefusalReachesTheClientAsTheOwnerSpelledIt) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_refusal");
+
+    DispatchOutcome out;
+    auto statement = rig.Start("INSERT INTO shipped_refusal VALUES ('not an int')", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    // Byte for byte the line the owner would have written itself: the code
+    // crossed and `ErrorReply` rendered it again on this side.
+    EXPECT_EQ(out.response,
+              rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO shipped_refusal VALUES ('not an int')")
+                  .response);
+    // A refusal is not an execution, so nothing was written on the owner.
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
+}
+
+TEST_F(CoreRuntimeTest, AStatementInsideATransactionIsNotShippedAndKeepsItsRefusal) {
+    // D1: nothing crosses transaction state, so an explicit transaction
+    // keeps the CC3 refusal it has always had - the retryable spelling
+    // included, because that is what a client's retry loop reads.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_txn");
+
+    Session session;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome out;
+    auto statement = rig.Start("INSERT INTO shipped_txn VALUES (40)", out, &session);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_NE(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
+    EXPECT_EQ(rig.ship->waiting(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, ASynchronousDispatchDoesNotShipBecauseItCannotAwaitTheAnswer) {
+    // The rule that keeps `UnknownOutcome` rare: a path that cannot park
+    // must not send, because a statement the owner may commit would have
+    // nowhere to deliver its answer. `Dispatch()` is that path, and it
+    // refuses exactly as it did before shipping existed.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_sync");
+
+    const std::string out =
+        rig.dispatcher->Dispatch("INSERT INTO shipped_sync VALUES (40)").response;
+    EXPECT_NE(out.find("TXN_CONFLICT"), std::string::npos) << out;
+    EXPECT_EQ(rig.ship->waiting(), 0u);
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, AShippedStatementDoesNotShipOnward) {
+    // The hop limit (session.hpp). Driven artificially, because the fork
+    // cannot produce it: two cores would have to disagree about an owner.
+    // The peer is asked to run a statement against a relation **core 0**
+    // owns - so its own fork would ship it back, and without the limit the
+    // two cores would pass it between them, each hop a fresh identity the
+    // dedup record cannot recognise.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_hop");
+
+    // Placed on core 0, which rotation cannot do - it skips the system core
+    // (core_placement.hpp) - so the policy is switched for this one
+    // relation and switched back.
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    auto core0_oid =
+        rig.catalog2->CreateTable(catalog::kNamespacePublic, "core0_owned", TwoColumnSchema(),
+                                  catalog::ClusteredType::kBtree);
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    ASSERT_TRUE(core0_oid.ok()) << core0_oid.status().message();
+    auto row = rig.catalog2->GetSysTableRow(core0_oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 0u);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+
+    ASSERT_NE(rig.peer->statement_ship(), nullptr);
+    ASSERT_TRUE(rig.peer->statement_ship()
+                    ->Ship(/*owner_core=*/1, /*request_id=*/7, /*session_id=*/1,
+                           /*sequence=*/1, core0_oid.value(), Role::kAdmin,
+                           "INSERT INTO core0_owned VALUES (1)")
+                    .ok());
+    rig.Pump(32);
+
+    // The peer ran it, found the relation foreign, and **refused** rather
+    // than shipping it on: its client has nothing else parked.
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
+    EXPECT_EQ(rig.peer->statement_ship()->waiting(), 1u)
+        << "only the artificial request above should be parked";
+    const ShippedStatementOutcome* answer = rig.peer->statement_ship()->Find(7);
+    ASSERT_NE(answer, nullptr);
+    ASSERT_TRUE(answer->arrived) << "the peer must have answered rather than shipped onward";
+    EXPECT_FALSE(answer->status.ok());
+    EXPECT_NE(answer->status.message().find("core 0"), std::string::npos)
+        << answer->status.message();
 }
 
 TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbort) {

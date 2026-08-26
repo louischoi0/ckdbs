@@ -82,18 +82,22 @@ protected:
 TEST_F(StatementShipTest, AStatementCrossesAndItsAnswerComesBack) {
     std::vector<std::string> seen;
     std::uint64_t seen_session = 0, seen_sequence = 0, seen_oid = 0;
-    InstallOwner([&](std::uint64_t session, std::uint64_t sequence, std::uint64_t oid,
-                     std::string text, StatementShipServer::ReplyFn reply) {
-        seen_session = session;
-        seen_sequence = sequence;
-        seen_oid = oid;
-        seen.emplace_back(std::move(text));
+    Role seen_role = Role::kAdmin;
+    std::uint32_t seen_requester = 99;
+    InstallOwner([&](StatementShipServer::ShippedStatement st,
+                     StatementShipServer::ReplyFn reply) {
+        seen_requester = st.requester;
+        seen_session = st.session_id;
+        seen_sequence = st.sequence;
+        seen_oid = st.target_oid;
+        seen_role = st.role;
+        seen.emplace_back(std::move(st.text));
         reply(Status::OK(), "INSERTED oid=4000 id=7 page=12 slot=3");
     });
 
     ASSERT_TRUE(client_
                     ->Ship(/*owner_core=*/1, /*request_id=*/1, /*session_id=*/99,
-                           /*sequence=*/4, /*target_oid=*/4000,
+                           /*sequence=*/4, /*target_oid=*/4000, Role::kReadWrite,
                            "INSERT INTO t VALUES ('a', 1)")
                     .ok());
     EXPECT_EQ(client_->waiting(), 1u);
@@ -124,12 +128,12 @@ TEST_F(StatementShipTest, TheOwnersRefusalArrivesAsTheOwnerSpelledIt) {
     // Including the retryable bit, which is the one bit clients build retry
     // loops on (docs/protocol.md §11) and the thing a re-wrapped status
     // silently loses.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) {
         reply(Status::TxnConflict("extent lease: this core's lease of 64 pages is spent"), {});
     });
 
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, "INSERT INTO t VALUES ('a', 1)").ok());
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
     Pump();
 
     const ShippedStatementOutcome* out = client_->Find(1);
@@ -149,7 +153,7 @@ TEST_F(StatementShipTest, ADeadlineIsUnknownOutcomeAndIsNotRetryable) {
     // may have committed on the owner, so anything a client would retry
     // invites a second row under a second engine-issued pk. Nothing is
     // installed on the owner, so nothing ever answers.
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, "INSERT INTO t VALUES ('a', 1)").ok());
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
     Pump();
     EXPECT_FALSE(client_->Settled(1)) << "nothing answered, so the wait must still be open";
 
@@ -171,7 +175,7 @@ TEST_F(StatementShipTest, AnUninstalledExecutorRefusesRatherThanLookingLikeACras
     // core with no executor must answer, or the arrival core pays a full
     // deadline to learn that nothing is built yet.
     InstallOwner({});
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, "INSERT INTO t VALUES ('a', 1)").ok());
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
     Pump();
 
     const ShippedStatementOutcome* out = client_->Find(1);
@@ -186,10 +190,10 @@ TEST_F(StatementShipTest, AReplyWhoseIdentityDoesNotMatchItsWaiterIsDropped) {
     // protocol must not have. The waiter is left to its deadline, which
     // says "unknown outcome" - truthful, because this core now knows
     // nothing about its own statement.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
-    ASSERT_TRUE(client_->Ship(1, /*request_id=*/1, /*session_id=*/99, /*sequence=*/1, 4000,
+    ASSERT_TRUE(client_->Ship(1, /*request_id=*/1, /*session_id=*/99, /*sequence=*/1, 4000, Role::kReadWrite,
                               "INSERT INTO t VALUES ('a', 1)")
                     .ok());
     // A forged reply on the right request id but the wrong identity.
@@ -217,10 +221,10 @@ TEST_F(StatementShipTest, ALateReplyIsCountedRatherThanDelivered) {
     // arriving afterwards cannot be un-answered and the owner's effect
     // cannot be undone - so it is counted, and that count is the measure of
     // how often SS3's dedup record is what saves a client.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, "INSERT INTO t VALUES ('a', 1)").ok());
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
     clock_.Advance(kShippedStatementDeadlineNs);
     ASSERT_TRUE(client_->Settled(1));
     client_->Close(1);  // what the parked statement does when it gives up
@@ -233,14 +237,14 @@ TEST_F(StatementShipTest, ALateReplyIsCountedRatherThanDelivered) {
 
 TEST_F(StatementShipTest, AnOverLongStatementIsRefusedAndShipsNothing) {
     std::vector<std::string> seen;
-    InstallOwner([&](std::uint64_t, std::uint64_t, std::uint64_t, std::string text,
+    InstallOwner([&](StatementShipServer::ShippedStatement st,
                      StatementShipServer::ReplyFn reply) {
-        seen.emplace_back(std::move(text));
+        seen.emplace_back(std::move(st.text));
         reply(Status::OK(), "OK");
     });
 
     const std::string too_long(kShippedStatementTextMax + 1, 'x');
-    Status refused = client_->Ship(1, 1, 99, 1, 4000, too_long);
+    Status refused = client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, too_long);
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.code(), StatusCode::kUnsupported);
     EXPECT_NE(refused.message().find(std::to_string(kShippedStatementTextMax)),
@@ -253,7 +257,7 @@ TEST_F(StatementShipTest, AnOverLongStatementIsRefusedAndShipsNothing) {
     // And the longest statement that *does* fit ships **and arrives whole**:
     // the boundary is only pinned if the far side sees every byte.
     const std::string exact(kShippedStatementTextMax, 'y');
-    EXPECT_TRUE(client_->Ship(1, 2, 99, 2, 4000, exact).ok());
+    EXPECT_TRUE(client_->Ship(1, 2, 99, 2, 4000, Role::kReadWrite, exact).ok());
     EXPECT_EQ(client_->waiting(), 1u);
     Pump();
     ASSERT_EQ(seen.size(), 1u);
@@ -266,12 +270,12 @@ TEST_F(StatementShipTest, AnOverLongReplyIsUnknownOutcomeBecauseTheStatementAlre
     // would hand the client a different answer, so the honest report is
     // that the effect stands and the answer is lost - which is the same
     // class as a deadline and wears the same code.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) {
         reply(Status::OK(), std::string(kShippedStatementReplyTextMax + 1, 'r'));
     });
 
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, "SELECT * FROM t").ok());
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadOnly, "SELECT * FROM t").ok());
     Pump();
 
     const ShippedStatementOutcome* out = client_->Find(1);
@@ -292,6 +296,81 @@ TEST_F(StatementShipTest, TheUnknownOutcomeSpellingIsWhatTheClientSees) {
               "ERR UNKNOWN_OUTCOME retryable=0 the outcome cannot be stated");
 }
 
+TEST_F(StatementShipTest, EveryErrorReplyRoundTripsThroughItsCode) {
+    // The property SS3's answer path stands on: a statement refused on its
+    // owner is rendered, its code is recovered, it crosses, and the arrival
+    // core renders it again - and a client must not be able to tell that
+    // happened. Every spelling `ErrorReply` has, including the bare arm,
+    // because a code that falls through to bare must come back rendering
+    // bare.
+    const Status statuses[] = {
+        Status::TxnConflict("row id=42 was written by transaction 118"),
+        Status::FkViolation("parent row 7 does not exist"),
+        Status::AssertionViolation("group total exceeds its bound"),
+        Status::UnknownOutcome("the statement's effect stands and its answer is lost"),
+        Status::InvalidArgument("table 'nosuch' not found"),
+        Status::Unsupported("outer joins are not executed"),
+        Status::NotFound("index 'ix' not found"),
+        Status::IoError("the device refused the write"),
+    };
+    for (const Status& status : statuses) {
+        const std::string rendered = ErrorReply(status);
+        const Status recovered = StatusFromErrorReply(rendered);
+        EXPECT_EQ(ErrorReply(recovered), rendered) << rendered;
+        // And the bit itself, which is the half a client acts on.
+        EXPECT_EQ(recovered.retryable(), status.retryable()) << rendered;
+    }
+
+    // A line that is not a refusal is not turned into one: the caller has
+    // already decided which arm it is on.
+    EXPECT_TRUE(StatusFromErrorReply("INSERTED oid=4000 id=7 page=12 slot=3").ok());
+}
+
+TEST_F(StatementShipTest, TheArrivalCoresRankCrossesWithTheStatement) {
+    // SS3 runs the statement under the rank the arrival core authenticated,
+    // so the rank has to arrive with it - a `Session` the owner mints holds
+    // kAdmin by default, and an owner that assumed one would be the only
+    // authorization there is.
+    Role seen = Role::kAdmin;
+    InstallOwner([&](StatementShipServer::ShippedStatement st,
+                     StatementShipServer::ReplyFn reply) {
+        seen = st.role;
+        reply(Status::OK(), "OK");
+    });
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadOnly, "SELECT * FROM t").ok());
+    Pump();
+    EXPECT_EQ(seen, Role::kReadOnly);
+}
+
+TEST_F(StatementShipTest, ARoleByteThisBuildCannotReadIsRefusedNotAssumed) {
+    // Fail closed. A byte outside the enum means the two ends disagree
+    // about what a rank is, and the wrong reading of that is to pick one -
+    // in either direction: `kAdmin` runs a statement nobody authorized,
+    // `kReadOnly` refuses one that was.
+    bool executed = false;
+    InstallOwner([&](StatementShipServer::ShippedStatement,
+                     StatementShipServer::ReplyFn reply) {
+        executed = true;
+        reply(Status::OK(), "OK");
+    });
+
+    auto forged = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT * FROM t");
+    ASSERT_TRUE(forged.ok()) << forged.status().message();
+    ASSERT_TRUE(ShippedStatementRoleOf(forged.value()).ok());  // as issued
+    forged.value().role = 99;  // no such rank
+    EXPECT_FALSE(ShippedStatementRoleOf(forged.value()).ok());
+
+    // And the seam refuses it rather than running it. It **replies**: a
+    // refusal the arrival core can read costs it one round trip, where
+    // silence would cost it a whole deadline and answer `UnknownOutcome`
+    // for a statement that provably never ran.
+    sched::SubmitSendPod(*arrival_, *transport_, 0, 1, /*session_core=*/0, /*request_id=*/1,
+                         sched::RingMessageKind::kShippedStatementRequest, forged.value());
+    Pump();
+    EXPECT_FALSE(executed) << "a rank this build cannot read must not run a statement";
+    EXPECT_EQ(server_->replies(), 1u);
+}
+
 TEST_F(StatementShipTest, AFullRingRetriesAndNeverDrops) {
     // The fixture's ring holds 16 slots. Shipping past that before a single
     // pump forces `MakeSendRetryTask`'s ResourceExhausted path, which is
@@ -299,7 +378,7 @@ TEST_F(StatementShipTest, AFullRingRetriesAndNeverDrops) {
     // must cost retries, never a lost statement - a lost one costs its
     // client a 10 s park and a false `UnknownOutcome`.
     int executed = 0;
-    InstallOwner([&](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([&](StatementShipServer::ShippedStatement,
                      StatementShipServer::ReplyFn reply) {
         ++executed;
         reply(Status::OK(), "OK");
@@ -310,7 +389,7 @@ TEST_F(StatementShipTest, AFullRingRetriesAndNeverDrops) {
         ASSERT_TRUE(client_
                         ->Ship(1, /*request_id=*/static_cast<std::uint64_t>(i + 1),
                                /*session_id=*/99, /*sequence=*/static_cast<std::uint64_t>(i),
-                               4000, "INSERT INTO t VALUES ('a', 1)")
+                               4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)")
                         .ok())
             << i;
     }
@@ -333,11 +412,11 @@ TEST_F(StatementShipTest, ARequestIdWithAStatementParkedOnItIsRefused) {
     // identity and all - after which the reply check has nothing left to
     // compare against and the first statement would be woken with the
     // second's answer.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, "INSERT INTO t VALUES ('a', 1)").ok());
-    Status refused = client_->Ship(1, 1, 99, 2, 4000, "INSERT INTO t VALUES ('b', 2)");
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
+    Status refused = client_->Ship(1, 1, 99, 2, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('b', 2)");
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(client_->waiting(), 1u);
@@ -345,7 +424,7 @@ TEST_F(StatementShipTest, ARequestIdWithAStatementParkedOnItIsRefused) {
     // And the id is reusable once the statement that held it has closed.
     Pump();
     client_->Close(1);
-    EXPECT_TRUE(client_->Ship(1, 1, 99, 2, 4000, "INSERT INTO t VALUES ('b', 2)").ok());
+    EXPECT_TRUE(client_->Ship(1, 1, 99, 2, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('b', 2)").ok());
 }
 
 TEST_F(StatementShipTest, AShipToACoreTheInstanceHasNotIsRefusedBeforeAnythingParks) {
@@ -353,10 +432,10 @@ TEST_F(StatementShipTest, AShipToACoreTheInstanceHasNotIsRefusedBeforeAnythingPa
     // the message evaporates and the statement parks the full deadline
     // before being told its outcome is unknown - for a request that
     // provably never left this core.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
-    Status refused = client_->Ship(/*owner_core=*/7, 1, 99, 1, 4000, "INSERT INTO t VALUES (1)");
+    Status refused = client_->Ship(/*owner_core=*/7, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES (1)");
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(client_->waiting(), 0u);
@@ -370,7 +449,7 @@ TEST_F(StatementShipTest, AForgedReplyLengthIsUnknownOutcomeNotABlankAnswer) {
     // early.
     // No owner handler at all, so the request is dropped on arrival and the
     // forged reply is the only thing the waiter ever sees.
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, "INSERT INTO t VALUES ('a', 1)").ok());
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
 
     ShippedStatementReplyPayload forged{};
     forged.session_id = 99;
@@ -393,7 +472,7 @@ TEST_F(StatementShipTest, AWrongSizedRequestGetsNoReplyAndLeavesTheDeadlineToAns
     // The one path that cannot answer: nothing in a payload of the wrong
     // size names the waiter to answer to. It must not crash, must not
     // reply, and must leave the arrival core's deadline as the backstop.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     const std::byte runt[8]{};
@@ -412,7 +491,7 @@ TEST_F(StatementShipTest, AWrongSizedRequestGetsNoReplyAndLeavesTheDeadlineToAns
 TEST_F(StatementShipTest, AForgedTextLengthIsRefusedNotRead) {
     // The payload is bytes this core did not compute, and `text_len` is
     // the only thing between a forged length and a read past the array.
-    InstallOwner([](std::uint64_t, std::uint64_t, std::uint64_t, std::string,
+    InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     ShippedStatementRequestPayload forged{};
