@@ -1,5 +1,6 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
 #include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
@@ -252,6 +253,20 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         *out = FinishIndexBuild(build, session != nullptr ? *session : autocommit_session_);
     }
 
+    if (out->pending_assertion_build.has_value() && assertion_builds_ != nullptr) {
+        // The owner's Bound Cabin build (PW1c-6c, assertion_build_service.hpp).
+        // `pending_index_build`'s shape exactly, and for its reasons: the
+        // predicate re-finds the waiter and reads the clock, so the deadline
+        // ends the park unaided, and the pending record is copied off the
+        // outcome because phase 2 writes the outcome whole.
+        const PendingAssertionBuild build = std::move(*out->pending_assertion_build);
+        const std::function<bool()> settled = [this, id = build.request_id] {
+            return assertion_builds_->Settled(id);
+        };
+        co_await sched::WaitUntil{&settled};
+        *out = FinishAssertionBuild(build);
+    }
+
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
         // statement is the whole change: every other runnable connection
@@ -369,6 +384,20 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
         index_builds_->Done(build.owner_core, build.def.index_oid, /*committed=*/false);
         return {ErrorReply(Status::TxnConflict(
                     "CREATE INDEX on '" + build.table_name +
+                    "' needs the reactor path to await its owner's build; retry on a served "
+                    "connection")),
+                false};
+    }
+    if (outcome.pending_assertion_build.has_value()) {
+        // The same stance for the owner's Bound Cabin (PW1c-6c): with no
+        // reactor nothing here receives the reply, so the statement is
+        // abandoned now and the owner told - otherwise it would be left
+        // enforcing a constraint no row will ever name.
+        const PendingAssertionBuild& build = *outcome.pending_assertion_build;
+        assertion_builds_->Close(build.request_id);
+        assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/false);
+        return {ErrorReply(Status::TxnConflict(
+                    "CREATE ASSERTION on '" + build.table_name +
                     "' needs the reactor path to await its owner's build; retry on a served "
                     "connection")),
                 false};
@@ -546,7 +575,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleCabin(Trim(line));
         }
         if (IEquals(sub, "ASSERTION")) {
-            return HandleAssertion(Trim(line));
+            return HandleAssertion(Trim(line), session);
         }
         // `UNIQUE` routes here too, so its refusal comes from the parser
         // with the byte offset of the word itself rather than from this
@@ -587,7 +616,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleIndex(Trim(line), session);
         }
         if (IEquals(sub, "ASSERTION")) {
-            return HandleAssertion(Trim(line));
+            return HandleAssertion(Trim(line), session);
         }
         if (IEquals(sub, "TABLE")) {
             return HandleDropTable(Trim(line), session);
@@ -906,8 +935,14 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // rebuilt is counted here and left *out* of the registry, so
         // SHOW ASSERTIONS reports `enforcing=0` for it rather than a
         // constraint that would admit every write.
+        // `_foreign` is neither of those: an assertion on a relation another
+        // core owns is enforced by that core (PW1c-6c), so this core reads
+        // the declaration and takes nothing on. Printed rather than folded
+        // into either counter, because a correctly-partitioned instance
+        // would otherwise read as half-unrecovered.
         os << " recovery_assertions_enforcing=" << recovery_->assertions_enforcing
-           << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered;
+           << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered
+           << " recovery_assertions_foreign=" << recovery_->assertions_foreign;
     }
     return {os.str(), false};
 }
@@ -2159,7 +2194,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
     });
 }
 
-DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Session& session) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
@@ -2170,13 +2205,75 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     }
     const auto& stmt = std::get<parser::AssertionStmt>(parsed.value());
 
+    // A relation another core owns has its Bound Cabin built *there*
+    // (PW1c-6c): the cabin is appended to by every write to the relation,
+    // and only the relation's owner may write the owner's pages, so a cabin
+    // built here would be one nobody can maintain. `BeginForeignAssertionBuild`
+    // is the two phases; a dispatcher with no client is a fixture without a
+    // ring and is refused by name rather than left to build in the wrong
+    // core's pages. The unfiltered row read is `HandleIndex`'s, for its
+    // reason: the build touches physical pages whichever view resolved the
+    // name, and an unresolvable name falls through to `PrepareAssertionDef`,
+    // which owns that refusal and its byte position.
+    //
+    // **DROP keeps its catalog half here and gains one message**: the
+    // registry it evicts from is the owner's now, so a drop that only
+    // retired the row would leave the owner enforcing a constraint no row
+    // names - the opposite failure to the one this task closes, and just as
+    // wrong. The `done(aborted)` leg is exactly "forget this id", so the
+    // drop arm below sends it. Fire and forget, with no waiter: a lost
+    // message leaves the owner over-enforcing until its next mount, which
+    // is the fail-closed side of a message that cannot be acknowledged
+    // without a second protocol.
+    if (!stmt.drop) {
+        if (auto rel_oid = catalog_.FindTableOidByName(stmt.table_name); rel_oid.ok()) {
+            auto rel_row = catalog_.GetSysTableRow(rel_oid.value());
+            if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
+                if (assertion_builds_ != nullptr) {
+                    return BeginForeignAssertionBuild(stmt, rel_row.value().owner_core, session);
+                }
+                return {ErrorReply(Status::Unsupported(
+                            "CREATE ASSERTION on '" + stmt.table_name + "' at byte " +
+                            std::to_string(stmt.table_byte_offset) +
+                            ": the relation is owned by core " +
+                            std::to_string(rel_row.value().owner_core) +
+                            ", whose writes maintain the Bound Cabin, so the cabin is built "
+                            "there (workplan-peer-writer.md §7d, PW1c-6c) - and this "
+                            "dispatcher has no assertion-build client to reach it")),
+                        false};
+            }
+        }
+    }
+
     if (stmt.drop) {
+        // Which core holds the directory, read **before** the row is
+        // retired - afterwards the assertion's target oid is unreadable,
+        // and with it the answer to "who has to forget this". A lookup that
+        // fails leaves `owner` unset and the drop exactly as it was.
+        std::optional<std::uint32_t> owner;
+        if (assertion_builds_ != nullptr) {
+            if (auto def = exec::FindAssertionByName(catalog_, page_store_, stmt.name);
+                def.ok() && def.value().has_value()) {
+                if (auto row = catalog_.GetSysTableRow(def.value()->target_oid);
+                    row.ok() && row.value().owner_core != core_id_) {
+                    owner = row.value().owner_core;
+                }
+            }
+        }
         auto id = exec::DropAssertion(catalog_, page_store_, stmt, wal_);
         if (!id.ok()) {
             return {ErrorReply(id.status()), false};
         }
         if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
+        // This core's registry, which holds the directory when the relation
+        // is this core's, and the owner's, which holds it otherwise. Both
+        // are called: `Evict` is a no-op on an id a registry never held, and
+        // naming both is what keeps the drop's effect independent of where
+        // the relation lives.
         enforcer_.Evict(id.value());
+        if (owner.has_value()) {
+            assertion_builds_->Done(*owner, id.value(), /*committed=*/false);
+        }
         std::ostringstream os;
         os << "DROPPED ASSERTION name=" << stmt.name << " assertion_id=" << id.value();
         if (logging(LogLevel::kInfo)) {
@@ -2234,6 +2331,131 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     return {os.str(), false};
 }
 
+DispatchOutcome CommandDispatcher::BeginForeignAssertionBuild(const parser::AssertionStmt& stmt,
+                                                              std::uint32_t owner_core,
+                                                              Session& session) {
+    // The park would hold the client's transaction open across the owner's
+    // whole scan, and the owner would be enforcing a constraint whose row
+    // waits on a COMMIT that may never come. Refused by name before
+    // anything is sent, exactly as the sibling CREATE INDEX is, and
+    // nothing is burned: no id issued, no page written, the transaction as
+    // it was. It is a divergence from the local arm, which takes this
+    // statement inside a transaction and publishes at once (assertions are
+    // not transactional DDL, `docs/spec/spec-ddl-transactional.md` §5) - named
+    // here rather than left to be found.
+    if (session.in_explicit_txn()) {
+        return {ErrorReply(Status::Unsupported(
+                    "CREATE ASSERTION on '" + stmt.table_name + "' at byte " +
+                    std::to_string(stmt.table_byte_offset) + ": the relation is owned by core " +
+                    std::to_string(owner_core) +
+                    ", which builds and adopts the Bound Cabin before this statement's row "
+                    "exists - inside a transaction that row waits on the client's COMMIT; run "
+                    "it in autocommit (workplan-peer-writer.md PW1c-6c)")),
+                false};
+    }
+
+    // §3.1's checks and the id, on the catalog this core owns, before a
+    // byte crosses: a declaration that would have been refused locally is
+    // refused without asking a peer to scan a relation for it. The id is
+    // issued here - `ASSERT_BUILD` records on the owner carry it - and a
+    // burned one is never reissued, the ids' standing rule.
+    auto prepared = exec::PrepareAssertionDef(catalog_, page_store_, stmt);
+    if (!prepared.ok()) return {ErrorReply(prepared.status()), false};
+
+    const std::uint64_t request_id = next_remote_request_++;
+    if (Status s = assertion_builds_->Request(owner_core, request_id,
+                                              prepared.value().target_oid,
+                                              prepared.value().assertion_id, stmt.source_text);
+        !s.ok()) {
+        return {ErrorReply(s), false};
+    }
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "asked core " + std::to_string(owner_core) +
+                              " to build assertion '" + stmt.name + "' on " + stmt.table_name +
+                              " (request " + std::to_string(request_id) + ")");
+    }
+    DispatchOutcome pending;
+    pending.pending_assertion_build =
+        PendingAssertionBuild{request_id,  owner_core,      prepared.value().assertion_id,
+                              prepared.value().target_oid, stmt.name, stmt.table_name,
+                              stmt.source_text};
+    return pending;
+}
+
+DispatchOutcome CommandDispatcher::FinishAssertionBuild(const PendingAssertionBuild& build) {
+    const AssertionBuildOutcome* reply = assertion_builds_->Find(build.request_id);
+    Status verdict = Status::OK();
+    PageId root = kInvalidPageId;
+    std::uint64_t rows = 0;
+    std::uint32_t groups = 0;
+    if (reply == nullptr) {
+        verdict = Status::IoError("CREATE ASSERTION on '" + build.table_name +
+                                  "': the wait for core " + std::to_string(build.owner_core) +
+                                  "'s build was closed under the statement");
+    } else if (!reply->arrived) {
+        // The deadline. Retryable: a retry builds afresh under a new id,
+        // and the owner is told below, so the directory it may have adopted
+        // in the meantime does not outlive this statement.
+        verdict = Status::TxnConflict(
+            "CREATE ASSERTION on '" + build.table_name + "': core " +
+            std::to_string(build.owner_core) + " did not reply within " +
+            std::to_string(kAssertionBuildReplyDeadlineNs / 1'000'000'000ull) +
+            " s; the build is abandoned and the owner told (workplan-peer-writer.md PW1c-6c)");
+    } else if (!reply->status.ok()) {
+        // The owner's own refusal, code and message intact: an
+        // `ASSERTION_VIOLATION` for data already past the bound and a
+        // `TXN_CONFLICT` for an unsettled relation are both compatibility
+        // surfaces a client switches on, and they must read the same
+        // whichever core ran the scan.
+        verdict = reply->status.WithContext("CREATE ASSERTION on '" + build.table_name +
+                                            "': core " + std::to_string(build.owner_core) +
+                                            " refused the build");
+    } else {
+        root = reply->cabin_root;
+        rows = reply->rows_incorporated;
+        groups = reply->group_count;
+    }
+    assertion_builds_->Close(build.request_id);
+    if (!verdict.ok()) {
+        assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/false);
+        if (logging(LogLevel::kWarn)) log_->Warn("ddl", verdict.message());
+        return {ErrorReply(verdict), false};
+    }
+
+    // Phase 2: the publish, which is the single commit point (§8.1a) and
+    // the *only* thing left - the cabin, its base and its directory are all
+    // the owner's already. A refusal here (a same-named assertion created
+    // while this was parked, the relation dropped) orphans the owner's
+    // chain through the `done(aborted)` below.
+    if (Status s = exec::InsertAssertion(catalog_, page_store_, wal_, build.assertion_id,
+                                         build.target_oid, build.name, build.source_text, root);
+        !s.ok()) {
+        assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/false);
+        return {ErrorReply(s), false};
+    }
+
+    // `done(committed)` before the durability wait, `index_build_service.hpp`'s
+    // order and this statement's own local stance: a sync failure answers
+    // ERR with the owner still enforcing what its log already holds -
+    // over-enforcing until the operator retries, where the other order
+    // would leave a durably published constraint unenforced on the
+    // instance.
+    assertion_builds_->Done(build.owner_core, build.assertion_id, /*committed=*/true);
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
+
+    std::ostringstream os;
+    os << "CREATED ASSERTION name=" << build.name << " assertion_id=" << build.assertion_id
+       << " on=" << build.table_name << " cabin_root=" << root << " rows=" << rows
+       << " groups=" << groups << " enforcing=" << (kWritePathEnforcesAssertions ? 1 : 0)
+       << " built_by_core=" << build.owner_core;
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "created assertion '" + build.name + "' on '" + build.table_name +
+                              "', built and enforced by core " +
+                              std::to_string(build.owner_core));
+    }
+    return {os.str(), false};
+}
+
 DispatchOutcome CommandDispatcher::HandleShowAssertions() {
     auto rows = exec::ListAssertions(catalog_, page_store_);
     if (!rows.ok()) {
@@ -2274,6 +2496,17 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
                 enforcer_.Holds(def.id))
                    ? 1
                    : 0);
+        // **And which core that answer is about** (PW1c-6c). A relation
+        // another core owns has its Bound Cabin built, held and appended to
+        // there, so this core's registry does not hold the directory and
+        // `enforcing=0` above means "not by this core" rather than "not at
+        // all". The owner is named instead of the claim being made on its
+        // behalf: nothing here can see another core's registry, and a `1`
+        // printed from a catalog row would be a guess. Ask that core.
+        if (auto owner = catalog_.GetSysTableRow(def.target_oid);
+            owner.ok() && owner.value().owner_core != core_id_) {
+            os << " enforced_by_core=" << owner.value().owner_core;
+        }
         // §9's production counters, printed only while the registry holds
         // the assertion: they live and die with the directory, so an
         // unenforced row prints no numbers rather than zeros that would
@@ -3342,8 +3575,9 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     // PW1c-5's shape gate, a **whitelist**: on a peer, a write is admitted
     // only where the PW1c-4 grants and this core's own extent lease make it
     // sound - any relation, clustered either way (the btree arm lifted at
-    // PW2-4), whose only secondary structure is an owner-built index
-    // (PW1c-6b-4). The key-mode arm lifted with the mode (2026-08-25) and
+    // PW2-4), whose secondary structures are owner-built: an index
+    // (PW1c-6b-4) and, since 2026-08-26, a Bound Cabin this core holds the
+    // directory for (PW1c-6c). The key-mode arm lifted with the mode (2026-08-25) and
     // its refusal is per row in `InsertOneRow`, so this gate no longer says
     // anything about keys at all. The interim guard this
     // replaced indicted its own blacklist shape ("a page-writing verb
@@ -3400,8 +3634,27 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // which admits every peer write this gate used to refuse for having
         // the wrong mode declared, and refuses exactly the rows that would
         // have needed the system core's page.
+        //
+        // **The assertion arm lifted 2026-08-26 (PW1c-6c)**, and what is
+        // left in its place is the narrower question it should always have
+        // asked. A peer-owned relation's Bound Cabin is owner-built
+        // (assertion_build_service.hpp): its pages come from this core's
+        // lease, carry this core's stamp, and `ReserveInsert` appends to
+        // them as an ordinary local write - so a relation whose assertions
+        // *this registry holds* is funded, and refusing it would refuse
+        // every write to a constraint this core is enforcing correctly.
+        //
+        // What still refuses is an assertion this core knows of and cannot
+        // enforce (`CannotEnforce`): a cabin core 0 built for this
+        // relation before PW1c-6c, whose pages `MayWrite` denies. That is
+        // the arm's real predicate, and reading `AnyOn` for it was the
+        // defect - `AnyOn` is false on a core whose registry never heard of
+        // the assertion, which is exactly the core that must refuse
+        // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
+        // Finding 2: a shipped write put a second row in a group under
+        // `CHECK COUNT(*) <= 1`).
         const bool funded_shape = access.fkeys_out.empty() && access.fkeys_in.empty() &&
-                                  !any_cabin && !enforcer_.AnyOn(access.oid);
+                                  !any_cabin && !enforcer_.CannotEnforce(access.oid);
         if (!funded_shape) {
             if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
                 return Status::Unsupported(
@@ -3417,12 +3670,15 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                     ": whether a Bound Cabin's entry pages follow the grant is unverified "
                     "(workplan-peer-writer.md §4)");
             }
-            if (enforcer_.AnyOn(access.oid)) {
+            if (enforcer_.CannotEnforce(access.oid)) {
                 return Status::Unsupported(
-                    "a relation under an assertion cannot take writes on core " +
+                    "a relation under an assertion this core cannot enforce cannot take "
+                    "writes on core " +
                     std::to_string(core_id_) +
-                    ": the assertion's entry pages are the system core's and carry no "
-                    "write grant (workplan-peer-writer.md §4)");
+                    ": the assertion's entry pages are the system core's and carry no write "
+                    "grant, so admitting the write would leave the constraint unchecked; "
+                    "re-create the assertion so its owner builds it "
+                    "(workplan-peer-writer.md §7d, PW1c-6c)");
             }
             return Status::Unsupported(
                 "this relation's shape is not funded for writes on core " +

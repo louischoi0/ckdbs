@@ -96,9 +96,44 @@ void AssertionEnforcer::Adopt(LiveAssertion assertion) {
     live_.insert_or_assign(id, std::move(assertion));
     auto& ids = by_oid_[oid];
     if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+    // An id that is now enforced is no longer one this core merely knows
+    // about, whatever a previous mount concluded. Cleared per id rather
+    // than per relation: a relation may carry both, and a write it admits
+    // on the strength of this one would still be unchecked against the
+    // other (PW1c-6c).
+    auto stale = unenforceable_.find(oid);
+    if (stale == unenforceable_.end()) return;
+    auto& blocked = stale->second;
+    blocked.erase(std::remove(blocked.begin(), blocked.end(), id), blocked.end());
+    if (blocked.empty()) unenforceable_.erase(stale);
+}
+
+void AssertionEnforcer::NoteUnenforceable(catalog::Oid oid, std::uint64_t assertion_id) {
+    // Never for something this core is already enforcing: the two states
+    // are exclusive, and the enforced one is the truthful answer.
+    if (live_.count(assertion_id) != 0) return;
+    auto& ids = unenforceable_[oid];
+    if (std::find(ids.begin(), ids.end(), assertion_id) == ids.end()) {
+        ids.push_back(assertion_id);
+    }
 }
 
 void AssertionEnforcer::Evict(std::uint64_t assertion_id) {
+    // The unenforceable record first, and **before the early return**: an
+    // assertion this core could not enforce is exactly the one an operator
+    // drops in order to re-create it (PW1c-6c's repair for a file written
+    // before it), and leaving the record behind would keep refusing the
+    // relation's writes for an assertion that no longer exists. Nothing is
+    // in both maps - `NoteUnenforceable` refuses an id `live_` holds - so
+    // this touches at most one of the two.
+    for (auto blocked = unenforceable_.begin(); blocked != unenforceable_.end(); ++blocked) {
+        auto& ids = blocked->second;
+        const auto found = std::find(ids.begin(), ids.end(), assertion_id);
+        if (found == ids.end()) continue;
+        ids.erase(found);
+        if (ids.empty()) unenforceable_.erase(blocked);
+        break;
+    }
     auto it = live_.find(assertion_id);
     if (it == live_.end()) return;
     auto& ids = by_oid_[it->second.target_oid];

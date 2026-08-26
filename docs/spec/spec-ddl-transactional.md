@@ -8,8 +8,12 @@ only — §5 says exactly what each gets and §5a why they still differ.
 **§5e** adds the two-core case (PW1c-6b, 2026-08-25): a `CREATE INDEX`
 whose relation another core owns is built by that owner and stays atomic
 and isolated across both, and `DROP INDEX` on such a relation is refused
-inside a transaction. Owning workplan: `docs/inflight/in-progress/workplan-ddl-transactional.md`
-(this spec) and `docs/inflight/in-progress/workplan-peer-writer.md` §7c (the two-core case).
+inside a transaction. **§5f** does the same for `CREATE ASSERTION`
+(PW1c-6c, 2026-08-26) on a stronger premise — a Bound Cabin is written by
+every later write to the relation, not only at build time — and with no
+refusal window. Owning workplan: `docs/inflight/in-progress/workplan-ddl-transactional.md`
+(this spec) and `docs/inflight/in-progress/workplan-peer-writer.md` §7c/§7d
+(the two-core cases).
 
 ## 0. This reverses a recorded decision, deliberately
 
@@ -589,6 +593,39 @@ a ROLLBACK would then restore an index missing every meanwhile-write.
 Autocommit keeps only the commit-failure window every DDL has and is
 admitted; a `DROP INDEX` on a relation core 0 owns is untouched (DT9
 isolates it).
+
+### 5f. The same relation's `CREATE ASSERTION`, and why it is not §5e twice
+
+**Built 2026-08-26 (PW1c-6c, `docs/inflight/in-progress/workplan-peer-writer.md`
+§7d.)** The shape is §5e's — core 0 checks the declaration and issues the
+id, the owner builds, core 0 publishes the `sys.assertions` row, the
+statement parks between the two phases and is refused inside an explicit
+transaction — and the *reason* is stronger. An index is built once from rows
+core 0 cannot see; a Bound Cabin is **written by every subsequent write to
+the relation**, so its pages have to be the owner's for the assertion's whole
+life, not only at build time. That is why nothing about this can be fixed by
+telling core 0's build to try harder.
+
+**Atomic**, on the same terms: one publishing event, core 0's row. A refused
+reply, a deadline or a failed publish tells the owner `done(aborted)` and the
+chain orphans with the entries any meanwhile-write put in it, exactly as a
+dropped assertion's pages orphan.
+
+**Isolated differently, and deliberately.** §5e's owner refuses the
+relation's writes for the whole build; this one refuses none, because the
+owner adopts the directory at the end of its own synchronous build task —
+there is no interval between the last scanned row and the adoption in which a
+write could be missed. What that leaves is a write admitted after the
+adoption and before core 0's publish: counted by a cabin whose row is on its
+way, and reserved into an orphan chain if the publish then fails. The cabin
+is a stricter-than-snapshot admission structure (`feat-assertion.md` §4.3),
+so counting early is the side it already errs on.
+
+**One gap of its own**: a write that passed its admission check and then
+parked can reserve after an adoption that happened in between, so a single
+row can be reserved unchecked. `CREATE INDEX` has the identical hole against
+its window; both need a statement's gate-to-write span to be atomic, which
+nothing provides today.
 
 ## 6. Open decisions — do not assume
 

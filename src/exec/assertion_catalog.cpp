@@ -86,8 +86,16 @@ AssertionDef ToAssertionDef(const std::vector<parser::AstValue>& values) {
 // released its spans. That ordering is I15's R1, and it is the whole reason
 // none of these can short-circuit on a match - the name to match on may still
 // be an unresolved pointer while the walk runs.
+// `resolve_spills = false` returns the fixed columns alone - id, target oid,
+// cabin root - and leaves `name` and `source_text` empty. The fixed columns
+// are inline in the heap tuple, so that form **touches no var-heap page**,
+// which is the difference between a reader a peer core can run and one it
+// cannot: a catalog relation's heap pages are all below `kFirstUserPageId`
+// by construction (well_known.hpp), and its var-heap is not
+// (`ListAssertionTargets` says what depends on that).
 StatusOr<std::vector<AssertionDef>> ScanAssertions(catalog::Catalog& catalog,
-                                                   storage::PageStore& store) {
+                                                   storage::PageStore& store,
+                                                   bool resolve_spills = true) {
     auto access = OpenAssertions(catalog);
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
@@ -125,7 +133,9 @@ StatusOr<std::vector<AssertionDef>> ScanAssertions(catalog::Catalog& catalog,
     std::vector<AssertionDef> out;
     out.reserve(staged.size());
     for (StagedRow& row : staged) {
-        if (Status s = ResolveSpills(store, row.spills, row.values); !s.ok()) return s;
+        if (resolve_spills) {
+            if (Status s = ResolveSpills(store, row.spills, row.values); !s.ok()) return s;
+        }
         out.push_back(ToAssertionDef(row.values));
     }
     return out;
@@ -136,6 +146,52 @@ StatusOr<std::vector<AssertionDef>> ScanAssertions(catalog::Catalog& catalog,
 StatusOr<std::vector<AssertionDef>> ListAssertions(catalog::Catalog& catalog,
                                                    storage::PageStore& store) {
     return ScanAssertions(catalog, store);
+}
+
+StatusOr<std::vector<AssertionDef>> ListAssertionTargets(catalog::Catalog& catalog,
+                                                         storage::PageStore& store) {
+    return ScanAssertions(catalog, store, /*resolve_spills=*/false);
+}
+
+StatusOr<std::vector<PageId>> AssertionSpillPages(catalog::Catalog& catalog,
+                                                  storage::PageStore& store) {
+    auto access = OpenAssertions(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    std::vector<PageId> pages;
+    Status walked = heap::ChainVisit(
+        store, rel.desc_page_id, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                return tuple.status();
+            }
+            if (tuple.value().deleted) return storage::VisitControl::kContinue;
+
+            std::vector<parser::AstValue> values(kColumnCount);
+            std::vector<PendingSpill> spills;
+            if (Status s = DecodeRowInto(rel.schema, rel.layout, tuple.value().payload, values,
+                                          &spills);
+                !s.ok()) {
+                return s;
+            }
+            // The ids the row *names*, never followed: this runs where the
+            // fetch is not yet permitted, which is the whole point.
+            for (const PendingSpill& spill : spills) {
+                if (spill.ptr.page_id == kInvalidPageId) continue;
+                if (std::find(pages.begin(), pages.end(), spill.ptr.page_id) == pages.end()) {
+                    pages.push_back(spill.ptr.page_id);
+                }
+            }
+            return storage::VisitControl::kContinue;
+        });
+    if (!walked.ok()) return walked;
+    return pages;
 }
 
 StatusOr<std::optional<AssertionDef>> FindAssertionByName(catalog::Catalog& catalog,
@@ -334,39 +390,41 @@ Status EmitAssertDrop(wal::WalManager* wal, std::uint64_t assertion_id, PageId c
 
 }  // namespace
 
-StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
-                                             storage::PageStore& store,
-                                             const parser::AssertionStmt& stmt,
-                                             const txn::ReadView& check_view,
-                                             wal::WalManager* wal) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name);
-    if (!oid.ok()) {
-        return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
-                                std::to_string(stmt.table_byte_offset) + ")");
-    }
-    auto access = catalog.InitTableAccess(oid.value());
-    if (!access.ok()) return access.status();
+namespace {
+
+// The schema positions every path needs, resolved against **one core's**
+// view of the relation. Factored out because `PrepareAssertionDef` and
+// `BuildAssertionCabin` both need them and, on the cross-core path, run on
+// different cores against different catalog views - so this is one
+// implementation resolving twice, never one resolution shared across a
+// wire.
+struct AssertionColumns {
+    std::vector<std::uint16_t> group_cols;
+    std::uint16_t sum_col = 0;  // read for a SUM assertion only
+};
+
+StatusOr<AssertionColumns> ResolveAssertionColumns(const catalog::TableAccess& access,
+                                                   const parser::AssertionStmt& stmt) {
+    AssertionColumns out;
 
     // Every GROUP BY column must exist. The positions are kept for the
     // builder and still not *stored*, because §8.2 keeps `source_text` as the
     // canon and the columns are recovered by re-parsing it. The refusal is
     // §3.1's whole "maximized validation" point - a declaration naming a
     // column that is not there could never be enforced.
-    std::vector<std::uint16_t> group_cols;
-    group_cols.reserve(stmt.group_columns.size());
+    out.group_cols.reserve(stmt.group_columns.size());
     for (const parser::IndexColumnRef& col : stmt.group_columns) {
-        auto pos = ResolveColumn(*access.value(), col, stmt.table_name);
+        auto pos = ResolveColumn(access, col, stmt.table_name);
         if (!pos.ok()) return pos.status();
-        group_cols.push_back(pos.value());
+        out.group_cols.push_back(pos.value());
     }
 
-    std::uint16_t sum_col = 0;
     if (stmt.func == parser::AggFunc::kSum) {
-        auto pos = ResolveColumn(*access.value(), stmt.sum_column, stmt.table_name);
+        auto pos = ResolveColumn(access, stmt.sum_column, stmt.table_name);
         if (!pos.ok()) return pos.status();
-        sum_col = pos.value();
+        out.sum_col = pos.value();
 
-        const catalog::SysColumnRow& col = access.value()->schema.columns[pos.value()];
+        const catalog::SysColumnRow& col = access.schema.columns[pos.value()];
         if (col.type_val == catalog::kTypeValUint64) {
             // Named separately because §10 names it separately, and for AG3's
             // reason: half of a uint64's range does not fit the int64
@@ -387,6 +445,32 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
                 "(docs/spec/feat-assertion.md §3.1)");
         }
     }
+    return out;
+}
+
+// The relation, or §3.1's refusal with the byte the parser recorded.
+StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
+                                          const parser::AssertionStmt& stmt) {
+    auto oid = catalog.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) {
+        return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
+                                std::to_string(stmt.table_byte_offset) + ")");
+    }
+    return oid.value();
+}
+
+}  // namespace
+
+StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
+                                                storage::PageStore& store,
+                                                const parser::AssertionStmt& stmt) {
+    auto oid = AssertionTargetOid(catalog, stmt);
+    if (!oid.ok()) return oid.status();
+    auto access = catalog.InitTableAccess(oid.value());
+    if (!access.ok()) return access.status();
+
+    auto columns = ResolveAssertionColumns(*access.value(), stmt);
+    if (!columns.ok()) return columns.status();
 
     // The cheap refusals the build must not run ahead of: a taken name and
     // an over-long declaration would both fail the publish, and finding out
@@ -411,76 +495,78 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
     auto id = catalog.AllocateRowId(catalog::kSysAssertionsTable);
     if (!id.ok()) return id.status();
 
+    AssertionPrepared prepared;
+    prepared.target_oid = oid.value();
+    prepared.assertion_id = id.value();
+    return prepared;
+}
+
+StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
+                                                  storage::PageStore& store,
+                                                  const parser::AssertionStmt& stmt,
+                                                  std::uint64_t assertion_id,
+                                                  const txn::ReadView& check_view,
+                                                  wal::WalManager* wal) {
+    auto oid = AssertionTargetOid(catalog, stmt);
+    if (!oid.ok()) return oid.status();
+    auto access = catalog.InitTableAccess(oid.value());
+    if (!access.ok()) return access.status();
+    auto columns = ResolveAssertionColumns(*access.value(), stmt);
+    if (!columns.ok()) return columns.status();
+
     // ---- Built before it is published (§8.1, index_ddl.cpp's shape) ------
-    auto build = BuildBoundCabin(store, *access.value(), stmt, id.value(), group_cols, sum_col,
+    auto build = BuildBoundCabin(store, *access.value(), stmt, assertion_id,
+                                 columns.value().group_cols, columns.value().sum_col,
                                  check_view, wal);
     if (!build.ok()) {
         // The discard marker, then the caller's error. Pages and id leak -
         // the backfill's precedent; nothing reclaims a page in this engine.
-        if (Status s = EmitAssertDrop(wal, id.value(), kInvalidPageId); !s.ok()) return s;
+        if (Status s = EmitAssertDrop(wal, assertion_id, kInvalidPageId); !s.ok()) return s;
         return build.status();
     }
 
-    // ---- The publish: the single commit point (§8.1a) ---------------------
-    //
-    // The row carrying the root, and deliberately **no version bump**:
-    // `Catalog::BumpVersion` is private on purpose, called only by catalog
-    // mutators from which something cached is derived, and nothing cached is
-    // derived from a `sys.assertions` row - no CatalogCache entry, and no
-    // compiled plan consults assertions. The task that changes the second
-    // fact (AST07, whose check steps make a plan a function of the
-    // assertion set) is the task that must make this publish invalidate
-    // plans, and it owns choosing the door.
-    if (Status s = InsertAssertion(catalog, store, wal, id.value(), oid.value(), stmt.name,
-                                   stmt.source_text, build.value().cabin_root);
-        !s.ok()) {
-        if (Status drop = EmitAssertDrop(wal, id.value(), build.value().cabin_root); !drop.ok()) {
-            return drop;
-        }
-        return s;
-    }
-
-    AssertionDdlResult result;
-    result.assertion_id = id.value();
-    result.target_oid = oid.value();
-    result.cabin_root = build.value().cabin_root;
-    result.rows_incorporated = build.value().rows_incorporated;
-    result.group_count = build.value().cabin.group_count();
+    AssertionCabinBuild out;
+    out.cabin_root = build.value().cabin_root;
+    out.rows_incorporated = build.value().rows_incorporated;
+    out.group_count = build.value().cabin.group_count();
 
     // The live half, resolved here where the statement, the schema and the
     // build are all in hand: the write hook must never re-scan a catalog or
     // re-parse a declaration per statement.
-    LiveAssertion live;
-    live.assertion_id = id.value();
+    LiveAssertion& live = out.live;
+    live.assertion_id = assertion_id;
     live.target_oid = oid.value();
     live.name = stmt.name;
     live.aggregate = stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum
                                                         : BoundAggregate::kCount;
-    live.group_cols = group_cols;
-    live.sum_col = sum_col;
+    live.group_cols = columns.value().group_cols;
+    live.sum_col = columns.value().sum_col;
     live.sum_col_name = stmt.sum_column.name;
-    for (std::size_t i = 0; i < group_cols.size(); ++i) {
+    for (std::size_t i = 0; i < live.group_cols.size(); ++i) {
         live.group_col_names.push_back(stmt.group_columns[i].name);
-        live.group_type_vals.push_back(access.value()->schema.columns[group_cols[i]].type_val);
+        live.group_type_vals.push_back(
+            access.value()->schema.columns[live.group_cols[i]].type_val);
     }
     live.chain = build.value().chain;
     live.cabin = std::move(build.value().cabin);
 
-    // **The new cabin's base, at its publish** (AS6a, RC07). Without it an
+    // **The new cabin's base, at its build** (AS6a, RC07). Without it an
     // assertion created after the last checkpoint has no base in any range: the
     // mount cannot recover it, so it stays out of the registry, so the completion
     // checkpoint - which snapshots the registry - cannot give it one either, and
     // `enforcing=0` is *permanent* until DROP + CREATE. With a long
     // `checkpoint_interval_ms` that is every new assertion.
     //
-    // After the row, because the row is the single commit point (§8.1a): a base
-    // for an assertion whose publish then failed would describe a cabin nothing
-    // references. A failure here leaves the assertion published and unbased,
-    // which the next mount reports rather than mis-enforces - so it is returned,
-    // not swallowed.
+    // **Into the stream of the core that built it**, which is the core that
+    // will append to the cabin - so the base and the records folded onto it
+    // are one stream's, whichever core that is (PW1c-6c). Logged before the
+    // publish rather than after it: the owner cannot see core 0's row, so
+    // the cross-core order is forced, and the local path keeps the same one
+    // rather than differing by path (assertion_catalog.hpp says what that
+    // costs).
     if (wal != nullptr) {
         wal::AssertionCabinSnapshot base;
-        base.assertion_id = id.value();
+        base.assertion_id = assertion_id;
         for (const BoundCabin::GroupSnapshot& group : live.cabin.SnapshotGroups()) {
             wal::AssertionSnapshotGroup entry;
             entry.group_id = group.group_id;
@@ -493,8 +579,53 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
             return s.WithContext("publishing assertion \"" + stmt.name + "\"'s group snapshot");
         }
     }
+    return out;
+}
 
-    result.live.emplace(std::move(live));
+StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
+                                             storage::PageStore& store,
+                                             const parser::AssertionStmt& stmt,
+                                             const txn::ReadView& check_view,
+                                             wal::WalManager* wal) {
+    // **The order is validate -> build -> publish** (§8.1), and the three
+    // steps are the three entry points a cross-core create splits across
+    // (PW1c-6c): this is the single-core arm, where all three are here.
+    auto prepared = PrepareAssertionDef(catalog, store, stmt);
+    if (!prepared.ok()) return prepared.status();
+
+    auto build = BuildAssertionCabin(catalog, store, stmt, prepared.value().assertion_id,
+                                     check_view, wal);
+    if (!build.ok()) return build.status();
+
+    // ---- The publish: the single commit point (§8.1a) ---------------------
+    //
+    // The row carrying the root, and deliberately **no version bump**:
+    // `Catalog::BumpVersion` is private on purpose, called only by catalog
+    // mutators from which something cached is derived, and nothing cached is
+    // derived from a `sys.assertions` row - no CatalogCache entry, and no
+    // compiled plan consults assertions. The task that changes the second
+    // fact (AST07, whose check steps make a plan a function of the
+    // assertion set) is the task that must make this publish invalidate
+    // plans, and it owns choosing the door.
+    if (Status s = InsertAssertion(catalog, store, wal, prepared.value().assertion_id,
+                                   prepared.value().target_oid, stmt.name, stmt.source_text,
+                                   build.value().cabin_root);
+        !s.ok()) {
+        if (Status drop = EmitAssertDrop(wal, prepared.value().assertion_id,
+                                         build.value().cabin_root);
+            !drop.ok()) {
+            return drop;
+        }
+        return s;
+    }
+
+    AssertionDdlResult result;
+    result.assertion_id = prepared.value().assertion_id;
+    result.target_oid = prepared.value().target_oid;
+    result.cabin_root = build.value().cabin_root;
+    result.rows_incorporated = build.value().rows_incorporated;
+    result.group_count = build.value().group_count;
+    result.live.emplace(std::move(build.value().live));
     return result;
 }
 

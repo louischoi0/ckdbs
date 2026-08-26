@@ -20,6 +20,7 @@
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/row_id_lease_service.hpp"
@@ -674,6 +675,11 @@ private:
     // used only while that scheduler runs; nothing pumps it after Serve
     // returns.
     std::optional<IndexBuildClient> index_builds_;
+
+    // Core 0's side of a peer-owned relation's CREATE ASSERTION (PW1c-6c,
+    // assertion_build_service.hpp), on the same terms as `index_builds_`
+    // above and armed beside it.
+    std::optional<AssertionBuildClient> assertion_builds_;
 
     // **Core 0's two halves of statement shipping** (SS1/SS3), armed with
     // the transport for `index_builds_`' reason. Core 0 is an owner like

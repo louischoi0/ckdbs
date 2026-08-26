@@ -187,6 +187,17 @@ stops spinning where it used to.
 
 ### Finding 2 — the assertion gate does not fire on a peer (blocking)
 
+> **Closed 2026-08-26** (PW1c-6c, worktree `ss-check-findings2`,
+> `docs/inflight/in-progress/workplan-peer-writer.md` §7d). The measurement
+> below stands as it was taken at `v2.2.0-11-g925f483` and nothing in it is
+> restated; what changed is the engine. The operator's direction was to fix
+> by **ownership** rather than by refreshing the peer's registry, and the
+> paragraph below that reads "the fix is not 'let the peer enforce' — it
+> cannot" is the part that was superseded: it *can*, once the Bound Cabin is
+> built from the owner's own lease and held by the owner, which is what
+> PW1c-6c does. The disabled test named here is enabled and its successors
+> assert the enforcement as well as the refusal.
+
 **A shipped write to an assertion-covered, peer-owned relation is admitted
 and the assertion is not enforced.** Measured: `CHECK COUNT(*) <= 1` declared
 on a peer-owned relation, then a shipped `INSERT` puts a **second row in the

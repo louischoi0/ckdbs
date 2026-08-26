@@ -704,6 +704,103 @@ built in worktree `pw1c6-index-grant`:
 | PW1c-6b-4 | **Built 2026-08-25** (worktree `pw1c6b4-gate-lift`). `CheckWriteAffinity`'s `indexed` arm lifted: `access.indexes.empty()` dropped from `funded_shape` and its refusal branch deleted, so a peer takes writes to a relation it owns that has a secondary index. **The soundness argument, reviewed and confirmed**: a peer-owned relation's index is *only* ever owner-built (a peer refuses all DDL - `PeerDdlRefused`; core 0's `HandleIndex` foreign arm reaches only `BeginForeignIndexBuild`; `CheckIndexDef` refuses a `kHere` seed on a foreign relation; `owner_core` is written once by `CreateTable` and there is no mover), so every index page is the owner's own-stamped and maintenance is a local write - `AppendIndexEntry`'s existing leaves and a split's new page pass `MayWrite` on the lease/own-stamp, `UpdateIndexRoot` writes the granted anchor (PW2-4, the same page `UpdateRelationDescPage` already wrote). The `IndexBuildClient` is **wired into the Expeditor** on every multi-core instance (beside `remote_reads_`, receiver registered before `SetIndexBuilds`), so the foreign arm's two phases are production, and the null-client fallback is a socket-free fixture - refused by name and byte. **The review found the lift opens a cross-core hole on the *sibling* statement**, closed here: `DROP INDEX` on a peer-owned relation *inside a transaction* marks the row and `BumpVersion` broadcasts at the mark, so the owner - whose DT9 in-flight predicate is core-local and cannot see core 0's deleter - drops the index from its view and maintains nothing before COMMIT; a ROLLBACK would then restore an index missing the owner's meanwhile-writes. Refused by name (Unsupported, byte, symmetric with the CREATE-in-a-transaction refusal); autocommit keeps only the commit-failure window every DDL has and stays admitted; core-0-owned stays isolated by DT9, untouched. Four stale contract claims the lift outdated were corrected in place (the `SetIndexBuilds` header, the DDL refused-shapes list, the whitelist opener, the exhaustiveness comment - each now names the shapes actually refused: EXPLICIT, FK-linked, cabined, assertion-covered). **Owed to 6b-5** (documentation, no code): (a) a window that *expires* on the owner before core 0's late commit lands admits writes an index the commit then publishes would miss - pre-existing (the pre-lift gate keyed on the same stale own-catalog view), unchanged in severity, now reachable in production; (b) `SHOW INDEXES` on core 0 for a peer relation reads the build-time root from the row (foreign `InitTableAccess` skips the anchor), which a maintenance split can move, so a stale root now walks a subtree and prints a plausible-wrong `entries=` - diagnostics only, cross-core reads downgrade `kIndexProbe` to `kScan` before shipping (`step_descriptor.cpp`) so query answers are unaffected. E2E over the `ForeignIndexRig`: the happy path now INSERTs after publish (admitted, the gate lifted) and `AnOwnerMaintainsInsertsIntoAPeerBuiltIndexAndReadsAnswerWhole` runs four maintained INSERTs, asserts `SHOW INDEXES` `entries=3`->`7` and reads every value whole through the index (`ANALYZE`=`IndexProbe`), an absent one none; plus the DROP refusal/admit test. The pending-window refusal-and-release and the abort path are 6b-3's tests, kept. Suite 2629/2629; overhead not measured (the v2 amendment). Review (`critics-developer`): the tree-side lift is sound (no route to a non-owner-stamped page found; `MayWrite` passes on leaves, splits, anchor), the DROP hole was its finding and is fixed, four contract claims corrected, two tests trimmed of overlap and an absent-read hardened; declined nothing of substance | 6b-3 |
 | PW1c-6b-5 | **Built 2026-08-25** (worktree `pw1c6b5-docs`), docs only. `docs/spec/spec-ddl-transactional.md` gains **§5e** (a relation another core owns: `CREATE INDEX` built by the owner) - atomic (one publishing event, core 0's commit; a rollback/timeout/abort orphans the owner's `kNoTxnId` tree as a dropped index's pages orphan; a crash between the commit append and durability makes the DDL a recovery loser and the tree an orphan), isolated (the owner's refusal window during the build, the row DT9-filtered until commit, the owner's cache holding no index until `done`), and the two gaps a single-core build lacks (an expiry window before a late commit; `SHOW INDEXES` on core 0 reading a maintenance-moved peer root) - plus the `DROP INDEX`-on-a-peer-relation refusal inside a transaction; §5b's core-0-scope paragraph and §6's oracle bullet note the meeting arrived and is closed conservatively; the header points at §5e. `docs/spec/crosscore.md` CC7 gains the **owner-builds exception** (core 0 cannot produce a populated relation's index pages, so the owner builds and no page crosses a stream - CC7's rejected "owner allocates at DDL" taken for this one DDL, the premise having failed). `docs/inflight/known-gaps.md`'s peer-writer entry records the PW1c-6b series complete and §5e's two named gaps. `CLAUDE.md`'s Open Decisions parenthetical flipped to decided-and-built. No code, no measurement | 6b-4 |
 
+### 7d. The assertion's cabin — decided and built 2026-08-26 (PW1c-6c)
+
+Opened by `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
+**Finding 2**, on the engine at `v2.2.0-11-g925f483`: a shipped write to an
+assertion-covered, peer-owned relation was **admitted and not enforced** — a
+second row landed in a group under `CHECK COUNT(*) <= 1`. The measured cause
+was that the shape gate's assertion arm read `enforcer_.AnyOn(oid)`, a
+per-core memory registry that only core 0's mount ever filled, so on a peer
+it answered "no assertion" and the gate did not fire. The operator's
+direction, 2026-08-26: **fix by ownership, not refresh** — the owner
+allocates the cabin from its own lease, own-stamped, no handoff, PW3
+checkpoints it, 6b's pattern; the remote-reservation alternative pends 2PC.
+
+**Why a refresh could not have worked, and why this is stronger than 6b's
+case.** Teaching the peer's registry about core 0's cabin would have turned
+an unenforced write into a *refused* one, never into an enforced one: the
+Bound Cabin is appended to by **every write to the relation**
+(`AssertionEnforcer::ReserveInsert`), so its pages must be writable by the
+relation's owner for as long as the assertion exists, and a chain core 0
+allocated never is — `MayWrite` refuses a page carrying neither this core's
+lease, a grant, nor its own stream's stamp. The index's premise was that
+core 0 could not *read* the rows; this one is that core 0 cannot own a
+structure the owner must keep writing.
+
+**What was built.**
+
+- **The split**, `exec::PrepareAssertionDef` / `BuildAssertionCabin` /
+  `InsertAssertion` (6b-1's shape). Core 0 keeps §3.1's checks and the id —
+  both catalog writes — and the owner runs the page half against its own
+  catalog view.
+- **Kinds 30-32** and `server/assertion_build_service.hpp`: the request
+  carries the declaration *verbatim* (§8.2's canon, so the owner parses it
+  exactly as a mount's `ReviveAssertion` does, and the `GROUP BY` list stays
+  uncapped in the catalog while the wire caps bytes), the reply the root and
+  the two numbers, `done` the statement's end.
+- **No refusal window**, where the index build has one, and the reason is
+  the adoption point: the owner adopts the directory at the end of its own
+  synchronous build task, so there is no interval between the last scanned
+  row and the publish in which a write could go uncounted. A window would
+  also have been the worse trade for this structure — an index missing a row
+  answers wrongly, a cabin missing a row **under-counts its group forever**,
+  since nothing rebuilds it.
+- **The gate reads the right question.** `funded_shape` drops
+  `!enforcer_.AnyOn(oid)` — a relation whose assertions this core holds is
+  funded, and refusing it would refuse writes to a constraint the core is
+  enforcing correctly — and gains `!enforcer_.CannotEnforce(oid)`, the new
+  fail-closed record for an assertion this core knows of and may not
+  maintain.
+- **RC07 per core.** `ResumeAssertionsAfterRecovery` runs in
+  `CoreRuntime::Open` too and takes on **only the relations that core owns**;
+  every other declaration is counted `assertions_foreign` and skipped, so no
+  two cores hold the same directory. Every way a directory can fail to come
+  back on a relation this core owns — the declaration unreadable, the revive
+  refused, no base in range — now also records `NoteUnenforceable`, which is
+  what makes the owner refuse the relation's writes instead of admitting
+  unchecked ones.
+- **`DROP ASSERTION` reaches the owner**, through the `done(aborted)` leg.
+  Found by self-review, not by a test that existed: with the directory moved
+  to the owner, a drop that only retired core 0's row would have left the
+  owner refusing writes for a constraint that no longer exists — the mirror
+  of the finding, and just as wrong.
+
+**Two things the build had to learn from a failing test.** A peer could not
+read the declarations at all: `sys.assertions`' *heap* pages are below
+`kFirstUserPageId` by construction, exactly so a peer can read the catalog
+(`catalog/well_known.hpp`), but a spilled `source_text` lives in a var-heap
+page from the general supply, which a peer may not fault. The mount now
+grants itself read rights over **exactly the pages the rows name**
+(`exec::AssertionSpillPages`) — and exactly those, page by page, because the
+first cut granted the extent around them and broke
+`APeersOwnPagesSurviveARestartByTheirStamp`: a page that answers `MayFault`
+from a grant never reaches `TryClaimByStamp`, so an extent covering pages the
+core owns costs it PW1c-7's restored write rights. The second: the
+writability probe must run *after* the revive has walked the chain, since
+that walk is what lets the store claim its own stamp.
+
+**Open, and named rather than left to be found.**
+
+- **The admission straddle.** A write that passes `AdmitInsert` and then
+  parks (a lease refill) can reserve after an adoption that happened in
+  between, so one row can be reserved without an admission check. The
+  aggregate stays exact, and the index build has the identical class of hole
+  against its window; a fix belongs to whatever makes a statement's
+  gate-to-write span atomic.
+- **A lost `done`.** No acknowledgement exists in either direction, so a lost
+  `done(committed)` leaves the owner's catalog cache stale until the next
+  DDL, and a lost `done(aborted)` — including a `DROP`'s — leaves it
+  over-enforcing until its next mount. Fail-closed both ways, and a remount
+  clears it.
+- **The catalog var-heap is not in the peer-readable range.** The mount's
+  page-exact grant closes it for `sys.assertions`; `sys.pattern_defs` has the
+  same shape and no reader on a peer today.
+
+| # | Task | Gate |
+|---|---|---|
+| PW1c-6c | **Built 2026-08-26** (worktree `ss-check-findings2`). Everything above, with seven tests over the `ForeignIndexRig`: the happy path (built on core 1, the violating shipped write refused by the assertion and not by a gate, **and a legal write still admitted** — a fix that refused everything would pass a test that only checked the refusal); the owner's restart (revived, folded from its own stream, enforcing with the *recovered* aggregate, plus the two orderings above pinned separately); the unenforceable record refusing by name and its repair by eviction without a remount; the owner's refusal (`ASSERTION_VIOLATION` raised where the rows are, nothing published, the relation still writable — proof there is no leftover window); core 0 abandoning the statement on the synchronous path and the owner evicting; the explicit-transaction refusal; and the DROP reaching the owner. `SHOW META` gains `recovery_assertions_foreign=`, `SHOW ASSERTIONS` gains `enforced_by_core=` for a relation another core owns (this core's registry cannot answer for another's, so the owner is named rather than the claim guessed), and the foreign `CREATED ASSERTION` line carries `built_by_core=`. Suite **2729/2730**, the one failure `TlsChannelTest.PlaintextGarbageIsFatal`, pre-existing on this host and recorded at `docs/inflight/bugs/tls-plaintext-garbage-alert-bytes.md`; one disabled test remains and is Finding 1's, untouched. **The `critics-developer` review was not run** — this session forbids agent invocation — so the code was self-reviewed, which is a stated gap and not an implied pass; that self-review is what found the DROP hole and the `Evict` repair path. Overhead not measured (the v2 amendment) | §7d, PW1c-6b |
+
 ## 8. The PW1c decision — decided 2026-08-24 (operator-delegated)
 
 **The write handoff, riding PL-B.** A peer gains write rights over a
