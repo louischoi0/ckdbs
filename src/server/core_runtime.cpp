@@ -492,6 +492,8 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
                                    log_);
     if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
     dispatcher_->SetStatementShip(&*statement_ship_client_);
+    // And the owner's half, for this core's `SHOW META` (D7).
+    dispatcher_->SetShippedStatements(&*shipped_executor_);
 
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has

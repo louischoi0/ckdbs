@@ -153,6 +153,7 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 
 class IndexBuildClient;
 class StatementShipClient;
+class ShippedStatementExecutor;
 
 // A peer-owned relation's `CREATE INDEX` between its two phases on core 0
 // (docs/workplan-peer-writer.md §7c, PW1c-6b-3): the definition core 0
@@ -165,6 +166,15 @@ struct PendingIndexBuild {
     catalog::Catalog::IndexDef def;
     std::string table_name;       // the reply line
     std::string key_column_name;  // the Cabin warning
+};
+
+// A statement this core sent to the core that owns its relation (SS2,
+// statement_ship_service.hpp), between the send and the answer. What the
+// waiter needs to be found again, and what its refusals need to name.
+struct PendingShippedStatement {
+    std::uint64_t request_id = 0;
+    std::uint32_t owner_core = 0;
+    std::string relation;
 };
 
 struct DispatchOutcome {
@@ -185,6 +195,18 @@ struct DispatchOutcome {
     // finishes through `FinishIndexBuild()`; the synchronous `Dispatch()`
     // has no reactor to receive one on and abandons it, telling the owner.
     std::optional<PendingIndexBuild> pending_index_build = std::nullopt;
+
+    // A statement shipped to its owner core (SS2): the reply is not in
+    // `response` yet. `DispatchAsync()` parks on the owner's answer under
+    // its deadline and finishes through `FinishShippedStatement()`.
+    //
+    // **The synchronous `Dispatch()` never sees one**, and that is a
+    // correctness statement rather than an accident: shipping is admitted
+    // only where the statement can park, because a send from a path that
+    // cannot wait would leave a statement the owner may have committed with
+    // nowhere to deliver its answer - and the refusal `Dispatch()` would
+    // have to invent could not be retryable (D4).
+    std::optional<PendingShippedStatement> pending_shipped = std::nullopt;
 
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/wal.md
@@ -230,9 +252,19 @@ std::string ErrorReply(const Status& status);
 // == line` for every line `ErrorReply` produces, which is the property
 // worth having and the one its test asserts.
 //
-// A line that is not an error reply is `kOk` with the line as its message:
-// the caller has already decided which arm it is on, and this refuses to
-// invent a failure for a success.
+// A line that is not an error reply is a bare `kOk` - **the line itself is
+// not carried**, because on the success arm the caller already holds it and
+// copying it into a status message would only duplicate the answer. This
+// refuses to invent a failure for a success; it does not claim to
+// reconstruct the success.
+//
+// Which makes the classification purely prefix-shaped: a *success* line
+// beginning `ERR ` would be read as a refusal. What keeps that unreachable
+// is not this function but the replies themselves - a DML answer opens with
+// a fixed keyword (`INSERTED`/`UPDATED`/`DELETED`/`OK`), and a SELECT's
+// header line is comma-joined identifiers, so no shippable success has a
+// space at byte 3. Stated because it is a property of the *callers*, and a
+// reply shape added later that can lead with free text breaks it silently.
 Status StatusFromErrorReply(std::string_view reply);
 
 // Where a tuple lives, as a point lookup reports it. Local to the
@@ -848,7 +880,12 @@ private:
     // Split out for the KWP load session (docs/workplan-kwp-load.md KW5),
     // whose rows arrive binary and never had text - BI2's "same write
     // path" made literal, since this IS the path a T1 statement takes.
-    DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope);
+    // `line` is the statement's text, for the one thing only text can do:
+    // be shipped to another core (SS2). Empty from the KWP load path, whose
+    // rows never were text - so that path keeps the cross-core refusal it
+    // has always had, structurally rather than by a flag.
+    DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope,
+                                 std::string_view line);
 
 public:
     // KW5's public seam: run one parsed INSERT under `session` exactly as
@@ -966,6 +1003,17 @@ public:
     // every single-core instance and every fixture, and is what keeps
     // `cores = 1` byte-identical.
     void SetStatementShip(StatementShipClient* client) noexcept { statement_ship_ = client; }
+
+    // The **owner's** half, for `SHOW META` only (D7): this core executes
+    // other cores' statements, and nothing else in this class would ever
+    // read that. A pointer rather than a counters struct because the
+    // executor already owns the numbers and a second copy of them is a
+    // second thing to keep true. `executor` must outlive the dispatcher -
+    // which is the reverse of the ordinary direction here, and is why
+    // `CoreRuntime` declares it below the dispatcher and drops it first.
+    void SetShippedStatements(const ShippedStatementExecutor* executor) noexcept {
+        shipped_statements_ = executor;
+    }
 
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
@@ -1326,6 +1374,17 @@ private:
     // SS2's client, on every core of a multi-core instance; null wherever
     // the cross-core refusal still stands (see SetStatementShip).
     StatementShipClient* statement_ship_ = nullptr;
+    // D7's owner-side reporting; null on a core that answers for nobody.
+    const ShippedStatementExecutor* shipped_statements_ = nullptr;
+    // Whether the statement running right now can park (set by
+    // `DispatchAsync`, never by `Dispatch`). One statement runs at a time
+    // per core (sched.md §3), which is what makes a member the right place
+    // for it - the same argument `pending_commit_lsn_` makes one line up.
+    bool may_park_ = false;
+    // The next `Session::ship_id()` this core mints. From 1, because 0 is
+    // "never shipped"; per core, and paired with the arrival core in the
+    // owner's record, which is what makes it unique instance-wide.
+    std::uint64_t next_ship_session_id_ = 1;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;
@@ -1498,6 +1557,39 @@ private:
     // transaction's home core on the first one that is allowed. See
     // core_affinity.hpp - the restriction is decided (CC3), not a stand-in
     // for the pipeline.
+    // ---- Statement shipping's fork (SS2) -------------------------------
+    //
+    // Whether this statement may be shipped at all. Four questions, each a
+    // decision rather than a guard: is shipping armed (a single-core
+    // instance and every fixture: no); can the statement park (see
+    // `DispatchOutcome::pending_shipped`); is it autocommit (D1 - nothing
+    // crosses transaction state, so an explicit transaction keeps its
+    // refusal); and did it arrive shipped (session.hpp's hop limit).
+    bool MayShip(const Session& session) const noexcept;
+
+    // Sends `line` to `owner_core` and returns the outcome that parks on
+    // it. Every refusal it can produce happens **before** the send, so a
+    // client that sees one knows the statement did not run.
+    DispatchOutcome ShipStatement(std::string_view line, catalog::Oid oid,
+                                  std::uint32_t owner_core, std::string_view relation,
+                                  Session& session);
+
+    // The parked statement's other end: the owner's answer, its deadline,
+    // or a waiter that vanished.
+    DispatchOutcome FinishShippedStatement(const PendingShippedStatement& shipped);
+
+    // The one core that owns every relation this chain reads, when there is
+    // one and it is not this core. Nothing otherwise: a chain touching this
+    // core's relations cannot run anywhere else, and one spanning two
+    // foreign owners is R6's multi-owner statement, which stays refused.
+    std::optional<std::uint32_t> SoleForeignOwner(const exec::StepChain& chain);
+
+    // Ends a write scope that wrote nothing because its statement went to
+    // another core. Autocommit by D1, so this is `EndWrite`'s abort arm:
+    // the transaction holds no page, and the status it carries is never
+    // client-visible - the answer is the owner's.
+    Status AbandonWriteForShipping(Session& session, WriteScope& scope);
+
     Status CheckWriteAffinity(const catalog::TableAccess& access, std::string_view relation,
                               Session& session);
 

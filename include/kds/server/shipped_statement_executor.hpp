@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <deque>
+#include <list>
 #include <map>
 #include <memory>
 #include <string>
@@ -67,6 +67,16 @@
 //     that statement's outcome has been superseded and this core can no
 //     longer say whether it ran. Guessing is the one thing D4 forbids.
 //
+// **The record covers the statement while it is still running, not only
+// after it has answered**, and that half is the one that matters: an
+// arrival core's deadline fires *because* the owner is slow, so the retry
+// it provokes is precisely the request that meets the original mid-flight.
+// A record written only at `Finish` would let that retry through to a
+// second execution - a second row, against an engine-issued pk. `running_`
+// is therefore keyed by the same identity and consulted in the same place,
+// and a statement for a session already running one is `UnknownOutcome`:
+// true, non-retryable, and never a second run.
+//
 // Nothing re-sends a landed request today (`sched::SubmitSendPod` retries
 // only a send the ring refused, which by definition never arrived), so the
 // record is the guard for the retry paths a routing layer will bring, and
@@ -80,11 +90,14 @@
 // and a waiter past its deadline has already been answered
 // `UnknownOutcome` - so a record older than two deadlines cannot be the
 // answer to anything still asking. `kShippedDedupMaxRecords` is a second
-// bound under it, for memory rather than for correctness; when it bites it
-// evicts the oldest record early and **counts** it (`early_evictions()`),
-// because an early eviction is the one condition under which a duplicate
-// could reach an empty record and be re-executed. A run with
-// `early_evictions() == 0` had no such window at all.
+// bound under it, for memory rather than for correctness - and it is a
+// bound on *records*, so the order list carries one node per key and moves
+// it rather than appending a second: a session shipping a thousand
+// statements inside one retention window holds one entry, not a thousand.
+// When the cap bites it evicts the oldest record early and **counts** it
+// (`early_evictions()`), because an early eviction is the one condition
+// under which a duplicate could reach an empty record and be re-executed.
+// A run with `early_evictions() == 0` had no such window at all.
 
 namespace kds::server {
 
@@ -130,8 +143,9 @@ public:
     std::uint64_t executed() const noexcept { return executed_; }
     // Duplicates answered from the record instead of run again (D4).
     std::uint64_t deduped() const noexcept { return deduped_; }
-    // Duplicates this core could not answer for, because their outcome was
-    // superseded. Each one is a client told `UNKNOWN_OUTCOME`.
+    // Duplicates this core could not answer for - superseded by a later
+    // sequence, or still running here so that no outcome exists yet. Each
+    // one is a client told `UNKNOWN_OUTCOME`.
     std::uint64_t unanswerable() const noexcept { return unanswerable_; }
     // Records dropped by the memory bound before their retention expired -
     // the only condition under which a duplicate could be re-executed.
@@ -139,6 +153,11 @@ public:
     // Statements running right now: the population the owner's reactor is
     // carrying on other cores' behalf.
     std::size_t running() const noexcept { return running_.size(); }
+    // Outcomes the record holds - the number `kShippedDedupMaxRecords`
+    // bounds. Read off the order list rather than the map so that the two
+    // going out of step is visible from outside, since it is the list that
+    // would grow with the shipping rate if a key ever took a second node.
+    std::size_t records() const noexcept { return answered_order_.size(); }
 
 private:
     // What one shipped statement holds while it runs. Heap-allocated and
@@ -149,8 +168,7 @@ private:
         Session session;
         DispatchOutcome out;
         StatementShipServer::ReplyFn reply;
-        std::uint32_t requester = 0;
-        std::uint64_t session_id = 0;
+        // The identity's third component. The first two are the map key.
         std::uint64_t sequence = 0;
 
         Running(std::string statement, txn::IsolationLevel isolation, Role role)
@@ -159,18 +177,23 @@ private:
         }
     };
 
+    using DedupKey = std::pair<std::uint32_t, std::uint64_t>;  // (requester, session id)
+
     // The outcome kept for a duplicate to be answered from.
     struct Answered {
         std::uint64_t sequence = 0;
         Status status;
         std::string text;
         sched::MonoTimeNs at_ns = 0;
+        // This key's one node in `answered_order_`. A list, so the node is
+        // stable while every other entry comes and goes, and re-recording a
+        // key splices it to the back instead of appending a second one.
+        std::list<DedupKey>::iterator order;
     };
-    using DedupKey = std::pair<std::uint32_t, std::uint64_t>;  // (requester, session id)
 
     void Execute(StatementShipServer::ShippedStatement statement,
                  StatementShipServer::ReplyFn reply);
-    void Finish(std::uint64_t id);
+    void Finish(const DedupKey& key);
     void Remember(const DedupKey& key, std::uint64_t sequence, const Status& status,
                   std::string_view text);
     void Expire();
@@ -181,16 +204,18 @@ private:
     const sched::Clock& clock_;
     Logger* log_;
 
-    // Keyed by a local counter rather than by the shipping identity: the
-    // completion callback needs one word, and the identity may repeat
-    // across cores.
-    std::uint64_t next_running_id_ = 1;
-    std::map<std::uint64_t, std::unique_ptr<Running>> running_;
+    // **Keyed by the shipping identity**, which is what makes the record
+    // reach the in-flight half of the window: a duplicate is recognised
+    // while its original is still running, not only after it has answered.
+    // At most one entry per key, because `Execute` refuses a second
+    // statement for a session that already has one here.
+    std::map<DedupKey, std::unique_ptr<Running>> running_;
 
     std::map<DedupKey, Answered> answered_;
-    // Insertion order, for the two bounds. An entry is stale once its key's
-    // record has moved on, which the stamp comparison detects.
-    std::deque<std::pair<sched::MonoTimeNs, DedupKey>> answered_order_;
+    // Recording order, oldest at the front, for the two bounds. Exactly one
+    // node per record - `Answered::order` is it - so `kShippedDedupMaxRecords`
+    // bounds this list and not merely the map above it.
+    std::list<DedupKey> answered_order_;
 
     std::uint64_t executed_ = 0;
     std::uint64_t deduped_ = 0;

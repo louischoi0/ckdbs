@@ -140,6 +140,29 @@ public:
         return home_core_ == kUnbound || home_core_ == core_id;
     }
 
+    // ---- Statement shipping (SS2, server/statement_ship_service.hpp) ---
+    //
+    // **The identity a shipped statement carries.** The owner keeps the
+    // last outcome per `(arrival core, session)` so a duplicate is answered
+    // rather than run twice, which against engine-issued primary keys is
+    // the difference between an answer and a second row. The id is minted
+    // by the dispatcher on this session's first ship and is stable for its
+    // life; the sequence counts the statements this session has shipped.
+    // Zero means "never shipped", which is why the dispatcher mints from 1.
+    std::uint64_t ship_id() const noexcept { return ship_id_; }
+    void set_ship_id(std::uint64_t id) noexcept { ship_id_ = id; }
+    std::uint64_t NextShipSequence() noexcept { return ++ship_sequence_; }
+
+    // **This session is running a statement that arrived shipped**, set by
+    // the owner's executor on the session it mints (SS3). A shipped
+    // statement never ships again: two cores whose catalogs disagree about
+    // an owner would otherwise pass one statement back and forth, each hop
+    // a fresh identity the dedup record cannot recognise, until a deadline
+    // fired on every one of them. One hop, and the second core refuses as
+    // it always did.
+    bool shipped() const noexcept { return shipped_; }
+    void mark_shipped() noexcept { shipped_ = true; }
+
     // Which commands a poisoned session still answers (section 10-8).
     // Deliberately a whitelist rather than a blacklist: a new statement
     // must be refused inside a failed transaction by default, and admitting
@@ -170,6 +193,9 @@ private:
     Role role_ = Role::kAdmin;
     txn::Transaction* txn_ = nullptr;
     std::uint32_t home_core_ = kUnbound;
+    std::uint64_t ship_id_ = 0;
+    std::uint64_t ship_sequence_ = 0;
+    bool shipped_ = false;
 };
 
 }  // namespace kds::server

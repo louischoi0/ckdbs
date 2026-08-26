@@ -10,6 +10,33 @@ Today there is no way to attribute time. A slow `SELECT` is slow somewhere betwe
 
 The design goal is narrow: **one trace per request, a span per layer, zero cost when disabled, and no allocation on the hot path when enabled.**
 
+## 1a. What exists today — counters on `SHOW META`, not tracing
+
+Nothing in this document is built. What *is* built, and is worth naming
+here so this proposal is not read as the engine's only instrumentation, is
+a growing set of **per-core counters printed by `SHOW META`** — fields on
+an existing command, not a subsystem. They answer "how much" and never
+"where the time went", which is exactly the gap §1 describes.
+
+- **Per-scheduling-group accounting** against reactor wall time
+  (`sched_wall_us`, `sched_<group>_polled_us` / `_polls` / `_consumed_us`),
+  added 2026-08-26 by the statement-shipping pretasks' T4 — so the time
+  charged to no group is computable from outside the process
+  (`docs/sched.md` §4).
+- **Cross-core write refusals** (`cross_core_write_refusals` and its keyed
+  detail), the population a 2PC decision would be made from
+  (`docs/crosscore.md` §6).
+- **Statement shipping**, both halves, added 2026-08-26 by SS4: what a core
+  shipped and what came back (`shipped_statements`, `shipped_replies`,
+  `shipped_refusals`, `shipped_wait_us_max`, and the anomaly counters that
+  should stay 0), and what a core ran for others (`shipped_executed`,
+  `shipped_running`, `shipped_deduped`, `shipped_unanswerable`,
+  `shipped_early_evictions`). Field-by-field in `docs/client-manual.md` §3.
+
+Every one of them is **core-local** and **absent rather than zeroed where
+the thing it counts is not wired** — a rule worth keeping if this proposal
+is ever built, because a zero and an absence answer different questions.
+
 ## 2. Non-goals
 
 - **Not a logging framework.** No severity levels, no formatters, no sinks, no `printf`-style call sites scattered through engine code. A log line inside a page-latch critical section is a latency bug waiting to happen. If a subsystem needs to report a condition, that is a `Status` (`rules.md` §1), not a log.

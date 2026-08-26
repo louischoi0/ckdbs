@@ -224,7 +224,15 @@ deliberately stops short of making it: the memo is what the workplan is
 checked against, not the workplan.
 
 **The three claims the workplan's first section should be checked against**,
-stated so a later reader can mark each right or wrong:
+stated so a later reader can mark each right or wrong.
+
+**Status 2026-08-26: the build landed, the claims are still unjudged.**
+SS1–SS4 of `instructions/v2.2.0-stmtshipping.md` are built — the wire and
+the waiter, the owner-side execution, the dispatch fork, the counters — so
+every claim below is now *testable* rather than hypothetical, and the
+instrument each one needs is a field on `SHOW META`. None of them has been
+measured: SS-B has not run, and no results file exists to point at yet. The
+pointer this section is owed goes in when it does.
 
 1. Shipping is **throughput-positive** where more than one session targets an
    owner core, and the margin grows with the session count — because it moves

@@ -84,6 +84,14 @@
 //     that code, added for this and non-retryable by construction
 //     (`IsRetryable` is one code wide, by `docs/protocol.md` §11).
 //
+// **A statement parked when the reactor is destroyed never replies**, and
+// that is correct rather than a leak: `~CoroTask` destroys a suspended
+// frame without invoking its completion, so nothing calls back into an
+// executor or a server that teardown is dismantling, and the outcome of a
+// statement interrupted mid-flight genuinely is unknown - which is what the
+// arrival core's deadline says. Written here because a reader would
+// otherwise have to derive it from `sched/coro.hpp`.
+//
 // A reply that matches no waiter is the deadline having already fired.
 // There is nothing to do with it but count it: unlike 6b's tree, a
 // committed DML statement cannot be un-done by telling the owner to
@@ -138,10 +146,22 @@ inline constexpr std::size_t kShippedStatementTextMax =
 // arrival core -> owner: the statement, and the identity that makes a
 // duplicate recognisable.
 //
-// `target_oid` is a **cross-check, not the authority**: the owner resolves
-// the relation from the text it parses, and refuses if the two disagree.
-// Carrying it lets that disagreement be caught as a disagreement rather
-// than as a statement quietly running against something else.
+// `target_oid` is **the relation the arrival core routed on, and nothing
+// more**: which oid's owner this request was addressed to.
+//
+// **Retracted 2026-08-26** (the SS3 review): this paragraph used to say the
+// owner cross-checks it against the relation the text resolves to and
+// refuses if the two disagree. Nothing did that, and on inspection nothing
+// should. The owner parses and binds under its own catalog, which is the
+// only authoritative resolution there is (the argument above) - so a
+// disagreement means the arrival core's catalog was behind, and the two
+// outcomes are already right: if the owner's resolution is a relation it
+// owns, running it is the correct answer to what the client asked *by
+// name*; if it is not, `CheckWriteAffinity` refuses, and the hop limit
+// (session.hpp) keeps that refusal from becoming a second ship. A check
+// here could only turn a correct answer into a refusal. It is carried
+// because a log line that names the oid the routing decision was made on is
+// what makes a mis-route legible afterwards.
 struct ShippedStatementRequestPayload {
     std::uint64_t session_id;
     std::uint64_t sequence;
@@ -339,6 +359,9 @@ struct ShippedStatementOutcome {
     std::uint64_t session_id = 0;
     std::uint64_t sequence = 0;
     sched::MonoTimeNs deadline_ns = 0;
+    // When the statement left, so the wait can be measured rather than
+    // inferred from the deadline (D7's `shipped_wait_us_max`).
+    sched::MonoTimeNs sent_ns = 0;
 };
 
 // The arrival core's side: the waiters, the deadline, the send and the
@@ -384,6 +407,26 @@ public:
 
     std::size_t waiting() const noexcept { return waiting_.size(); }
 
+    // ---- What D7 asks this core to report ------------------------------
+    //
+    // The arrival core's half: what it sent, what came back, and how long
+    // the longest one took. `shipped()` counts statements that **left** -
+    // a refusal from `Ship` sent nothing and is not one of them, which is
+    // what keeps `shipped() - replies()` readable as "still in flight or
+    // lost" rather than as a mix of that and statements that never went.
+    std::uint64_t shipped() const noexcept { return shipped_; }
+    // Answers delivered to the waiter that asked for them. A late reply is
+    // not one (it has no waiter left); it is in `late_*_replies()` above.
+    std::uint64_t replies() const noexcept { return replies_; }
+    // Of those, the ones that carried a refusal. The owner's own refusals
+    // and the wire's, together: from here they are one population - the
+    // statements shipping did not turn into work.
+    std::uint64_t refusals() const noexcept { return refusals_; }
+    // The longest a delivered answer kept its statement parked. The
+    // population this measures is the one SS-B4 prices - a waiter is a
+    // parked coroutine, and this says how long the worst one held one.
+    sched::MonoTimeNs wait_ns_max() const noexcept { return wait_ns_max_; }
+
     // **The two halves of "a reply that matched no waiter", kept apart
     // because they mean opposite things.**
     //
@@ -413,6 +456,10 @@ private:
     std::uint64_t late_executed_replies_ = 0;
     std::uint64_t late_refused_replies_ = 0;
     std::uint64_t identity_mismatches_ = 0;
+    std::uint64_t shipped_ = 0;
+    std::uint64_t replies_ = 0;
+    std::uint64_t refusals_ = 0;
+    sched::MonoTimeNs wait_ns_max_ = 0;
 };
 
 }  // namespace kds::server

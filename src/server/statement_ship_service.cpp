@@ -25,6 +25,18 @@ std::size_t Utf8PrefixLen(std::string_view text, std::size_t cap) noexcept {
     return len;
 }
 
+// The one refusal that means "the statement ran and its answer cannot be
+// carried" - written once because it is produced twice, from the encode and
+// from the caller that pre-empts the encode, and two copies of a message
+// that must mean exactly one thing is how they stop meaning it.
+Status OverLongReply(std::size_t bytes) {
+    return Status::UnknownOutcome(
+        "statement shipping: the statement executed on its owner but its reply is " +
+        std::to_string(bytes) + " bytes, past the " +
+        std::to_string(kShippedStatementReplyTextMax) +
+        " a reply carries; the statement's effect stands and its answer is lost");
+}
+
 }  // namespace
 
 StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t session_id,
@@ -87,13 +99,7 @@ StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t ses
     // what is being reported is a delivered-but-unreportable outcome -
     // the same class as a lost reply, wearing the same code, because a
     // client that retried it would run the statement twice.
-    if (text.size() > kShippedStatementReplyTextMax) {
-        return Status::UnknownOutcome(
-            "statement shipping: the statement executed on its owner but its reply is " +
-            std::to_string(text.size()) + " bytes, past the " +
-            std::to_string(kShippedStatementReplyTextMax) +
-            " a reply carries; the statement's effect stands and its answer is lost");
-    }
+    if (text.size() > kShippedStatementReplyTextMax) return OverLongReply(text.size());
     out.text_len = static_cast<std::uint16_t>(text.size());
     if (!text.empty()) std::memcpy(out.text, text.data(), text.size());
     return out;
@@ -212,11 +218,7 @@ void StatementShipServer::Reply(std::uint32_t requester, std::uint64_t request_i
     Status answer = status;
     std::string_view answer_text = text;
     if (answer.ok() && text.size() > kShippedStatementReplyTextMax) {
-        answer = Status::UnknownOutcome(
-            "statement shipping: the statement executed on its owner but its reply is " +
-            std::to_string(text.size()) + " bytes, past the " +
-            std::to_string(kShippedStatementReplyTextMax) +
-            " a reply carries; the statement's effect stands and its answer is lost");
+        answer = OverLongReply(text.size());
         answer_text = {};
     }
 
@@ -304,7 +306,18 @@ Status StatementShipClient::RegisterReplyReceiver() {
                 return;
             }
 
+            // **Counted here**, past the two arms that answer no waiter
+            // (a late reply, a mismatched identity) and before the two that
+            // do - the length refusal below included, because a forged
+            // length is a reply that arrived and refused, not a statement
+            // whose answer never came. `shipped() - replies()` is then
+            // exactly "still parked, or lost".
+            ++replies_;
+            const sched::MonoTimeNs waited = clock_.Now() - it->second.sent_ns;
+            if (waited > wait_ns_max_) wait_ns_max_ = waited;
+
             if (reply.text_len > kShippedStatementReplyTextMax) {
+                ++refusals_;
                 // Bytes this core did not compute, bounded here as the
                 // request side bounds them - but **not** by reading an
                 // empty text instead. On the success arm that would hand
@@ -331,6 +344,7 @@ Status StatementShipClient::RegisterReplyReceiver() {
             }
             it->second.text.assign(reply.text, reply.text_len);
             it->second.status = Status::FromWire(reply.status_code, it->second.text);
+            if (!it->second.status.ok()) ++refusals_;
             // A success carries the reply line in `text`; a refusal carries
             // its message, which FromWire has just taken - so `text` is
             // meaningful only on the success arm and is cleared on the
@@ -379,7 +393,9 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
     ShippedStatementOutcome& outcome = waiting_[request_id];
     outcome.session_id = session_id;
     outcome.sequence = sequence;
-    outcome.deadline_ns = clock_.Now() + kShippedStatementDeadlineNs;
+    outcome.sent_ns = clock_.Now();
+    outcome.deadline_ns = outcome.sent_ns + kShippedStatementDeadlineNs;
+    ++shipped_;
 
     sched::SubmitSendPod(scheduler_, transport_, core_id_, owner_core,
                          /*session_core=*/core_id_, request_id,

@@ -1173,11 +1173,21 @@ Status Expeditor::Serve() {
     // borrow - a member holding this reactor - and is cleared by the same
     // guard, so a dispatch after `Serve` returns refuses as a single-core
     // one does instead of shipping through a destroyed reactor.
+    //
+    // `index_builds_` is the third of the same shape and is cleared here
+    // too: it captures this function's `scheduler` exactly as the shipping
+    // client does, and a `CREATE INDEX` through the public `dispatcher()`
+    // accessor after `Serve` returned would send on a destroyed reactor.
+    // It was installed and never withdrawn before this guard existed - the
+    // hazard is the one the `set_scheduler_view` argument above states, and
+    // withdrawing all three together is what makes this struct's name true.
     struct ClearReactorBorrows {
         CommandDispatcher* dispatcher;
         ~ClearReactorBorrows() {
             dispatcher->set_scheduler_view(nullptr);
             dispatcher->SetStatementShip(nullptr);
+            dispatcher->SetShippedStatements(nullptr);
+            dispatcher->SetIndexBuilds(nullptr);
         }
     } clear_reactor_borrows{&*dispatcher_};
 
@@ -1460,6 +1470,7 @@ Status Expeditor::Serve() {
                                        &*logger_);
         if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
         dispatcher_->SetStatementShip(&*statement_ship_client_);
+        dispatcher_->SetShippedStatements(&*shipped_executor_);
 
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -

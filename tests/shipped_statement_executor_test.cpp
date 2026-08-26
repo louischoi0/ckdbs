@@ -11,6 +11,9 @@
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/txn/manager.hpp"
+#include "kds/txn/trx_id.hpp"
+#include "kds/txn/undo_log.hpp"
 
 // SS3: what the owner does with a statement that arrived from another core.
 //
@@ -38,7 +41,17 @@ protected:
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
-        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_);
+        // With a real transaction manager, because an owner has one and
+        // what a shipped statement is allowed to do to it is part of the
+        // contract: a session that dies inside a transaction pins
+        // `ReadHorizon()` for the life of the process.
+        ids_.emplace(boot_->superblock);
+        undo_.emplace(store_, /*wal=*/nullptr);
+        txns_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr);
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_,
+                            /*wal=*/nullptr, wal::DurabilityClass::kRelaxed, exec::Budget(),
+                            /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
         scheduler_.emplace(clock_, io_);
         executor_.emplace(/*core_id=*/1, *dispatcher_, *scheduler_, clock_);
 
@@ -85,6 +98,9 @@ protected:
     sched::ManualClock clock_;
     sched::NullIoBackend io_;
     std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<txn::TrxIdSequence> ids_;
+    std::optional<txn::UndoLog> undo_;
+    std::optional<txn::TransactionManager> txns_;
     std::optional<CommandDispatcher> dispatcher_;
     std::optional<sched::Scheduler> scheduler_;
     std::optional<ShippedStatementExecutor> executor_;
@@ -229,6 +245,16 @@ TEST_F(ShippedStatementExecutorTest, AReadShipsAndAnswersWithItsRows) {
     EXPECT_EQ(out.text, Local("SELECT * FROM t"));
 }
 
+TEST_F(ShippedStatementExecutorTest, ShowMetaOmitsTheShippingBlockWhereNothingIsWired) {
+    // "Absent rather than zeroed" is the rule the recovery and scheduler
+    // blocks already follow, and it is the honest reading of a single-core
+    // instance: shipping is not armed here, so there is nothing to report -
+    // not a row of zeros that looks like an armed core doing nothing.
+    // This dispatcher has neither half installed.
+    const std::string meta = Local("SHOW META");
+    EXPECT_EQ(meta.find("shipped_"), std::string::npos) << meta;
+}
+
 TEST_F(ShippedStatementExecutorTest, ARefusedShippedStatementAllocatesNothing) {
     // D5, generalised from G2's fix: the refusal paths a shipped statement
     // can reach take no page. Driven as the storm it is meant to survive -
@@ -243,6 +269,72 @@ TEST_F(ShippedStatementExecutorTest, ARefusedShippedStatementAllocatesNothing) {
     }
     EXPECT_EQ(store_.page_count(), before) << "a refusal took a page";
     EXPECT_EQ(executor_->early_evictions(), 0u);
+}
+
+TEST_F(ShippedStatementExecutorTest, ADuplicateThatMeetsItsOriginalStillRunningIsNotRunAgain) {
+    // **The half of D4's window the record alone does not cover.** An
+    // arrival core's deadline fires *because* the owner is slow, so the
+    // retry it provokes arrives while the original is still executing here
+    // and before anything has been recorded. Answering it by running the
+    // statement is the double insert the whole design exists to prevent.
+    auto ship = [&](std::uint64_t sequence, const std::shared_ptr<Answer>& answer) {
+        StatementShipServer::ShippedStatement statement;
+        statement.requester = 0;
+        statement.session_id = 99;
+        statement.sequence = sequence;
+        statement.role = Role::kReadWrite;
+        statement.text = "INSERT INTO t VALUES (7)";
+        executor_->Seam()(std::move(statement),
+                          [answer](const Status& status, std::string_view text) {
+                              answer->answered = true;
+                              answer->status = status;
+                              answer->text.assign(text);
+                          });
+    };
+
+    auto original = std::make_shared<Answer>();
+    auto retry = std::make_shared<Answer>();
+    ship(/*sequence=*/1, original);
+    ship(/*sequence=*/1, retry);  // no pump in between: the original is still running
+
+    // The retry is answered at once, and answered with the one true thing
+    // this core can say - not with a second execution and not with a guess.
+    ASSERT_TRUE(retry->answered);
+    EXPECT_EQ(retry->status.code(), StatusCode::kUnknownOutcome);
+    EXPECT_FALSE(IsRetryable(retry->status.code()));
+
+    for (int i = 0; i < 64 && !original->answered; ++i) scheduler_->RunOnce();
+    EXPECT_TRUE(original->status.ok()) << original->status.message();
+    EXPECT_EQ(executor_->executed(), 1u);
+
+    // One row. Before this rule there were two.
+    const std::string rows = Rows();
+    EXPECT_EQ(rows.find(",7"), rows.rfind(",7")) << rows;
+}
+
+TEST_F(ShippedStatementExecutorTest, ARecordedSessionHoldsOneOrderEntryHoweverManyItShips) {
+    // `kShippedDedupMaxRecords` is stated as the memory bound. It bounds
+    // records, so the order list has to hold one node per *key* and move it
+    // - one per statement would make the real bound the shipping rate times
+    // the retention, which is a bound on nothing a cap can state.
+    for (std::uint64_t sequence = 1; sequence <= 3000; ++sequence) {
+        ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", /*session_id=*/99, sequence).status.ok());
+    }
+    EXPECT_EQ(executor_->records(), 1u);
+    EXPECT_EQ(executor_->early_evictions(), 0u);
+}
+
+TEST_F(ShippedStatementExecutorTest, AShippedStatementMayNotLeaveATransactionOpen) {
+    // D1 scopes shipping to autocommit, and the reason it has to be
+    // enforced *here* and not only at the fork: this session is destroyed
+    // with the statement, so a transaction it adopted would stay `active_`
+    // forever - pinning `ReadHorizon()`, stalling the undo purge, and
+    // answering `IsInFlight` true for the life of the process. A dropped
+    // connection is rolled back (docs/txn.md section 10-8); so is this.
+    const Answer out = Ship("BEGIN", /*session_id=*/99, /*sequence=*/1);
+    ASSERT_TRUE(out.answered);
+    EXPECT_EQ(out.status.code(), StatusCode::kUnsupported) << out.status.message();
+    EXPECT_EQ(txns_->ActiveCount(), 0u) << "a shipped BEGIN left a transaction running";
 }
 
 }  // namespace
