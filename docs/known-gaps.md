@@ -591,8 +591,40 @@ still waits on its own gate, so:
   1.000, because its second arm always runs later — so every A/B ratio this
   harness has produced carries a ~10% ordering bias, `bench/v2.1.0`'s C1 and
   C2 controls included.
-- **Sustained shipped `CREATE INDEX` leaves a peer-owned relation
-  permanently unwritable, where core 0 fails cleanly** — found 2026-08-26 by
+- ~~**Sustained shipped `CREATE INDEX` leaves a peer-owned relation
+  permanently unwritable, where core 0 fails cleanly**~~ — **closed
+  2026-08-26** (worktree `fix-peer-index-build`). The cause was not the
+  index build at all: a peer's free-map copy is a snapshot taken at
+  `DevicePageStore::Open()`, and the only thing that refreshed it was a
+  *relation grant*. `sys.indexes` fills its root page and spills onto
+  `kCatalogOverflowFirst` (page 15), which core 0 allocates from the map it
+  owns; the peer then invalidates its catalog, re-reads the chain, follows
+  `next_page_id` into page 15, and `IsAllocated` answers from a snapshot in
+  which that page does not exist — `NotFound`, no retryable bit, forever,
+  and every INSERT hits it because every INSERT maintains the index.
+  Confirmed from the raw data file: page 15 **is** marked allocated on
+  disk while the peer answered not-found. The fix is one call —
+  `CoreRuntime::InvalidateCatalog()` now runs the pre-existing
+  `RefreshFreeMapFromDevice()` before evicting the catalog frames, which is
+  the same adoption the grant receivers already did for the case a grant
+  covers. Core 0 needed no change: `BroadcastCatalogInvalidation`'s
+  `FlushPages` already writes the dirty maps after the pages they describe,
+  before the message leaves. Measured after: the reproduction runs 297
+  builds at `cores = 4` and at `cores = 8` with the relation still
+  writable, where it died at 58. Pinned by three tests, each verified to
+  fail without the fix.
+  **The residual this leaves, named**: four catalog relations are written
+  with **no** `BumpVersion` and therefore no broadcast — `sys.patterns`,
+  `sys.pattern_defs`, `sys.access_stats` and `sys.assertions`. Core 0 can
+  grow any of them onto an overflow page and tell no peer. It is safe only
+  because a peer's dispatcher is built with no recorder, no replay, no
+  access statistics and no cabins, and its assertion registry is never
+  resumed, so a peer reads none of the four. **Enable any one of them on a
+  peer and this bug returns on a chain nothing invalidates** — the refresh
+  unions the whole region-0 map page, so a later bumping DDL would adopt
+  the bits anyway, making it a window rather than a permanent state, but
+  only if such a DDL ever follows. The original report follows.
+- **The original report, for the record** — found 2026-08-26 by
   T4's probe (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
   §8d), and **re-confirmed on the merged tree at `b85cd31`**, after
   FM2-FM5 raised the free-map ceiling. The shape, **measured** twice on each
