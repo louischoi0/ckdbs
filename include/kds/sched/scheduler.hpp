@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -28,9 +29,16 @@
 // Submit()/RegisterIoHandler()/RegisterMessageHandler()/RunOnce()/Run()/
 // Stop() must be called from the single thread that owns this reactor.
 // There is nothing to lock: the ready queues, the handler tables and the
-// consumed-runtime counters are plain (non-atomic) fields, and the only
-// atomics anywhere near this class are the two indices inside each SpscRing
-// (workplan-crosscore.md guideline 1).
+// consumed-runtime counters are plain (non-atomic) fields.
+//
+// **One exception, and it is the whole of it: `sleeping_`.** A peer's
+// `TrySend` reads that flag to decide whether this reactor needs waking out
+// of its idle block, and calls `IoBackend::Wake()` when it does. So exactly
+// one field and exactly one method are reachable from another thread; the
+// store-load argument that makes the pair race-free lives in
+// core_waker.hpp, and the `seq_cst` on both sides is load-bearing. Past
+// those two, the only atomics near this class remain the two indices inside
+// each SpscRing (workplan-crosscore.md guideline 1).
 //
 // **The read-only accessors are covered by that same rule**, and it has to
 // be said because a getter reads as safe: stopped(), iterations(),
@@ -314,6 +322,18 @@ private:
     // ---- Cross-core (sched.md §5) ---------------------------------------
     RingTransport* transport_ = nullptr;
     std::uint32_t core_id_ = 0;
+
+    // "This reactor is about to block, or is blocking." Published for one
+    // reader: a peer's `TrySend`, deciding whether this core needs a wake
+    // (core_waker.hpp carries the store-load argument, and the `seq_cst` on
+    // both sides is load-bearing - do not relax it). The only piece of
+    // scheduler state another thread ever touches, which is why it is the
+    // only atomic here; sched.md invariant 2 is otherwise intact.
+    //
+    // A `Scheduler` therefore may not move once registered: the transport
+    // holds `&sleeping_`. It has reference members and has never been
+    // movable, so this documents a property rather than adding one.
+    std::atomic<bool> sleeping_{false};
     // Keyed by the enum's underlying value. A small flat map would do as
     // well; what matters is that nothing iterates it, so its order is never
     // observable (sched.md §8's deterministic-container rule).

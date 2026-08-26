@@ -43,6 +43,13 @@ Status Scheduler::UnregisterIoHandler(IoHandle handle) {
 void Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) noexcept {
     transport_ = transport;
     core_id_ = core_id;
+    // Registering here, and only here, is what makes "a core that never
+    // attaches is never woken" true by construction rather than by care:
+    // the same call that gives this reactor an inbox gives its peers the
+    // way to say something is in it (core_waker.hpp).
+    if (transport_ != nullptr) {
+        transport_->RegisterWaker(core_id_, CoreWakeHandle{&sleeping_, &io_backend_});
+    }
 }
 
 Status Scheduler::RegisterMessageHandler(RingMessageKind kind, MessageHandler handler) {
@@ -315,8 +322,47 @@ bool Scheduler::RunOnce() {
     // pulled to the front, which is where a reactor can actually sleep: 0
     // when anything is runnable, otherwise up to the next timer deadline
     // (sched.md section 7).
+    //
+    // Three things can end that block: an I/O event, the timer that capped
+    // it, and - since the wake path - a peer with a message for this core.
+    // Before the third existed, a ring message waited out the whole block
+    // because the ring is memory and epoll cannot watch it; that cost a
+    // shipped statement a flat ~1.07 ms
+    // (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §4a).
     io_events_scratch_.clear();
-    Status io_status = io_backend_.PollReady(IdleTimeoutMs(), io_events_scratch_);
+    int idle_timeout_ms = IdleTimeoutMs();
+    bool published_sleeping = false;
+    if (idle_timeout_ms != 0) {
+        // About to block. Publish that first, then re-read the inbox: this
+        // is the sleeper's half of core_waker.hpp's store-load pair, and
+        // both memory orders there are seq_cst because the two sides touch
+        // different locations and nothing weaker orders them against each
+        // other.
+        //
+        // The re-read is a *peek*, never a drain: phase 3 stays the only
+        // place a message leaves the ring (sched.md §2's fixed phase order
+        // is a determinism rule). A peer that pushed just before reading
+        // `sleeping_ == false` is caught here, and this iteration runs
+        // straight through to phase 3 instead of sleeping on top of work
+        // that had already arrived.
+        sleeping_.store(true, std::memory_order_seq_cst);
+        // The sleeper's StoreLoad barrier. The store above is already a
+        // full one, but the load that follows is the *ring's* (acquire, on
+        // another object), so the pairing is stated explicitly here rather
+        // than resting on what a seq_cst store happens to compile to. Off
+        // the hot path by construction: this whole branch runs only when
+        // the reactor is about to sleep.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        published_sleeping = true;
+        if (transport_ != nullptr && transport_->HasPending(core_id_)) idle_timeout_ms = 0;
+    }
+    Status io_status = io_backend_.PollReady(idle_timeout_ms, io_events_scratch_);
+    // Only where it was published: a seq_cst store is a fence, and a
+    // saturated reactor takes this path millions of times a second without
+    // ever having claimed to be asleep. Paying a fence per iteration to
+    // clear a flag that is already false is the kind of cost that does not
+    // show up in a microbenchmark and does show up in §7's poll rate.
+    if (published_sleeping) sleeping_.store(false, std::memory_order_seq_cst);
     // A poll failure here is not fatal to the reactor: the loop keeps
     // running and the next iteration may succeed. But it is the top of the
     // stack, so nothing else can report it - it goes to the log, and only

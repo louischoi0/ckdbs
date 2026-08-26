@@ -97,6 +97,13 @@ public:
     bool TryReceive(std::uint32_t dst_core, MessageHeader& header,
                     std::vector<std::byte>& payload) override;
 
+    // Exactly `TryReceive`'s predicate without the delivery: a message
+    // addressed here whose deadline has passed. A message still in its
+    // injected delay is deliberately *not* pending - saying otherwise would
+    // let a delayed message keep a reactor awake, which is the one thing an
+    // injected delay is supposed to be able to model.
+    bool HasPending(std::uint32_t dst_core) const noexcept override;
+
     std::uint32_t core_count() const noexcept override { return core_count_; }
 
     // Messages sent but not yet delivered. For tests: "the pipeline is torn
@@ -116,7 +123,13 @@ private:
     };
 
     SimRingTransport(std::uint32_t core_count, const Clock& clock, SimTransportConfig config)
-        : core_count_(core_count), clock_(&clock), config_(config), rng_state_(config.seed) {}
+        : core_count_(core_count), clock_(&clock), config_(config), rng_state_(config.seed) {
+        // Sized like the real transport's even though this one never wakes
+        // (see the note in TrySend's file): a registration that silently
+        // did nothing on one implementation and something on the other is
+        // the kind of asymmetry a test would not catch.
+        InitWakers(core_count);
+    }
 
     // SplitMix64: a two-line generator with no external dependency and no
     // hidden global state, which is the whole requirement. Its statistical

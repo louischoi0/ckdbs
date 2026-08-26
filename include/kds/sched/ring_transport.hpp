@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "kds/base/status.hpp"
+#include "kds/sched/core_waker.hpp"
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/spsc_ring.hpp"
 
@@ -58,7 +59,48 @@ public:
     virtual bool TryReceive(std::uint32_t dst_core, MessageHeader& header,
                             std::vector<std::byte>& payload) = 0;
 
+    // Whether a `TryReceive(dst_core)` right now would return something.
+    // Read-only and side-effect free, which is what lets a reactor ask it
+    // from phase 1 without moving the drain out of phase 3 (sched.md §2's
+    // fixed phase order is a determinism rule, not a preference).
+    //
+    // It exists for exactly one caller: the sleeper's half of the
+    // store-load pair in core_waker.hpp. Callable only on `dst_core`'s own
+    // thread, like `TryReceive`.
+    virtual bool HasPending(std::uint32_t dst_core) const noexcept = 0;
+
     virtual std::uint32_t core_count() const noexcept = 0;
+
+    // Registers how to wake `core` when a message is delivered to it.
+    //
+    // Called once per core at startup, on the thread that later runs that
+    // core, before any peer can send - so the table needs no synchronization
+    // of its own and the handles inside it stay valid for the transport's
+    // life (core_waker.hpp's lifetime note). A core that never registers is
+    // simply never woken: the transport keeps working and that core pays
+    // its idle block, which is what every core did before this existed.
+    // Noexcept and allocation-free on purpose: the caller is
+    // `Scheduler::AttachTransport`, which is itself noexcept, so a resize
+    // here would turn an out-of-memory into a terminate. The table is sized
+    // by the implementation's constructor instead (InitWakers).
+    void RegisterWaker(std::uint32_t core, CoreWakeHandle waker) noexcept {
+        if (core < wakers_.size()) wakers_[core] = waker;
+    }
+
+protected:
+    // Called by an implementation's constructor, before anything can send.
+    void InitWakers(std::uint32_t core_count) { wakers_.assign(core_count, CoreWakeHandle{}); }
+
+    // Called by an implementation's `TrySend` **after** the message is
+    // visible to the reader, never before: the sender's store-load pair is
+    // ordered by that, and waking first would let the woken core drain
+    // nothing and go back to sleep with the message still invisible.
+    void WakeTarget(std::uint32_t dst_core) const noexcept {
+        if (dst_core < wakers_.size()) wakers_[dst_core].WakeIfSleeping();
+    }
+
+private:
+    std::vector<CoreWakeHandle> wakers_;
 };
 
 // The real transport: one SpscRing per **ordered** core pair, so a channel
@@ -88,15 +130,21 @@ public:
     Status TrySend(const MessageHeader& header, std::span<const std::byte> payload) override;
     bool TryReceive(std::uint32_t dst_core, MessageHeader& header,
                     std::vector<std::byte>& payload) override;
+    bool HasPending(std::uint32_t dst_core) const noexcept override;
     std::uint32_t core_count() const noexcept override { return core_count_; }
 
 private:
     RealRingTransport(std::uint32_t core_count, std::vector<SpscRing> rings)
         : core_count_(core_count), rings_(std::move(rings)),
-          next_peer_(core_count, 0) {}
+          next_peer_(core_count, 0) {
+        InitWakers(core_count);
+    }
 
     // Row-major (src, dst): rings_[src * n + dst].
     SpscRing& RingFor(std::uint32_t src, std::uint32_t dst) noexcept {
+        return rings_[static_cast<std::size_t>(src) * core_count_ + dst];
+    }
+    const SpscRing& RingFor(std::uint32_t src, std::uint32_t dst) const noexcept {
         return rings_[static_cast<std::size_t>(src) * core_count_ + dst];
     }
 

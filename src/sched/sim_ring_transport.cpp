@@ -72,6 +72,22 @@ Status SimRingTransport::TrySend(const MessageHeader& header,
     return Status::OK();
 }
 
+bool SimRingTransport::HasPending(std::uint32_t dst_core) const noexcept {
+    if (dst_core >= core_count_) return false;
+    const MonoTimeNs now = clock_->Now();
+    for (const Pending& p : pending_) {
+        if (p.header.dst_core == dst_core && p.deadline <= now) return true;
+    }
+    return false;
+}
+
+// Note what this transport deliberately does **not** do: wake its target.
+// `RingTransport::WakeTarget` is never called here, because every simulated
+// reactor is multiplexed onto one thread by a harness that decides which
+// one advances next (sched.md §8). There is no block to end, and a wake
+// would be a second source of "who runs now" beside the seeded scheduler -
+// which is the definition of the nondeterminism §8 exists to forbid.
+
 bool SimRingTransport::TryReceive(std::uint32_t dst_core, MessageHeader& header,
                                   std::vector<std::byte>& payload) {
     if (dst_core >= core_count_) return false;

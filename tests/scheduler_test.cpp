@@ -32,8 +32,12 @@ public:
         timeouts.push_back(timeout_ms);
         return Status::OK();
     }
+    // Never blocks, so there is nothing to end; counted because the wake
+    // path's tests care whether one was issued at all.
+    void Wake() noexcept override { ++wakes; }
 
     std::vector<int> timeouts;
+    int wakes = 0;
 };
 
 class SchedulerTimerTest : public ::testing::Test {

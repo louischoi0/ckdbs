@@ -942,6 +942,21 @@ still waits on its own gate, so:
   shipping, and deliberately unfixed by the run that found it.
   At four sessions and above the owner is never idle, the sleep never
   happens, and shipping runs at **0.93–0.99×** — inside the floor.
+  **The wake path is built 2026-08-26** (worktree `v2.3.0-reactor-wake`,
+  the v2.3.0 order's RW1–RW2): `IoBackend::Wake()` behind an eventfd the
+  epoll set already watches, and a `TrySend` that wakes a target whose
+  `sleeping_` flag says it is blocked — nine of the engine's eleven park
+  sites are satisfied by a peer's message and are covered by it
+  (`docs/spec/sched.md` §7 carries the census, and the two that are not
+  with what covers them instead). Proven by a test that fails by *waiting
+  out a 30-second block* when the wake is removed, and by the negative
+  control that was run to show it does. **What is not yet closed here is
+  the price**: the R1 cell's 0.429–0.531 has not been re-measured at the
+  fixed engine, so the ~2× penalty stands as this file's number until it
+  is. The rounding floor (`IdleTimeoutMs` in whole milliseconds) is
+  untouched by design — after the wake a ring message no longer waits for
+  a timer at all, and whether the floor still costs anything is a
+  measurement, not an assumption.
 - **One parked waiter already burns ~89% of an arrival core** (measured
   2026-08-26, B4). Polls rise 3.1M → 7.9M/s from K = 1 to K = 16 while the
   cost per poll holds at 0.059–0.068 µs: the spin signature the pretasks
