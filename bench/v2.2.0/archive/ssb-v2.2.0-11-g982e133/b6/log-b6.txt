@@ -1,0 +1,54 @@
+  b6 r1: a=897.4 b=471.5
+  b6 r2: a=867.5 b=473.0
+  b6 r3: a=872.6 b=473.7
+  b6 r4: a=876.6 b=472.5
+  b6 r5: a=878.1 b=469.2
+== b6: a=876.6 b=472.5 ratio=0.539 (0.5254..0.5452) refused a=0 b=0
+
+archived to /home/ubuntu/ckdbs/.claude/worktrees/workplan-v2.2.0/bench/v2.2.0/archive/ssb-v2.2.0-11-g982e133-b6
+{
+  "b6": {
+    "cell": "b6",
+    "reps": 5,
+    "contended": [],
+    "gate_wait_max_s": 0,
+    "a_ips_median": 876.6,
+    "a_ips_min": 867.5,
+    "a_ips_max": 897.4,
+    "a_p0_us": 437.3,
+    "a_p25_us": 1074.0,
+    "a_p50_us": 1160.6,
+    "a_p95_us": 1348.1,
+    "a_p99_us": 1444.4,
+    "a_attempted": 125000,
+    "a_executed": 125000,
+    "a_refused": 0,
+    "a_retries": 0,
+    "a_verify_bad": [],
+    "a_classes": {},
+    "b_ips_median": 472.5,
+    "b_ips_min": 469.2,
+    "b_ips_max": 473.7,
+    "b_p0_us": 869.8,
+    "b_p25_us": 2003.5,
+    "b_p50_us": 2127.9,
+    "b_p95_us": 2756.7,
+    "b_p99_us": 3158.5,
+    "b_attempted": 125000,
+    "b_executed": 125000,
+    "b_refused": 0,
+    "b_retries": 0,
+    "b_verify_bad": [],
+    "b_classes": {},
+    "ratio_per_rep": [
+      0.5254,
+      0.5452,
+      0.5429,
+      0.539,
+      0.5343
+    ],
+    "ratio_median": 0.539,
+    "ratio_min": 0.5254,
+    "ratio_max": 0.5452
+  }
+}
