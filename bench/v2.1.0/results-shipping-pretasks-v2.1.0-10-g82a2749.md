@@ -455,3 +455,111 @@ are. At `cores = 8, tables = 14` concentrating beats spreading by **1.98×**
 shipping.** Shipping re-concentrates commits onto owner cores; the arm that
 does that here is the one that wins at every session count above one per
 core, and the margin grows with load.
+
+---
+
+## 7. T3 — the four-core-server effect: one candidate dead, one harness bias found, the rest not separable
+
+`bench/v2.1.0` §7 measured `cores = 4` with **everything on core 0 and
+nothing cross-core happening at all** beating `cores = 1` by 1.071× aggregate
+and 1.457× on insert p50, and §11-3 left it undiscriminated with three named
+candidates: four WAL anchors, per-core extent leases, background work moving
+off core 0. It is currently a larger effect than rotation's whole
+contribution, so every multi-core ratio needs it subtracted.
+
+### 7a. The null cell, which changes how every other ratio is read
+
+The sweep's first cell is `cores = 1` against `cores = 1` — the same driver,
+two identical servers, compared to each other. It should be 1.000.
+
+**measured** — `bench/run_t3.py --cores 1,2,3,4,8 --tables 6 --rows 2000`,
+`--placement creating`, no peer listeners, 5 reps per cell, `errors=0`
+throughout:
+
+| cores | ratio (median) | spread | insert p50 gain | N-core stmt/s | one-core stmt/s |
+|---|---|---|---|---|---|
+| **1 (null)** | **1.099** | 0.970–1.115 | 1.186 | 3,761 | 3,469 |
+| 2 | 1.131 | 1.078–1.195 | 1.340 | 3,913 | 3,479 |
+| 3 | 1.183 | 1.130–1.227 | 1.300 | 4,161 | 3,506 |
+| 4 | 1.202 | 1.142–1.307 | 1.325 | 4,293 | 3,516 |
+| 8 | 1.340 | 1.318–1.354 | 1.461 | 4,659 | 3,474 |
+
+**The null cell is not 1.000; it is 1.099.** The driver starts its
+`single-core` arm first and its second arm afterwards on the same box, and
+the second arm is ~10% faster for reasons that have nothing to do with what
+is being compared. Every A/B ratio this driver produces carries that, and
+**`bench/v2.1.0` never ran this cell** — so its C1 (1.071) and C2 (1.067)
+cannot be separated from an ordering bias by anything in that file. That is a
+statement about the harness, not about that run's conclusions: H3's 1.751×
+was computed as a *cross-cell* comparison of absolute aggregates, which the
+bias does not touch.
+
+Divided through by the null cell, the residual four-core-server effect on
+this host is **1.03× at 2 cores, 1.08× at 3, 1.09× at 4 and 1.22× at 8** —
+real, monotone in the core count, and roughly a third of what the raw ratios
+show.
+
+### 7b. The candidate configuration cannot reach — and it is dead
+
+The three candidates §11-3 names are all *engine* state, and none of them has
+a knob: `wal_anchor_count` is a **high-water mark of anchor slots ever
+published** (`src/server/superblock.cpp:174`, **source-read**), not a
+setting; per-core extent leases are unconditional above `cores = 1`; and
+background work has no toggle.
+
+There is a fourth candidate that list does not name, and it *is* testable
+from outside: **the peer reactors are idle but not asleep**. A reactor with
+nothing to do blocks in `PollReady` for at most `max_idle_block_ms` = 10 ms,
+so every peer core wakes ~100 times a second forever — which on a server CPU
+is the difference between a deep C-state and a merely idle core, and which
+would scale with the core count exactly as the measured effect does.
+
+**measured** — `bench/idle_wakers_probe.py --wakers 3,7 --cores-arms 1,4,8
+--tables 6 --rows 2000 --reps 3`, insert phase only, arms **interleaved by
+repetition** so drift cannot land on one of them, helper processes pinned one
+per otherwise-unused CPU and doing nothing but `sleep(10 ms)` in a loop:
+
+| arm | ips (median) | spread | insert p50 | against `cores = 1` |
+|---|---|---|---|---|
+| `cores = 1`, no wakers | 2,743 | 2,519–2,864 | 2,198 µs | 1.000 |
+| `cores = 1`, **3 wakers** | 2,628 | 2,588–3,080 | 2,256 µs | **0.958** |
+| `cores = 1`, **7 wakers** | 2,661 | 2,633–3,196 | 2,234 µs | **0.970** |
+| `cores = 4`, no wakers | 2,965 | 2,837–3,388 | 1,966 µs | **1.081** |
+| `cores = 8`, no wakers | 3,090 | 3,045–3,879 | 1,891 µs | **1.127** |
+
+**Supplying the wake cadence from outside the process reproduces none of the
+effect** — it is slightly *negative*, which is what adding processes to a box
+usually is — while the same probe's `cores = 4` and `cores = 8` arms show
+1.081× and 1.127× in the same interleaved run. The candidate is dead by
+measurement rather than by argument, and this probe's ratios are the
+cleanest estimate of the residual effect in this document, because it has no
+A/B ordering to be biased by.
+
+### 7c. What `SHOW META` says, and where this stops
+
+**measured**, one `SHOW META` per arm after the same workload: across
+`cores` 1, 2, 3, 4 and 8 every field is identical — `undo_pages_live=2`,
+`undo_pages_recycled=64`, `recovery_records=0`, `catalog_marks_purged=0` —
+**except `wal_anchor_count`, which is the core count**. And that one cannot
+be the cause: with `creating` placement only core 0 ever writes, so the other
+anchors are allocated slots nothing touches.
+
+Per-core CPU says the same thing from the other side: nothing is near
+saturated in any arm — every CPU sits at 1.3–7.1% busy, and core 0 is not
+distinguishable from the rest, because the driver's own threads float across
+the box while the single reactor is pinned.
+
+**So this is where T3 stops, exactly as its instructions require.** Of the
+four candidates, one is dead (the idle-wake cadence), one is visible but
+excluded by its own semantics (`wal_anchor_count`), and the remaining two —
+per-core extent leases and background work — have no configuration that
+separates them on this engine. Finding out would mean patching the engine,
+which a measurement run may not do.
+
+**What this run does establish about it**: the effect is real, it is
+**1.08–1.13×** rather than the 1.20–1.34× the raw A/B shows, it grows with
+the core count, and **any future multi-core ratio on this harness must be
+divided by a null cell before it is quoted** — which is the finding with the
+longest reach, because it applies to every number this driver has ever
+produced.
+

@@ -1,0 +1,133 @@
+{
+  "configs": {
+    "single-core": {
+      "cores": 1,
+      "phases": {
+        "insert": {
+          "n": 12001,
+          "p50_us": 2163,
+          "p99_us": 2862
+        },
+        "point-select": {
+          "n": 12000,
+          "p50_us": 86,
+          "p99_us": 1314
+        },
+        "update": {
+          "n": 12000,
+          "p50_us": 2372,
+          "p99_us": 2820
+        },
+        "delete": {
+          "n": 6000,
+          "p50_us": 2324,
+          "p99_us": 2754
+        },
+        "scan": {
+          "n": 6,
+          "p50_us": 1332,
+          "p99_us": 1456
+        }
+      },
+      "verify": "survivors as expected (1000, and one more in bench0 for the probe row)",
+      "placement": "bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0",
+      "refills": "none (no peer listener)",
+      "retries": "retries: none",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 11.84,
+      "aggregate_stmt_s": 3547.0,
+      "errors": 0
+    },
+    "multi-core": {
+      "cores": 3,
+      "phases": {
+        "insert": {
+          "n": 12001,
+          "p50_us": 1652,
+          "p99_us": 2236
+        },
+        "point-select": {
+          "n": 12000,
+          "p50_us": 85,
+          "p99_us": 1019
+        },
+        "update": {
+          "n": 12000,
+          "p50_us": 2105,
+          "p99_us": 2618
+        },
+        "delete": {
+          "n": 6000,
+          "p50_us": 2158,
+          "p99_us": 2620
+        },
+        "scan": {
+          "n": 6,
+          "p50_us": 1320,
+          "p99_us": 15138
+        }
+      },
+      "verify": "survivors as expected (1000, and one more in bench0 for the probe row)",
+      "placement": "bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0",
+      "refills": "none (no peer listener)",
+      "retries": "retries: none",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 10.09,
+      "aggregate_stmt_s": 4165.0,
+      "errors": 0
+    }
+  },
+  "ratio": 1.174,
+  "raw_lines": 33,
+  "cores": 3,
+  "rep": 3,
+  "returncode": 0,
+  "timed_out": false,
+  "elapsed_s": 24.08637762069702,
+  "invocation": "/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 3 --tables 6 --rows 2000 --placement creating --workdir /home/ubuntu/mcbench2/t3/c3-r3 --port 19672",
+  "cpu": {
+    "cpu0": {
+      "mean": 0.04794695532895432,
+      "peak": 0.2708333333333333,
+      "samples": 48
+    },
+    "cpu1": {
+      "mean": 0.05264953055690361,
+      "peak": 0.34,
+      "samples": 48
+    },
+    "cpu2": {
+      "mean": 0.03435388987540745,
+      "peak": 0.13043478260869565,
+      "samples": 48
+    },
+    "cpu3": {
+      "mean": 0.03672796501543761,
+      "peak": 0.1956521739130435,
+      "samples": 48
+    },
+    "cpu4": {
+      "mean": 0.04995478354385233,
+      "peak": 0.3469387755102041,
+      "samples": 48
+    },
+    "cpu5": {
+      "mean": 0.028806005558251666,
+      "peak": 0.14893617021276595,
+      "samples": 48
+    },
+    "cpu6": {
+      "mean": 0.03703332372910976,
+      "peak": 0.14893617021276595,
+      "samples": 48
+    },
+    "cpu7": {
+      "mean": 0.0454837719662333,
+      "peak": 0.16666666666666666,
+      "samples": 48
+    }
+  },
+  "usable": true
+}
