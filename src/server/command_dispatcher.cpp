@@ -601,6 +601,19 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // this one is live dispatcher state and prints unconditionally.
        << " catalog_marks_purged=" << catalog_marks_purged_;
 
+    // FM10 (docs/workplan-multi-free-map.md): what the allocation map
+    // costs, printed unconditionally because a one-region database's `1`
+    // is the answer that says the multi-page map is costing nothing here.
+    // `map_pages_resident` below twice `map_regions` is FM6's saving made
+    // visible: a database with no Waystone directory builds no headerless
+    // bitmap at all, and `headerless_pages=0` is the fact that lets
+    // IsHeaderless answer with no lookup on the fault, write-back and
+    // WAL-gate paths.
+    const auto map = page_store_.map_residency();
+    os << " map_regions=" << map.regions << " map_pages_resident=" << map.resident_pages
+       << " map_coverage_ids=" << map.coverage_ids
+       << " headerless_pages=" << (map.has_headerless ? 1 : 0);
+
     // The undo purge's two numbers (docs/workplan-undo-purge.md UP3):
     // live pages plateauing under a write-heavy loop is the feature, and
     // the recycle count is what proves the plateau came from reuse rather

@@ -68,6 +68,14 @@ StatusOr<Extent> ExtentAllocator::Reserve(std::uint32_t count) {
             continue;
         }
         const std::uint32_t start = *found;
+        // A bitmap id is occupied whatever its bit says: under FM6 a
+        // region's headerless map carries no bit until the page is placed,
+        // and handing that id out would put a data page where the bitmap
+        // must go. Arithmetic, for the reason CreateNew gives.
+        if (IsMapPageId(base + start)) {
+            candidate = base + start + 1;
+            continue;
+        }
 
         // **D3(a): a reservation never straddles a region.** A run that
         // would cross abandons the tail of this region and restarts in the
@@ -91,7 +99,10 @@ StatusOr<Extent> ExtentAllocator::Reserve(std::uint32_t count) {
         }
 
         std::uint32_t run = 0;
-        while (run < count && !FreeMapIsAllocated(map.value(), start + run)) ++run;
+        while (run < count && !FreeMapIsAllocated(map.value(), start + run) &&
+               !IsMapPageId(base + start + run)) {
+            ++run;
+        }
 
         if (run == count) {
             // Marked here, not at first use: an id promised to one core must
@@ -100,6 +111,11 @@ StatusOr<Extent> ExtentAllocator::Reserve(std::uint32_t count) {
             for (std::uint32_t i = 0; i < count; ++i) {
                 FreeMapAllocate(map.value(), start + i);
             }
+            // Every one of those bits was proved clear by the probe above,
+            // so the store's maintained count moves by exactly `count`
+            // (D8(a); DevicePageStore::NoteAllocated says why it may add
+            // rather than re-scan).
+            if (store_ != nullptr) store_->NoteAllocated(count);
             next_ = base + start + count;
             ++reservations_;
             return Extent{base + start, count};

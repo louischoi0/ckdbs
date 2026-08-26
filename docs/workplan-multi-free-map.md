@@ -1,24 +1,42 @@
 # Workplan — the multi-page free map (`docs/page.md` §5)
 
-**Status: the ceiling is lifted. D1, D3 and D4 were settled by the operator
-2026-08-26 and FM1-FM5 are built the same day; FM6-FM11 are not, and D2, D5-D9
-and the new D10 are open.** An instance is bounded by the 2^31-page design
-ceiling now, not by one bitmap page's 65,280 ids. `docs/page.md` §5 says
-free-map pages "sit at computable interval positions in the id space" and does
-not say which positions; §2 recorded the candidates and their costs and picked
-none, and **the operator picked candidate A** — the map pair at the head of the
-region it covers. D2 and D5-D9 remain named decisions in §7, in the shape
-`docs/workplan-peer-writer.md` §7b uses: the statement, the options, what each
-costs, and no silent default.
+**Status: complete. FM1-FM11 built 2026-08-26.** An instance is bounded by the
+2^31-page design ceiling, not by one bitmap page's 65,280 ids.
 
-Everything the survey states about the *pre-FM1* code was read at `d8be95a`
-and re-checked at `56b20d2` before the series started; FM1's own claims name
-their commit where they are made.
+`docs/page.md` §5 said free-map pages "sit at computable interval positions in
+the id space" and did not say which positions. §2 recorded the two candidates
+and their costs and picked neither; **the operator picked candidate A** — the
+map pair at the head of the region it covers — along with D3(a), D4(a) and,
+later the same day, D2(a), D5(a), D8(a) and D10(a).
 
-Every claim below about code was read on the `multi-free-map` worktree at
-`d8be95a`. No measurement was taken and none was needed — every finding here
-is structural, and this worktree has no `build-release` of its own. §8 names
-the two numbers that *will* need one once something is built.
+**Decisions, and how each closed** (full statements in §7):
+
+| | Question | Closed as |
+|---|---|---|
+| D1 | placement arithmetic | operator: candidate A |
+| D2 | the headerless map at scale | operator: (a) — **after FM2 dissolved the premise**; see FM6 |
+| D3 | may a run straddle a region | operator: (a), refuse |
+| D4 | map pages in the pool | operator: (a), store-owned |
+| D5 | peer coherence | operator: (a), refresh every resident region |
+| D6 | `page.md` §4/§5 vs `superblock.hpp` | **still open** — a doc conflict this work did not need to resolve |
+| D7 | mount validation scope | (a), and **forced rather than chosen**; see FM9 |
+| D8 | what `allocated_pages()` means | operator: (a), maintained |
+| D9 | does the map become logged | **deliberately open**; stays unlogged, RC04 repairs |
+| D10 | the grant bitmaps' own ceiling | operator: (a), grow per region — a decision this work *created* |
+
+Two of this document's own claims were **retracted by building it**, and both
+are marked where they were made rather than quietly amended: §5's argument that
+`IsHeaderless` could double the miss path (FM6 — FM2's eager loading removed
+the cost), and §5's single-digit residency target (FM8 — resident map pages
+track file size, not access pattern). §2's warning that candidate A would need
+a third clause in `MayFault` also did not come true, because D4(a) keeps map
+pages out of the pool; the two decisions cancelled.
+
+Everything the survey states about the *pre-FM1* code was read on the
+`multi-free-map` worktree at `d8be95a` and re-checked at `56b20d2` before the
+series started; the FM rows in §6 name their own commits. §1's line numbers are
+pre-FM2 and are kept as the record of what was changed, not as a map of what is
+there now.
 
 **Scope.** Raise the instance ceiling from one bitmap page to a computable
 family of them. In scope: the addressing arithmetic, the store's map cache,
@@ -511,8 +529,48 @@ workflow. D1 was settled 2026-08-26, so the series has started.
   always dropped a leased store's map writes. So a peer gets a private, empty,
   never-dirty region — its region-0 copy's semantics, generalised. Recording a
   peer's headerless pages durably is FM7's, under D5.
-- **FM6 — the headerless map at scale.** Whatever **D2** picks. Sequenced
-  after FM2 so its fast path is measured against a real cache.
+- **FM6 — the headerless map at scale. Built 2026-08-26**, as D2(a) — but
+  **the decision's premise had to be corrected before it could be answered**,
+  and the correction is the substance of this row. §5 argued `IsHeaderless`
+  could cost a second fault per fault, because the headerless map would be
+  partly resident and the paths it sits on follow a scattered working set.
+  FM2 loads every region that exists at mount, so **every headerless bitmap is
+  already resident and the lookup is a `std::map::find` plus a bit test** — no
+  I/O, no fault, no second miss. The cost §5 named does not exist, and FM6 is
+  therefore not the thing §5 asked for.
+  What remains is *resident memory*: 16 KiB per 510 MiB of file, about 526 MiB
+  at the 16 TiB ceiling, half of it headerless bitmaps. D2(a) attacks that
+  half. Two mechanisms, both cheap:
+  - **A region's headerless bitmap is not built until the region holds a
+    headerless page**, and **its id is not marked allocated until then
+    either**. A database with no Waystone directory therefore holds one
+    bitmap page per region instead of two and reads one per region at mount.
+    `allocated_pages()` on a fresh database is 1 where it was 2, which is the
+    honest number: nothing is at that id.
+
+    That second clause is a **correction the simulation harness forced**, and
+    it is the more interesting half. FM6 first shipped with the id *reserved*
+    at region creation and only the bytes deferred — which reads as the safe
+    choice, since a reserved id cannot be handed out. It is not: an id the
+    free map calls allocated whose page was never written is precisely the
+    signature of a torn creation, and `sim/`'s integrity sweep reads every
+    allocated page. It failed on seed 4, in three modes, with
+    *"page 2: allocated page unreadable ... never written (all zero)"*. The
+    fix is to claim the id in `EnsureHeaderlessMap`, as the page is placed,
+    and to let both allocation paths skip a bitmap id by **arithmetic**
+    (`IsMapPageId`) rather than by finding a bit set. That is strictly more
+    robust than the reservation it replaced: allocation correctness no longer
+    depends on a bit having been written at the right moment, and the same
+    `IsMapPageId` already guarded `CreateAt`.
+  - **A whole-instance `any_headerless_` flag** short-circuits `IsHeaderless`
+    to `false` with *no lookup at all* — the fast path D2(a) actually named.
+    Seeded at mount from what loaded, moved by the one writer that can change
+    it. `src/stats/waystone_dir.cpp` is the engine's only caller of
+    `CreateNewHeaderless`, which is what makes "one writer" true rather than
+    hopeful.
+  A database written before the headerless map existed has nothing at that id
+  and reads as `kInvalid`, which is now simply "no headerless pages here" —
+  the legacy special case stopped being special.
 - **FM7 — peer stores.** What a non-zero core loads at `Open`, what it may
   fault, and whether its cached map pages can go stale in a way `EvictClean`
   does not cover (**D5**). Under candidate A — chosen — this includes
@@ -526,31 +584,99 @@ workflow. D1 was settled 2026-08-26, so the series has started.
   drops the id at `device_page_store.cpp:462`'s explicit `if`, `GrantFaultPages`
   loses it to `FreeMapAllocate`'s silent no-op, and the failure then surfaces
   one layer away, as `MayFault` refusing a page the grant appeared to cover.
-  FM7 either grows them the same way FM2 grows the map or replaces them with a
-  representation that is not a bitmap; that choice is **D10**.
-- **FM8 — residency and the pinned class.** Extend `IsPinnedClass`'s kind half
-  (`device_page_store.cpp:848`) to `PageType::kFreeMap` and
-  `kHeaderlessMap`, and add the counter that makes §5's single-digit target a
-  checked property rather than a design intention.
-- **FM9 — mount validation.** Whatever **D7** picks, plus: `fresh` detection
-  stays region 0's business, and a torn map page must refuse the mount the way
-  a torn catalog page has since RV3
-  (`docs/workplan-rv3-catalog-recovery.md`) rather than being served.
-- **FM10 — observability.** `SHOW META` reports resident map pages, map pages
-  in existence, and coverage; `allocated_pages()`'s meaning and cost per
-  **D8**.
-- **FM11 — the ceiling tests, moved. Partly done 2026-08-26** as FM3's
-  fallout: the three tests that *failed* when the ceiling moved were rewritten
-  with their reasoning (the two named below plus
-  `tests/wal_high_water_test.cpp`, which this row missed). What remains is the
-  sweep for tests that still *pass* while asserting the old meaning, and the
-  `sim/` run over a two-region device.
-  `tests/extent_lease_test.cpp:82`,
-  `tests/device_page_store_test.cpp:113-115` and `tests/free_map_test.cpp`'s
-  out-of-range cases all pin 65,280 as the *instance* ceiling today; each
-  becomes a per-page-coverage test plus a new instance-ceiling test at
-  `kMaxPageCount`. A `sim/` run over a device spanning two regions is the
-  end-to-end gate.
+  **Built 2026-08-26 as D10(a)**: `rights_regions_` is a
+  `std::map<region, RightsRegion>` mirroring `map_regions_`, each half built
+  only when something is granted into that region, and both `HasFaultRight`
+  and `HasWriteRight` lost their id ceiling. `GrantFaultPages` no longer
+  clamps an extent — an extent is an id range and nothing confines it to one
+  region, so the loop creates each region's bitmap as it reaches it — and
+  `TryClaimByStamp`'s ceiling moved to `kMaxPageCount`. Never persisted, so
+  there was no format question and no migration, which is what made growing
+  them the cheap answer.
+  **D5(a) built the same day**: `RefreshFreeMapFromDevice` refreshes *every*
+  resident region rather than region 0 alone. The reason it had to is
+  structural — `Open` runs before the lease is installed, so a peer loads
+  every region the device holds and every one of them goes stale from that
+  moment; refreshing only the first left the rest frozen at mount. The
+  scratch-validate-union discipline is per region and unchanged, and a region
+  the peer created privately after its lease was installed is skipped, since
+  the device holds no such page.
+  **One cost D1 named did not arise.** §2's candidate A warned that `MayFault`
+  would need a third clause, because a map page above `kFirstUserPageId` is
+  one a peer must fault. It does not: D4(a) keeps map pages store-owned and
+  out of `frames_`, so no map page is ever faulted and `MayFault` is never
+  asked about one. The two decisions cancelled.
+- **FM8 — residency and the pinned class. Built 2026-08-26.**
+  `IsPinnedClass` gained both halves: the kind half now names `kFreeMap` and
+  `kHeaderlessMap` beside `kCabinBound`, and an *arithmetic* half above it —
+  `IsMapPageId` answers without a resident frame to read a header off, which
+  the id-range half could not do for a map page scattered above
+  `first_evictable_page_id_`. Under D4(a) this is a guard against a future
+  that pools map pages rather than a live case, and it is written as
+  arithmetic precisely so that future cannot get it wrong.
+  **§5's single-digit target is retracted, not met.** It assumed a hint-local
+  working set over a partly-resident map. FM2 loads every region that exists,
+  so resident map pages are `regions + regions-with-a-headerless-bitmap` — a
+  number that tracks file size, not access pattern. FM10 reports it rather
+  than checking it against a target that no longer describes the design.
+- **FM9 — mount validation. Built 2026-08-26, as D7(a) — and D7 turned out
+  to be narrower than it read.** Loading every region at mount is *forced* by
+  a signature, not chosen: `IsAllocated` and `IsHeaderless` are
+  `const noexcept` and sit on the fault path, the write-back path and the WAL
+  gate, so neither can read a device or report a failure, and D7(b)'s
+  load-on-first-touch would need a `mutable` cache with a swallowed error —
+  the exact failure shape RV3 converted into a refusal. Since a region must be
+  loaded to be trusted, and loading validates, D7(a) follows. `fresh`
+  detection stayed region 0's business, and a torn map page refuses the mount
+  with `Corruption` (`ATornMapPageRefusesTheMountRatherThanServingIt`).
+  What this leaves genuinely open is *cost*, not correctness: mount reads one
+  page per region, which is 32,896 scattered reads for a full 16 TiB file.
+  Nothing in the engine can produce such a file yet, and when something can,
+  the fix is a batched `ReadPageRun` over the map ids rather than a change of
+  policy.
+- **FM10 — observability. Built 2026-08-26.** `SHOW META` prints
+  `map_regions`, `map_pages_resident`, `map_coverage_ids` and
+  `headerless_pages`, unconditionally — a one-region database's `1` is the
+  answer that says the multi-page map costs nothing here, and
+  `map_pages_resident` below twice `map_regions` is FM6's saving made visible
+  rather than assumed. Reported through a `PageStore::MapResidency` virtual
+  defaulted to a map of nothing, so the dispatcher stays blind to which
+  concrete store it holds, which is the seam every other store-shaped
+  reporting path uses.
+  **D8(a) built with it**: `allocated_pages()` is maintained, not swept —
+  seeded at mount (which already reads every region, so the seed is free) and
+  moved by each site that sets a free-map bit. One of those sites is not in
+  the store: `ExtentAllocator::Reserve` marks through the raw span, so it
+  reports its run through `NoteAllocated`, and it may add rather than re-scan
+  because the probe next door proved every bit of that run clear.
+  `RefreshFreeMapFromDevice` is the one path that changes bits without being
+  able to report how many, so it recounts.
+- **FM11 — the ceiling tests, moved. Built 2026-08-26.** Two rounds, because
+  the ceiling moved twice in one day. FM3's round rewrote the three tests that
+  *failed* when the instance ceiling became `kMaxPageCount` — and there were
+  three, not the two this row originally named: `tests/wal_high_water_test.cpp`
+  was missed. FM6's round rewrote two more that failed when the headerless
+  bitmap stopped being built unconditionally, and one of them,
+  `FlushWritesIdSortedWithTheFreeMapLast`, came out **stronger**: it now pins
+  the no-headerless case (free map last, nothing else) *and* the case that
+  actually exercises the ordering rule (create a headerless page, then assert
+  headerless-then-free-map). `tests/extent_lease_test.cpp`'s coverage test is
+  a per-page-coverage test now, with a new instance-ceiling test beside it,
+  and `tests/free_map_test.cpp`'s out-of-range cases were already per-page and
+  needed no change.
+  A third round followed FM6's correction: eight tests asserted the old
+  `allocated_pages()` totals, which fell by one per region when the
+  headerless id stopped being reserved. Three of those are pre-existing
+  (`FreshDeviceHasOnlyTheTwoMapsAllocated`, now
+  `...HasOnlyTheFreeMapAllocated`, and the two reopen tests) and five are this
+  series'.
+  **Not done, and named rather than implied**: the `sim/` run over a device
+  spanning *two regions*. Note what did happen, though — `sim/` ran on region
+  0 alone and still caught FM6's defect, because the flaw was in what a
+  region's creation marks rather than in crossing between regions. Reaching
+  region 1 needs the harness to place pages above 65,280, which is a
+  `SimPlan` change and not a test edit. §8 carries it with the other owed
+  run.
 
 ### 6a. Reclamation is out of scope and is **not** a prerequisite
 
@@ -594,7 +720,16 @@ and nowhere else, and `kFreeMapPageId` / `kHeaderlessMapPageId` are
 `static_assert`ed against `FreeMapPageIdFor(0)` / `HeaderlessMapPageIdFor(0)` at
 their declarations, so the two fixed ids stopped being independent facts.
 
-### D2. How the headerless map answers per read, once it is not one page
+### D2. How the headerless map answers per read, once it is not one page — **SETTLED 2026-08-26: (a), after the premise was corrected**
+
+**Read FM6 before the options below.** The question as posed rests on §5's
+claim that `IsHeaderless` could cost a second fault per fault, and FM2
+dissolved that claim by loading every region at mount — the lookup never
+faults. What survived is a memory figure, and (a) is what the operator chose
+against it: a region's headerless bitmap is built only where something is
+headerless, and a whole-instance flag answers `false` with no lookup when
+nothing is. (c) became moot with the premise. (b) and (d) stay available and
+unbuilt.
 
 §5 states the problem: `IsHeaderless` sits on the fault, write-back and
 WAL-gate paths, and those follow a scattered working set rather than a hint.
@@ -664,7 +799,13 @@ revisited rather than merely extended.
   written in a second pass, or a low-id map page is published ahead of the
   data it describes.
 
-### D5. Peer coherence for cached map pages
+### D5. Peer coherence for cached map pages — **SETTLED 2026-08-26: (a)**
+
+Built as "refresh every resident region", which is (a) minus its faulting
+half: a peer needs no on-demand fault because `Open` runs before the lease is
+installed and loads every region the device holds. (a)'s stated requirement —
+a third clause in `MayFault` — did not arise either, because D4(a) keeps map
+pages out of the pool entirely. See FM7.
 
 A peer's map copy is frozen at its `Open()` (`core_runtime.cpp:54`), and that
 is sound today because `IsAllocated` short-circuits on `lease_->Owns()`
@@ -683,7 +824,12 @@ stale, and `EvictClean` — the invalidation route core 0 uses for catalog pages
   changes what a peer can say about a page core 0 allocated after the peer
   started.
 
-### D6. `docs/page.md` §4/§5 vs. `superblock.hpp` — which is right?
+### D6. `docs/page.md` §4/§5 vs. `superblock.hpp` — which is right? **Still open.**
+
+Untouched by FM1-FM11, and deliberately: neither placement candidate needed a
+stored root, so the whole series ran without resolving the contradiction. It is
+a documentation defect rather than a design one — `page.md` describes a field
+the superblock does not have and never had — and it outlives this workplan.
 
 §4 says the superblock anchors the "free-map root, high-water"; §5 repeats it.
 `include/kds/server/superblock.hpp:16-20` says the opposite, in as many words
@@ -693,7 +839,16 @@ the code, since neither §2 candidate needs a stored root; **(b)** add the
 fields, which is a superblock version bump and reopens whether placement is
 arithmetic at all. Flagged rather than guessed, per CLAUDE.md.
 
-### D7. Mount validation scope
+### D7. Mount validation scope — **SETTLED 2026-08-26: (a), and forced rather than chosen**
+
+The choice below reads as a policy question and is not one. `IsAllocated` and
+`IsHeaderless` are `const noexcept` and sit on the fault path, the write-back
+path and the WAL gate; neither can read a device or report a failure. (b)'s
+load-on-first-touch therefore needs a `mutable` cache with a swallowed error —
+the failure shape RV3 deliberately converted into a refusal — so a region must
+be loaded to be trusted, and loading is validating. What stays open is the
+*cost*: 32,896 scattered reads at a full 16 TiB, wanting a batched
+`ReadPageRun` before anything can produce such a file. See FM9.
 
 Today `Open` validates both map pages at the door
 (`device_page_store.cpp:38`, `:64`). With N regions: **(a)** validate every
@@ -703,7 +858,7 @@ validate region 0 at mount and the rest on first touch — constant mount cost,
 but a torn map page surfaces mid-statement, which is the failure shape RV3
 deliberately converted into a refusal.
 
-### D8. What `allocated_pages()` means once it must sweep
+### D8. What `allocated_pages()` means once it must sweep — **SETTLED 2026-08-26: (a), maintained**
 
 It is `FreeMapCountAllocated` over one page (`device_page_store.cpp:186`),
 `std::uint32_t`, printed at mount, at shutdown and by `SHOW META`
@@ -714,7 +869,7 @@ with one writer; **(b)** count only the resident map pages and rename it so
 the number does not read as the instance total; **(c)** drop it from the mount
 and shutdown lines and keep it as a diagnostic that says it is expensive.
 
-### D10. What happens to the two grant bitmaps when the map's ceiling lifts?
+### D10. What happens to the two grant bitmaps when the map's ceiling lifts? — **SETTLED 2026-08-26: (a), grow per region**
 
 §9's second finding: `fault_rights_` and `write_rights_` are single-page
 bitmaps over absolute page ids, so FM3 would leave a peer unable to hold rights
@@ -763,10 +918,17 @@ with interleaved A/B per CLAUDE.md:
    build and differencing the bytes, which is what "byte-identical" says. The
    structural assertions plus an unchanged codec are strong evidence and are
    not the same claim. The differencing run is still owed.
-2. **FM6's fault-path cost.** `IsHeaderless` on the miss path is free at one
-   page. Whatever D2 picks, the per-fault and per-write-back cost is measured
-   against `d8be95a` on the same workload, because §5's whole argument is that
-   this is the one place a multi-page map can cost real time.
+2. ~~**FM6's fault-path cost.**~~ **Withdrawn — the cost it would measure does
+   not exist.** §5 argued `IsHeaderless` could double the miss path because
+   the headerless map would be partly resident; FM2 loads every region at
+   mount, so the lookup never faults. What replaced it is a memory figure, not
+   a time one, and it is arithmetic rather than measured: 16 KiB per 510 MiB
+   of file, halved by FM6 for any database with no Waystone directory, and
+   reported per instance by `SHOW META`'s `map_pages_resident`.
+
+3. **The `sim/` two-region run (FM11).** Owed. Reaching region 1 needs the
+   harness to place pages above 65,280, which is a `SimPlan` change rather
+   than a test edit.
 
 ## 9. Two findings this plan surfaced — now recorded
 

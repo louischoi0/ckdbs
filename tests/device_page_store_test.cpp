@@ -50,16 +50,20 @@ bool Matches(std::span<const std::byte, kPageSize> page, std::uint8_t seed) {
     return true;
 }
 
-TEST(DevicePageStoreTest, FreshDeviceHasOnlyTheTwoMapsAllocated) {
+TEST(DevicePageStoreTest, FreshDeviceHasOnlyTheFreeMapAllocated) {
     auto device = MakeDevice();
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
 
-    // The allocation bitmap and the headerless bitmap, both reserved at
-    // fixed ids and both self-allocated at open.
-    EXPECT_EQ(store->allocated_pages(), 2u);
+    // The allocation bitmap, self-allocated at open. **Not the headerless
+    // bitmap**: since FM6 it is not built until something is headerless,
+    // and an id is marked allocated only when its page is placed - an
+    // allocated id whose bytes were never written is the signature of a
+    // torn creation, which the simulation harness's integrity sweep reads
+    // every allocated page to catch.
+    EXPECT_EQ(store->allocated_pages(), 1u);
     EXPECT_TRUE(store->IsAllocated(kFreeMapPageId));
-    EXPECT_TRUE(store->IsAllocated(kHeaderlessMapPageId));
+    EXPECT_FALSE(store->IsAllocated(kHeaderlessMapPageId));
     // The maps themselves are headered, so they are checksummed like
     // anything else - only what they *point at* can be headerless.
     EXPECT_FALSE(store->IsHeaderless(kHeaderlessMapPageId));
@@ -159,7 +163,7 @@ TEST(DevicePageStoreTest, SyncedStateSurvivesReopen) {
 
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
-    EXPECT_EQ(store->allocated_pages(), 4u);  // two data pages + the two maps
+    EXPECT_EQ(store->allocated_pages(), 3u);  // two data pages + the free map
     EXPECT_EQ(store->resident_pages(), 0u);  // nothing loaded until asked for
 
     auto zero = store->Get(0);
@@ -195,7 +199,7 @@ TEST(DevicePageStoreTest, UnsyncedWorkIsLostOnCrash) {
 
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
-    EXPECT_EQ(store->allocated_pages(), 2u);  // the two maps, nothing else
+    EXPECT_EQ(store->allocated_pages(), 1u);  // the free map, nothing else
     EXPECT_EQ(store->Get(0).status().code(), StatusCode::kNotFound);
 }
 
@@ -211,27 +215,47 @@ TEST(DevicePageStoreTest, FlushWritesIdSortedWithTheFreeMapLast) {
         ASSERT_TRUE(store->CreateAt(page_id).ok());
     }
 
+    const auto writes = [&device]() {
+        std::vector<PageId> written;
+        for (const auto& entry : device->trace()) {
+            if (entry.kind == MemoryPageDevice::OpKind::kWrite) {
+                written.push_back(entry.first_page_id);
+            }
+        }
+        return written;
+    };
+
     device->ClearTrace();
     ASSERT_TRUE(store->Flush().ok());
 
-    std::vector<PageId> written;
-    for (const auto& entry : device->trace()) {
-        if (entry.kind == MemoryPageDevice::OpKind::kWrite) written.push_back(entry.first_page_id);
-    }
-    // Four data pages, then both maps. The free map is strictly last: it
-    // is what makes an id exist, so a crash before it can only orphan a
+    // Four data pages, then the free map - and **no headerless map**, which
+    // this database has no page for (FM6). The free map is strictly last:
+    // it is what makes an id exist, so a crash before it can only orphan a
     // page, never publish one whose bytes never landed.
-    ASSERT_EQ(written.size(), 6u);
+    std::vector<PageId> written = writes();
+    ASSERT_EQ(written.size(), 5u);
     EXPECT_EQ(written.back(), kFreeMapPageId);
-    EXPECT_EQ(written[written.size() - 2], kHeaderlessMapPageId);
-
-    std::vector<PageId> data(written.begin(), written.end() - 2);
+    std::vector<PageId> data(written.begin(), written.end() - 1);
     EXPECT_EQ(data, (std::vector<PageId>{0, 7, 64, 200}));
 
     // A second flush with nothing dirtied is a no-op.
     device->ClearTrace();
     ASSERT_TRUE(store->Flush().ok());
     EXPECT_TRUE(device->trace().empty());
+
+    // Once a headerless page exists the pair goes out together, and the
+    // order within it is the one that matters: headerless first, free map
+    // last. The reverse would publish an allocated headerless page whose
+    // headerless bit had not landed, and the next read of it would verify
+    // a checksum that was never written and call the page corrupt.
+    ASSERT_TRUE(store->CreateNewHeaderless().ok());
+    device->ClearTrace();
+    ASSERT_TRUE(store->Flush().ok());
+
+    written = writes();
+    ASSERT_GE(written.size(), 3u);
+    EXPECT_EQ(written.back(), kFreeMapPageId);
+    EXPECT_EQ(written[written.size() - 2], kHeaderlessMapPageId);
 }
 
 TEST(DevicePageStoreTest, OpenRejectsACorruptedFreeMap) {
@@ -866,11 +890,12 @@ TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
 // the ids [N*65280, (N+1)*65280), its free map at N*65280+1 and its
 // headerless map at +2.
 
-TEST(FreeMapRegionTest, ASingleRegionDatabaseWritesExactlyTheTwoMapPages) {
+TEST(FreeMapRegionTest, ASingleRegionDatabaseTouchesOnlyRegionZerosMapIds) {
     // FM2's acceptance property in the form a test can hold: a database
-    // that fits in one region touches the same two map ids it always did,
-    // and creates no third. Byte-identity rests on this plus the codec,
-    // which is unchanged.
+    // that fits in one region touches the same map ids it always did, and
+    // creates no third. Since FM6 it writes only the *free* map of those
+    // two - the headerless bitmap's id stays reserved and its bytes are
+    // never built, because nothing here is headerless.
     auto device = MakeDevice(/*extent_pages=*/8, /*initial_pages=*/0);
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
@@ -889,12 +914,15 @@ TEST(FreeMapRegionTest, ASingleRegionDatabaseWritesExactlyTheTwoMapPages) {
     ASSERT_TRUE(device->ReadPage(kFreeMapPageId, view).ok());
     EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kFreeMap));
     ASSERT_TRUE(device->ReadPage(kHeaderlessMapPageId, view).ok());
-    EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kHeaderlessMap));
+    EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kInvalid))
+        << "a headerless bitmap was built for a database with no headerless page";
     EXPECT_LE(device->page_capacity(), kFreeMapBitsPerPage)
         << "a one-region database grew the file past region 0";
 
-    // 2 maps + 5 data pages, unchanged from the single-page map.
-    EXPECT_EQ(store->allocated_pages(), 7u);
+    // The headerless id is neither written nor allocated: the free map and
+    // the 5 data pages are all that exist.
+    EXPECT_EQ(store->allocated_pages(), 6u);
+    EXPECT_FALSE(store->IsAllocated(kHeaderlessMapPageId));
 }
 
 TEST(FreeMapRegionTest, AllocationCrossesIntoANewRegionAndSkipsItsMapPages) {
@@ -921,9 +949,12 @@ TEST(FreeMapRegionTest, AllocationCrossesIntoANewRegionAndSkipsItsMapPages) {
         EXPECT_EQ(created.value().first, want);
     }
 
-    // The new region's bitmaps exist, are allocated, and are not placeable.
+    // The new region's free map exists and is allocated; its headerless
+    // twin is neither, until something is headerless. **Both ids are
+    // unplaceable either way** - that is arithmetic (IsMapPageId), not a
+    // reserved bit, which is what makes the id safe to leave unmarked.
     EXPECT_TRUE(store->IsAllocated(FreeMapPageIdFor(region1)));
-    EXPECT_TRUE(store->IsAllocated(HeaderlessMapPageIdFor(region1)));
+    EXPECT_FALSE(store->IsAllocated(HeaderlessMapPageIdFor(region1)));
     EXPECT_EQ(store->CreateAt(FreeMapPageIdFor(region1)).status().code(),
               StatusCode::kAlreadyExists);
     EXPECT_EQ(store->CreateAt(HeaderlessMapPageIdFor(region1)).status().code(),
@@ -960,8 +991,9 @@ TEST(FreeMapRegionTest, AGrownMapSurvivesARemount) {
     ASSERT_TRUE(got.ok()) << got.status().message();
     EXPECT_TRUE(Matches(got.value().bytes(), 42));
 
-    // Region 0's two maps plus region 1's two plus the one data page.
-    EXPECT_EQ(store->allocated_pages(), 5u);
+    // One free map per region, plus the one data page. No headerless
+    // bitmap exists in either region.
+    EXPECT_EQ(store->allocated_pages(), 3u);
 }
 
 TEST(FreeMapRegionTest, ATornMapPageRefusesTheMountRatherThanServingIt) {
@@ -1038,6 +1070,158 @@ TEST(FreeMapRegionTest, ALeasedStoreGetsAPrivateRegionAndNeverReadsTheDevicesMap
     ASSERT_TRUE(device->ReadPage(FreeMapPageIdFor(region1), view).ok());
     EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kInvalid))
         << "a peer published a free-map region";
+}
+
+
+// ---- FM6-FM11: the headerless map, grants, residency ------------------
+
+TEST(FreeMapRegionTest, ADatabaseWithNoHeaderlessPageBuildsNoHeaderlessBitmap) {
+    // FM6 / D2(a). waystone_dir.cpp is the engine's only creator of
+    // headerless pages, so a database with no Waystone directory has none
+    // anywhere - and a bitmap to record that costs a page of memory and a
+    // page of mount I/O per region to say nothing.
+    auto device = MakeDevice(/*extent_pages=*/8, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    for (int i = 0; i < 3; ++i) ASSERT_TRUE(store->CreateNew().ok());
+    ASSERT_TRUE(store->Flush().ok());
+
+    const auto map = store->map_residency();
+    EXPECT_EQ(map.regions, 1u);
+    EXPECT_EQ(map.resident_pages, 1u) << "a headerless bitmap was built for nothing";
+    EXPECT_FALSE(map.has_headerless);
+
+    // Its id is not marked allocated either, so no allocated page is
+    // unreadable - and it is still unreachable by allocation, because
+    // every allocation path skips a bitmap id by arithmetic.
+    EXPECT_FALSE(store->IsAllocated(kHeaderlessMapPageId));
+    EXPECT_EQ(store->allocated_pages(), 4u);  // the free map + 3 data
+    Page probe{};
+    auto view = std::span<std::byte, kPageSize>(probe);
+    ASSERT_TRUE(device->ReadPage(kHeaderlessMapPageId, view).ok());
+    EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kInvalid));
+}
+
+TEST(FreeMapRegionTest, TheFirstHeaderlessPageBuildsTheBitmapAndItSurvives) {
+    auto device = MakeDevice(/*extent_pages=*/8, /*initial_pages=*/0);
+    PageId headerless = kInvalidPageId;
+    {
+        auto store = OpenStore(*device);
+        ASSERT_NE(store, nullptr);
+        EXPECT_FALSE(store->map_residency().has_headerless);
+
+        auto made = store->CreateNewHeaderless();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        headerless = made.value().first;
+        EXPECT_TRUE(store->IsHeaderless(headerless));
+        EXPECT_TRUE(store->map_residency().has_headerless);
+        EXPECT_EQ(store->map_residency().resident_pages, 2u);
+        ASSERT_TRUE(store->Flush().ok());
+    }
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    EXPECT_TRUE(store->map_residency().has_headerless);
+    EXPECT_TRUE(store->IsHeaderless(headerless))
+        << "the headerless bitmap did not survive the remount";
+    EXPECT_FALSE(store->IsHeaderless(kFreeMapPageId)) << "a bitmap page is headered";
+}
+
+TEST(FreeMapRegionTest, AGrantAboveRegionZeroIsHeldAndHonoured) {
+    // D10(a). The rights bitmaps were single pages indexed by absolute id,
+    // so they capped at 65,280 and a peer could hold no grant above region
+    // 0 - GrantWritePages dropped the id at a range check and the refusal
+    // then surfaced at MayFault, one layer from the cause.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    const PageId high = FreeMapRegionBase(3) + 777;
+    LeasedIdSource lease(Extent{FreeMapRegionBase(1), 4});
+    store->SetCoreOwnership(/*core_id=*/2, &lease, /*system_page_limit=*/128);
+
+    EXPECT_FALSE(store->MayWrite(high));
+    const PageId granted[] = {high};
+    store->GrantWritePages(granted);
+    EXPECT_TRUE(store->MayWrite(high)) << "a write grant above region 0 was dropped";
+    EXPECT_TRUE(store->MayFault(high)) << "what a core may write it may read";
+    EXPECT_FALSE(store->MayWrite(high + 1)) << "grants stay exact-page";
+
+    // A fault grant spanning a region boundary keeps every id in it.
+    const PageId across = FreeMapRegionBase(2) - 2;
+    store->GrantFaultPages(Extent{across, 6});
+    for (PageId id = across; id < across + 6; ++id) {
+        EXPECT_TRUE(store->MayFault(id)) << "id " << id;
+    }
+    EXPECT_FALSE(store->MayFault(across + 6));
+}
+
+TEST(FreeMapRegionTest, TheAllocatedCountIsMaintainedNotSwept) {
+    // D8(a). Every site that sets a free-map bit moves the count, and the
+    // one that cannot report - the extent allocator, which writes through
+    // the raw span - has a seam of its own.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    EXPECT_EQ(store->allocated_pages(), 1u);  // region 0's free map
+
+    ASSERT_TRUE(store->CreateNew().ok());
+    EXPECT_EQ(store->allocated_pages(), 2u);
+
+    ExtentAllocator alloc(*store, 4096);
+    auto e = alloc.Reserve(64);
+    ASSERT_TRUE(e.ok()) << e.status().message();
+    EXPECT_EQ(store->allocated_pages(), 66u) << "a leased run went uncounted";
+
+    // Crossing into a new region adds that region's own free map, then the
+    // page itself.
+    ASSERT_TRUE(store->RaiseAllocationFloor(kFreeMapBitsPerPage).ok());
+    ASSERT_TRUE(store->CreateNew().ok());
+    EXPECT_EQ(store->allocated_pages(), 68u);
+    EXPECT_EQ(store->map_residency().regions, 2u);
+
+    // The first headerless page claims its bitmap's id as it places it -
+    // in **region 1**, since that is where allocation now is, not region 0.
+    // Two ids: the bitmap's own and the headerless page's.
+    ASSERT_TRUE(store->CreateNewHeaderless().ok());
+    EXPECT_EQ(store->allocated_pages(), 70u) << "the bitmap's own id went unclaimed";
+    EXPECT_TRUE(store->IsAllocated(HeaderlessMapPageIdFor(FreeMapRegionBase(1))));
+    EXPECT_FALSE(store->IsAllocated(kHeaderlessMapPageId))
+        << "region 0 built a bitmap it has no headerless page for";
+}
+
+TEST(FreeMapRegionTest, AReservationNeverStraddlesARegion) {
+    // D3(a), over a store rather than bare bytes: the run abandons the tail
+    // of region 0 and restarts in region 1, past that region's two
+    // reserved bitmap ids.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    ExtentAllocator alloc(*store, kFreeMapBitsPerPage - 10);
+    auto e = alloc.Reserve(64);
+    ASSERT_TRUE(e.ok()) << e.status().message();
+    EXPECT_EQ(e.value().first, FreeMapRegionBase(1) + 3)
+        << "the run straddled a region boundary or landed on a bitmap id";
+    EXPECT_EQ(FreeMapRegionOf(e.value().first),
+              FreeMapRegionOf(e.value().end() - 1))
+        << "one reservation spans two regions";
+}
+
+TEST(FreeMapRegionTest, MapPagesAreNeverReclaimCandidates) {
+    // FM8. Store-owned under D4(a), so they never enter the pool at all -
+    // this is the guard against a future that puts them there, and it is
+    // arithmetic so it holds without a resident frame to read a header off.
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    EXPECT_TRUE(store->IsPinnedClass(kFreeMapPageId));
+    EXPECT_TRUE(store->IsPinnedClass(kHeaderlessMapPageId));
+    EXPECT_TRUE(store->IsPinnedClass(FreeMapPageIdFor(FreeMapRegionBase(9))));
+    EXPECT_TRUE(store->IsPinnedClass(HeaderlessMapPageIdFor(FreeMapRegionBase(9))));
 }
 
 }  // namespace

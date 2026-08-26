@@ -989,27 +989,36 @@ still waits on its own gate, so:
   ceiling `docs/page.md` §4 always named. A database inside one region is
   unchanged: region 0's bitmaps are still ids 1 and 2, so **no superblock
   version bump and no migration**, and an existing file mounts as it did.
-  **What remains**: a reservation may not cross a region (D3(a)), wasting
-  at most 63 ids per 65,280, permanently, since nothing frees; the
-  headerless map's per-read cost at scale is unaddressed (FM6, D2 open);
-  peer stores get a private in-memory region above region 0 and cannot
-  durably record a headerless page there (FM7, D5 open); and the two
-  *rights* bitmaps still cap at 65,280, so a peer can hold no grant above
-  region 0 (FM7 and D10 — see the next entry).
+  **FM6-FM11 landed the same day**, so what the first version of this entry
+  listed as remaining is mostly closed: the headerless bitmap is built only
+  where something is headerless and `IsHeaderless` answers with no lookup at
+  all when nothing is (D2(a)); a peer refreshes every resident region, not
+  region 0 alone (D5(a)); the grant bitmaps grew per region, so a peer can
+  hold a grant anywhere (D10(a)); `allocated_pages()` is maintained rather
+  than swept (D8(a)); and `SHOW META` prints `map_regions`,
+  `map_pages_resident`, `map_coverage_ids` and `headerless_pages`.
+  **What actually remains**: a reservation may not cross a region (D3(a)),
+  wasting at most 63 ids per 65,280, permanently, since nothing frees; a peer
+  still cannot *durably* record a headerless page in a region it created
+  privately, because `FlushMaps` drops a leased store's map writes as it
+  always has; mount reads one page per region, which is 32,896 scattered
+  reads for a full 16 TiB file and wants a batched `ReadPageRun` before
+  anything can produce one; the map stays unlogged (D9 open, RC04 repairs);
+  and `docs/page.md` §4/§5's claim that the superblock anchors a "free-map
+  root" still contradicts `superblock.hpp`, which holds no such field (D6,
+  untouched because no candidate needed one).
 - **The consequence of lifting it, now live**: the instance ceiling was
   **the engine's only bound on leaked space**. With nothing freeing pages
   (see reclamation above), a `DROP TABLE`/rebuild loop stopped at 510 MiB
   before 2026-08-26 and now runs to the design ceiling. Not a new defect —
   the same absent reclamation, with a bigger number in front of it.
-- **A peer core can hold no fault or write grant above page 65,280.**
-  `fault_rights_` and `write_rights_` are single-page bitmaps indexed by
-  absolute page id, so the free map's placement arithmetic does not reach
-  them and lifting the map's ceiling did not lift theirs.
-  `GrantWritePages` drops such an id at an explicit range check,
-  `GrantFaultPages` loses it to `FreeMapAllocate`'s silent no-op, and the
-  refusal then surfaces at `MayFault` rather than at the grant. Reachable
-  only in a database that has grown past region 0 *and* runs more than one
-  core. `docs/workplan-multi-free-map.md` §9's second finding and D10.
+- ~~**A peer core can hold no fault or write grant above page 65,280**~~ —
+  **closed 2026-08-26** by the same day's FM7, as D10(a). `fault_rights_` and
+  `write_rights_` are keyed by region now, mirroring the map, each half built
+  only when something is granted into that region and neither persisted — so
+  there was no format question and no migration. `GrantFaultPages` no longer
+  clamps an extent to one region's coverage, and `TryClaimByStamp`'s ceiling
+  is the design ceiling. It was open for the length of one commit.
 - ~~**Dividing a full btree *internal* node is not implemented**~~ —
   **built 2026-08-11** (`docs/workplan-key-mode.md` PK09). A separator
   promoted into a full parent now divides that node's entries when it sorts

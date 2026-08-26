@@ -199,6 +199,29 @@ public:
     // 0, which is honest - it has no reclaim for a pin to hold off.
     virtual std::size_t live_pins() const noexcept { return 0; }
 
+    // ---- FM10: what the allocation map costs -------------------------
+    //
+    // Reported by SHOW META, which holds a PageStore and stays blind to
+    // which concrete store it has. Defaulted to a map of nothing, which is
+    // the truth for every store that has no free map - the in-memory one.
+    struct MapResidency {
+        // Regions loaded or created; one per 65,280 ids of file.
+        std::size_t regions = 0;
+        // Bitmap pages held in memory: one per region, plus one more for
+        // each region that has a headerless bitmap. **Resident is
+        // in-existence** for the free map - every region the device holds
+        // is loaded at mount - so the gap between this and 2x regions is
+        // exactly what FM6's deferred headerless bitmaps save.
+        std::size_t resident_pages = 0;
+        // Ids the resident maps can answer about. Not the file's size: the
+        // top region is partial.
+        std::uint64_t coverage_ids = 0;
+        // Whether any headerless page exists anywhere. False is the common
+        // case and is what lets IsHeaderless answer with no lookup.
+        bool has_headerless = false;
+    };
+    virtual MapResidency map_residency() const noexcept { return {}; }
+
     // ---- The raw seam: protected since MG06 ----------------------------
     //
     // What a store implements - and, since MG06, *only* what a store
