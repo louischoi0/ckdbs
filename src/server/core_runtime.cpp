@@ -703,6 +703,35 @@ storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
 }
 
 void CoreRuntime::InvalidateCatalog() {
+    // The catalog's own growth is the case no grant covers: `sys.indexes`
+    // spills onto `kCatalogOverflowFirst`, and without this the chain walk
+    // the eviction below forces answers `page id not found` forever - 58
+    // shipped `CREATE INDEX`es, then every write to that relation failed
+    // permanently and not retryably
+    // (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d).
+    // `RefreshFreeMapFromDevice`'s contract says why a peer's copy can be
+    // behind at all.
+    //
+    // Ordered by construction, and it must come **first**: `EvictClean`
+    // below `return`s on failure, so a refresh placed after it would be
+    // skipped in exactly the case the peer is already in trouble. Core 0
+    // needs no change - `BroadcastCatalogInvalidation`'s `FlushPages`
+    // writes the dirty maps after the pages they describe, before the send.
+    //
+    // Retried once, then logged and the eviction still runs. The failure
+    // this retries is a torn read racing core 0's concurrent flush of the
+    // same page, whose window is one `WritePage` wide; giving up instead
+    // would leave the peer unable to reach the grown page until the next
+    // *bumping* DDL, which may never come.
+    Status refreshed = store_->RefreshFreeMapFromDevice();
+    if (!refreshed.ok()) refreshed = store_->RefreshFreeMapFromDevice();
+    if (!refreshed.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("core", "core " + std::to_string(config_.core_id) +
+                                ": free-map refresh at catalog invalidation failed twice, so a "
+                                "catalog page core 0 has just allocated stays unreachable here "
+                                "until the next DDL: " +
+                                refreshed.message());
+    }
     // **Both halves, and the order matters little but the pairing does.**
     // Dropping the catalog's derived facts without dropping the page frames
     // they were derived from is a no-op: the next scan reads the same stale

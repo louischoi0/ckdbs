@@ -339,6 +339,99 @@ TEST_F(CoreRuntimeTest, APeerDoesNotSeeADdlThatWasNotFlushed) {
     EXPECT_TRUE(after.ok()) << after.status().message();
 }
 
+TEST_F(CoreRuntimeTest, InvalidatingTheCatalogRefreshesThePeersFreeMap) {
+    // **The catalog can grow onto a page the peer has never heard of.**
+    //
+    // A peer's free-map copy is a snapshot taken at Open(). Until
+    // 2026-08-26 the only thing that refreshed it was a relation grant, so
+    // a page core 0 allocated with *no grant attached* stayed invisible to
+    // the peer forever - and the catalog is exactly that case: `sys.indexes`
+    // fills its root and spills onto `kCatalogOverflowFirst`, which core 0
+    // allocates from the map it owns. The peer then re-reads the chain,
+    // follows `next_page_id` into that page, and `IsAllocated` answers from
+    // a snapshot in which it does not exist: `page id not found`, which
+    // carries no retryable bit and never clears.
+    //
+    // Measured before the fix: 58 shipped `CREATE INDEX`es on a peer-owned
+    // relation, after which every write to it failed permanently
+    // (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d).
+    // This is that hazard in one page, without the 58 builds.
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // Core 0 allocates a page *after* the peer's snapshot was taken - the
+    // catalog's overflow growth, in miniature.
+    auto fresh = core0_store_->CreateNew();
+    ASSERT_TRUE(fresh.ok()) << fresh.status().message();
+    const PageId grown = fresh.value().first;
+    EXPECT_TRUE(core0_store_->IsAllocated(grown)) << "core 0 owns the map; it knows at once";
+
+    // The peer does not know it yet, and that is not the bug - the snapshot
+    // is allowed to be behind. Reading it answers NotFound, which is what
+    // becomes permanent without the refresh below.
+    EXPECT_FALSE(peer.value()->store().IsAllocated(grown))
+        << "the peer's snapshot predates the allocation";
+
+    // The flush half is the one `BroadcastCatalogInvalidation` already runs
+    // before the message leaves: FlushPages writes the dirty maps after the
+    // pages they describe, so the bit is on the device before any peer is
+    // told to look.
+    ASSERT_TRUE(core0_store_->FlushPages(catalog::kEveryCatalogPage).ok());
+
+    peer.value()->InvalidateCatalog();
+
+    // The peer has adopted the bit, so a page core 0 grew the catalog onto
+    // is addressable here rather than answering NotFound forever.
+    EXPECT_TRUE(peer.value()->store().IsAllocated(grown))
+        << "the invalidation must refresh the free map, not only the frames";
+}
+
+TEST_F(CoreRuntimeTest, APeerResolvesARelationWhoseCatalogRowsSpilledOntoAnOverflowPage) {
+    // **The scenario, not just the mechanism.** The test above pins that an
+    // invalidation refreshes the map; this one is the shape that made it
+    // matter, and it fails the same way the 58-build reproduction did.
+    //
+    // A catalog chain grows onto `kCatalogOverflowFirst` when its root
+    // fills (`AllocateCatalogPage`). `sys.columns` is the fastest to get
+    // there - one row per column of every relation - so a peer that mounted
+    // before the spill, and then resolves a relation whose columns live on
+    // the new page, walks `next_page_id` into an id its snapshot calls
+    // free. Without the refresh that is `page id not found`, permanently.
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // Everything from here is created *after* the peer's snapshot.
+    const PageId first_overflow = catalog::kCatalogOverflowFirst;
+    ASSERT_FALSE(peer.value()->store().IsAllocated(first_overflow))
+        << "the spill has not happened yet";
+
+    std::string spilled;
+    for (int i = 0; i < 64 && !core0_store_->IsAllocated(first_overflow); ++i) {
+        spilled = "spill" + std::to_string(i);
+        auto created = core0_->catalog.CreateTable(catalog::kNamespacePublic, spilled,
+                                                   TwoColumnSchema(),
+                                                   catalog::ClusteredType::kHeap);
+        ASSERT_TRUE(created.ok()) << created.status().message();
+    }
+    ASSERT_TRUE(core0_store_->IsAllocated(first_overflow))
+        << "the catalog never spilled; this test needs a chain that grows";
+
+    // Core 0's half of the ordering, exactly as BroadcastCatalogInvalidation
+    // runs it: FlushPages writes the dirty maps after the pages.
+    ASSERT_TRUE(core0_store_->FlushPages(catalog::kEveryCatalogPage).ok());
+    peer.value()->InvalidateCatalog();
+
+    // The last relation created is the one whose rows are furthest along
+    // the chain, so resolving it is what walks onto the overflow page.
+    auto found = peer.value()->catalog().FindTableOidByName(spilled);
+    ASSERT_TRUE(found.ok()) << found.status().message();
+    auto access = peer.value()->catalog().InitTableAccess(found.value());
+    ASSERT_TRUE(access.ok()) << access.status().message()
+                             << " - the peer could not read a catalog page core 0 allocated "
+                                "after it mounted";
+    EXPECT_EQ(access.value()->schema.columns.size(), 2u);
+}
+
 TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
     // The asymmetry that makes a peer's stale view safe: one writer per
     // catalog page, so a peer can be behind but never torn.

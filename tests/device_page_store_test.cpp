@@ -660,6 +660,58 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverWritesTheMapsBackToTheDevice
         << "a leased store published a free-map bit it does not own";
 }
 
+TEST(DevicePageStoreOwnershipTest, ARefreshAdoptsTheDevicesBitsAndSubtractsNone) {
+    // `RefreshFreeMapFromDevice`'s two halves, and the second is the one
+    // no caller can demonstrate: a leased store's own ids answer from the
+    // lease (`IsAllocated` short-circuits on `Owns`), so a test that
+    // refreshes over a *leased* page proves nothing about the merge. The
+    // only bit that lives in this copy and not on the device is redo's -
+    // `CreateAt` at mount, before the lease is installed
+    // (server/core_runtime.cpp orders it so), which is the construction
+    // `ALeasedStoreNeverWritesTheMapsBackToTheDevice` above uses for the
+    // write-out half of the same rule. Replacement instead of union would
+    // subtract exactly that page.
+    auto device = MakeDevice(64, 0);
+
+    auto core0 = OpenStore(*device);
+    ASSERT_NE(core0, nullptr);
+    ASSERT_TRUE(core0->Sync().ok());
+
+    // The peer's copy: taken here, and stale from core 0's next allocation.
+    auto peer = OpenStore(*device);
+    ASSERT_NE(peer, nullptr);
+
+    // Redo's bit, in this copy alone - never flushed, and outside the lease
+    // below so nothing but the map can answer for it.
+    ASSERT_TRUE(peer->CreateAt(300).ok());
+    LeasedIdSource lease(Extent{1000, 4});
+    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+
+    auto later = core0->CreateNew();
+    ASSERT_TRUE(later.ok()) << later.status().message();
+    const PageId core0_page = later.value().first;
+    ASSERT_FALSE(peer->IsAllocated(core0_page)) << "the snapshot predates it";
+    ASSERT_TRUE(core0->Sync().ok());
+
+    ASSERT_TRUE(peer->RefreshFreeMapFromDevice().ok());
+
+    EXPECT_TRUE(peer->IsAllocated(core0_page)) << "the device's bit was not adopted";
+    EXPECT_TRUE(peer->IsAllocated(300u))
+        << "the refresh replaced the copy instead of unioning into it, subtracting the page "
+           "this store's own recovery rebuilt";
+}
+
+TEST(DevicePageStoreOwnershipTest, TheSystemCoresOwnMapIsNotRefreshable) {
+    // The refusal is the contract, not a guard: core 0's copy *is* the
+    // authority, so re-reading the device over it would overwrite the
+    // allocations it has made since its last flush.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    EXPECT_EQ(store->RefreshFreeMapFromDevice().code(), StatusCode::kInvalidArgument);
+}
+
 TEST(DevicePageStoreOwnershipTest, ALeasedPageIsReadableThoughTheMapDoesNotKnowIt) {
     // A non-zero core reads its free map at Open(); core 0 marks the lease's
     // bits later, in *its* copy. So the lease has to answer for the core's

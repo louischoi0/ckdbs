@@ -625,62 +625,79 @@ still waits on its own gate, so:
   1.000, because its second arm always runs later — so every A/B ratio this
   harness has produced carries a ~10% ordering bias, `bench/v2.1.0`'s C1 and
   C2 controls included.
-- **A peer's free-map copy went stale between relation grants, and the
-  fault seam turned that into a permanently unwritable relation** — found
-  2026-08-26 by T4's probe
-  (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d),
-  **root-caused and fixed 2026-08-26** on worktree
-  `g1-peer-page-id-not-found` (`docs/workplan-peer-writer.md` PW1c-8), the
-  statement-shipping work order's G1 gate. The entry is kept rather than
-  deleted because the mechanism bounds what a peer may believe, and two
-  residues remain below.
+- ~~**Sustained shipped `CREATE INDEX` leaves a peer-owned relation
+  permanently unwritable, where core 0 fails cleanly**~~ — **closed
+  2026-08-26** (worktree `fix-peer-index-build`). The cause was not the
+  index build at all: a peer's free-map copy is a snapshot taken at
+  `DevicePageStore::Open()`, and the only thing that refreshed it was a
+  *relation grant*. `sys.indexes` fills its root page and spills onto
+  `kCatalogOverflowFirst` (page 15), which core 0 allocates from the map it
+  owns; the peer then invalidates its catalog, re-reads the chain, follows
+  `next_page_id` into page 15, and `IsAllocated` answers from a snapshot in
+  which that page does not exist — `NotFound`, no retryable bit, forever,
+  and every INSERT hits it because every INSERT maintains the index.
+  Confirmed from the raw data file: page 15 **is** marked allocated on
+  disk while the peer answered not-found. The fix is one call —
+  `CoreRuntime::InvalidateCatalog()` now runs the pre-existing
+  `RefreshFreeMapFromDevice()` before evicting the catalog frames, which is
+  the same adoption the grant receivers already did for the case a grant
+  covers. Core 0 needed no change: `BroadcastCatalogInvalidation`'s
+  `FlushPages` already writes the dirty maps after the pages they describe,
+  before the message leaves. Measured after: the reproduction runs 297
+  builds at `cores = 4` and at `cores = 8` with the relation still
+  writable, where it died at 58. Pinned by three tests, each verified to
+  fail without the fix.
+  **The residual this leaves, named**: four catalog relations are written
+  with **no** `BumpVersion` and therefore no broadcast — `sys.patterns`,
+  `sys.pattern_defs`, `sys.access_stats` and `sys.assertions`. Core 0 can
+  grow any of them onto an overflow page and tell no peer. It is safe only
+  because a peer's dispatcher is built with no recorder, no replay, no
+  access statistics and no cabins, and its assertion registry is never
+  resumed, so a peer reads none of the four. **Enable any one of them on a
+  peer and this bug returns on a chain nothing invalidates** — the refresh
+  unions the whole region-0 map page, so a later bumping DDL would adopt
+  the bits anyway, making it a window rather than a permanent state, but
+  only if such a DDL ever follows. The original report follows.
+- **The original report, for the record** — found 2026-08-26 by
+  T4's probe (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+  §8d), and **re-confirmed on the merged tree at `b85cd31`**, after
+  FM2-FM5 raised the free-map ceiling. The shape, **measured** twice on each
+  tree: `CREATE INDEX`/`DROP INDEX` in a loop from core 0 against a
+  peer-owned relation succeeds ~58 times, consuming 1,856 pages (15 MB for
+  58 usable indexes on a 3,000-row relation — refused attempts allocate too,
+  ~7.7 pages each), after which **every** later write to that relation
+  answers `ERR page id not found`, which is **not retryable** and does not
+  clear. The identical churn on `cores = 1` runs 279 builds and then refuses
+  by name — *"anchor page holds 679 index entries already; the table is
+  full"* — with the relation still writable afterwards.
 
-  **The shape, before the fix**: `CREATE INDEX`/`DROP INDEX` in a loop from
-  core 0 against a peer-owned relation succeeded ~58 times, after which
-  **every** later write to that relation answered `ERR page id not found`,
-  not retryable and never clearing. The identical churn on `cores = 1` ran
-  279 builds and then refused by name — *"anchor page holds 679 index
-  entries already; the table is full"* — with the relation still writable.
-  **Re-confirmed** on `b85cd31` after FM2-FM5, and again at `449804e` after
-  the whole multi-free-map series: at **exactly 58 builds** on `cores = 2`,
-  so the free-map rewrite neither caused nor closed it.
+  **A second fix landed the same day, independently, at the other seam**
+  (worktree `g1-peer-page-id-not-found`, `docs/workplan-peer-writer.md`
+  PW1c-8). It found the identical mechanism and answered it **lazily**: a
+  leased store adopts the device's map once before calling a page absent,
+  and the refusal names the id it withheld. The two compose, and the lazy
+  half is precisely the backstop the residual above needs — it covers an
+  allocation whatever did or did not announce it, so the four relations
+  that write without `BumpVersion` cannot make the bug permanent again;
+  they cost a miss, not a mount. Measured on its own: 400 builds clean at
+  `cores = 2`, where 58 poisoned before.
 
-  **The mechanism**: a peer's free-map copy is a **mount-time snapshot**,
-  and the only thing that advanced it was a relation fault/write grant
-  (`server/core_runtime.cpp`'s two grant receivers, PW1c-4r's C1). Core 0
-  allocating a page *between* grants is therefore invisible to that peer —
-  a **catalog** page above all, which a peer must read to resolve any
-  relation of its own. `DevicePageStore::IsAllocated` then answered false
-  for a page that exists, and the fault seam reported it as absence. The
-  index churn is simply the fastest way to make core 0 append a catalog
-  page while placing no relation on the peer. Named page: **15**, a catalog
-  heap page whose bit was set on the device and clear in the peer's copy;
-  and one `CREATE TABLE` that rotation placed on the peer **healed** the
-  poisoned relation, which is what proved it. The asymmetry the original
-  entry called the finding follows from this and is no longer a mystery:
-  `cores = 1` has no lease, so core 0's map *is* the authority and there is
-  no snapshot to go stale.
+  Its review closed **a second door of the same class**, which the
+  multi-free-map series had just made reachable: `RefreshFreeMapFromDevice`
+  walks only *resident* regions, and `free_map_bytes_for` answers an absent
+  region as all zeroes — so a page core 0 placed in a region created after
+  the peer mounted could not be adopted at all, not even one the peer had
+  been granted. `AdoptDeviceMapOnMiss` loads an absent region first.
 
-  **The fix**: before a leased store calls a page absent it adopts the
-  device's map once — `AdoptDeviceMapOnMiss`, the grant receivers' own
-  operation, at the one seam where "stale" and "absent" are
-  indistinguishable — and the refusal now names the page id it withheld.
-  400 builds clean afterwards at `cores = 2`, 32 MB → 70 MB, the `cores = 1`
-  shape. One device read per resident region **on a miss**, which is an
-  error path; core 0 never pays it.
-
-  **What is still true after the fix**, both stated rather than fixed:
-
-  - a page core 0 has allocated but **not yet flushed** its map for is
-    still refused `NotFound`, which carries no retryable bit — the next
-    statement re-adopts, so it clears itself rather than poisoning, but a
-    client sees a non-retryable error for a transient condition. The
-    engine's own comment (`MayWrite` in `device_page_store.cpp`) calls this
-    case *"a retryable not found"*, which the status code does not deliver;
-  - a peer reads core 0's catalog **bytes** off the device, so a catalog
-    page core 0 holds dirty is a stale read on the peer. The free-map fix
-    does not reach it, and no coherence protocol exists — one writer per
-    catalog page is the whole of today's discipline.
+  **Two residues of the pair, stated rather than fixed**: a page core 0 has
+  allocated but not yet flushed the map for is still refused `NotFound`,
+  which carries no retryable bit — the next statement re-adopts, so it
+  clears itself rather than poisoning, but a client sees a non-retryable
+  error for a transient condition, and `MayWrite`'s own comment calls this
+  case *"a retryable not found"*. And a peer reads core 0's catalog
+  **bytes** off the device, so a catalog page core 0 holds dirty is a stale
+  read on the peer; neither fix reaches it, and one writer per catalog page
+  is the whole of today's discipline.
 
   Reproductions, unchanged: `bench/parked_coroutine_probe.py` driven in a
   loop, and the two probes archived at

@@ -783,6 +783,18 @@ at K = 16, and nothing here says what shipping's steady-state waiters cost.
 
 ### 8d. The defect found on the way, reported because it bounds shipping
 
+> **Closed 2026-08-26**, after this run, on worktree `fix-peer-index-build`.
+> The cause was not the index build: a peer's free-map copy is a snapshot
+> taken at `Open()` and only a *relation grant* refreshed it, so when
+> `sys.indexes` spilled onto `kCatalogOverflowFirst` the peer answered
+> `NotFound` for a page that is allocated on disk. `InvalidateCatalog()`
+> now refreshes the map before evicting the catalog frames. The
+> reproduction below runs 297 builds with the relation still writable.
+> `docs/known-gaps.md` carries the mechanism and the residual. **The
+> measurement below is left exactly as it was taken** — it is what the
+> engine did at `v2.1.0-15-g5989f13`, and back-filling a fix into it would
+> date a claim to a build that never carried one.
+
 It is on the peer path, it was found by driving that path harder than any
 test does, and it is not worked around silently. **measured** on two trees:
 `v2.1.0-15-g5989f13` (before the free-map work landed) and again on
