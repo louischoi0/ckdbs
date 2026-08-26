@@ -70,6 +70,60 @@ never mixed in one sentence.
 
 ---
 
+## 2. What ran, and what this run corrected about its own instructions
+
+| task | state |
+|---|---|
+| **T1a** transaction-wrapped bulk insert, batch 1/10/100/1000 × cores 2/4/8 | run, 5 reps — §4 |
+| **T1b** one relation, 1/2/4/8 sessions × cores 1/2/4/8 | run, 5 reps — §5 |
+| **T2** the crossover curve, cores 2/4/8 | run, 5 reps — §6 |
+| **T3** discriminating the four-core-server effect | run — §7 |
+| **T4** the parked-coroutine price, and the group-accounting instrument | run — §8 |
+| **T5** the cross-core write refusal counters, and a baseline reading | run — §9 |
+| **T6** the shipping × group-commit memo | `docs/memo-shipping-and-group-commit.md` |
+| the device gate, the harness gate | run — §3 |
+
+Four things this run corrected, recorded because a run that only ever
+confirms its own instructions is not measuring:
+
+1. **T5's premise was stale.** The instructions say the §6 counters are
+   *"specified and **unbuilt** (source-read, no implementation sites)"* and
+   ask for the known undercount to be stated: *"the peer-listener guard
+   refuses foreign writes before parsing, so that class is invisible"*. On
+   this tree at `82a2749` the class and **both recording sites** exist
+   (`CheckWriteAffinity`, `src/server/command_dispatcher.cpp:2954` and
+   `:2963`, **source-read**); what was missing was any way to *read* them
+   from outside the process. And the undercount named is retired: that
+   pre-parse guard was `PeerWriteRefused`, **deleted at PW1c-5** on
+   2026-08-24, whose own workplan row says the change *"reverses PW5's
+   recorded undercount"*. `docs/crosscore.md` §6 still asserted it and has
+   been corrected in place. T5 became "expose, and state the undercount that
+   is real now" — §9.
+2. **T2's sweep measures the busiest core, not the average.** The
+   instructions ask for "fractional sessions-per-core" points at 1.33 and
+   1.67. On a thread-per-core engine there is no fractional load: at
+   `tables = 4` over three writer cores the cores hold 2, 1 and 1. §6 reports
+   the curve as asked *and* reports what it turns out to measure, which is a
+   step at the first core to take a second session.
+3. **The T1 orchestrator's quiet-load threshold stalled the sweep it was
+   guarding.** A fixed `0.6` one-minute load, inherited from a 4-CPU host,
+   is below what an 8-CPU box carries just after a benchmark, so every cell
+   waited out `wait_quiet`'s 180 s timeout. It scales with the CPU count now,
+   and the orchestrator gained resume so an interrupted sweep re-uses
+   finished repetitions instead of re-measuring them.
+4. **T4's own instrument shipped a dangling pointer, caught before it
+   produced a number.** The first form set the dispatcher's scheduler view to
+   a function-local reactor in `Expeditor::Serve` and cleared it after the
+   worker join — with **twenty** early `return`s in between, any of which
+   would have left a member dispatcher pointing at freed stack, readable
+   through the public `dispatcher()` accessor. A `critics-developer` review
+   found it; it is a scope guard now, and the same review found a test
+   assertion that could not fail (`find("=1")` matches `ddl_durable=1`). §8a
+   records both, because an instrument's credibility is the whole of its
+   value.
+
+---
+
 ## 3. The two gates, run before anything is read
 
 ### 3a. The device: this volume overlaps four `fdatasync` streams and then gets worse
@@ -312,3 +366,92 @@ here on a machine with twice the cores and growing with the core count.
 this document that compares a multi-core arm against `cores = 1` carries it.
 
 ---
+
+---
+
+## 6. T2 — the crossover is a step, not a slope, and it is the *busiest* core that sets it
+
+`bench/v2.1.0` §7 measured rotation winning **1.751×** at one writing session
+per writer core and **0.989×** at two, and §11-1 left the boundary between
+them "bracketed but not located". Locating it is what any placement policy
+needs, and what shipping needs in order to decide when to ship rather than
+refuse under load.
+
+The sweep is by table count, since the driver gives each relation exactly one
+writing session and rotation spreads relations over the `cores - 1`
+non-system cores: `sessions per writer core = tables / (cores - 1)`.
+
+**measured** — `bench/run_t2.py` (`tools/multicore_benchmark.py`,
+`--placement rotate --peer-listeners`, `--rows 2000`), 5 reps per point,
+`errors=0` and every relation's survivor count verified in every run:
+
+| cores | writer cores | tables | sessions per writer core | max on one core | ratio (median) | spread | multi stmt/s | single stmt/s |
+|---|---|---|---|---|---|---|---|---|
+| 2 | 1 | 1 | 1.00 | 1 | 1.204 | 1.143–1.361 | 1,429 | 1,175 |
+| 2 | 1 | 2 | 2.00 | 2 | 1.168 | 1.160–1.245 | 1,450 | 1,244 |
+| 4 | 3 | 3 | 1.00 | 1 | **1.999** | 1.959–2.036 | 3,686 | 1,836 |
+| 4 | 3 | 4 | 1.33 | **2** | 1.170 | 1.077–1.235 | 2,815 | 2,475 |
+| 4 | 3 | 5 | 1.67 | 2 | 1.172 | 1.063–1.193 | 3,484 | 2,960 |
+| 4 | 3 | 6 | 2.00 | 2 | 1.118 | 1.032–1.133 | 3,974 | 3,533 |
+| 8 | 7 | 7 | 1.00 | 1 | 1.036 | 1.023–1.109 | 4,571 | 4,410 |
+| 8 | 7 | 9 | 1.29 | **2** | **0.804** | 0.754–0.812 | 4,204 | 5,234 |
+| 8 | 7 | 12 | 1.71 | 2 | **0.595** | 0.580–0.631 | 4,399 | 7,383 |
+| 8 | 7 | 14 | 2.00 | 2 | **0.506** | 0.495–0.513 | 4,365 | 8,625 |
+
+5 reps per point, `errors=0` in all 50 runs, every relation's survivor count
+verified in every run.
+
+**The curve does not slope; it steps.** At exactly one session per writer
+core rotation wins ~2×. The moment the average passes 1.00 — which on a
+thread-per-core engine means *one* core has taken a second relation — the
+ratio collapses to ~1.1 and stays there through 2.00. A fractional average is
+not a fractional load: at `cores = 4, tables = 4` the three writer cores hold
+2, 1 and 1 relations, and the run's wall clock is the two-relation core's.
+
+**That is §6's law, and the law is about a core, not about an average.** A
+core with one session commits once per sync; a core with two commits twice
+and takes twice as long, while its idle neighbours finish early and wait. The
+aggregate is therefore set by `max` sessions per writer core, and every
+intermediate point on this sweep has the same max — 2 — which is exactly why
+they have the same ratio.
+
+**So the crossover is located, and it is not a number between 1 and 2.** It
+is the first core to receive a second session. A placement policy that keeps
+`max` at one session per writer core gets the whole 2×; one that lets any
+core take two gives back nearly all of it, however good the average looks.
+`bench/v2.1.0`'s bracket — 1.751× at 1.00 and 0.989× at 2.00 — was not
+bracketing a slope; it was measuring the two sides of a step.
+
+**No policy is proposed here.** Placement is `docs/crosscore.md` §9's open
+decision and this is an input to it.
+
+### 6a. At seven writer cores the multi-core arm is pinned, and that is the whole curve
+
+The `cores = 8` rows are the clearest thing this run measured, because one
+column does not move: **the multi-core arm sits at 4,204–4,571 stmt/s at
+every table count**, while the single-core arm climbs from 4,410 to 8,625 as
+sessions are added. The ratio's collapse from 1.04 to 0.51 is entirely the
+denominator.
+
+The pinned number is the device's, and it can be checked against §3a
+directly. This workload is 5/7 commit-bound (insert + update + delete out of
+insert / point-select / update / delete / scan), so 4,365 stmt/s is
+**3,117 commits/s** — against §3a's measured 8-stream ceiling of
+**3,102/s**. The seven writer cores are not slow; they are *at the device's
+limit for seven concurrent streams*, which is 18% below what four streams
+manage.
+
+The single-core arm has no such limit because it is not opening streams — it
+is filling one. Fourteen sessions on core 0 commit 6,158/s through a device
+that syncs 1,118 times a second, which is a batch of 5.5 commits per sync.
+
+**So the two arms are the same law at two operating points**, and the
+crossing point is where a core's batch is one: below it, more streams win;
+above it, a fuller batch wins, and it wins by more the more sessions there
+are. At `cores = 8, tables = 14` concentrating beats spreading by **1.98×**
+(8,625 against 4,365) on identical work.
+
+**This is the measured half of what T6's memo predicts about statement
+shipping.** Shipping re-concentrates commits onto owner cores; the arm that
+does that here is the one that wins at every session count above one per
+core, and the margin grows with load.

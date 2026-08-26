@@ -1,0 +1,37 @@
+/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 2 --tables 2 --rows 2000 --placement rotate --peer-listeners --workdir /home/ubuntu/mcbench2/t2/c2-t2-r4 --port 19048
+
+
+== single-core: cores=1, 2 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0
+   host: workdir on ext4, 1-minute load 0.91 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=11.25s  aggregate=1,244 stmt/s  errors=0
+   insert        n=  4001  p50=   2165us  p99=   2538us
+   point-select  n=  4000  p50=     23us  p99=     44us
+   update        n=  4000  p50=   2239us  p99=   2565us
+   delete        n=  2000  p50=   2320us  p99=   2577us
+   scan          n=     2  p50=   1372us  p99=   1372us
+
+== multi-core: cores=2, 2 relations x 2000 rows ==
+   placement: bench0 owner_core=1  bench1 owner_core=1
+   host: workdir on ext4, 1-minute load 0.92 at start
+   ddl session on core 0 after 1 connection(s); 2 writer session(s) on cores [1] after 7 connection(s)
+   refills: core 1: rowid 2/2 wait_max=0.8ms (submit 0.0ms/0it, to-grant 0.8ms/1505it, resume 0.0ms/1it), trxid 3/3 wait_max=26.7ms (submit 0.0ms/0it, to-grant 26.7ms/111272it, resume 1.0ms/1it), extent 1/1 wait_max=5.1ms (submit 0.0ms/0it, to-grant 4.2ms/4it, resume 0.8ms/1it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=5
+   wall=9.66s  aggregate=1,450 stmt/s  errors=0
+   insert        n=  4001  p50=   1744us  p99=   2094us
+   point-select  n=  4000  p50=     21us  p99=     39us
+   update        n=  4000  p50=   2054us  p99=   2371us
+   delete        n=  2000  p50=   2107us  p99=   2392us
+   scan          n=     2  p50=   1376us  p99=   1376us
+
+== comparison ==
+   multi-core / single-core throughput: 1.165x
+   (rotation skips the system core, so at cores=2 every relation is
+    core 1's: this compares the peer write path against core 0's at
+    equal parallelism - a cost, not a scaling number; cores >= 3 is
+    where two writer cores exist)

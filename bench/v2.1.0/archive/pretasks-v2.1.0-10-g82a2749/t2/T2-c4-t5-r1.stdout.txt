@@ -1,0 +1,33 @@
+/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 4 --tables 5 --rows 2000 --placement rotate --peer-listeners --workdir /home/ubuntu/mcbench2/t2/c4-t5-r1 --port 19120
+
+
+== single-core: cores=1, 5 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0
+   host: workdir on ext4, 1-minute load 1.42 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=11.63s  aggregate=3,009 stmt/s  errors=0
+   insert        n= 10001  p50=   2204us  p99=   2702us
+   point-select  n= 10000  p50=     61us  p99=   1194us
+   update        n= 10000  p50=   2315us  p99=   2668us
+   delete        n=  5000  p50=   2289us  p99=   2715us
+   scan          n=     5  p50=   1244us  p99=   1330us
+
+== multi-core: cores=4, 5 relations x 2000 rows ==
+   placement: bench0 owner_core=3  bench1 owner_core=1  bench2 owner_core=2  bench3 owner_core=3  bench4 owner_core=1
+   host: workdir on ext4, 1-minute load 1.36 at start
+   ddl session on core 0 after 1 connection(s); 5 writer session(s) on cores [1, 2, 3] after 6 connection(s)
+   refills: core 1: rowid 2/2 wait_max=1.0ms (submit 0.0ms/0it, to-grant 1.0ms/3781it, resume 0.0ms/1it), trxid 3/3 wait_max=32.9ms (submit 0.0ms/0it, to-grant 32.9ms/150979it, resume 1.1ms/1it), extent 1/1 wait_max=5.8ms (submit 0.0ms/0it, to-grant 4.7ms/4it, resume 1.1ms/1it); core 2: rowid 1/1 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/2775it, resume 0.0ms/1it), trxid 2/2 wait_max=33.1ms (submit 0.0ms/0it, to-grant 33.1ms/152338it, resume 0.0ms/1it), extent 0/0 wait_max=0.0ms (submit 0.0ms/0it, to-grant 0.0ms/0it, resume 0.0ms/0it); core 3: rowid 2/2 wait_max=0.8ms (submit 0.0ms/0it, to-grant 0.8ms/70it, resume 0.0ms/1it), trxid 3/3 wait_max=33.0ms (submit 0.0ms/0it, to-grant 33.0ms/151050it, resume 1.0ms/1it), extent 1/1 wait_max=5.4ms (submit 0.0ms/0it, to-grant 4.3ms/4it, resume 1.1ms/1it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=16
+   wall=10.16s  aggregate=3,445 stmt/s  errors=0
+   insert        n= 10001  p50=   1746us  p99=   2334us
+   point-select  n= 10000  p50=     23us  p99=    102us
+   update        n= 10000  p50=   2067us  p99=   2416us
+   delete        n=  5000  p50=   2101us  p99=   2436us
+   scan          n=     5  p50=    422us  p99=   1341us
+
+== comparison ==
+   multi-core / single-core throughput: 1.145x

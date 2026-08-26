@@ -1,0 +1,33 @@
+/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 8 --tables 14 --rows 2000 --placement rotate --peer-listeners --workdir /home/ubuntu/mcbench2/t2/c8-t14-r3 --port 19282
+
+
+== single-core: cores=1, 14 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0  bench6 owner_core=0  bench7 owner_core=0  bench8 owner_core=0  bench9 owner_core=0  bench10 owner_core=0  bench11 owner_core=0  bench12 owner_core=0  bench13 owner_core=0
+   host: workdir on ext4, 1-minute load 2.95 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=11.11s  aggregate=8,823 stmt/s  errors=0
+   insert        n= 28001  p50=   1883us  p99=   2681us
+   point-select  n= 28000  p50=    227us  p99=    938us
+   update        n= 28000  p50=   2240us  p99=   2878us
+   delete        n= 14000  p50=   2232us  p99=   2796us
+   scan          n=    14  p50=   1244us  p99=   1760us
+
+== multi-core: cores=8, 14 relations x 2000 rows ==
+   placement: bench0 owner_core=5  bench1 owner_core=6  bench2 owner_core=7  bench3 owner_core=1  bench4 owner_core=2  bench5 owner_core=3  bench6 owner_core=4  bench7 owner_core=5  bench8 owner_core=6  bench9 owner_core=7  bench10 owner_core=1  bench11 owner_core=2  bench12 owner_core=3  bench13 owner_core=4
+   host: workdir on ext4, 1-minute load 2.65 at start
+   ddl session on core 0 after 1 connection(s); 14 writer session(s) on cores [1, 2, 3, 4, 5, 6, 7] after 44 connection(s)
+   refills: core 1: rowid 2/2 wait_max=1.4ms (submit 0.0ms/0it, to-grant 1.4ms/192it, resume 0.0ms/1it), trxid 3/3 wait_max=30.7ms (submit 0.0ms/0it, to-grant 30.7ms/98190it, resume 2.1ms/1it), extent 1/1 wait_max=11.0ms (submit 0.0ms/0it, to-grant 8.6ms/4it, resume 2.4ms/1it); core 2: rowid 2/2 wait_max=1.1ms (submit 0.0ms/0it, to-grant 1.0ms/3591it, resume 0.0ms/1it), trxid 3/3 wait_max=30.7ms (submit 0.0ms/0it, to-grant 30.7ms/97381it, resume 2.7ms/1it), extent 1/1 wait_max=10.8ms (submit 0.0ms/0it, to-grant 8.1ms/3it, resume 2.7ms/1it); core 3: rowid 2/2 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/217it, resume 0.0ms/1it), trxid 3/3 wait_max=30.8ms (submit 0.0ms/0it, to-grant 30.8ms/98093it, resume 2.6ms/1it), extent 1/1 wait_max=10.7ms (submit 0.0ms/0it, to-grant 8.0ms/3it, resume 2.7ms/1it); core 4: rowid 2/2 wait_max=1.4ms (submit 0.0ms/0it, to-grant 1.4ms/725it, resume 0.0ms/1it), trxid 3/3 wait_max=30.7ms (submit 0.0ms/0it, to-grant 30.7ms/132521it, resume 2.3ms/1it), extent 1/1 wait_max=9.7ms (submit 0.0ms/0it, to-grant 7.5ms/3it, resume 2.2ms/1it); core 5: rowid 2/2 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/657it, resume 0.0ms/1it), trxid 3/3 wait_max=30.7ms (submit 0.0ms/0it, to-grant 30.7ms/97292it, resume 2.4ms/1it), extent 1/1 wait_max=12.5ms (submit 0.0ms/0it, to-grant 9.9ms/4it, resume 2.7ms/1it); core 6: rowid 2/2 wait_max=0.8ms (submit 0.0ms/0it, to-grant 0.8ms/47it, resume 0.0ms/1it), trxid 3/3 wait_max=30.7ms (submit 0.0ms/0it, to-grant 30.7ms/97695it, resume 2.7ms/1it), extent 1/1 wait_max=11.4ms (submit 0.0ms/0it, to-grant 9.0ms/3it, resume 2.3ms/1it); core 7: rowid 2/2 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/182it, resume 0.0ms/1it), trxid 3/3 wait_max=30.8ms (submit 0.0ms/0it, to-grant 30.8ms/98005it, resume 2.5ms/1it), extent 1/1 wait_max=15.1ms (submit 0.0ms/0it, to-grant 12.7ms/4it, resume 2.3ms/1it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=40
+   wall=22.46s  aggregate=4,364 stmt/s  errors=0
+   insert        n= 28001  p50=   4613us  p99=   5543us
+   point-select  n= 28000  p50=    135us  p99=    683us
+   update        n= 28000  p50=   4654us  p99=   5463us
+   delete        n= 14000  p50=   4626us  p99=   5275us
+   scan          n=    14  p50=   1004us  p99=   2294us
+
+== comparison ==
+   multi-core / single-core throughput: 0.495x

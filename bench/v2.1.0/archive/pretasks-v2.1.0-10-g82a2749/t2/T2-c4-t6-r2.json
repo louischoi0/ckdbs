@@ -1,0 +1,135 @@
+{
+  "configs": {
+    "single-core": {
+      "cores": 1,
+      "phases": {
+        "insert": {
+          "n": 12001,
+          "p50_us": 2242,
+          "p99_us": 2835
+        },
+        "point-select": {
+          "n": 12000,
+          "p50_us": 85,
+          "p99_us": 1236
+        },
+        "update": {
+          "n": 12000,
+          "p50_us": 2308,
+          "p99_us": 2711
+        },
+        "delete": {
+          "n": 6000,
+          "p50_us": 2274,
+          "p99_us": 2791
+        },
+        "scan": {
+          "n": 6,
+          "p50_us": 1466,
+          "p99_us": 1654
+        }
+      },
+      "verify": "survivors as expected (1000, and one more in bench0 for the probe row)",
+      "placement": "bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0",
+      "refills": "none (no peer listener)",
+      "retries": "retries: none",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 11.89,
+      "aggregate_stmt_s": 3533.0,
+      "errors": 0
+    },
+    "multi-core": {
+      "cores": 4,
+      "phases": {
+        "insert": {
+          "n": 12001,
+          "p50_us": 1877,
+          "p99_us": 2482
+        },
+        "point-select": {
+          "n": 12000,
+          "p50_us": 22,
+          "p99_us": 71
+        },
+        "update": {
+          "n": 12000,
+          "p50_us": 2105,
+          "p99_us": 2547
+        },
+        "delete": {
+          "n": 6000,
+          "p50_us": 2098,
+          "p99_us": 2482
+        },
+        "scan": {
+          "n": 6,
+          "p50_us": 1218,
+          "p99_us": 1382
+        }
+      },
+      "verify": "survivors as expected (1000, and one more in bench0 for the probe row)",
+      "placement": "bench0 owner_core=3  bench1 owner_core=1  bench2 owner_core=2  bench3 owner_core=3  bench4 owner_core=1  bench5 owner_core=2",
+      "refills": "core 1: rowid 2/2 wait_max=1.9ms (submit 0.0ms/0it, to-grant 1.9ms/1958it, resume 0.0ms/1it), trxid 3/3 wait_max=31.1ms (submit 0.0ms/0it, to-grant 31.1ms/143022it, resume 1.4ms/1it), extent 1/1 wait_max=6.1ms (submit 0.0ms/0it, to-grant 4.9ms/4it, resume 1.2ms/1it); core 2: rowid 2/2 wait_max=1.7ms (submit 0.0ms/0it, to-grant 1.7ms/2809it, resume 0.0ms/1it), trxid 3/3 wait_max=31.1ms (submit 0.0ms/0it, to-grant 31.1ms/142532it, resume 1.2ms/1it), extent 1/1 wait_max=5.1ms (submit 0.0ms/0it, to-grant 4.0ms/3it, resume 1.1ms/1it); core 3: rowid 2/2 wait_max=0.8ms (submit 0.0ms/0it, to-grant 0.8ms/616it, resume 0.0ms/1it), trxid 3/3 wait_max=31.0ms (submit 0.0ms/0it, to-grant 31.0ms/141943it, resume 1.1ms/1it), extent 1/1 wait_max=5.1ms (submit 0.0ms/0it, to-grant 4.3ms/3it, resume 0.8ms/1it)",
+      "retries": "retries: insert=22",
+      "first_error": null,
+      "not_run": false,
+      "wall_s": 10.65,
+      "aggregate_stmt_s": 3943.0,
+      "errors": 0
+    }
+  },
+  "ratio": 1.116,
+  "raw_lines": 31,
+  "cores": 4,
+  "tables": 6,
+  "rep": 2,
+  "returncode": 0,
+  "timed_out": false,
+  "elapsed_s": 25.22386932373047,
+  "invocation": "/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 4 --tables 6 --rows 2000 --placement rotate --peer-listeners --workdir /home/ubuntu/mcbench2/t2/c4-t6-r2 --port 19156",
+  "cpu": {
+    "cpu0": {
+      "mean": 0.04052100209186357,
+      "peak": 0.1276595744680851,
+      "samples": 50
+    },
+    "cpu1": {
+      "mean": 0.049853426476973765,
+      "peak": 0.12244897959183673,
+      "samples": 50
+    },
+    "cpu2": {
+      "mean": 0.06209509188290701,
+      "peak": 0.30612244897959184,
+      "samples": 50
+    },
+    "cpu3": {
+      "mean": 0.05103756451701865,
+      "peak": 0.14583333333333334,
+      "samples": 50
+    },
+    "cpu4": {
+      "mean": 0.037008798183757956,
+      "peak": 0.10638297872340426,
+      "samples": 50
+    },
+    "cpu5": {
+      "mean": 0.03923540218051214,
+      "peak": 0.1836734693877551,
+      "samples": 50
+    },
+    "cpu6": {
+      "mean": 0.05713587857401553,
+      "peak": 0.36,
+      "samples": 50
+    },
+    "cpu7": {
+      "mean": 0.03748181436240617,
+      "peak": 0.1702127659574468,
+      "samples": 50
+    }
+  },
+  "sessions_per_writer_core": 2.0,
+  "usable": true
+}

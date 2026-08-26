@@ -1,0 +1,37 @@
+/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 2 --tables 1 --rows 2000 --placement rotate --peer-listeners --workdir /home/ubuntu/mcbench2/t2/c2-t1-r4 --port 19018
+
+
+== single-core: cores=1, 1 relations x 2000 rows ==
+   placement: bench0 owner_core=0
+   host: workdir on ext4, 1-minute load 1.74 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=6.41s  aggregate=1,092 stmt/s  errors=0
+   insert        n=  2001  p50=   1234us  p99=   1458us
+   point-select  n=  2000  p50=     24us  p99=     36us
+   update        n=  2000  p50=   1307us  p99=   1479us
+   delete        n=  1000  p50=   1224us  p99=   1437us
+   scan          n=     1  p50=    281us  p99=    281us
+
+== multi-core: cores=2, 1 relations x 2000 rows ==
+   placement: bench0 owner_core=1
+   host: workdir on ext4, 1-minute load 1.62 at start
+   ddl session on core 0 after 1 connection(s); 1 writer session(s) on cores [1] after 2 connection(s)
+   refills: core 1: rowid 1/1 wait_max=0.4ms (submit 0.0ms/0it, to-grant 0.4ms/1538it, resume 0.0ms/1it), trxid 2/2 wait_max=25.2ms (submit 0.0ms/0it, to-grant 25.2ms/116837it, resume 0.0ms/1it), extent 0/0 wait_max=0.0ms (submit 0.0ms/0it, to-grant 0.0ms/0it, resume 0.0ms/0it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=2
+   wall=4.71s  aggregate=1,486 stmt/s  errors=0
+   insert        n=  2001  p50=    905us  p99=   1172us
+   point-select  n=  2000  p50=     23us  p99=     35us
+   update        n=  2000  p50=    927us  p99=   1199us
+   delete        n=  1000  p50=    928us  p99=   1174us
+   scan          n=     1  p50=    284us  p99=    284us
+
+== comparison ==
+   multi-core / single-core throughput: 1.361x
+   (rotation skips the system core, so at cores=2 every relation is
+    core 1's: this compares the peer write path against core 0's at
+    equal parallelism - a cost, not a scaling number; cores >= 3 is
+    where two writer cores exist)

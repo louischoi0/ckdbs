@@ -1,0 +1,33 @@
+/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/bench/../tools/multicore_benchmark.py --server /home/ubuntu/ckdbs/.claude/worktrees/worktree-v2.2.0-pretasks-stmtshipping/build-release/kds_server --cores 8 --tables 12 --rows 2000 --placement rotate --peer-listeners --workdir /home/ubuntu/mcbench2/t2/c8-t12-r5 --port 19264
+
+
+== single-core: cores=1, 12 relations x 2000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0  bench3 owner_core=0  bench4 owner_core=0  bench5 owner_core=0  bench6 owner_core=0  bench7 owner_core=0  bench8 owner_core=0  bench9 owner_core=0  bench10 owner_core=0  bench11 owner_core=0
+   host: workdir on ext4, 1-minute load 2.92 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: none
+   wall=11.58s  aggregate=7,257 stmt/s  errors=0
+   insert        n= 24001  p50=   1888us  p99=   2590us
+   point-select  n= 24000  p50=    195us  p99=    926us
+   update        n= 24000  p50=   2406us  p99=   2892us
+   delete        n= 12000  p50=   2428us  p99=   2818us
+   scan          n=    12  p50=   1375us  p99=   1488us
+
+== multi-core: cores=8, 12 relations x 2000 rows ==
+   placement: bench0 owner_core=5  bench1 owner_core=6  bench2 owner_core=7  bench3 owner_core=1  bench4 owner_core=2  bench5 owner_core=3  bench6 owner_core=4  bench7 owner_core=5  bench8 owner_core=6  bench9 owner_core=7  bench10 owner_core=1  bench11 owner_core=2
+   host: workdir on ext4, 1-minute load 2.49 at start
+   ddl session on core 0 after 1 connection(s); 12 writer session(s) on cores [1, 2, 3, 4, 5, 6, 7] after 25 connection(s)
+   refills: core 1: rowid 2/2 wait_max=1.5ms (submit 0.0ms/0it, to-grant 1.5ms/2689it, resume 0.0ms/1it), trxid 3/3 wait_max=30.3ms (submit 0.0ms/0it, to-grant 30.3ms/96343it, resume 2.3ms/1it), extent 1/1 wait_max=10.8ms (submit 0.0ms/0it, to-grant 8.6ms/4it, resume 2.2ms/1it); core 2: rowid 2/2 wait_max=2.0ms (submit 0.0ms/0it, to-grant 1.0ms/3064it, resume 1.0ms/1it), trxid 3/3 wait_max=30.2ms (submit 0.0ms/0it, to-grant 30.2ms/96647it, resume 2.4ms/1it), extent 1/1 wait_max=12.2ms (submit 0.0ms/0it, to-grant 9.9ms/4it, resume 2.3ms/1it); core 3: rowid 1/1 wait_max=0.0ms (submit 0.0ms/0it, to-grant 0.0ms/75it, resume 0.0ms/1it), trxid 2/2 wait_max=30.3ms (submit 0.0ms/0it, to-grant 30.3ms/96628it, resume 0.0ms/1it), extent 0/0 wait_max=0.0ms (submit 0.0ms/0it, to-grant 0.0ms/0it, resume 0.0ms/0it); core 4: rowid 1/1 wait_max=1.1ms (submit 0.0ms/0it, to-grant 1.1ms/3706it, resume 0.0ms/1it), trxid 2/2 wait_max=30.2ms (submit 0.0ms/0it, to-grant 30.2ms/129648it, resume 0.0ms/1it), extent 0/0 wait_max=0.0ms (submit 0.0ms/0it, to-grant 0.0ms/0it, resume 0.0ms/0it); core 5: rowid 2/2 wait_max=0.8ms (submit 0.0ms/0it, to-grant 0.8ms/889it, resume 0.0ms/1it), trxid 3/3 wait_max=30.2ms (submit 0.0ms/0it, to-grant 30.2ms/95586it, resume 2.0ms/1it), extent 1/1 wait_max=10.4ms (submit 0.0ms/0it, to-grant 8.1ms/4it, resume 2.3ms/1it); core 6: rowid 2/2 wait_max=1.0ms (submit 0.0ms/0it, to-grant 1.0ms/9it, resume 0.0ms/1it), trxid 3/3 wait_max=30.2ms (submit 0.0ms/0it, to-grant 30.2ms/96283it, resume 2.3ms/1it), extent 1/1 wait_max=11.9ms (submit 0.0ms/0it, to-grant 9.6ms/4it, resume 2.3ms/1it); core 7: rowid 2/2 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/877it, resume 0.0ms/1it), trxid 3/3 wait_max=30.1ms (submit 0.0ms/0it, to-grant 30.1ms/95914it, resume 2.9ms/1it), extent 1/1 wait_max=9.5ms (submit 0.0ms/0it, to-grant 7.4ms/4it, resume 2.1ms/1it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=42
+   wall=19.10s  aggregate=4,398 stmt/s  errors=0
+   insert        n= 24001  p50=   4508us  p99=   5427us
+   point-select  n= 24000  p50=     86us  p99=    564us
+   update        n= 24000  p50=   3331us  p99=   4984us
+   delete        n= 12000  p50=   3281us  p99=   3748us
+   scan          n=    12  p50=    460us  p99=   1924us
+
+== comparison ==
+   multi-core / single-core throughput: 0.606x
