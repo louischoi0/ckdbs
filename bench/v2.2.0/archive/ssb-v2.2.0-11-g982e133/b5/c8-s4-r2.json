@@ -1,0 +1,66 @@
+{
+  "cores": 8,
+  "tables": 6,
+  "sessions": 4,
+  "rows_per_session": 200,
+  "owner_cores": {
+    "r0": 5,
+    "r1": 6,
+    "r2": 7,
+    "r3": 1,
+    "r4": 2,
+    "r5": 3
+  },
+  "session_cores": [
+    7,
+    7,
+    3,
+    6
+  ],
+  "wall_s": 0.2134,
+  "attempts": 800,
+  "accepted": 776,
+  "refused": 24,
+  "refusal_rate": 0.03,
+  "by_class": {
+    "lease_refill": 24
+  },
+  "first_other": null,
+  "engine_counters": {
+    "core0": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core1": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core2": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core3": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core4": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core5": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core6": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core7": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    }
+  },
+  "engine_counted_total": 0,
+  "driver_cc3_refusals": 0,
+  "counter_agrees_with_driver": true
+}

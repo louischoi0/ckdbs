@@ -1,0 +1,148 @@
+{
+  "arms": {
+    "ping-1": {
+      "threads": 1,
+      "seconds": 3.001,
+      "ops": 142053,
+      "ops_per_second": 47341.9,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-1": {
+      "threads": 1,
+      "seconds": 3.001,
+      "ops": 128752,
+      "ops_per_second": 42909.8,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-1": {
+      "threads": 1,
+      "seconds": 3.001,
+      "ops": 2650,
+      "ops_per_second": 883.0,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-2": {
+      "threads": 2,
+      "seconds": 3.001,
+      "ops": 333432,
+      "ops_per_second": 111120.9,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-2": {
+      "threads": 2,
+      "seconds": 3.001,
+      "ops": 242786,
+      "ops_per_second": 80914.1,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-2": {
+      "threads": 2,
+      "seconds": 3.002,
+      "ops": 3299,
+      "ops_per_second": 1098.8,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-4": {
+      "threads": 4,
+      "seconds": 3.001,
+      "ops": 280306,
+      "ops_per_second": 93406.1,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-4": {
+      "threads": 4,
+      "seconds": 3.001,
+      "ops": 277524,
+      "ops_per_second": 92492.3,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-4": {
+      "threads": 4,
+      "seconds": 3.002,
+      "ops": 6057,
+      "ops_per_second": 2017.4,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-6": {
+      "threads": 6,
+      "seconds": 3.001,
+      "ops": 205269,
+      "ops_per_second": 68404.5,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-6": {
+      "threads": 6,
+      "seconds": 3.001,
+      "ops": 204215,
+      "ops_per_second": 68055.1,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-6": {
+      "threads": 6,
+      "seconds": 3.002,
+      "ops": 9079,
+      "ops_per_second": 3024.4,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-8": {
+      "threads": 8,
+      "seconds": 3.001,
+      "ops": 176089,
+      "ops_per_second": 58676.6,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-8": {
+      "threads": 8,
+      "seconds": 3.001,
+      "ops": 168302,
+      "ops_per_second": 56083.5,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-8": {
+      "threads": 8,
+      "seconds": 3.001,
+      "ops": 12997,
+      "ops_per_second": 4330.2,
+      "errors": 0,
+      "first_error": null
+    },
+    "ping-14": {
+      "threads": 14,
+      "seconds": 3.002,
+      "ops": 177079,
+      "ops_per_second": 58992.9,
+      "errors": 0,
+      "first_error": null
+    },
+    "select-14": {
+      "threads": 14,
+      "seconds": 3.002,
+      "ops": 173488,
+      "ops_per_second": 57798.6,
+      "errors": 0,
+      "first_error": null
+    },
+    "insert-14": {
+      "threads": 14,
+      "seconds": 3.003,
+      "ops": 17800,
+      "ops_per_second": 5927.2,
+      "errors": 0,
+      "first_error": null
+    }
+  }
+}

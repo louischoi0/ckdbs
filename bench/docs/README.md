@@ -702,6 +702,154 @@ python3 bench/run_pw6.py --workdir $HOME/mcbench-pw6/run --report
 | `bench/keystone_alloc_bench.cpp` | the id allocator, in-process — no client, no socket |
 | `bench/txn_layers_bench.cpp` | the transaction layers' cost, in-process |
 
+## The cross-core probes — statement shipping, and the pretask series it grew from
+
+These are **probes**, not scenarios: each answers one question about where a
+statement runs, and each starts and stops its own server on its own fresh
+data file. `bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` is the
+run they were last driven for; `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+is the run that introduced the first three.
+
+### `bench/run_ssb.py` — the SS-B cell sweep
+
+Drives `single_relation_probe.py` over the named cells, `--reps` times each,
+and prints a median with its full min..max spread per cell. Every A/B cell
+runs its two arms in a **fixed order** — the local (`--seat owner`) arm
+first, the shipped (`--seat foreign`) arm second — so any ordering bias falls
+one way and can be divided out; the `null*` cells are that divisor, both arms
+identical.
+
+| cell | shape |
+|---|---|
+| `null1` | `cores = 1` against `cores = 1`, S = 4. The ordering-bias cell |
+| `null4` | `cores = 4`, both arms seated on the owner, S = 4. The same shape as every ratio it corrects |
+| `b1` | one relation per writer core, one session each, shipped against seated |
+| `b2` | S = 2, 4, 8, 14 sessions on **one** owner's relation, shipped against seated |
+| `sz` | S = 4 against a relation of ~200, ~1,000 and ~10,000 rows — the row-set sweep |
+| `b3` | 1, 2 and 4 relations on the **same** owner at fixed S. Only meaningful if `b2` departs from its expected law |
+| `b4` | K = 1, 4, 16 sessions on **one** arrival core: the parked-waiter population |
+| `sync` | S = 1 at `durability` `group` and `relaxed` — the control that says whether a gap is a device sync |
+| `b6` | one session, one arrival core, 25,000 shipped statements (six trx-id lease blocks), latency series kept |
+
+`--cells` takes exact names or a family prefix (`b2` expands to `b2-s2,
+b2-s4, …`). **The gate is a process check, not only a load average**: an arm
+does not start while `cc1plus`, `ld`, `kds_tests`, `cc1` or `as` is alive on
+the box, and an arm a competitor appeared *beside* is discarded and re-run up
+to `--contention-retries` times — this repository's worktrees share a
+machine, and a cell measured next to somebody else's build is fiction. Every
+rep records the load it started at, how long it waited for the gate, and
+whether it ended contended.
+
+```bash
+cp build-release/kds_server ~/ssb/bin/kds_server && sha256sum ~/ssb/bin/kds_server
+bench/run_ssb.py --server ~/ssb/bin/kds_server --workdir ~/ssb/run \
+    --archive bench/v2.2.0/archive/ssb-<describe> \
+    --cells null1,null4,b1,b2,b4 --reps 5 --rows 3000 --port 17200
+```
+
+### `bench/single_relation_probe.py` — N sessions, R relations, and where the sessions sit
+
+The T1b shape (one relation, N sessions, engine-issued keys, so every insert
+lands on one ascending btree tail) with **`--seat`** added for SS-B:
+
+- `--seat owner` — every session sits on the relation's owner core. T1b's
+  arm, unchanged.
+- `--seat foreign` — every session sits on a core that does **not** own the
+  relation it writes, so every statement is shipped. Sessions are dealt
+  round-robin over the other cores, core 0 included, which is what an
+  application that has never heard of core placement gets.
+
+Other flags: `--relations R` deals the sessions round-robin over R relations
+(`--same-owner` keeps creating relations until R of them share one owner,
+which is what separates per-page from per-core serialization);
+`--arrival-core N` puts every shipped session on one core (`-1` means "the
+lowest peer that is not the owner", since rotation picks the owner by
+creation sequence and a fixed number would sometimes name it);
+`--durability group|relaxed|strict` and `--wal-drain-interval-us` are written
+into the server's config, the first because a cost that is a device sync must
+be tellable from one that is not; `--trace-latencies` emits every statement's
+latency in arrival order, which is the only way a step at a lease-block
+boundary is visible at all. `--arm single` is the `cores = 1` control and
+refuses `--seat foreign`, which has no meaning there.
+
+Reports `attempted` / `executed` / `refused` separately from `sent` and
+`retries` — a refusal must never become a denominator — with the refusal
+classes by message, p0/p25/p50/p95/p99, per-logical-CPU busy over the
+measured window only, `COUNT(*)` verified per relation, and `SHOW META`'s
+`shipped_*`, `cross_core_write_refusal*`, `sched_*` and the three lease
+refill triples read from **every** core (the ship counters are arrival-core
+local and the executed counters owner-local, so a total needs all of them).
+
+```bash
+bench/single_relation_probe.py --server ~/ssb/bin/kds_server --workdir ~/ssb/b2 \
+    --arm multi --cores 4 --sessions 8 --relations 1 --rows 3000 --seat foreign
+```
+
+### `bench/refusal_baseline_probe.py` — the cross-core write refusal counter, both eras
+
+Takes the sessions the kernel gives it and writes round-robin over every
+relation including the ones its core does not own — every other driver here
+hunts for the owner and therefore reports zero refusals by construction.
+Reports the refusal rate, the class by message, and `SHOW META`'s
+`cross_core_write_refusals` read from every core, with the engine's total
+checked against the driver's own count.
+
+**`--residue` is the SS-B addition.** After the unchanged run it exercises
+the shapes statement shipping declines by construction — a write inside an
+explicit transaction, a write whose predicate names a second relation, a join
+spanning two owners, a read whose answer exceeds the ring's 992-byte payload
+— and classifies each, with two in-scope controls that must convert. That
+distribution, not the total, is the evidence base a 2PC design is owed.
+`--residue-reps` sets how many times each session runs each shape;
+`--residue-limit` sets the `LIMIT` of the over-long read.
+
+```bash
+bench/refusal_baseline_probe.py --server ~/ssb/bin/kds_server --workdir ~/ssb/t5 \
+    --cores 4 --sessions 8 --tables 6 --rows 200
+bench/refusal_baseline_probe.py --server ~/ssb/bin/kds_server --workdir ~/ssb/b5res \
+    --cores 4 --sessions 8 --tables 6 --rows 200 --residue --residue-reps 5
+```
+
+### `bench/shipped_reply_cap_probe.py` — where the 992-byte reply cap bites, in rows
+
+A shipped reply fills one ring slot less its header, and `SS1` refuses rather
+than truncating past it. The bound is stated in bytes; what a reader needs is
+rows. This asks `SELECT * FROM t LIMIT k` for rising k from a foreign session
+until the answer stops arriving, and asks the same k from a session seated on
+the owner, so the two columns say plainly that the cap is shipping's and not
+the engine's. Reports the largest k answered, its reply size, and the
+verbatim refusal — which is `UnknownOutcome`, non-retryable, because the
+statement ran and its answer could not be carried.
+
+```bash
+bench/shipped_reply_cap_probe.py --server ~/ssb/bin/kds_server \
+    --workdir ~/ssb/cap --cores 4 --rows 200
+```
+
+### `bench/client_ceiling_probe.py` — what the harness can do at all
+
+Three arms (`ping`, a parsed `SELECT`, an autocommit `INSERT`) at each thread
+count, aggregate throughput. A cell within 2× of this number is the CPython
+driver's number and must be reported as unresolved rather than quoted as an
+engine result. Re-run it per host; it moves.
+
+```bash
+bench/client_ceiling_probe.py --server ~/ssb/bin/kds_server \
+    --workdir ~/ssb/ceiling --threads 1,2,4,6,8,14
+```
+
+### The pretask orchestrators
+
+`bench/run_t1.py`, `bench/run_t2.py` and `bench/run_t3.py` sweep
+`single_relation_probe.py`, `tools/multicore_benchmark.py` and the
+`cores`-count matrix respectively; `bench/txn_batch_probe.py`,
+`bench/reactor_accounting_probe.py`, `bench/parked_coroutine_probe.py`,
+`bench/percore_insert_probe.py`, `bench/idle_wakers_probe.py`,
+`bench/drain_cadence_probe.py` and `bench/index_refusal_storm_probe.py` each
+answer one pretask question and each carries its own docstring. Their run is
+`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`, whose
+"Reproducing" section has every invocation.
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers

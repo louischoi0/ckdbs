@@ -1,0 +1,87 @@
+{
+  "cell": "null1",
+  "side": "a",
+  "rep": 3,
+  "returncode": 0,
+  "timed_out": false,
+  "elapsed_s": 6.0,
+  "invocation": "/usr/bin/python3 /home/ubuntu/ckdbs/.claude/worktrees/workplan-v2.2.0/bench/single_relation_probe.py --server /home/ubuntu/ssb/bin/kds_server --workdir /home/ubuntu/ssb/run/null1-a-r3 --port 17216 --arm single --cores 1 --sessions 4 --relations 1 --rows 3000 --seat owner",
+  "result": {
+    "arm": "single",
+    "cores": 1,
+    "sessions": 4,
+    "rows": 3000,
+    "relations": 1,
+    "seat": "owner",
+    "same_owner": false,
+    "rows_total": 12000,
+    "relations_created": [
+      "hot0"
+    ],
+    "relations_used": [
+      "hot0"
+    ],
+    "owner_cores": {
+      "hot0": 0
+    },
+    "owner_core": 0,
+    "session_seats": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "session_relations": [
+      "hot0",
+      "hot0",
+      "hot0",
+      "hot0"
+    ],
+    "warmup_retries": 0,
+    "cpu_busy": {
+      "cpu0": 0.0106,
+      "cpu1": 0.0317,
+      "cpu2": 0.0265,
+      "cpu3": 0.0354,
+      "cpu4": 0.0213,
+      "cpu5": 0.0411,
+      "cpu6": 0.0336,
+      "cpu7": 0.0338
+    },
+    "wall_s": 5.7256,
+    "attempted": 12000,
+    "executed": 12000,
+    "refused": 0,
+    "refusal_rate": 0.0,
+    "refusal_classes": {},
+    "sent": 12000,
+    "inserted": 12000,
+    "inserts_per_second": 2095.8,
+    "retries": 0,
+    "errors": 0,
+    "first_error": null,
+    "insert_p50_us": 2059.4,
+    "insert_p99_us": 2689.1,
+    "insert_p0_us": 624.7,
+    "insert_p25_us": 1470.9,
+    "insert_p75_us": 2247.6,
+    "insert_p95_us": 2514.3,
+    "insert_mean_us": 1905.2,
+    "verify_per_relation": {
+      "hot0": {
+        "expected": 12001,
+        "got": 12001,
+        "ok": true
+      }
+    },
+    "verify": "rows as expected",
+    "owner_cores_distinct": [
+      0
+    ]
+  },
+  "loadavg_at_start": 1.2,
+  "gate_wait_s": 0.0,
+  "contended": [],
+  "attempts": 1,
+  "stderr": ""
+}

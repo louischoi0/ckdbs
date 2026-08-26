@@ -1,0 +1,52 @@
+{
+  "cores": 4,
+  "rows": 200,
+  "owner_core": 3,
+  "foreign_core": 0,
+  "largest_shipped_limit": 99,
+  "largest_shipped_reply_bytes": 987,
+  "first_refused": {
+    "limit": 100,
+    "seated_bytes": 998,
+    "reply": "ERR UNKNOWN_OUTCOME retryable=0 statement shipping: the statement executed on its owner but its reply is 998 bytes, past the 992 a reply carries; the statement's effect stands and its answer is lost"
+  },
+  "per_limit": [
+    {
+      "limit": 95,
+      "seated_bytes": 947,
+      "shipped_ok": true,
+      "shipped_bytes": 947
+    },
+    {
+      "limit": 96,
+      "seated_bytes": 957,
+      "shipped_ok": true,
+      "shipped_bytes": 957
+    },
+    {
+      "limit": 97,
+      "seated_bytes": 967,
+      "shipped_ok": true,
+      "shipped_bytes": 967
+    },
+    {
+      "limit": 98,
+      "seated_bytes": 977,
+      "shipped_ok": true,
+      "shipped_bytes": 977
+    },
+    {
+      "limit": 99,
+      "seated_bytes": 987,
+      "shipped_ok": true,
+      "shipped_bytes": 987
+    },
+    {
+      "limit": 100,
+      "seated_bytes": 998,
+      "shipped_ok": false,
+      "shipped_bytes": 198
+    }
+  ],
+  "seated_answers_past_the_cap": true
+}

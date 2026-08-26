@@ -1,0 +1,50 @@
+{
+  "cores": 4,
+  "tables": 6,
+  "sessions": 4,
+  "rows_per_session": 200,
+  "owner_cores": {
+    "r0": 3,
+    "r1": 1,
+    "r2": 2,
+    "r3": 3,
+    "r4": 1,
+    "r5": 2
+  },
+  "session_cores": [
+    0,
+    3,
+    1,
+    0
+  ],
+  "wall_s": 0.2816,
+  "attempts": 800,
+  "accepted": 776,
+  "refused": 24,
+  "refusal_rate": 0.03,
+  "by_class": {
+    "lease_refill": 24
+  },
+  "first_other": null,
+  "engine_counters": {
+    "core0": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core1": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core2": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    },
+    "core3": {
+      "cross_core_write_refusals": "0",
+      "cross_core_write_refusal_keys": "0"
+    }
+  },
+  "engine_counted_total": 0,
+  "driver_cc3_refusals": 0,
+  "counter_agrees_with_driver": true
+}

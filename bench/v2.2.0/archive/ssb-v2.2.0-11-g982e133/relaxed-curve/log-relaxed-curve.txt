@@ -1,0 +1,8 @@
+relaxed foreign S=1 ips 857.9 p0 355.5 p25 1052.2 p50 1090.9 p99 2025.1 exec 1500 ref 0 cpu {'cpu0': 0.0058, 'cpu1': 0.8122, 'cpu2': 0.0117, 'cpu3': 0.0235, 'cpu4': 0.0294, 'cpu5': 0.0, 'cpu6': 0.0058, 'cpu7': 0.0341}
+relaxed owner S=1 ips 33172.8 p0 14.3 p25 23.4 p50 23.7 p99 166.3 exec 1500 ref 0 cpu {'cpu0': 0.3333, 'cpu1': 0.0, 'cpu2': 0.0, 'cpu3': 0.0, 'cpu4': 0.0, 'cpu5': 0.0, 'cpu6': 0.0, 'cpu7': 0.0}
+relaxed foreign S=2 ips 1720.7 p0 236.8 p25 1055.3 p50 1082.9 p99 2060.3 exec 3000 ref 0 cpu {'cpu0': 0.0291, 'cpu1': 0.8966, 'cpu2': 0.0173, 'cpu3': 0.0407, 'cpu4': 0.0294, 'cpu5': 0.0, 'cpu6': 0.0349, 'cpu7': 0.0286}
+relaxed owner S=2 ips 77795.2 p0 12.1 p25 16.4 p50 18.3 p99 46.5 exec 3000 ref 0 cpu {'cpu0': 0.0, 'cpu1': 0.0, 'cpu2': 0.0, 'cpu3': 0.3333, 'cpu4': 0.6667, 'cpu5': 0.4, 'cpu6': 0.0, 'cpu7': 0.0}
+relaxed foreign S=4 ips 3548.4 p0 23.3 p25 1051.5 p50 1080.5 p99 2083.5 exec 6000 ref 0 cpu {'cpu0': 0.0299, 'cpu1': 0.9408, 'cpu2': 0.0422, 'cpu3': 0.0606, 'cpu4': 0.0305, 'cpu5': 0.0357, 'cpu6': 0.0303, 'cpu7': 0.0479}
+relaxed owner S=4 ips 74960.0 p0 14.1 p25 32.9 p50 41.6 p99 116.8 exec 6000 ref 0 cpu {'cpu0': 0.4286, 'cpu1': 0.0, 'cpu2': 0.25, 'cpu3': 0.6667, 'cpu4': 0.4286, 'cpu5': 0.3333, 'cpu6': 0.25, 'cpu7': 0.0}
+relaxed foreign S=8 ips 7108.0 p0 28.2 p25 1036.0 p50 1079.9 p99 2205.3 exec 12000 ref 0 cpu {'cpu0': 0.0552, 'cpu1': 0.9461, 'cpu2': 0.0545, 'cpu3': 0.0793, 'cpu4': 0.0427, 'cpu5': 0.0485, 'cpu6': 0.0714, 'cpu7': 0.0366}
+relaxed owner S=8 ips 50132.2 p0 14.4 p25 76.5 p50 123.2 p99 1280.2 exec 12000 ref 0 cpu {'cpu0': 0.3636, 'cpu1': 0.3636, 'cpu2': 0.3, 'cpu3': 0.619, 'cpu4': 0.3, 'cpu5': 0.2632, 'cpu6': 0.3, 'cpu7': 0.3333}
