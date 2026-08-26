@@ -1,0 +1,154 @@
+  sz-200 r1: a=3056.2 b=3104.7
+  sz-200 r2: a=3255.8 b=3099.9
+  sz-200 r3: a=3794.3 b=3294.4
+  sz-200 r4: a=3209.3 b=3310.8
+  sz-200 r5: a=3795.4 b=2310.8
+== sz-200: a=3255.8 b=3104.7 ratio=0.9521 (0.6088..1.0316) refused a=0 b=0
+  sz-1000 r1: a=3304.9 b=2297.3
+  sz-1000 r2: a=3507.4 b=2716.9
+  sz-1000 r3: a=3993.8 b=2365.4
+  sz-1000 r4: a=3173.3 b=2983.2
+  sz-1000 r5: a=3048.5 b=3321.5
+== sz-1000: a=3304.9 b=2716.9 ratio=0.7746 (0.5923..1.0896) refused a=0 b=0
+  sz-10000 r1: a=2398.2 b=2378.4
+  sz-10000 r2: a=2393.5 b=2214.0
+  sz-10000 r3: a=2260.2 b=2229.4
+  sz-10000 r4: a=2281.8 b=2218.6
+  sz-10000 r5: a=2240.5 b=2122.2
+== sz-10000: a=2281.8 b=2218.6 ratio=0.9723 (0.925..0.9917) refused a=0 b=0
+
+archived to /home/ubuntu/ckdbs/.claude/worktrees/workplan-v2.2.0/bench/v2.2.0/archive/ssb-v2.2.0-11-g982e133-sz
+{
+  "sz-200": {
+    "cell": "sz-200",
+    "reps": 5,
+    "contended": [],
+    "gate_wait_max_s": 0,
+    "a_ips_median": 3255.8,
+    "a_ips_min": 3056.2,
+    "a_ips_max": 3795.4,
+    "a_p0_us": 690.2,
+    "a_p25_us": 947.3,
+    "a_p50_us": 1140.2,
+    "a_p95_us": 1544.5,
+    "a_p99_us": 1680.1,
+    "a_attempted": 1000,
+    "a_executed": 1000,
+    "a_refused": 0,
+    "a_retries": 0,
+    "a_verify_bad": [],
+    "a_classes": {},
+    "b_ips_median": 3104.7,
+    "b_ips_min": 2310.8,
+    "b_ips_max": 3310.8,
+    "b_p0_us": 681.1,
+    "b_p25_us": 993.9,
+    "b_p50_us": 1206.6,
+    "b_p95_us": 1648.8,
+    "b_p99_us": 1758.6,
+    "b_attempted": 1000,
+    "b_executed": 1000,
+    "b_refused": 0,
+    "b_retries": 0,
+    "b_verify_bad": [],
+    "b_classes": {},
+    "ratio_per_rep": [
+      1.0159,
+      0.9521,
+      0.8682,
+      1.0316,
+      0.6088
+    ],
+    "ratio_median": 0.9521,
+    "ratio_min": 0.6088,
+    "ratio_max": 1.0316
+  },
+  "sz-1000": {
+    "cell": "sz-1000",
+    "reps": 5,
+    "contended": [],
+    "gate_wait_max_s": 0,
+    "a_ips_median": 3304.9,
+    "a_ips_min": 3048.5,
+    "a_ips_max": 3993.8,
+    "a_p0_us": 571.7,
+    "a_p25_us": 1049.3,
+    "a_p50_us": 1246.0,
+    "a_p95_us": 1482.5,
+    "a_p99_us": 1587.1,
+    "a_attempted": 5000,
+    "a_executed": 5000,
+    "a_refused": 0,
+    "a_retries": 0,
+    "a_verify_bad": [],
+    "a_classes": {},
+    "b_ips_median": 2716.9,
+    "b_ips_min": 2297.3,
+    "b_ips_max": 3321.5,
+    "b_p0_us": 719.6,
+    "b_p25_us": 1250.2,
+    "b_p50_us": 1407.4,
+    "b_p95_us": 1869.9,
+    "b_p99_us": 2073.4,
+    "b_attempted": 5000,
+    "b_executed": 5000,
+    "b_refused": 0,
+    "b_retries": 0,
+    "b_verify_bad": [],
+    "b_classes": {},
+    "ratio_per_rep": [
+      0.6951,
+      0.7746,
+      0.5923,
+      0.9401,
+      1.0896
+    ],
+    "ratio_median": 0.7746,
+    "ratio_min": 0.5923,
+    "ratio_max": 1.0896
+  },
+  "sz-10000": {
+    "cell": "sz-10000",
+    "reps": 5,
+    "contended": [],
+    "gate_wait_max_s": 0,
+    "a_ips_median": 2281.8,
+    "a_ips_min": 2240.5,
+    "a_ips_max": 2398.2,
+    "a_p0_us": 558.8,
+    "a_p25_us": 1291.4,
+    "a_p50_us": 1914.9,
+    "a_p95_us": 2350.0,
+    "a_p99_us": 2485.7,
+    "a_attempted": 50000,
+    "a_executed": 50000,
+    "a_refused": 0,
+    "a_retries": 0,
+    "a_verify_bad": [],
+    "a_classes": {},
+    "b_ips_median": 2218.6,
+    "b_ips_min": 2122.2,
+    "b_ips_max": 2378.4,
+    "b_p0_us": 569.5,
+    "b_p25_us": 1563.7,
+    "b_p50_us": 1790.2,
+    "b_p95_us": 2301.2,
+    "b_p99_us": 2805.1,
+    "b_attempted": 50000,
+    "b_executed": 50000,
+    "b_refused": 0,
+    "b_retries": 0,
+    "b_verify_bad": [],
+    "b_classes": {},
+    "ratio_per_rep": [
+      0.9917,
+      0.925,
+      0.9864,
+      0.9723,
+      0.9472
+    ],
+    "ratio_median": 0.9723,
+    "ratio_min": 0.925,
+    "ratio_max": 0.9917
+  }
+}

@@ -907,27 +907,75 @@ still waits on its own gate, so:
   stops after one round trip instead of spinning to its deadline. The
   review of this change found that case
   (`ADeniedRelationAnswersOnceWithoutTheBitThenAsksAgain`).
-- **Statement shipping is built and unmeasured** (SS1–SS4, 2026-08-26).
-  An autocommit single-relation statement whose relation another core owns
-  now runs on the owner instead of being refused — the wire, the waiter,
-  the owner-side execution, the dispatch fork and the counters are all in.
-  What is **not** done, stated so the build is not read as the version:
-  **SS-B has not run**. Every one of
-  `docs/inflight/in-progress/memo-shipping-and-group-commit.md` §8's three claims is still
-  unjudged, including the one predicting shipping is a small *loss* at or
-  below one session per owner core — this build ships unconditionally by
-  D6, so if that claim is right the loss is being paid today and nobody has
-  priced it. Nothing here is a throughput claim; the only claims made are
-  correctness ones, and per the v2 amendment **overhead was not measured**.
-  Those correctness claims were then **checked**, 2026-08-26:
-  `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` is the
-  post-SS5 order's Part A, five items clean and two findings, both recorded
-  below.
-  Also unmeasured: whether the demand converts (the 80–92% refusal rate the
-  pretasks measured should go to ~0 shipped-and-executed, with
-  `cross_core_write_refusals` flat, and no run has checked it), and the
-  waiter population's cost at K = 1/4/16, which is the open falsifier the
-  pretasks could not fake.
+- ~~**Statement shipping is built and unmeasured**~~ — **measured
+  2026-08-26**, `bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md`
+  (SS-B, the order at `instructions/v2.2.0/measurement-after-s5.md`). The
+  demand entry closes with its number: **80–92% of an unrouted client's
+  writes refused → 0%**, zero CC3 refusals in 4,800 unrouted attempts at
+  `cores` 4 and 8, the engine counter reading 0 from every core. What the
+  run leaves open is *not* the conversion; it is the price, below.
+- **The correctness order's Part A ran 2026-08-26**,
+  `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` — five
+  items clean and two findings, which is the track SS-B's order assumes
+  and does not test.
+- **Shipping costs ~2× at one session per owner, and the cause is a
+  scheduler property rather than the wire** (measured 2026-08-26, the same
+  file). The memo's claim 2 is upheld and by more than it predicted: 0.526
+  (B1), 0.429 (B4 at K = 1), 0.531 sustained over 25,000 statements (B6),
+  five reps each and an order of magnitude outside a 1.016 noise floor.
+  **D6 ships unconditionally, so that penalty is being paid in the R1
+  regime today** — the number `docs/spec/crosscore.md` §9's routing decision
+  inherits.
+  The cause is neither the round trip nor the waiter: the shipped-minus-
+  seated delta is a flat **1,064 µs under `group` and 1,068 µs under
+  `relaxed`** — the same constant with the device in the path and without
+  it — and it tracks the reactor's idle block over a fivefold range
+  (1.08 / 2.10 / 3.11 / 5.12 ms at `wal_drain_interval_us`
+  1000/2000/3000/5000, seated control flat at 23 µs). **An idle reactor
+  sleeps for a whole millisecond and nothing wakes it when a ring message
+  arrives**: `Scheduler::IdleTimeoutMs` is an `int` of milliseconds handed
+  to `epoll_wait` and rounds *up* by its own argument
+  (`src/sched/scheduler.cpp:196-214`), and no wake path exists in the ring
+  or the scheduler. Any cross-core message to an idle core pays it;
+  shipping is only the first feature to put one on a client's critical
+  path twice per statement. **Owned by `docs/spec/sched.md` §4**, not by
+  shipping, and deliberately unfixed by the run that found it.
+  At four sessions and above the owner is never idle, the sleep never
+  happens, and shipping runs at **0.93–0.99×** — inside the floor.
+- **One parked waiter already burns ~89% of an arrival core** (measured
+  2026-08-26, B4). Polls rise 3.1M → 7.9M/s from K = 1 to K = 16 while the
+  cost per poll holds at 0.059–0.068 µs: the spin signature the pretasks
+  could not build a population to look for, now built by shipping's own
+  waiters. No throughput cost was observed *only because CPUs were free* —
+  at S = 14 two arrival cores sat at 0.921 busy against 0.058 seated.
+  Handed to `docs/spec/sched.md` §4 with the idle-block finding above; both are
+  the same missing wake path seen from opposite ends.
+- **Claim 3 is unproven, not disproven** (2026-08-26). The owner core runs
+  at 11–24% busy at the top of the curve this harness can build, with
+  92–96% of its reactor wall charged to no scheduling group, so its
+  execution capacity is not being tested. Two things the memo could not
+  have: the resource that *does* saturate under shipping is the **arrival**
+  core, and shipping moves the owner's ceiling further away rather than
+  nearer — a shipped statement costs the owner's foreground group 1.8–2.2
+  µs per poll against 4.4–4.9 seated at the same 2.00 polls/statement,
+  because the socket and the render happen on the arrival core.
+- **The R6 residue, now a measured distribution** (2026-08-26, B5) — the
+  evidence base this file has been saying a 2PC decision must be designed
+  from, read for the first time. Of what shipping does not convert:
+  `in_explicit_txn` and `subquery_write` refuse 100% (the R6 write
+  population), `two_owner_read` refuses 87.5% with **12.5% already answered
+  correctly by the P4d pipeline** when the session lands on core 0, and
+  `overlong_read` answers 100% `UNKNOWN_OUTCOME` (the entry below). The R6
+  entry stays **open** and now points here rather than at a total.
+- **A shipped write's abandoned transaction costs WAL, not the lease**
+  (measured 2026-08-26, B6, refining the entry below). Six extra trx-id
+  refills per 25,000 statements — 2.3 µs/statement amortised — and **no
+  latency step at any 4,096-id boundary** (boundary vs elsewhere 1.02–1.03×
+  on *both* arms, so the step is not the lease's). What it does cost is
+  **64.02 bytes per shipped statement into an otherwise-idle stream**, a
+  13% rise in instance WAL, measured by scanning the written extent of each
+  core's segment. Whether the fork moves above `BeginWrite` is the
+  operator's call and now has both sides of the trade in numbers.
 - **A shipped read whose reply exceeds 992 bytes is answered
   `UNKNOWN_OUTCOME`, which is the wrong thing to tell a client about a
   read** (found 2026-08-26 by the SS2 review, not fixed). The ring's

@@ -226,13 +226,31 @@ checked against, not the workplan.
 **The three claims the workplan's first section should be checked against**,
 stated so a later reader can mark each right or wrong.
 
-**Status 2026-08-26: the build landed, the claims are still unjudged.**
-SS1–SS4 of `instructions/v2.2.0-stmtshipping.md` are built — the wire and
-the waiter, the owner-side execution, the dispatch fork, the counters — so
-every claim below is now *testable* rather than hypothetical, and the
-instrument each one needs is a field on `SHOW META`. None of them has been
-measured: SS-B has not run, and no results file exists to point at yet. The
-pointer this section is owed goes in when it does.
+**Judged 2026-08-26 —
+`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md`.** SS1–SS4 are
+built and SS-B has run against them. The pointer this section was owed is
+that file; the verdicts, in the order the claims are stated below:
+
+1. **Upheld on this memo's own test, missed literally.** Throughput tracks
+   521–547 × S over S = 2…14 and the local-vs-shipped gap is 1–7%, inside a
+   1.016 noise floor — but shipping is never *faster* at any S and the
+   ratios show no trend in S. Both readings are recorded there; the
+   literal form is rescued only by the fact that the "before" for these
+   sessions was a refusal, and against zero throughput any of it is
+   positive.
+2. **Upheld, by more than this memo predicted.** Not "a small net loss from
+   a round trip and a waiter" — a factor of two, in three independent cells
+   (0.526, 0.429, 0.531). And the cause is neither the round trip nor the
+   waiter: it is that an idle reactor sleeps a whole millisecond and
+   nothing wakes it on a ring message. §3's arithmetic — the wire at ~1/40
+   of a sync — is right and its conclusion does not follow from it.
+3. **Unproven, not disproven.** The owner runs at 11–24% busy at the top of
+   the curve this harness can build, so its execution capacity is not
+   tested. Two things this memo could not have anticipated: the resource
+   that saturates under shipping is the **arrival** core, and shipping
+   moves the owner's ceiling *further away* — a shipped statement costs the
+   owner 1.8–2.2 µs per poll against 4.4–4.9 seated, because the socket and
+   the render happen elsewhere.
 
 1. Shipping is **throughput-positive** where more than one session targets an
    owner core, and the margin grows with the session count — because it moves

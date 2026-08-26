@@ -1,0 +1,104 @@
+  sync-group r1: a=1266.2 b=534.7
+  sync-group r2: a=1341.8 b=538.3
+  sync-group r3: a=1371.0 b=532.1
+  sync-group r4: a=1275.9 b=540.3
+  sync-group r5: a=1166.2 b=535.6
+== sync-group: a=1275.9 b=535.6 ratio=0.4223 (0.3881..0.4593) refused a=0 b=0
+  sync-relaxed r1: a=36138.0 b=860.3
+  sync-relaxed r2: a=35639.0 b=865.8
+  sync-relaxed r3: a=36825.4 b=857.2
+  sync-relaxed r4: a=35806.6 b=863.1
+  sync-relaxed r5: a=36454.6 b=860.4
+== sync-relaxed: a=36138.0 b=860.4 ratio=0.0238 (0.0233..0.0243) refused a=0 b=0
+
+archived to /home/ubuntu/ckdbs/.claude/worktrees/workplan-v2.2.0/bench/v2.2.0/archive/ssb-v2.2.0-11-g982e133-sync
+{
+  "sync-group": {
+    "cell": "sync-group",
+    "reps": 5,
+    "contended": [],
+    "gate_wait_max_s": 0,
+    "a_ips_median": 1275.9,
+    "a_ips_min": 1166.2,
+    "a_ips_max": 1371.0,
+    "a_p0_us": 430.2,
+    "a_p25_us": 591.8,
+    "a_p50_us": 720.3,
+    "a_p95_us": 1236.1,
+    "a_p99_us": 1349.5,
+    "a_attempted": 15000,
+    "a_executed": 15000,
+    "a_refused": 0,
+    "a_retries": 0,
+    "a_verify_bad": [],
+    "a_classes": {},
+    "b_ips_median": 535.6,
+    "b_ips_min": 532.1,
+    "b_ips_max": 540.3,
+    "b_p0_us": 797.6,
+    "b_p25_us": 1696.4,
+    "b_p50_us": 1784.1,
+    "b_p95_us": 2301.3,
+    "b_p99_us": 3017.0,
+    "b_attempted": 15000,
+    "b_executed": 15000,
+    "b_refused": 0,
+    "b_retries": 0,
+    "b_verify_bad": [],
+    "b_classes": {},
+    "ratio_per_rep": [
+      0.4223,
+      0.4012,
+      0.3881,
+      0.4235,
+      0.4593
+    ],
+    "ratio_median": 0.4223,
+    "ratio_min": 0.3881,
+    "ratio_max": 0.4593
+  },
+  "sync-relaxed": {
+    "cell": "sync-relaxed",
+    "reps": 5,
+    "contended": [],
+    "gate_wait_max_s": 146.3,
+    "a_ips_median": 36138.0,
+    "a_ips_min": 35639.0,
+    "a_ips_max": 36825.4,
+    "a_p0_us": 13.9,
+    "a_p25_us": 23.3,
+    "a_p50_us": 23.6,
+    "a_p95_us": 30.8,
+    "a_p99_us": 43.7,
+    "a_attempted": 15000,
+    "a_executed": 15000,
+    "a_refused": 0,
+    "a_retries": 0,
+    "a_verify_bad": [],
+    "a_classes": {},
+    "b_ips_median": 860.4,
+    "b_ips_min": 857.2,
+    "b_ips_max": 865.8,
+    "b_p0_us": 345.5,
+    "b_p25_us": 1059.1,
+    "b_p50_us": 1091.4,
+    "b_p95_us": 1773.3,
+    "b_p99_us": 1941.2,
+    "b_attempted": 15000,
+    "b_executed": 15000,
+    "b_refused": 0,
+    "b_retries": 0,
+    "b_verify_bad": [],
+    "b_classes": {},
+    "ratio_per_rep": [
+      0.0238,
+      0.0243,
+      0.0233,
+      0.0241,
+      0.0236
+    ],
+    "ratio_median": 0.0238,
+    "ratio_min": 0.0233,
+    "ratio_max": 0.0243
+  }
+}

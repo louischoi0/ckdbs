@@ -57,6 +57,13 @@ CLASSES = {
     "lease_refill": "retry after the refill grant lands",
     "lease_exhausted": "a refill must be granted before it can allocate again",
     "peer_ddl": "takes no DDL",
+    # Post-shipping classes (SS-B5's residue reading). The first is the read
+    # half of the same restriction; the second and third are shipping's own
+    # bounds, and both are `UnknownOutcome` rather than a refusal - a
+    # statement that ran and could not be reported.
+    "cross_core_read": "cross-core reads need the step pipeline",
+    "shipped_reply_overlong": "its reply is",
+    "shipped_unknown": "unknown outcome",
 }
 
 
@@ -98,6 +105,78 @@ class Writer(threading.Thread):
                 self.first_other = r
 
 
+def residue_phase(conns, names, owners, args):
+    """The shapes shipping declines, run deliberately so the residue is a
+    distribution rather than a total.
+
+    Each `(conn, core)` runs each shape `--residue-reps` times against a
+    relation its own core does not own, and the reply is classified. Six
+    shapes, each naming what puts it outside D1:
+
+      autocommit_write   the control - in scope, must convert.
+      autocommit_read    the read half of the same scope.
+      in_explicit_txn    D1's first exclusion: BEGIN, then a foreign write.
+      two_owner_read     D1's second: a join whose two relations have two
+                         owners, which `SoleForeignOwner` declines.
+      subquery_write     a write whose predicate names a second relation;
+                         the fork skips it whatever the owners are
+                         (`AnySubqueryPredicate`, command_dispatcher.cpp).
+      overlong_read      in scope and shippable, and the answer does not
+                         fit the ring's 992 bytes.
+
+    Nothing here is retried: a residue statement's *class* is the
+    measurement and a retry would only re-collect it.
+    """
+    # Two relations with different owners, for the shapes that need one.
+    pairs = {}
+    for a in names:
+        for b in names:
+            if a != b and owners[a] != owners[b]:
+                pairs[(owners[a], owners[b])] = (a, b)
+    by_shape = {}
+    samples = {}
+    for conn, core in conns:
+        foreign = [n for n in names if owners[n] != core]
+        if not foreign:
+            continue
+        t = foreign[0]
+        other = next((n for n in foreign if owners[n] != owners[t]), None)
+        stmts = [
+            ("autocommit_write", [f"INSERT INTO {t} VALUES ('res', 1)"]),
+            ("autocommit_read", [f"SELECT * FROM {t} LIMIT 2"]),
+            ("in_explicit_txn", ["BEGIN", f"INSERT INTO {t} VALUES ('res', 2)",
+                                 "ROLLBACK"]),
+            ("overlong_read", [f"SELECT * FROM {t} LIMIT {args.residue_limit}"]),
+        ]
+        if other is not None:
+            stmts.append(("two_owner_read",
+                          [f"SELECT {t}.balance FROM {t} JOIN {other} "
+                           f"ON {other}.id = {t}.id"]))
+            stmts.append(("subquery_write",
+                          [f"UPDATE {t} SET balance = 0 WHERE balance IN "
+                           f"(SELECT balance FROM {other} WHERE id = 999999999)"]))
+        for shape, lines in stmts:
+            for _ in range(args.residue_reps):
+                verdict = None
+                for line in lines:
+                    r = conn.cmd(line)
+                    # The verdict is the first non-OK reply in the sequence:
+                    # a BEGIN that succeeds and an INSERT that refuses is one
+                    # refused statement, not one of each.
+                    if r.startswith("ERR") and verdict is None:
+                        verdict = r
+                if verdict is None:
+                    name = "accepted"
+                else:
+                    name = classify(verdict)
+                    samples.setdefault(f"{shape}/{name}", verdict[:220])
+                by_shape.setdefault(shape, {})
+                by_shape[shape][name] = by_shape[shape].get(name, 0) + 1
+    return dict(by_shape=by_shape, samples=samples,
+                reps_per_session=args.residue_reps,
+                overlong_limit=args.residue_limit)
+
+
 def meta_counters(meta):
     out = {}
     for tok in meta.split():
@@ -120,6 +199,14 @@ def main():
     ap.add_argument("--port", type=int, default=18600)
     ap.add_argument("--max-connects", type=int, default=512)
     ap.add_argument("--json", default="")
+    ap.add_argument("--residue", action="store_true",
+                    help="after the unchanged run, exercise the shapes shipping declines "
+                         "and report their classes (SS-B5's residue reading)")
+    ap.add_argument("--residue-reps", type=int, default=5,
+                    help="times each session runs each residue shape")
+    ap.add_argument("--residue-limit", type=int, default=200,
+                    help="LIMIT of the overlong_read shape; the reply must exceed the "
+                         "ring's 992-byte payload for the cell to mean anything")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
@@ -178,6 +265,20 @@ def main():
                    refusal_rate=round((attempts - ok) / attempts, 4) if attempts else None,
                    by_class=by_class,
                    first_other=next((w.first_other for w in writers if w.first_other), None))
+
+        # ---- The residue, by shape (SS-B5's second reading) -------------
+        #
+        # The workload above is autocommit, single-relation and one
+        # statement, which is exactly D1's shipping scope - so after
+        # shipping it converts whole and leaves nothing to distribute.
+        # The population a 2PC decision has to be designed from is the one
+        # shipping deliberately does **not** carry, and it does not appear
+        # in a workload that never asks for it. `--residue` asks: each
+        # unrouted session runs each out-of-scope shape and the reply is
+        # classified. This is an *added* shape mix and is reported apart
+        # from the unchanged run above, never folded into its rate.
+        if args.residue:
+            out["residue"] = residue_phase(conns, names, owners, args)
 
         # The engine's own counters, from every core: the counter is
         # core-local, so a total needs one reading per core.
