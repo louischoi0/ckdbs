@@ -1358,41 +1358,19 @@ Status Expeditor::Serve() {
         // batches. Registered before the dispatcher learns about it so a
         // reply can never beat its handlers.
         // One send for both pipeline endpoints on this core - the client
-        // below and the step server after it. Written once so the two
-        // cannot drift on src_core or scheduling group.
-        auto step_send = [this, &scheduler](std::uint32_t dst, sched::RingMessageKind kind,
-                                            std::vector<std::byte> payload) {
-            // Answered before the submit, because after it there is nobody
-            // to answer to: `MakeSendRetryTask` retries backpressure and
-            // discards every other failure, and this lambda's `OK` was
-            // read by `Drain` as "sent". An oversize payload therefore
-            // vanished and the statement's EOF arrived anyway - a short
-            // result set with no error at all
-            // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
-            // Callers seal against `max_payload()` so this should never
-            // fire; it is what makes "should never" checkable.
-            if (payload.size() > transport_->max_payload()) {
-                return Status::InvalidArgument(
-                    "step message is " + std::to_string(payload.size()) +
-                    " bytes; the ring slot to core " + std::to_string(dst) + " carries " +
-                    std::to_string(transport_->max_payload()));
-            }
-            sched::MessageHeader out{};
-            out.src_core = 0;
-            out.dst_core = dst;
-            out.session_core = 0;
-            out.kind = static_cast<std::uint16_t>(kind);
-            out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
-            scheduler.Submit(sched::MakeSendRetryTask(*transport_, out, payload));
-            return Status::OK();
-        };
+        // below and the step server after it - and one with `CoreRuntime`'s,
+        // which used to be its near-verbatim twin. `MakeStepSend` also
+        // carries the slot the server's ceiling is derived from, so the
+        // sender and that ceiling cannot come from different transports.
+        StepSendSeam step_seam = MakeStepSend(scheduler, *transport_, /*src_core=*/0);
+        StepSendFn step_send = step_seam.send;
         remote_reads_.emplace(/*core_id=*/0, step_send, &*logger_);
         // Core 0's own step server (workplan P4d-4b-3): a stage placed on
         // a relation core 0 owns is served here, like any peer serves its
         // own - the missing half that made "every stage's core serving"
         // true. Producers and consumers land on core 0's one reactor.
         remote_steps_.emplace(
-            database_->catalog, *store_, /*core_id=*/0, step_send, &*logger_,
+            database_->catalog, *store_, /*core_id=*/0, std::move(step_seam), &*logger_,
             kStepBatchTargetBytes,
             [&scheduler](std::unique_ptr<sched::Task> task) {
                 scheduler.Submit(std::move(task));
@@ -1400,13 +1378,7 @@ Status Expeditor::Serve() {
             txn_manager_.has_value() ? &*txn_manager_ : nullptr,
             // And the same row-touch ceiling every statement on this core
             // runs under (P4d-4c's review).
-            exec::Budget(config_.max_rows_touched),
-            // The slot a sealed batch actually has to fit through, asked
-            // of the transport rather than restated here - the two numbers
-            // drifting apart is the defect this parameter closes. 0 where
-            // there is no transport: no ring, so no ceiling above the
-            // target.
-            transport_.has_value() ? transport_->max_payload() : 0);
+            exec::Budget(config_.max_rows_touched));
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kStepOpen,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
@@ -1804,6 +1776,19 @@ Status Expeditor::Serve() {
         }
     }
     cores_.clear();
+
+    // **The pipeline endpoints go before the transport they send through.**
+    // Both hold a sender bound to `*transport_` - by reference since
+    // `MakeStepSend`, by `[this]` and a `*transport_` dereference before
+    // that - so destroying the transport first leaves a sender that would
+    // be undefined to call. Nothing calls one here (every reactor has
+    // stopped by this line, which is why the old ordering never bit), but
+    // teardown that is correct only because nothing exercises it is the
+    // shape this file has already been caught by once. The dispatcher's
+    // raw borrow is dropped first, in the same spirit.
+    if (dispatcher_.has_value()) dispatcher_->SetRemoteReads(nullptr);
+    remote_steps_.reset();
+    remote_reads_.reset();
     transport_.reset();
 
     // Torn down before the scheduler leaves scope: both hold fds

@@ -24,6 +24,11 @@ namespace kds::txn {
 class TransactionManager;
 }
 
+namespace kds::sched {
+class Scheduler;
+class RingTransport;
+}  // namespace kds::sched
+
 // The remote step server (docs/spec/crosscore.md §2-§4, workplan P4b): an owning
 // core takes a STEP_OPEN, executes the described step against its **local**
 // relation state, and streams STEP_BATCHes to the downstream core under
@@ -131,48 +136,76 @@ struct StepOpenParts {
 };
 StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payload);
 
+// `send(dst_core, kind, payload)` must deliver or report; it never blocks
+// (the real one submits a send-retry task).
+using StepSendFn =
+    std::function<Status(std::uint32_t, sched::RingMessageKind, std::vector<std::byte>)>;
+
+// "This sender writes into no ring, so no slot bounds it." True of every
+// in-process fixture and of no production wiring.
+//
+// Deliberately not `0`: a sentinel that looks like an omission is the
+// "told wrong" hazard the slot exists to remove, and `0` is also a
+// plausible real size. Deliberately not the batch target either - that
+// default silently turned a fixture's tiny target into a ceiling nothing
+// could fit under, and fifteen tests said so.
+inline constexpr std::size_t kNoRingSlot = std::numeric_limits<std::size_t>::max();
+
+// **The send seam and the slot it sends through, as one value.**
+//
+// They are one fact and were two parameters, which is how they came to
+// disagree: `kStepBatchTargetBytes` was 32x the ring slot for the
+// pipeline's whole life, and a cross-core read of 42 rows answered zero
+// rows with no error (`docs/inflight/known-gaps.md`, beside the
+// shipped-reply cap). A sender and a ceiling taken from different places
+// can drift again; taken from one object they cannot.
+struct StepSendSeam {
+    StepSendFn send;
+    std::size_t max_message_bytes = kNoRingSlot;
+};
+
+// The one step-send, for every core that has a ring.
+//
+// Both production wirings built this by hand and differed in exactly
+// three initialisers - `src_core`, `session_core`, and which scheduler
+// they submitted to - which meant the oversize guard and its nine-line
+// comment were written twice. `session_core` was the interesting one: the
+// two disagreed (`0` against the destination) and **nothing on the step
+// path reads it** - every reader in `remote_step_service.cpp` and
+// `session_step_client.cpp` takes `tag.session_core` out of the payload,
+// not the header. So this fills it from that same tag, which every step
+// payload begins with, and the header states the truth for the first
+// time instead of two different guesses.
+StepSendSeam MakeStepSend(sched::Scheduler& scheduler, sched::RingTransport& transport,
+                          std::uint32_t src_core);
+
 class RemoteStepServer {
 public:
-    // `send(dst_core, kind, payload)` must deliver or report; it never
-    // blocks (the real one submits a send-retry task).
-    using SendFn =
-        std::function<Status(std::uint32_t, sched::RingMessageKind, std::vector<std::byte>)>;
+    using SendFn = StepSendFn;
 
     // Hands a producer task to this core's reactor. Empty selects the
     // synchronous collect-then-stream fallback (see the header comment).
     using SubmitFn = std::function<void(std::unique_ptr<sched::Task>)>;
 
-    // `max_message_bytes` is the sending transport's slot - **ask it, never
-    // declare it** (`sched::RingTransport::max_payload`). It bounds the
-    // batch target, which is only a target: a batch that crosses the
-    // ceiling is refused by `TrySend` and, before this parameter existed,
-    // dropped silently (`docs/inflight/known-gaps.md`, beside the
-    // shipped-reply cap).
-    //
-    // `kNoRing` is the default and says what it means: this server sends
-    // through no ring, so no slot bounds it. That is true of every
-    // in-process fixture and of no production wiring. It is deliberately
-    // **not** spelled `0`, and not defaulted to the target either: a
-    // sentinel that merely looks like an omission is the same "told
-    // wrong" hazard this parameter exists to remove, and defaulting to
-    // the target silently turns a fixture's deliberately tiny target into
-    // a ceiling nothing can fit under.
-    static constexpr std::size_t kNoRing = std::numeric_limits<std::size_t>::max();
-
+    // The seam is **required and one argument**, so the ceiling cannot be
+    // omitted and cannot come from a different transport than the sender.
+    // A fixture passes `StepSendSeam{lambda}` and gets `kNoRingSlot` by
+    // the struct's own default, which is the only place that default
+    // lives.
     RemoteStepServer(catalog::Catalog& catalog, storage::PageStore& store, std::uint32_t core_id,
-                     SendFn send, Logger* log = nullptr,
+                     StepSendSeam seam, Logger* log = nullptr,
                      std::size_t batch_target_bytes = kStepBatchTargetBytes,
                      SubmitFn submit = {}, txn::TransactionManager* txns = nullptr,
-                     exec::Budget budget = exec::Budget(),
-                     std::size_t max_message_bytes = kNoRing) noexcept
+                     exec::Budget budget = exec::Budget()) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
-          send_(std::move(send)),
+          send_(std::move(seam.send)),
           log_(log),
           batch_target_(batch_target_bytes),
-          batch_ceiling_(max_message_bytes == kNoRing ? kNoRing
-                                                      : StepBatchCeiling(max_message_bytes)),
+          batch_ceiling_(seam.max_message_bytes == kNoRingSlot
+                             ? kNoRingSlot
+                             : StepBatchCeiling(seam.max_message_bytes)),
           submit_(std::move(submit)),
           txns_(txns),
           budget_(budget) {}

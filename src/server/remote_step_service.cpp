@@ -6,11 +6,55 @@
 #include <utility>
 
 #include "kds/exec/step_vm.hpp"
+#include "kds/sched/ring_transport.hpp"
+#include "kds/sched/scheduler.hpp"
+#include "kds/sched/send_retry.hpp"
 #include "kds/server/step_descriptor.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/wire/row_codec.hpp"
 
 namespace kds::server {
+
+StepSendSeam MakeStepSend(sched::Scheduler& scheduler, sched::RingTransport& transport,
+                          std::uint32_t src_core) {
+    StepSendSeam seam;
+    seam.max_message_bytes = transport.max_payload();
+    seam.send = [&scheduler, &transport, src_core](std::uint32_t dst,
+                                                   sched::RingMessageKind kind,
+                                                   std::vector<std::byte> payload) -> Status {
+        // Answered before the submit, because after it there is nobody to
+        // answer to: `MakeSendRetryTask` retries backpressure and discards
+        // every other failure, so an `OK` this function has not earned is
+        // read by `Drain` as "sent" and the rows are gone with the EOF
+        // still arriving. Callers seal against the same `max_payload()`
+        // this seam carries, so it should never fire; it is what makes
+        // "should never" checkable rather than assumed.
+        if (payload.size() > transport.max_payload()) {
+            return Status::InvalidArgument(
+                "step message is " + std::to_string(payload.size()) +
+                " bytes; the ring slot to core " + std::to_string(dst) + " carries " +
+                std::to_string(transport.max_payload()));
+        }
+        sched::MessageHeader out{};
+        out.src_core = src_core;
+        out.dst_core = dst;
+        // Every step payload begins with the tag (step_pipeline.hpp's rule,
+        // so teardown-by-tag can run before the kind-specific fields are
+        // read), which is the only thing here that knows the statement's
+        // session core. The two hand-written senders this replaced guessed
+        // differently and nothing read either.
+        if (payload.size() >= sizeof(PipelineTag)) {
+            PipelineTag tag{};
+            std::memcpy(&tag, payload.data(), sizeof(tag));
+            out.session_core = tag.session_core;
+        }
+        out.kind = static_cast<std::uint16_t>(kind);
+        out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+        scheduler.Submit(sched::MakeSendRetryTask(transport, out, payload));
+        return Status::OK();
+    };
+    return seam;
+}
 
 namespace {
 

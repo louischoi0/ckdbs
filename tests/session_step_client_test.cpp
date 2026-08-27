@@ -76,7 +76,8 @@ protected:
         // as two attached reactors would - minus the rings.
         server_.emplace(
             boot_->catalog, *store_, /*core_id=*/1,
-            [this](std::uint32_t, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            StepSendSeam{[this](std::uint32_t, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
                 switch (kind) {
                     case sched::RingMessageKind::kStepBatch: client_->OnStepBatch(payload); break;
                     case sched::RingMessageKind::kStepEof: client_->OnStepEof(payload); break;
@@ -86,7 +87,7 @@ protected:
                     default: ADD_FAILURE() << "server sent unexpected kind";
                 }
                 return Status::OK();
-            },
+            }},
             nullptr, /*batch_target_bytes=*/64);
         client_.emplace(
             /*core_id=*/0,

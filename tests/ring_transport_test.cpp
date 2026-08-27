@@ -178,11 +178,21 @@ TEST(RingTransportTest, TheSimulatedTransportMatchesTheRealOnePerEdgeAtZeroDelay
     // message is invented, lost, or duplicated.
     constexpr std::uint32_t kCores = 3;
 
-    auto real = RealRingTransport::Create(kCores, 32, 64);
+    constexpr std::size_t kSlot = 64;
+    auto real = RealRingTransport::Create(kCores, 32, kSlot);
     ASSERT_TRUE(real.ok());
     sched::ManualClock clock;
-    auto sim = SimRingTransport::Create(kCores, clock);  // zero delay by default
+    // **The same slot on both.** The sim transport had no payload cap at
+    // all until 2026-08-27 and now defaults to the production 1,024, so
+    // an unconfigured one beside a 64-byte real one would differ by 16x
+    // in what it refuses - and this comparison could not see it, because
+    // nothing it sends lands between the two. Stating the slot here is
+    // what makes `max_payload()` part of the contract these two agree on.
+    SimTransportConfig sim_config;
+    sim_config.max_payload = kSlot;
+    auto sim = SimRingTransport::Create(kCores, clock, sim_config);  // zero delay by default
     ASSERT_TRUE(sim.ok());
+    ASSERT_EQ(real.value().max_payload(), sim.value().max_payload());
 
     const std::vector<std::pair<std::uint32_t, std::uint32_t>> traffic = {
         {0, 1}, {0, 1}, {2, 1}, {0, 1}, {2, 1}, {1, 0}, {2, 0},
@@ -198,6 +208,16 @@ TEST(RingTransportTest, TheSimulatedTransportMatchesTheRealOnePerEdgeAtZeroDelay
         EXPECT_EQ(DrainByPeer(real.value(), dst), DrainByPeer(sim.value(), dst))
             << "the transports disagreed at destination " << dst;
     }
+
+    // And they refuse the same oversize payload, in the same code. This is
+    // the half the comparison above cannot reach - every message it sends
+    // is two bytes - and it is the half a silent loss came out of: a
+    // simulator that carries what production drops does not simulate it.
+    const std::vector<std::byte> too_wide(kSlot + 1, std::byte{0});
+    const Status real_refused = real.value().TrySend(Msg(0, 1, 99), too_wide);
+    const Status sim_refused = sim.value().TrySend(Msg(0, 1, 99), too_wide);
+    EXPECT_EQ(real_refused.code(), StatusCode::kInvalidArgument) << real_refused.message();
+    EXPECT_EQ(sim_refused.code(), real_refused.code()) << sim_refused.message();
 }
 
 TEST(RingTransportTest, BothTransportsKeepOneEdgeInSendOrder) {

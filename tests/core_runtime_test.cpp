@@ -1210,7 +1210,8 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
     std::optional<SessionStepClient> client;
     server.emplace(
         catalog2, *core0_store_, /*core_id=*/1,
-        [&](std::uint32_t, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+        StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
+                         std::vector<std::byte> payload) {
             switch (kind) {
                 case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
                 case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
@@ -1218,7 +1219,7 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
                 default: ADD_FAILURE() << "unexpected server send";
             }
             return Status::OK();
-        });
+        }});
     client.emplace(
         /*core_id=*/0,
         [&](std::uint32_t, sched::RingMessageKind kind, std::vector<std::byte> payload) {
@@ -1365,7 +1366,7 @@ TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) 
         }
         return Status::OK();
     };
-    server.emplace(catalog2, *core0_store_, /*core_id=*/1, deliver, nullptr,
+    server.emplace(catalog2, *core0_store_, /*core_id=*/1, StepSendSeam{deliver}, nullptr,
                    /*batch_target_bytes=*/1,
                    [&](std::unique_ptr<sched::Task> task) { tasks.push_back(std::move(task)); });
     client.emplace(/*core_id=*/0, deliver);
@@ -1521,7 +1522,7 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
         }
         return Status::OK();
     };
-    server.emplace(catalog2, *core0_store_, /*core_id=*/1, deliver, nullptr,
+    server.emplace(catalog2, *core0_store_, /*core_id=*/1, StepSendSeam{deliver}, nullptr,
                    /*batch_target_bytes=*/1,
                    [&](std::unique_ptr<sched::Task> task) { tasks.push_back(std::move(task)); });
     client.emplace(/*core_id=*/0, deliver);
