@@ -107,7 +107,7 @@
 namespace kds::storage {
 
 // Fixed home of the free-map page, in the reserved sub-128 system range
-// alongside the superblock (0) and the catalog's fixed pages (4-8).
+// alongside the superblock (0) and the catalog's fixed pages (4-15).
 inline constexpr PageId kFreeMapPageId = 1;
 
 // The headerless bitmap (PageType::kHeaderlessMap), immediately after it

@@ -473,10 +473,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     //
     // **`transport`, the parameter - never `transport_`.** That member is
     // not assigned until the end of this function, and reading it here
-    // was first a null dereference and then, once guarded, a silent "no
-    // ceiling" that left every batch oversize. `MakeStepSend` takes the
-    // parameter and holds it, so the whole class of ordering error is
-    // gone rather than commented around.
+    // was first a null dereference and then, once guarded, a silent
+    // default that left the batch ceiling absent, so nothing clamped an
+    // oversize batch. `MakeStepSend` takes the parameter and holds it,
+    // so the whole class of ordering error is gone rather than commented
+    // around.
     remote_steps_.emplace(
         *catalog_, *store_, config_.core_id,
         MakeStepSend(*scheduler_, transport, config_.core_id), log_, kStepBatchTargetBytes,

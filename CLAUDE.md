@@ -318,8 +318,10 @@ interface that keeps every listed option viable.
   batch/credit/ring/extent sizing; the `ring_full` retry protocol;
   core-count changes; initial placement policy (`creating` | `rotate`);
   split/migrate policy and constants (the mover); auxiliary placement
-  under a split relation (each §6a gate's owner); the id-block
-  interleave default; the shared-structure access mechanism. (`CREATE
+  under a split relation (each §6a gate's owner); the shared-structure
+  access mechanism. (The id-block interleave default was closed
+  2026-08-27 as **default** — CLA's reading of the operator's range
+  direction, correctable — `docs/spec/crosscore.md` §6b.) (`CREATE
   INDEX` on a peer-owned relation is **decided and built 2026-08-25**:
   the owner builds, PW1c-6b complete, `docs/spec/ddl-transactional.md`
   §5e and `docs/spec/crosscore.md` CC7's owner-builds exception.) **Placement

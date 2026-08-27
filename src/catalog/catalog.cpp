@@ -40,7 +40,7 @@ namespace {
 // **GetForRead, not Get.** A scan reads and modifies nothing, and Get()
 // marks the frame dirty by convention rather than by what the caller
 // actually wrote (page_store.hpp) - so every catalog lookup used to dirty a
-// catalog page, and every checkpoint wrote all nine of them back having
+// catalog page, and every checkpoint wrote every one of them back having
 // changed none.
 //
 // Multicore turned that waste into a refusal: a peer may read the catalog
@@ -529,7 +529,7 @@ Status Catalog::Bootstrap() {
         std::string_view name;
         PageId page_id;
     };
-    static constexpr std::array<SysTableBootstrap, 9> kSysTables{{
+    static constexpr std::array<SysTableBootstrap, 10> kSysTables{{
         {kSysTypesTable, "types", kCatalogPageTypes},
         {kSysObjectsTable, "objects", kCatalogPageObjects},
         {kSysColumnsTable, "columns", kCatalogPageColumns},
@@ -554,6 +554,13 @@ Status Catalog::Bootstrap() {
         // reason sys.cabins does - an `fk_id` comes from this relation's own
         // `next_id`, not from GenerateUserOid(), which numbers objects.
         {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
+        // sys.ranges (RD1): a page and its two catalog rows, and at this
+        // version nothing more - the relation is empty and its row format
+        // is RD2's (well_known.hpp's note at kSysRangesTable). It sits in
+        // this array so it exists from the first mount on a fixed low page
+        // every routing core can fault, which is the whole reason it
+        // bootstraps rather than waiting for a first split.
+        {kSysRangesTable, "ranges", kCatalogPageRanges},
     }};
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -658,7 +665,10 @@ Status Catalog::Bootstrap() {
     if (Status s = BootstrapAssertions(); !s.ok()) return s;
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-        log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size() + 1) +
+        // + 2: sys.pattern_defs (phase 5) and sys.assertions (phase 6) are
+        // bootstrapped outside the array. The line said "+ 1" from AST03
+        // to 2026-08-27, under-counting by one.
+        log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size() + 2) +
                                   " system tables and " + std::to_string(kTypes.size()) +
                                   " types on the fixed catalog pages");
     }
@@ -1700,6 +1710,26 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
             }
         }
     };
+
+    // sys.ranges (RD1): the sweep's place, held before the row exists. The
+    // relation is empty and codec-less until RD2 (gated on D2,
+    // workplan-range-directory.md §4), so a tuple on this chain is
+    // corruption, not a row; RD2 replaces this with SysRangeRow and
+    // `r.rel_oid == table_oid`. First in the chain on purpose: this is the
+    // one sweep guaranteed to fail on its trigger, so it probes before the
+    // destructive sweeps below have retired anything.
+    struct RangeRowNotYetDefined {
+        static StatusOr<RangeRowNotYetDefined> Decode(std::span<const std::byte>) {
+            return Status::Corruption(
+                "sys.ranges holds a tuple before RD2 defined its row format; "
+                "nothing may write this relation yet");
+        }
+    };
+    if (Status s = sweep(RangeRowNotYetDefined{}, kCatalogPageRanges,
+                         [](const RangeRowNotYetDefined&) { return false; });
+        !s.ok()) {
+        return s;
+    }
 
     if (Status s = sweep(SysTableRow{}, kCatalogPageTables,
                          [&](const SysTableRow& r) { return r.oid == table_oid; });

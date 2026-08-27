@@ -28,7 +28,7 @@ protected:
     Catalog catalog_{store_};
 
     // Matches kds::server::kFirstUserPageId (128) so freshly-created user
-    // tables never collide with the fixed catalog pages (4-8).
+    // tables never collide with the fixed catalog pages (4-15).
     static constexpr PageId server_first_new_page_id_ = 128;
 };
 
@@ -75,6 +75,33 @@ TEST_F(CatalogTest, BootstrapMakesSysTablesFindableByName) {
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(NameView(row.value().name), "objects");
     EXPECT_EQ(row.value().desc_page_id, kCatalogPageObjects);
+}
+
+// RD1 (instructions/v2.4.0/range-foundation.md §5 RA2): sys.ranges exists
+// from bootstrap and is empty. Empty is the whole product at this version
+// - the row format is RD2's - so what this pins is the relation's
+// existence on its fixed root and the emptiness every path relies on: a
+// relation with no rows here is one range owned by sys.tables.owner_core
+// (docs/spec/crosscore.md CC9).
+TEST_F(CatalogTest, SysRangesExistsAndIsEmptyAtBootstrap) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto oid = catalog_.FindTableOidByName("ranges");
+    ASSERT_TRUE(oid.ok());
+    EXPECT_EQ(oid.value(), kSysRangesTable);
+
+    auto row = catalog_.GetSysTableRow(kSysRangesTable);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(NameView(row.value().name), "ranges");
+    EXPECT_EQ(row.value().desc_page_id, kCatalogPageRanges);
+
+    // Empty means empty on the device, not just unread: no tuple on the
+    // root, and no chain ever grew from it.
+    auto bytes = store_.Get(kCatalogPageRanges);
+    ASSERT_TRUE(bytes.ok());
+    heap::PageView page(bytes.value().bytes());
+    EXPECT_EQ(page.slot_count(), 0u);
+    EXPECT_EQ(page.next_page_id(), kInvalidPageId);
 }
 
 TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {

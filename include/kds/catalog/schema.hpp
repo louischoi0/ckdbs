@@ -287,6 +287,23 @@ struct TableAccess {
         return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
     }
 
+    // Whether any column carries a live Cabin — the **live-id** test, and
+    // deliberately neither of the two tests that look right: not
+    // `cabin_mask != 0` (a Cabin on a column past 64 folds into no bit,
+    // per the mask's own comment above) and not `!cabin_ids.empty()`
+    // (the vector is column-parallel and non-empty on every relation the
+    // cache fills). One accessor for CabinOn's reason: the id-0 rule
+    // lives here, not re-derived per caller. `CheckWriteAffinity`
+    // (command_dispatcher.cpp) still hand-rolls the same predicate; that
+    // site flips to this whenever RD5/R6-8 rewrites that decision point
+    // (it is out of range-foundation's scope until then).
+    bool AnyCabin() const noexcept {
+        for (const CabinRef& cabin : cabin_ids) {
+            if (cabin.id != 0) return true;
+        }
+        return false;
+    }
+
     // ---- Foreign keys at both ends (docs/spec/foreign-keys.md §1) -------
     //
     // `fkeys_out` is this relation as the **child**: each entry names the

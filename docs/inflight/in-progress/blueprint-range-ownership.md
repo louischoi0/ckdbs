@@ -154,7 +154,7 @@ per-core pool structure survives unchanged.
 | R0 | ~~Ratify PL~~ — **closed 2026-08-24**, PL-B + PL-C guard (`docs/spec/page-lsn-cross-stream.md` §9) | done |
 | R1 | Every core equivalent: shared-structure access rule, per-core listeners, per-core statistics relations | PL not needed |
 | R2 | Global frame accounting — **static half built 2026-08-24** (the instance budget divides over every core per EV4, worktree `r2-frame-budget`); the dynamic arbiter that rebalances shares by demand remains | none |
-| R3 | Range directory + read path: `sys.ranges`, manual `SPLIT RANGE` DDL, pipeline over ranges. Placement still static | R1 |
+| R3 | Range directory + read path: `sys.ranges`, engine-internal range allocation behind the §6a gates — no user-facing range DDL, in this phase or any later one (operator direction 2026-08-27) — pipeline over ranges. Placement still static | R1 |
 | R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (`crosscore.md` §6b, per-range chains included) | R3, PW1b |
 | R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | R1, R3; the PL contract built |
 | R6 | Multi-range transactions | 2PC — separate decision |
@@ -167,8 +167,10 @@ Per-range local vs global secondary indexes
 (reading on record: local per range, broadcast probes cut by Cabin/Waystone
 — **not ratified**; owner: `index.md` §13); split/migrate policy and
 its constants (promoted 2026-08-24: `crosscore.md` §9 indexes it, the
-physical optimizer's Part III spec owns it when drafted); id-block
-interleave default (§6; indexed at `crosscore.md` §9); shared-structure
-access mechanism (§8); merge; 2PC. The split *gates* — which relations
-may split at all before these decisions land — are ratified rules, not
-open: `crosscore.md` §6a.
+physical optimizer's Part III spec owns it when drafted);
+shared-structure access mechanism (§8); merge; 2PC. The id-block
+interleave default closed 2026-08-27 as **default** (CLA's reading of
+the operator's range direction, correctable; `crosscore.md` §6b
+carries it). The split *gates* — which relations may split at all
+before these decisions land — are ratified rules, not open:
+`crosscore.md` §6a.

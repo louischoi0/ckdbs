@@ -68,6 +68,7 @@ add_executable(kds_tests
     pattern_defs_test.cpp
     create_pattern_test.cpp
     range_scan_test.cpp
+    range_eligible_test.cpp
     access_stats_test.cpp
     decay_test.cpp
     relayout_planner_test.cpp
