@@ -386,9 +386,16 @@ range allocator's admission check
 later creation path inherits them, the mover's included (CC10). A gated
 relation is declined as a logged engine decision naming the gate — no
 statement asks for the range, so no offending token and no byte
-position — which keeps every listed option viable. The gates below
-bind **split**; whole-relation **migration** moves everything together
-and preserves co-location, so only the Cabin gate (its state is
+position — which keeps every listed option viable. Where the decline
+is *read* was decided at RA4 (2026-08-27, `workplan-range-directory.md`
+§9e, made without operator input): the caller logs the line and
+increments per-core decline counters in §6's `SHOW META`
+refusal-counter form, both landing with RD5's first caller — nothing
+lands before a caller exists (the absent-rather-than-zeroed rule), and
+the counter is owner-core-local because only the owner's registry can
+answer the assertion gate. The gates below bind **split**;
+whole-relation **migration** moves everything together and preserves
+co-location, so only the Cabin gate (its state is
 memory-resident on the outgoing core, and its miss path does not
 self-heal — CC10) binds both:
 

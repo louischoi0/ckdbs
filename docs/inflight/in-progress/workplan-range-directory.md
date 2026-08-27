@@ -490,7 +490,7 @@ remaining row of this plan depends on it.
 | **RD2** `[D2]` | **The directory row.** `SysRangeRow{rel_oid, lo, owner_core, entry_page}` per CC9. What this row adds beyond CC9's cell: the `lo = 0` and derived-`hi` rules are **enforced at the catalog door rather than assumed**, D2 is taken, and the anchor's `index_oid == 0` collision is recorded as its reason | RD1 |
 | **RD3** | **Resolution and publication.** `ResolveRanges(rel_oid, predicate) -> {owner_core, entry_page}[]`, plan-time, from the session core's cache (§2a of the spec). Publication decided per §2b — and **the choice is forced by where RD5 allocates**, not preferred. §2c's plan-time-only rule enforced by shape. **The zero-cost invariant binds hardest here** (*"a one-range relation on its owner core must add zero instructions over today"*): the unsplit path gains no scan, no lookup, no allocation, and RD9 measures it rather than an inspection asserting it | RD2 |
 | ~~**RD4**~~ | ~~**The gates, declined by name (§6a).** `RangeEligible(access)` over four fields already on `TableAccess` — `SchemaCanSpill(schema)` (`src/catalog/schema.cpp:29`), `indexes.empty()` (`schema.hpp:371`), the **live-id** `cabin_ids` test `CheckWriteAffinity` uses at `command_dispatcher.cpp:3631-3633` (**not** `cabin_mask != 0`, **not** emptiness — both are the wrong test, stated there), `fkeys_out.empty() && fkeys_in.empty()` (`schema.hpp:311-312`) — plus D1's btree decline. Per §0 a decline is a logged engine decision naming the gate, with no token and no byte. Built and tested **before** anything can allocate a second range.~~ **Built 2026-08-27 in worktree `v2.4.0-range-foundation-1` (RA3), gated by §9's C2 — with a fifth gate C2 found**: `RangeEligible(access, enforcer)` in `include/kds/exec/range_eligible.hpp` / `src/exec/range_eligible.cpp`, the four fields plus D1's btree decline plus the **assertion gate** (§9a row 7; the signature takes the `AssertionEnforcer` because the fact deliberately does not ride `TableAccess`). One caller: `tests/range_eligible_test.cpp` (H2 held, §9d). Gated on the order's RA2+C2 rather than this row's RD2, and rightly: the function reads `TableAccess` fields and the registry, never a `sys.ranges` row, so RD2's codec is nothing it needs — the row's RD2 gate was scoping conservatism, noted for the operator in cws issue `rd4-gate-rd2-mismatch` | ~~RD2~~ §9's C2 |
-| **RD5** | **Allocation — the system's half.** A second range opens where the row-id allocator already carves a disjoint block, so the boundary is that block's `first_id` and CC10's page-boundary rule is satisfied *vacuously* — §6b's own words, *"the new range starts as its own empty sub-structure (CC8) and no existing page straddles it"*. Rides `AllocateRowIdRange`/`RowIdLeaseTable` unchanged; the row and the entry page are what is new. **The size is one named constant reached through one function and swept by config** (§2a, D6), starting at `kRowIdLeasePerGrant`. `RangeEligible` asked first, always — **on the owner core** (the assertion gate's registry is core-local, §9c) — **and re-checked where the durable row lands**: §9b's two admission windows (an index build in flight, an assertion between core 0's half and the owner's adoption) are races `RangeEligible` cannot see, serialized through core 0's catalog stream (CC10 step 3). **The converse gates land with this row too** (§9b): CREATE INDEX / CREATE CABIN (auto included) / CREATE ASSERTION / an FK naming a split relation each decline until `crosscore.md` §9's placement decisions are taken. **This row's shape is what answers §2b** — whether it runs on the drain tick (`core_runtime.cpp:1006-1016`, outside a borrow) or at the point of demand (`row_id_lease.hpp:88-95`, inside a running INSERT) | RD3, RD4 |
+| **RD5** | **Allocation — the system's half.** A second range opens where the row-id allocator already carves a disjoint block, so the boundary is that block's `first_id` and CC10's page-boundary rule is satisfied *vacuously* — §6b's own words, *"the new range starts as its own empty sub-structure (CC8) and no existing page straddles it"*. Rides `AllocateRowIdRange`/`RowIdLeaseTable` unchanged; the row and the entry page are what is new. **The size is one named constant reached through one function and swept by config** (§2a, D6), starting at `kRowIdLeasePerGrant`. `RangeEligible` asked first, always — **on the owner core** (the assertion gate's registry is core-local, §9c) — **and re-checked where the durable row lands**: §9b's two admission windows (an index build in flight, an assertion between core 0's half and the owner's adoption) are races `RangeEligible` cannot see, serialized through core 0's catalog stream (CC10 step 3). **The converse gates land with this row too** (§9b): CREATE INDEX / CREATE CABIN (auto included) / CREATE ASSERTION / an FK naming a split relation each decline until `crosscore.md` §9's placement decisions are taken. **C3's surface lands with this row's first caller, in the same change** (§9e, decided at RA4): the decline's log line and the per-core `range_split_declines` counters on `SHOW META` in `crosscore.md` §6's refusal-counter form — deferred from RA4 because a counter no caller increments reads structurally 0. **This row's shape is what answers §2b** — whether it runs on the drain tick (`core_runtime.cpp:1006-1016`, outside a borrow) or at the point of demand (`row_id_lease.hpp:88-95`, inside a running INSERT) | RD3, RD4 |
 | **RD6** | **Per-range chains, and the insert head (§2's survivor, CC8's "largest piece").** Each range is its own chain with its own head and tail. **The review's blocking finding lives here**: `sys.tables.desc_page_id` is CREATE-fixed (`catalog.cpp:2266`) and *every* insert path uses it as the head — `ChainInsert(page_store_, access.desc_page_id, …)` at `command_dispatcher.cpp:4466`, `ChainAppendBatch(…, ta.desc_page_id, …)` at `:4091`. A cut that clears the predecessor's `next_page_id` leaves `desc_page_id` heading the **lower** range, `ChainTail` returns that range's last page, and since every issued id is above its `min_key`, `ChainInsert` **accepts the row there** — no refusal fires, and the pk then routes the reader to the top range for a zero-row answer. `heap_tail_hint` cannot mask it: a hint from another chain *"is a logic error upstream that this layer cannot detect"* (`heap_chain.hpp:120-125`) and it dies with the cache entry (`schema.hpp:191-192`). **So this row's substance is that the insert head comes from the directory, per range, and `heap_tail_hint` becomes per range with it** — the cut is what *creates* the route, not what closes it. Plus the mutation API Part III will call (split / set / modify / merge, §0), one caller today, no policy | RD5 |
 | **RD7** `[D4]` | **The pipeline over ranges** — §5's shape, with all four of its costs built and none assumed: the `sibling` field, the plural `InputEdge`, the grouped `pending_remote`, the same `downstream_step` across siblings. Range-order concatenation; key-order-requiring shapes refused as `emit_in_key_order` already is. Inherits D5 — core-0-sessioned only | RD3, RD6, D4 |
 | **RD8** | **§8 test 9 — range equivalence**: every shippable shape over a split relation returns byte-identical results to the same rows unsplit on one core, the split the only variable, **matching rows straddling the boundary**; test 1's discipline, home `tests/core_runtime_test.cpp:1397+`. **§8 test 13** in its §0-amended form. **Plus the two the review's findings owe**: a post-split INSERT lands in the range its id names (§2, RD6), and a cross-range DML meets `crosscore.md:311-314`'s ratified retryable refusal rather than a wrong answer | RD7 |
@@ -516,16 +516,20 @@ detail. **RD4 is built** — RA3 in the same worktree, gated by §9's C2,
 which refuted H3: the gates are **five** plus D1's btree decline, the
 fifth (assertions) found before anything could allocate; `RangeEligible`
 has one caller, its test, and §9 carries the enumeration, the two
-admission windows and the converse gates RD5 inherits. **What is next in
-this order is RA4** (C3's observability decision — now over six gate
-names) and RA5 (C4's two tables); the build resumes at RD2.
+admission windows and the converse gates RD5 inherits. **RA4 is decided
+2026-08-27** (§9e: per-core `SHOW META` decline counters in
+`crosscore.md` §6's refusal-counter form, plus the owed log line, both
+landing with RD5's first caller — nothing lands before a caller exists, the
+absent-rather-than-zeroed rule; made without operator input,
+reversible). **What is next in this order is RA5** (C4's two tables);
+the build resumes at RD2.
 RD2 wants D2, RD7 wants D4, and **D1 removes the btree half entirely** —
-it is `crosscore.md` §9's, not this plan's. D6 blocks nothing: RD5 is
-built so choosing it is a config value, not a rewrite.
+it is `crosscore.md` §9's, not this plan's. D6 blocks nothing: once RD5
+is built, choosing it is a config value, not a rewrite.
 
 ---
 
-## 9. RD4 — the hypotheses, the C2 enumeration, and the fifth gate
+## 9. RD4 — the hypotheses, the C2 enumeration, the fifth gate, and C3's decision
 
 Gate **C2** of `instructions/v2.4.0/range-foundation.md` §3, run 2026-08-27
 in worktree `v2.4.0-range-foundation-1` at `87e68ce`, **before
@@ -683,9 +687,7 @@ says so. Fixed check order, documented in the header: btree (D1), then
 C2's addition, last. First tripped gate named; `RangeGateName()` gives
 the decline's log token.
 
-**C3 is untouched**: no counter, no `SHOW` field, no log line lands at
-RD4 — RA4 decides, and a surface added now would read structurally 0
-until RD5 exists (the shipping block's absent-rather-than-zeroed rule).
+**C3 is untouched at RD4, and decided at RA4 — §9e.**
 `log.hpp`'s own doctrine agrees: the decline is a decision whose caller
 (RD5, on the drain tick or at demand) is the thing with no one to report
 to — the *caller* logs; the function names.
@@ -703,3 +705,81 @@ to — the *caller* logs; the function names.
   `range_eligible.{hpp,cpp}` and `range_eligible_test.cpp`. No caller in
   `CheckWriteAffinity`, `InsertOneRow`, or any plan path; none was
   needed, so nothing leaked from RD5's shape and §2b stays undecided.
+
+### 9e. C3 — where a decline is read: decided at RA4
+
+Decided 2026-08-27 in worktree `v2.4.0-range-foundation-1`, **without
+operator input** (workflow mode's autonomy rule — a decision task with
+nobody to ask), stated with its passed-over alternatives so one reading
+can reverse it. The options were the order's own (§3 C3): a counter, a
+`SHOW` field, or a log line and nothing else.
+
+**The decision: per-core decline counters printed by `SHOW META`, in
+`crosscore.md` §6's refusal-counter form, incremented by the caller at
+the decline site — landing with RD5's first caller, in the same change —
+plus the per-event log line §0 already owes. Nothing lands at RA4.** The
+default spelling, correctable at RD5 without reopening this decision:
+`range_split_declines` (total), `range_split_decline_keys`, and a capped
+`range_split_decline_detail` of `oid:gate=count`, the gate token from
+`RangeGateName()` — the triple `cross_core_write_refusals` / `_keys` /
+`_detail` prints today (`command_dispatcher.cpp:785-805`, T5's shape,
+cap-says-it-truncated rule included). What may move at RD5 is the key —
+whether `oid` gains the range boundary, the same open detail §6's
+counters carry — never the class: per-core counters, read through
+`SHOW META`, written on the owner core.
+
+**Why a counter.** The decline is an engine decision no session asked
+for — RD5's allocator runs on the drain tick or at demand (§2b), and on
+the demand branch the running statement asked for rows, not for a range —
+so no reply can carry it. A log line alone fails C3's own premise (*"a
+log line nothing surfaces is not observable"*), and §6's refusal
+counters state the principle this reuses: their
+recording sites predated T5, and *"what was missing was any way to read
+them from outside the process, which is the whole of what a metric is
+for."* The reading the counters exist for is aggregate, exactly as §6's
+are the input the placement/2PC decision is made from: **which gate
+declines how often on which relation is the evidence for which owning
+decision to lift first** — index (`index.md` §13), Cabin (`cabin.md`
+§11), var-heap partition, FK, or assertion placement — and an
+unaggregated log line cannot be that input. The log line still lands
+with the counter, because §0 and `crosscore.md` §6a owe it and
+`log.hpp`'s charter names it (a background decision with no caller to
+report to); it is the per-event half, not the observable surface. And
+it is **bounded, not per-ask**: the line logs the (oid, gate)
+*transition* — the first decline and any change of gate — behind the
+level guard (`core_runtime.cpp:1010`'s `enabled()` idiom), and the
+counter carries the per-ask volume. Without the bound, a permanently
+gated relation — any indexed one — would pay `log.hpp`'s synchronous
+`write()` once per lease refill (`kRowIdLeasePerGrant` = 4096 inserts),
+forever, on the insert-adjacent path.
+
+**Why not a `SHOW` state field.** A field answering "is this relation
+eligible" in the present tense claims *state*, and RD4's own finding is
+that eligibility is not cacheable state: the assertion gate's fact lives
+in the owner's core-local registry and moves with no version bump, so
+a stored or displayed eligibility bit is stale by construction — the identical reason the bit
+stayed off `TableAccess` (§9a row 7). Owner-core authority (§9c) rules
+out the global variant on partiality: a field assembled anywhere but the
+owner core could truthfully carry the four catalog gates plus D1 and
+**not** `kAssertion`. Present-tense eligibility is answerable only by
+running the function on the owner core at the moment of asking — which
+is what RD5 does, and what the counter records: a decision *taken*,
+written where and when it was authoritative, is truthful by construction
+where a state field cannot be. A user-readable eligibility surface would
+also be a framework without a consumer — ranges are engine-internal
+(§0), so no user can act on the answer.
+
+**Why deferred to RD5, and why the deferral is forced rather than
+chosen.** H2 held at RA3 and re-held at `82bdf92` (grep: the symbol
+lives in `range_eligible.{hpp,cpp}` and its test, nowhere else), so
+until RD5 there is no increment site — a counter added at RA4 reads
+structurally 0 **by construction**, not by timing. That is R6-0's second
+deferral verbatim (*"a separate `SHOW META` field would read
+structurally 0 until R6-3 sets the bit … split it out at R6-3, when it
+can be non-zero"*, `workplan-cross-owner-txn.md`), and the print site
+states the rule in code (*"absent rather than zeroed where nothing is
+wired"*, `command_dispatcher.cpp:812`). Landing the counter and its
+caller in one change closes the only window the deferral could open:
+there is no commit at which a decline can happen unrecorded. The
+increment goes in the **caller**, never in `RangeEligible` itself — the
+function stays pure by contract, and the header carries the rule.

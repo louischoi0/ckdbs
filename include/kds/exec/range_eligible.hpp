@@ -15,10 +15,14 @@
 // decisions, never by relaxing the decline. There is no user-facing range
 // DDL, so a decline is a logged engine decision naming the gate — no
 // statement asked, so no offending token and no byte position. This
-// function *returns* the gate's name; where that name surfaces (a
-// counter, a SHOW field, a log line) is C3's decision (order §3, RA4) and
-// deliberately not taken here — a surface added now would read
-// structurally 0 until RD5 exists.
+// function *returns* the gate's name; where that name surfaces was
+// decided at RA4 (workplan §9e): the caller's log line plus per-core
+// `range_split_declines` counters on `SHOW META` in `crosscore.md` §6's
+// refusal-counter form, both landing with RD5's first caller —
+// deliberately not landed here, because a surface with no caller reads
+// structurally 0 until RD5 exists. The increment is the caller's, never
+// this function's: pure over its arguments, per the concurrency note
+// below.
 //
 // **No caller until RD5, deliberately** (H2, order §4): the allocator
 // that would ask does not exist yet, and this function landing first is
@@ -72,8 +76,10 @@ enum class RangeGate : std::uint8_t {
     kAssertion,   // §6a fifth gate (C2): one core's chain, one core's registry
 };
 
-// The gate's name for the decline's log line — short, stable tokens a
-// log reader can grep. kNone answers "eligible".
+// The gate's name for the decline's log line and for the counter's
+// detail key (RA4, workplan §9e) — short, stable tokens a log reader can
+// grep, and none carries ':' or ',', so `oid:gate=count` parses. kNone
+// answers "eligible".
 std::string_view RangeGateName(RangeGate gate) noexcept;
 
 RangeGate RangeEligible(const catalog::TableAccess& access,
