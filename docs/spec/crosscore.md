@@ -460,6 +460,18 @@ the tails; R3/R4 owns building the second. Consequences, stated now:
   `STEP_CANCEL` for every live request as part of session teardown (the
   same hook that rolls back an open transaction, `docs/spec/txn.md` tests).
 
+- **A batch send that fails cancels the pipeline; it never merely breaks
+  out of the drain loop** (2026-08-27, fixed at `7148343`). Breaking alone
+  leaks one `pipelines_` entry per failed send — `SendFn` takes its payload
+  by value, so the queue head is left a moved-from vector that nothing pops
+  and the EOF-and-erase arm never runs — which is exactly what **§8's test
+  3 forbids** (*"no state leaks (pipeline table empty after teardown)"*).
+  Cancelling instead routes teardown through the path a cancel already
+  takes: the producer erases if one is live, the drain itself otherwise.
+  The arm was unreachable until the send seam learned to refuse an oversize
+  payload, which is why a fault this old had never fired. Pinned by
+  `RemoteStepServiceTest.ABatchSendThatFailsTearsThePipelineDownInsteadOfLeakingIt`.
+
 ## 8. Determinism and Testing
 
 All of this must run under the simulated ring seam (`docs/spec/sched.md` §6):

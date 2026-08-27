@@ -61,13 +61,17 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 - **Backpressure:** a full ring fails the send with the KDS status type (no blocking, no `throw`). Callers must handle `ring_full` — typically by suspending the sending task until the reactor retries. Silent drop is forbidden.
 - The ring interface is injectable: simulation replaces it with an in-memory model that can delay and reorder deliveries (§8).
 
-**Status: built** (`docs/inflight/in-progress/workplan-crosscore.md` P1, 2026-08-04). `sched/spsc_ring.hpp` is the ring, `sched/ring_transport.hpp` the injectable seam and its real N² implementation, `sched/sim_ring_transport.hpp` the simulated one, `sched/ring_message.hpp` the header and the central kind enum, `sched/send_retry.hpp` the `ring_full` answer. Two properties are worth stating here because callers depend on them and neither is obvious from the paragraph above:
+**Status: built** (`docs/inflight/in-progress/workplan-crosscore.md` P1, 2026-08-04). `sched/spsc_ring.hpp` is the ring, `sched/ring_transport.hpp` the injectable seam and its real N² implementation, `sched/sim_ring_transport.hpp` the simulated one, `sched/ring_message.hpp` the header and the central kind enum, `sched/send_retry.hpp` the `ring_full` answer. Four properties are worth stating here because callers depend on them and none is obvious from the paragraph above:
 
 - **Delivery order is per edge only.** Messages on one `(src, dst)` pair arrive in send order; two messages from *different* peers to the same core have no defined relative order, and the real and simulated transports deliberately disagree about it — the real one rotates its peer sweep to avoid starvation, the simulation delivers by injected deadline. Nothing above this layer may depend on cross-peer order.
 - **The receiving handler runs in phase 4, not phase 3.** The drain moves messages off the ring and queues a task per message, under its own loop budget. A handler is a task and must yield like one.
 - **A successful send wakes a sleeping target** (§7, 2026-08-26). `TrySend` stays non-blocking and fallible; it costs a syscall only when the target is actually asleep, and a *refused* send wakes nobody — waking a core to find nothing is the spin the wake exists to remove. The wake follows the push and never precedes it.
+- **A service armed inside `AttachTransport` takes the transport *parameter*, never the `transport_` member** (2026-08-27, fixed at `7148343`). The member is assigned at the end of that function, so a service constructed earlier that reads it gets a null — first a dereference crash, and then, once "fixed" with a ternary guard, a silent default that left the batch ceiling absent, so nothing clamped an oversize batch. The parameter is in scope the whole time, so taking it removes the ordering class rather than commenting around it; `src/server/core_runtime.cpp` carries the rule as a comment at the two sites the defect was found on, and the three further services armed before the assignment take the parameter under it. Verified at `02d3184`: no read of `transport_` remains inside `AttachTransport` (`src/server/core_runtime.cpp:356-669`, the member assigned at `:618`).
 
-Nothing constructs a transport in production yet: with one reactor, phase 3 costs one null test.
+At `cores = 1` nothing constructs a transport and phase 3 costs one null
+test. Above one core `Expeditor::Serve` builds the real N² transport and
+attaches every reactor to it (`src/server/expeditor.cpp`), which is what
+makes the rule above a production rule and not a test one.
 
 ## 6. Timers
 

@@ -1053,18 +1053,40 @@ still waits on its own gate, so:
   and followed by the `STEP_EOF` anyway — so a cross-core read of **42
   rows or more answered zero rows, silently**, where shipping at least
   refused and named the loss. The transport answers `max_payload()` now,
-  the seal keeps one row's margin under it, and the two step senders
-  refuse rather than claim OK. **What outlives the fix**, and is the
+  a row that does not fit is rolled back out of the batch and opens the
+  next one (`beec260`, after `7148343`'s one-row *prediction* proved wrong
+  on any schema whose rows vary in width), and the step sender refuses
+  rather than claims OK. **What outlives the fix**, and is the
   reason this entry keeps it: the *rule* was written down the whole time
   (`step_pipeline.hpp`: a batch "must stay at or below the ring's max
   message payload minus the header") and nothing enforced it, while the
   **simulated transport had no payload cap at all** — so no simulation
   could have found it, and the P4e equivalence rig, which is byte-exact
   about content, delivers by calling the far side's handler directly and
-  never meets a slot. A declared invariant with no enforcement and a
-  simulator more permissive than production are the two conditions that
-  made a silent wrong answer survive; both are worth checking for
-  elsewhere. **One correction to the first telling of this, made by the
+  never meets a slot. A declared invariant with no
+  enforcement is the condition that made a silent wrong answer survive,
+  and it is worth checking for elsewhere. The simulator's permissiveness
+  is **not** a second one — it is a fidelity gap, per the ratified
+  correction below, and listing it as a cause would assert three times
+  over something already retracted once. **Two further shapes, recorded here 2026-08-27**, come
+  from the two incidental defects `7148343` fixed on its way, which until
+  then lived only in that commit's message; each site's *rule* now sits
+  in the spec that owns it (`docs/spec/sched.md` §5,
+  `docs/spec/crosscore.md` §7) and only what transfers is kept here.
+  **A guard that turns a crash into a quiet wrong answer** —
+  `AttachTransport` built `remote_steps_` while `transport_` was still
+  unassigned, and the ternary that stopped the segfault substituted a
+  silent "no ceiling", which is this bug's own shape reproduced by the
+  attempt to fix it: a null guard is a *decision to carry on with a value
+  nobody chose*, and one that cannot name a correct fallback should
+  refuse rather than default. **An error arm nothing has ever run is not
+  known to work** — `RemoteStepServer::Drain`'s send-failure arm was
+  unreachable for the pipeline's whole life and was wrong when the
+  refusing seam finally reached it, breaking out of the loop without
+  popping a moved-from queue head and leaking one pipeline per failed
+  send; the change that makes dead code reachable is the change that owes
+  it a reading. Both are fixed.
+  **One correction to the first telling of this, made by the
   fix's own review**: the sim gap is a *fidelity* gap and was not the
   reason the defect went unfound — `sim/` builds no `RingTransport` at
   all, and the defect was found on a real one. The comments that said

@@ -313,36 +313,39 @@ already refuses `emit_in_key_order`.
 
 ---
 
-## 6. A defect found on the way — and it is probably not latent
+## 6. A defect found on the way — reproduced, fixed, retired
 
-`kStepBatchTargetBytes` is 32 KiB (`step_pipeline.hpp:157`) while the
-production ring slot payload is **1,024 bytes**
-(`include/kds/sched/ring_transport.hpp:204`, one caller
-`src/server/expeditor.cpp:1210-1211`). Nothing clamps one against the
-other, though `step_pipeline.hpp:153-154` **declares** the rule — *"must
-stay at or below the ring's max message payload minus the header"*. It is
-an unenforced documented invariant.
+**Closed 2026-08-27, and this section is now the closure note rather than
+the report.** `docs/inflight/bugs/README.md`'s rule is that a report lives
+only until the fix lands with its test, then is deleted and what it taught
+goes to the spec that owns the subsystem or to `known-gaps.md`. `dcdc5e5`
+performed that deletion, so re-telling the mechanism here would restore in
+a workplan precisely what the rule removed from `docs/inflight/bugs/` — and
+the retelling had already begun to rot: every `path:line` in it was
+pre-`7148343` and none still resolved. The pre-fix narrative is in git at
+`29593ac` and in `7148343`'s message, with the citations that were true
+when they were written.
 
-**The threshold is 1,024, not 32 KiB, and that is the review's finding.**
-A batch seals at `size_bytes() >= batch_target_ || full()` — and `full()`
-caps only on a u16 row count (`src/wire/row_codec.cpp:269-271`) — but the
-**final seal fires unconditionally on any non-empty writer**
-(`remote_step_service.cpp:385`). So a payload need only exceed 1,024
-bytes, roughly 20–50 rows. `TrySend` then answers `InvalidArgument`
-(`include/kds/sched/spsc_ring.hpp:76-86`); the step send lambdas pass no
-`on_done` (`expeditor.cpp:1363-1373`, `src/server/core_runtime.cpp:463`) and
-return `Status::OK()` synchronously; `SendRetryTask::Poll` retries only
-`kResourceExhausted` and otherwise discards (`include/kds/sched/send_retry.hpp:79-88`).
-`Drain` checks `send_`'s status (`remote_step_service.cpp:936-942`) and is
-told OK. **The EOF still arrives: a short result set, silently.**
+**What happened.** RD0(a)'s probe ran and reproduced: a cross-core read of
+**42 rows or more answered zero rows, silently**, the batch having exceeded
+the 1,024-byte ring slot. So the framing question this section used to pose
+was answered in favour of `docs/inflight/bugs/` — a report with a fix, not
+a `known-gaps.md` entry. The reproducer landed with the report at `5a9bfd0`
+(`CoreRuntimeTest.AStepBatchWiderThanTheRingSlotStillDeliversEveryRow`) and
+the fix at `7148343`; three commits then **corrected and completed** it
+rather than polishing it — `beec260` replaced `7148343`'s *predictive* seal,
+which turned the silent loss into a wrong `ERR` on any schema whose rows
+vary in width, with an exact place-or-rollback; `f448e1f` made the sender
+and its ceiling one required argument; `44bdd2f` applied that review.
+`dcdc5e5` then deleted the report.
 
-No test catches it — the P4e rigs use 3–20-row datasets and a loopback
-`send_` that delivers inline (`remote_step_service.cpp:920-921`), and every
-`RealRingTransport` in `tests/` is built with a 64-byte payload for
-unrelated reasons. **RD0 runs the reachability probe.** If it reproduces
-it is a bug report in `docs/inflight/bugs/` with a fix, not a
-`known-gaps.md` entry, and "R3 does not make this worse" is not the right
-framing.
+**What outlived the fix is not here.** The conditions that let a silent
+wrong answer survive, and the two transferable shapes the incidental
+defects left, are in `docs/inflight/known-gaps.md`; the subsystem rules are
+in `docs/spec/crosscore.md` §7 and `docs/spec/sched.md` §5.
+
+**What R3 inherits: nothing.** The defect is fixed on `main`, and no
+remaining row of this plan depends on it.
 
 ---
 
@@ -352,7 +355,8 @@ framing.
 
 | # | Task | Gate |
 |---|---|---|
-| **RD0** | **Probe and record, before building.** (a) The §6 reachability probe at production sizing — a cross-core read whose batch exceeds `kCoreRingPayloadBytes`, asserting on row count against the same statement locally; its outcome decides `docs/inflight/bugs/` versus `known-gaps.md`. (b) The §1 gate reading and (c) §0's three reversed sentences, amended in place in `crosscore.md` §6a/§8 and the blueprint's R3 row | none |
+| ~~**RD0(a)**~~ | ~~**Probe and record, before building.** The §6 reachability probe at production sizing — a cross-core read whose batch exceeds `kCoreRingPayloadBytes`, asserting on row count against the same statement locally; its outcome decides `docs/inflight/bugs/` versus `known-gaps.md`.~~ **Closed 2026-08-27 — it was already done before this row was picked up.** The probe ran and reproduced at 42 rows under the test that landed with the report at `5a9bfd0`; `7148343` fixed it and pinned the pipeline leak it exposed with a second test; `dcdc5e5` retired the report. The framing question was answered **bug report**, and the residue is in `known-gaps.md`. Not owed work | none |
+| **RD0(b)(c)** | **The doc half, still owed.** (b) The §1 gate reading and (c) §0's three reversed sentences, amended in place in `crosscore.md` §6a/§8 and the blueprint's R3 row. Carried as **RA1** of `instructions/v2.4.0/range-foundation.md` §5 | none |
 | **RD1** | **`sys.ranges` exists and is empty.** Oid **133** (verified free: table oids are 100, 110-116, 130-132; the column-oid bases run 120-123 and 140-145), fixed root page **15**, `kCatalogOverflowFirst` → 16, `kSuperBlockVersion` → **16** with a ledger entry quoting the 12 → 13 precedent. Joins all five exhaustive lists: `kAllWellKnownOids` (`well_known.hpp:215-230`, compile-gated), `kAllCatalogPages` (`:291-296`), the `static_assert` at `:333`, `Bootstrap()`'s `kSysTables` (`catalog.cpp:532-557` — note the hard-coded `std::array<…, 9>`), and the `DropTable` sweep chain (`:1704-1736`, or rows outlive the relation). Fixed-offset row per `SysCabinRow`'s template — every field fixed-width. **`tests/assertion_catalog_test.cpp:109` is `EXPECT_EQ(kCatalogOverflowFirst, 15u)` — an exact pin this row breaks and must edit.** That file's own comment at `:102-106` argues exact pins are the wrong shape (which is why `:107` is `>=`); the same reasoning applies to `:109`, and it was missed once already at 13 → 14 | none |
 | **RD2** `[D2]` | **The directory row.** `SysRangeRow{rel_oid, lo, owner_core, entry_page}` per CC9. What this row adds beyond CC9's cell: the `lo = 0` and derived-`hi` rules are **enforced at the catalog door rather than assumed**, D2 is taken, and the anchor's `index_oid == 0` collision is recorded as its reason | RD1 |
 | **RD3** | **Resolution and publication.** `ResolveRanges(rel_oid, predicate) -> {owner_core, entry_page}[]`, plan-time, from the session core's cache (§2a of the spec). Publication decided per §2b — and **the choice is forced by where RD5 allocates**, not preferred. §2c's plan-time-only rule enforced by shape. **The zero-cost invariant binds hardest here** (*"a one-range relation on its owner core must add zero instructions over today"*): the unsplit path gains no scan, no lookup, no allocation, and RD9 measures it rather than an inspection asserting it | RD2 |
@@ -373,7 +377,10 @@ peer writer — §8's row 10 says so.
 
 ## 8. Where to pick this up
 
-At `acb2540`, **nothing is built**. **RD0, RD1 and RD4 are unblocked.**
+At `acb2540`, **nothing is built** — with one correction made 2026-08-27:
+**RD0(a) is closed**, and was closed before this plan was picked up, by
+`7148343` on `main` (§6). **RD0(b)(c), RD1 and RD4 are unblocked**, and
+under `instructions/v2.4.0/range-foundation.md` they are RA1, RA2 and RA3.
 RD2 wants D2, RD7 wants D4, and **D1 removes the btree half entirely** —
 it is `crosscore.md` §9's, not this plan's. D6 blocks nothing: RD5 is
 built so choosing it is a config value, not a rewrite.
