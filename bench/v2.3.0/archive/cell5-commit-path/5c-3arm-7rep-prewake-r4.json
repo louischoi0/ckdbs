@@ -1,0 +1,89 @@
+{
+  "cores": 4,
+  "rows": 800,
+  "reader_seconds": 2.0,
+  "wal_drain_interval_us": 1000,
+  "server": "/home/ubuntu/rw-b/cell5/bin/kds_server-prewake-bce12d0",
+  "owner_core": 3,
+  "seed": {
+    "p0": 475.4,
+    "p25": 679.7,
+    "p50": 745.6,
+    "p75": 797.3,
+    "p90": 844.5,
+    "p95": 857.3,
+    "p99": 927.6,
+    "p100": 988.1,
+    "n": 200,
+    "mean": 729.4,
+    "errors": 0,
+    "retries": 1,
+    "inserted": 200
+  },
+  "keys_seen": 200,
+  "key_range": [
+    1,
+    200
+  ],
+  "reader_alone": {
+    "p0": 10.5,
+    "p25": 14.0,
+    "p50": 23.8,
+    "p75": 24.2,
+    "p90": 24.9,
+    "p95": 26.5,
+    "p99": 35.1,
+    "p100": 280.4,
+    "n": 92652,
+    "mean": 21.0,
+    "errors": 0,
+    "empty_replies": 0
+  },
+  "reader_beside_committer": {
+    "p0": 17.7,
+    "p25": 39.9,
+    "p50": 641.6,
+    "p75": 756.1,
+    "p90": 856.6,
+    "p95": 905.6,
+    "p99": 1016.3,
+    "p100": 2052.4,
+    "n": 1212,
+    "mean": 494.1,
+    "errors": 0,
+    "empty_replies": 0
+  },
+  "committer_beside_reader": {
+    "p0": 428.7,
+    "p25": 693.4,
+    "p50": 738.2,
+    "p75": 797.0,
+    "p90": 876.5,
+    "p95": 949.7,
+    "p99": 1112.4,
+    "p100": 2075.3,
+    "n": 800,
+    "mean": 750.3,
+    "errors": 0,
+    "retries": 0,
+    "inserted": 800
+  },
+  "committer_alone": {
+    "p0": 469.5,
+    "p25": 690.7,
+    "p50": 738.0,
+    "p75": 784.8,
+    "p90": 845.3,
+    "p95": 877.5,
+    "p99": 947.4,
+    "p100": 2667.0,
+    "n": 400,
+    "mean": 745.8,
+    "errors": 0,
+    "retries": 0,
+    "inserted": 400
+  },
+  "count": [
+    "1400"
+  ]
+}

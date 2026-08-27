@@ -122,8 +122,15 @@ them it would not.
 
 ## 6. Reproducing
 
-The invocation in §1 is complete as written; the raw per-rep JSON for all
-three arms is under `/home/ubuntu/rw-b/` on the measuring host and is not
-archived here (the scenario-archive rule covers scenario drivers; this is a
-narrower measurement). The only thing it needs that this file cannot carry
-is a quiet box.
+The invocation in §1 is complete as written, and the raw per-rep JSON for
+all three arms is archived beside this file in
+`bench/v2.3.0/archive/cell1-r1/`, prefixed by arm. The only thing it needs
+that this file cannot carry is a quiet box.
+
+**Corrected 2026-08-27.** This section previously said the output was *not*
+archived, on the grounds that CLAUDE.md's archive rule covers scenario
+drivers and this is a narrower measurement. That reading was wrong for this
+series: `instructions/v2.3.0-reactor-wake.md` §5 asks for RW-B's raw driver
+output archived beside its results, and an order's own instruction outranks
+the general exemption. The files were back-filled rather than re-measured —
+they are the same JSON the tables above were computed from.

@@ -128,6 +128,11 @@ failures — the same two the pristine tree at `bce12d0` produces, the
 `chain-order`-under-injected-faults defect already in
 `docs/inflight/known-gaps.md`, and no new one.
 
+Raw per-rep JSON for both arms, and for the K = 1 / K = 4 sweep §5 cites,
+is archived beside this file in `bench/v2.3.0/archive/cell3-parked/`
+(added 2026-08-27 — `instructions/v2.3.0-reactor-wake.md` §5 asks for RW-B's
+raw output to be archived, and this file's first version did not).
+
 ## 7. What is still unrun
 
 Cells 2 (the knob sweep at the woken reactor), 4 (the hot-path cost of the
