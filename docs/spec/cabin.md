@@ -185,7 +185,7 @@ hint-failure path re-records. This is IX17's shape one trust class over,
 and it is the only **banked** acceleration a **heap** relation's join
 column can have — IX3 refuses it an index. (Amended 2026-08-20: it was
 "the only acceleration at all" until the statement-local inner build
-landed, `docs/spec/spec-join-inner-build.md`. The two do not compete for the
+landed, `docs/spec/join-inner-build.md`. The two do not compete for the
 same claim — a Cabin is declared, authoritative and survives the
 statement; the build is undeclared, unauthoritative and dies with it —
 and ladder order encodes the economics: a converged Cabin serve
@@ -463,7 +463,7 @@ to decide that this column carries a Cabin?**
 | written | policy | meaning |
 |---|---|---|
 | `col type NO CABIN` | disabled | No Cabin on this column, ever, by any route. `CREATE CABIN` is refused; auto-creation will never consider it. |
-| `col type CABIN AUTO` | auto | The engine may create one when its own signals say the column has earned it. **Consumed since 2026-08-10** by the cabin optimizer (`docs/spec/feat-physical-optimizer.md` Part II) — see below. |
+| `col type CABIN AUTO` | auto | The engine may create one when its own signals say the column has earned it. **Consumed since 2026-08-10** by the cabin optimizer (`docs/spec/physical-optimizer.md` Part II) — see below. |
 | `col type CABIN` | enabled | A Cabin is created at `CREATE TABLE`, and its values are observed on **first** selection. |
 | `col type` | unset | Read as *auto* by every reader, and stored distinctly so "nothing was said" stays distinguishable from "the engine may decide". |
 
@@ -494,7 +494,7 @@ value asked once must not buy a standing write-hook cost.
 
 **`auto` is a name, not a behaviour** — *as written 2026-08-03; amended
 2026-08-10, when it became one.* The promotion pipeline exists now: the
-**cabin optimizer** (`docs/spec/feat-physical-optimizer.md` Part II, PO1-PO10)
+**cabin optimizer** (`docs/spec/physical-optimizer.md` Part II, PO1-PO10)
 is a per-core background controller that CREATEs, EXTENDs, HEALs and
 DROPs Observational Cabins under a fixed-point cost-benefit core — its
 threshold is the θ_create hysteresis margin over measured scan cost and
@@ -556,7 +556,7 @@ sys.cabins
 
 `CREATE CABIN ON trade(sym)` / `DROP CABIN` for the user path, mirroring
 the pattern feature's origin axis; auto-creation arrived 2026-08-10 with
-the cabin optimizer (`docs/spec/feat-physical-optimizer.md` Part II), whose
+the cabin optimizer (`docs/spec/physical-optimizer.md` Part II), whose
 rows carry `origin = auto` — the tag that marks a Cabin the engine may
 drop on its own judgement.
 
@@ -564,7 +564,7 @@ drop on its own judgement.
 
 - Expression / predicate-scoped cabins (C3 — revisit after v1).
 - ~~The `CABIN AUTO` threshold (§8.1)~~ — **consumed 2026-08-10** by the
-  cabin optimizer (`docs/spec/feat-physical-optimizer.md` Part II): earning is
+  cabin optimizer (`docs/spec/physical-optimizer.md` Part II): earning is
   the θ_create margin sustained over N confirm snapshots, un-earning the
   θ_drop cooldown, both against measured scan cost × decayed frequency.
   What stays open moved with it (§II.7's tuning and PHY08's follow-ups).
@@ -588,14 +588,14 @@ drop on its own judgement.
 
 ## 12. Cabin classes — Observational and Bound (rev. 2026-08-08, AST01)
 
-This section is the revision `docs/spec/feat-assertion.md` §5 requires (AS6's
+This section is the revision `docs/spec/assertion.md` §5 requires (AS6's
 prerequisite), and it is **normative for the class boundary only**. Its
-authority is derived: where this section and `feat-assertion.md` §5 disagree
+authority is derived: where this section and `assertion.md` §5 disagree
 on any property in the table below, the assertion spec wins and this file is
 wrong — the two are meant to be readable as one.
 
 **One sentence: a Bound Cabin is a Cabin that is required to have observed
-everything, forever.** The same relationship `feat-index.md` IX1 already
+everything, forever.** The same relationship `index.md` IX1 already
 states for a secondary index ("an index is a Cabin that observed everything"),
 with two properties added that an index does not have — the coverage is
 *pinned* rather than merely maintained, and each group carries a **running
@@ -609,7 +609,7 @@ and the lookup machinery are shared; the **lifecycle contracts are not**.
 | Population | Lazy — observed values only (§5's witness, n=2/n=1) | Eager — full coverage of the group-column combination, built at `CREATE ASSERTION` |
 | Coverage contract | Partial by design; a value is either observed or it is not | 100% of the target relation's live rows, with no per-value opt-out |
 | Eviction | Allowed — §1's corollary, un-observing is always legal | **Forbidden.** Pages are pinned; un-observing is unavailable |
-| Failure response | Un-observe and fall back to the scan: a performance event | **Fail the statement.** Same line `feat-index.md` draws for index maintenance, and for the same reason: a Bound Cabin missing an entry is *wrong*, not slow |
+| Failure response | Un-observe and fall back to the scan: a performance event | **Fail the statement.** Same line `index.md` draws for index maintenance, and for the same reason: a Bound Cabin missing an entry is *wrong*, not slow |
 | Durability | Unlogged authoritative (§9); memory-resident in v1; rebuilt by traffic after a restart | **Logged, headered authority class** (var-heap V3 / unique-index U5 tier): WAL-before-data, checksummed, crash-consistent, enforceable at restart with no rebuild scan |
 | Role | Advisory acceleration — chooses where to look | Authoritative constraint substrate — decides whether a write is admitted |
 | Entry size | 24 B (`stats::CabinEntry`, C6) | **32 B** — the same fields plus the row's aggregate value inline |

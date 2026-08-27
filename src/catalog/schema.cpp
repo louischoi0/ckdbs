@@ -47,7 +47,7 @@ Status CheckDeclarableColumnTypes(const Schema& schema) {
             DecimalPrecisionOf(col.len) == 0) {
             return Status::InvalidArgument(
                 "column '" + std::string(NameView(col.name)) +
-                "' is decimal with no precision recorded (docs/spec/spec-types.md TY2)");
+                "' is decimal with no precision recorded (docs/spec/types.md TY2)");
         }
     }
     return Status::OK();

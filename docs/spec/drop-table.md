@@ -1,7 +1,7 @@
 # DROP TABLE v1 — catalog-scoped, with the oid tombstone
 
 Decisions DT1-DT6. Workplan: `docs/workplan-drop-table.md` (`DT01`-`DT05`).
-Named as the out-of-scope item by `docs/spec/spec-alter.md` §10, which also
+Named as the out-of-scope item by `docs/spec/alter.md` §10, which also
 built the RESTRICT predicate this feature consults.
 
 ## DT1 — Catalog-scoped: the relation becomes unreachable, its pages orphan
@@ -10,7 +10,7 @@ v1 removes the *catalog's* knowledge of the relation and reclaims no
 pages. The heap/btree chain, the var-heap chain, index pages and any
 Bound Cabin pages stay allocated and unreachable — leaked space, stated
 plainly. Reclamation is gated elsewhere and the gates are real: returning
-a page to the free map is `feat-physical-optimizer.md` §6 gate 3 (a
+a page to the free map is `physical-optimizer.md` §6 gate 3 (a
 reallocated page breaks trail validation — per-relation Keystone ids
 collide at a reused slot), and any reuse needs the reader horizon that
 deliberate reader non-registration withholds. A DROP that guessed at
@@ -78,7 +78,7 @@ Autocommit still retires, exactly as this section describes.
 
 Two limits carried from there rather than restated: the drop is
 **atomic but not isolated** (other sessions see it before it commits —
-`docs/spec/spec-ddl-transactional.md` §5a says why), and it is still not
+`docs/spec/ddl-transactional.md` §5a says why), and it is still not
 crash-durable, which the first sentence above already says.
 
 ## DT6 — Grammar

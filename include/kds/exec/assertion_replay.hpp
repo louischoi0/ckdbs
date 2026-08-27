@@ -7,7 +7,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/record.hpp"
 
-// Replay of the five assertion records (docs/spec/feat-assertion.md §7, workplan
+// Replay of the five assertion records (docs/spec/assertion.md §7, workplan
 // AST05): the fold that turns a stream of ASSERT_* records back into the
 // Bound Cabin state that emitted them - entry pages restored through the
 // store, the memory-resident group directory rebuilt beside them.
@@ -32,7 +32,7 @@
 // **Where replay starts** - decided, and still not this file's business.
 // A directory folded from records needs a durable base to fold onto, and
 // until 2026-08-11 nothing held one, so the fold would have had to start at
-// the cabin's birth. `feat-assertion.md` **AS6a** settles it: the checkpoint
+// the cabin's birth. `assertion.md` **AS6a** settles it: the checkpoint
 // snapshots each cabin's group headers, every entry carries a `group_id` so
 // the header->entry linkage is rebuilt from the cabin's own pages, and replay
 // folds from the last checkpoint forward. `docs/workplan-wal-recovery.md`

@@ -172,7 +172,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     if (file.Has("buffer_pool_frames")) {
         // MG06: how many frames may stay resident across the **whole
         // instance** - divided evenly per core, remainder to core 0
-        // (spec-eviction.md §6 EV4; Open() refuses a nonzero total below
+        // (eviction.md §6 EV4; Open() refuses a nonzero total below
         // `cores`, CheckFrameBudget). 0 (the default) is unbounded, the
         // exact pre-eviction behaviour. Nonzero arms the CLOCK sweep on
         // the fault path (spec-eviction EV5's on-demand trigger).
@@ -350,13 +350,13 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         } else if (mode == "on") {
             // Refused naming every gate, so the operator learns what is
             // missing rather than what word to try next
-            // (docs/spec/feat-physical-optimizer.md §6).
+            // (docs/spec/physical-optimizer.md §6).
             return Status::InvalidArgument(
                 file.origin() +
                 ": physical_optimizer = on is not available: every relayout plan is blocked - "
                 "compact on the reader horizon (readers are unregistered, txn.md §9), cluster "
                 "on the ordered-between property kRange pruning reads, defrag on cross-relation "
-                "page reuse breaking trail validation (docs/spec/feat-physical-optimizer.md §6). "
+                "page reuse breaking trail validation (docs/spec/physical-optimizer.md §6). "
                 "Use 'shadow' for the report, 'off' to silence it.");
         } else {
             return Status::InvalidArgument(file.origin() + ": physical_optimizer '" + v.value() +
@@ -377,7 +377,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(
                 file.origin() + ": decay_half_life " + std::to_string(v.value()) +
                 " is outside 1.." + std::to_string(kMaxHalfLifeSeconds) +
-                " (seconds; docs/spec/feat-physical-optimizer.md R1)");
+                " (seconds; docs/spec/physical-optimizer.md R1)");
         }
         decay_half_life_ns = v.value() * 1'000'000'000ULL;
     }
@@ -795,7 +795,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->database_->catalog, *expeditor->store_, expeditor->recovery_,
         &*expeditor->logger_);
 
-    // DT10 (`spec-ddl-transactional.md` §5c): retire the delete-marked
+    // DT10 (`ddl-transactional.md` §5c): retire the delete-marked
     // catalog rows a previous mount left behind, before anything can read
     // one. **Here and only here** - after recovery, so a mark this mount's
     // own log restored is included, and before the transaction stack

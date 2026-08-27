@@ -5,8 +5,8 @@ Lifts the CREATE TABLE refusal of `decimal` (`client-manual.md` §3) for the
 fixed-width form specified here; `float` stays refused. Companion tasks:
 `docs/workplan-types.md`. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`.
 Consistent with `docs/rules/rule-fixed-length-tuple.md` (invariant 13),
-`docs/spec/parser-v2.md`, `docs/spec/feat-aggregate.md` (AG-series),
-`docs/spec/heap-and-tuple.md`, `docs/spec/feat-cabin.md`.
+`docs/spec/parser-v2.md`, `docs/spec/aggregate.md` (AG-series),
+`docs/spec/heap-and-tuple.md`, `docs/spec/cabin.md`.
 
 *(Both filenames on the first two lines were wrong until TY09: this file
 cited `docs/types-workplan.md` for its own workplan, which is
@@ -145,7 +145,7 @@ comparisons. `SUM` over `DATE`/`TIMESTAMP` is refused (`InvalidArgument`) —
 a sum of dates is a statement nobody meant; `MIN`/`MAX` over them are exact
 and useful. `COUNT` is type-blind as always.
 
-**AVG folds since 2026-08-07** — decided in `docs/spec/feat-aggregate.md` §3.4,
+**AVG folds since 2026-08-07** — decided in `docs/spec/aggregate.md` §3.4,
 the document this spec deliberately handed the item to rather than
 settling it in passing: the answer is at the argument column's declared
 scale, rounded half-even on the exact integer pair, and a column that
@@ -154,11 +154,11 @@ worked as designed — the decision lives in one document and this one only
 points at it.
 
 *Closed at TY09, historical note.* The correct file is
-`docs/spec/feat-aggregate.md`, not `docs/aggregate.md`, which does not exist
+`docs/spec/aggregate.md`, not `docs/aggregate.md`, which does not exist
 and never did — this paragraph and the workplan both cited it, which is
 the kind of reference that survives precisely because nobody follows it.
 (TY09 also scrubbed the refusal's stale "no decimal kind" clause from two
-code comments, `feat-aggregate.md` and `CLAUDE.md`; the refusal itself,
+code comments, `aggregate.md` and `CLAUDE.md`; the refusal itself,
 and its "compute it from SUM and COUNT" message, are gone entirely now
 that AVG folds — only a non-decimal argument still gets an error, the
 compile-time one above.)
@@ -297,7 +297,7 @@ and anything (`'2026-08-06'` into a varchar column stays a plain string).
   range stays cheap — the encoding is a signed epoch day with room to
   spare; narrowing it is data-losing and needs a migration story.
 - ~~**AVG's return type, scale and rounding**~~ — **decided and built
-  2026-08-07** in `docs/spec/feat-aggregate.md` §3.4, the document TY09 handed
+  2026-08-07** in `docs/spec/aggregate.md` §3.4, the document TY09 handed
   the item to: declared scale, half-even, integer columns refused. §3.2
   above now points at it.
 - ~~Phase 2: bare numeric literals (TY3) and its fingerprint analysis~~ —

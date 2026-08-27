@@ -25,7 +25,7 @@ std::string_view Describe(const Token& tok) {
 
 // The aggregate `name` spells, or false if it spells none.
 //
-// `AVG` was deliberately absent until 2026-08-07, when feat-aggregate.md
+// `AVG` was deliberately absent until 2026-08-07, when aggregate.md
 // §10's open question was decided (see AggFunc's note in ast.hpp); the
 // grammar half is now ordinary and the type half - decimal columns only -
 // is the compiler's `CheckAggregateArgType`, where every other per-type
@@ -99,7 +99,7 @@ StatusOr<AstValue> Parser::ParseValue() {
 
     // Every literal carries where it was written, not just `$param`.
     // A literal is now something a *later* stage can reject - the step
-    // compiler coerces one against its column's type (spec-types.md §3.1),
+    // compiler coerces one against its column's type (types.md §3.1),
     // and `WHERE d = '2026-02-30'` fails there, long after the token is
     // gone. Without the offset that failure can only say which column it
     // was about; with it, it can point at the byte.
@@ -317,7 +317,7 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         return cond;
     }
 
-    // `col IS [NOT] NULL` (docs/spec/spec-null.md; NU5). `IS` is contextual -
+    // `col IS [NOT] NULL` (docs/spec/null.md; NU5). `IS` is contextual -
     // an unreserved word like REFERENCES, so it still names a column
     // everywhere else and the fingerprint hashes it as the identifier it
     // lexes as. No right-hand side: the op is the whole predicate.
@@ -424,7 +424,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         col.type_name = std::move(type_name.value());
 
         // `DECIMAL(p, s)` - the one type whose declaration carries
-        // arguments (docs/spec/spec-types.md §2). Recognized by the paren rather
+        // arguments (docs/spec/types.md §2). Recognized by the paren rather
         // than by the name, so a type that takes no arguments refuses them
         // here instead of each type name needing its own production.
         if (lexer_.Peek().type == TokenType::kLParen) {
@@ -466,7 +466,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         }
 
         // Optional nullability, directly after the type and before every
-        // other suffix (docs/spec/spec-null.md §2.3, D1): `NULL` opts a column
+        // other suffix (docs/spec/null.md §2.3, D1): `NULL` opts a column
         // into nullability; `NOT NULL` spells the default for
         // standard-minded schemas and changes nothing. First in the suffix
         // chain because it modifies the type, not the column's relations.
@@ -486,7 +486,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
             col.notnull = true;  // the default, said out loud
         }
 
-        // Optional `REFERENCES <table>` (docs/spec/impl-foreign-keys.md §1).
+        // Optional `REFERENCES <table>` (docs/spec/foreign-keys.md §1).
         // Peeked like the cabin clause below it, and written *before* it
         // when both appear - a fixed order, because two optional suffixes
         // accepted in either order is a grammar with a shape nobody can
@@ -517,7 +517,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         }
 
         // Optional cabin policy: `CABIN`, `CABIN AUTO`, or `NO CABIN`
-        // (docs/spec/feat-cabin.md). Peeked rather than required, so every
+        // (docs/spec/cabin.md). Peeked rather than required, so every
         // pre-existing CREATE TABLE parses unchanged and lands on
         // kCabinPolicyUnset.
         const Token& policy = lexer_.Peek();
@@ -948,7 +948,7 @@ StatusOr<IndexStmt> Parser::ParseIndex(bool drop) {
     return stmt;
 }
 
-// `{CREATE | DROP} ASSERTION ...` (docs/spec/feat-assertion.md §3).
+// `{CREATE | DROP} ASSERTION ...` (docs/spec/assertion.md §3).
 //
 // **Every refusal in here is a create-time refusal by design** (AS2, §3.1):
 // the grammar *is* the supported predicate class, so a form outside the class
@@ -1067,7 +1067,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
             " bounds are out of scope for assertions (byte " +
             std::to_string(agg_tok.byte_offset) +
             "); v1 takes COUNT(*) and SUM(<int64 column>) upper bounds only "
-            "(docs/spec/feat-assertion.md §10)");
+            "(docs/spec/assertion.md §10)");
     }
     stmt.func = func;
 
@@ -1146,7 +1146,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
                 "equality assertions (=) are not supported (byte " + std::to_string(op_at) +
                 "); enforcing = means enforcing a lower bound, which v1 excludes, and reading "
                 "it as <= would enforce something other than what was written "
-                "(docs/spec/feat-assertion.md AS11)");
+                "(docs/spec/assertion.md AS11)");
         case CompareOp::kGt:
         case CompareOp::kGte:
             // AS11, and the one refusal that pays for a whole write path:
@@ -1157,7 +1157,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
                 std::string("lower-bound assertions (") + CompareOpName(op.value()) +
                 ") are not supported (byte " + std::to_string(op_at) +
                 "); v1 enforces upper bounds only, which is what makes DELETE check-free "
-                "(docs/spec/feat-assertion.md AS11)");
+                "(docs/spec/assertion.md AS11)");
         case CompareOp::kNeq:
             // Distinct from `=` and from `>`: those name a constraint this
             // engine understands and declines, so they say which decision
@@ -1221,7 +1221,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
                 "(byte " +
                 std::to_string(tail.byte_offset) +
                 "); an assertion is checked at statement time, always "
-                "(docs/spec/feat-assertion.md AS3, AS7)");
+                "(docs/spec/assertion.md AS3, AS7)");
         }
         if (tail.type == TokenType::kIdent &&
             (IEquals(tail.text, "DEFERRABLE") || IEquals(tail.text, "INITIALLY") ||
@@ -1230,7 +1230,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
                 "'" + std::string(tail.text) +
                 "' is reserved and not supported (byte " + std::to_string(tail.byte_offset) +
                 "); an assertion is checked at statement time, always "
-                "(docs/spec/feat-assertion.md AS3, AS7)");
+                "(docs/spec/assertion.md AS3, AS7)");
         }
         break;
     }
@@ -1265,7 +1265,7 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
 
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;
 
-    // One or more parenthesised rows, comma-separated (spec-bulkinsert.md
+    // One or more parenthesised rows, comma-separated (bulkinsert.md
     // BI3). The row *cap* is the dispatcher's - this layer is config-blind
     // - so the loop is bounded only by the statement text, which the
     // server already accepted whole.
@@ -1545,7 +1545,7 @@ Status Parser::ParseHaving(SelectStmt& stmt) {
         // `IS [NOT] NULL`, the one predicate with no right-hand side. A
         // group that folded no non-NULL argument answers NULL for SUM,
         // MIN, MAX and AVG (AG4), so this is the only way to ask for it -
-        // every relational operator drops it under spec-null.md §4's
+        // every relational operator drops it under null.md §4's
         // three-valued collapse.
         if (const Token is_tok = lexer_.Peek();
             is_tok.type == TokenType::kIdent && IEquals(is_tok.text, "IS")) {
@@ -2110,11 +2110,11 @@ StatusOr<Statement> Parser::Parse() {
             // the position that matters is this word's. Enforcing
             // uniqueness makes the index a *constraint*, which needs a
             // second write-conflict path and would let an index failure
-            // abort a write (docs/spec/feat-index.md IX11).
+            // abort a write (docs/spec/index.md IX11).
             return Status::Unsupported(
                 "UNIQUE indexes are not supported (byte " + std::to_string(what.byte_offset) +
                 "); v1 is a read accelerator that cannot fail a write for a reason of its own "
-                "(docs/spec/feat-index.md IX11)");
+                "(docs/spec/index.md IX11)");
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "PATTERN")) {
             lexer_.Next();
             auto s = ParseCreatePattern();
@@ -2162,7 +2162,7 @@ StatusOr<Statement> Parser::Parse() {
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "TABLE")) {
-            // docs/spec/spec-drop-table.md DT6: catalog-scoped, oid tombstoned,
+            // docs/spec/drop-table.md DT6: catalog-scoped, oid tombstoned,
             // pages orphaned - the refusals live in the dispatcher, which
             // is the layer that can name a blocker.
             lexer_.Next();
@@ -2226,7 +2226,7 @@ StatusOr<Statement> Parser::Parse() {
 }
 
 // `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
-// (docs/spec/spec-alter.md AL1, AL7), with `ALTER` already consumed.
+// (docs/spec/alter.md AL1, AL7), with `ALTER` already consumed.
 //
 // `TABLE`, `RENAME`, `COLUMN` and `TO` are ordinary identifiers matched by
 // text, like every clause head this grammar has grown - and the refusal

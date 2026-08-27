@@ -1,6 +1,6 @@
 # What DT9 costs a statement: the unfiltered catalog read, priced
 
-DT9 (`docs/spec/spec-ddl-transactional.md` §5a/§5b) changed one arm of the
+DT9 (`docs/spec/ddl-transactional.md` §5a/§5b) changed one arm of the
 catalog's `ScanAll`. A delete-marked catalog row used to count as deleted the
 moment the mark was written; it now counts only once its deleter is no longer
 in flight, which the read learns by calling
@@ -408,7 +408,7 @@ rides entirely inside it.** Every hot arm is flat to within the floor
 including `SHOW TABLES`, which does an unfiltered `ScanAll` per statement.
 The only way to make DT9 cost anything at all was to defeat the cache
 deliberately, once per statement, with a `BumpVersion` the workload does not
-otherwise contain. `docs/spec/spec-ddl-transactional.md`'s claim that a view is
+otherwise contain. `docs/spec/ddl-transactional.md`'s claim that a view is
 minted only while some transaction holds uncommitted DDL, so the cache fast
 path is untouched, is confirmed by measurement here for the first time.
 

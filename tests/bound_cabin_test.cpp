@@ -12,7 +12,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
-// The Bound Cabin storage engine (docs/spec/feat-assertion.md §5, workplan AST04).
+// The Bound Cabin storage engine (docs/spec/assertion.md §5, workplan AST04).
 //
 // One test per acceptance criterion, and each is written against the property
 // rather than the implementation:

@@ -49,7 +49,7 @@ What this tool still measures well:
    the join-point shape, then runs `ANALYZE` on the live inline statement
    and compares the two `pattern_id`s. That equality is the whole
    load-bearing claim of CREATE PATTERN
-   (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 3.2). If
+   (docs/spec/create-pattern-user-defined-patterns-v1.md section 3.2). If
    it ever stops holding, every declared pattern silently matches nothing
    - no error, no failed query, just a feature that quietly does not
    work. This tool fails loudly on it.

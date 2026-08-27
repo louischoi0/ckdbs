@@ -245,7 +245,7 @@ the relation grows, so the key space grows with it — 2,000 distinct users at
 10,000 loans — and the hit rate collapses. **The two results are the same
 mechanism read at opposite ends of one variable, and neither is a property of
 the Cabin alone.** What decides it is the workload's argument distribution,
-which is the input the `CABIN AUTO` threshold in `docs/spec/feat-cabin.md` §11 is
+which is the input the `CABIN AUTO` threshold in `docs/spec/cabin.md` §11 is
 still open on.
 
 `symbol-history` is the counter-case on both engines: its result set grows

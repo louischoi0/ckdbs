@@ -12,7 +12,7 @@
 #include "kds/storage/page_store.hpp"
 
 // `CREATE INDEX` / `DROP INDEX`: the checks, the tree, and the catalog
-// write behind them (docs/spec/feat-index.md §10, workplan IX05).
+// write behind them (docs/spec/index.md §10, workplan IX05).
 //
 // It sits here rather than in `catalog/` for one reason: computing an
 // index's `key_width` needs the key encoding (`exec/index_key.hpp`) and
@@ -125,7 +125,7 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
 // As above, but a drop **delete-marks** its `sys.indexes` row rather than
 // retiring it when transactional, so a rollback clears the mark. Unlike
 // `DROP TABLE` this is isolated too - there is no in-place retype here
-// (spec-ddl-transactional.md §5a).
+// (ddl-transactional.md §5a).
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
                                   std::uint64_t trx_id = catalog::kBootstrapXid,
                                   catalog::CatalogRowChange* change = nullptr);

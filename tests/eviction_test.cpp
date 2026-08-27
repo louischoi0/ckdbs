@@ -254,7 +254,7 @@ TEST_F(EvictionTest, APinnedFrameIsNeverReclaimedWhileAVictimFallsBesideIt) {
 
 TEST_F(EvictionTest, APinnedClassFrameIsNeverReclaimedAndNeedsNoPin) {
     // EV3: residency is a property of the page's *class*. This is what
-    // `docs/spec/feat-assertion.md` §5's Bound Cabin will declare, and what
+    // `docs/spec/assertion.md` §5's Bound Cabin will declare, and what
     // AST04's "exempt from eviction" acceptance criterion means.
     const PageId resident = MakeCleanResidentPage(std::byte{1});
     const PageId victim = MakeCleanResidentPage(std::byte{2});

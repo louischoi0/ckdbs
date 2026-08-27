@@ -738,7 +738,7 @@ TEST_F(StepCompileTest, ACabinStepsKeyColumnIsAlwaysInItsFilterMask) {
 }
 
 TEST_F(StepCompileTest, AJoinOnACabinedColumnCompilesToACorrelatedCabinProbe) {
-    // feat-cabin.md §4a: the cabined join column with no literal anywhere -
+    // cabin.md §4a: the cabined join column with no literal anywhere -
     // the shape that walked the inner relation once per outer row, and the
     // only accelerable shape a heap relation's join column has. Both ON
     // orientations must give the same probe, per the pk arm's argument.
@@ -818,7 +818,7 @@ TEST_F(StepCompileTest, ACorrelatedSubChainProbesTheCabinThroughTheFrame) {
 // ---- The walked-join build annotation (workplan JB1) ----------------------
 //
 // The compile half of the statement-local inner build
-// (docs/spec/spec-join-inner-build.md). Two contracts, and every test here pins
+// (docs/spec/join-inner-build.md). Two contracts, and every test here pins
 // one of them: **exactly** the walked-join shape carries the annotation, and
 // an annotated step is a kScan by every other measure - kinds, residuals,
 // read_columns and class are what they were before the arm existed, by

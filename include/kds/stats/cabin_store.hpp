@@ -19,7 +19,7 @@ class OptimizerSignals;
 
 // The Cabin runtime store: the observed sets, the sighting counter, and the
 // policy that decides when a value becomes observed
-// (docs/spec/feat-cabin.md §§3-5, docs/cabin-workplan.md CB04).
+// (docs/spec/cabin.md §§3-5, docs/cabin-workplan.md CB04).
 //
 // ---- What "observed" means, precisely -----------------------------------
 //
@@ -101,7 +101,7 @@ struct CabinEntry {
     PageId page_id = kInvalidPageId;
 
     // The page's relayout epoch at the time the entry was written or last
-    // healed (docs/spec/feat-physical-optimizer.md R4; recorded and compared for
+    // healed (docs/spec/physical-optimizer.md R4; recorded and compared for
     // real since workplan PX04 - the field was here from C6, written 0
     // while the engine had no epoch, precisely so there would be nowhere
     // for the check *not* to happen the day it landed). Compared in
@@ -254,7 +254,7 @@ public:
     void NoteHint(std::uint64_t cabin_id, bool ok);
 
     // Where the optimizer's decayed quality signals live, when a collector
-    // exists (feat-physical-optimizer.md §II.2 S3). Null is the ordinary
+    // exists (physical-optimizer.md §II.2 S3). Null is the ordinary
     // no-optimizer configuration and costs one predicate per note. The
     // store forwards and never owns: eviction, snapshotting and caps are
     // the collector's policy, not this class's.
@@ -271,7 +271,7 @@ public:
     // lives in one place and this is it.
     //
     // `declared` is "**the declaration speaks for this probe**", not "the
-    // Cabin is declared" - the two parted at CB14 (feat-cabin.md §4a): a
+    // Cabin is declared" - the two parted at CB14 (cabin.md §4a): a
     // correlated probe's key is a value no operator named, so it passes
     // false however the Cabin was created. The caller owns that test
     // because only the caller knows the probe's shape.
@@ -283,7 +283,7 @@ public:
     // per-cabin value cap, asked **before** a recording walk is paid for.
     // Without this gate a cap-refused value re-armed on every probe, and
     // under CB13's completion license each doomed attempt was a full
-    // relation walk (the bug feat-cabin.md §4a's cap paragraph records).
+    // relation walk (the bug cabin.md §4a's cap paragraph records).
     // The entry cap cannot be asked here - a set's size is only known
     // mid-walk - so the recording path bounds that one itself. A false is
     // never an error: the value simply stays unobserved (rule 2).
@@ -310,7 +310,7 @@ public:
     // A key whose set outgrew the per-value entry cap mid-recording. The
     // mark is **sticky**: sets only grow under append-only maintenance, so
     // re-attempting on the next probe was doomed work re-armed forever -
-    // the completion-license bug feat-cabin.md §4a's cap paragraph records.
+    // the completion-license bug cabin.md §4a's cap paragraph records.
     // What clears it: `Unobserve` (the heal path - the world provably
     // changed) and the sighting table's wholesale reset (the store's one
     // crude eviction). An UPDATE moving rows *away* from the value can

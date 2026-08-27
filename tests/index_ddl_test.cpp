@@ -12,7 +12,7 @@
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` (docs/spec/feat-index.md §10,
+// `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` (docs/spec/index.md §10,
 // workplan IX05): the grammar, the DDL layer under it, and the reply.
 //
 // Two things these are really about.
@@ -221,7 +221,7 @@ TEST_F(IndexDdlTest, ARelationThatHasHeldRowsIsBackfilledRatherThanRefused) {
 
 TEST_F(IndexDdlTest, AFloatlessTypeSetMeansEveryDeclarableColumnCanBeAKey) {
     // Every type the engine can store has an index encoding, which is the
-    // claim spec-types.md §1 makes about a type being four things. A column
+    // claim types.md §1 makes about a type being four things. A column
     // type with no order would be refused here.
     const std::string made = Run("CREATE TABLE t (id int64, d date, ts timestamp, "
                                  "amt decimal(10,2), wide decimal(30,4), name varchar, "

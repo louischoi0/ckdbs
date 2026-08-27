@@ -93,7 +93,7 @@ the owner's workplan.
   relation the catalog lost — because resolving a page to its relation needs a
   page→relation index that `page.md` does not have, and whose absence is
   already the named blocker on page reuse
-  (`docs/spec/feat-physical-optimizer.md` §6 gate 3). Building the set instead would
+  (`docs/spec/physical-optimizer.md` §6 gate 3). Building the set instead would
   mean walking every page of every relation at every mount. **Substrate built
   2026-08-13**: `docs/spec/page.md` §2a stamps the owning object's oid into the
   common header of every page created from that build on, which makes this
@@ -118,7 +118,7 @@ the owner's workplan.
      "the orphaned slot is the recorded leak that rides on purge" — and the
      rebuild has no way to distinguish it, so any cabin whose history includes a
      pre-checkpoint abort relinks an entry the live directory had dropped~~ —
-     **decided and fixed 2026-08-12** as AS6b (`docs/spec/feat-assertion.md` §7).
+     **decided and fixed 2026-08-12** as AS6b (`docs/spec/assertion.md` §7).
      `flags` bit 3, `kEntryOrphaned`, is set on abort by the live path and by
      `ASSERT_ROLLBACK` replay alike, and the linkage scan skips a marked entry.
      Bit 3 was free — AST04 shipped three flags — so no width moved and an older
@@ -126,7 +126,7 @@ the owner's workplan.
 
   The **aggregate was correct either way** (snapshot + folded deltas), so
   admission answered right and the constraint enforced correctly. What did not
-  hold is the structural proof `docs/spec/feat-assertion.md` §5.2 names — "the entries
+  hold is the structural proof `docs/spec/assertion.md` §5.2 names — "the entries
   remain the authority, the snapshot is a derived cache, and
   `VerifyAgainstEntries` is what proves one against the other" — because on a
   recovered cabin that check reported `Corruption` for a directory that was
@@ -176,7 +176,7 @@ the owner's workplan.
   where `ASSERT_COMMIT` takes a repeated-index list. Batching abort means moving
   that payload — a `docs/spec/wal.md` §4.1 decision, and one that would ride the
   segment-format bump to 2 for free rather than costing a version event of its
-  own later. Owned by `docs/spec/feat-assertion.md` §7.
+  own later. Owned by `docs/spec/assertion.md` §7.
 
 - **`SHOW META` under-reports an assertion-carrying mount by up to 29 ms**,
   because `exec::RecoverAssertions`' `ScanLog` is timed into no phase counter
@@ -420,7 +420,7 @@ the owner's workplan.
   remainder.
   The *other* half of that old entry — "DDL is not transactional,
   `CREATE TABLE` inside a transaction is not rolled back" — is **false
-  for `CREATE TABLE` as of 2026-08-16** (`docs/spec/spec-ddl-transactional.md`,
+  for `CREATE TABLE` as of 2026-08-16** (`docs/spec/ddl-transactional.md`,
   `docs/inflight/in-progress/workplan-ddl-transactional.md`, DT1-DT4): a rolled-back create
   leaves no relation, and an uncommitted one is invisible to every other
   session by every route into it. **Atomicity and isolation only;
@@ -434,7 +434,7 @@ the owner's workplan.
   isolated** (DT5 shipped delete-marking for its dependent rows; other
   sessions still see the drop before it commits, because the
   `sys.objects` retype is an in-place overwrite with no undo chain —
-  `spec-ddl-transactional.md` §5a). `CREATE INDEX` is atomic and
+  `ddl-transactional.md` §5a). `CREATE INDEX` is atomic and
   isolated; `DROP INDEX` is atomic and isolated **on core 0** since DT9
   taught the unfiltered catalog read that a delete-mark counts only once
   its deleter commits (§5b), which is core-0-scoped only because
@@ -470,7 +470,7 @@ the owner's workplan.
   built.
 - ~~**DT9's in-flight test can be fooled by a reissued transaction id
   after a crash**~~ — **closed 2026-08-18 by DT10**
-  (`docs/spec/spec-ddl-transactional.md` §5c). The exposure was real: an
+  (`docs/spec/ddl-transactional.md` §5c). The exposure was real: an
   unfiltered catalog read counts a delete-mark only once its deleter is
   no longer in flight, the id ceiling is unlogged (`txn/trx_id.hpp`), so
   a crash could reissue a committed dropper's id and a live transaction
@@ -483,7 +483,7 @@ the owner's workplan.
 - **Keystone K1 does not hold across a crash**
   (`docs/rules/keystoneid-k0-findings.md`): the durable log names ids the
   unlogged `sys.tables.next_id` has forgotten. K-M2a/K-M2 own it.
-- **The assertion checkpoint-genesis gap** (`docs/spec/feat-assertion.md` §7):
+- **The assertion checkpoint-genesis gap** (`docs/spec/assertion.md` §7):
   the group-directory fold needs records from the Bound Cabin's birth, and
   nothing durable holds headers for a checkpoint-bounded replay to start
   from. **Decided 2026-08-11 and now owned** — AS6a gives the checkpoint a
@@ -570,7 +570,7 @@ the owner's workplan.
   extent granted; not measured (the v2 amendment). Pinned by
   `AReservationAfterTheLastFlushIsLandedByPersist`.
 - **Cabin entry sets** are memory-resident by design
-  (`docs/spec/feat-cabin.md` §9): the `sys.cabins` row survives, the sets
+  (`docs/spec/cabin.md` §9): the `sys.cabins` row survives, the sets
   re-observe from traffic.
 - ~~**Assertion enforcement**: the registry/directory is memory-resident, so a
   surviving assertion honestly reports `enforcing=0` until recovery can replay
@@ -581,7 +581,7 @@ the owner's workplan.
   by scanning the cabin's own pages — bounded by the assertion's entry count, not
   the relation's rows — and folds the `ASSERT_*` records after the snapshot.
   `SHOW ASSERTIONS` reports `enforcing=1` immediately, which is what
-  `docs/spec/feat-assertion.md` §7 always claimed and the engine contradicted until
+  `docs/spec/assertion.md` §7 always claimed and the engine contradicted until
   now.
 
   Two things stay true and are reported rather than assumed. An assertion whose
@@ -601,7 +601,7 @@ the owner's workplan.
 Readers are **registered** as of 2026-08-19 (`txn.md` §4.1,
 `docs/workplan-reader-registration.md`): `ReadHorizon()` answers the one
 question every purge must ask. Two consumers exist — the catalog
-delete-mark purge (`spec-ddl-transactional.md` §5d) and the undo purge
+delete-mark purge (`ddl-transactional.md` §5d) and the undo purge
 (`docs/inflight/in-progress/workplan-undo-purge.md`, the same day: settled pages recycle into
 the log's own growth, so this run's chain plateaus). Everything else
 still waits on its own gate, so:
@@ -715,17 +715,17 @@ still waits on its own gate, so:
   declined for v1;
 - delete-marked tuples keep their slots; var-heap bytes of superseded
   values stay; superseded index and Cabin entries stay
-  (`docs/spec/feat-index.md` §13);
+  (`docs/spec/index.md` §13);
 - catalog rows are never reclaimed (the column ceiling is on columns ever
   created); pages, extents and Keystone ids are never reused;
-- `DROP TABLE` exists (`docs/spec/spec-drop-table.md`) but is **catalog-scoped**:
+- `DROP TABLE` exists (`docs/spec/drop-table.md`) but is **catalog-scoped**:
   the relation's pages, var-heap chain and index pages orphan — leaked
   space, deliberately, because free-map reuse is gated (a reallocated page
-  breaks trail validation, `feat-physical-optimizer.md` §6 gate 3; a
+  breaks trail validation, `physical-optimizer.md` §6 gate 3; a
   reader horizon exists now, but that gate is its own). The oid is
   tombstoned in `sys.objects` and never
   reissued, which is what keeps dead-oid advisory structures harmless.
-  `ALTER TABLE` is catalog-only renames (`docs/spec/spec-alter.md` AL1). Both
+  `ALTER TABLE` is catalog-only renames (`docs/spec/alter.md` AL1). Both
   RESTRICT on assertions; DROP also RESTRICTs on referencing foreign keys.
   Every one of these is an unlogged catalog write like all DDL: a crash
   after it can lose it.
@@ -1091,7 +1091,7 @@ still waits on its own gate, so:
   already reach it — and made ordinary by it, since every core-0 client's
   write for that relation now takes this path. The bound is a remount. The
   fix is not to let the peer enforce (it cannot) but to make the gate read
-  what the other two arms read, which crosses `docs/spec/feat-assertion.md`'s
+  what the other two arms read, which crosses `docs/spec/assertion.md`'s
   "complete and enforcing" claim and `docs/spec/crosscore.md`'s peer contract.
 - **A duplicate whose dedup record the memory bound evicted early is
   executed again** (Part A finding 1, 2026-08-26, same file §1). Fill
@@ -1248,7 +1248,7 @@ still waits on its own gate, so:
   0's two-phase `HandleIndex` parks on the build and publishes the
   `sys.indexes` row (6b-3); the shape gate's `indexed` arm lifted so the
   owner maintains it on write (6b-4), with `DROP INDEX` on such a
-  relation refused inside a transaction; `docs/spec/spec-ddl-transactional.md`
+  relation refused inside a transaction; `docs/spec/ddl-transactional.md`
   §5e and `docs/spec/crosscore.md` CC7's owner-builds exception carry the
   atomic/isolated semantics), and **PW1c-7** closed the restart hole the series had
   named: leases and grants are memory-resident, and the probe found a
@@ -1372,14 +1372,14 @@ still waits on its own gate, so:
   and `varheap::Fetch` returned a span whose pin dropped at return, so a row
   with two spilled cells could evict the first value's page while fetching
   the second. **What stays open**: the budget defaults to unbounded until a
-  sizing decision picks a number (`docs/spec/spec-eviction.md` EV8's "pool
+  sizing decision picks a number (`docs/spec/eviction.md` EV8's "pool
   undersized" telemetry is the input), and `MaintainFreeReserve`'s
   background trigger still waits on EVT02's bounded pool.
 
 - ~~**A peer cannot enforce an assertion, and does not refuse the write
   either.**~~ — **closed 2026-08-26** (PW1c-6c,
   `docs/inflight/in-progress/workplan-peer-writer.md` §7d,
-  `docs/spec/feat-assertion.md` §6.1). Measured first
+  `docs/spec/assertion.md` §6.1). Measured first
   (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2): a
   shipped write to an assertion-covered, peer-owned relation was **admitted
   unchecked** — a second row in a group under `CHECK COUNT(*) <= 1` — because
@@ -1488,7 +1488,7 @@ still waits on its own gate, so:
 
 ## SQL surface and protocol
 
-- ~~**No NULL storage**~~ — **closed 2026-08-20** by `docs/spec/spec-null.md`
+- ~~**No NULL storage**~~ — **closed 2026-08-20** by `docs/spec/null.md`
   (NU1-NU8, `docs/workplan-null.md`): a tail null bitmap sized to the
   relation's *nullable* columns, the bitmap as sole authority with the
   `kNull` tag as defined filler. Columns are **NOT NULL by default** and
@@ -1583,18 +1583,18 @@ still waits on its own gate, so:
   (P15-P17, `docs/inflight/in-progress/waystone-workplan.md`); trails grow until then.
   One validation gap remains: nothing verifies a page still belongs to the
   relation a trail recorded it from — holds until pages can be reallocated
-  between relations (`docs/spec/feat-physical-optimizer.md` §6 gate 3 owns it).
+  between relations (`docs/spec/physical-optimizer.md` §6 gate 3 owns it).
 - **`CABIN AUTO` acts only under `cabin_optimizer = on`, default `off`**:
   the controller runs end to end since PHY04 and is observable since
   PHY06 (`SHOW CABIN_OPTIMIZER`, both 2026-08-10), but with the key at
   its default a column declared `auto` still behaves exactly as an
-  undeclared one (`docs/spec/feat-physical-optimizer.md` Part II). Its managed
+  undeclared one (`docs/spec/physical-optimizer.md` Part II). Its managed
   state and decision log are memory-resident: a restart forgets what the
   controller was managing, and re-observation rebuilds it — the stated
   crash posture, not a bug.
 - ~~**A Cabin entry set banked inside a transaction outlives its ROLLBACK,
   and is then served as authoritative**~~ — **closed 2026-08-21**, the day
-  after it was found, by `docs/spec/feat-cabin.md` §6a: a recording walk banks
+  after it was found, by `docs/spec/cabin.md` §6a: a recording walk banks
   nothing unless its read view carries no in-flight transaction and belongs
   to none (`view.in_flight_count == 0 && view.own_trx_id == kNoTrxId`, two
   comparisons on a path that already holds both facts).
@@ -1620,7 +1620,7 @@ still waits on its own gate, so:
   is no moment at which to drop the value.
 
 - **The physical optimizer is shadow-only as a finding**
-  (`docs/spec/feat-physical-optimizer.md` §6): every candidate move is blocked
+  (`docs/spec/physical-optimizer.md` §6): every candidate move is blocked
   by a named gate; `physical_optimizer = on` is refused at startup naming
   all three.
 

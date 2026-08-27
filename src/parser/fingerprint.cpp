@@ -146,7 +146,7 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         // pattern.
         //
         // The last of those is the whole of CREATE PATTERN
-        // (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section
+        // (docs/spec/create-pattern-user-defined-patterns-v1.md section
         // 3.2). A declaration's body never runs; live traffic does, and it
         // carries no declaration. So if a `$param` hashed as anything else
         // - an identifier, or a marker of its own - a declared pattern
@@ -154,7 +154,7 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         // silently dead. Neither the parameter's *name* nor its declared
         // *type* enters the stream here, for the same reason: live traffic
         // has neither to contribute.
-        // kNumLit is in the group by the phase-2 rule (spec-types.md TY3):
+        // kNumLit is in the group by the phase-2 rule (types.md TY3):
         // a bare `12.34` *is* the quoted `'12.34'`, so it must land where
         // every other bindable literal lands or the two spellings of one
         // statement would grow two pattern_ids.
@@ -271,7 +271,7 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
     // values keep folding into arg_hash - they are arguments wherever they
     // sit - and everything else folds nothing, so `VALUES (1)` and
     // `VALUES (1), (2)` share a pattern_id and row count never fragments
-    // sys.patterns (docs/spec/spec-bulkinsert.md §2.4). Every hash this moves
+    // sys.patterns (docs/spec/bulkinsert.md §2.4). Every hash this moves
     // belongs to a statement that parsed in no production - fingerprintable
     // but never storable - which is the fingerprint bump rule's permitted
     // second transition (the corpus header carries the argument).

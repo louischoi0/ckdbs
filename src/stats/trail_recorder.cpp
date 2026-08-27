@@ -9,7 +9,7 @@ bool TrailRecorder::WouldRecord(std::uint8_t sightings, std::uint8_t origin) con
     // A declared pattern records from its first execution: the declaration
     // is the evidence n=2 exists to gather, so gathering it again is asking
     // a question the operator already answered
-    // (spec-create-pattern-user-defined-patterns-v1.md section 7).
+    // (create-pattern-user-defined-patterns-v1.md section 7).
     if (origin == catalog::kOriginUser) return sightings >= 1;
     // An observed one waits for the second sighting. The first execution
     // only counts - which is what keeps a one-shot query from paying for a

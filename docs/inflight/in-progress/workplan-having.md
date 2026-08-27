@@ -1,6 +1,6 @@
 # Workplan — `HAVING`, and `ORDER BY` over aggregated output
 
-Owner doc for the **post-fold consumers**. Retracts `docs/spec/feat-aggregate.md`
+Owner doc for the **post-fold consumers**. Retracts `docs/spec/aggregate.md`
 AG7 ("HAVING — not in v1") and settles the second half of that spec's §10
 open item — *"decide with HAVING, since both are post-fold consumers and
 should share the wrapper seam AG1 established"* — by deciding both here.
@@ -16,7 +16,7 @@ below is built yet; every "does" is a task.
 |---|---|---|
 | HV1 | Placement | **A sink decorator at the AG1 seam**, downstream of `Aggregator::Finish` and upstream of the reply's formatting. The `Aggregator` learns nothing: it folds, and something else decides which folded rows leave. Same argument AG1 makes for the fold and OB4 makes for the sort — a second place that reasons about statement shape is a second answer to what the statement does |
 | HV2 | What `HAVING` may name | **Aggregates only**, over any resolvable column, *whether or not the select list names it*. A HAVING-only aggregate compiles as a **hidden trailing item** the fold computes and the sink does not emit. A predicate on a grouping key is **refused with its byte**: a group key is constant within its group, so `HAVING b = 3` is a second spelling of `WHERE b = 3` — and the WHERE spelling also cuts rows *before* the fold, which the HAVING spelling cannot. Liftable later without breaking anything, which is what refusing first buys |
-| HV3 | Predicate shape | The WHERE grammar's flat **AND-only conjunct list**, the same six comparison operators, and `IS [NOT] NULL`. The right-hand side is a **literal only** — no column, no subquery, no aggregate-against-aggregate. Three-valued exactly as WHERE is (`docs/spec/spec-null.md` §4): an unknown comparison keeps no group, and `IS NULL` is how a group whose `SUM` folded no non-NULL value is asked for |
+| HV3 | Predicate shape | The WHERE grammar's flat **AND-only conjunct list**, the same six comparison operators, and `IS [NOT] NULL`. The right-hand side is a **literal only** — no column, no subquery, no aggregate-against-aggregate. Three-valued exactly as WHERE is (`docs/spec/null.md` §4): an unknown comparison keeps no group, and `IS NULL` is how a group whose `SUM` folded no non-NULL value is asked for |
 | HV4 | `ORDER BY` over aggregated output | **Lifted, at the same seam.** A key is a grouping column or an aggregate (hidden allowed), each with its own `ASC`/`DESC`, up to the existing `kMaxSortKeys`. A bare non-grouped column is refused with AG5's reason; an ordinal stays refused with OB1's |
 | HV5 | `LIMIT` / `OFFSET` over aggregated output | **Still refused, with their present message.** Serving them would make fold order a client contract, and AG6 deliberately makes it a *deterministic* order rather than a promised one. §5 records what HV4 newly makes decidable, and does not decide it |
 | HV6 | The literal's type | Coerced at **compile**, against the aggregate's answer type, through the one coercion the engine has (`CoerceLiteralToColumn`). `SUM`/`MIN`/`MAX`/`AVG` answer at the argument column's type and scale, so the argument column *is* the coercion target; `COUNT` answers int64 and takes an integer literal, with a string refused at compile and positioned |
@@ -233,7 +233,7 @@ The question is overhead, and there are exactly two places it can hide:
 
 ### HV-9 — the documents
 
-`docs/spec/feat-aggregate.md` (AG7 retracted in place with the date, §2's table,
+`docs/spec/aggregate.md` (AG7 retracted in place with the date, §2's table,
 §8's "what v1 is not", §10's open item closed), `docs/workplan-order-by.md`
 (the refusal table's aggregated row), `docs/spec/parser-v2.md` I11 and the J2
 paragraph naming HAVING, `manual/sql/sql.md` (both passages),

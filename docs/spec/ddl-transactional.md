@@ -618,7 +618,7 @@ there is no interval between the last scanned row and the adoption in which a
 write could be missed. What that leaves is a write admitted after the
 adoption and before core 0's publish: counted by a cabin whose row is on its
 way, and reserved into an orphan chain if the publish then fails. The cabin
-is a stricter-than-snapshot admission structure (`feat-assertion.md` §4.3),
+is a stricter-than-snapshot admission structure (`assertion.md` §4.3),
 so counting early is the side it already errs on.
 
 **One gap of its own**: a write that passed its admission check and then

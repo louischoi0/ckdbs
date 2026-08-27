@@ -5,7 +5,7 @@
 
 #include "kds/sched/clock.hpp"
 
-// The lazy-decay score (docs/spec/feat-physical-optimizer.md R1, §3).
+// The lazy-decay score (docs/spec/physical-optimizer.md R1, §3).
 //
 // One `{score, last_bump}` pair per scored thing; exponential half-life
 // decay computed *lazily* — a touch decays-then-increments, a read decays
@@ -14,10 +14,10 @@
 //
 // **This is the one decay implementation.** Declared consumers: hot/cold
 // classification in the physical-optimizer planner (workplan PX05),
-// trail-retention ordering (docs/spec/spec-pattern-tracking-levels.md), and
-// EV1's experimental temperature hook (docs/spec/spec-eviction.md). A second
+// trail-retention ordering (docs/spec/pattern-tracking-levels.md), and
+// EV1's experimental temperature hook (docs/spec/eviction.md). A second
 // decay formula anywhere is the same defect a second literal-coercion path
-// was (docs/spec/spec-types.md §3.1). **Nothing consumes this yet** — the
+// was (docs/spec/types.md §3.1). **Nothing consumes this yet** — the
 // planner (PX05) is the first caller, and the header exists ahead of it
 // for the reason the eviction sweep does: so the property is testable now.
 //

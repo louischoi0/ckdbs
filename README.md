@@ -343,21 +343,21 @@ The design is specification-first: every subsystem has a spec carrying its decis
 | Subsystem | Spec |
 |---|---|
 | Row storage, heap, Keystone, invariants *(authoritative)* | `docs/spec/heap-and-tuple.md`, `docs/rules/rule-fixed-length-tuple.md`, `docs/spec/page.md` |
-| Pattern-keyed access trails | `docs/spec/waystone-concpets.md`, `docs/spec/spec-create-pattern-user-defined-patterns-v1.md` |
-| Value-observed authoritative store | `docs/spec/feat-cabin.md` |
-| Physical optimizer (relayout + Cabin controller) | `docs/spec/feat-physical-optimizer.md` |
+| Pattern-keyed access trails | `docs/spec/waystone-concpets.md`, `docs/spec/create-pattern-user-defined-patterns-v1.md` |
+| Value-observed authoritative store | `docs/spec/cabin.md` |
+| Physical optimizer (relayout + Cabin controller) | `docs/spec/physical-optimizer.md` |
 | Transactions & MVCC | `docs/spec/txn.md` |
 | Logging and durability | `docs/spec/wal.md` |
 | Query language, step chains, joins, subqueries | `docs/spec/parser-v2.md` |
-| Aggregation | `docs/spec/feat-aggregate.md` |
-| Secondary indexes | `docs/spec/feat-index.md` |
-| Group-level assertions | `docs/spec/feat-assertion.md` |
-| Foreign keys | `docs/spec/impl-foreign-keys.md` |
-| Types (DATE, TIMESTAMP, DECIMAL, DECIMAL128) | `docs/spec/spec-types.md` |
-| Buffer-pool eviction | `docs/spec/spec-eviction.md` |
+| Aggregation | `docs/spec/aggregate.md` |
+| Secondary indexes | `docs/spec/index.md` |
+| Group-level assertions | `docs/spec/assertion.md` |
+| Foreign keys | `docs/spec/foreign-keys.md` |
+| Types (DATE, TIMESTAMP, DECIMAL, DECIMAL128) | `docs/spec/types.md` |
+| Buffer-pool eviction | `docs/spec/eviction.md` |
 | Cross-core execution & scheduling | `docs/spec/crosscore.md`, `docs/spec/sched.md` |
 | Wire protocol | `docs/spec/protocol.md`, `docs/inflight/in-progress/protocol-wp.md` |
-| DDL (`ALTER TABLE`, `DROP TABLE`, bulk insert) | `docs/spec/spec-alter.md`, `docs/spec/spec-drop-table.md`, `docs/spec/spec-bulkinsert.md` |
+| DDL (`ALTER TABLE`, `DROP TABLE`, bulk insert) | `docs/spec/alter.md`, `docs/spec/drop-table.md`, `docs/spec/bulkinsert.md` |
 | Id issue-once contract | `docs/rules/keystoneid-invariant.md`, `docs/rules/keystoneid-k0-findings.md` |
 | C++ rules | `docs/rules/rules.md` |
 | **What is missing, and what a restart loses** | **`docs/inflight/known-gaps.md`** |

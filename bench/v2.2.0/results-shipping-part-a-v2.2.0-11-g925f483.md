@@ -223,7 +223,7 @@ that mounts after the assertion exists rebuilds its registry and refuses
 correctly.
 
 The fix is not "let the peer enforce" — it cannot. It is to make the gate
-read what the FK and Cabin arms read. That crosses `docs/spec/feat-assertion.md`'s
+read what the FK and Cabin arms read. That crosses `docs/spec/assertion.md`'s
 "complete and enforcing" claim and `docs/spec/crosscore.md`'s peer contract, so it
 is reported rather than taken inside a verification task.
 

@@ -14,7 +14,7 @@ with its owner named. This is the end-state architecture blueprint for
 equivalent" — the revision the operator opened 2026-08-24. Drafted in
 the main checkout on `main` at `a755521`.
 
-Upstream of everything in it was `docs/spec/spec-page-lsn-cross-stream.md`
+Upstream of everything in it was `docs/spec/page-lsn-cross-stream.md`
 (the PL decision) — **ratified 2026-08-24: PL-B logged handoff with the
 PL-C stream stamp** (that doc's §9). R0 is closed; every phase that moves
 a page between streams builds against that contract.
@@ -43,7 +43,7 @@ amendment:
   replayed on the wrong core after a migration misses on the epoch/owner
   check and falls through, which is the ordinary miss discipline.
 - **Cabin** is value-observed and authoritative for observed values
-  (`docs/spec/feat-cabin.md`), so it answers "which range holds value V" for a
+  (`docs/spec/cabin.md`), so it answers "which range holds value V" for a
   non-pk predicate without a broadcast, after first observation.
 - A secondary-index entry is `key || pk || covered`
   (`include/kds/storage/index/index_tree.hpp:39`), so **a probe's answer
@@ -128,7 +128,7 @@ Required, and separable from ranges:
 Global **frame accounting** first (one budget arbiter over the N private
 pools). The *static* half is built as of 2026-08-24: `buffer_pool_frames`
 is an instance total divided evenly per core, remainder to core 0
-(`docs/spec/spec-eviction.md` §6 EV4), which retires the defect this section
+(`docs/spec/eviction.md` §6 EV4), which retires the defect this section
 used to name — the key reaching core 0's pool alone. What R2 still wants
 is the **arbiter**: shares are fixed at boot, and no core may borrow a
 frame from an idle peer. The frame *directory* — which core holds which
@@ -151,7 +151,7 @@ per-core pool structure survives unchanged.
 
 | Stage | Content | Gate |
 |---|---|---|
-| R0 | ~~Ratify PL~~ — **closed 2026-08-24**, PL-B + PL-C guard (`docs/spec/spec-page-lsn-cross-stream.md` §9) | done |
+| R0 | ~~Ratify PL~~ — **closed 2026-08-24**, PL-B + PL-C guard (`docs/spec/page-lsn-cross-stream.md` §9) | done |
 | R1 | Every core equivalent: shared-structure access rule, per-core listeners, per-core statistics relations | PL not needed |
 | R2 | Global frame accounting — **static half built 2026-08-24** (the instance budget divides over every core per EV4, worktree `r2-frame-budget`); the dynamic arbiter that rebalances shares by demand remains | none |
 | R3 | Range directory + read path: `sys.ranges`, manual `SPLIT RANGE` DDL, pipeline over ranges. Placement still static | R1 |
@@ -165,7 +165,7 @@ R1+R2 stand on their own merits even if ranges are never built.
 
 Per-range local vs global secondary indexes
 (reading on record: local per range, broadcast probes cut by Cabin/Waystone
-— **not ratified**; owner: `feat-index.md` §13); split/migrate policy and
+— **not ratified**; owner: `index.md` §13); split/migrate policy and
 its constants (promoted 2026-08-24: `crosscore.md` §9 indexes it, the
 physical optimizer's Part III spec owns it when drafted); id-block
 interleave default (§6; indexed at `crosscore.md` §9); shared-structure

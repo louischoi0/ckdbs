@@ -215,7 +215,7 @@ Status IndexLeafView::SplitInto(IndexLeafView& into) {
                                        " entries has no split to make");
     }
 
-    // The midpoint (docs/spec/feat-index.md IX4a, `[PROPOSED]`). A parameter of
+    // The midpoint (docs/spec/index.md IX4a, `[PROPOSED]`). A parameter of
     // this function in the sense that changing it changes nothing else: the
     // only property the tree depends on is that both halves end non-empty.
     const std::uint16_t keep = static_cast<std::uint16_t>(h.nr_entries / 2);

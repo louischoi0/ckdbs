@@ -242,7 +242,7 @@ TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
     }
 }
 
-// ---- Secondary indexes (docs/spec/feat-index.md §12, workplan IX03) ----------
+// ---- Secondary indexes (docs/spec/index.md §12, workplan IX03) ----------
 
 // Three columns, so an index can be declared on something that is neither
 // the primary key nor the only other column.
@@ -1455,7 +1455,7 @@ TEST_F(CatalogTest, ADefaultedCreateTableStillStampsBootstrapAndBootstrapRowsAlw
     // caller that does not pass an id - bootstrap, recovery, every test -
     // must still get kBootstrapXid, because those rows have to stay
     // visible to a read view minted before any transaction existed
-    // (spec-ddl-transactional.md §3).
+    // (ddl-transactional.md §3).
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto oid = catalog_.CreateTable(kNamespacePublic, "unstamped", MinimalPkSchema(),
                                     ClusteredType::kHeap);
@@ -1496,7 +1496,7 @@ TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatRead
         EXPECT_NE(NameView(row.name), "pending") << "the invisible relation was listed";
     }
     // ...and the bootstrap relations are still there, because kBootstrapXid
-    // is visible to every view forever (spec-ddl-transactional.md §3). A
+    // is visible to every view forever (ddl-transactional.md §3). A
     // filter that hid those would pass the assertion above and be useless.
     EXPECT_FALSE(listed.value().empty()) << "the filter hid the bootstrap catalog too";
 
@@ -1551,7 +1551,7 @@ TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
     // *after* the rollback would see the creating id as committed. The
     // engine hides aborted work by compensation, so DDL has to put its
     // rows on the trail like every other write
-    // (spec-ddl-transactional.md §2's correction).
+    // (ddl-transactional.md §2's correction).
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     server::SuperBlock sb = server::SuperBlock::CreateFresh(/*now_unix_seconds=*/0);
     txn::TrxIdSequence ids(sb);

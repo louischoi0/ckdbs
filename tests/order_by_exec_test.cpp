@@ -443,7 +443,7 @@ TEST(OrderKeyTest, StringOrderIsByteOrderOverTheWholeValue) {
     EXPECT_EQ(a.value().Compare(a.value()), 0);
 }
 
-// D3 (docs/spec/spec-null.md): a NULL orders above every value - ASC puts it
+// D3 (docs/spec/null.md): a NULL orders above every value - ASC puts it
 // last and the ordinary descending flip puts it first - and two NULLs tie.
 TEST(OrderKeyTest, ANullOrdersAboveEveryValueAndTiesWithItself) {
     parser::AstValue null_value;
@@ -466,7 +466,7 @@ TEST(OrderKeyTest, ANullOrdersAboveEveryValueAndTiesWithItself) {
     EXPECT_EQ(null_key.value().Compare(null_key.value()), 0);
 }
 
-// ---- 10. NULL under ORDER BY, end to end (spec-null.md D3, NU7) ------------
+// ---- 10. NULL under ORDER BY, end to end (null.md D3, NU7) ------------
 
 TEST_F(OrderByExecTest, NullsSortLastAscendingAndFirstDescending) {
     Run("CREATE TABLE t (id int64, n int64 NULL)");

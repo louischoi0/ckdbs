@@ -153,7 +153,7 @@ def create_indexes(client, mode, tables, suffix, phase):
     """The same index set the ckdbs driver declares, in PostgreSQL's syntax.
 
     `COVERING (...)` becomes `INCLUDE (...)`, which is the same idea and the
-    reason feat-index.md §7 borrowed the concept: non-key payload columns
+    reason index.md §7 borrowed the concept: non-key payload columns
     stored in the leaf. PostgreSQL *can* answer index-only from one given a
     visible visibility map; KDS explicitly cannot (§7 says there is no
     index-only scan), and that asymmetry is a finding to report rather than

@@ -11,7 +11,7 @@
 #include "kds/storage/page_store.hpp"
 
 // `sys.pattern_defs`: the name and source text of a *declared* pattern
-// (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 4.2).
+// (docs/spec/create-pattern-user-defined-patterns-v1.md section 4.2).
 //
 // One row per user-declared pattern, joined to `sys.patterns` by
 // `pattern_id`. An auto-registered pattern has no row here at all - it holds

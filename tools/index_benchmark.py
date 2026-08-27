@@ -7,7 +7,7 @@ server on one data file within a few seconds of each other:
 
   1. a selective non-pk equality, indexed against the walk that replaces it;
   2. the same statement with and without `COVERING`, to price
-     `docs/spec/feat-index.md` §7's claim that covering buys the **avoided
+     `docs/spec/index.md` §7's claim that covering buys the **avoided
      descents** and nothing else - it is explicitly not an index-only scan;
   3. INSERT with 0, 1 and 2 indexes, and an UPDATE that moves an indexed key
      (which appends) against one that touches only a non-indexed column
@@ -24,7 +24,7 @@ index, `ord_idx` one on `cust_id`, `ord_cov` the same key with
 all three, so a probe returns the same rows in the same order from each - and
 `--verify` checks exactly that, comparing every shape's reply from the two
 indexed relations against the unindexed one **including row order**, which is
-what `feat-index.md` IX8a's pk-order rule stands or falls on.
+what `index.md` IX8a's pk-order rule stands or falls on.
 
 **Every shape is driven with the same argument on all three relations, in the
 same operation.** The three are interleaved rather than run in sequence, so a
@@ -43,7 +43,7 @@ no secondary structure, so it must not move when an index is added.
 
 `indexes = off` in the server config makes an index step take the walk it
 would have taken had the index not existed, **with the compiled chain
-unchanged** (`feat-index.md` §12.3). That is the sharpest A/B available:
+unchanged** (`index.md` §12.3). That is the sharpest A/B available:
 identical plan, identical rows, different work. It is a startup key with no
 runtime `SET`, so the two sides are two server processes over two freshly
 loaded data files - the load is seeded, so their contents match.
@@ -81,7 +81,7 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # ---- the schema ----------------------------------------------------------
 #
 # One relation shape, used six times. Every relation is BTREE and that is a
-# hard requirement: feat-index.md §3 permits a secondary index only on a
+# hard requirement: index.md §3 permits a secondary index only on a
 # btree-clustered relation, because an entry's payload is a pk and resolving
 # one costs a descent there and a chain scan on a heap.
 #
@@ -111,7 +111,7 @@ READ_ORDER = ("none", "idx", "cov")
 # The three write relations: same contents, 0 / 1 / 2 indexes. `w2`'s second
 # index is on `cust_id`, which no UPDATE below touches - so a key-moving
 # UPDATE on `w2` appends to one of its two indexes, which is what prices
-# feat-index.md §2's "an UPDATE that touches no key column must not append".
+# index.md §2's "an UPDATE that touches no key column must not append".
 WRITE_RELS = {
     "w0": (),
     "w1": ((("region",), ()),),
@@ -270,7 +270,7 @@ def create_tables(client, names, phase):
 def index_defs(tag, names, suffix):
     """`(name, statement)` per index on relation `tag`.
 
-    An index name is unique **instance-wide** (feat-index.md §10), so the run
+    An index name is unique **instance-wide** (index.md §10), so the run
     suffix is in the name as well as in the relation's."""
     spec = READ_RELS.get(tag)
     if spec is None:
@@ -302,10 +302,10 @@ def create_indexes(client, tags, names, suffix, phase):
                 if "unsupported" in lowered or "expected" in lowered:
                     abort(f"this server does not understand CREATE INDEX.\n"
                           f"  `{stmt}`\n  Secondary indexes need a build with "
-                          f"docs/spec/feat-index.md in it.", reply)
+                          f"docs/spec/index.md in it.", reply)
                 if "heap" in lowered:
                     abort(f"CREATE INDEX refused a heap relation - SCHEMA was "
-                          f"edited; feat-index.md §3 requires BTREE.", reply)
+                          f"edited; index.md §3 requires BTREE.", reply)
                 abort(f"could not create index {name}", reply)
             made.append(name)
     return made
@@ -381,7 +381,7 @@ SHAPES = (
                   f"BETWEEN {a['lo']} AND {a['lo'] + RANGE_SPAN} "
                   f"AND status = {a['status']}"),
     ("count-eq", "SELECT COUNT(*) ... WHERE cust_id = ? - not servable from "
-                 "the index either (feat-index.md §7)",
+                 "the index either (index.md §7)",
      lambda t, a: f"SELECT COUNT(*) FROM {t} WHERE cust_id = {a['cust']}"),
 )
 
@@ -478,7 +478,7 @@ def analyze_shapes(client, names, sizes, seed):
     can carry: examined, matched, and the index's three numbers.
 
     `index_filtered` is the only honest price for a COVERING clause
-    (feat-index.md §7): it counts base descents the covered columns avoided,
+    (index.md §7): it counts base descents the covered columns avoided,
     and nothing else. Zero means the clause bought exactly the write cost it
     added."""
     rng = random.Random(seed)
@@ -499,7 +499,7 @@ def observed_index_mode(analysis):
     """Which side of the `indexes` switch the server is actually on.
 
     Read out of the counters rather than taken on trust: the compiled chain
-    is identical either way by design (feat-index.md §12.3), so the plan
+    is identical either way by design (index.md §12.3), so the plan
     cannot answer this and only the work done can. An index step that
     scanned no index entries walked instead."""
     for key, line in analysis.items():
@@ -519,8 +519,8 @@ def verify(client, names, sizes, args, rng):
     2. **Every read shape's reply from `ord_idx` and `ord_cov` equals
        `ord_none`'s, row for row and in order.** The three hold identical
        contents, so this is the equivalence that says the index served a
-       complete set in the right order - the failure feat-cabin.md §5 calls
-       invisible without a baseline, which feat-index.md §1 inherits, plus
+       complete set in the right order - the failure cabin.md §5 calls
+       invisible without a baseline, which index.md §1 inherits, plus
        IX8a's pk-order rule which only an ordered comparison can see.
     3. The same across the write relations after their updates, which is the
        write hook's half: if a key-moving UPDATE failed to append, `w1` and

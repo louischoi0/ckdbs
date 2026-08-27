@@ -23,7 +23,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
-// The CREATE-time builder and its cutover (docs/spec/feat-assertion.md §8.1,
+// The CREATE-time builder and its cutover (docs/spec/assertion.md §8.1,
 // workplan AST06), tested through the statement surface: what a client sees
 // is what the acceptance criteria are written in terms of - a CREATE that
 // incorporates every live row or refuses whole, a reply that reports what
@@ -192,7 +192,7 @@ TEST_F(AssertionBuildTest, DropThenRecreateLeavesNoResidue) {
 TEST_F(AssertionBuildTest, ASpilledGroupValueResolvesBeforeGrouping) {
     // A tag longer than the inline cell width spills to the var-heap, and
     // grouping on the *pointer* instead of the value would split one group
-    // in two - the class of failure spec-types.md calls invisible without a
+    // in two - the class of failure types.md calls invisible without a
     // baseline. Two rows share one long tag; one differs late in the string.
     ASSERT_EQ(Run("CREATE TABLE tagged (id int64, tag varchar) BTREE").substr(0, 7), "CREATED");
     const std::string long_a(100, 'a');

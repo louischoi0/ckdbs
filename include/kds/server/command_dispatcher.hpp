@@ -143,7 +143,7 @@ namespace kds::server {
 struct MountRecovery;
 
 // The `physical_optimizer` config key's two legal states
-// (docs/spec/feat-physical-optimizer.md R3). There is deliberately no `kOn`:
+// (docs/spec/physical-optimizer.md R3). There is deliberately no `kOn`:
 // the config layer refuses `on` at startup naming §6's gates, so a mode a
 // mover would need cannot exist before the mover does.
 enum class PhysicalOptimizerMode : std::uint8_t {
@@ -621,7 +621,7 @@ private:
     //
     // The unfiltered duplicate check answers "is a live relation using this
     // name" and is deliberately unfiltered so a second create is refused
-    // (spec-ddl-transactional.md §6). It cannot see the case this covers -
+    // (ddl-transactional.md §6). It cannot see the case this covers -
     // `DROP TABLE` retypes the `sys.objects` row in place, so the name
     // reads as free to everyone while the drop is still undoable, and a
     // create that took it would leave two live rows claiming one name once
@@ -679,7 +679,7 @@ private:
     // row or a committed one, so an unfiltered read is correct for every
     // reader - and a filtered read would cost a catalog page scan per
     // statement, because a filtered lookup deliberately bypasses the
-    // shared cache (DT3). That is spec-ddl-transactional.md §6's cache
+    // shared cache (DT3). That is ddl-transactional.md §6's cache
     // decision, taken: pay for isolation only where isolation is at
     // stake.
     std::optional<txn::ReadView> ViewFor(Session& session);
@@ -714,7 +714,7 @@ private:
     std::vector<std::uint64_t> ddl_txns_;
     void EndDdlScope(const Session& session);
     // Delete-marked catalog rows retired since mount by the horizon-gated
-    // purge EndDdlScope runs (spec-ddl-transactional.md §5d). SHOW META
+    // purge EndDdlScope runs (ddl-transactional.md §5d). SHOW META
     // prints it beside `catalog_marks_finalized`, whose count is the
     // previous mount's leftovers - this one is this mount's own.
     std::uint64_t catalog_marks_purged_ = 0;
@@ -728,20 +728,20 @@ private:
     DispatchOutcome HandleCreatePattern(std::string_view line);
     DispatchOutcome HandleDropPattern(std::string_view line);
 
-    // `CREATE CABIN` / `DROP CABIN` (docs/spec/feat-cabin.md §10). One handler
+    // `CREATE CABIN` / `DROP CABIN` (docs/spec/cabin.md §10). One handler
     // for both: they share a parse and a reply shape, and differ only in
     // which catalog call they reach. Takes the whole statement line, like
     // the pattern handlers, because the parser is what resolves the two
     // identifiers.
     DispatchOutcome HandleCabin(std::string_view line);
 
-    // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec/spec-alter.md,
+    // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec/alter.md,
     // workplan ALT03). One handler for both forms, for HandleCabin's
     // reason; the AL4 assertion RESTRICT and the AL7 system-relation
     // refusal live here, before the catalog write.
     DispatchOutcome HandleAlter(std::string_view line, Session& session);
 
-    // `DROP TABLE <name>` (docs/spec/spec-drop-table.md, workplan DT03). The
+    // `DROP TABLE <name>` (docs/spec/drop-table.md, workplan DT03). The
     // DT3 RESTRICT gate lives here - a referencing foreign key and an
     // assertion each refuse naming the blocker - before the catalog's
     // tombstone-and-retire; the in-memory Cabin sets are forgotten after.
@@ -758,12 +758,12 @@ private:
     // Cabin exists but has never been probed" visible.
     DispatchOutcome HandleShowCabins();
 
-    // `CREATE INDEX` / `DROP INDEX` (docs/spec/feat-index.md §10). One handler
+    // `CREATE INDEX` / `DROP INDEX` (docs/spec/index.md §10). One handler
     // for both, for HandleCabin's reason: they share a parse and a reply
     // shape and differ only in which catalog call they reach.
     // Emits one INDEX_INSERT per index mutation, or a full page image per
     // page a split restructured. Called **before** the HEAP_INSERT or
-    // HEAP_OVERWRITE the entries point at (docs/spec/feat-index.md §12.1): a
+    // HEAP_OVERWRITE the entries point at (docs/spec/index.md §12.1): a
     // dangling entry is dropped by verification, a row with no entry is
     // lost.
     Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
@@ -783,7 +783,7 @@ private:
     DispatchOutcome FinishIndexBuild(const PendingIndexBuild& build, Session& session);
     DispatchOutcome HandleShowIndexes(Session& session);
 
-    // `CREATE ASSERTION` / `DROP ASSERTION` (docs/spec/feat-assertion.md §3,
+    // `CREATE ASSERTION` / `DROP ASSERTION` (docs/spec/assertion.md §3,
     // workplan AST03). One handler for both, for HandleCabin's reason.
     //
     // Validates the declaration against the catalog (§3.1), builds the
@@ -829,7 +829,7 @@ private:
     // `QualityOf`) - this handler renders and never computes.
     DispatchOutcome HandleShowCabinOptimizer();
 
-    // ---- Foreign-key checks (docs/spec/impl-foreign-keys.md §§2-4) -----------
+    // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) -----------
     //
     // The write paths' three entry points. They live here rather than in
     // `exec/` because they are what turns a verdict into a *reply* - which
@@ -864,7 +864,7 @@ private:
     // execution is what parser-v2.md I11 forbids.
     std::string RelationNameOf(catalog::Oid oid);
 
-    // Every declared foreign key (docs/spec/impl-foreign-keys.md §1). One line
+    // Every declared foreign key (docs/spec/foreign-keys.md §1). One line
     // per sys.fkeys row: which relation references which, through which
     // column. Prints `action=RESTRICT` unconditionally, because v1 has one
     // action (F2) - a stored action field would have exactly one value.
@@ -883,7 +883,7 @@ private:
         std::uint16_t slot = 0;
     };
 
-    // The per-row write pipeline, verbatim and in order (spec-bulkinsert.md
+    // The per-row write pipeline, verbatim and in order (bulkinsert.md
     // §4, BI2): arity, FK forward check, assertion admission, id, encode +
     // spill, placement, Cabin witness, index maintenance, reservation,
     // rollback trail, WAL, root repoint. **A refactor of InsertInner's
@@ -1066,7 +1066,7 @@ public:
         shipped_statements_ = executor;
     }
 
-    // The physical optimizer's shadow surface (docs/spec/feat-physical-optimizer.md
+    // The physical optimizer's shadow surface (docs/spec/physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
     // with the same default posture: a dispatcher never told behaves as the
     // documented configuration - shadow on, the spec's `[PROPOSED]` 600 s
@@ -1143,7 +1143,7 @@ public:
     }
 
 private:
-    // The aggregated SELECT path (docs/spec/feat-aggregate.md AG1): the same
+    // The aggregated SELECT path (docs/spec/aggregate.md AG1): the same
     // execution, with an `Aggregator` in the sink and the fold's output
     // emitted after it. `header` is the column-heading line the caller
     // already built.
@@ -1182,7 +1182,7 @@ private:
     // would make the statistic mean two things.
     void RecordAccessShapes(const exec::StepChain& chain);
 
-    // The cabin optimizer's S1/S2 (feat-physical-optimizer.md §II.2,
+    // The cabin optimizer's S1/S2 (physical-optimizer.md §II.2,
     // workplan PHY01): one decayed touch per successful fingerprinted
     // SELECT, carrying the statement's page count. Beside RecordTrail and
     // RecordAccessShapes because it is the same moment - a completed
@@ -1190,7 +1190,7 @@ private:
     void RecordOptimizerSignals(const std::optional<stats::InstanceKey>& instance,
                                 const exec::StepChain& chain, const exec::ExecStats& stats);
 
-    // ---- The Cabin write hook (docs/spec/feat-cabin.md §5) --------------------
+    // ---- The Cabin write hook (docs/spec/cabin.md §5) --------------------
     //
     // **This is what "observed ⇒ complete" costs**, and the whole reason a
     // Cabin can be authoritative where a Waystone trail cannot: absence has
@@ -1237,7 +1237,7 @@ private:
     // unchanged.
     //
     // **The Cabin write hook is deliberately not called here.** By
-    // feat-cabin.md section 5 removal is forbidden: an older snapshot may
+    // cabin.md section 5 removal is forbidden: an older snapshot may
     // still be entitled to match the row through the undo chain, so
     // dropping its entry would break the superset invariant. The surplus is
     // subtracted at read time, which now includes the visibility predicate.
@@ -1529,7 +1529,7 @@ private:
     // here, DROP evicts it, the three write paths check and reserve through
     // it, and the commit/abort hooks below settle what a transaction
     // reserved. Core-local like everything on this dispatcher
-    // (feat-assertion.md §6.1). The entry *pages* are durable; this
+    // (assertion.md §6.1). The entry *pages* are durable; this
     // registry is the memory-resident half a restart loses until recovery
     // replays it (AST05's fold) - and SHOW ASSERTIONS derives `enforcing`
     // from its presence, so the loss reports itself instead of hiding.

@@ -20,15 +20,15 @@ Markers: `[CONFIRMED]` is settled,
 assumed. Part I decisions are numbered `R1`-`R12`.
 Related documents: `heap-and-tuple.md` §7 (the normative relayout section
 this file expands), `rule-fixed-length-tuple.md` (tuple mobility),
-`spec-eviction.md` (EV1's temperature hook), `spec-pattern-tracking-levels.md`
+`eviction.md` (EV1's temperature hook), `pattern-tracking-levels.md`
 (decay-ranked trail eviction), `waystone-concpets.md` §3.1 (epoch validation),
-`feat-cabin.md` (relocation invariance), `feat-index.md` (IX3),
+`cabin.md` (relocation invariance), `index.md` (IX3),
 `txn.md` §9 (no reader registration), `parser-v2.md` I7/V11.
 Task breakdown: `docs/workplan-physical-optimizer.md` (`PX01`-`PX08`).
 
 **On the numbering.** Two shipped specs already cite "the physical-optimizer
 lazy-decay score (R1)" from a blueprint that does not exist in this
-repository — `spec-eviction.md` EV1 and `spec-pattern-tracking-levels.md` §3
+repository — `eviction.md` EV1 and `pattern-tracking-levels.md` §3
 both lean on it, and `rule-fixed-length-tuple.md`'s status line claims
 consistency with it. This document backfills that blueprint, and **R1 is
 assigned to the lazy-decay score** so the existing citations become true
@@ -78,14 +78,14 @@ mover code ships in v1 (R11).
 
 | ID | Decision |
 |----|----------|
-| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: hot/cold classification here, trail-retention ordering (`spec-pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. **Two reads (2026-08-10):** the Q24.8 `ValueAt` — which underflows to zero after ~16 half-lives, so it ranks live data only — and `Log2ValueAt`, the same state read in the log domain, where decay is a subtraction and ordering survives indefinitely. The state did not change: the underflow was always in the read. Any consumer that must order *idle* things (an eviction victim, a retirement) uses the log read; see §II.4's note for what that fixed and what it structurally cannot. |
+| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: hot/cold classification here, trail-retention ordering (`pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. **Two reads (2026-08-10):** the Q24.8 `ValueAt` — which underflows to zero after ~16 half-lives, so it ranks live data only — and `Log2ValueAt`, the same state read in the log domain, where decay is a subtraction and ordering survives indefinitely. The state did not change: the underflow was always in the read. Any consumer that must order *idle* things (an eviction victim, a retirement) uses the log read; see §II.4's note for what that fixed and what it structurally cannot. |
 | R2 | **Inputs are the existing collectors only**: `sys.access_stats` (the shape axis), Waystone sightings (the value axis), and what a page itself says when walked. The optimizer adds no third collector; an input it lacks becomes a collection change in the layer that owns collection, spec'd there first. |
 | R3 | **Two halves with a hard seam.** The **planner** is pure — it reads statistics and the catalog and produces `RelayoutPlan`s with predicted benefit — and the **mover** enacts plans. Shadow mode is the planner without the mover. The `physical_optimizer` config key takes `off | shadow` (default `shadow`); `on` is **refused at startup naming the open gates**, so a config written for the future fails loudly today instead of silently under-delivering. |
 | R4 | **The page epoch** settles `heap-and-tuple.md` §3.1a's `[OPEN]`: `PageHeaderFields::reserved0` (offset 16, u64) becomes `relayout_epoch` — the field the header comment already nominated. Every existing page carries 0 there, so **no format bump**: a zero reads as epoch 0. Durable by construction (it is header bytes), which trails need because trail pages are durable. Bumped **only by the mover** when tuples move; INSERT/UPDATE/DELETE never bump, because the fixed-length rule makes them address-stable — that stability is the whole reason replay is safe today. Wraparound is unreachable at u64 width rather than handled. **Pairing rule: no consumer may accept a location on epoch equality alone** — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. |
 | R5 | **The legal-move table (§4)** is normative for any mover, v1 or later. It derives from invariants 2, 3, 4, 8, 14, from `kRange` pruning's ordered-between dependency, and from rollback's in-memory undo trail naming addresses. |
 | R6 | **Mover execution context**: a maintenance-group task on the relation's home core, never cross-core. Safe today by run-to-completion; the moment the executor becomes suspendable it **must** gain a relation-busy guard (no in-flight statement holding a position on the relation, no open transaction whose undo trail names addresses in it) — the suspension-audit precedent: mechanical, debug-asserted, not remembered. |
 | R7 | **Mover logging**: a full-page image of every page it mutates plus `PAGE_INIT` for pages it creates `[PROPOSED]`. A `HEAP_RELAYOUT` record type is reserved, not assigned — the FPI is the honest v1 shape for the same reason chain growth uses one. An unlogged relayout is forbidden even while recovery does not exist: the WAL-before-data gate is store-enforced, and a log that names slots a relayout silently moved is a log that lies. |
-| R8 | **The maintenance surface is deliberately empty.** Cabins and secondary indexes are relocation-invariant (value = pk indirection, `feat-cabin.md`, `feat-index.md` B2); the var-heap is untouched (invariant 14); trails are invalidated by the epoch bump and self-heal on next execution. A **heap relation has no pk index**, so a heap-relation mover maintains *nothing but the epoch* — which is why the first mover targets heap relations (§4). `heap-and-tuple.md` §7's "keep the B+ tree consistent" applies only to btree-clustered relations, whose relayout is the tree's own restructure and out of v1's scope entirely; this spec amends that parenthetical. |
+| R8 | **The maintenance surface is deliberately empty.** Cabins and secondary indexes are relocation-invariant (value = pk indirection, `cabin.md`, `index.md` B2); the var-heap is untouched (invariant 14); trails are invalidated by the epoch bump and self-heal on next execution. A **heap relation has no pk index**, so a heap-relation mover maintains *nothing but the epoch* — which is why the first mover targets heap relations (§4). `heap-and-tuple.md` §7's "keep the B+ tree consistent" applies only to btree-clustered relations, whose relayout is the tree's own restructure and out of v1's scope entirely; this spec amends that parenthetical. |
 | R9 | **The benefit model**: predicted benefit = pages-not-touched per execution × decayed shape frequency, reported per plan in pages and per shape. The promotion metric — measured-after against predicted — becomes computable only when a mover exists, and the planner's output format carries both fields from day one so the comparison needs no format change. |
 | R10 | **The v1 planner is pull-only**: computed when `SHOW RELAYOUT` asks, no background task, no cadence. Zero idle cost, no timing-wheel dependency (`sched.md`'s wheel is unbuilt), and the cadence decision lands with the mover, which is what actually needs one. |
 | R11 | **v1 scope**: R1 + R4 + the planner and report. No mover. Every enactment is blocked by a named gate (§6) and the report says which. |
@@ -108,7 +108,7 @@ Rules:
 - **One implementation.** `include/kds/stats/decay.hpp`, pure functions over
   the pair, `Clock`-injected like every time consumer (`sched/clock.hpp`'s
   contract). A second decay formula anywhere is the same defect as a second
-  literal-coercion path was (`spec-types.md` §3.1).
+  literal-coercion path was (`types.md` §3.1).
 - **No clock, no decay**: the score degrades to a raw counter. Deterministic
   tests inject `ManualClock` and get exact halving.
 - Fixed-point arithmetic `[PROPOSED]`: u32 score scaled by 256, shift/mask
@@ -314,7 +314,7 @@ standalone "Physical Optimizer v1" spec on a parallel branch, the same day
 Part I was written — two sessions, one name, two subjects. The merge decided
 one umbrella document: Part I is *relayout* (what `heap-and-tuple.md` §7 has
 always meant by the physical optimizer — shadow-only, gated, with the code);
-Part II is the **`CABIN AUTO` promotion pipeline** `feat-cabin.md` §8.1 left
+Part II is the **`CABIN AUTO` promotion pipeline** `cabin.md` §8.1 left
 open — a per-core background controller over Observational Cabins. The two
 are complementary and touch none of each other's structures; Part II
 consumes the R1 lazy-decay score Part I defines and implements

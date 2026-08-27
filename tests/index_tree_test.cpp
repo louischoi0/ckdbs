@@ -12,7 +12,7 @@
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/page_header.hpp"
 
-// The secondary index tree (docs/spec/feat-index.md §4, workplan IX02).
+// The secondary index tree (docs/spec/index.md §4, workplan IX02).
 //
 // What separates this from btree_test.cpp is the thing the whole page class
 // exists for: **keys arrive out of order and a full page divides.** The

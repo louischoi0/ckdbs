@@ -6,8 +6,8 @@ exactly where the line sits and why. `[PROPOSED]` marks a default to confirm
 or amend before the affected part is built; `[OPEN]` must not be assumed;
 `[GATED]` names an obligation blocked on an unbuilt subsystem. Companion
 workplan: `docs/inflight/blocked/workplan-bulk-insert.md` (to be written from this spec).
-Consistent with `docs/spec/protocol.md`, `docs/spec/wal.md`, `docs/spec/feat-assertion.md`,
-`docs/spec/feat-index.md`, `docs/spec/feat-cabin.md`, `docs/spec/spec-eviction.md`,
+Consistent with `docs/spec/protocol.md`, `docs/spec/wal.md`, `docs/spec/assertion.md`,
+`docs/spec/index.md`, `docs/spec/cabin.md`, `docs/spec/eviction.md`,
 `docs/rules/rules.md`.
 
 **Status: nothing here is built.** Today `Parser::ParseInsert()` accepts a
@@ -28,7 +28,7 @@ dispatch, one round trip per statement — never amortizes. This spec is that
 | BI2 | Correctness shortcut | **None, ever.** Every row through T1/T2 runs the full single-row write pipeline — FK check, assertion admission, Keystone allocation, encode + var-heap spill, placement, Cabin witness, index maintenance, WAL — **in the same per-row order** as `InsertInner` today (§5). Bulk buys amortization of parse/framing/round-trip, never of authority |
 | BI3 | T1 grammar | `INSERT INTO t VALUES (…), (…) [, …]` — comma-separated row lists; per-statement row cap `kds.max_insert_rows` (default **1024** `[PROPOSED]`) |
 | BI4 | Atomicity | A bulk statement (T1) and a load session (T2) are **atomic**: all rows or none, unwound by the existing transaction scope. Any per-row refusal fails the whole statement with the 1-based row ordinal in the message. No partial-accept mode, no error table, no slow path |
-| BI5 | Fingerprint | An N-row INSERT fingerprints **identically to the 1-row INSERT** on the same relation — row count is not part of the template. Existing 1-row fingerprints are byte-stable (the recurring constraint, cf. `spec-types.md` TY3). T2 never parses, so it never fingerprints |
+| BI5 | Fingerprint | An N-row INSERT fingerprints **identically to the 1-row INSERT** on the same relation — row count is not part of the template. Existing 1-row fingerprints are byte-stable (the recurring constraint, cf. `types.md` TY3). T2 never parses, so it never fingerprints |
 | BI6 | T2 protocol | New KWP frames `C_LOAD_BEGIN / C_LOAD_CHUNK / C_LOAD_END / C_LOAD_ABORT` and `S_LOAD_READY / S_LOAD_ACK`, gated by a `BULK_LOAD` capability bit — no version break. Chunk rows use the **D5 row encoding already implemented in `wire/row_codec`**, the same codec below `S_ROW_BATCH` and crosscore `STEP_BATCH` (§4) |
 | BI7 | Flow control | Windowed chunk acknowledgment: at most `window` unacknowledged chunks in flight (server-announced in `S_LOAD_READY`, default **4** `[PROPOSED]`), chunk payload ≤ announced byte cap (default **256 KiB** `[PROPOSED]`). Explicit and deterministic, in the spirit of §7 portal suspension — no TCP-buffer guesswork |
 | BI8 | Durability | Orthogonal, unchanged: the transaction's WAL class applies (`C_TXN_BEGIN.durability`). **D3 relaxed is the documented recommendation for bulk load** — this is the use `wal.md` §1 named for it. No new class |
@@ -223,7 +223,7 @@ foreground working set's usage counters never see the load happen.
   row that breaks it. Bound Cabin's running aggregates are updated per row;
   abort unwinds them through the existing statement-error path.
 - **Secondary indexes** — per-row maintenance, failure fails the load
-  (`feat-index.md` §2's argument applies row by row). Note for operators,
+  (`index.md` §2's argument applies row by row). Note for operators,
   not for the engine: dropping indexes before a large load and re-creating
   them after (the IX backfill) is often faster; the engine does not do this
   implicitly.

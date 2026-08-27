@@ -7,12 +7,12 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// A Bound Cabin's entry page (`docs/spec/feat-assertion.md` §5.1, workplan AST04).
+// A Bound Cabin's entry page (`docs/spec/assertion.md` §5.1, workplan AST04).
 //
 // ---- What a Bound Cabin is, in one line -----------------------------------
 //
 // A Cabin that is required to have observed everything, forever
-// (`docs/spec/feat-cabin.md` §12). The observational class is lazy, evictable and
+// (`docs/spec/cabin.md` §12). The observational class is lazy, evictable and
 // advisory; this one is eager, **pinned** and authoritative, because an
 // assertion's admission check reads its group aggregate and a missing entry
 // would be a wrong answer rather than a slow one.
@@ -53,12 +53,12 @@
 //
 // Concurrency: core-local. A relation's pages belong to its home core, and an
 // assertion is single-relation (AS8), so the whole structure is one core's
-// (`docs/spec/feat-assertion.md` §6.1). No latches, no atomics.
+// (`docs/spec/assertion.md` §6.1). No latches, no atomics.
 
 namespace kds::storage::cabin {
 
 // `flags` bit 0: the entry was written by a statement that has not committed
-// (`docs/spec/feat-assertion.md` §6.2 step 3). Cleared at commit, and the entry
+// (`docs/spec/assertion.md` §6.2 step 3). Cleared at commit, and the entry
 // plus its delta are removed at abort.
 //
 // **A reservation counts in the aggregate from the moment of admission**,
@@ -89,7 +89,7 @@ inline constexpr std::uint8_t kEntryDeparture = 0x4;
 // that rides on purge - but they are no longer any group's, and this is what
 // says so on the page itself.
 //
-// **Why the page has to carry it** (`docs/spec/feat-assertion.md` §7, the AS6b
+// **Why the page has to carry it** (`docs/spec/assertion.md` §7, the AS6b
 // decision taken 2026-08-12). A live abort removes the entry from the group's
 // list in memory, so the directory is right and `VerifyAgainstEntries` holds.
 // A *recovered* directory rebuilds that linkage by scanning these pages
@@ -144,7 +144,7 @@ struct BoundCabinEntry {
     // **AS6a.** Which group of this cabin the entry belongs to - authoritative,
     // not advisory: it is what lets recovery rebuild the header->entry linkage
     // by scanning the cabin's own pages instead of persisting O(all entries) at
-    // every checkpoint (`feat-assertion.md` §5.1, §7).
+    // every checkpoint (`assertion.md` §5.1, §7).
     //
     // An id and **not a group-key hash**, and the difference is correctness:
     // `HashGroupKey`'s collisions are expected and are resolved by confirming
@@ -187,7 +187,7 @@ inline constexpr std::size_t kEntriesOffset = kPageBodyOffset + kCabinPageHeader
 inline constexpr std::uint16_t kMaxEntriesPerPage =
     static_cast<std::uint16_t>((kPageSize - kEntriesOffset) / kEntryBytes);
 
-static_assert(kEntryBytes == 32, "feat-assertion.md §5.1 fixes the entry at 32 bytes");
+static_assert(kEntryBytes == 32, "assertion.md §5.1 fixes the entry at 32 bytes");
 static_assert(kEntriesOffset % 8 == 0, "entries stay 8-byte aligned within the page");
 static_assert(kMaxEntriesPerPage == 254,
               "8192 - 32 (common header) - 8 (page header) = 8152; 8152 / 32 = 254");

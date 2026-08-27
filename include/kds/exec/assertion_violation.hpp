@@ -8,7 +8,7 @@
 #include "kds/exec/bound_cabin.hpp"
 #include "kds/parser/ast.hpp"
 
-// The assertion violation message (docs/spec/feat-assertion.md §4.4, AS9,
+// The assertion violation message (docs/spec/assertion.md §4.4, AS9,
 // workplan AST08): the one place its format lives, so the wire, the tests
 // and every future check site cannot drift on what a refusal says.
 //
@@ -31,7 +31,7 @@
 // Group-key values render through `FormatValue(type_val, value)` - the
 // two-argument form, deliberately, because a group column may be a DATE and
 // an epoch-day count in an error message is a number nobody declared
-// (docs/spec/spec-types.md §3.3; the single-argument form is deleted for exactly
+// (docs/spec/types.md §3.3; the single-argument form is deleted for exactly
 // this caller's sake).
 //
 // ---- What this file is not ------------------------------------------------

@@ -6,7 +6,7 @@
 
 #include "kds/stats/optimizer_signals.hpp"
 
-// The cabin optimizer's decision core (docs/spec/feat-physical-optimizer.md
+// The cabin optimizer's decision core (docs/spec/physical-optimizer.md
 // §II.4/PO3/PO5, workplan PHY02): `Decide(Snapshot) → ActionSet`.
 //
 // ---- The purity contract (PO3/PO10), stated exactly ----------------------

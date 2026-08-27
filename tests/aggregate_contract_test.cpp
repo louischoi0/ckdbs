@@ -15,7 +15,7 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// The aggregation contract suite (docs/spec/feat-aggregate.md §9,
+// The aggregation contract suite (docs/spec/aggregate.md §9,
 // docs/workplan-aggregate.md AG09). Regression-mandatory: every item here
 // is a property the feature is defined by, not an example of it working.
 //
@@ -389,7 +389,7 @@ TEST(AggregateContractShapeTest, TheFingerprintVersionDidNotMove) {
     // in it against a recorded value and fails loudly if one moves. A bump
     // here without that file changing is the contradiction to look for.
     EXPECT_EQ(parser::kFingerprintVersion, 1u)
-        << "docs/spec/feat-aggregate.md §2 claims no bump; a bump retires every stored waystone";
+        << "docs/spec/aggregate.md §2 claims no bump; a bump retires every stored waystone";
 }
 
 TEST(AggregateContractShapeTest, AnAggregateHeadHashesAsTheIdentifierItUsedToBe) {

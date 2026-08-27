@@ -14,7 +14,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/checkpointer.hpp"  // AS6a: the snapshot seam this registry implements
 
-// The write-path admission and reservation protocol (docs/spec/feat-assertion.md
+// The write-path admission and reservation protocol (docs/spec/assertion.md
 // §§4.2, 6.2; workplan AST07): the one place a write is checked against a
 // declared assertion, and the bookkeeping that makes a refused race lose
 // cleanly and an aborted transaction restore the aggregates exactly.

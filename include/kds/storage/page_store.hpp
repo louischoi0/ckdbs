@@ -41,7 +41,7 @@ enum class PageAccess {
     kWrite,  // the visitor may modify tuples in place
 };
 
-// How a bulk sequential reader fetches pages (docs/spec/spec-eviction.md §5,
+// How a bulk sequential reader fetches pages (docs/spec/eviction.md §5,
 // workplan EVT06). A scan that faults every page of a large relation
 // through the ordinary path floods the pool with frames it will touch
 // exactly once; ring mode reuses a small fixed set of frames cyclically

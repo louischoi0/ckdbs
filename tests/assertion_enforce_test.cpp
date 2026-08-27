@@ -11,7 +11,7 @@
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
 
-// The write-path reservation protocol (docs/spec/feat-assertion.md §§4.2, 6.2;
+// The write-path reservation protocol (docs/spec/assertion.md §§4.2, 6.2;
 // workplan AST07), tested through the statement surface - which is where the
 // acceptance criteria live: a race at bound-1 admits exactly one, an abort
 // restores the aggregates exactly, a group-move charges only its

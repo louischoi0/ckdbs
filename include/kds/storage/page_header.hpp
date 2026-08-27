@@ -53,7 +53,7 @@ inline constexpr std::size_t kPageLsnOffset = 8;
 // Offset 16 is the word that was `reserved0`, whose comment nominated
 // exactly this use — which is why the field's arrival is not a format
 // event: every page ever written already carries 0 here, and 0 reads as
-// "never relayouted" (docs/spec/feat-physical-optimizer.md R4).
+// "never relayouted" (docs/spec/physical-optimizer.md R4).
 inline constexpr std::size_t kPageRelayoutEpochOffset = 16;
 // Offset 24 was `reserved1`, consumed by `owner_oid` the same way offset 16
 // was consumed above (page.md §2a): every page ever written already carries
@@ -134,7 +134,7 @@ void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn);
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page);
 std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 
-// ---- The PL-C stream stamp (spec-page-lsn-cross-stream.md §9 rule 4) ----
+// ---- The PL-C stream stamp (page-lsn-cross-stream.md §9 rule 4) ----
 //
 // The 16-bit `flags` word at offset 2 carries `core_id + 1` of the WAL
 // stream that last wrote the page; **0 means never stamped**, which is
@@ -158,13 +158,13 @@ constexpr bool StampIsForeign(std::uint16_t stamp, std::uint32_t core_id) noexce
     return stamp != 0 && stamp != StreamStampFor(core_id);
 }
 
-// ---- Relayout epoch (docs/spec/feat-physical-optimizer.md R4) ----------------
+// ---- Relayout epoch (docs/spec/physical-optimizer.md R4) ----------------
 //
 // Bumped only by the physical optimizer's mover when tuples on the page
 // move; INSERT, UPDATE and DELETE never bump it, because the fixed-length
 // rule makes them address-stable — that stability is what keeps every
 // recorded location valid today. **Nothing calls Bump yet**: the mover
-// does not exist (feat-physical-optimizer.md §6's gates), and the API is
+// does not exist (physical-optimizer.md §6's gates), and the API is
 // here ahead of it — the eviction sweep's precedent — so the consumers'
 // comparisons (Waystone replay rule 2, Cabin entry verification, workplan
 // PX04) are real code now rather than promises.

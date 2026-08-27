@@ -60,7 +60,7 @@ inline constexpr std::uint64_t kDefaultRowTouchBudget = 100'000'000;
 // would refuse.
 inline constexpr std::uint64_t kUnlimitedRowTouchBudget = 0;
 
-// `join_build_max_rows`' ratified default (spec-join-inner-build.md §7,
+// `join_build_max_rows`' ratified default (join-inner-build.md §7,
 // workplan JB5). Rows, not bytes, following `aggregate_max_groups`'
 // argument: an entry count is the number an operator can reason about
 // against an entry width they know (24 bytes, C6). **Refusal semantics

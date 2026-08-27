@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What a declared assertion costs on the write path: with, against without.
 
-`docs/spec/feat-assertion.md` restricts `CREATE ASSERTION` to group ceilings
+`docs/spec/assertion.md` restricts `CREATE ASSERTION` to group ceilings
 (`GROUP BY (cols) CHECK COUNT(*)|SUM(col) <= N`) precisely so that the check
 can ride the write path instead of re-evaluating a query. This driver prices
 that ride as a *difference*: every measured statement runs against relations

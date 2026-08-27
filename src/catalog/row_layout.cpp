@@ -23,7 +23,7 @@ StatusOr<std::uint32_t> RowLayout::ColumnWidth(const SysColumnRow& col,
         case kTypeValChar: return col.len;
         // The tagged cell: one width for every value, whatever it holds.
         case kTypeValVarchar: return inline_cell_width;
-        // docs/spec/spec-types.md TY1/TY2/TY4. All three are fixed-width by
+        // docs/spec/types.md TY1/TY2/TY4. All three are fixed-width by
         // construction, which is why they are expressible at all: a
         // relation's row size is a schema constant (invariant 13), so a
         // type with no decided width cannot be part of one.
@@ -34,7 +34,7 @@ StatusOr<std::uint32_t> RowLayout::ColumnWidth(const SysColumnRow& col,
         case kTypeValFloat:
             return Status::Unsupported(
                 "column '" + std::string(NameView(col.name)) +
-                "' has type float, which this engine does not store (docs/spec/spec-types.md TY1): "
+                "' has type float, which this engine does not store (docs/spec/types.md TY1): "
                 "IEEE comparison and aggregation semantics conflict with its exactness "
                 "discipline. Use decimal(p, s) for money and int64 for counts");
         default:
@@ -85,7 +85,7 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
         layout.offsets.push_back(offset);
         offset += width.value();
         // One bit per nullable column, in ascending schema position
-        // (spec-null.md §2); NOT NULL columns consume no bit, which is
+        // (null.md §2); NOT NULL columns consume no bit, which is
         // what keeps every existing relation's bitmap at zero bytes.
         layout.null_bits.push_back(schema.columns[i].notnull ? kNoNullBit : next_bit++);
     }

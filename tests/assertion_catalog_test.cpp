@@ -10,7 +10,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// `sys.assertions` — the catalog half of ASSERTION (docs/spec/feat-assertion.md
+// `sys.assertions` — the catalog half of ASSERTION (docs/spec/assertion.md
 // §8.2, workplan AST03).
 //
 // What this file is really pinning, beyond "the row round-trips".

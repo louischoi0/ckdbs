@@ -10,7 +10,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// The secondary-index write hook (docs/spec/feat-index.md §2, workplan IX06).
+// The secondary-index write hook (docs/spec/index.md §2, workplan IX06).
 //
 // The test that decides whether the feature is usable is
 // `AnUpdateThatTouchesNoIndexedColumnAppendsNothing`, and it is written
@@ -178,7 +178,7 @@ TEST_F(IndexMaintainTest, TypedKeyColumnsAreKeyedOnTheirStorageFormNotTheLiteral
     // A DATE column's INSERT value is the string as written while everything
     // that reads the index keys on the epoch integer. Keying on the raw
     // literal is how the Cabin came to lose every row inserted after a value
-    // was observed (docs/spec/spec-types.md §3.1) - and here it would put the
+    // was observed (docs/spec/types.md §3.1) - and here it would put the
     // entry under a key no probe ever looks up.
     Ok("CREATE TABLE t (id int64, d date, amt decimal(10,2), name varchar) BTREE");
     Ok("CREATE INDEX by_d ON t (d)");
@@ -225,11 +225,11 @@ TEST_F(IndexMaintainTest, ARelationWithNoIndexIsUnaffected) {
     EXPECT_NE(Run("SHOW INDEXES").find("indexes=0"), std::string::npos);
 }
 
-// ---- The backfill (docs/spec/feat-index.md §10a, workplan IX09) --------------
+// ---- The backfill (docs/spec/index.md §10a, workplan IX09) --------------
 
 // **Written first**, as the workplan asks: omitting the undo-chain walk
 // makes an old-snapshot read return fewer rows with no error - the failure
-// `feat-cabin.md` §5 calls invisible without a baseline.
+// `cabin.md` §5 calls invisible without a baseline.
 TEST_F(IndexMaintainTest, TheBackfillIndexesEveryVersionAndNotJustTheCurrentOne) {
     Ok("CREATE TABLE t (id int64, owner int64) BTREE");
     Ok("INSERT INTO t VALUES (7)");

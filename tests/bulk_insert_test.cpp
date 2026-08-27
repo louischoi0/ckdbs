@@ -12,7 +12,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// T1 bulk insert (docs/spec/spec-bulkinsert.md §2, BI2-BI5, BI9; workplan
+// T1 bulk insert (docs/spec/bulkinsert.md §2, BI2-BI5, BI9; workplan
 // BLK01-BLK04).
 //
 // The two claims everything else hangs off:

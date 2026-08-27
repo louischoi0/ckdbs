@@ -119,7 +119,7 @@ TEST(StepDescriptorTest, TheRefusedClassesAreRefusedByName) {
     EXPECT_EQ(param.status().code(), StatusCode::kUnsupported);
 }
 
-// `IS [NOT] NULL` is a CompareOp like any other (docs/spec/spec-null.md NU5),
+// `IS [NOT] NULL` is a CompareOp like any other (docs/spec/null.md NU5),
 // so it ships: a peer-owned relation's `WHERE col IS NULL` is evaluated
 // remotely, not refused by a bound written against the old last enumerator.
 TEST(StepDescriptorTest, TheIsNullOpsShipLikeEveryOtherComparison) {

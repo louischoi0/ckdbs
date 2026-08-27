@@ -12,7 +12,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// **The types contract** (docs/spec/spec-types.md §6, workplan TY08).
+// **The types contract** (docs/spec/types.md §6, workplan TY08).
 //
 // One test per numbered item, in order, and regression-mandatory from the
 // moment this file exists: these are the eight statements the types work
@@ -205,7 +205,7 @@ TEST(TypesContract, Item3_EveryMalformedLiteralIsAPositionedError) {
 TEST(TypesContract, Item3_PrecisionAndScaleBoundsAreRefusedAtCreateTable) {
     Instance db;
     // `decimal(19, 0)` left this list when the wide type landed
-    // (spec-types.md TY2's separate int128 type, 2026-08-07): 19..38 now
+    // (types.md TY2's separate int128 type, 2026-08-07): 19..38 now
     // selects `decimal128`, and the refusals move to the new edges.
     for (const char* decl : {"decimal(0, 0)", "decimal(39, 0)", "decimal(5, 6)",
                              "decimal(24, 25)", "decimal128(10, 2)", "decimal"}) {

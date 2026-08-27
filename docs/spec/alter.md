@@ -21,7 +21,7 @@ understands and declines — `Unsupported`, with a position and the reason:
   changes the constant, and every existing tuple then *is* `Corruption` by
   the codec's own rule. Doing it right is a relation rewrite — a mover,
   page allocation, and the reader-horizon question — which is the physical
-  optimizer's gated territory (`feat-physical-optimizer.md` §6), not a
+  optimizer's gated territory (`physical-optimizer.md` §6), not a
   catalog edit. Refused, not deferred-and-half-done.
 - **Widening (`ALTER ... TYPE varchar(n)` in any spelling).** Permanently
   out, not open: the tagged cell has no per-column width to widen

@@ -28,7 +28,7 @@
 // relation's unique indexes, Cabin, Waystone pages and var-heap hang off
 // its own catalog row and have no owner of their own (rows.hpp). What M1's
 // co-location rule will need a say in, when it exists, is FK-linked
-// relations - and `docs/spec/impl-foreign-keys.md` keeps those co-located in v1
+// relations - and `docs/spec/foreign-keys.md` keeps those co-located in v1
 // by deferring cross-core FK entirely, so there is nothing to encode yet.
 
 namespace kds::catalog {

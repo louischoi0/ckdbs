@@ -57,7 +57,7 @@ namespace {
 //
 // **A null view is not the absence of a rule, it is one rule: an object
 // exists from the moment its row is written until its removal commits**
-// (`spec-ddl-transactional.md` §5a, DT9). `txn`, when given, is what makes
+// (`ddl-transactional.md` §5a, DT9). `txn`, when given, is what makes
 // the second half true - a delete-mark counts only once its deleter is no
 // longer in flight. The two halves are deliberately asymmetric, and the
 // symmetric version is a bug: hiding *inserted* rows from unfiltered
@@ -112,7 +112,7 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
             // **No undo chain is consulted**, because a catalog row has
             // none: `undo_ptr` is 0 (txn.md §7). That is exactly why an
             // in-place *overwrite* under a transaction cannot be hidden
-            // from other readers - spec-ddl-transactional.md §5a says what
+            // from other readers - ddl-transactional.md §5a says what
             // that costs DROP TABLE, which DT9 does not change.
             if (tuple.value().deleted) {
                 const std::uint64_t deleter = tuple.value().trx_id;
@@ -622,7 +622,7 @@ Status Catalog::Bootstrap() {
         {kTypeBool, "bool", kTypeValBool, 1},
         {kTypeVarchar, "varchar", kTypeValVarchar, 0},
         {kTypeChar, "char", kTypeValChar, 1},
-        // docs/spec/spec-types.md TY1. `len` here is the type's *width*, which
+        // docs/spec/types.md TY1. `len` here is the type's *width*, which
         // is what sys.types has always meant by it - a DECIMAL column
         // carries its own (p, s) elsewhere (TY9).
         {kTypeDate, "date", kTypeValDate, 4},
@@ -1027,7 +1027,7 @@ StatusOr<std::uint64_t> Catalog::PurgeSettledDeleteMarks() {
     }
     // No version bump, unlike the mount sweep: every retired row was
     // already gone to every reader, so no cached answer changes. The
-    // proof lives once, in spec-ddl-transactional.md §5d.
+    // proof lives once, in ddl-transactional.md §5d.
     return swept;
 }
 
@@ -1385,7 +1385,7 @@ StatusOr<SysTableRow> Catalog::GetSysTableRow(Oid table_oid) {
 
 StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::ReadView* view) {
     // **A transactional lookup neither reads nor fills the cache** (DT3;
-    // spec-ddl-transactional.md §4's option (a)). The cache is one map for
+    // ddl-transactional.md §4's option (a)). The cache is one map for
     // the whole instance and answers "does this name exist" with no idea
     // whose transaction is asking - so serving one session from it would
     // hand it another session's uncommitted relation, and filling it from
@@ -1453,7 +1453,7 @@ StatusOr<bool> Catalog::NameHeldByPendingDrop(std::string_view name,
     return held;
 }
 
-// ALTER TABLE's catalog half (docs/spec/spec-alter.md, workplan ALT02). Both
+// ALTER TABLE's catalog half (docs/spec/alter.md, workplan ALT02). Both
 // renames are one fixed-width Name rewrite - MutatePatternRow's shape -
 // followed by BumpVersion(): a name is read by resolution itself, so the
 // in-place-cache exception the pattern setters use does not apply.
@@ -1970,7 +1970,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     }
 
     // The relation's secondary indexes, in one sys.indexes scan
-    // (docs/spec/feat-index.md §12, workplan IX04).
+    // (docs/spec/index.md §12, workplan IX04).
     //
     // A failure here is fatal to opening the relation, and for the *fkeys*
     // reason rather than the Cabin one. An index the compiler cannot see
@@ -2830,7 +2830,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
     }
     if ((def.flags & kIndexFlagUnique) != 0) {
         return Status::Unsupported(
-            "catalog: UNIQUE indexes are not supported (docs/spec/feat-index.md IX11); v1 is a read "
+            "catalog: UNIQUE indexes are not supported (docs/spec/index.md IX11); v1 is a read "
             "accelerator that cannot fail a write for a reason of its own");
     }
 
@@ -2864,12 +2864,12 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
     // A heap relation has no pk index, so resolving an entry's pk would be a
     // chain scan and an index over it would turn one full scan into N
     // partial ones. The same rule and the same argument as
-    // impl-foreign-keys.md F1's refusal of a heap parent.
+    // foreign-keys.md F1's refusal of a heap parent.
     if (access.value()->clustered_type != ClusteredType::kBtree) {
         return Status::InvalidArgument(
             "catalog: relation oid " + std::to_string(def.table_oid) +
             " is heap-clustered; a secondary index resolves an entry through the primary key, "
-            "which a heap relation has no index for (docs/spec/feat-index.md IX3)");
+            "which a heap relation has no index for (docs/spec/index.md IX3)");
     }
 
     const auto check_column = [&](std::uint16_t pos, const char* role) -> Status {
@@ -2893,12 +2893,12 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
         // v1, so the entry format, maintenance and backfill keep the
         // property that every row has exactly one entry of a key that
         // always exists. IS NULL answers by scan; revisit with a measured
-        // need, like feat-index.md §13's other opens.
+        // need, like index.md §13's other opens.
         if (!schema.columns[def.key_cols[i]].notnull) {
             return Status::Unsupported(
                 "catalog: column '" +
                 std::string(NameView(schema.columns[def.key_cols[i]].name)) +
-                "' is nullable, and an index key must always exist (docs/spec/spec-null.md D2; "
+                "' is nullable, and an index key must always exist (docs/spec/null.md D2; "
                 "declare the column NOT NULL or leave it unindexed)");
         }
         for (std::size_t j = 0; j < i; ++j) {
@@ -2917,7 +2917,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
         if (!schema.columns[pos].notnull) {
             return Status::Unsupported(
                 "catalog: covered column '" + std::string(NameView(schema.columns[pos].name)) +
-                "' is nullable, and an index entry has no NULL encoding (docs/spec/spec-null.md D2)");
+                "' is nullable, and an index entry has no NULL encoding (docs/spec/null.md D2)");
         }
     }
 

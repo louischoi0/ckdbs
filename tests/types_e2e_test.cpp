@@ -244,7 +244,7 @@ TEST(TypesEndToEnd, AvgOverDecimalAnswersAtTheDeclaredScale) {
     Instance db;
     Load(db);
     // 1360.99 / 5 = 272.198 -> 272.20 at the column's scale 2, half-even
-    // (feat-aggregate.md §3.4). No float touches the value: the quotient
+    // (aggregate.md §3.4). No float touches the value: the quotient
     // is computed on the unscaled integers.
     EXPECT_EQ(db.Run("SELECT AVG(amt) FROM trade"), "avg(amt)\\n272.20");
 
@@ -407,7 +407,7 @@ TEST(TypesEndToEnd, AnOutOfRangeInsertIsRefusedAndWritesNothing) {
     EXPECT_EQ(db.Run("SELECT COUNT(*) FROM trade"), before);
 }
 
-// ---- The wide decimal (spec-types.md TY2's int128 type, 2026-08-07) ------
+// ---- The wide decimal (types.md TY2's int128 type, 2026-08-07) ------
 //
 // The same claim TY07's suite makes for the narrow types, made for the
 // 16-byte one: a width, a literal parser, a comparison and a rendering are
@@ -532,7 +532,7 @@ TEST(TypesEndToEnd, MixedWidthDecimalColumnsRefuseToCompare) {
     EXPECT_NE(reply.find("width"), std::string::npos) << reply;
 }
 
-// ---- NULL end to end (docs/spec/spec-null.md, workplan-null.md NU5) -------------
+// ---- NULL end to end (docs/spec/null.md, workplan-null.md NU5) -------------
 
 TEST(NullE2eTest, ANullInsertsReadsBackAndIsNotZeroOrEmpty) {
     Instance db;
@@ -597,7 +597,7 @@ TEST(NullE2eTest, AnUpdateCanSetNullAndClearItAgain) {
     EXPECT_EQ(db.Run("SELECT id FROM t WHERE n IS NULL").find("1,"), std::string::npos);
 }
 
-// spec-null.md §4's aggregate semantics, driven through statements.
+// null.md §4's aggregate semantics, driven through statements.
 TEST(NullE2eTest, AggregatesSkipNullsAndAnAllNullGroupSumsToNull) {
     Instance db;
     ASSERT_EQ(db.Run("CREATE TABLE t (id int64, g int64, n int64 NULL, d decimal(10,2) NULL)")
@@ -667,7 +667,7 @@ TEST(NullE2eTest, ANullIntoANotNullColumnIsRefusedThroughTheStatement) {
     EXPECT_NE(out.find("NOT NULL"), std::string::npos) << out;
 }
 
-// The wire keeps §1's distinction on the way out (spec-null.md §4, NU7):
+// The wire keeps §1's distinction on the way out (null.md §4, NU7):
 // a NULL renders as the token NULL and an empty string as an empty field.
 // (A *stored* string 'NULL' is wire-ambiguous with it, as any string with a
 // comma already is - the text protocol renders values unquoted, and typed

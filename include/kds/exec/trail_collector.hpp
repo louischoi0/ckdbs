@@ -54,7 +54,7 @@ struct TouchedTuple {
     PageId page_id = kInvalidPageId;
 
     // The page's relayout epoch at the moment of access
-    // (docs/spec/feat-physical-optimizer.md R4, since PX04 - it was absent while
+    // (docs/spec/physical-optimizer.md R4, since PX04 - it was absent while
     // the engine had no epoch). Reported **verbatim** as the header's u64:
     // the executor states the fact, and each store that keeps it owns its
     // stored width - trail_store.hpp narrows to its entry format's u32 and

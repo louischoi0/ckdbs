@@ -5,7 +5,7 @@
 
 #include "kds/parser/parser.hpp"
 
-// AG01 - the aggregate grammar (docs/spec/feat-aggregate.md §2,
+// AG01 - the aggregate grammar (docs/spec/aggregate.md §2,
 // docs/workplan-aggregate.md).
 //
 // Three things this file is here to hold down, in descending order of how
@@ -235,7 +235,7 @@ TEST(ParserAggregateTest, StarWithGroupByIsRefused) {
 
 TEST(ParserAggregateTest, AvgParsesLikeAnyOtherAggregate) {
     // This test's predecessor pinned the refusal; the flip is the AVG
-    // decision landing (feat-aggregate.md §3.4, 2026-08-07). The *grammar*
+    // decision landing (aggregate.md §3.4, 2026-08-07). The *grammar*
     // half is now ordinary - the type half (decimal columns only) is the
     // compiler's, tested where the other per-type rules are.
     const StatusOr<Statement> parsed = Parse("SELECT AVG(x) FROM t");
@@ -310,7 +310,7 @@ TEST(ParserAggregateTest, HavingConjunctsAreAndCombinedInWrittenOrder) {
 }
 
 // The one predicate with no right-hand side, and the only way to ask for a
-// group whose SUM folded no non-NULL value (AG4, spec-null.md §4).
+// group whose SUM folded no non-NULL value (AG4, null.md §4).
 TEST(ParserAggregateTest, HavingTakesIsNullAndIsNotNull) {
     const SelectStmt null_sel =
         MustSelect(Parse("SELECT b FROM t GROUP BY b HAVING SUM(q) IS NULL"));

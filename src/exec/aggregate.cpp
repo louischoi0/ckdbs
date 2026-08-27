@@ -273,7 +273,7 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
                 // A `DECIMAL` joins on the same terms and needs no arm of
                 // its own: its `int_val` is the unscaled integer, every row
                 // of one column carries the same scale, and so the sum of
-                // the unscaled values is the unscaled sum (spec-types.md
+                // the unscaled values is the unscaled sum (types.md
                 // §3.2). The scale is re-attached once, in `Finish`. The
                 // wide decimal folds beside them into its own int128
                 // accumulator - the int64 one is a product contract and
@@ -432,7 +432,7 @@ Status Aggregator::Finish(const AggregateSink& emit) {
 
                 case parser::AggFunc::kAvg: {
                     if (!state.has_value) break;  // stays kNull
-                    // The one divide (feat-aggregate.md §3.4): the exact
+                    // The one divide (aggregate.md §3.4): the exact
                     // quotient of the unscaled sum by the count, **rounded
                     // half to even at the column's own scale** - ties go to
                     // the even neighbor, which is sign-symmetric and

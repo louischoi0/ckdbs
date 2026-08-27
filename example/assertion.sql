@@ -36,7 +36,7 @@
 -- nine in §4 (the reserved forms), five in §5 (the wrong ones), four in §6
 -- (what only the catalog can answer), and one in §7 (dropping twice).
 --
--- Spec: docs/spec/feat-assertion.md.
+-- Spec: docs/spec/assertion.md.
 -- Command reference: docs/spec/client-manual.md.
 -- ===========================================================================
 

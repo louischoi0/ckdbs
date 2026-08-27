@@ -10,7 +10,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/row_codec.hpp"
 
-// AG03 - the fold itself (docs/spec/feat-aggregate.md §5,
+// AG03 - the fold itself (docs/spec/aggregate.md §5,
 // docs/workplan-aggregate.md).
 //
 // Driven by a hand-built `ChainFrame` rather than by executing a chain,
@@ -964,7 +964,7 @@ TEST(AggregateTest, AMergeThatOverflowsSumFails) {
     EXPECT_EQ(overflowed.code(), StatusCode::kOutOfRange);
 }
 
-// ---- AVG (feat-aggregate.md §3.4, decided 2026-08-07) --------------------
+// ---- AVG (aggregate.md §3.4, decided 2026-08-07) --------------------
 //
 // One principle, three consequences: AVG answers at exactly the scale the
 // schema declared, rounding half to even. These tests pin the divide - the
@@ -1114,7 +1114,7 @@ TEST(AggregateTest, AvgDistinctMergeCountsAValueInBothPartitionsOnce) {
     EXPECT_EQ(rows[0], (std::vector<std::string>{"20.00"}));
 }
 
-// ---- The wide decimal in the fold (spec-types.md TY2, 2026-08-07) --------
+// ---- The wide decimal in the fold (types.md TY2, 2026-08-07) --------
 
 parser::AstValue DecWideVal(std::int64_t hi, std::int64_t lo, std::uint8_t scale) {
     parser::AstValue out;

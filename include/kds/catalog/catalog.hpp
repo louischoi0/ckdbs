@@ -153,7 +153,7 @@ public:
 
     // The core's transaction manager, for the one question an *unfiltered*
     // catalog read has to ask: is the transaction that delete-marked this
-    // row still running? (`spec-ddl-transactional.md` §5b.) Set rather
+    // row still running? (`ddl-transactional.md` §5b.) Set rather
     // than constructed with, for SetLogger's reason - the manager is built
     // after the catalog, and bootstrap has none at all. What null means is
     // on the member.
@@ -277,7 +277,7 @@ public:
     // considered current.
     void InvalidateAfterCompensation();
 
-    // **DT10** (`spec-ddl-transactional.md` §5c): retires every
+    // **DT10** (`ddl-transactional.md` §5c): retires every
     // delete-marked catalog row, and answers how many. Runs once at mount,
     // on the system core, before the listener binds — never afterwards,
     // because afterwards a mark may belong to a transaction that is still
@@ -317,7 +317,7 @@ public:
     // bump, unlogged like every catalog write; a held-back mark survives
     // to the next call or to the mount sweep. The caller is DDL resolution
     // (`CommandDispatcher::EndDdlScope`, system core only). The soundness
-    // proof lives once, in `spec-ddl-transactional.md` §5d.
+    // proof lives once, in `ddl-transactional.md` §5d.
     StatusOr<std::uint64_t> PurgeSettledDeleteMarks();
 
     // Registers the fixed namespace/type sys-objects in the in-memory
@@ -374,7 +374,7 @@ public:
     // `kBootstrapXid` is what keeps every existing caller - bootstrap,
     // tests, recovery - byte-identical, and it is the *correct* value for
     // them: those rows must be visible to a read view minted before any
-    // transaction existed (spec-ddl-transactional.md §3).
+    // transaction existed (ddl-transactional.md §3).
     //
     // **Passing a real id is only correct once catalog reads filter by
     // visibility** (DT3). Until then a real id would make the rows
@@ -414,7 +414,7 @@ public:
     // `DROP TABLE` frees a name the instant it runs, for everybody: the
     // retype to `kTypeDroppedTable` is an in-place overwrite and a catalog
     // row has no undo chain, so no reader can be isolated from it
-    // (spec-ddl-transactional.md §5a). But the drop can still roll back,
+    // (ddl-transactional.md §5a). But the drop can still roll back,
     // and the rollback rewrites that row back to a live `kTypeTable` -
     // so a `CREATE TABLE` that took the name meanwhile leaves **two live
     // rows claiming one name**, which is precisely the corruption §6's
@@ -435,7 +435,7 @@ public:
     // exist" without the caller already knowing a name to look up.
     StatusOr<std::vector<SysObjectRow>> ListTables(const txn::ReadView* view = nullptr);
 
-    // ALTER TABLE's two catalog writes (docs/spec/spec-alter.md AL2, AL5,
+    // ALTER TABLE's two catalog writes (docs/spec/alter.md AL2, AL5,
     // workplan ALT02): rewrite one fixed-width Name field in place - same
     // size, no relayout - then BumpVersion(), with no in-place-cache
     // exception, because a name is read by resolution itself. Identity is
@@ -449,7 +449,7 @@ public:
     Status RenameTable(Oid table_oid, std::string_view new_name);
     Status RenameColumn(Oid table_oid, std::string_view old_name, std::string_view new_name);
 
-    // DROP TABLE's catalog half (docs/spec/spec-drop-table.md DT1-DT3, workplan
+    // DROP TABLE's catalog half (docs/spec/drop-table.md DT1-DT3, workplan
     // DT02). The sys.objects row is **retyped to kTypeDroppedTable, never
     // retired** - the rows are GenerateUserOid()'s counter, so the row
     // must stay to keep the dead oid from being reissued, while name
@@ -468,7 +468,7 @@ public:
     // caller to register on its trail. Defaulted to the autocommit path,
     // which retires exactly as it always did.
     //
-    // **Atomic, not isolated** - see spec-ddl-transactional.md §5a. The
+    // **Atomic, not isolated** - see ddl-transactional.md §5a. The
     // `sys.objects` retype is in place and a catalog row has no undo
     // chain, so other sessions see the relation become a tombstone the
     // moment the drop runs, before it commits.
@@ -787,7 +787,7 @@ public:
     // `SHOW ACCESS`.
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 
-    // ---- sys.cabins (docs/spec/feat-cabin.md §10) -----------------------------
+    // ---- sys.cabins (docs/spec/cabin.md §10) -----------------------------
 
     // Declares a Cabin on one non-pk column and returns its `cabin_id`.
     //
@@ -832,7 +832,7 @@ public:
     // this per step (catalog_cache.hpp's absence rule).
     StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
 
-    // ---- Foreign keys (docs/spec/impl-foreign-keys.md, FK-M1) ----------------
+    // ---- Foreign keys (docs/spec/foreign-keys.md, FK-M1) ----------------
 
     // Records that `child_rel_oid`'s column `child_column_no` references
     // `parent_rel_oid`'s Keystone id, and returns the new `fk_id`.
@@ -876,7 +876,7 @@ public:
     // The `trx_id` on these three is the row's MVCC stamp (DT2). It
     // defaults to `kBootstrapXid` because every caller that does not pass
     // one is bootstrap, and a bootstrap row must be visible to every read
-    // view forever (spec-ddl-transactional.md §3).
+    // view forever (ddl-transactional.md §3).
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name,
                             std::uint64_t trx_id = kBootstrapXid,
                             CatalogRowRef* where = nullptr);
@@ -918,7 +918,7 @@ public:
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr);
 
-    // ---- Secondary indexes (docs/spec/feat-index.md §12) --------------------
+    // ---- Secondary indexes (docs/spec/index.md §12) --------------------
 
     // What CREATE INDEX has settled by the time it reaches the catalog.
     // The widths are computed by the caller from the key columns
@@ -976,7 +976,7 @@ public:
     //
     // `CreateIndex` is this plus the write, so there is still exactly one
     // implementation of each refusal. It is public because the DDL layer
-    // **backfills before it publishes** (docs/spec/feat-index.md §10a) - and a
+    // **backfills before it publishes** (docs/spec/index.md §10a) - and a
     // declaration that could never work should be refused by name before it
     // walks a relation, not after, and certainly not as a page-type error
     // from inside the build.
@@ -994,7 +994,7 @@ public:
     // rather than retired and the change reported, so a rollback clears
     // the mark. Unlike `DROP TABLE` this is also *isolated* - there is no
     // in-place retype, so a reader that cannot see the dropper still sees
-    // the index (spec-ddl-transactional.md §5a).
+    // the index (ddl-transactional.md §5a).
     Status DropIndex(Oid index_oid, std::uint64_t trx_id = kBootstrapXid,
                       CatalogRowChange* change = nullptr);
 
@@ -1066,7 +1066,7 @@ private:
     Status BootstrapPatternDefs();
 
     // Phase 6 of Bootstrap(): creates sys.assertions, the *second* row-codec
-    // catalog relation (docs/spec/feat-assertion.md §8.2, workplan AST03). Same
+    // catalog relation (docs/spec/assertion.md §8.2, workplan AST03). Same
     // shape as the phase above it and for the same reason - it stores the
     // declaration's text verbatim - so the two read as one pattern rather
     // than as a special case and a copy of it.
@@ -1132,7 +1132,7 @@ private:
     // dispatcher. That last one is deliberate rather than missed: a peer's
     // live list can never hold the core-0 transaction that wrote a
     // catalog mark, so armed and unarmed answer identically there
-    // (`spec-ddl-transactional.md` §5b's core-0 scope, from the other
+    // (`ddl-transactional.md` §5b's core-0 scope, from the other
     // side). Null is the pre-DT9 answer: a mark counts the moment it is
     // written.
     const txn::TransactionManager* txn_ = nullptr;

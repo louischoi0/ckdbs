@@ -79,7 +79,7 @@ runtime side.
 | Dynamic page-to-core assignment, the statistics-driven mover | its whole premise is that a page changes owner |
 | "Every core equivalent" (retiring `workplan-crosscore.md` M5) | a catalog page written by any core is written by any stream |
 | Cross-core commit / 2PC (`wal.md` §3 `[OPEN]`) | one transaction's records in two streams |
-| Free-map reclamation across cores (`feat-physical-optimizer.md` §6 gate 3) | a page freed by A and reallocated to B is the same collision |
+| Free-map reclamation across cores (`physical-optimizer.md` §6 gate 3) | a page freed by A and reallocated to B is the same collision |
 | Recovery under a changed core count (`wal.md` §3 `[OPEN]`) | stream reassignment moves every page of a stream at once |
 
 `docs/spec/crosscore.md` CC7's flush-then-grant handoff is the one place the
@@ -323,7 +323,7 @@ context.
 Consequences that bind other work:
 
 - **Cross-core free-map reclamation is a handoff** (`docs/
-  feat-physical-optimizer.md` §6 gate 3): a page freed by one core and
+  physical-optimizer.md` §6 gate 3): a page freed by one core and
   reallocated to another crosses streams and takes rules 1-5 like any
   migration.
 - The mover's policy pays **one flush per migration** (rule 1a); pricing

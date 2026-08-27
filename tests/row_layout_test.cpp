@@ -95,7 +95,7 @@ TEST(RowLayoutTest, ACharColumnKeepsItsDeclaredWidth) {
 
 TEST(RowLayoutTest, AFloatColumnIsUnsupported) {
     // Float and decimal used to be refused together, for one reason: no
-    // decided width. `docs/spec/spec-types.md` TY1 splits them. Decimal is a
+    // decided width. `docs/spec/types.md` TY1 splits them. Decimal is a
     // scaled int64 and has a width now; float stays out on the merits -
     // IEEE comparison and aggregation semantics conflict with this
     // engine's exactness discipline - which is a product decision rather
@@ -189,7 +189,7 @@ TEST(RowLayoutTest, AnOutOfRangeCellWidthIsRefused) {
     EXPECT_FALSE(RowLayout::Build(schema, storage::kMaxInlineCellWidth + 1).ok());
 }
 
-// ---- The null bitmap (spec-null.md §2, §6) --------------------------------
+// ---- The null bitmap (null.md §2, §6) --------------------------------
 
 SysColumnRow Nullable(std::uint32_t pos, std::string_view name, std::uint32_t type_val,
                       std::uint32_t len = 0) {

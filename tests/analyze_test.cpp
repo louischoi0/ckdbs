@@ -171,7 +171,7 @@ TEST_F(AnalyzeTest, ALiteralPkEqualityReportsALookup) {
     EXPECT_NE(plan.find("class=PointSelect"), std::string::npos) << plan;
 }
 
-// `IS [NOT] NULL` is the whole predicate (docs/spec/spec-null.md NU5): the kNull
+// `IS [NOT] NULL` is the whole predicate (docs/spec/null.md NU5): the kNull
 // its carrier holds in `rhs` is filler, so a plan that printed it would read
 // `IS NULL NULL` and describe a predicate nobody wrote.
 TEST_F(AnalyzeTest, AnIsNullResidualPrintsWithoutItsFillerOperand) {

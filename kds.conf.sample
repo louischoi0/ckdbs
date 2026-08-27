@@ -67,7 +67,7 @@ inline_cell_width = 64
 cores = 1
 
 # Resident-frame budget for the whole instance's buffer pools, in 8 KiB
-# pages (docs/spec/spec-eviction.md §6, EV4). Every core takes an *equal* share
+# pages (docs/spec/eviction.md §6, EV4). Every core takes an *equal* share
 # - total / cores, the small remainder undistributed (operator invariant
 # 2026-08-24; the ratified min(cores, hardware cores) divisor collapses to
 # cores because boot refuses overcommit) - and a core past its share
@@ -225,7 +225,7 @@ relaxed_flush_interval_us = 10000
 max_rows_touched = 100000000
 
 # How many rows one INSERT statement may carry
-# (docs/spec/spec-bulkinsert.md BI3: `INSERT INTO t VALUES (...), (...), ...`).
+# (docs/spec/bulkinsert.md BI3: `INSERT INTO t VALUES (...), (...), ...`).
 #
 # A refusal, never a truncation: an over-cap statement is refused naming
 # the cap and the count, and inserts nothing. The cap bounds the memory a
@@ -293,7 +293,7 @@ waystone_replay = on
 # relation was filter-scanned on `flag` 40,000 times" is the signal that
 # would justify clustering or indexing it. Since 2026-08-09 the optimizer's
 # shadow planner consumes it - SHOW RELAYOUT weighs these shapes into
-# candidate relayout plans (docs/spec/feat-physical-optimizer.md) - though no
+# candidate relayout plans (docs/spec/physical-optimizer.md) - though no
 # mover exists yet, so nothing acts on it.
 #
 # Measured cost: +1-2% on a point lookup, unmeasurable on anything slower.
@@ -302,7 +302,7 @@ access_statistics = on
 
 # ---- Physical optimizer ----------------------------------------------------
 
-# The physical optimizer's mode (docs/spec/feat-physical-optimizer.md R3).
+# The physical optimizer's mode (docs/spec/physical-optimizer.md R3).
 #
 #   off      SHOW RELAYOUT answers a one-line disabled notice.
 #   shadow   the default: the planner computes the relayout report when
@@ -318,7 +318,7 @@ access_statistics = on
 physical_optimizer = shadow
 
 # How long an untouched decay score takes to lose half its weight, in
-# seconds (docs/spec/feat-physical-optimizer.md R1). The lazy-decay score is the
+# seconds (docs/spec/physical-optimizer.md R1). The lazy-decay score is the
 # one time-weighting the engine has: the physical-optimizer planner weighs
 # access shapes with it, and trail retention and the eviction temperature
 # hook are its declared future consumers.
@@ -334,7 +334,7 @@ physical_optimizer = shadow
 # parses, validates, and steers nothing.
 decay_half_life = 600
 
-# The cabin optimizer - Part II of docs/spec/feat-physical-optimizer.md: the
+# The cabin optimizer - Part II of docs/spec/physical-optimizer.md: the
 # background controller that CREATEs/EXTENDs/HEALs/DROPs Observational
 # Cabins under a cost-benefit rule. **Off by default, experimental** - the
 # opposite default from `physical_optimizer` above, because a controller
@@ -388,7 +388,7 @@ cabin_optimizer = off
 
 # ---- Cabins ----------------------------------------------------------------
 
-# Whether Cabins may be built and served (docs/spec/feat-cabin.md).
+# Whether Cabins may be built and served (docs/spec/cabin.md).
 #
 # A Cabin is a per-(relation, non-pk column) store that is **authoritative
 # for the values queries have actually observed** - the third trust class,
@@ -414,7 +414,7 @@ cabin_optimizer = off
 # so a crash declares every Cabin unobserved and traffic rebuilds it.
 cabins = on
 
-# ---- Secondary indexes (docs/spec/feat-index.md) --------------------------------
+# ---- Secondary indexes (docs/spec/index.md) --------------------------------
 #
 # Whether a secondary index may be **read**. Off makes an index step take the
 # walk it would have taken had the index not existed.
@@ -432,7 +432,7 @@ cabins = on
 indexes = on
 
 # How much one Cabin may hold: distinct observed values, and entries per
-# value. `[PROPOSED]` - docs/spec/feat-cabin.md section 8 leaves the budget open,
+# value. `[PROPOSED]` - docs/spec/cabin.md section 8 leaves the budget open,
 # so these are configurable rather than compiled in, and nothing depends on
 # the numbers.
 #
@@ -450,7 +450,7 @@ cabin_max_entries_per_value = 4096
 # ---- Aggregation -----------------------------------------------------------
 
 # How much one aggregated statement may hold: groups, and DISTINCT entries
-# summed over every set in the statement. `[PROPOSED]` - docs/spec/feat-aggregate.md
+# summed over every set in the statement. `[PROPOSED]` - docs/spec/aggregate.md
 # section 6 leaves the numbers open until the first bench, so they are
 # configurable rather than compiled in and nothing depends on either value.
 #
@@ -496,7 +496,7 @@ sort_max_rows = 1048576
 
 # How many rows one statement-local inner build may hold - the per-statement
 # map that serves a join on a column with no index and no Cabin
-# (docs/spec/spec-join-inner-build.md). Counted in rows for sort_max_rows'
+# (docs/spec/join-inner-build.md). Counted in rows for sort_max_rows'
 # reason; each entry is 24 bytes.
 #
 # Unlike the sort's cap this never refuses a statement at any value: past

@@ -50,10 +50,10 @@
 // It does not decide visibility, roll anything back, or touch an advisory
 // structure. Waystone pages are headerless and are never a replay target
 // (`page.md` §1); Cabins declare themselves unobserved after a restart
-// (`feat-cabin.md` §9); both are RV7. The assertion records are recognised
+// (`cabin.md` §9); both are RV7. The assertion records are recognised
 // and **deferred, not skipped silently** - rebuilding a Bound Cabin's group
 // directory is RC07's, and it is blocked on the checkpoint-genesis
-// decision (`feat-assertion.md` §7). They are counted so the deferral is
+// decision (`assertion.md` §7). They are counted so the deferral is
 // visible rather than assumed.
 
 namespace kds::wal {

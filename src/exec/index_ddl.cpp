@@ -29,7 +29,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const std::string& table_name) {
     for (std::size_t i = 0; i < access.schema.columns.size(); ++i) {
         if (catalog::NameView(access.schema.columns[i].name) == col.name) {
-            // D2 (docs/spec/spec-null.md): no nullable column enters an index in
+            // D2 (docs/spec/null.md): no nullable column enters an index in
             // v1, key or covered - an entry has no NULL encoding. Refused
             // here because this is the layer that still holds the byte;
             // Catalog::CheckIndexDef re-checks as the catalog's own defense,
@@ -38,7 +38,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
             if (!access.schema.columns[i].notnull) {
                 return Status::Unsupported(
                     "column '" + col.name + "' is nullable and cannot be in an index "
-                    "(docs/spec/spec-null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
+                    "(docs/spec/null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
                     std::to_string(col.byte_offset) + ")");
             }
             return static_cast<std::uint16_t>(i);

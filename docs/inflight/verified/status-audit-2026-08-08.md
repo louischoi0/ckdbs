@@ -94,11 +94,11 @@ throughout. The drift this audit was called to measure was not there to find.
 | IX10-IX12 compiler, read path, equivalence | AGREES | `src/exec/step_vm.cpp:365` dispatches `kIndexProbe`/`kIndexRange` to `RunIndexStep`; `tests/index_compile_test.cpp`, `tests/index_contract_test.cpp` |
 | IX13 `indexes` switch | AGREES | `src/exec/step_vm.cpp:613` takes the walk when `!indexes_` |
 | IX14 benchmark | UNVERIFIABLE | `bench/results-index.md`, `tools/index_benchmark.py`, `tools/pg_index_benchmark.py` all exist; the *numbers* are a measurement CLA cannot reproduce |
-| IX15 documentation sweep | AGREES | `docs/spec/feat-index.md` header, `CLAUDE.md` Core Architecture entry |
+| IX15 documentation sweep | AGREES | `docs/spec/index.md` header, `CLAUDE.md` Core Architecture entry |
 | IX16 access statistics, "and it was free" | AGREES | `src/stats/access_stats.cpp:22` — one `catalog.RecordAccess(exec::StoredAccessKind(step.kind), ...)` with no per-kind branch; mapping at `src/exec/plan_printer.cpp:33` |
 | "the whole suite is green at 1,699 tests" (line 15) | UNVERIFIABLE | a test run |
 
-### `docs/spec/feat-index.md` — spec
+### `docs/spec/index.md` — spec
 
 | claim | class | evidence |
 |---|---|---|
@@ -110,7 +110,7 @@ throughout. The drift this audit was called to measure was not there to find.
 |---|---|---|
 | spec line 9: "Status of the work: **unbuilt**" | **STALE** | `src/exec/step_compiler.cpp`, `src/exec/step_vm.cpp`, `include/kds/exec/budget.hpp`, `tests/exec_chain_test.cpp`, `tests/exec_subquery_test.cpp` |
 | spec line 9: "no join execution anywhere" | **STALE** | `tests/parser_join_test.cpp`, `tests/exec_chain_test.cpp` |
-| spec I14 resolved by `feat-aggregate.md` (line 178) | AGREES | `include/kds/exec/aggregate.hpp` |
+| spec I14 resolved by `aggregate.md` (line 178) | AGREES | `include/kds/exec/aggregate.hpp` |
 | workplan `V01`-`V19` done | AGREES | per-task artifacts: `tests/parser_golden_test.cpp` (V01), `include/kds/storage/visit.hpp` (V03), `tests/parser_subquery_test.cpp` (V07), `include/kds/exec/chain_frame.hpp` (V16), `tests/exec_budget_test.cpp` (V19) |
 | workplan V20 **not** marked done | AGREES | correct — `tests/exec_order_test.cpp`, the test V20 names, **does not exist** |
 | workplan `V21`+ unbuilt | UNVERIFIABLE | V21/V22 name `src/stats/recorder.cpp`, which does not exist under that path; the trail work landed as `include/kds/stats/trail_recorder.hpp` instead, so the workplan's file names are stale even where its status is right |
@@ -120,10 +120,10 @@ throughout. The drift this audit was called to measure was not there to find.
 | claim | class | evidence |
 |---|---|---|
 | "recording and replay both work (P01-P13)" | AGREES | `include/kds/stats/trail_recorder.hpp`, `trail_store.hpp`, `include/kds/exec/trail_replay.hpp`, `tests/waystone_replay_test.cpp`, `tests/waystone_contract_test.cpp` |
-| "not built: retention (P15), decay (P16), epoch bump sites (P17)" | AGREES | no retention or decay symbol found; the page epoch is absent engine-wide, which `feat-cabin.md` and `feat-index.md` both record independently |
+| "not built: retention (P15), decay (P16), epoch bump sites (P17)" | AGREES | no retention or decay symbol found; the page epoch is absent engine-wide, which `cabin.md` and `index.md` both record independently |
 | workplan carries **no status header at all** | UNVERIFIABLE | *a finding in itself*: per-task state must be read from `waystone-concpets.md` §status, not from the workplan a worker would open first |
 
-### `docs/cabin-workplan.md` / `docs/spec/feat-cabin.md`
+### `docs/cabin-workplan.md` / `docs/spec/cabin.md`
 
 | claim | class | evidence |
 |---|---|---|
@@ -146,12 +146,12 @@ throughout. The drift this audit was called to measure was not there to find.
 | "logging works for INSERT" | **STALE** | UPDATE and DELETE are logged too — `include/kds/txn/undo_log.hpp`, `tests/insert_wal_test.cpp`, `tests/wal_payload_test.cpp` |
 | "recovery is not implemented" | AGREES | nothing reads the log back; no replay entry point found |
 
-### `docs/workplan-aggregate.md` / `docs/spec/feat-aggregate.md`
+### `docs/workplan-aggregate.md` / `docs/spec/aggregate.md`
 
 | claim | class | evidence |
 |---|---|---|
 | "`AG01`–`AG10` are built (2026-08-06)" | AGREES | `include/kds/exec/aggregate.hpp`, `tests/aggregate_test.cpp`, `tests/aggregate_contract_test.cpp`, `tests/parser_aggregate_test.cpp` |
-| "One task was added, `AG11`" | UNVERIFIABLE | the added task's own artifact was not resolved within this audit's search; `AVG` is described as built in `CLAUDE.md` and `feat-aggregate.md` §3.4 |
+| "One task was added, `AG11`" | UNVERIFIABLE | the added task's own artifact was not resolved within this audit's search; `AVG` is described as built in `CLAUDE.md` and `aggregate.md` §3.4 |
 | AG1: chain byte-identical with and without the fold | AGREES | `tests/aggregate_contract_test.cpp` is the suite named for it; the *assertion* is a test run |
 
 ### `docs/inflight/in-progress/workplan-aggregate-perf.md`
@@ -161,13 +161,13 @@ throughout. The drift this audit was called to measure was not there to find.
 | "AP01, AP02 (partly) and AP03 are built; AP04 and AP06 still open" | UNVERIFIABLE | every task in this plan is a *measurement*, and its own text says the numbers of AP04/AP05 are stale. Nothing here can be settled by reading code |
 | "`./build` is Debug — use `build-release`" | UNVERIFIABLE | a build instruction, not a status claim |
 
-### `docs/workplan-types.md` / `docs/spec/spec-types.md`
+### `docs/workplan-types.md` / `docs/spec/types.md`
 
 | claim | class | evidence |
 |---|---|---|
 | "`TY01`–`TY09`, all built as of 2026-08-07" | AGREES | `include/kds/exec/type_literals.hpp`, `tests/type_literals_test.cpp`, `tests/types_contract_test.cpp`, `tests/types_e2e_test.cpp`, `tests/types_predicate_test.cpp` |
 | "`TY10` and `TY11` built the same day" | AGREES | `include/kds/base/int128.hpp` is TY11's representation; `tests/lexer_test.cpp` covers TY10's numeric token |
-| "`float` still refused" | AGREES | consistent across `spec-types.md`, `protocol-wp.md:53` and `CLAUDE.md` |
+| "`float` still refused" | AGREES | consistent across `types.md`, `protocol-wp.md:53` and `CLAUDE.md` |
 
 ### `docs/inflight/in-progress/workplan-crosscore.md` / `docs/spec/crosscore.md` / `docs/spec/sched.md`
 
@@ -198,7 +198,7 @@ throughout. The drift this audit was called to measure was not there to find.
 | "K1 does not hold across a crash today" | AGREES | `sys.tables.next_id` is unlogged and no recovery exists; consistent with `docs/spec/wal.md` |
 | findings' measurement of allocator cost | UNVERIFIABLE | `bench/results-keystone-alloc.md` exists; the numbers are a measurement |
 
-### `docs/spec/impl-foreign-keys.md`
+### `docs/spec/foreign-keys.md`
 
 | claim | class | evidence |
 |---|---|---|

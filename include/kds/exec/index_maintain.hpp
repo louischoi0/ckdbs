@@ -9,7 +9,7 @@
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
 
-// The secondary-index write hook (docs/spec/feat-index.md §2, workplan IX06):
+// The secondary-index write hook (docs/spec/index.md §2, workplan IX06):
 // one implementation, called from the same three doors `fk_check.hpp` uses.
 //
 // ---- Every maintenance action is an append (IX2) -------------------------
@@ -20,7 +20,7 @@
 //   DELETE  nothing at all.
 //
 // Removal is **incorrect** rather than merely unnecessary, and that is
-// `feat-cabin.md` §5's statement carried over intact: an older snapshot may
+// `cabin.md` §5's statement carried over intact: an older snapshot may
 // still match through the undo chain, so an entry naming a row whose current
 // version no longer carries that key is exactly what a pre-update reader
 // needs. The surplus is subtracted by the read path - MVCC visibility plus a
@@ -49,7 +49,7 @@
 // `exec::CoerceLiteralToColumn` - the one path from a written literal to a
 // value the engine keys on. A second coercion is how the Cabin came to key
 // its writes on one form and its reads on another, silently losing every row
-// inserted after a value was observed (`docs/spec/spec-types.md` §3.1).
+// inserted after a value was observed (`docs/spec/types.md` §3.1).
 //
 // **Covered columns come from `row`**, the encoded tuple, sliced at the
 // layout's offsets. They are stored as their inline cell bytes verbatim, so

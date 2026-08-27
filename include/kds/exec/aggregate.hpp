@@ -17,7 +17,7 @@
 #include "kds/exec/step_chain.hpp"
 #include "kds/parser/ast.hpp"
 
-// The fold (docs/spec/feat-aggregate.md §5, workplan AG03).
+// The fold (docs/spec/aggregate.md §5, workplan AG03).
 //
 // ---- It is a consumer of the row stream, not a step -------------------
 //

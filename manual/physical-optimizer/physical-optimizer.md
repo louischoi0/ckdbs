@@ -2,7 +2,7 @@
 
 Operating the physical optimizer: what it observes, how to read
 `SHOW RELAYOUT`, the config keys, and why v1 enacts nothing. Verified
-against `docs/spec/feat-physical-optimizer.md`, `HandleShowRelayout`
+against `docs/spec/physical-optimizer.md`, `HandleShowRelayout`
 (`src/server/command_dispatcher.cpp`), `kds.conf.sample` and
 `include/kds/stats/` as of 2026-08-10. The spec owns every decision cited
 here (R1-R12, PO1-PO10); this manual is the operator's view.
@@ -130,7 +130,7 @@ controller's S1/S2 signals (Part II) — same score, their own names.
 ## 4. Why nothing is enacted — the three gates
 
 Every v1 plan kind is blocked by a named gate, each owned by an open
-decision elsewhere (`docs/spec/feat-physical-optimizer.md` §6):
+decision elsewhere (`docs/spec/physical-optimizer.md` §6):
 
 | Plan | Would do | Blocked on |
 |---|---|---|

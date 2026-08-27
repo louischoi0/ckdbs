@@ -12,7 +12,7 @@
 #include "kds/storage/cabin_bound_page.hpp"
 
 // The Bound Cabin's group directory and running aggregates
-// (`docs/spec/feat-assertion.md` §5.2, workplan AST04).
+// (`docs/spec/assertion.md` §5.2, workplan AST04).
 //
 // ---- What an admission check costs, and why -------------------------------
 //
@@ -26,7 +26,7 @@
 // ---- Collisions are isolated by the key, never by the hash -----------------
 //
 // The directory is keyed by hash, and a header found by hash is **confirmed
-// against the stored group key** before it is used (`docs/spec/feat-cabin.md`
+// against the stored group key** before it is used (`docs/spec/cabin.md`
 // §12.3). Trusting the hash alone would merge two groups, which for an
 // authoritative structure is a wrong answer rather than a slow one - and the
 // observational Cabin holds its key by value for exactly this reason (§3).
@@ -99,7 +99,7 @@ struct GroupHeader {
 // total the enforcement would never have produced - and the two would then
 // differ only on the rows nobody looked at.
 //
-// A NULL contributes nothing (`docs/spec/spec-null.md` §4). Stated here rather
+// A NULL contributes nothing (`docs/spec/null.md` §4). Stated here rather
 // than inherited from the decoder zeroing `int_val`, because a slot reused
 // across rows can carry a stale one and the answer must still be 0.
 inline std::int64_t SumContribution(const parser::AstValue& value) noexcept {
@@ -110,7 +110,7 @@ inline std::int64_t SumContribution(const parser::AstValue& value) noexcept {
 //
 // Tags each value's kind and length-prefixes strings, so `('a','bc')` and
 // `('ab','c')` cannot collide — the same rule and the same reason as the
-// aggregate fold's key encoding (`feat-aggregate.md`), and NULL is a value
+// aggregate fold's key encoding (`aggregate.md`), and NULL is a value
 // here rather than an absence, so two NULL keys are one group.
 std::string EncodeGroupKey(const std::vector<parser::AstValue>& values);
 
@@ -132,7 +132,7 @@ struct AdmissionResult {
 // One assertion's Bound Cabin: the group directory over its entry pages.
 //
 // **Memory-resident in v1**, exactly as the observational Cabin's sets are and
-// on the same licence (`docs/spec/feat-cabin.md` §9). What makes that *not* a
+// on the same licence (`docs/spec/cabin.md` §9). What makes that *not* a
 // contradiction of AS6's "logged, headered authority class" is sequencing:
 // the entries are already on durable, checksummed `kCabinBound` pages, and
 // AST05's WAL records are what let the directory be rebuilt exactly at
@@ -277,7 +277,7 @@ public:
     //
     // The group is kept even at zero. A group that reached zero may be
     // written to again, and re-creating a header is not free — but more to
-    // the point, `feat-cabin.md` §5's "removal is forbidden" is about the
+    // the point, `cabin.md` §5's "removal is forbidden" is about the
     // *observational* class's entries and does not govern this: a reserved
     // entry that aborted was never visible to any snapshot, so removing it
     // restores a state, it does not hide one.

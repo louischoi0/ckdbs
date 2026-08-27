@@ -43,7 +43,7 @@ inline constexpr Oid kTypeDecimal = 29;
 inline constexpr Oid kTypeUint64 = 30;
 inline constexpr Oid kTypeInt64 = kTypeInt;
 
-// docs/spec/spec-types.md TY1. Appended rather than inserted, like every oid
+// docs/spec/types.md TY1. Appended rather than inserted, like every oid
 // above them: these are seeded into `sys.types` at bootstrap and a moved
 // oid would change what an existing catalog row means.
 inline constexpr Oid kTypeDate = 31;
@@ -56,7 +56,7 @@ inline constexpr Oid kTypeTimestamp = 32;
 inline constexpr Oid kTypeDecimalWide = 33;
 
 // A dropped relation's sys.objects row is *retyped* to this, never
-// retired (docs/spec/spec-drop-table.md DT2): GenerateUserOid() recovers its
+// retired (docs/spec/drop-table.md DT2): GenerateUserOid() recovers its
 // floor from the highest oid on the catalog pages - the rows are the
 // counter - so the row must stay to keep the dead oid from being
 // reissued, while every name lookup filters on kTypeTable and so frees
@@ -92,7 +92,7 @@ inline constexpr Oid kSysIndexesTable = 113;
 // pattern has to be rooted somewhere that survives a restart.
 inline constexpr Oid kSysPatternsTable = 114;
 
-// sys.pattern_defs (docs/spec/spec-create-pattern-user-defined-patterns-v1.md
+// sys.pattern_defs (docs/spec/create-pattern-user-defined-patterns-v1.md
 // section 4.2): the name and source text of a *declared* pattern, joined to
 // sys.patterns by pattern_id. An auto-registered pattern has no row here and
 // keeps printing as a bare hex id.
@@ -119,7 +119,7 @@ inline constexpr Oid kSysPatternDefsTable = 115;
 // are the pages being built is a question with no answer yet.
 inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
 
-// sys.assertions (docs/spec/feat-assertion.md §8.2, workplan AST03): one row per
+// sys.assertions (docs/spec/assertion.md §8.2, workplan AST03): one row per
 // declared assertion - a group-level upper-bound constraint over one
 // relation.
 //
@@ -150,7 +150,7 @@ inline constexpr Oid kSysAssertionsColumnOidBase = 140;
 // reasons apply.
 inline constexpr Oid kSysAccessStatsTable = 130;
 
-// sys.cabins (docs/spec/feat-cabin.md §10): one row per Cabin - a
+// sys.cabins (docs/spec/cabin.md §10): one row per Cabin - a
 // `(relation, non-pk column)` store authoritative for observed values.
 // Fixed-offset typed rows like every catalog relation except
 // sys.pattern_defs, since nothing in the row is variable-width.
@@ -161,7 +161,7 @@ inline constexpr Oid kSysAccessStatsTable = 130;
 // every Cabin, which is invariant-preserving by C1's own terms.
 inline constexpr Oid kSysCabinsTable = 131;
 
-// sys.fkeys (docs/spec/impl-foreign-keys.md §1): one row per foreign key - a
+// sys.fkeys (docs/spec/foreign-keys.md §1): one row per foreign key - a
 // child relation's column that references a parent relation's Keystone id.
 // Fixed-offset typed rows like every catalog relation except
 // sys.pattern_defs, since nothing in the row is variable-width.
@@ -388,7 +388,7 @@ inline constexpr std::uint32_t kTypeValBool = 8;
 inline constexpr std::uint32_t kTypeValVarchar = 9;
 inline constexpr std::uint32_t kTypeValChar = 10;
 
-// ---- docs/spec/spec-types.md TY1 / TY9 --------------------------------------
+// ---- docs/spec/types.md TY1 / TY9 --------------------------------------
 //
 // **Purely additive**, and that is the whole migration story: no existing
 // `type_val` changes meaning, so no existing relation does either.
@@ -406,7 +406,7 @@ inline constexpr std::uint32_t kTypeValChar = 10;
 inline constexpr std::uint32_t kTypeValDate = 11;
 inline constexpr std::uint32_t kTypeValTimestamp = 12;
 
-// The wide decimal (docs/spec/spec-types.md TY2's "future separate type",
+// The wide decimal (docs/spec/types.md TY2's "future separate type",
 // built 2026-08-07): `decimal(p, s)` with `19 <= p <= 38`, stored as an
 // **int128 unscaled value in 16 LE bytes** - a different schema constant
 // coexisting with the 8-byte type, never a widening of it. Selected by

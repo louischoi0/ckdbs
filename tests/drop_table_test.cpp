@@ -10,7 +10,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
-// DT04 - DROP TABLE (docs/spec/spec-drop-table.md DT1-DT6).
+// DT04 - DROP TABLE (docs/spec/drop-table.md DT1-DT6).
 //
 // The two claims that carry the feature: **the oid tombstone** (DT2 - a
 // dropped oid is never reissued, pinned through the `oid=` in INSERTED
@@ -146,7 +146,7 @@ TEST_F(DropTableTest, ASystemRelationIsRefused) {
 }
 
 // **This test asserted the opposite until 2026-08-16**, and it was right
-// to: `docs/spec/spec-drop-table.md` DT5 called a drop "a catalog write like
+// to: `docs/spec/drop-table.md` DT5 called a drop "a catalog write like
 // all DDL - ROLLBACK does not resurrect it". Transactional DDL's own DT5
 // (`docs/inflight/in-progress/workplan-ddl-transactional.md`, a different numbering - cite the
 // file) made that false on purpose: a drop inside a transaction

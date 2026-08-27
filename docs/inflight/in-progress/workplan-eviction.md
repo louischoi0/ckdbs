@@ -1,7 +1,7 @@
 # Page Eviction — Workplan (EVT01–EVT08)
 
 Status: **READY FOR EXECUTION**
-Spec: `docs/spec/spec-eviction.md` (normative). Related: `docs/spec/page.md`,
+Spec: `docs/spec/eviction.md` (normative). Related: `docs/spec/page.md`,
 `docs/spec/wal.md`, `docs/workplan-assertion.md` (AST06 depends on EVT06),
 `docs/inflight/in-progress/workplan-testing.md`. *(Filenames corrected 2026-08-10 — none of
 `eviction.md`, `storage.md`, `assertion-workplan.md` or
@@ -269,7 +269,7 @@ ANALYZE snapshot tests.
   pre-eviction baseline at standard pool size (regression budget: noise
   level; eviction must be free when the working set fits).
 - Docs cross-check: `docs/spec/page.md` gains a pointer to
-  `docs/spec/spec-eviction.md`; `docs/workplan-assertion.md` AST06 gains the
+  `docs/spec/eviction.md`; `docs/workplan-assertion.md` AST06 gains the
   EVT06 dependency note.
 
 **Acceptance.** Green CI on the tiny-pool job; benchmark recorded in the

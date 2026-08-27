@@ -185,7 +185,7 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t by
 // through a signed reading.
 Status CheckAggregateArgType(const parser::SelectItem& item, std::uint32_t type_val,
                              const std::string& label) {
-    // ---- AVG (feat-aggregate.md §3.4, decided 2026-08-07) ---------------
+    // ---- AVG (aggregate.md §3.4, decided 2026-08-07) ---------------
     //
     // One principle answers all three of §10's questions: **AVG never
     // invents digits and never drops declared ones** - it answers at
@@ -221,7 +221,7 @@ Status CheckAggregateArgType(const parser::SelectItem& item, std::uint32_t type_
             "; half its range does not fit the int64 accumulator, and a wrapped sum is wrong "
             "in a way no reader can detect");
     }
-    // TY05 / spec-types.md §3.2. A `DECIMAL` sums: its unscaled int64 goes
+    // TY05 / types.md §3.2. A `DECIMAL` sums: its unscaled int64 goes
     // through the same checked adder, and the answer's scale is the
     // column's, so nothing about the accumulator changes. A `DATE` or
     // `TIMESTAMP` does not - both are integers underneath, so summing one
@@ -564,7 +564,7 @@ bool HasUnindexedEqualityFilter(const catalog::TableAccess& access, const Step& 
     return false;
 }
 
-// ---- Index selection (docs/spec/feat-index.md §9) ----------------------------
+// ---- Index selection (docs/spec/index.md §9) ----------------------------
 //
 // **`f(shape, catalog)`, and nothing else.** No statistics, no cardinality
 // estimate, no property of the data - because a recorded pattern must not
@@ -740,7 +740,7 @@ bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow&
     return a.type_val == b.type_val && a.len == b.len;
 }
 
-// The correlated index probe (docs/spec/feat-index.md §8a), or nullopt: an index
+// The correlated index probe (docs/spec/index.md §8a), or nullopt: an index
 // whose **leading** key column is bound by equality to a column of an
 // *earlier* step or an enclosing chain - a join key - so the descent is
 // keyed per outer row instead of the relation being walked per outer row.
@@ -846,7 +846,7 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
     return std::nullopt;
 }
 
-// The correlated cabin probe (docs/spec/feat-cabin.md §4a), or nullopt: a
+// The correlated cabin probe (docs/spec/cabin.md §4a), or nullopt: a
 // cabined column bound by equality to an earlier step's or an enclosing
 // chain's column - the join shape, IX17's selection one trust class over.
 // Reached only after the literal form declined; first qualifying conjunct
@@ -860,7 +860,7 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
 // carry at all - IX3 refuses it an index - which is the shape this arm
 // exists for. Since JB1 the same shape without a Cabin takes the build
 // annotation one arm later (a per-statement map, not a banked structure);
-// ladder order is the economics, spec-join-inner-build.md §5: a converged
+// ladder order is the economics, join-inner-build.md §5: a converged
 // serve beats any per-statement rebuild.
 std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
@@ -890,7 +890,7 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
     return std::nullopt;
 }
 
-// The walked-join annotation (docs/spec/spec-join-inner-build.md §5, workplan
+// The walked-join annotation (docs/spec/join-inner-build.md §5, workplan
 // JB1), or nullopt. Still `f(shape, catalog)` - the residual and two schema
 // descriptors are all it reads - and declining is never a wrong answer,
 // only a forgone build. Two declines are this loop's own, spec §8's by
@@ -1227,7 +1227,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             // `inner_build=false`, v1's SELECT-only rule (workplan JB1):
             // this sub-chain runs per row of a statement that *writes*, and
             // its own writes between outer rows are what would invalidate a
-            // map the first row built (spec-join-inner-build.md §4).
+            // map the first row built (join-inner-build.md §4).
             auto inner = CompileBlock(catalog, *cond.subquery, &scope, next_step_id, /*depth=*/1,
                                       view, /*inner_build=*/false);
             if (!inner.ok()) return inner.status();

@@ -145,7 +145,7 @@ TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
 }
 
 TEST_F(AnalysisTest, APageHandoffRemovesThePageFromTheDirtyPageTable) {
-    // PW1c-2, spec-page-lsn-cross-stream.md section 9 rule 3: the page
+    // PW1c-2, page-lsn-cross-stream.md section 9 rule 3: the page
     // left this stream at the handoff LSN, and rule 1a's flush means
     // everything this stream logged for it before is already in the
     // durable image - so this stream's redo owes the page nothing, and an

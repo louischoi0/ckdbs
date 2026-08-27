@@ -320,7 +320,7 @@ it: `AcceptTupleAt` forced a **full row decode for every walked row while a
 Cabin recording was live** — eight columns per rejected row on `loans`,
 where the plain `FilterScan` decodes only the filter's column, on a path
 whose cost is decode-dominated. The fix landed as `a44c5cc`
-(`src/exec/step_vm.cpp`; `docs/spec/feat-cabin.md` §4 carries the dated
+(`src/exec/step_vm.cpp`; `docs/spec/cabin.md` §4 carries the dated
 amendment): the recording walk now decodes the filter's columns per row —
 the cabined equality *is* the filter, so the key column is already in the
 mask — and the pk on demand, only for a row whose key matches, with the key
@@ -405,7 +405,7 @@ not resolvable across runs and this addendum's claims rest on its own
 interleaved cells only. At `a44c5cc` the miss costs **+5.1–5.9%** over the
 walk, consistently across all three shapes — the honest residual, about one
 key comparison per walked row, the price of building the entry set rather
-than of decoding for it. (`docs/spec/feat-cabin.md` §4's amendment quotes ~14%
+than of decoding for it. (`docs/spec/cabin.md` §4's amendment quotes ~14%
 from the pre-A/B measurement chain; this run's interleaved number is the
 5–6% above, and the spec's figure should be read as superseded.)
 
@@ -520,7 +520,7 @@ stands whole — a Cabin's benefit is still a function of how often an
 argument repeats, `scenario1`'s 15.3× on eight cycling arguments and this
 workload's growing key space still bracket the answer, and the hit rate is
 still unreported by the engine (§12). The `CABIN AUTO` threshold
-(`docs/spec/feat-cabin.md` §11, CLAUDE.md's open decision) remains open; what
+(`docs/spec/cabin.md` §11, CLAUDE.md's open decision) remains open; what
 this addendum moves is only where that threshold's economics start — a
 structure that costs ~6% on a cold key and round-trip-floor on a warm one
 is cheap enough to declare at far lower repeat rates than the pre-fix
@@ -534,7 +534,7 @@ file, which describes `9f762a3`.
 §9b closed the no-literal join for an *indexed* join column, and its §9b.7
 left the other half open by name: a join key on an unindexed non-pk column,
 where IX17 has nothing to probe and IX3 refuses a heap relation an index at
-all. **CB12** (`8f3f730`, `docs/spec/feat-cabin.md` §4a) closes that half with
+all. **CB12** (`8f3f730`, `docs/spec/cabin.md` §4a) closes that half with
 the other structure: a cabined join column bound by equality to an earlier
 step's column probes the Cabin **per outer row**, the key read from the
 frame (`CabinProbe::key_from`) instead of a compile-time literal — the same
@@ -682,7 +682,7 @@ box, not a path.
 limitation; §7c measures the convergence. This section stands as the BASE
 side of that A/B and as the record of the pre-CB13 engine.)*
 
-`docs/spec/feat-cabin.md` §4a records that a correlated EXISTS over a cabined
+`docs/spec/cabin.md` §4a records that a correlated EXISTS over a cabined
 column **re-observes without ever recording** when every probed outer key
 has a qualifying match: the stopping sink halts the inner walk at its first
 match, a partial walk cannot commit an authoritative set, so the statement
@@ -822,7 +822,7 @@ each imposing the write-hook cost thereafter. A join whose outer keys
 never repeat pays ~6% per key (§7a's miss surcharge) for nothing — **the
 never-repeating-key distribution on an unindexed column remains the
 uncovered case**, and it is a `CABIN AUTO` policy question
-(`docs/spec/feat-cabin.md` §11), not an executor one *(closed on the Cabin's
+(`docs/spec/cabin.md` §11), not an executor one *(closed on the Cabin's
 side later by CB14 — §7d measures it)*. Also unchanged: the
 EXISTS non-convergence (§7b.4 above, recorded in §4a with the reason the
 narrow fix is wrong) *(closed later the same day by CB13 — §7c measures
@@ -832,7 +832,7 @@ re-measured; and the rest of this file, which describes `9f762a3`.
 
 ## 7c. Addendum, 2026-08-19 — the correlated EXISTS converges: sub-chain mode commits whole sets, and the caps bound the license
 
-§7b.4 measured the limitation `docs/spec/feat-cabin.md` §4a recorded: a
+§7b.4 measured the limitation `docs/spec/cabin.md` §4a recorded: a
 correlated EXISTS over a cabined column re-observed forever, because the
 stopping sink halted every recording walk at its first match and a partial
 walk may never commit a set (C1). **CB13** (`fa1f320`, §4a's closed
@@ -989,7 +989,7 @@ the walk it licenses, not at the short-circuit it replaces.
 licensed walk visits past the stop are the Cabin's work, not the
 statement's answer: charging them made the cabined side of the review's
 reproduction answer `ResourceExhausted` where the cabin-free side answered
-rows — an accelerator changing a result, which `docs/spec/feat-cabin.md` §1
+rows — an accelerator changing a result, which `docs/spec/cabin.md` §1
 forbids. The uncharged work is bounded per key: a commitable set completes
 once ever, and the caps stop the doomed forms before they walk.
 
@@ -1171,7 +1171,7 @@ of this file, which describes `9f762a3`.
 keys never repeat paid the observation surcharge for nothing, and one
 SELECT could push up to `cabin_max_values` keys into observation — each a
 dead set carrying a standing write-hook cost for a key nobody would probe
-again. **CB14** (`8420242`, `docs/spec/feat-cabin.md` §4a and §8.1 amended)
+again. **CB14** (`8420242`, `docs/spec/cabin.md` §4a and §8.1 amended)
 closes it at the admission seam: the correlated probe now takes the
 `n = 2` threshold whatever the Cabin's declaration says, because a
 declaration is evidence about the value the operator *named* — the
@@ -1784,7 +1784,7 @@ derived.
 *(each column is the mean of two same-configuration cells)*
 
 **The join cell passes and misses its class.**
-`docs/spec/spec-join-inner-build.md` §9 sets acceptance at moving the join from
+`docs/spec/join-inner-build.md` §9 sets acceptance at moving the join from
 ~8.5 ms "to the ~600 µs class". The on-side p50 at 10,000 is **1,461.8 µs**,
 so the class is missed by 2.4×, and §7f.5 says exactly where the miss is:
 the k=1 statement the build already pays (602 µs — client, the outer `Range`
@@ -1792,7 +1792,7 @@ and one walk of `loans`) plus the build constant (834 µs) plus fifteen
 further bucket replays (26 µs) is **1,462 µs** against a measured 1,461.8.
 
 **The `EXISTS` cell does not move, and that is the JB6 gate holding.**
-JB6 — the stopping sub-chain's prefix map, `docs/spec/spec-join-inner-build.md` §6
+JB6 — the stopping sub-chain's prefix map, `docs/spec/join-inner-build.md` §6
 — **is not built**, and JB3 gates sub-chains out of the build until it is. A
 correlated `EXISTS` inner walk stops at its first qualifying row, so the map
 it would produce is a walk-order prefix, and a conclusive miss over a partial
@@ -1904,7 +1904,7 @@ and the table above confirms it without a fit: **k=2 loses at every size**
 cost and the build's premium are proportional to the same row count, so the
 ratio that sets the crossing cancels it.
 
-**This makes `docs/spec/spec-join-inner-build.md` §5's "at k ≥ 2 every avoided walk
+**This makes `docs/spec/join-inner-build.md` §5's "at k ≥ 2 every avoided walk
 is pure win" quantitatively wrong at every cardinality measured**, by 8% at
 200 rows, 17% at 1,000 and 21% at 10,000. The prior round found the same
 thing at 10,000 and estimated break-even between 2.6 and 5.3 depending on
@@ -2117,7 +2117,7 @@ because an index is declared, the build arm is never offered the shape, and
 the disabled probe degrades to a per-outer-row walk. It is reachable only
 through a benchmark lever rather than a production configuration, but it is
 the one interaction between IX13 and JB1 that this matrix exposes, and
-`docs/spec/feat-index.md` §13 owns the key.
+`docs/spec/index.md` §13 owns the key.
 
 **Composite reaches the build and single does not.** `--index-mode composite`
 declares keys on `(status, due_day)` and `(branch_id, genre)` and nothing on
@@ -3103,7 +3103,7 @@ what that pass cannot reach: a join with no literal at all. `ON l.user_id =
 u.id WHERE u.id BETWEEN ? AND ?` gives the propagation nothing to derive —
 there is no constant to push onto `loans` — so the inner side stayed a full
 scan *per outer row*, and the same is true of a correlated `EXISTS`. **IX17**
-(`4f304fd`, `perf(index): the correlated probe`, `docs/spec/feat-index.md` §8a)
+(`4f304fd`, `perf(index): the correlated probe`, `docs/spec/index.md` §8a)
 closes that shape differently: when the inner side of a join step carries a
 secondary index on the join column, the executor probes that index keyed by
 each outer row's value (`IndexProbe::key_from`) instead of walking the

@@ -385,7 +385,7 @@ public:
     // Whether `trx_id` is still running **on this manager's core**. The
     // membership test a `ReadView` runs, without minting one to learn a
     // single bit. Its user is the unfiltered catalog read
-    // (`spec-ddl-transactional.md` §5b), which reads a false answer as
+    // (`ddl-transactional.md` §5b), which reads a false answer as
     // "committed" - sound only because `Abort` compensates the whole trail
     // *before* it clears `active_`, so an inactive transaction is one no
     // rollback is coming for.

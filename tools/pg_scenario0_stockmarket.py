@@ -92,7 +92,7 @@ scenario0_stockmarket.py rather than reimplemented, so the two runs cannot drift
 
 ## The `--cabin` counterpart
 
-ckdbs's `--cabin` gives `accounts.user_id` a **Cabin** (docs/spec/feat-cabin.md):
+ckdbs's `--cabin` gives `accounts.user_id` a **Cabin** (docs/spec/cabin.md):
 a store authoritative for the values queries have actually observed, which
 serves the reporter's `WHERE user_id = <n>` from an observed value's entry set
 instead of walking the relation, and charges each account UPDATE a directory
@@ -215,7 +215,7 @@ FK_CHILD, FK_COLUMN, FK_PARENT = "trades", "account_id", "accounts"
 #   - PostgreSQL takes a `KEY SHARE` row lock on the parent for each check,
 #     so two traders inserting against one account serialize briefly on it.
 #     ckdbs takes no lock: a check that meets an in-flight writer fails fast
-#     and retryably (docs/spec/impl-foreign-keys.md F3). This scenario gives each
+#     and retryably (docs/spec/foreign-keys.md F3). This scenario gives each
 #     trader a disjoint account partition, so the lock is uncontended here -
 #     which is a property of the workload, not of either engine.
 #   - Neither engine indexes the *child* column for it. That only matters

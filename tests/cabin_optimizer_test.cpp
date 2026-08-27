@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-// The decision core (feat-physical-optimizer.md §II.4, workplan PHY02).
+// The decision core (physical-optimizer.md §II.4, workplan PHY02).
 // Four properties carry the acceptance: golden ActionSets for scripted
 // snapshot sequences, hysteresis (no oscillation inside the θ gap), the
 // budget invariant (Σ pages ≤ budget after every executed ActionSet), and

@@ -317,7 +317,7 @@ TEST_F(FixedLengthTupleTest, AValueTooLongToInlineSpillsAndStillRoundTrips) {
 TEST_F(FixedLengthTupleTest, AFloatColumnIsRefusedAtCreateTable) {
     // Refused at definition time rather than at the first INSERT, and now
     // on the merits rather than for want of a width: IEEE semantics
-    // conflict with this engine's exactness discipline (spec-types.md TY1).
+    // conflict with this engine's exactness discipline (types.md TY1).
     const std::string reply = Run("CREATE TABLE bad_float (id int64, x float)");
     EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
     EXPECT_NE(reply.find("float"), std::string::npos) << reply;
@@ -325,7 +325,7 @@ TEST_F(FixedLengthTupleTest, AFloatColumnIsRefusedAtCreateTable) {
 
 TEST_F(FixedLengthTupleTest, ABareDecimalColumnIsRefusedForWantOfAScale) {
     // A bare `decimal` says nothing about scale, and a default scale is a
-    // silent decision about someone's money (spec-types.md §2). Refused at
+    // silent decision about someone's money (types.md §2). Refused at
     // parse, so the position is the type's own.
     const std::string reply = Run("CREATE TABLE bad_dec (id int64, x decimal)");
     EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;

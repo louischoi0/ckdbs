@@ -77,7 +77,7 @@ CREATE TABLE <name> ( <col> <type> [NULL | NOT NULL] [REFERENCES <parent>]
 - **Columns are `NOT NULL` by default — the opposite of standard SQL.**
   A column that says nothing refuses `NULL`; writing `NULL` after the type
   opts it in, and writing `NOT NULL` spells the default out loud for
-  standard-minded schemas. This is deliberate (spec-null.md D1): a
+  standard-minded schemas. This is deliberate (null.md D1): a
   nullable-by-default rule would have silently reinterpreted every
   `CREATE TABLE` written before the feature existed. Consequences: the
   first column (the primary key) may not be `NULL`; neither may any index
@@ -127,7 +127,7 @@ Unset and `AUTO` are stored as different values so the catalog keeps the
 difference between "nothing was said" and "the engine may decide".
 A column declared `AUTO` currently behaves exactly as an undeclared one — the
 promotion pipeline that would consume the policy is specified
-(`feat-physical-optimizer.md` Part II) but not wired to DDL.
+(`physical-optimizer.md` Part II) but not wired to DDL.
 
 **Foreign keys** (built and enforced, FK-M1..FK-M5):
 
@@ -175,7 +175,7 @@ decisions land.
   see the relation as gone; if the transaction rolls back, it returns.
   The rows are never at risk — data pages are untouched — but the schema
   change is early. Isolating it needs undo records for catalog rows,
-  which is not built (`docs/spec/spec-ddl-transactional.md` §5a).
+  which is not built (`docs/spec/ddl-transactional.md` §5a).
 
 ### ALTER TABLE (built 2026-08-10, AL1-AL9 / ALT01-ALT05)
 
@@ -348,7 +348,7 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 
 ## 3. DML
 
-### INSERT (verified; multi-row built 2026-08-10, spec-bulkinsert.md T1)
+### INSERT (verified; multi-row built 2026-08-10, bulkinsert.md T1)
 
 ```sql
 -- Omit the pk and the engine issues one
@@ -511,7 +511,7 @@ over expressions, no parenthesized nesting. Each conjunct is one of
   is refused with a position.
 - `IN (1, 2, 3)` — a value list — does **not** exist yet (the open half of
   workplan V08). It is reported as "expected a subquery".
-- **Comparisons are three-valued** (spec-null.md §4): a relational operator
+- **Comparisons are three-valued** (null.md §4): a relational operator
   with a NULL operand is unknown, and `WHERE` keeps only true — so
   `col = NULL` matches nothing, ever (the standard's trap, kept on
   purpose); `IS NULL` is the spelling that finds them.
@@ -565,7 +565,7 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   refuses rather than wraps; `LIMIT 0` is legal and answers no rows.
 - The counts are **slots**: `LIMIT 10` and `LIMIT 20` are one pattern,
   two instances, so a limited statement fingerprints like any other.
-- **NULLs sort largest** (spec-null.md D3): `ASC` puts them last, `DESC`
+- **NULLs sort largest** (null.md D3): `ASC` puts them last, `DESC`
   first — PostgreSQL's rule, one fixed default per direction. There is no
   `NULLS FIRST` / `NULLS LAST` grammar to override it.
 - `ORDER BY` takes **any column or columns**, of any relation the

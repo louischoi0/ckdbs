@@ -418,7 +418,7 @@ Four things it settled, three of them beyond moving the existing check:
   implements; it is the invariant.
 - **Both refusals now carry a byte.** `parser::Assignment` gained a
   `byte_offset` for the reason `AstValue::byte_offset` has one
-  (`spec-types.md` TY05) — and for the same reason it was safe: nothing
+  (`types.md` TY05) — and for the same reason it was safe: nothing
   compares the field, the fingerprint folds from the token stream and not
   from the AST, so no stored `pattern_id` moved.
 - **The parser deliberately does not refuse it.** Which column is the pk

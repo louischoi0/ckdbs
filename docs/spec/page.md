@@ -34,7 +34,7 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 | 2 | 2 | `flags` | per-type; 0 unless specified |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
-| 16 | 8 | `relayout_epoch` | **built** — bumped when tuples on the page move (`docs/spec/feat-physical-optimizer.md` R4); 0 = never relayouted. Its arrival consumed `reserved0` without a format event, the precedent §2a reuses |
+| 16 | 8 | `relayout_epoch` | **built** — bumped when tuples on the page move (`docs/spec/physical-optimizer.md` R4); 0 = never relayouted. Its arrival consumed `reserved0` without a format event, the precedent §2a reuses |
 | 24 | 8 | `owner_oid` | **built 2026-08-13** — oid of the owning object, 0 = unattributed (§2a); pre-§2a pages carry 0, which reads correctly |
 
 Codec rules as everywhere (rules.md §2/§5): field-wise memcpy helpers, mirror struct + `offsetof` `static_assert`s, fixed-width LE, no bitfields. A shared `page_header` codec module owns this layout; type-specific codecs compose it and must not re-implement it.
@@ -46,7 +46,7 @@ Codec rules as everywhere (rules.md §2/§5): field-wise memcpy helpers, mirror 
 The engine has forward mappings only (relation → descriptor page, var-heap
 root, index roots); nothing resolves a page back to its relation. Two
 consumers name that absence as their blocker: **page reclamation**
-(`docs/spec/feat-physical-optimizer.md` §6 gate 3 — retired and DROP-TABLE-orphaned
+(`docs/spec/physical-optimizer.md` §6 gate 3 — retired and DROP-TABLE-orphaned
 pages are quarantined forever because no structure can prove an owner) and
 **the uncountable half of catalog recovery** (`docs/inflight/known-gaps.md`, RV3 —
 rows whose relation the catalog lost cannot be attributed). WAL recovery
@@ -109,7 +109,7 @@ What it answers, and at what cost:
 
 1. **Owner of page P:** read the header. O(1) with the page in hand.
 2. **Is P orphaned:** its `owner_oid` resolves to a `kTypeDroppedTable`
-   tombstone row. DT2's retype-never-retire (`docs/spec/spec-drop-table.md`)
+   tombstone row. DT2's retype-never-retire (`docs/spec/drop-table.md`)
    and the never-reissued oid floor make the test ABA-proof — a stamped
    oid can never come to mean a *different* live relation. This is gate
    3's missing ownership proof. An **unattributed page is never
@@ -146,7 +146,7 @@ unambiguous as "unattributed" in this field.
 
 Amendments applied at confirmation (2026-08-13): `docs/spec/wal.md` §5.2
 (`PAGE_INIT` payload growth, length-discriminated decode),
-`docs/spec/feat-physical-optimizer.md` §6 gate 3 (names this as the confirmed
+`docs/spec/physical-optimizer.md` §6 gate 3 (names this as the confirmed
 ownership check), `docs/inflight/known-gaps.md` (RV3's uncountable half).
 
 **Built the same day.** What landed: the header field and `GetOwnerOid`;

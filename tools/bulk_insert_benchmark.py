@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prices the T1 multi-row INSERT (docs/spec/spec-bulkinsert.md, BLK08).
+"""Prices the T1 multi-row INSERT (docs/spec/bulkinsert.md, BLK08).
 
 The question this driver answers, in one sentence: how much of the
 ~21 us/row statement cost that `bench/results-scenario1-vs-pg.md` measured

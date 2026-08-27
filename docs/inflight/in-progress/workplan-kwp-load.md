@@ -1,7 +1,7 @@
 # KWP v0 — the load endpoint (T2 over a minimal KWP substrate)
 
 Decisions KW1-KW7; tasks KL01-KL06. **v0 carries exactly T2** — the bulk
-load stream `spec-bulkinsert.md` §3 specifies — over the smallest honest
+load stream `bulkinsert.md` §3 specifies — over the smallest honest
 KWP substrate: framed connections, the version/capability handshake, and
 the load session. The query surface (PARSE/BIND/EXECUTE, portals) stays
 on the newline protocol and stays open in `docs/inflight/in-progress/protocol-wp.md`; nothing

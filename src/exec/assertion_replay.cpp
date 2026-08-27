@@ -139,7 +139,7 @@ Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& stor
     // abort writes, so a replayed page and a live one agree - the linkage
     // rebuild reads these pages and nothing else, so a mark only the live path
     // wrote would make a recovered cabin disagree with a crashed-and-recovered
-    // one (`docs/spec/feat-assertion.md` §7).
+    // one (`docs/spec/assertion.md` §7).
     //
     // The (page_id, index) pair is the entry's *name* here, which Unapply
     // confirms against the group's list. The envelope's flag byte says whether

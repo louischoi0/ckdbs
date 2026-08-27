@@ -88,7 +88,7 @@ parent side to the Keystone id for every foreign key there can be, and
 **no action field**, because F2 leaves v1 with exactly one action and a
 field with one legal value is a field that only records that a decision
 was deferred. `kFkNullable` gained its writer with NULL storage
-(2026-08-20, `docs/spec/spec-null.md`): `Catalog::CreateForeignKey` stamps it
+(2026-08-20, `docs/spec/null.md`): `Catalog::CreateForeignKey` stamps it
 from the child column's declared nullability. A stored 0 keeps its one
 reading — "the check runs" — and enforcement never consults the bit (see
 §3's semantics note); it records the declaration for display.

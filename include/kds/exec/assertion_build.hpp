@@ -12,7 +12,7 @@
 #include "kds/txn/read_view.hpp"
 #include "kds/wal/record.hpp"
 
-// The CREATE-time Bound Cabin builder (docs/spec/feat-assertion.md §8.1, workplan
+// The CREATE-time Bound Cabin builder (docs/spec/assertion.md §8.1, workplan
 // AST06): one full scan of the target relation, accumulated into entry pages
 // and a group directory, refused whole if the data already violates the
 // declared bound.

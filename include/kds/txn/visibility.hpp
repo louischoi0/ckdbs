@@ -96,7 +96,7 @@ StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
                                          std::uint64_t undo_ptr,
                                          std::vector<std::byte>& payload);
 
-// ---- Check visibility (docs/spec/impl-foreign-keys.md §4) ---------------------
+// ---- Check visibility (docs/spec/foreign-keys.md §4) ---------------------
 //
 // What a **constraint check** is entitled to see, which is not what a reader
 // is. A foreign key check cannot read at the statement snapshot: a parent

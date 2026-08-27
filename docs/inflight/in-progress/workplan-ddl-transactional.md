@@ -1,6 +1,6 @@
 # Workplan — transactional DDL
 
-Spec: `docs/spec/spec-ddl-transactional.md`. Read §1's table before touching
+Spec: `docs/spec/ddl-transactional.md`. Read §1's table before touching
 anything here: this milestone builds **atomicity, isolation and
 consistency**, and defers **durability** by name.
 
@@ -58,7 +58,7 @@ resolution sites DT3c did not thread (listed there).
 
 ### DT1 — the spec, and the reversal recorded ✅ 2026-08-15
 
-`docs/spec/spec-ddl-transactional.md`, plus amendments to `docs/spec/txn.md` §7 and
+`docs/spec/ddl-transactional.md`, plus amendments to `docs/spec/txn.md` §7 and
 §9 so the docs stop saying "out of scope" while the code does it. No code.
 
 ### DT2 — a catalog row can carry a real transaction id ✅ 2026-08-15
@@ -272,7 +272,7 @@ Two things this found:
 
 **One pre-existing test asserted the opposite and was inverted, not
 deleted**: `DropTableTest.ADropInsideATransactionIsNotRolledBack` pinned
-the old limitation, and `docs/spec/spec-drop-table.md`'s own DT5 stated it in
+the old limitation, and `docs/spec/drop-table.md`'s own DT5 stated it in
 prose. Both are amended, and both now point here. Note the numbering
 collision CLAUDE.md warns about is live: **two specs have a "DT5" and
 they say opposite things about the same statement** — cite the file.
@@ -286,7 +286,7 @@ and is unaffected by a later unrelated rollback.
 
 `DROP TABLE` delete-marks its `sys.tables` row under the transaction's id
 instead of tombstoning immediately, so a rolled-back DROP leaves the
-relation intact. Interacts with `docs/spec/spec-drop-table.md`'s tombstone
+relation intact. Interacts with `docs/spec/drop-table.md`'s tombstone
 rule — read it first; the oid must still never be reissued.
 
 ### DT6 — the second DDL statement, and the refusal ✅ 2026-08-16

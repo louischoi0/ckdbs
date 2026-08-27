@@ -10,7 +10,7 @@ decided, and the workplan is `docs/workplan-join-inner-build.md`
 and §7b/§9b (the shapes it would serve).
 
 Related docs: `docs/spec/parser-v2.md` §5 (the contract this must not break),
-`docs/spec/feat-cabin.md` §4a (the machinery this reuses), `docs/spec/feat-index.md`
+`docs/spec/cabin.md` §4a (the machinery this reuses), `docs/spec/index.md`
 §8a, `docs/spec/crosscore.md`.
 
 ---
@@ -66,7 +66,7 @@ asks for them to be ratified as such:
 2. **The lazy build never changes read scheduling.** The inner relation
    is first read exactly when written order says it is — when the first
    outer row reaches the inner step. The build is that walk's side
-   effect, precisely the Recording pattern `feat-cabin.md` §4 ratified
+   effect, precisely the Recording pattern `cabin.md` §4 ratified
    ("it was going to scan anyway; recording is a side effect").
 3. **Emission order is untouched.** The map's buckets are appended in
    walk order, so a probe replays each key's matches in exactly the
@@ -239,7 +239,7 @@ steps to their walk, and the build — being execution-time, not a
 compiled kind — needs no descriptor presence at all. `[OPEN]`: whether
 the peer's consuming stage may build locally for its own stage (it runs
 the same executor, so the machinery would work unmodified); deferred
-with the rest of the re-derivation question in `feat-index.md` §8a.
+with the rest of the re-derivation question in `index.md` §8a.
 
 Out of scope in v1, by decision: multi-column join keys (CB12's scope
 rule); non-equality joins; spill-to-disk; building for a `kFilterScan`

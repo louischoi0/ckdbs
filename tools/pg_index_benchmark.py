@@ -18,7 +18,7 @@ What differs, and it is dialect rather than shape:
 What differs and is **not** dialect, and is the most interesting column of
 the comparison: PostgreSQL's `INCLUDE` can produce a real **index-only
 scan**, because a visibility map exists to answer "is every row on this heap
-page visible to everyone?" without reading the page. `feat-index.md` §7 says
+page visible to everyone?" without reading the page. `index.md` §7 says
 KDS cannot have one and says exactly why - there is no visibility witness
 outside the tuple. So this twin runs `EXPLAIN (ANALYZE, BUFFERS)` on the
 covering shapes and records which scan node PostgreSQL chose; a run where it
@@ -232,7 +232,7 @@ def explain_shapes(client, names, sizes, seed):
     """`EXPLAIN (ANALYZE)` per (shape, relation), reduced to the scan node.
 
     The node name is the number that matters here: `Index Only Scan` is the
-    plan KDS structurally cannot produce (`feat-index.md` §7), and seeing
+    plan KDS structurally cannot produce (`index.md` §7), and seeing
     which shapes PostgreSQL serves that way is what prices the missing
     visibility witness rather than guessing at it."""
     rng = random.Random(seed)

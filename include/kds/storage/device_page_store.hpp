@@ -193,7 +193,7 @@ public:
     // map write is FlushMaps' guarded no-op and only the sync runs.
     Status PersistMaps();
 
-    // ---- The writeback primitive (docs/spec/spec-eviction.md §4, EVT03) ------
+    // ---- The writeback primitive (docs/spec/eviction.md §4, EVT03) ------
     //
     // Durable → checksum → write → clean, for exactly these ids, skipping
     // any that are non-resident or already clean. **The single code path**
@@ -238,7 +238,7 @@ public:
     // it in production until then - the same stance the sweep itself takes.
     std::size_t MaintainFreeReserve(std::size_t pool_frames, std::size_t watermark);
 
-    // ---- Scan ring (docs/spec/spec-eviction.md §5, EVT06) --------------------
+    // ---- Scan ring (docs/spec/eviction.md §5, EVT06) --------------------
     //
     // The real cyclic ring: a page absent from the pool is faulted into
     // the ring's next slot, whose previous occupant is dropped from the
@@ -510,7 +510,7 @@ public:
     StatusOr<PageRef> PinnedGetForRead(PageId page_id) { return GetForRead(page_id); }
 
     // Whether `page_id` belongs to a **pinned class**
-    // (`docs/spec/spec-eviction.md` EV3): never a sweep candidate at any
+    // (`docs/spec/eviction.md` EV3): never a sweep candidate at any
     // pressure. v1's classes are the fixed catalog pages and - when AST04
     // lands - Bound Cabin pages.
     //
@@ -587,7 +587,7 @@ public:
     // still holds one, so enabling the sweep before the `PageRef` migration
     // would be a use-after-free. It exists now so the pinned-class guarantee
     // a Bound Cabin rests on is testable before that migration lands.
-    // The CLOCK usage counter's ceiling (`docs/spec/spec-eviction.md` EV1,
+    // The CLOCK usage counter's ceiling (`docs/spec/eviction.md` EV1,
     // `[PROPOSED] 5`). A cap and not a free-running count: it bounds how
     // many sweep rotations a hot frame can survive, so a page that fell out
     // of use cannot hold a frame for an unbounded time on the strength of
@@ -683,7 +683,7 @@ private:
         // (EV4 answers OutOfSpace instead of waiting).
         std::uint32_t pins = 0;
 
-        // The CLOCK usage counter (`docs/spec/spec-eviction.md` EV1 / §3.1-2):
+        // The CLOCK usage counter (`docs/spec/eviction.md` EV1 / §3.1-2):
         // **saturating on access, decremented by the sweep, reclaimed at
         // zero.** A counter rather than a single reference bit, so a page
         // touched five times outlives one touched once - which a bit cannot

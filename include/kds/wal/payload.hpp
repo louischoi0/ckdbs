@@ -213,7 +213,7 @@ StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in
 
 // ---- INDEX_INSERT --------------------------------------------------------
 //
-// One entry appended to one secondary-index leaf (docs/spec/feat-index.md §12.1).
+// One entry appended to one secondary-index leaf (docs/spec/index.md §12.1).
 // The record's `page_id` names the leaf, and the leaf's own header carries
 // the widths - so redo needs neither the index's oid nor its layout, and
 // there is no second place for either to be wrong.
@@ -482,7 +482,7 @@ StatusOr<CheckpointEndPayload> DecodeCheckpointEnd(std::span<const std::byte> in
 // ---- ASSERT_RESERVE / ASSERT_BUILD ---------------------------------------
 //
 // One Bound Cabin entry landing in the page the envelope names
-// (docs/spec/feat-assertion.md §7, workplan AST05). One shape for both record
+// (docs/spec/assertion.md §7, workplan AST05). One shape for both record
 // types, HEAP_INSERT/HEAP_OVERWRITE's precedent: a reservation and a build
 // row write identical bytes and differ in ownership - RESERVE is txn-owned
 // with kEntryReserved set in the entry, BUILD is DDL-owned (kNoTxnId) with
@@ -678,7 +678,7 @@ StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in);
 // One chunk of one Bound Cabin's group headers as of a checkpoint. It is the
 // durable base assertion replay folds onto, which is what lets the fold start
 // at the last checkpoint instead of at the cabin's birth
-// (`docs/spec/feat-assertion.md` §7).
+// (`docs/spec/assertion.md` §7).
 //
 // **Headers only, never the entry lists.** A group's entry list is O(all
 // writes, forever) - `BoundCabin::Apply` appends one pair per checked write and

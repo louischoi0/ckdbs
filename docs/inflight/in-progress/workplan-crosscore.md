@@ -67,7 +67,7 @@ worth carrying forward:
   field of their own, so M1's co-location rule is structural — there is no
   way to spell a relation whose var-heap is on another core. The only
   co-location that will need expressing is FK-linked relations, and
-  `docs/spec/impl-foreign-keys.md` keeps those together in v1 by deferring
+  `docs/spec/foreign-keys.md` keeps those together in v1 by deferring
   cross-core FK entirely.
 
 The placement policy is `catalog::AssignOwnerCore()`

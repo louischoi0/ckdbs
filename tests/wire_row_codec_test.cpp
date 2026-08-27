@@ -48,7 +48,7 @@ parser::AstValue Str(std::string v) {
 }
 
 // The decoded form a decimal column produces: unscaled int64 plus the
-// column's scale (spec-types.md TY5).
+// column's scale (types.md TY5).
 parser::AstValue Decimal(std::int64_t unscaled, std::uint8_t scale) {
     parser::AstValue a;
     a.type = parser::ValueType::kDecimal;
@@ -388,7 +388,7 @@ TEST(WireRowBatchTest, AWideDecimalRoundTripsAsSixteenBytes) {
 }
 
 TEST(WireRowBatchTest, ADateAndATimestampRoundTripAsEpochIntegers) {
-    // Both decode as kInt (spec-types.md TY5) and ride the int arm at
+    // Both decode as kInt (types.md TY5) and ride the int arm at
     // their storage widths. Rendering into a calendar is the client's act,
     // exactly as it is at the text protocol's emission boundary.
     const auto schema = SchemaOf({Column(0, "d", catalog::kTypeValDate),

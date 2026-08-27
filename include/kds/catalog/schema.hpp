@@ -46,7 +46,7 @@ Status CheckKeystoneColumn(const Schema& schema);
 Status CheckDeclarableColumnTypes(const Schema& schema);
 
 // A column with no null bit - every `NOT NULL` column, which is every
-// column of a relation that declared nothing (spec-null.md §2.2).
+// column of a relation that declared nothing (null.md §2.2).
 inline constexpr std::uint16_t kNoNullBit = 0xFFFF;
 
 // ---- RowLayout -----------------------------------------------------------
@@ -89,13 +89,13 @@ struct RowLayout {
     // Corruption, never interpreted (invariant 13's "checked redundancy").
     // Includes `null_bitmap_bytes`, which is 0 for an all-NOT NULL schema -
     // the property that makes this feature free for every relation that
-    // never asks for it (spec-null.md §2.2's no-migration argument).
+    // never asks for it (null.md §2.2's no-migration argument).
     std::uint32_t row_size = 0;
 
     // Byte offset of each column within the payload, one per schema column
     // and positionally aligned with Schema::columns. offsets[0] is always 0:
     // the Keystone word leads every tuple. **Unchanged by the null bitmap**,
-    // which is appended after the last column (spec-null.md §2.1).
+    // which is appended after the last column (null.md §2.1).
     std::vector<std::uint32_t> offsets;
 
     // The null-bit index of each column, positionally aligned with
@@ -130,7 +130,7 @@ struct RowLayout {
                                                 std::uint32_t inline_cell_width);
 };
 
-// The bitmap is the sole authority on nullness (spec-null.md §3), and these
+// The bitmap is the sole authority on nullness (null.md §3), and these
 // two are its only readers and writer - explicit shift and mask, invariant
 // 6, with the byte's address computed in exactly one place. `payload` is
 // the whole tuple payload of exactly `layout.row_size` bytes; a column with
@@ -161,7 +161,7 @@ inline void SetNullBit(std::span<std::byte> payload, const RowLayout& layout,
 bool SchemaCanSpill(const Schema& schema) noexcept;
 
 // One end of a foreign key, as the relation at the *other* end holds it
-// (docs/spec/impl-foreign-keys.md §1). Which end `rel_oid` names depends on
+// (docs/spec/foreign-keys.md §1). Which end `rel_oid` names depends on
 // which list it is in - the parent in `fkeys_out`, the child in `fkeys_in`
 // - because a relation reading its own list already knows which side it is
 // on, and a field saying so again is a field that can disagree.
@@ -246,7 +246,7 @@ struct TableAccess {
     // inline_cell_width, neither of which can change without DDL.
     RowLayout layout;
 
-    // ---- Cabins on this relation (docs/spec/feat-cabin.md) -------------------
+    // ---- Cabins on this relation (docs/spec/cabin.md) -------------------
     //
     // Which columns carry a Cabin, and which Cabin each is. Both are DDL
     // facts - `CREATE CABIN` and `DROP CABIN` bump the catalog version -
@@ -287,7 +287,7 @@ struct TableAccess {
         return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
     }
 
-    // ---- Foreign keys at both ends (docs/spec/impl-foreign-keys.md §1) -------
+    // ---- Foreign keys at both ends (docs/spec/foreign-keys.md §1) -------
     //
     // `fkeys_out` is this relation as the **child**: each entry names the
     // parent it references and the local column holding the reference. The
@@ -321,7 +321,7 @@ struct TableAccess {
         return nullptr;
     }
 
-    // ---- Secondary indexes on this relation (docs/spec/feat-index.md) --------
+    // ---- Secondary indexes on this relation (docs/spec/index.md) --------
     //
     // One entry per index, everything a compiler or a write hook needs to
     // reach the tree without going back to sys.indexes.

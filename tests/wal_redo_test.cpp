@@ -231,7 +231,7 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
 }
 
 TEST_F(RedoTest, AHandedOffPagesRecordsAreSkippedAndThePageNeverFaulted) {
-    // PW1c-2, spec-page-lsn-cross-stream.md section 9 rule 3's redo half.
+    // PW1c-2, page-lsn-cross-stream.md section 9 rule 3's redo half.
     // The stream holds PAGE_INIT + two inserts for kPage and then a
     // PAGE_HANDOFF: the page left this stream, so redo must apply nothing
     // for it and must not even create or load it. The store deliberately
@@ -269,7 +269,7 @@ TEST_F(RedoTest, AHandedOffPagesRecordsAreSkippedAndThePageNeverFaulted) {
         << "redo must not create or fault a page that left the stream";
 }
 
-// ---- The PL-C stamp (PW1c-3, spec-page-lsn-cross-stream.md §9 4-5) -------
+// ---- The PL-C stamp (PW1c-3, page-lsn-cross-stream.md §9 4-5) -------
 
 TEST_F(RedoTest, AnAppliedRecordStampsTheOwningStream) {
     // Rule 4: the stream stamp rides the page_lsn stamp, so a replayed

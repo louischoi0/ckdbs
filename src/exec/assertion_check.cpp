@@ -428,7 +428,7 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         // purge - but they are marked, so a rebuild scanning only these pages
         // reaches the same directory this `Unapply` just produced
         // (`storage/cabin_bound_page.hpp`'s `kEntryOrphaned`, the AS6b decision
-        // in `docs/spec/feat-assertion.md` §7). Unconditional, not `wal != nullptr`:
+        // in `docs/spec/assertion.md` §7). Unconditional, not `wal != nullptr`:
         // the mark is a data change, and skipping it without a log would leave
         // a page the next scan misreads.
         auto page = store.Get(it->page);

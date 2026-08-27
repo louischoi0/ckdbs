@@ -696,7 +696,7 @@ TEST(DurabilityClassNames, EveryClassRoundTripsThroughItsName) {
 }
 
 
-// ---- INDEX_INSERT (docs/spec/feat-index.md §12.1, workplan IX08) --------------
+// ---- INDEX_INSERT (docs/spec/index.md §12.1, workplan IX08) --------------
 
 TEST_F(InsertWalTest, AnIndexEntryIsLoggedBeforeTheRowItPointsAt) {
     // The direction is forced, not stylistic: if the index record is durable

@@ -299,7 +299,7 @@ private:
     bool valid_ = false;     // ...and it was patternable, and nothing failed to lex
     bool complete_ = false;  // kEof has been fed
 
-    // BI5's suppression (docs/spec/spec-bulkinsert.md §2.4): an INSERT's shape
+    // BI5's suppression (docs/spec/bulkinsert.md §2.4): an INSERT's shape
     // is its **first row's**. Once the first top-level paren group of an
     // INSERT-headed stream has closed, later tokens fold literals into
     // arg_hash and nothing into the shape - so `VALUES (1)` and
