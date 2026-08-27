@@ -247,6 +247,72 @@ pre-existing data file stops mounting** (P0's development-stage policy).
 Priced alongside: each new root shrinks the catalog overflow range by one
 page, ~68 `sys.columns` rows off the instance ceiling (`well_known.hpp:313-325`).
 
+### 3a. C1 — the non-bootstrap alternative priced at mount, and the conclusion
+
+Gate C1 of `instructions/v2.4.0/range-foundation.md` §3, closed 2026-08-27
+in worktree `v2.4.0-range-foundation-1` at `6ce9b6e`, **before** the RA2
+edit it gates. The 15 → 16 epoch is irreversible for every existing file,
+so the alternative — a directory that needs no bump — is priced at
+**mount**, where CC9 requires the directory readable before any statement
+runs, and refused on the two costs below rather than by omission.
+
+**(a) `sys.ranges` as an on-demand relation** — created like a user
+relation on first split, root from the general page supply.
+
+1. **A peer core could not read it, and that is fatal rather than slow.**
+   A general-supply root sits at or above `kFirstUserPageId` (128); every
+   core's store is armed `SetCoreOwnership(core, lease, kFirstUserPageId)`
+   (`src/server/core_runtime.cpp:202`), and `DevicePageStore::MayFault`
+   admits only ids below that limit plus explicitly granted leases —
+   grants that exist for leased *writes* (CC7), not for a catalog every
+   routing core must always read. `well_known.hpp`'s overflow-range
+   comment states the rule for exactly this case: *"a peer that cannot
+   read the catalog cannot resolve a relation at all."*
+2. **The invalidation flush must name every catalog page, and a dynamic
+   root cannot be named.** The flush before `kCatalogInvalidate` walks the
+   compile-time span (`FlushPages(kEveryCatalogPage)`,
+   `src/server/expeditor.cpp:1028`), as does the peer's `EvictClean`
+   (`src/server/core_runtime.cpp:884`). A run-time root would need a
+   durable registry of which general-supply ids are catalog pages — a
+   second free-map-shaped structure invented to avoid one version bump.
+3. **Existence becomes conditional on every resolution path.** A
+   bootstrap root is findable with zero catalog reads; an on-demand
+   relation is found by name through `sys.objects` → `sys.tables`, and
+   its *absence* is a per-file fact — plan-time resolution carries an
+   "is there a directory yet" branch forever, against RD3's zero-cost
+   invariant on the unsplit path.
+
+**(b) Range rows folded into an existing structure.** Into `sys.tables`:
+`SysTableRow` is a fixed-offset row keyed one-per-relation, and ranges are
+variable-count per relation — either the row grows a variable-length list
+(refused by the codec's shape, `rows.hpp`) or `oid` stops keying one row
+and every `sys.tables` reader is rewritten. Into the **anchor page**: as
+the *whole* directory it fails on shape alone — `{u64 key, u32 root}`
+cells (`anchor_page.hpp:42`) have no `owner_core` field — before D2's
+`index_oid == 0` / `lo = 0` collision (`catalog.cpp:1106-1111`) is even
+reached; the collision's pricing as an *entry-page* store stays C4's
+(RA5), for D2.
+
+**Conclusion: the epoch is necessary; RA2 proceeds as ordered.** (a)1 and
+(a)2 are structural — the fixed low root is what the peer-fault rule and
+the bounded flush span are built on — and (b) fails on shape. On the other
+side of the scale: every pre-16 file stops mounting (P0 policy, and the
+order's §0 argues the cost is lowest *now*, before R6's recovery
+fixtures exist); one overflow page off the catalog ceiling (H4 — the
+range 15..127 = 113 pages becomes 16..127 = 112, ~68 `sys.columns` rows,
+M2's number); one more bootstrap `CreateAt` (M1's number).
+
+**H1 and H4, stated before the first edit** (falsifiers in the order §4).
+**H1** (RD1 is inert): checkable now by source-read — no path reads page
+15 today, and the one execution RA2 adds to an existing path is
+`DropTable`'s sweep visiting an empty chain, answer-identical by
+construction — plus the suite half of the falsifier (any delta beyond the
+version pins RA2 edits); the mount-cost half is **M1's**, not this
+task's. **H4**: the arithmetic above is computable now from
+`well_known.hpp:313-325`; reading it against the widest scenario-bench
+schema is **M2's**. Verdicts land in this section when the suite and the
+cells report.
+
 ---
 
 ## 4. Decisions this plan does not take
