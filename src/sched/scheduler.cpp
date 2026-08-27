@@ -66,7 +66,12 @@ Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_i
     }
     // Draining is all the handler does: the wake carries no data, the ring
     // is the queue, and phase 3 of this same iteration is what reads it.
-    io_handlers_[waker_->handle()] = [this](const IoEvent&) { waker_->Drain(); };
+    io_handlers_[waker_->handle()] = [this](const IoEvent&) {
+        waker_->Drain();
+        // D7's `sched_spurious_wakes`: read once, after phase 3, against
+        // whether that drain found anything.
+        woken_by_waker_ = true;
+    };
 
     // Published last, so no peer can find a target that is not yet
     // registered. Safe unsynchronised: this runs on the startup thread
@@ -381,6 +386,7 @@ bool Scheduler::RunOnce() {
     // across the whole body rather than at any one phase.
     bool advanced = false;
     const std::uint64_t submits_at_entry = submits_;
+    woken_by_waker_ = false;
 
     // Phase 1: drain I/O completions. The wait is phase 6's idle policy
     // pulled to the front, which is where a reactor can actually sleep: 0
@@ -421,7 +427,15 @@ bool Scheduler::RunOnce() {
             idle_blocks_.fetch_add(1, std::memory_order_relaxed);
         }
     }
+    // The block itself, timed (D7). Two clock reads, and only on an
+    // iteration that was about to sleep - the same "by construction there
+    // is nothing to run" argument the counters above stand on.
+    const MonoTimeNs block_entry_ns = timeout_ms != 0 ? clock_.Now() : 0;
     Status io_status = io_backend_.PollReady(timeout_ms, io_events_scratch_);
+    if (timeout_ms != 0) {
+        const MonoTimeNs now = clock_.Now();
+        if (now > block_entry_ns) idle_block_ns_ += static_cast<std::uint64_t>(now - block_entry_ns);
+    }
     // Cleared the moment the block ends, so a wake written from here on is
     // one this reactor did not need - which costs a syscall, never a
     // missed message.
@@ -465,10 +479,16 @@ bool Scheduler::RunOnce() {
 
     // Phase 3: drain cross-core inboxes (sched.md section 5). A no-op with
     // no transport attached, which is every single-core build.
-    if (DrainInbox()) {
+    const bool drained = DrainInbox();
+    if (drained) {
         did_work = true;
         advanced = true;
     }
+    // A wake that ended the block and left the inbox empty. Ordinary
+    // rather than wrong - the sender publishes before it wakes, so the
+    // message can be drained by the iteration that raced the flag, one
+    // ahead of the eventfd being read (scheduler.hpp's accessor).
+    if (woken_by_waker_ && !drained) ++spurious_wakes_;
 
     // Phase 4: run ready tasks under the loop budget.
     if (RunReadyTasks(advanced)) did_work = true;

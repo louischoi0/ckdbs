@@ -844,6 +844,15 @@ Each tagged **measured** or **source-read**, each with its site.
    shipping defect** — any cross-core message to an idle core pays it;
    shipping is the first feature to put one on a client's critical path.
    *Owner: `docs/spec/sched.md` §4. This run fixes nothing.*
+   **Answered 2026-08-26/27** by that owner (`instructions/v2.3.0-reactor-wake.md`,
+   worktree `v2.3.0-rwc1`): an eventfd per reactor, woken only when the
+   destination is actually asleep. The cell above re-reads **0.416 → 0.989**
+   (`bench/v2.3.0/results-reactor-wake-r1-v2.2.1-10-g01da467.md`) and this
+   sweep's functional dependence is gone — 43.2 µs flat across the same four
+   knob values, and 42.4 µs at 50,000
+   (`bench/v2.3.0/results-knob-sweep-cell2-v2.2.1-14-g13c6d4d.md`). The
+   rounding floor was left unbuilt: with nothing waiting for the timer, the
+   residual is 20 µs of wire rather than a millisecond of block.
 2. **The millisecond is shared, not serialized.** Under `relaxed`, shipped
    throughput is linear at ≈ 880 × S while p50 holds at 1,080 µs and the
    owner sits at 2–8% busy (§4b). **measured.** It is therefore invisible
@@ -854,6 +863,12 @@ Each tagged **measured** or **source-read**, each with its site.
    **measured**, mechanism **source-read** at
    `src/sched/scheduler.cpp:196-199` and `include/kds/sched/coro.hpp:425`.
    *Owner: `docs/spec/sched.md` §4; this closes pretasks §8c.*
+   **Answered 2026-08-26** by the same order's RW3 ("parked is not ready"):
+   the arrival core reads **0.032** at K = 1 and 0.028 at K = 4
+   (`bench/v2.3.0/results-parked-is-not-ready-v2.2.1-12-g12c0ebb.md`,
+   `bench/v2.3.0/results-hot-path-cell4-v2.2.1-14-g13c6d4d.md`). The trade
+   is stated there rather than netted off: at K = 1 on an idle box it costs
+   0.900× throughput and +31.5 µs p50, and by K = 4 that is gone.
 4. **The 80–92% cross-core write refusal is gone.** 0 CC3 refusals in 4,800
    unrouted write attempts over 20 runs at `cores` 4 and 8, engine counter 0
    from every core in every run (§8a). **measured.** *Closes

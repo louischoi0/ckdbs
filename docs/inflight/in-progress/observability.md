@@ -23,6 +23,16 @@ an existing command, not a subsystem. They answer "how much" and never
   added 2026-08-26 by the statement-shipping pretasks' T4 — so the time
   charged to no group is computable from outside the process
   (`docs/spec/sched.md` §4).
+- **The idle policy and the wake path**, added 2026-08-26/27 by the v2.3.0
+  order's RW1-RW3 and its D7: `sched_idle_blocks`, `sched_wake_race_skips`,
+  `sched_parked_idle_blocks`, `sched_idle_block_us`, `sched_wakes_sent`,
+  `sched_wakes_received`, `sched_spurious_wakes`. The one that changes what
+  can be *read* rather than adding a count is `sched_idle_block_us`: with
+  it, `sched_wall_us - sum(sched_*_polled_us) - sched_idle_block_us` is the
+  time charged to nobody that was not sleep, which is what the bullet above
+  could not separate — an arrival core measured at 79.5% sleep and 10.3%
+  unaccounted work where the two used to arrive as one 90% lump
+  (`docs/spec/sched.md` §7).
 - **Cross-core write refusals** (`cross_core_write_refusals` and its keyed
   detail), the population a 2PC decision would be made from
   (`docs/spec/crosscore.md` §6).

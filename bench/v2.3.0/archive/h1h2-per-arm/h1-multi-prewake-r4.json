@@ -1,0 +1,55 @@
+{
+  "only": "multi",
+  "cores": 4,
+  "tables": 6,
+  "rows": 2000,
+  "placement": "rotate",
+  "peer_listeners": true,
+  "configs": {
+    "multi-core": {
+      "tag": "multi-core",
+      "cores": 4,
+      "tables": 6,
+      "rows": 2000,
+      "wall_s": 11.316074193999157,
+      "statements": 42007,
+      "errors": 0,
+      "throughput_stmts_s": 3712.153108917936,
+      "owner_cores": {
+        "bench0": 3,
+        "bench1": 1,
+        "bench2": 2,
+        "bench3": 3,
+        "bench4": 1,
+        "bench5": 2
+      },
+      "phases": {
+        "insert": {
+          "n": 12001,
+          "p50_us": 2033.6770012363559,
+          "p99_us": 2764.418000879232
+        },
+        "point-select": {
+          "n": 12000,
+          "p50_us": 23.427999622072093,
+          "p99_us": 78.11099931132048
+        },
+        "update": {
+          "n": 12000,
+          "p50_us": 2172.0490003644954,
+          "p99_us": 2764.0659991448047
+        },
+        "delete": {
+          "n": 6000,
+          "p50_us": 2159.7970007860567,
+          "p99_us": 2742.402999501792
+        },
+        "scan": {
+          "n": 6,
+          "p50_us": 1129.9630004941719,
+          "p99_us": 1567.9790012654848
+        }
+      }
+    }
+  }
+}

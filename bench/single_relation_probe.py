@@ -195,7 +195,9 @@ def run_once(args, port):
                 f"peer_listeners = {'on' if multi else 'off'}\n"
                 f"durability = {args.durability}\n"
                 f"wal_drain_interval_us = {args.wal_drain_interval_us}\n"
-                f"log_file = probe.log\nlog_dir = {workdir}\nlog_level = warn\n")
+                + (f"relaxed_flush_interval_us = {args.relaxed_flush_interval_us}\n"
+                   if args.relaxed_flush_interval_us >= 0 else "")
+                + f"log_file = probe.log\nlog_dir = {workdir}\nlog_level = warn\n")
     stderr_path = os.path.join(workdir, "probe.stderr")
     with open(stderr_path, "w") as err:
         proc = subprocess.Popen([args.server, "--config", conf],
@@ -419,6 +421,15 @@ def main():
                          "idle reactor blocks (`IdleTimeoutMs` caps the 10 ms idle block "
                          "at the next timer, sched/scheduler.cpp:196-214), so it bounds "
                          "how long a ring message waits on a core with nothing to do.")
+    ap.add_argument("--relaxed-flush-interval-us", type=int, default=-1,
+                    help="the `relaxed` loss window, and the period of the sync that "
+                         "enforces it. That sync runs on the reactor thread, so it is "
+                         "also the period of `relaxed`'s latency tail "
+                         "(expeditor.hpp: one ~2.2 ms statement every 12 ms at the "
+                         "10 ms default). 0 disables the sync outright (expeditor.hpp), "
+                         "which is the discriminator: a tail that survives it is not this "
+                         "sync. -1, the default, leaves the engine's own value - what "
+                         "every cell before RW-B cell 2 measured.")
     ap.add_argument("--arrival-core", type=int, default=None,
                     help="with --seat foreign, put every session on this one core")
     ap.add_argument("--trace-latencies", action="store_true",

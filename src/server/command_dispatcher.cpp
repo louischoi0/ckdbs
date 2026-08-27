@@ -862,7 +862,24 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // before "parked is not ready".
            << " sched_idle_blocks=" << scheduler_view_->idle_blocks()
            << " sched_wake_race_skips=" << scheduler_view_->wake_race_skips()
-           << " sched_parked_idle_blocks=" << scheduler_view_->parked_idle_blocks();
+           << " sched_parked_idle_blocks=" << scheduler_view_->parked_idle_blocks()
+           // The block's *duration*, and the wake traffic around it (D7 of
+           // `instructions/v2.3.0-reactor-wake.md`). With
+           // `sched_idle_block_us` present,
+           // `sched_wall_us - sum(sched_*_polled_us) - sched_idle_block_us`
+           // is the time charged to nobody that was not sleep - which is
+           // the reading the group-accounting gap actually needs, and the
+           // one the field above could not give on its own.
+           //
+           // `sched_wakes_sent` is the whole instance's, so it repeats on
+           // every core and equals the sum of their `sched_wakes_received`;
+           // `sched_spurious_wakes` are wakes that ended a block and found
+           // an empty inbox, which the race makes ordinary rather than
+           // wrong.
+           << " sched_idle_block_us=" << scheduler_view_->idle_block_ns() / 1000
+           << " sched_wakes_sent=" << scheduler_view_->wakes_sent()
+           << " sched_wakes_received=" << scheduler_view_->wakes_received()
+           << " sched_spurious_wakes=" << scheduler_view_->spurious_wakes();
         // Indexed by the enum, not paired with it: a fourth group would
         // then fail to compile here rather than print as two.
         static constexpr const char* kGroupNames[sched::kNumSchedulingGroups] = {
