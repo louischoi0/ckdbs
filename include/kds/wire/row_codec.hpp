@@ -160,6 +160,20 @@ public:
     // this gets a wrapped count rather than an error.
     bool full() const noexcept;
 
+    // Un-appends the last row, returning the writer to what `size_bytes()`
+    // read before it. `mark` must be exactly that value.
+    //
+    // The same rollback `AppendRow` already performs on a failed encode,
+    // exposed for a caller that has to decide *after* seeing a row's
+    // encoded width - which is the only way to bound a batch exactly. A
+    // row's wire width is not a schema constant even though its stored
+    // width is (invariant 13): a NULL field costs 4 bytes and a present
+    // int64 costs 12, and a varchar costs 4 + its length. So a sink that
+    // predicts the next row from the last one is wrong on every nullable
+    // and every text relation, and both are ordinary. Refuses a mark that
+    // is not the current row's start rather than corrupting the batch.
+    Status RollbackLastRow(std::size_t mark);
+
     // Writes the row count into the reserved header and returns the
     // payload. The writer is left empty and reusable, which is what keeps a
     // streaming caller from allocating a buffer per batch.

@@ -80,10 +80,15 @@ struct SimTransportConfig {
     //
     // Defaulted to the production number for the reason the capacity above
     // is bounded at all: a simulated transport that carries what the real
-    // one refuses does not simulate it. This one carried anything, and the
-    // cost was a live defect no simulation could have found - a cross-core
-    // read of 42 rows answering zero rows, silently
-    // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
+    // one refuses does not simulate it, and this one carried anything.
+    //
+    // Stated exactly, because the first version of this comment claimed
+    // the gap had cost a live defect "no simulation could have found" and
+    // that was wrong twice over: `sim/` builds no `RingTransport` at all,
+    // and the defect (a cross-core read of 42 rows answering zero rows,
+    // silently - `docs/inflight/known-gaps.md`, beside the shipped-reply
+    // cap) was found on a real one. The gap is a fidelity gap and nothing
+    // has yet been lost to it; a cap is what keeps that true.
     std::size_t max_payload = kCoreRingPayloadBytes;
 };
 

@@ -40,9 +40,10 @@ Status SimRingTransport::TrySend(const MessageHeader& header,
 
     // The real ring refuses an oversize payload as a programming error
     // (spsc_ring.hpp), so this one must too, in the same code and with the
-    // same reading. It did not, and that is why no simulation could have
-    // found the batch-wider-than-the-slot defect: the simulated transport
-    // carried what production drops.
+    // same reading. It did not, which was a fidelity gap: the simulated
+    // transport carried what production drops. (Not the reason the
+    // batch-wider-than-the-slot defect went unfound - `sim/` builds no
+    // transport at all; see the config field's own note.)
     if (payload.size() > config_.max_payload) {
         return Status::InvalidArgument(
             "sim ring transport: payload is " + std::to_string(payload.size()) +
