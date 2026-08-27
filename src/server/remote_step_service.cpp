@@ -372,9 +372,11 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
             for (std::size_t i = 0; i < out_cols.size(); ++i) {
                 row[i] = frame.Get(exec::ColumnRef{0, 0, out_cols[i]});
             }
-            const std::size_t before = writer.size_bytes();
-            if (Status s = writer.AppendRow(out_schema, row); !s.ok()) return s;
-            if (ShouldSeal(writer, writer.size_bytes() - before)) Seal(pipe, writer);
+            if (Status s = PlaceRow(writer, out_schema, row,
+                                    [&] { Seal(pipe, writer); });
+                !s.ok()) {
+                return s;
+            }
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
@@ -711,10 +713,10 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                             static_cast<std::uint16_t>(output[o].from_upstream != 0 ? 1 : 0),
                             0, output[o].index});
                     }
-                    const std::size_t before = writer.size_bytes();
-                    if (Status s = writer.AppendRow(output_schema, out_row); !s.ok()) return s;
-                    if (ShouldSeal(writer, writer.size_bytes() - before)) {
-                        SealAndDrain(tag, writer);
+                    if (Status s = PlaceRow(writer, output_schema, out_row,
+                                            [&] { SealAndDrain(tag, writer); });
+                        !s.ok()) {
+                        return s;
                     }
                     return storage::VisitControl::kContinue;
                 },
@@ -810,11 +812,26 @@ void RemoteStepServer::CancelUpstream(const PipelineTag& input_tag,
     (void)send_(upstream_core, sched::RingMessageKind::kStepCancel, std::move(bytes));
 }
 
-bool RemoteStepServer::ShouldSeal(const wire::RowBatchWriter& writer,
-                                  std::size_t row_bytes) const noexcept {
-    if (writer.full()) return true;
-    if (writer.size_bytes() >= batch_target_) return true;
-    return writer.size_bytes() + row_bytes > batch_ceiling_;
+Status RemoteStepServer::PlaceRow(wire::RowBatchWriter& writer, const catalog::Schema& schema,
+                                  std::span<const parser::AstValue> row,
+                                  const std::function<void()>& seal) {
+    const std::size_t before = writer.size_bytes();
+    if (Status s = writer.AppendRow(schema, row); !s.ok()) return s;
+
+    if (writer.size_bytes() > batch_ceiling_) {
+        if (writer.row_count() == 1) {
+            return Status::ResourceExhausted(
+                "a single row encodes to " + std::to_string(writer.size_bytes() - before) +
+                " bytes, past the " + std::to_string(batch_ceiling_) +
+                " a cross-core batch can carry; no batching can make it fit");
+        }
+        // It fits in a batch of its own, just not in this one.
+        if (Status s = writer.RollbackLastRow(before); !s.ok()) return s;
+        seal();
+        return writer.AppendRow(schema, row);
+    }
+    if (writer.full() || writer.size_bytes() >= batch_target_) seal();
+    return Status::OK();
 }
 
 // One batch encoder for both execution shapes: the equivalence test pins
@@ -885,10 +902,10 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
             for (std::size_t i = 0; i < output.size(); ++i) {
                 row[i] = frame.Get(exec::ColumnRef{0, 0, output[i]});
             }
-            const std::size_t before = writer.size_bytes();
-            if (Status s = writer.AppendRow(out_schema, row); !s.ok()) return s;
-            if (ShouldSeal(writer, writer.size_bytes() - before)) {
-                SealAndDrain(tag, writer);
+            if (Status s = PlaceRow(writer, out_schema, row,
+                                    [&] { SealAndDrain(tag, writer); });
+                !s.ok()) {
+                return s;
             }
             return storage::VisitControl::kContinue;
         },

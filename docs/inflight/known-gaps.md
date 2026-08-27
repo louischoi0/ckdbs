@@ -1064,7 +1064,27 @@ still waits on its own gate, so:
   never meets a slot. A declared invariant with no enforcement and a
   simulator more permissive than production are the two conditions that
   made a silent wrong answer survive; both are worth checking for
-  elsewhere.
+  elsewhere. **One correction to the first telling of this, made by the
+  fix's own review**: the sim gap is a *fidelity* gap and was not the
+  reason the defect went unfound — `sim/` builds no `RingTransport` at
+  all, and the defect was found on a real one. The comments that said
+  otherwise were wrong and are corrected in place; a comment that
+  misattributes a defect is worse than none, because the next reader acts
+  on it.
+- **A cross-core row wider than the ring slot cannot be shipped at all,
+  and is now refused by name** (2026-08-27, opened by the fix above).
+  `docs/spec/crosscore.md` §4 says *"a single row larger than the target
+  still ships alone … so a wide row is slow and never stuck"*. That is
+  **retracted**: a batch is one ring message, so no batching policy can
+  carry a row past `StepBatchCeiling` (the slot minus the batch header —
+  1,000 bytes at the shipped 1,024). Before the fix such a row was
+  dropped silently; it is `ResourceExhausted` naming its own width now.
+  Reachable at defaults: roughly fifteen full-width varchar columns at
+  `inline_cell_width = 64`, and a single value at its 4,096 ceiling.
+  Closing it needs a batch fragmented across ring messages, or
+  `crosscore.md` §9's ring sizing — that spec's decision, not the
+  pipeline's. `step_pipeline.hpp` carries the retraction beside the
+  constant.
 - **What shipping deliberately does not carry, and where the residue is
   read** (2026-08-26). Refused, by scope and not by omission: a statement
   **inside an explicit transaction** (nothing crosses transaction state), a

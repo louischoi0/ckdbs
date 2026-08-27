@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -141,29 +142,37 @@ public:
     // synchronous collect-then-stream fallback (see the header comment).
     using SubmitFn = std::function<void(std::unique_ptr<sched::Task>)>;
 
-    // `max_message_bytes` is the sending transport's slot - ask it, never
-    // declare it (`sched::RingTransport::max_payload`). It bounds the
+    // `max_message_bytes` is the sending transport's slot - **ask it, never
+    // declare it** (`sched::RingTransport::max_payload`). It bounds the
     // batch target, which is only a target: a batch that crosses the
     // ceiling is refused by `TrySend` and, before this parameter existed,
-    // dropped silently
-    // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
-    // The default keeps a caller that passes neither behaving exactly as
-    // before - the target with no ceiling above it - which is what every
-    // in-process test fixture wants and no production wiring does.
+    // dropped silently (`docs/inflight/known-gaps.md`, beside the
+    // shipped-reply cap).
+    //
+    // `kNoRing` is the default and says what it means: this server sends
+    // through no ring, so no slot bounds it. That is true of every
+    // in-process fixture and of no production wiring. It is deliberately
+    // **not** spelled `0`, and not defaulted to the target either: a
+    // sentinel that merely looks like an omission is the same "told
+    // wrong" hazard this parameter exists to remove, and defaulting to
+    // the target silently turns a fixture's deliberately tiny target into
+    // a ceiling nothing can fit under.
+    static constexpr std::size_t kNoRing = std::numeric_limits<std::size_t>::max();
+
     RemoteStepServer(catalog::Catalog& catalog, storage::PageStore& store, std::uint32_t core_id,
                      SendFn send, Logger* log = nullptr,
                      std::size_t batch_target_bytes = kStepBatchTargetBytes,
                      SubmitFn submit = {}, txn::TransactionManager* txns = nullptr,
                      exec::Budget budget = exec::Budget(),
-                     std::size_t max_message_bytes = 0) noexcept
+                     std::size_t max_message_bytes = kNoRing) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
           send_(std::move(send)),
           log_(log),
           batch_target_(batch_target_bytes),
-          batch_ceiling_(max_message_bytes == 0 ? batch_target_bytes
-                                                : StepBatchCeiling(max_message_bytes)),
+          batch_ceiling_(max_message_bytes == kNoRing ? kNoRing
+                                                      : StepBatchCeiling(max_message_bytes)),
           submit_(std::move(submit)),
           txns_(txns),
           budget_(budget) {}
@@ -255,20 +264,29 @@ private:
     void Erase(const PipelineTag& tag);
     void Drain(Pipeline& pipe);
 
-    // Must this batch be sealed now? Called immediately after a row joins
-    // `writer`, with that row's encoded width.
+    // Places `row` in `writer`, sealing through `seal` first if it will
+    // not fit - so no batch ever exceeds what the transport carries.
     //
-    // Three reasons, and the third is the one that was missing for the
-    // pipeline's whole life: the soft target, the format's u16 row cap,
-    // and **one row's margin under the ceiling the transport imposes**.
-    // The margin is predictive because a batch is sealed *after* a row
-    // joins, so a check on the current size alone always admits one more
-    // row than it meant to. `row_bytes` predicts the next row from the
-    // last: invariant 13 makes a relation's row a schema constant, and the
-    // wire form varies only through NULLs and tagged cells - so this is
-    // exact on the common shape and an underestimate on no shape that
-    // matters, with `Drain`'s refusal as the backstop for the rest.
-    bool ShouldSeal(const wire::RowBatchWriter& writer, std::size_t row_bytes) const noexcept;
+    // **Exact, not predictive.** A batch is sealed *after* a row joins, so
+    // any check on the size alone admits one row more than it meant to;
+    // the first form of this fix predicted the next row's width from the
+    // last, which holds only where the wire row width is constant, and it
+    // is not. A NULL field costs 4 bytes and a present int64 costs 12
+    // (`wire/row_codec.cpp`'s `PutField`), a varchar costs 4 + its length,
+    // and `CommandDispatcher`'s shipping gate admits `SELECT *` over
+    // nullable and text relations with no column-type restriction at all.
+    // So the row is appended, measured, and **rolled back** into the next
+    // batch when it does not fit - `RowBatchWriter::RollbackLastRow`, the
+    // rollback `AppendRow` already performed internally.
+    //
+    // The one case sealing cannot answer is a single row wider than the
+    // ceiling: it is refused rather than sent, because no batching policy
+    // can make it fit and the alternative is the silent loss this whole
+    // change exists to end (`step_pipeline.hpp` carries the retraction of
+    // the "never stuck" rule that used to promise otherwise).
+    Status PlaceRow(wire::RowBatchWriter& writer, const catalog::Schema& schema,
+                    std::span<const parser::AstValue> row,
+                    const std::function<void()>& seal);
 
     void Seal(Pipeline& pipe, wire::RowBatchWriter& writer);
     void SendError(const PipelineTag& tag, std::uint32_t session_core, const Status& status);

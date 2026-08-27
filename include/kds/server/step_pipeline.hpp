@@ -151,9 +151,19 @@ private:
 
 // Accumulates KWP-encoded rows toward the batch-size target and hands back
 // full chunks. The target is `[PROPOSED]` 32 KiB and must stay at or below
-// the ring's max message payload minus the header; a single row larger
-// than the target still ships alone - the spec's rule, so a wide row is
-// slow and never stuck.
+// the ring's max message payload minus the header.
+//
+// **`crosscore.md` §4's "a single row larger than the target still ships
+// alone - so a wide row is slow and never stuck" is retracted here as
+// written**, and the retraction is a fact about the transport rather than
+// a policy change. A row wider than `StepBatchCeiling` cannot be carried
+// by *any* batching, because a batch is one ring message; before
+// 2026-08-27 such a row was dropped silently, and now it is refused by
+// name. Reachable at defaults - roughly fifteen full-width varchar
+// columns at `inline_cell_width = 64`, and one value alone at its 4,096
+// ceiling. Closing it needs either a batch fragmented across ring
+// messages or `crosscore.md` §9's ring sizing, and both are that spec's;
+// `docs/inflight/known-gaps.md` carries the gap.
 //
 // **That "must" was a sentence and nothing else for the whole life of the
 // pipeline**, and 32 KiB is 32x the production ring slot

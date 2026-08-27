@@ -1202,6 +1202,59 @@ TEST_F(ConsumingStageTest, ACancelReachesAWalkParkedInsideItsInputRow) {
     EXPECT_TRUE(upstream_cancelled) << "crosscore.md §7: the upstream was left parked";
 }
 
+TEST_F(RemoteStepServiceTest, NoBatchExceedsTheCeilingWhenRowWidthsVary) {
+    // The first form of the oversize fix predicted the next row's width
+    // from the last row's, which holds only where a wire row is a constant
+    // width. It is not: a NULL field costs 4 bytes and a present int64
+    // costs 12 (`wire/row_codec.cpp`'s PutField), so a run of narrow rows
+    // followed by a wide one crosses the ceiling with no seal in between -
+    // and the shipping gate admits `SELECT *` over nullable relations with
+    // no column-type restriction at all. The acceptance test could not see
+    // it: its relation is two int64s, the one schema class the prediction
+    // is exact on.
+    //
+    // Here the ceiling is small and real, so the assertion is the direct
+    // one - **no sealed payload exceeds what the transport would carry** -
+    // and it is checked against every batch rather than against an answer.
+    constexpr std::size_t kSlot = 256;
+    server_.emplace(
+        boot_->catalog, *store_, /*core_id=*/1,
+        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            sent_.push_back(Sent{dst, kind, std::move(payload)});
+            return Status::OK();
+        },
+        nullptr, /*batch_target_bytes=*/kStepBatchTargetBytes, RemoteStepServer::SubmitFn{},
+        /*txns=*/nullptr, exec::Budget(), /*max_message_bytes=*/kSlot);
+
+    // Enough rows that the batch target (32 KiB) is never the thing that
+    // seals: only the ceiling can be.
+    InsertRows(200);
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    // Exactly the edge's ceiling per grant: `EdgeCredit::Grant` refuses
+    // anything that would take `available_` past it, so a bigger number is
+    // silently dropped and the drain never resumes.
+    for (int i = 0; i < 128 && server_->open_pipelines() > 0; ++i) {
+        GrantCredits(kInitialCreditsPerEdge);
+    }
+
+    std::size_t batches = 0;
+    std::uint32_t rows_seen = 0;
+    for (const Sent& s : sent_) {
+        if (s.kind != sched::RingMessageKind::kStepBatch) continue;
+        ++batches;
+        EXPECT_LE(s.payload.size(), kSlot)
+            << "batch " << batches << " is wider than the slot it must ride through";
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(s.payload, rows);
+        ASSERT_TRUE(header.ok()) << header.status().message();
+        rows_seen += header.value().row_count;
+    }
+    EXPECT_GT(batches, 1u) << "the ceiling never sealed anything; the test proves nothing";
+    // 8 from SetUp plus the 200 here: sealing exactly must lose no row and
+    // duplicate none, which is the half a size assertion alone cannot see.
+    EXPECT_EQ(rows_seen, 208u);
+}
+
 TEST_F(RemoteStepServiceTest, ABatchSendThatFailsTearsThePipelineDownInsteadOfLeakingIt) {
     // `Drain`'s send-failure arm was dead code for the pipeline's whole
     // life - the send seam returned OK unconditionally - and it became
