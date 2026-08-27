@@ -75,6 +75,16 @@ struct SimTransportConfig {
     // that never fills would let a send-retry bug reach production
     // untested.
     std::size_t capacity_per_edge = 256;
+
+    // The payload cap `TrySend` enforces, modelling the real ring's slot.
+    //
+    // Defaulted to the production number for the reason the capacity above
+    // is bounded at all: a simulated transport that carries what the real
+    // one refuses does not simulate it. This one carried anything, and the
+    // cost was a live defect no simulation could have found - a cross-core
+    // read of 42 rows answering zero rows, silently
+    // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
+    std::size_t max_payload = kCoreRingPayloadBytes;
 };
 
 class SimRingTransport final : public RingTransport {
@@ -107,6 +117,8 @@ public:
     void SetWakeTarget(std::uint32_t, WakeTarget) override {}
 
     std::uint32_t core_count() const noexcept override { return core_count_; }
+
+    std::size_t max_payload() const noexcept override { return config_.max_payload; }
 
     // Messages sent but not yet delivered. For tests: "the pipeline is torn
     // down" is partly a claim that nothing is still in flight.

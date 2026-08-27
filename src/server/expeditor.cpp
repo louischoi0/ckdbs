@@ -1362,6 +1362,21 @@ Status Expeditor::Serve() {
         // cannot drift on src_core or scheduling group.
         auto step_send = [this, &scheduler](std::uint32_t dst, sched::RingMessageKind kind,
                                             std::vector<std::byte> payload) {
+            // Answered before the submit, because after it there is nobody
+            // to answer to: `MakeSendRetryTask` retries backpressure and
+            // discards every other failure, and this lambda's `OK` was
+            // read by `Drain` as "sent". An oversize payload therefore
+            // vanished and the statement's EOF arrived anyway - a short
+            // result set with no error at all
+            // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
+            // Callers seal against `max_payload()` so this should never
+            // fire; it is what makes "should never" checkable.
+            if (payload.size() > transport_->max_payload()) {
+                return Status::InvalidArgument(
+                    "step message is " + std::to_string(payload.size()) +
+                    " bytes; the ring slot to core " + std::to_string(dst) + " carries " +
+                    std::to_string(transport_->max_payload()));
+            }
             sched::MessageHeader out{};
             out.src_core = 0;
             out.dst_core = dst;
@@ -1385,7 +1400,13 @@ Status Expeditor::Serve() {
             txn_manager_.has_value() ? &*txn_manager_ : nullptr,
             // And the same row-touch ceiling every statement on this core
             // runs under (P4d-4c's review).
-            exec::Budget(config_.max_rows_touched));
+            exec::Budget(config_.max_rows_touched),
+            // The slot a sealed batch actually has to fit through, asked
+            // of the transport rather than restated here - the two numbers
+            // drifting apart is the defect this parameter closes. 0 where
+            // there is no transport: no ring, so no ceiling above the
+            // target.
+            transport_.has_value() ? transport_->max_payload() : 0);
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kStepOpen,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

@@ -38,6 +38,17 @@ Status SimRingTransport::TrySend(const MessageHeader& header,
             std::to_string(core_count_) + " cores this instance runs");
     }
 
+    // The real ring refuses an oversize payload as a programming error
+    // (spsc_ring.hpp), so this one must too, in the same code and with the
+    // same reading. It did not, and that is why no simulation could have
+    // found the batch-wider-than-the-slot defect: the simulated transport
+    // carried what production drops.
+    if (payload.size() > config_.max_payload) {
+        return Status::InvalidArgument(
+            "sim ring transport: payload is " + std::to_string(payload.size()) +
+            " bytes; this transport's slot carries " + std::to_string(config_.max_payload));
+    }
+
     // Occupancy is counted per edge, not globally, so that one saturated
     // edge cannot make an unrelated pair look full - which is the property
     // the real per-core-pair rings have and the reason backpressure is

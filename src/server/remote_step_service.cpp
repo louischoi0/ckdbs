@@ -372,8 +372,9 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
             for (std::size_t i = 0; i < out_cols.size(); ++i) {
                 row[i] = frame.Get(exec::ColumnRef{0, 0, out_cols[i]});
             }
+            const std::size_t before = writer.size_bytes();
             if (Status s = writer.AppendRow(out_schema, row); !s.ok()) return s;
-            if (writer.size_bytes() >= batch_target_ || writer.full()) Seal(pipe, writer);
+            if (ShouldSeal(writer, writer.size_bytes() - before)) Seal(pipe, writer);
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
@@ -710,8 +711,9 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                             static_cast<std::uint16_t>(output[o].from_upstream != 0 ? 1 : 0),
                             0, output[o].index});
                     }
+                    const std::size_t before = writer.size_bytes();
                     if (Status s = writer.AppendRow(output_schema, out_row); !s.ok()) return s;
-                    if (writer.size_bytes() >= batch_target_ || writer.full()) {
+                    if (ShouldSeal(writer, writer.size_bytes() - before)) {
                         SealAndDrain(tag, writer);
                     }
                     return storage::VisitControl::kContinue;
@@ -808,6 +810,13 @@ void RemoteStepServer::CancelUpstream(const PipelineTag& input_tag,
     (void)send_(upstream_core, sched::RingMessageKind::kStepCancel, std::move(bytes));
 }
 
+bool RemoteStepServer::ShouldSeal(const wire::RowBatchWriter& writer,
+                                  std::size_t row_bytes) const noexcept {
+    if (writer.full()) return true;
+    if (writer.size_bytes() >= batch_target_) return true;
+    return writer.size_bytes() + row_bytes > batch_ceiling_;
+}
+
 // One batch encoder for both execution shapes: the equivalence test pins
 // the two byte-identical, and an encoder existing twice is exactly what
 // would let them drift.
@@ -876,8 +885,9 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
             for (std::size_t i = 0; i < output.size(); ++i) {
                 row[i] = frame.Get(exec::ColumnRef{0, 0, output[i]});
             }
+            const std::size_t before = writer.size_bytes();
             if (Status s = writer.AppendRow(out_schema, row); !s.ok()) return s;
-            if (writer.size_bytes() >= batch_target_ || writer.full()) {
+            if (ShouldSeal(writer, writer.size_bytes() - before)) {
                 SealAndDrain(tag, writer);
             }
             return storage::VisitControl::kContinue;
@@ -938,6 +948,18 @@ void RemoteStepServer::Drain(Pipeline& pipe) {
         if (Status s = send_(downstream, sched::RingMessageKind::kStepBatch,
                              std::move(pipe.batches.front()));
             !s.ok()) {
+            // **Cancelled, not merely broken out of.** This arm was dead
+            // code until the send seam learned to refuse an oversize
+            // payload, and breaking alone leaks the pipeline: `SendFn`
+            // takes the payload by value, so the batch is already gone
+            // and the queue head is a moved-from vector that nothing pops
+            // - which makes `batches` permanently non-empty, so the
+            // EOF-and-erase below is skipped forever and no credit will
+            // re-enter here, the session having just been answered with
+            // the error. Marking it cancelled routes teardown through the
+            // discipline this file already has and tests: the producer
+            // erases if one is live, the post-loop arm otherwise.
+            pipe.cancelled = true;
             SendError(tag, tag.session_core, s);
             break;
         }

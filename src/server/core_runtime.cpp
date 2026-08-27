@@ -454,6 +454,16 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     remote_steps_.emplace(
         *catalog_, *store_, config_.core_id,
         [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            // Checked here for the reason expeditor.cpp's twin states: the
+            // submit below cannot report, so an `OK` this lambda has not
+            // earned is read by `Drain` as "sent" and the rows are gone
+            // with the EOF still arriving.
+            if (payload.size() > transport_->max_payload()) {
+                return Status::InvalidArgument(
+                    "step message is " + std::to_string(payload.size()) +
+                    " bytes; the ring slot to core " + std::to_string(dst) + " carries " +
+                    std::to_string(transport_->max_payload()));
+            }
             sched::MessageHeader out{};
             out.src_core = config_.core_id;
             out.dst_core = dst;
@@ -469,7 +479,17 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         // And this core's configured row-touch ceiling, which the server
         // ignored until P4d-4c's review - a shipped statement was bounded
         // only by whatever a fresh `exec::Budget()` defaulted to.
-        config_.budget);
+        config_.budget,
+        // The slot a sealed batch actually has to fit through, asked of
+        // the transport rather than restated here.
+        //
+        // `transport`, the parameter - **not** `transport_`, which this
+        // function does not assign until its very end, so reading the
+        // member here is a null dereference and, once guarded, silently
+        // yields "no ceiling" and leaves every batch oversize. Both were
+        // observed while building this: the crash first, then the refusal
+        // the ceiling exists to prevent.
+        transport.max_payload());
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kStepOpen,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
