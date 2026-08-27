@@ -69,6 +69,29 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
         return;
     }
 
+    // Finding 1 / R6-0 (`instructions/v2.4.0/2pc.md` §2): nothing here holds
+    // an outcome for this *sequence* - either the record has no entry for
+    // this identity at all, or it holds a **lower** sequence, which is the
+    // arm above falling through. On a first attempt that means "not seen,
+    // execute". On a retry it does not - the record may have been evicted
+    // early (`early_evictions()`) or may never have been written, and this
+    // core cannot tell those apart from here. A lower recorded sequence is
+    // not proof of non-execution either: an eviction can drop a key after a
+    // high sequence finished, and a later statement then re-records the same
+    // key at a lower one. Guessing either way risks a second row against an
+    // engine-issued pk, so the honest answer is the one D4 already gives a
+    // superseded sequence: `UnknownOutcome`, never a guess.
+    if (statement.retry) {
+        ++unanswerable_;
+        reply(Status::UnknownOutcome(
+                  "statement shipping: core " + std::to_string(core_id_) +
+                  " holds no record of sequence " + std::to_string(statement.sequence) +
+                  " for this session; this is a retry, so whether it ran cannot be "
+                  "established from an absent record"),
+              {});
+        return;
+    }
+
     auto running = std::make_unique<Running>(std::move(statement.text),
                                              dispatcher_.default_isolation(), statement.role);
     // The hop limit (session.hpp): what arrived shipped does not ship on.

@@ -488,6 +488,42 @@ TEST_F(StatementShipTest, AWrongSizedRequestGetsNoReplyAndLeavesTheDeadlineToAns
     EXPECT_EQ(server_->replies(), 0u);
 }
 
+TEST_F(StatementShipTest, ShippedStatementRequestOfEncodesTheRetryBit) {
+    // R6-0 (`instructions/v2.4.0/2pc.md` §2): the wire field itself, ahead
+    // of anything crossing a ring.
+    auto first = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1");
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    EXPECT_EQ(first.value().retry, 0u);
+
+    auto retry = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1",
+                                           /*retry=*/true);
+    ASSERT_TRUE(retry.ok()) << retry.status().message();
+    EXPECT_EQ(retry.value().retry, 1u);
+}
+
+TEST_F(StatementShipTest, TheRetryBitCrossesWithTheStatement) {
+    // The bit has to survive the ring round trip and reach the seam
+    // (`StatementShipServer::ShippedStatement::retry`), which is what
+    // `ShippedStatementExecutor::Execute` reads.
+    std::vector<bool> seen;
+    InstallOwner([&](StatementShipServer::ShippedStatement st,
+                     StatementShipServer::ReplyFn reply) {
+        seen.push_back(st.retry);
+        reply(Status::OK(), "OK");
+    });
+
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES (1)").ok());
+    ASSERT_TRUE(client_
+                    ->Ship(1, 2, 99, 2, 4000, Role::kReadWrite, "INSERT INTO t VALUES (2)",
+                           /*retry=*/true)
+                    .ok());
+    Pump();
+
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_FALSE(seen[0]) << "the default must not cross as a retry";
+    EXPECT_TRUE(seen[1]);
+}
+
 TEST_F(StatementShipTest, AForgedTextLengthIsRefusedNotRead) {
     // The payload is bytes this core did not compute, and `text_len` is
     // the only thing between a forged length and a read past the array.

@@ -106,9 +106,16 @@
 // it rather than appending a second: a session shipping a thousand
 // statements inside one retention window holds one entry, not a thousand.
 // When the cap bites it evicts the oldest record early and **counts** it
-// (`early_evictions()`), because an early eviction is the one condition
-// under which a duplicate could reach an empty record and be re-executed.
-// A run with `early_evictions() == 0` had no such window at all.
+// (`early_evictions()`). Before R6-0 an early eviction was the one
+// condition under which a duplicate could reach an empty record and be
+// re-executed; the retry bit (`instructions/v2.4.0/2pc.md` §2,
+// `ShippedStatement::retry`) closes it - a resend marked `retry` that meets
+// an absent record is `UnknownOutcome`, never a second execution. What
+// `early_evictions() > 0` now measures is a different cost: a resend that
+// arrives *after* its record was dropped pays `UnknownOutcome` where it
+// would otherwise have been answered from the record. Nothing sets the bit
+// on a live path yet - it is the wire and the semantics only, and the
+// routing layer that actually resends a lost request is R6-3's.
 
 namespace kds::server {
 
@@ -155,11 +162,15 @@ public:
     // Duplicates answered from the record instead of run again (D4).
     std::uint64_t deduped() const noexcept { return deduped_; }
     // Duplicates this core could not answer for - superseded by a later
-    // sequence, or still running here so that no outcome exists yet. Each
-    // one is a client told `UNKNOWN_OUTCOME`.
+    // sequence, still running here so that no outcome exists yet, or (R6-0)
+    // a marked retry that met no record of its sequence. Each one is a
+    // client told `UNKNOWN_OUTCOME`.
     std::uint64_t unanswerable() const noexcept { return unanswerable_; }
-    // Records dropped by the memory bound before their retention expired -
-    // the only condition under which a duplicate could be re-executed.
+    // Records dropped by the memory bound before their retention expired.
+    // **No longer a correctness signal since R6-0**: a marked retry meeting
+    // the empty record is refused rather than re-executed. What it counts
+    // now is the availability cost - outcomes that can only be answered
+    // `UnknownOutcome` because the record for them is gone.
     std::uint64_t early_evictions() const noexcept { return early_evictions_; }
     // Statements running right now: the population the owner's reactor is
     // carrying on other cores' behalf.

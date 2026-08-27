@@ -43,7 +43,8 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
                                                                    std::uint64_t sequence,
                                                                    std::uint64_t target_oid,
                                                                    Role role,
-                                                                   std::string_view text) {
+                                                                   std::string_view text,
+                                                                   bool retry) {
     if (text.empty()) {
         return Status::InvalidArgument("statement shipping: an empty statement is not a statement");
     }
@@ -63,6 +64,7 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
     out.sequence = sequence;
     out.target_oid = target_oid;
     out.role = static_cast<std::uint8_t>(role);
+    out.retry = retry ? 1 : 0;
     out.text_len = static_cast<std::uint16_t>(text.size());
     std::memcpy(out.text, text.data(), text.size());
     return out;
@@ -194,6 +196,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     statement.sequence = sequence;
     statement.target_oid = request.target_oid;
     statement.role = role.value();
+    statement.retry = request.retry != 0;
     statement.text.assign(text.value());
     execute_(std::move(statement),
              [this, requester, request_id, session_id, sequence](const Status& status,
@@ -356,7 +359,8 @@ Status StatementShipClient::RegisterReplyReceiver() {
 
 Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request_id,
                                  std::uint64_t session_id, std::uint64_t sequence,
-                                 std::uint64_t target_oid, Role role, std::string_view text) {
+                                 std::uint64_t target_oid, Role role, std::string_view text,
+                                 bool retry) {
     // **One live waiter per request id.** Reusing an id that still has a
     // statement parked on it would replace that statement's waiter with
     // this one's, and the identity check on the reply path cannot catch it -
@@ -382,7 +386,7 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
             " is not a core of this instance, which has " +
             std::to_string(transport_.core_count()));
     }
-    auto request = ShippedStatementRequestOf(session_id, sequence, target_oid, role, text);
+    auto request = ShippedStatementRequestOf(session_id, sequence, target_oid, role, text, retry);
     // A statement the wire refuses opens no waiter: nothing was sent, so
     // nothing will answer, and a waiter would only cost the statement a
     // deadline before saying what is already known.

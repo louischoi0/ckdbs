@@ -178,7 +178,15 @@ struct ShippedStatementRequestPayload {
     // **refused**, never defaulted: fail-closed is the only reading of an
     // unreadable rank.
     std::uint8_t role;
-    std::uint8_t reserved0[5];
+    // Finding 1 / R6-0 (`instructions/v2.4.0/2pc.md` §2, `known-gaps.md`'s
+    // dedup-eviction entry): 0 on a statement's first send - an absent dedup
+    // record on the owner then means "not seen", execute. 1 on a resend of
+    // a request already sent once - an absent record then means the record
+    // was evicted (or never written), and the honest answer is
+    // `UnknownOutcome`, never a second execution. Nothing sets this yet
+    // (R6-3's routing layer will); it defaults to 0.
+    std::uint8_t retry;
+    std::uint8_t reserved0[4];
     char text[kShippedStatementTextMax];  // not NUL-terminated; text_len bounds it
 };
 static_assert(sizeof(ShippedStatementRequestPayload) == sched::kCoreRingPayloadBytes,
@@ -231,7 +239,8 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
                                                                    std::uint64_t sequence,
                                                                    std::uint64_t target_oid,
                                                                    Role role,
-                                                                   std::string_view text);
+                                                                   std::string_view text,
+                                                                   bool retry = false);
 // The reply encode, same discipline: a reply too long to carry is turned
 // into a refusal that says so, never a truncated answer presented as one.
 StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t session_id,
@@ -303,6 +312,11 @@ public:
         // Fail-closed default: a statement whose rank was never set runs at
         // the lowest one, not at the highest.
         Role role = Role::kReadOnly;
+        // R6-0's wire bit, carried onto the seam: false means an absent
+        // dedup record is a genuinely new statement, true means it is a
+        // resend and an absent record must not be executed
+        // (`ShippedStatementExecutor::Execute`).
+        bool retry = false;
         std::string text;
     };
     using ExecuteFn = std::function<void(ShippedStatement statement, ReplyFn reply)>;
@@ -394,7 +408,7 @@ public:
     // reply wake it.
     Status Ship(std::uint32_t owner_core, std::uint64_t request_id, std::uint64_t session_id,
                 std::uint64_t sequence, std::uint64_t target_oid, Role role,
-                std::string_view text);
+                std::string_view text, bool retry = false);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.

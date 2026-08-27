@@ -834,8 +834,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // `shipped_statements` is what SS-B's claim 3 is read from - whether
         // the ceiling reached is the owner's execution capacity - and
         // `shipped_running` is the population doing it right now.
-        // `shipped_early_evictions` is the dedup record's honesty check:
-        // non-zero means a duplicate could have been re-executed.
+        // `shipped_early_evictions` (R6-0, `instructions/v2.4.0/2pc.md` §2):
+        // non-zero means outcomes were dropped inside their retention, so a
+        // marked retry for one of them is answered `UnknownOutcome` rather
+        // than from the record - an availability cost, not (since R6-0) a
+        // re-execution risk, provided the sender marks its retries.
         os << " shipped_executed=" << shipped_statements_->executed()
            << " shipped_running=" << shipped_statements_->running()
            << " shipped_deduped=" << shipped_statements_->deduped()

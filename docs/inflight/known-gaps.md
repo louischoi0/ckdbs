@@ -1093,21 +1093,25 @@ still waits on its own gate, so:
   fix is not to let the peer enforce (it cannot) but to make the gate read
   what the other two arms read, which crosses `docs/spec/assertion.md`'s
   "complete and enforcing" claim and `docs/spec/crosscore.md`'s peer contract.
-- **A duplicate whose dedup record the memory bound evicted early is
-  executed again** (Part A finding 1, 2026-08-26, same file §1). Fill
-  `kShippedDedupMaxRecords` (4,096) with distinct sessions and the oldest
-  record is dropped inside its retention; the same (session, sequence)
-  delivered again then runs a second time — against an engine-issued pk, a
-  second row. Measured `executed` 4,097 → 4,098
-  (`DISABLED_ADuplicateWhoseRecordWasEvictedEarlyIsNotReExecuted`).
-  `shipped_statement_executor.hpp` already states this and `early_evictions()`
-  counts it; what Part A asks for is `UnknownOutcome` instead. **Latent**:
-  nothing re-sends a landed request today (`SendRetryTask` retries only a
-  send the ring refused), so no live path produces a duplicate at all — this
-  is the retry paths a routing layer will bring. Three fixes, each a policy
-  call: refuse rather than evict (an availability cliff at 4,096 concurrent
-  shipping sessions per owner), carry a retry bit on the request (five
-  reserved bytes exist), or keep tombstones under a second bound.
+- **A duplicate whose dedup record the memory bound evicted early was
+  executed again** (Part A finding 1, 2026-08-26, same file §1). **Fixed
+  2026-08-27 as R6-0** (`instructions/v2.4.0/2pc.md` §2, operator-confirmed
+  option: a retry bit). `ShippedStatementRequestPayload::retry` (one of the
+  five `reserved0` bytes) crosses to `ShippedStatement::retry` and
+  `ShippedStatementExecutor::Execute`: a first attempt (`retry=0`) meeting
+  an absent record still executes, a resend (`retry=1`) meeting one answers
+  `UnknownOutcome` instead — never a second row.
+  `ADuplicateWhoseRecordWasEvictedEarlyIsNotReExecutedOnRetry` (formerly
+  `DISABLED_...NotReExecuted`) is the acceptance test, now enabled and
+  passing. **Still latent as a live path**: nothing re-sends a landed
+  request today (`SendRetryTask` retries only a send the ring refused), so
+  no production caller sets the bit yet — that is R6-3's routing layer. Until
+  then this closes the wire and the semantics, exercised directly by tests
+  rather than by a retry that cannot happen yet. **And the guarantee is a
+  contract on the sender, not a property of the owner**: a resender that
+  leaves the bit at 0 still gets the old behaviour, because an absent record
+  and a first attempt are indistinguishable from the owner's side by
+  construction. Every retry path built from R6-3 on has to set it.
 - **Nothing reclaims a shipped statement's waiter if its coroutine is
   destroyed rather than completed** (Part A, 2026-08-26).
   `StatementShipClient::Close` is reached only from
