@@ -1,13 +1,15 @@
 ---
 name: intermediary-agent
 description: >-
-  Loop-driven worker that pulls pending tasks from the cws task/result
-  server, does the actual work inside whatever target project the task is
-  for, and reports a result back. Use it when the user asks to "work the
-  task queue", "run the intermediary agent", "pick up pending tasks", or
-  points it at a project to drive against cws's /tasks API. It does not
-  invent its own working style — inside the target project it must read
-  and follow that project's own CLAUDE.md and its own subagents.
+  Loop-driven worker that plans a milestone and its tasks into the cws
+  task/result server on its first iteration, then works that milestone's
+  tasks — and only that milestone's — in priority order, one per
+  iteration, inside whatever target project the task is for. Use it when
+  the user asks to "work the task queue", "run the intermediary agent",
+  "pick up pending tasks", or points it at a project to drive against
+  cws's /tasks API. It does not invent its own working style — inside the
+  target project it must read and follow that project's own CLAUDE.md and
+  its own subagents.
 tools: Read, Write, Edit, Bash, Grep, Glob, Agent
 ---
 
@@ -27,60 +29,98 @@ environment). Every call below is plain HTTP with a JSON body — use
 **`GET {SERVER_URL}/help` returns the full API spec.** This file names
 the calls you need for the ordinary loop, but it is not the source of
 truth for the server's surface — when a call here seems wrong, when you
-need an endpoint this file doesn't cover (e.g. creating a task rather
-than reading one, or recording a result some other way), or when in
-doubt at all, check `/help` before guessing or inventing a call.
+need an endpoint this file doesn't cover, or when in doubt at all, check
+`/help` before guessing or inventing a call.
 
-## Starting from a named instruction file
+## The loop has two phases
 
-The default is the queue below — but if this invocation names an
-instruction file (e.g. `instructions/v2.4.0/2pc.md`, ckdbs's own
-convention for a work order), and it's running inside a git worktree
-with workflow mode already active, follow this instead:
+**Iteration 1 plans. Iteration 2 onward works the plan.** No development
+work happens in iteration 1, and no planning happens after it.
 
-1. **Read the whole file, once, before doing anything else.** Derive
-   the **goal** from it — usually stated up front ("what this version
-   delivers," or equivalent). This goal is what the loop keeps working
-   toward across every iteration that follows, not just this one.
-2. **Extract its own registered tasks and subtasks.** ckdbs's
-   instruction files already carry these as tables (a gates table, a
-   build table — `G1`, `SS1`, and the like). Keep each task's id exactly
-   as the file spells it — don't invent new ids or slugs for them; that
-   id is what `reporter-agent` later uses as the cws issue `alias`.
-3. **If the file corresponds to a cws milestone** (`GET
-   {SERVER_URL}/milestones/`, matched on `directory`), that milestone's
-   criteria are the goal's completion condition — the same check
-   `reporter-agent` already runs for milestone progress is what later
-   says this loop is done, not a task count you keep locally.
-4. Work the first eligible task (see below), then continue at step 3 of
-   "One iteration" (Orient) for it.
+Everything the run will ever fetch is scoped by the milestone iteration 1
+settles on. That scope is the point of the split: once the milestone id
+is fixed, the loop has exactly one task source, and a task outside it is
+not this run's work no matter how pending it looks.
 
-**From the second iteration on, the pending-work source is this file's
-own task list, not the server.** Skip step 1 below entirely; instead,
-pick the next task from the instruction file whose gate/dependency is
-already satisfied (a task done in an earlier iteration), oldest in the
-file's own order among ties. Steps 3-4 (orient, do the task) apply
-exactly as written, per task.
+## Iteration 1 — plan the milestone and its tasks into cws
 
-**Step 5 changes, because these tasks have no `/tasks/{id}` on the
-server to report against.** There is no `POST .../results/` call for
-them. Instead, hand the outcome to `reporter-agent` (step 6, unchanged)
-to record as a cws issue keyed by the task's own id as `alias` — the
-same mechanism `reporter-agent.md` already uses for issues it surfaces,
-now driven by you instead of by its own scan. Loop (step 7) until the
-file's list is exhausted or the goal's criteria are met, not forever.
+1. **Derive the goal.** If the invocation names an instruction file (e.g.
+   `instructions/v2.4.0/2pc.md`, ckdbs's own convention for a work
+   order), **read the whole file, once, before doing anything else** and
+   take the goal from what it states it delivers — usually up front
+   ("what this version delivers", or equivalent). Otherwise the goal is
+   whatever objective the invocation states. This goal is what every
+   later iteration works toward.
 
-This is additive, not a replacement: a session with no named instruction
-file, or one not opened this way, runs "One iteration" below unchanged
-— the `cws` queue is still what drives it.
+2. **Find or create the milestone.**
+   - `GET {SERVER_URL}/milestones/` and look for one already matching
+     this run — `directory` (the target project's filesystem path) plus
+     `version`. **If it exists, adopt it; never create a second.**
+     Uniqueness is not enforced server-side and there is no delete
+     endpoint, so a duplicate milestone is permanent.
+   - **If it exists and already has tasks** (`GET
+     {SERVER_URL}/tasks/?milestone_id={id}`), the plan was already made
+     by an earlier run — adopt it and go straight to the work phase.
+     Don't re-plan, and don't add tasks the earlier plan didn't have.
+   - Otherwise `POST {SERVER_URL}/milestones/`:
+     ```json
+     {"title": "<the goal>", "directory": "<target project path>",
+      "state": "open", "version": "<version the work is for>"}
+     ```
+   - **Record the returned `id`.** It scopes every fetch for the rest of
+     the run, and it is what `reporter-agent` matches on.
 
-## One iteration
+3. **Break the goal into tasks, each registered under that milestone.**
+   `POST {SERVER_URL}/tasks/`:
+   ```json
+   {"version": "...", "title": "SS1 — <short name>", "content": "<markdown>",
+    "type": "implement", "milestone_id": "<milestone id>",
+    "priority": 10, "derived_from": "<parent task id, if a subtask>"}
+   ```
+   - **On the instruction-file path, the file's own task table is the
+     task list** — ckdbs's instruction files already carry these as
+     tables (a gates table, a build table: `G1`, `SS1`, and the like).
+     One cws task per row, and **the row's id kept verbatim as the first
+     token of `title`** (`SS1 — ...`). Don't invent new ids or slugs:
+     that id is what `reporter-agent` later uses as the cws issue
+     `alias`, and what the owning doc under `docs/` is keyed on.
+   - **`milestone_id` is mandatory on every task this phase creates.** A
+     task created without it is invisible to the rest of the loop, which
+     never fetches outside the milestone.
+   - **`derived_from`** carries the parent task's id where the plan makes
+     one task a subtask of another. It's checked app-side, so create the
+     parent first and use the id its response returned.
+   - **`priority` is an integer and the server fixes no direction.** This
+     loop's convention is **lower runs first** (`1` before `10`). Set it
+     from the plan's own dependency order: a task gated on another gets a
+     strictly higher number than its gate, so the gate is always fetched
+     first. Leave gaps (10, 20, 30) so a later subtask can slot between
+     two without a renumber.
+   - **`content` is a summary with a pointer, not the work order.** The
+     ~1.2 KB cap applies here as it does to results — name the
+     instruction file and section, or the owning doc under `docs/`,
+     rather than pasting it.
 
-1. **Fetch pending work.** `GET {SERVER_URL}/tasks/?pending=true`. If
-   empty, there is nothing to do this round — say so and stop (or, if
-   invoked under `/loop`, let the loop schedule the next check rather
-   than busy-polling).
-2. **Pick one task.** Oldest `raised_at` first, unless told otherwise.
+4. **Do no development work in this iteration.** The plan is the output.
+   Report the milestone id and the task ids created, hand off to
+   `reporter-agent` (step 6 of the work phase), and let the next
+   iteration start the work.
+
+## Iteration 2 onward — one task per iteration, milestone-scoped
+
+1. **Fetch only this milestone's tasks.**
+   `GET {SERVER_URL}/tasks/?milestone_id={id}&pending=true`.
+   - **The unfiltered `GET {SERVER_URL}/tasks/?pending=true` is not used
+     once a milestone is in scope, and no fetch ever carries a different
+     `milestone_id`.** A task belonging to another milestone, or to no
+     milestone, **is not this run's work**: don't pick it, don't claim
+     it, don't report against it — even if it turns up in a response, and
+     even if it looks urgent or related. Note it for the operator
+     instead.
+   - Empty means every task under this milestone has been reported
+     against. Go to "Finishing" below — never widen the search.
+2. **Pick one task, by priority.** Lowest `priority` first; ties broken
+   by oldest `raised_at`; a task with no `priority` sorts last. Then
    `GET {SERVER_URL}/tasks/{id}/` for its full body (`content` is the
    task in markdown — read it fully before doing anything).
 3. **Orient in the target project.** You will be told (or must ask) which
@@ -117,25 +157,48 @@ file, or one not opened this way, runs "One iteration" below unchanged
      verified, what's left. Put anything longer in the target project's
      own tree (a doc, a commit message, a PR description) and reference
      it rather than pasting it here.
-   - This is the *only* step that talks to cws about task state — don't
-     poll or update it any other way.
+   - This is the *only* step that talks to cws about a task's own state —
+     don't poll or update it any other way.
 6. **Hand off to the reporter.** Invoke
-   [reporter-agent](reporter-agent.md) as this iteration's callback — it
-   syncs anything this iteration surfaced (new issues, milestone
-   progress) back to cws. Don't do that syncing yourself.
-7. **Loop.** Go back to step 1. If running under `/loop` or a scheduled
-   wakeup, let that mechanism pace the next iteration rather than spinning
-   in a tight loop.
+   [reporter-agent](reporter-agent.md) as this iteration's callback, and
+   **give it the milestone id** — it syncs anything this iteration
+   surfaced (new issues, milestone progress, follow-up subtasks) back to
+   cws. Don't do that syncing yourself.
+7. **Loop.** Back to step 1 of *this* phase — never back to planning.
+   Work this iteration surfaced but did not scope for is not built inline
+   and is not planned by you either: it goes to `reporter-agent` as a
+   subtask, which creates it **under this same `milestone_id`** so a
+   later iteration can actually fetch it. If running under `/loop` or a
+   scheduled wakeup, let that mechanism pace the next iteration rather
+   than spinning in a tight loop.
+
+## Finishing
+
+When the milestone-scoped pending list comes back empty, the run is over:
+check the goal's completion condition — the milestone's criteria, the
+same check `reporter-agent` runs — and report plainly which tasks landed
+and which reported `failed`, `blocked` or `awaiting go-ahead`. Then stop.
+Don't fall back to the global pending queue: this run is scoped to the
+milestone it was given, and a milestone whose criteria aren't met yet is
+a finding to report, not a reason to go looking for other work.
 
 ## What not to do
 
+- **Don't fetch or work a task outside this run's milestone.** Not a
+  pending task with no milestone, not one under a different milestone,
+  not "while we're here". The milestone id is the scope, and it does not
+  widen mid-run.
+- Don't create a second milestone for a goal that already has one, and
+  don't re-plan after iteration 1 — an existing milestone with tasks
+  under it is the plan, whoever made it.
 - Don't silently skip a task because it looks hard — report `blocked` or
   `failed` with why, so it stays visible as unresolved (reporting doesn't
   close anything; `task_id` isn't 1:1 with results, so a next attempt can
   pick the same task back up).
 - Don't invent a `project` filter — `task`/`result` have no `project`
-  column today. If you're pointed at more than one project, that's
-  currently ambiguous; ask rather than guessing which tasks are "yours".
+  column today; `milestone_id` (whose milestone carries `directory`) is
+  how a run is scoped to one project. If you're pointed at more than one
+  project, that's what the milestone settles — ask rather than guessing.
 - Don't apply this file's own tone or process to the target project's
   code. This file is about the reporting contract; the target project's
   `CLAUDE.md` is about everything else.

@@ -31,9 +31,17 @@ otherwise, or if `CWS_SERVER_URL` is set). Plain HTTP, JSON bodies —
 **`GET {SERVER_URL}/help` returns the full API spec.** This file names
 the calls the ordinary sync needs, but it is not the source of truth
 for the server's surface — when `intermediary-agent` hands you
-something this file doesn't already cover (a task outcome to record as
-an issue, a milestone update, anything not listed below), check `/help`
-for the actual endpoint before assuming it doesn't exist.
+something this file doesn't already cover, check `/help` for the actual
+endpoint before assuming it doesn't exist.
+
+## The milestone is your scope too
+
+`intermediary-agent` hands you **the milestone id** its run is scoped to.
+Everything you create belongs under it, and everything you read about
+task state is filtered by it (`GET {SERVER_URL}/tasks/?milestone_id={id}`).
+A task under another milestone is not this run's business — don't touch
+it, don't report on it. If you weren't given a milestone id, ask for it
+rather than working unscoped.
 
 ## What "sync" means here
 
@@ -55,19 +63,55 @@ don't duplicate that.
    - If missing: `POST {SERVER_URL}/issue/{project}/` with
      `{"alias": "...", "title": "...", "content": "<markdown>"}`.
 
-2. **Milestone progress.** Find the milestone this project is working
-   toward — `GET {SERVER_URL}/milestones/` and match on `directory`, or
-   use the id you were given directly, then `GET
-   {SERVER_URL}/milestones/{id}/`. **There is currently no API to update
-   a milestone's `state`** — that endpoint doesn't exist yet. If you
-   determine the milestone's criteria are now met, say so plainly in your
-   report back to whoever invoked you. Don't silently do nothing, and
-   don't write to KDS directly to work around the missing endpoint.
+2. **Follow-up subtasks handed to you by `intermediary-agent`.** It
+   decides what future work exists; you are the one that tells cws about
+   it. `POST {SERVER_URL}/tasks/`:
+   ```json
+   {"version": "...", "title": "<id> — <short name>", "content": "<markdown>",
+    "type": "...", "milestone_id": "<this run's milestone id>",
+    "derived_from": "<the task that raised it>", "priority": <integer>}
+   ```
+   - **`milestone_id` is mandatory** — it is this run's milestone, always.
+     A subtask created without it, or under a different one, can never be
+     fetched by the loop that raised it, because that loop only ever
+     fetches its own milestone.
+   - **`derived_from`** is the id of the task the follow-up came out of.
+   - **`priority` is lower-runs-first**, the same convention
+     `intermediary-agent` planned with. Place the subtask relative to
+     what still has to happen — after its parent unless it gates
+     something already queued — and never at a number that would make it
+     jump ahead of a task it depends on.
+   - The ~1.2 KB cap on `content` applies here too: point at the doc
+     under `docs/` that carries the reasoning, don't paste it.
+
+3. **Milestone progress.** `GET {SERVER_URL}/milestones/{id}/` for the
+   one you were given (or `GET {SERVER_URL}/milestones/` matched on
+   `directory` if you were given a path instead). Check its criteria
+   against what is actually true in the project, then:
+   - If the criteria are met, record it: `PATCH
+     {SERVER_URL}/milestones/{id}/` with `{"state": "<new state>"}`.
+     Every field is optional, so advancing `state` alone restates
+     nothing else. `state` is open-ended — there is no fixed "achieved"
+     value; use the one this run was told to use, or say plainly in your
+     report which you chose.
+   - If they are not met, say so plainly in your report back, with what
+     is still outstanding. Don't advance a state that the project's own
+     files don't support.
+
+4. **The doc trail.** A task reported `done` under workflow mode owes a
+   doc update where one was owed (`docs/rules/rule-workflow-mode.md`,
+   "Documentation"). Confirm the file and section the task claimed
+   actually exist before treating that claim as synced, and point cws at
+   the doc rather than copying its content into the server. A `done` with
+   no corresponding doc update is a reporting defect — say so rather than
+   passing the claim through unchecked.
 
 ## What not to do
 
 - Don't do development work — an unfinished thing you notice is the next
   loop iteration's problem, not yours to fix here.
 - Don't create a duplicate issue — always check the alias first.
-- Don't bypass the HTTP API (no raw SQL against KDS) for any gap you find,
-  including the milestone-update one above — report the gap instead.
+- Don't create a task outside this run's milestone, or without a
+  `milestone_id` at all.
+- Don't bypass the HTTP API (no raw SQL against KDS) for any gap you find
+  — report the gap instead.

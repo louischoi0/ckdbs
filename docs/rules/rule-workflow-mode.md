@@ -18,28 +18,55 @@ when a user asks for it in those terms — "work the task queue", "run the
 intermediary agent", "pick up pending tasks" (`intermediary-agent.md`'s
 own trigger phrases) — or invokes it directly by name. A session that
 has never been asked to run the loop is not in workflow mode, no matter
-how automatable a task looks. Once active, it can run two ways — see
-"Two task sources" below.
+how automatable a task looks. Once active, it plans before it builds —
+see "One task source" below.
 
-## Two task sources — the cws queue, or one named instruction file
+## One task source — the milestone. Two ways to plan into it.
 
-Queue-driven — pulling whatever cws holds pending — is the default
-described below. A second path exists for running one work order end
-to end: open the session in a git worktree (`CLAUDE.md` §1), activate
-workflow mode, and name an instruction file under `instructions/` —
-ckdbs's own convention for a work order (`instructions/v2.2.0-stmtshipping.md`,
-`instructions/v2.4.0/2pc.md`, and the like). `intermediary-agent` reads
-it once, sets the run's **goal** from what the file states it delivers,
-and from the second iteration on takes over that file's own registered
-tasks and subtasks — its gates/build tables, ids kept verbatim — as the
-loop's task source instead of the cws queue. Where the file corresponds
-to a cws milestone (matched on `directory`), that milestone's criteria
-become the goal's completion condition, checked the same way
-`reporter-agent` already checks milestone progress; a task's id from
-the file is what feeds the alias rule above, unchanged. The mechanics
-live in `intermediary-agent.md`'s own "Starting from a named
-instruction file" section — this file states the policy, that one
-states the procedure.
+**A run is scoped to exactly one milestone, and the loop never fetches
+outside it.** That is the whole task-source rule: `intermediary-agent`'s
+first iteration settles a milestone and registers the run's tasks under
+it, and from the second iteration on every fetch carries that
+`milestone_id`. A pending task under a different milestone, or under
+none, is not this run's work — not picked, not claimed, not reported
+against, however urgent it looks. The scope does not widen mid-run.
+
+**Iteration 1 plans; it does not build.** Its output is the milestone
+(`POST {SERVER_URL}/milestones/`, or an existing one adopted — matched
+on `directory` plus `version`, never duplicated) and one cws task per
+planned unit of work (`POST {SERVER_URL}/tasks/`), each carrying
+`milestone_id`, a `priority`, and `derived_from` where the plan makes one
+task a subtask of another. Where the milestone already exists **with
+tasks under it**, the plan was made by an earlier run: it is adopted, not
+re-made.
+
+Two things can supply that plan:
+
+- **A named instruction file** — open the session in a git worktree
+  (`CLAUDE.md` §1), activate workflow mode, and name a file under
+  `instructions/`, ckdbs's own convention for a work order
+  (`instructions/v2.2.0-stmtshipping.md`, `instructions/v2.4.0/2pc.md`).
+  `intermediary-agent` reads it once, sets the run's **goal** from what
+  the file states it delivers, and registers the file's own task table —
+  its gates/build rows, **ids kept verbatim** (`G1`, `SS1`) as the first
+  token of each task's `title` — as the milestone's tasks. Those ids
+  still feed the issue-alias rule under "Documentation" below,
+  unchanged. Because the rows are now real cws tasks, they report through
+  `POST /tasks/{id}/results/` like any other task; the old exception that
+  said they had no `/tasks/{id}` to report against is gone.
+- **No instruction file** — the goal is whatever the invocation states,
+  and the plan is `intermediary-agent`'s own breakdown of it into tasks
+  under the new milestone. Nothing already sitting in the queue is
+  adopted by this route: an unrelated pending task is not part of this
+  run's plan and is never fetched by it.
+
+Either way the milestone's criteria are the goal's completion condition,
+checked the same way `reporter-agent` already checks milestone progress —
+not a task count kept locally. **`priority` is an integer the server
+fixes no direction for; this loop reads it lower-runs-first** (`1` before
+`10`), a convention chosen without operator input and reversible by
+saying so. The mechanics live in `intermediary-agent.md`'s own two-phase
+loop — this file states the policy, that one states the procedure.
 
 ## What it is
 
@@ -47,8 +74,10 @@ Workflow mode is the process that drives ckdbs development from `cws`'s
 external task/result queue instead of from an interactive session, using
 two agents:
 
-- **`intermediary-agent`** pulls one pending task from cws, works inside
-  ckdbs on it, and reports a result back. It has no working style of its
+- **`intermediary-agent`** plans the run's milestone and tasks on its
+  first iteration, then pulls one pending task **from that milestone**,
+  works inside ckdbs on it, and reports a result back. It has no working
+  style of its
   own inside ckdbs — it reads and follows `CLAUDE.md` and this project's
   own subagents (`critics-developer`, `ck-tester`) exactly as an
   interactive session would. Wrapping, not replacing: the loop decides
@@ -65,7 +94,10 @@ task did not scope for, that follow-up does not get done inline; it
 becomes a subtask handed to `reporter-agent`, which is the only one of
 the two that talks to cws about task state going forward in time. This
 keeps the split intact: `intermediary-agent` decides *what future work
-exists*, `reporter-agent` is the one that *tells cws about it*.
+exists*, `reporter-agent` is the one that *tells cws about it*. **Such a
+subtask is created under this run's own `milestone_id`, always** — the
+loop fetches nothing else, so a subtask filed anywhere else is a subtask
+the loop that raised it can never pick up.
 
 ## Autonomy — research and decide, never ask
 
@@ -146,9 +178,22 @@ disambiguate with.
 
 ## The loop, one iteration
 
-1. `intermediary-agent` asks cws for the next pending task — or, on the
-   instruction-file path above, picks the next task from the file whose
-   gate is already satisfied.
+**Iteration 1 is the planning iteration** and runs steps 0 and 6 only:
+`intermediary-agent` settles the milestone, registers the run's tasks
+under it with their priorities, builds nothing, and hands the plan to
+`reporter-agent`. Every iteration after it runs the steps below.
+
+0. **(iteration 1 only)** `intermediary-agent` derives the goal, finds or
+   creates the milestone, and creates one task per planned unit of work
+   under it — `milestone_id` on every one, `priority` in dependency order
+   (lower first), `derived_from` where a task is another's subtask, and a
+   task-row id kept verbatim in the title where the plan came from an
+   instruction file.
+1. `intermediary-agent` asks cws for the next pending task **under this
+   run's milestone** — `GET {SERVER_URL}/tasks/?milestone_id={id}&pending=true`
+   — and takes the lowest `priority`, oldest `raised_at` breaking ties.
+   The unfiltered pending query is not used, and no other milestone's
+   tasks are fetched.
 2. It works the task inside `CLAUDE.md`'s ordinary Session Workflow,
    **unmodified**: a worktree named for the work (§1) — carrying the cws
    task id is recommended, so `reporter-agent` can trace state back to
@@ -161,7 +206,7 @@ disambiguate with.
    the rest of the task was decided. A task that reaches this gate
    reports `awaiting go-ahead` as its outcome — it does not push itself,
    and the loop does not block waiting for one: it moves on to the next
-   pending task.
+   pending task **under the same milestone**.
 4. `intermediary-agent` reports the task's outcome — done, blocked,
    awaiting go-ahead, or no task found — back to the loop driver.
 5. **If the task turned up unscoped work** — a fix that needs its own
@@ -173,9 +218,14 @@ disambiguate with.
    them to `reporter-agent` along with the iteration's other output.
 6. `reporter-agent` syncs the task outcome, checks that any doc update
    the task claimed is actually there, and enqueues the handed-off
-   subtasks into cws, then the loop returns to step 1. A subtask waits
-   its turn like any other pending task — it does not jump the queue or
-   run inline in the iteration that raised it.
+   subtasks into cws **under the same `milestone_id`**, then the loop
+   returns to step 1. A subtask waits its turn like any other pending
+   task — its `priority` places it, and it does not jump the queue or run
+   inline in the iteration that raised it.
+7. **The run ends when the milestone-scoped pending list is empty**, not
+   when the global queue is. `intermediary-agent` then checks the
+   milestone's criteria and reports what landed and what didn't; it does
+   not fall back to the unfiltered queue looking for more work.
 
 ## What never changes
 
@@ -188,33 +238,42 @@ exactly the point an interactive session would stop, and says so in its
 report to cws — it is never waved through because no human was
 watching.
 
+## Closed by `/help`, 2026-08-27
+
+`GET {SERVER_URL}/help` was run against the server and answered the three
+endpoint gaps this section used to carry. All three are now written into
+the two agent files rather than left as intent:
+
+- **Creating tasks exists.** `POST {SERVER_URL}/tasks/` takes `version`,
+  `title`, `content`, `type`, and optionally `derived_from` (a parent
+  task id, checked app-side — KDS has no self-referencing FK),
+  `milestone_id` (an engine-enforced FK — 400 if it doesn't exist) and
+  `priority` (an integer with **no server-fixed direction**, hence this
+  file's lower-runs-first convention). That is what both the planning
+  iteration and `reporter-agent`'s subtask enqueue call.
+- **Updating a milestone exists.** `PATCH {SERVER_URL}/milestones/{id}/`
+  writes only the fields present, so advancing `state` alone restates
+  nothing else. `reporter-agent.md`'s old "there is currently no API to
+  update a milestone's `state`" was true when written and is not now.
+- **The instruction-file tasks have real `/tasks/{id}` rows**, because
+  iteration 1 registers them, so recording their outcome is the ordinary
+  `POST /tasks/{id}/results/` — not an issue-shaped workaround. Issues
+  (`POST /issue/{project}/`) go back to meaning what `reporter-agent`
+  always used them for: problems the work surfaced.
+
+Also on the server and **not yet used by either agent**: `POST
+/tasks/{id}/claim/` and `/release/`, an exclusive 30-minute lease so two
+sessions can't work one task at once, with `GET /tasks/?claimable=true`
+as its advisory filter. One loop against one milestone doesn't need it;
+two loops sharing a milestone would. Unadopted, not rejected.
+
 ## Open
 
-**Both agents now check `GET {SERVER_URL}/help` for the full API spec**
-(`intermediary-agent.md`, `reporter-agent.md`) before assuming a call
-doesn't exist — that resolves *how to find* the two endpoint gaps
-below, but not what the actual answer is until an agent runs `/help`
-and reports it back. Treat the two bullets as open until then.
-
-- **Recording a task outcome as an issue on request.** On the
-  instruction-file path, `intermediary-agent` hands `reporter-agent` a
-  finished task (no server-side `/tasks/{id}` exists for it) to record
-  as a cws issue keyed by the task's own id — a related but distinct
-  case from `reporter-agent`'s own known-gaps scan. Check `/help` for
-  whether `POST /issue/{project}/` is the right call for this too, or
-  a different one is.
-- **The subtask-enqueue mechanism.** `reporter-agent.md` documents
-  `POST {SERVER_URL}/issue/{project}/` for issues and a read-only path
-  for milestones; whether a `POST` for creating a new task exists is
-  what `/help` answers. Until an agent checks and reports it, "hand off
-  a subtask to `reporter-agent`" states an intent, not a confirmed call
-  — say that explicitly in a report rather than inventing an endpoint.
-- **The wider doc-trail check** above isn't yet in `reporter-agent.md`'s
-  own instructions — today it documents scanning
-  `docs/inflight/known-gaps.md` for issues and a read-only milestone
-  check, not a general "confirm the doc this task pointed at actually
-  exists." Its tool set (`Read, Bash, Grep, Glob`) already covers what
-  the check needs; the instructions naming it are what's missing.
+- **The doc-trail check's depth.** `reporter-agent.md` now names the
+  check ("confirm the doc this task pointed at actually exists"), but
+  what counts as confirmation — the file existing, the section existing,
+  or the section actually saying what the task claimed — is not settled.
+  Today it reads as file-and-section.
 - **Who gives the go-ahead** for a task parked at `awaiting go-ahead` —
   an operator checking in periodically, or some other signal `cws`
   carries. Undecided; until it is, those tasks simply accumulate
