@@ -1363,8 +1363,12 @@ Status Expeditor::Serve() {
         // carries the slot the server's ceiling is derived from, so the
         // sender and that ceiling cannot come from different transports.
         StepSendSeam step_seam = MakeStepSend(scheduler, *transport_, /*src_core=*/0);
-        StepSendFn step_send = step_seam.send;
-        remote_reads_.emplace(/*core_id=*/0, step_send, &*logger_);
+        // The client takes the sender alone and no ceiling, which is the
+        // one place in the tree the pair comes apart. It needs none: the
+        // only thing it sends that could be wide is a STEP_OPEN, and the
+        // seam's own guard refuses that with `OpenPipeline` propagating
+        // the refusal - a plan-time error, never a silent loss.
+        remote_reads_.emplace(/*core_id=*/0, step_seam.send, &*logger_);
         // Core 0's own step server (workplan P4d-4b-3): a stage placed on
         // a relation core 0 owns is served here, like any peer serves its
         // own - the missing half that made "every stage's core serving"

@@ -35,18 +35,36 @@ StepSendSeam MakeStepSend(sched::Scheduler& scheduler, sched::RingTransport& tra
                 " bytes; the ring slot to core " + std::to_string(dst) + " carries " +
                 std::to_string(transport.max_payload()));
         }
+        // `TrySend`'s **other** non-retryable refusal, guarded here for the
+        // same reason and not because it is reachable: `dst` comes from the
+        // planner or from a tag, both in-process. Covering one of the two
+        // would leave the claim above half true, and the half it left out
+        // fails exactly as the oversize payload did - `OK` from here, a
+        // discard in the retry task, and an EOF arriving anyway.
+        if (dst >= transport.core_count()) {
+            return Status::InvalidArgument("step message addressed to core " +
+                                           std::to_string(dst) + "; this instance runs " +
+                                           std::to_string(transport.core_count()));
+        }
         sched::MessageHeader out{};
         out.src_core = src_core;
         out.dst_core = dst;
-        // Every step payload begins with the tag (step_pipeline.hpp's rule,
-        // so teardown-by-tag can run before the kind-specific fields are
-        // read), which is the only thing here that knows the statement's
-        // session core. The two hand-written senders this replaced guessed
-        // differently and nothing read either.
+        // **The header's tag, all three fields or none.** Every step
+        // payload begins with the `PipelineTag` (step_pipeline.hpp's rule,
+        // so teardown-by-tag runs before the kind-specific fields are
+        // read), and it is the only thing here that knows any of them. The
+        // two hand-written senders this replaced filled `session_core`
+        // with two different guesses and left the other two zero - and a
+        // zero `request_id` is documented at `ring_message.hpp` as "a
+        // system message that belongs to no statement", which a STEP_BATCH
+        // is not. Filling one of three would read as authoritative and be
+        // false, so all three come from the tag.
         if (payload.size() >= sizeof(PipelineTag)) {
             PipelineTag tag{};
             std::memcpy(&tag, payload.data(), sizeof(tag));
             out.session_core = tag.session_core;
+            out.request_id = tag.request_id;
+            out.step_id = tag.step_id;
         }
         out.kind = static_cast<std::uint16_t>(kind);
         out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);

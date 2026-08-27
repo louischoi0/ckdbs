@@ -28,6 +28,13 @@ Default `{SERVER_URL}` is `http://127.0.0.1:8080` (override if told
 otherwise, or if `CWS_SERVER_URL` is set). Plain HTTP, JSON bodies —
 `curl`.
 
+**`GET {SERVER_URL}/help` returns the full API spec.** This file names
+the calls the ordinary sync needs, but it is not the source of truth
+for the server's surface — when `intermediary-agent` hands you
+something this file doesn't already cover (a task outcome to record as
+an issue, a milestone update, anything not listed below), check `/help`
+for the actual endpoint before assuming it doesn't exist.
+
 ## What "sync" means here
 
 **Server → project:** nothing to do. The intermediary agent already reads

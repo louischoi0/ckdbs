@@ -136,34 +136,6 @@ struct StepOpenParts {
 };
 StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payload);
 
-// `send(dst_core, kind, payload)` must deliver or report; it never blocks
-// (the real one submits a send-retry task).
-using StepSendFn =
-    std::function<Status(std::uint32_t, sched::RingMessageKind, std::vector<std::byte>)>;
-
-// "This sender writes into no ring, so no slot bounds it." True of every
-// in-process fixture and of no production wiring.
-//
-// Deliberately not `0`: a sentinel that looks like an omission is the
-// "told wrong" hazard the slot exists to remove, and `0` is also a
-// plausible real size. Deliberately not the batch target either - that
-// default silently turned a fixture's tiny target into a ceiling nothing
-// could fit under, and fifteen tests said so.
-inline constexpr std::size_t kNoRingSlot = std::numeric_limits<std::size_t>::max();
-
-// **The send seam and the slot it sends through, as one value.**
-//
-// They are one fact and were two parameters, which is how they came to
-// disagree: `kStepBatchTargetBytes` was 32x the ring slot for the
-// pipeline's whole life, and a cross-core read of 42 rows answered zero
-// rows with no error (`docs/inflight/known-gaps.md`, beside the
-// shipped-reply cap). A sender and a ceiling taken from different places
-// can drift again; taken from one object they cannot.
-struct StepSendSeam {
-    StepSendFn send;
-    std::size_t max_message_bytes = kNoRingSlot;
-};
-
 // The one step-send, for every core that has a ring.
 //
 // Both production wirings built this by hand and differed in exactly
@@ -175,7 +147,15 @@ struct StepSendSeam {
 // `session_step_client.cpp` takes `tag.session_core` out of the payload,
 // not the header. So this fills it from that same tag, which every step
 // payload begins with, and the header states the truth for the first
-// time instead of two different guesses.
+// time instead of two different guesses - all three of the tag's fields,
+// because filling one of three would read as authoritative and be false.
+//
+// **`scheduler` and `transport` are captured by reference and must
+// outlive every server built from the returned seam.** That is the one
+// thing a caller can get wrong, and both production wirings had to be
+// corrected for it in opposite directions: `Expeditor::Serve` destroyed
+// the transport while the endpoints still held it, and `~CoreRuntime`
+// destroyed the scheduler the same way.
 StepSendSeam MakeStepSend(sched::Scheduler& scheduler, sched::RingTransport& transport,
                           std::uint32_t src_core);
 
@@ -203,9 +183,11 @@ public:
           send_(std::move(seam.send)),
           log_(log),
           batch_target_(batch_target_bytes),
-          batch_ceiling_(seam.max_message_bytes == kNoRingSlot
-                             ? kNoRingSlot
-                             : StepBatchCeiling(seam.max_message_bytes)),
+          // No special case for `kNoRingSlot`: `StepBatchCeiling(SIZE_MAX)`
+          // is `SIZE_MAX - 24`, which no writer can approach either, and a
+          // branch here would only invite the reader to think the function
+          // misbehaves at the sentinel.
+          batch_ceiling_(StepBatchCeiling(seam.max_message_bytes)),
           submit_(std::move(submit)),
           txns_(txns),
           budget_(budget) {}
@@ -371,9 +353,9 @@ private:
     SendFn send_;
     Logger* log_;
     std::size_t batch_target_;
-    // The hard bound `batch_target_` is only a target against. Equal to
-    // the target when no transport was named, so a fixture's behaviour is
-    // unchanged and only production tightens.
+    // The hard bound `batch_target_` is only a target against.
+    // `kNoRingSlot` - not the target - when the seam named no ring, so a
+    // fixture never seals on the ceiling and only production tightens.
     std::size_t batch_ceiling_;
     SubmitFn submit_;
     // The manager whose committed state every stage on this core reads at

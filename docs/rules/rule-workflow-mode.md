@@ -18,7 +18,28 @@ when a user asks for it in those terms — "work the task queue", "run the
 intermediary agent", "pick up pending tasks" (`intermediary-agent.md`'s
 own trigger phrases) — or invokes it directly by name. A session that
 has never been asked to run the loop is not in workflow mode, no matter
-how automatable a task looks.
+how automatable a task looks. Once active, it can run two ways — see
+"Two task sources" below.
+
+## Two task sources — the cws queue, or one named instruction file
+
+Queue-driven — pulling whatever cws holds pending — is the default
+described below. A second path exists for running one work order end
+to end: open the session in a git worktree (`CLAUDE.md` §1), activate
+workflow mode, and name an instruction file under `instructions/` —
+ckdbs's own convention for a work order (`instructions/v2.2.0-stmtshipping.md`,
+`instructions/v2.4.0/2pc.md`, and the like). `intermediary-agent` reads
+it once, sets the run's **goal** from what the file states it delivers,
+and from the second iteration on takes over that file's own registered
+tasks and subtasks — its gates/build tables, ids kept verbatim — as the
+loop's task source instead of the cws queue. Where the file corresponds
+to a cws milestone (matched on `directory`), that milestone's criteria
+become the goal's completion condition, checked the same way
+`reporter-agent` already checks milestone progress; a task's id from
+the file is what feeds the alias rule above, unchanged. The mechanics
+live in `intermediary-agent.md`'s own "Starting from a named
+instruction file" section — this file states the policy, that one
+states the procedure.
 
 ## What it is
 
@@ -125,7 +146,9 @@ disambiguate with.
 
 ## The loop, one iteration
 
-1. `intermediary-agent` asks cws for the next pending task.
+1. `intermediary-agent` asks cws for the next pending task — or, on the
+   instruction-file path above, picks the next task from the file whose
+   gate is already satisfied.
 2. It works the task inside `CLAUDE.md`'s ordinary Session Workflow,
    **unmodified**: a worktree named for the work (§1) — carrying the cws
    task id is recommended, so `reporter-agent` can trace state back to
@@ -167,19 +190,31 @@ watching.
 
 ## Open
 
-- **`reporter-agent.md`'s own instructions don't yet describe the wider
-  doc-trail check** above — today it documents scanning
+**Both agents now check `GET {SERVER_URL}/help` for the full API spec**
+(`intermediary-agent.md`, `reporter-agent.md`) before assuming a call
+doesn't exist — that resolves *how to find* the two endpoint gaps
+below, but not what the actual answer is until an agent runs `/help`
+and reports it back. Treat the two bullets as open until then.
+
+- **Recording a task outcome as an issue on request.** On the
+  instruction-file path, `intermediary-agent` hands `reporter-agent` a
+  finished task (no server-side `/tasks/{id}` exists for it) to record
+  as a cws issue keyed by the task's own id — a related but distinct
+  case from `reporter-agent`'s own known-gaps scan. Check `/help` for
+  whether `POST /issue/{project}/` is the right call for this too, or
+  a different one is.
+- **The subtask-enqueue mechanism.** `reporter-agent.md` documents
+  `POST {SERVER_URL}/issue/{project}/` for issues and a read-only path
+  for milestones; whether a `POST` for creating a new task exists is
+  what `/help` answers. Until an agent checks and reports it, "hand off
+  a subtask to `reporter-agent`" states an intent, not a confirmed call
+  — say that explicitly in a report rather than inventing an endpoint.
+- **The wider doc-trail check** above isn't yet in `reporter-agent.md`'s
+  own instructions — today it documents scanning
   `docs/inflight/known-gaps.md` for issues and a read-only milestone
   check, not a general "confirm the doc this task pointed at actually
   exists." Its tool set (`Read, Bash, Grep, Glob`) already covers what
   the check needs; the instructions naming it are what's missing.
-- **The subtask-enqueue mechanism itself is not yet named.**
-  `reporter-agent.md` documents `POST {SERVER_URL}/issue/{project}/` for
-  issues and a read-only path for milestones — no `POST` for creating a
-  new task is documented there today. Until one is, "hand off a subtask
-  to `reporter-agent`" describes an intent this file states, not an API
-  call either agent's current instructions can make; state that
-  explicitly in a report rather than inventing an endpoint.
 - **Who gives the go-ahead** for a task parked at `awaiting go-ahead` —
   an operator checking in periodically, or some other signal `cws`
   carries. Undecided; until it is, those tasks simply accumulate
