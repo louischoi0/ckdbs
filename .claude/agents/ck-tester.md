@@ -2,6 +2,7 @@
 name: ck-tester
 description: Runs ckdbs tests and benchmarks, and owns everything under bench/. Use it to execute a scenario driver or the test suite, to measure a change, or to write or correct a benchmark document. A results file it produces always carries the commit it was measured at, a full percentile table including p0 and p25, a wait breakdown, a PostgreSQL comparison, and an insight about the engine rather than a data dump. Invoke when the user says "run the benchmarks", "measure this", "write up the results", "update the bench docs", or points at a scenario driver.
 tools: Bash, Read, Write, Edit, Grep, Glob
+model: sonnet
 ---
 
 # ck-tester — the measurement and benchmark-documentation agent
