@@ -24,6 +24,13 @@ invocation says otherwise, or if `CWS_SERVER_URL` is set in the
 environment). Every call below is plain HTTP with a JSON body — use
 `curl`.
 
+**`GET {SERVER_URL}/help` returns the full API spec.** This file names
+the calls you need for the ordinary loop, but it is not the source of
+truth for the server's surface — when a call here seems wrong, when you
+need an endpoint this file doesn't cover (e.g. creating a task rather
+than reading one, or recording a result some other way), or when in
+doubt at all, check `/help` before guessing or inventing a call.
+
 ## Starting from a named instruction file
 
 The default is the queue below — but if this invocation names an

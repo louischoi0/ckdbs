@@ -190,27 +190,31 @@ watching.
 
 ## Open
 
-- **`reporter-agent.md` doesn't yet describe recording a task outcome as
-  an issue on request.** On the instruction-file path, `intermediary-agent`
-  hands it a finished task (no server-side `/tasks/{id}` exists for it)
-  to record as a cws issue keyed by the task's own id. Today
-  `reporter-agent.md` only describes issue creation from its *own* scan
-  of `docs/inflight/known-gaps.md` and the like — being handed one
-  pre-identified by `intermediary-agent` is a related but distinct case
-  its instructions don't name yet.
-- **`reporter-agent.md`'s own instructions don't yet describe the wider
-  doc-trail check** above — today it documents scanning
+**Both agents now check `GET {SERVER_URL}/help` for the full API spec**
+(`intermediary-agent.md`, `reporter-agent.md`) before assuming a call
+doesn't exist — that resolves *how to find* the two endpoint gaps
+below, but not what the actual answer is until an agent runs `/help`
+and reports it back. Treat the two bullets as open until then.
+
+- **Recording a task outcome as an issue on request.** On the
+  instruction-file path, `intermediary-agent` hands `reporter-agent` a
+  finished task (no server-side `/tasks/{id}` exists for it) to record
+  as a cws issue keyed by the task's own id — a related but distinct
+  case from `reporter-agent`'s own known-gaps scan. Check `/help` for
+  whether `POST /issue/{project}/` is the right call for this too, or
+  a different one is.
+- **The subtask-enqueue mechanism.** `reporter-agent.md` documents
+  `POST {SERVER_URL}/issue/{project}/` for issues and a read-only path
+  for milestones; whether a `POST` for creating a new task exists is
+  what `/help` answers. Until an agent checks and reports it, "hand off
+  a subtask to `reporter-agent`" states an intent, not a confirmed call
+  — say that explicitly in a report rather than inventing an endpoint.
+- **The wider doc-trail check** above isn't yet in `reporter-agent.md`'s
+  own instructions — today it documents scanning
   `docs/inflight/known-gaps.md` for issues and a read-only milestone
   check, not a general "confirm the doc this task pointed at actually
   exists." Its tool set (`Read, Bash, Grep, Glob`) already covers what
   the check needs; the instructions naming it are what's missing.
-- **The subtask-enqueue mechanism itself is not yet named.**
-  `reporter-agent.md` documents `POST {SERVER_URL}/issue/{project}/` for
-  issues and a read-only path for milestones — no `POST` for creating a
-  new task is documented there today. Until one is, "hand off a subtask
-  to `reporter-agent`" describes an intent this file states, not an API
-  call either agent's current instructions can make; state that
-  explicitly in a report rather than inventing an endpoint.
 - **Who gives the go-ahead** for a task parked at `awaiting go-ahead` —
   an operator checking in periodically, or some other signal `cws`
   carries. Undecided; until it is, those tasks simply accumulate
