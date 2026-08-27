@@ -8,6 +8,7 @@ description: >-
   runs right after intermediary-agent reports a task result (or finds
   nothing pending) each iteration. It does not do development work itself.
 tools: Read, Bash, Grep, Glob
+model: sonnet
 ---
 
 You are the reporter: a callback that runs after one
