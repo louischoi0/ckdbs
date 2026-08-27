@@ -2,10 +2,13 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <span>
 #include <vector>
 
 #include "kds/base/status.hpp"
+#include "kds/sched/ring_message.hpp"
 #include "kds/wire/row_codec.hpp"
 
 // The cross-core step pipeline's data plane (docs/spec/crosscore.md §3-§4,
@@ -43,6 +46,38 @@ struct PipelineTag {
     friend bool operator==(const PipelineTag&, const PipelineTag&) = default;
 };
 static_assert(sizeof(PipelineTag) == 16);
+
+// ---- The send seam ------------------------------------------------------
+
+// `send(dst_core, kind, payload)` must deliver or report; it never blocks
+// (the real one submits a send-retry task). Here rather than on either
+// endpoint because **both** the server and the session client take one,
+// and two identical declarations of one type is how they come to differ.
+using StepSendFn =
+    std::function<Status(std::uint32_t, sched::RingMessageKind, std::vector<std::byte>)>;
+
+// "This sender writes into no ring, so no slot bounds it." True of every
+// in-process fixture and of no production wiring.
+//
+// Deliberately not `0`: a sentinel that looks like an omission is the
+// "told wrong" hazard the slot exists to remove, and `0` is also a
+// plausible real size. Deliberately not the batch target either - that
+// default silently turned a fixture's tiny target into a ceiling nothing
+// could fit under, and fifteen tests said so.
+inline constexpr std::size_t kNoRingSlot = std::numeric_limits<std::size_t>::max();
+
+// **The send seam and the slot it sends through, as one value.**
+//
+// They are one fact and were two parameters, which is how they came to
+// disagree: `kStepBatchTargetBytes` was 32x the ring slot for the
+// pipeline's whole life, and a cross-core read of 42 rows answered zero
+// rows with no error (`docs/inflight/known-gaps.md`, beside the
+// shipped-reply cap). A sender and a ceiling taken from different places
+// can drift again; taken from one object they cannot.
+struct StepSendSeam {
+    StepSendFn send;
+    std::size_t max_message_bytes = kNoRingSlot;
+};
 
 // ---- Payloads -----------------------------------------------------------
 

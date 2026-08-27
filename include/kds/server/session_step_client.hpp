@@ -31,8 +31,11 @@ namespace kds::server {
 
 class SessionStepClient {
 public:
-    using SendFn =
-        std::function<Status(std::uint32_t, sched::RingMessageKind, std::vector<std::byte>)>;
+    // The one declaration lives in `step_pipeline.hpp`, beside the
+    // payloads it carries: this endpoint and the step server both take a
+    // sender, and two identical declarations of one type is how they
+    // come to differ.
+    using SendFn = StepSendFn;
 
     SessionStepClient(std::uint32_t core_id, SendFn send, Logger* log = nullptr) noexcept
         : core_id_(core_id), send_(std::move(send)), log_(log) {}
