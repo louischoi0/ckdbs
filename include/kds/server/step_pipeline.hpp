@@ -151,10 +151,42 @@ private:
 
 // Accumulates KWP-encoded rows toward the batch-size target and hands back
 // full chunks. The target is `[PROPOSED]` 32 KiB and must stay at or below
-// the ring's max message payload minus the header; a single row larger
-// than the target still ships alone - the spec's rule, so a wide row is
-// slow and never stuck.
+// the ring's max message payload minus the header.
+//
+// **`crosscore.md` §4's "a single row larger than the target still ships
+// alone - so a wide row is slow and never stuck" is retracted here as
+// written**, and the retraction is a fact about the transport rather than
+// a policy change. A row wider than `StepBatchCeiling` cannot be carried
+// by *any* batching, because a batch is one ring message; before
+// 2026-08-27 such a row was dropped silently, and now it is refused by
+// name. Reachable at defaults - roughly fifteen full-width varchar
+// columns at `inline_cell_width = 64`, and one value alone at its 4,096
+// ceiling. Closing it needs either a batch fragmented across ring
+// messages or `crosscore.md` §9's ring sizing, and both are that spec's;
+// `docs/inflight/known-gaps.md` carries the gap.
+//
+// **That "must" was a sentence and nothing else for the whole life of the
+// pipeline**, and 32 KiB is 32x the production ring slot
+// (`sched::kCoreRingPayloadBytes`, 1,024), so every batch past 1,024 bytes
+// was refused by `TrySend` and dropped by a send nobody was watching: a
+// cross-core read of 42 rows answered zero rows, silently
+// (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md). The
+// target is now a *target*, and `StepBatchCeiling` below is the bound.
 inline constexpr std::size_t kStepBatchTargetBytes = 32 * 1024;
+
+// The largest STEP_BATCH payload a transport whose slot carries
+// `max_message_bytes` can accept: the slot, minus this layer's own header.
+//
+// Derived rather than configured, and asked of the transport rather than
+// declared beside it, because the two numbers drifting apart is the defect
+// above. Answers 0 for a slot too small to hold even the header, which no
+// caller can satisfy and every caller must therefore refuse rather than
+// truncate.
+constexpr std::size_t StepBatchCeiling(std::size_t max_message_bytes) noexcept {
+    return max_message_bytes > sizeof(StepBatchHeader)
+               ? max_message_bytes - sizeof(StepBatchHeader)
+               : 0;
+}
 
 class StepBatchBuilder {
 public:

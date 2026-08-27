@@ -461,19 +461,16 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // when credit runs dry. The sender submits through the retry task - a
     // full ring yields and retries, never drops (M7) - and the producer
     // itself is a coroutine task on this same reactor.
+    //
+    // **`transport`, the parameter - never `transport_`.** That member is
+    // not assigned until the end of this function, and reading it here
+    // was first a null dereference and then, once guarded, a silent "no
+    // ceiling" that left every batch oversize. `MakeStepSend` takes the
+    // parameter and holds it, so the whole class of ordering error is
+    // gone rather than commented around.
     remote_steps_.emplace(
         *catalog_, *store_, config_.core_id,
-        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            sched::MessageHeader out{};
-            out.src_core = config_.core_id;
-            out.dst_core = dst;
-            out.session_core = dst;
-            out.kind = static_cast<std::uint16_t>(kind);
-            out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
-            scheduler_->Submit(sched::MakeSendRetryTask(*transport_, out, payload));
-            return Status::OK();
-        },
-        log_, kStepBatchTargetBytes,
+        MakeStepSend(*scheduler_, transport, config_.core_id), log_, kStepBatchTargetBytes,
         [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); },
         &*txn_manager_,
         // And this core's configured row-touch ceiling, which the server

@@ -297,6 +297,17 @@ Status RowBatchWriter::AppendRow(const catalog::Schema& schema,
     return Status::OK();
 }
 
+Status RowBatchWriter::RollbackLastRow(std::size_t mark) {
+    if (row_count_ == 0 || mark > buffer_.size()) {
+        return Status::InvalidArgument("wire row codec: nothing to roll back to byte " +
+                                       std::to_string(mark) + " in a batch of " +
+                                       std::to_string(row_count_) + " rows");
+    }
+    buffer_.resize(mark);
+    --row_count_;
+    return Status::OK();
+}
+
 std::vector<std::byte> RowBatchWriter::Finish() {
     buffer_[kRowCountOffset] = static_cast<std::byte>(row_count_ & 0xFF);
     buffer_[kRowCountOffset + 1] = static_cast<std::byte>((row_count_ >> 8) & 0xFF);

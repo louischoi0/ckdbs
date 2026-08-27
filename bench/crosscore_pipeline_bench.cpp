@@ -199,7 +199,7 @@ public:
             }
             return Status::OK();
         };
-        server_.emplace(*catalog_, *store_, /*core_id=*/1, deliver, nullptr,
+        server_.emplace(*catalog_, *store_, /*core_id=*/1, server::StepSendSeam{deliver}, nullptr,
                         server::kStepBatchTargetBytes,
                         [this](std::unique_ptr<sched::Task> task) {
                             tasks_.push_back(std::move(task));

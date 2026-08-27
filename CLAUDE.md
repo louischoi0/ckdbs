@@ -240,6 +240,12 @@ A failed review, a measured regression, or an unrun test suite stops the
 chain before the merge. Say which, and do not offer the push as though
 the gate had passed.
 
+**Workflow mode** is an outer loop — `intermediary-agent` pulling tasks
+from `cws` and `reporter-agent` syncing outcomes back — that wraps this
+four-step process unmodified; it never relaxes a gate, and it activates
+only on an explicit request, never by default. `docs/rules/rule-workflow-mode.md`
+is the full rule.
+
 ## Every claim carries its worktree and commit — in the middle of the text
 
 Not a header, not a footer, not a preamble: **the worktree name and the

@@ -6,11 +6,55 @@
 #include <utility>
 
 #include "kds/exec/step_vm.hpp"
+#include "kds/sched/ring_transport.hpp"
+#include "kds/sched/scheduler.hpp"
+#include "kds/sched/send_retry.hpp"
 #include "kds/server/step_descriptor.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/wire/row_codec.hpp"
 
 namespace kds::server {
+
+StepSendSeam MakeStepSend(sched::Scheduler& scheduler, sched::RingTransport& transport,
+                          std::uint32_t src_core) {
+    StepSendSeam seam;
+    seam.max_message_bytes = transport.max_payload();
+    seam.send = [&scheduler, &transport, src_core](std::uint32_t dst,
+                                                   sched::RingMessageKind kind,
+                                                   std::vector<std::byte> payload) -> Status {
+        // Answered before the submit, because after it there is nobody to
+        // answer to: `MakeSendRetryTask` retries backpressure and discards
+        // every other failure, so an `OK` this function has not earned is
+        // read by `Drain` as "sent" and the rows are gone with the EOF
+        // still arriving. Callers seal against the same `max_payload()`
+        // this seam carries, so it should never fire; it is what makes
+        // "should never" checkable rather than assumed.
+        if (payload.size() > transport.max_payload()) {
+            return Status::InvalidArgument(
+                "step message is " + std::to_string(payload.size()) +
+                " bytes; the ring slot to core " + std::to_string(dst) + " carries " +
+                std::to_string(transport.max_payload()));
+        }
+        sched::MessageHeader out{};
+        out.src_core = src_core;
+        out.dst_core = dst;
+        // Every step payload begins with the tag (step_pipeline.hpp's rule,
+        // so teardown-by-tag can run before the kind-specific fields are
+        // read), which is the only thing here that knows the statement's
+        // session core. The two hand-written senders this replaced guessed
+        // differently and nothing read either.
+        if (payload.size() >= sizeof(PipelineTag)) {
+            PipelineTag tag{};
+            std::memcpy(&tag, payload.data(), sizeof(tag));
+            out.session_core = tag.session_core;
+        }
+        out.kind = static_cast<std::uint16_t>(kind);
+        out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+        scheduler.Submit(sched::MakeSendRetryTask(transport, out, payload));
+        return Status::OK();
+    };
+    return seam;
+}
 
 namespace {
 
@@ -372,8 +416,11 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
             for (std::size_t i = 0; i < out_cols.size(); ++i) {
                 row[i] = frame.Get(exec::ColumnRef{0, 0, out_cols[i]});
             }
-            if (Status s = writer.AppendRow(out_schema, row); !s.ok()) return s;
-            if (writer.size_bytes() >= batch_target_ || writer.full()) Seal(pipe, writer);
+            if (Status s = PlaceRow(writer, out_schema, row,
+                                    [&] { Seal(pipe, writer); });
+                !s.ok()) {
+                return s;
+            }
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
@@ -710,9 +757,10 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                             static_cast<std::uint16_t>(output[o].from_upstream != 0 ? 1 : 0),
                             0, output[o].index});
                     }
-                    if (Status s = writer.AppendRow(output_schema, out_row); !s.ok()) return s;
-                    if (writer.size_bytes() >= batch_target_ || writer.full()) {
-                        SealAndDrain(tag, writer);
+                    if (Status s = PlaceRow(writer, output_schema, out_row,
+                                            [&] { SealAndDrain(tag, writer); });
+                        !s.ok()) {
+                        return s;
                     }
                     return storage::VisitControl::kContinue;
                 },
@@ -808,6 +856,28 @@ void RemoteStepServer::CancelUpstream(const PipelineTag& input_tag,
     (void)send_(upstream_core, sched::RingMessageKind::kStepCancel, std::move(bytes));
 }
 
+Status RemoteStepServer::PlaceRow(wire::RowBatchWriter& writer, const catalog::Schema& schema,
+                                  std::span<const parser::AstValue> row,
+                                  const std::function<void()>& seal) {
+    const std::size_t before = writer.size_bytes();
+    if (Status s = writer.AppendRow(schema, row); !s.ok()) return s;
+
+    if (writer.size_bytes() > batch_ceiling_) {
+        if (writer.row_count() == 1) {
+            return Status::ResourceExhausted(
+                "a single row encodes to " + std::to_string(writer.size_bytes() - before) +
+                " bytes, past the " + std::to_string(batch_ceiling_) +
+                " a cross-core batch can carry; no batching can make it fit");
+        }
+        // It fits in a batch of its own, just not in this one.
+        if (Status s = writer.RollbackLastRow(before); !s.ok()) return s;
+        seal();
+        return writer.AppendRow(schema, row);
+    }
+    if (writer.full() || writer.size_bytes() >= batch_target_) seal();
+    return Status::OK();
+}
+
 // One batch encoder for both execution shapes: the equivalence test pins
 // the two byte-identical, and an encoder existing twice is exactly what
 // would let them drift.
@@ -876,9 +946,10 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
             for (std::size_t i = 0; i < output.size(); ++i) {
                 row[i] = frame.Get(exec::ColumnRef{0, 0, output[i]});
             }
-            if (Status s = writer.AppendRow(out_schema, row); !s.ok()) return s;
-            if (writer.size_bytes() >= batch_target_ || writer.full()) {
-                SealAndDrain(tag, writer);
+            if (Status s = PlaceRow(writer, out_schema, row,
+                                    [&] { SealAndDrain(tag, writer); });
+                !s.ok()) {
+                return s;
             }
             return storage::VisitControl::kContinue;
         },
@@ -938,6 +1009,18 @@ void RemoteStepServer::Drain(Pipeline& pipe) {
         if (Status s = send_(downstream, sched::RingMessageKind::kStepBatch,
                              std::move(pipe.batches.front()));
             !s.ok()) {
+            // **Cancelled, not merely broken out of.** This arm was dead
+            // code until the send seam learned to refuse an oversize
+            // payload, and breaking alone leaks the pipeline: `SendFn`
+            // takes the payload by value, so the batch is already gone
+            // and the queue head is a moved-from vector that nothing pops
+            // - which makes `batches` permanently non-empty, so the
+            // EOF-and-erase below is skipped forever and no credit will
+            // re-enter here, the session having just been answered with
+            // the error. Marking it cancelled routes teardown through the
+            // discipline this file already has and tests: the producer
+            // erases if one is live, the post-loop arm otherwise.
+            pipe.cancelled = true;
             SendError(tag, tag.session_core, s);
             break;
         }

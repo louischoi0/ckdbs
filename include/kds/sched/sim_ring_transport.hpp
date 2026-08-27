@@ -75,6 +75,21 @@ struct SimTransportConfig {
     // that never fills would let a send-retry bug reach production
     // untested.
     std::size_t capacity_per_edge = 256;
+
+    // The payload cap `TrySend` enforces, modelling the real ring's slot.
+    //
+    // Defaulted to the production number for the reason the capacity above
+    // is bounded at all: a simulated transport that carries what the real
+    // one refuses does not simulate it, and this one carried anything.
+    //
+    // Stated exactly, because the first version of this comment claimed
+    // the gap had cost a live defect "no simulation could have found" and
+    // that was wrong twice over: `sim/` builds no `RingTransport` at all,
+    // and the defect (a cross-core read of 42 rows answering zero rows,
+    // silently - `docs/inflight/known-gaps.md`, beside the shipped-reply
+    // cap) was found on a real one. The gap is a fidelity gap and nothing
+    // has yet been lost to it; a cap is what keeps that true.
+    std::size_t max_payload = kCoreRingPayloadBytes;
 };
 
 class SimRingTransport final : public RingTransport {
@@ -107,6 +122,8 @@ public:
     void SetWakeTarget(std::uint32_t, WakeTarget) override {}
 
     std::uint32_t core_count() const noexcept override { return core_count_; }
+
+    std::size_t max_payload() const noexcept override { return config_.max_payload; }
 
     // Messages sent but not yet delivered. For tests: "the pipeline is torn
     // down" is partly a claim that nothing is still in flight.

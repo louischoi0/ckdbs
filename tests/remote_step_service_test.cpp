@@ -149,11 +149,13 @@ protected:
     void MakeServer(RemoteStepServer::SubmitFn submit) {
         server_.emplace(
             boot_->catalog, *store_, /*core_id=*/1,
-            [this](std::uint32_t dst, sched::RingMessageKind kind,
-                   std::vector<std::byte> payload) {
+            // No ring here: the sender is captured, so `kNoRingSlot` is
+            // the truthful slot and comes from the seam's own default.
+            StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
                 sent_.push_back(Sent{dst, kind, std::move(payload)});
                 return Status::OK();
-            },
+            }},
             nullptr, /*batch_target_bytes=*/1, std::move(submit));
     }
 
@@ -720,10 +722,11 @@ TEST_F(RemoteStepServiceTest, AStageReadsAtLatestCommittedAndNotAnInFlightWriter
     // A server wired to that manager mints its view when the stage opens.
     server_.emplace(
         boot_->catalog, *store_, /*core_id=*/1,
-        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> p) {
+        StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                            std::vector<std::byte> p) {
             sent_.push_back(Sent{dst, kind, std::move(p)});
             return Status::OK();
-        },
+        }},
         nullptr, /*batch_target_bytes=*/1, RemoteStepServer::SubmitFn{}, &mgr);
     server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
     GrantCredits(4);
@@ -1044,10 +1047,11 @@ TEST_F(ConsumingStageTest, TheRowTouchBudgetBoundsTheWholeStageNotOneInputRow) {
     // Per stage, the second row's walk crosses the ceiling.
     server_.emplace(
         boot_->catalog, *store_, /*core_id=*/1,
-        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> p) {
+        StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                            std::vector<std::byte> p) {
             sent_.push_back(Sent{dst, kind, std::move(p)});
             return Status::OK();
-        },
+        }},
         nullptr, /*batch_target_bytes=*/1,
         [this](std::unique_ptr<sched::Task> task) { tasks_.push_back(std::move(task)); },
         /*txns=*/nullptr, exec::Budget(12));
@@ -1200,6 +1204,107 @@ TEST_F(ConsumingStageTest, ACancelReachesAWalkParkedInsideItsInputRow) {
         if (tag.value().tag == (PipelineTag{7, 0, 0})) upstream_cancelled = true;
     }
     EXPECT_TRUE(upstream_cancelled) << "crosscore.md §7: the upstream was left parked";
+}
+
+TEST_F(RemoteStepServiceTest, NoBatchExceedsTheCeilingWhenRowWidthsVary) {
+    // The first form of the oversize fix predicted the next row's width
+    // from the last row's, which holds only where a wire row is a constant
+    // width. It is not: a NULL field costs 4 bytes and a present int64
+    // costs 12 (`wire/row_codec.cpp`'s PutField), so a run of narrow rows
+    // followed by a wide one crosses the ceiling with no seal in between -
+    // and the shipping gate admits `SELECT *` over nullable relations with
+    // no column-type restriction at all. The acceptance test could not see
+    // it: its relation is two int64s, the one schema class the prediction
+    // is exact on.
+    //
+    // Here the ceiling is small and real, so the assertion is the direct
+    // one - **no sealed payload exceeds what the transport would carry** -
+    // and it is checked against every batch rather than against an answer.
+    constexpr std::size_t kSlot = 256;
+    server_.emplace(
+        boot_->catalog, *store_, /*core_id=*/1,
+        StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                            std::vector<std::byte> payload) {
+                         sent_.push_back(Sent{dst, kind, std::move(payload)});
+                         return Status::OK();
+                     },
+                     /*max_message_bytes=*/kSlot},
+        nullptr, /*batch_target_bytes=*/kStepBatchTargetBytes, RemoteStepServer::SubmitFn{},
+        /*txns=*/nullptr, exec::Budget());
+
+    // Enough rows that the batch target (32 KiB) is never the thing that
+    // seals: only the ceiling can be.
+    InsertRows(200);
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    // Exactly the edge's ceiling per grant: `EdgeCredit::Grant` refuses
+    // anything that would take `available_` past it, so a bigger number is
+    // silently dropped and the drain never resumes.
+    for (int i = 0; i < 128 && server_->open_pipelines() > 0; ++i) {
+        GrantCredits(kInitialCreditsPerEdge);
+    }
+
+    std::size_t batches = 0;
+    std::uint32_t rows_seen = 0;
+    for (const Sent& s : sent_) {
+        if (s.kind != sched::RingMessageKind::kStepBatch) continue;
+        ++batches;
+        EXPECT_LE(s.payload.size(), kSlot)
+            << "batch " << batches << " is wider than the slot it must ride through";
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(s.payload, rows);
+        ASSERT_TRUE(header.ok()) << header.status().message();
+        rows_seen += header.value().row_count;
+    }
+    EXPECT_GT(batches, 1u) << "the ceiling never sealed anything; the test proves nothing";
+    // 8 from SetUp plus the 200 here: sealing exactly must lose no row and
+    // duplicate none, which is the half a size assertion alone cannot see.
+    EXPECT_EQ(rows_seen, 208u);
+}
+
+TEST_F(RemoteStepServiceTest, ABatchSendThatFailsTearsThePipelineDownInsteadOfLeakingIt) {
+    // `Drain`'s send-failure arm was dead code for the pipeline's whole
+    // life - the send seam returned OK unconditionally - and it became
+    // reachable the day that seam learned to refuse an oversize payload
+    // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
+    //
+    // What it did when first reached is what this pins: `SendFn` takes
+    // the payload **by value**, so a failing send has already moved the
+    // batch out of the queue, and breaking without popping leaves a
+    // moved-from vector at the head. `batches` is then non-empty forever,
+    // so the EOF-and-erase arm is skipped, and no credit will re-enter -
+    // the session has just been answered with the error. One leaked
+    // `pipelines_` entry per failed send, on a path nobody had run.
+    std::size_t sends = 0;
+    server_.emplace(
+        boot_->catalog, *store_, /*core_id=*/1,
+        StepSendSeam{[this, &sends](std::uint32_t dst, sched::RingMessageKind kind,
+                                   std::vector<std::byte> payload) {
+            sent_.push_back(Sent{dst, kind, std::move(payload)});
+            // The first batch fails the way an oversize payload now does -
+            // not backpressure, which the retry task owns and which must
+            // keep its own path. Everything after is let through so the
+            // error itself can be observed arriving.
+            if (kind == sched::RingMessageKind::kStepBatch && sends++ == 0) {
+                return Status::InvalidArgument("step message is wider than the ring slot");
+            }
+            return Status::OK();
+        }},
+        nullptr, /*batch_target_bytes=*/1, RemoteStepServer::SubmitFn{});
+
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+
+    EXPECT_EQ(server_->open_pipelines(), 0u)
+        << "a failed batch send left the pipeline behind; nothing will ever erase it";
+
+    // And the failure is *reported*, not swallowed: silence here is the
+    // whole defect this file's neighbour documents.
+    bool errored = false;
+    for (const Sent& s : sent_) {
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
+            << "a stage whose batch was lost must never claim a clean end";
+        if (s.kind == sched::RingMessageKind::kStepError) errored = true;
+    }
+    EXPECT_TRUE(errored) << "the session was told nothing about a batch it will never receive";
 }
 
 }  // namespace
