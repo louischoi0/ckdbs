@@ -1,0 +1,17 @@
+
+== single-core: cores=1, 3 relations x 20000 rows ==
+   placement: bench0 owner_core=0  bench1 owner_core=0  bench2 owner_core=0
+   host: workdir on ext4, 1-minute load 1.22 at start
+   every session on core 0
+   refills: none (no peer listener)
+   verify: survivors as expected (10000, and one more in bench0 for the probe row)
+   retries: none
+   wall=118.47s  aggregate=1,773 stmt/s  errors=0
+   insert        n= 60001  p50=   2419us  p99=   2964us
+   point-select  n= 60000  p50=     32us  p99=   1175us
+   update        n= 60000  p50=   2269us  p99=   2890us
+   delete        n= 30000  p50=   2301us  p99=   2886us
+   scan          n=     3  p50=   3413us  p99=   3637us
+
+== single only ==
+   1,773 stmt/s over 118.47s

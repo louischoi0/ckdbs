@@ -260,8 +260,10 @@ knob — the p50 at that point is 43.5 µs, the same as everywhere else.
   not a ratio inside a noise floor. Recorded as an argument standing in for
   a measurement.
 - Raw driver output — 48 sweep JSONs, 4 traces, 6 discriminator runs, 4
-  ceiling runs, with their logs — is archived beside this file in
-  `bench/v2.3.0/archive/cell2-knob-sweep/`.
+  ceiling runs, each with its driver log — is archived beside this file in
+  `bench/v2.3.0/archive/cell2-knob-sweep/`. (The logs joined it 2026-08-27:
+  `.gitignore`'s `*.log` had been swallowing them, so the first version of
+  this archive held the JSONs alone.)
 
 ## 7. What this cell does not answer
 

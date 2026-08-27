@@ -161,3 +161,5 @@ that a per-arm process does not carry it (two null cells at 0.991 and
 1.016), and every arm here is a separate process with a fresh server and a
 fresh data file. That is an argument standing in for a measurement, and it
 is recorded as such rather than as a cell that passed.
+
+> **The JSONs are there; the driver logs are not** (found 2026-08-27). `.gitignore`'s `*.log` had been swallowing the second half of every archive since the first one, so `bench/v2.3.0/archive/cell5-commit-path/` holds this run's JSON summaries and none of its logs. The rule now carries an exception for `bench/*/archive/**/*.log`, and the archives written after that date carry both; these logs were not reconstructed, because what is on disk here can no longer be matched to these runs with confidence.

@@ -186,6 +186,11 @@ what this run's own null cell exists to supply.
 - **H3, H4a, H4b, C1, C2, P7.** Only H1 and H2 were asked for and only H1 and
   H2 were run. H3 (3 relations, 1 session per core, published 1.927) is the
   cell where the writer cores are least saturated and is therefore the most
-  likely of the six to show something.
+  likely of the six to show something. **H3 was run the same day and it is
+  neutral too** — 1.865 prewake against 1.924 post, and 1.857 against 1.876
+  at ten times the rows, against a null cell spanning 3.6%
+  (`bench/v2.3.0/results-h3-per-arm-v2.2.1-20-g8a4c795.md`). The falsifier
+  §4 names therefore did not fire, and what remains untested is a shape with
+  **more cores than relations**, which no published cell has.
 - **The 33 ms trx-id refill wait** seen on both arms (§4).
 - **Anything about shipping**, which this workload does not do.
