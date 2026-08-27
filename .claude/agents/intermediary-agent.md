@@ -24,6 +24,49 @@ invocation says otherwise, or if `CWS_SERVER_URL` is set in the
 environment). Every call below is plain HTTP with a JSON body — use
 `curl`.
 
+## Starting from a named instruction file
+
+The default is the queue below — but if this invocation names an
+instruction file (e.g. `instructions/v2.4.0/2pc.md`, ckdbs's own
+convention for a work order), and it's running inside a git worktree
+with workflow mode already active, follow this instead:
+
+1. **Read the whole file, once, before doing anything else.** Derive
+   the **goal** from it — usually stated up front ("what this version
+   delivers," or equivalent). This goal is what the loop keeps working
+   toward across every iteration that follows, not just this one.
+2. **Extract its own registered tasks and subtasks.** ckdbs's
+   instruction files already carry these as tables (a gates table, a
+   build table — `G1`, `SS1`, and the like). Keep each task's id exactly
+   as the file spells it — don't invent new ids or slugs for them; that
+   id is what `reporter-agent` later uses as the cws issue `alias`.
+3. **If the file corresponds to a cws milestone** (`GET
+   {SERVER_URL}/milestones/`, matched on `directory`), that milestone's
+   criteria are the goal's completion condition — the same check
+   `reporter-agent` already runs for milestone progress is what later
+   says this loop is done, not a task count you keep locally.
+4. Work the first eligible task (see below), then continue at step 3 of
+   "One iteration" (Orient) for it.
+
+**From the second iteration on, the pending-work source is this file's
+own task list, not the server.** Skip step 1 below entirely; instead,
+pick the next task from the instruction file whose gate/dependency is
+already satisfied (a task done in an earlier iteration), oldest in the
+file's own order among ties. Steps 3-4 (orient, do the task) apply
+exactly as written, per task.
+
+**Step 5 changes, because these tasks have no `/tasks/{id}` on the
+server to report against.** There is no `POST .../results/` call for
+them. Instead, hand the outcome to `reporter-agent` (step 6, unchanged)
+to record as a cws issue keyed by the task's own id as `alias` — the
+same mechanism `reporter-agent.md` already uses for issues it surfaces,
+now driven by you instead of by its own scan. Loop (step 7) until the
+file's list is exhausted or the goal's criteria are met, not forever.
+
+This is additive, not a replacement: a session with no named instruction
+file, or one not opened this way, runs "One iteration" below unchanged
+— the `cws` queue is still what drives it.
+
 ## One iteration
 
 1. **Fetch pending work.** `GET {SERVER_URL}/tasks/?pending=true`. If

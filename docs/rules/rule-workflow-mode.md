@@ -18,7 +18,28 @@ when a user asks for it in those terms — "work the task queue", "run the
 intermediary agent", "pick up pending tasks" (`intermediary-agent.md`'s
 own trigger phrases) — or invokes it directly by name. A session that
 has never been asked to run the loop is not in workflow mode, no matter
-how automatable a task looks.
+how automatable a task looks. Once active, it can run two ways — see
+"Two task sources" below.
+
+## Two task sources — the cws queue, or one named instruction file
+
+Queue-driven — pulling whatever cws holds pending — is the default
+described below. A second path exists for running one work order end
+to end: open the session in a git worktree (`CLAUDE.md` §1), activate
+workflow mode, and name an instruction file under `instructions/` —
+ckdbs's own convention for a work order (`instructions/v2.2.0-stmtshipping.md`,
+`instructions/v2.4.0/2pc.md`, and the like). `intermediary-agent` reads
+it once, sets the run's **goal** from what the file states it delivers,
+and from the second iteration on takes over that file's own registered
+tasks and subtasks — its gates/build tables, ids kept verbatim — as the
+loop's task source instead of the cws queue. Where the file corresponds
+to a cws milestone (matched on `directory`), that milestone's criteria
+become the goal's completion condition, checked the same way
+`reporter-agent` already checks milestone progress; a task's id from
+the file is what feeds the alias rule above, unchanged. The mechanics
+live in `intermediary-agent.md`'s own "Starting from a named
+instruction file" section — this file states the policy, that one
+states the procedure.
 
 ## What it is
 
@@ -125,7 +146,9 @@ disambiguate with.
 
 ## The loop, one iteration
 
-1. `intermediary-agent` asks cws for the next pending task.
+1. `intermediary-agent` asks cws for the next pending task — or, on the
+   instruction-file path above, picks the next task from the file whose
+   gate is already satisfied.
 2. It works the task inside `CLAUDE.md`'s ordinary Session Workflow,
    **unmodified**: a worktree named for the work (§1) — carrying the cws
    task id is recommended, so `reporter-agent` can trace state back to
@@ -167,6 +190,14 @@ watching.
 
 ## Open
 
+- **`reporter-agent.md` doesn't yet describe recording a task outcome as
+  an issue on request.** On the instruction-file path, `intermediary-agent`
+  hands it a finished task (no server-side `/tasks/{id}` exists for it)
+  to record as a cws issue keyed by the task's own id. Today
+  `reporter-agent.md` only describes issue creation from its *own* scan
+  of `docs/inflight/known-gaps.md` and the like — being handed one
+  pre-identified by `intermediary-agent` is a related but distinct case
+  its instructions don't name yet.
 - **`reporter-agent.md`'s own instructions don't yet describe the wider
   doc-trail check** above — today it documents scanning
   `docs/inflight/known-gaps.md` for issues and a read-only milestone
