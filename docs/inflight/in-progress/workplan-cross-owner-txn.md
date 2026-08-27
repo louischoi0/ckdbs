@@ -17,7 +17,7 @@ that directory), and D1–D7 are today proposals with reasoning.
 |---|---|---|
 | R6-0 | The retry bit (§2) | **Built 2026-08-27**, `40e9220` |
 | R6-1 | Wire and sizing (D6) | **Built 2026-08-27**, this worktree |
-| R6-2 | Participant transaction context (D2) | Next; see the sizing note below |
+| R6-2 | Participant transaction context (D2) | **Built 2026-08-27**, this worktree |
 | R6-3 | Prepare and decide (D4) | — |
 | R6-4 | Recovery (D4) | — |
 | R6-5 | In-doubt handling (D5) | — |
@@ -175,6 +175,132 @@ but a session whose T1 decide was lost leaves an in-doubt enrollment that
 T2's first statement would silently join. A 4-byte enrollment epoch fits the
 remaining reserved bytes and makes that detectable — which spends the rest of
 them, and is the point at which R6-2's branch stops having room to spare.
+
+## R6-2 — participant transaction context
+
+Built on `v2.4.0-2pc-0`. The largest row, and it came out small, because the
+transaction it introduces is an **ordinary local transaction**: opened with
+the same `Dispatch("BEGIN")` a client's connection runs, held on a session
+that outlives the statement, ended with the same `ROLLBACK`. Zero new
+transaction code — the `KwpLoadServer` argument, which already holds one
+session's transaction across many messages, applied one layer over.
+
+**The wire cost was one byte**, as the R6-1 note predicted:
+`ShippedStatementRequestPayload::in_txn`, leaving `reserved0[3]`. It carries
+no transaction id, because the owner finds the transaction by
+`(src_core, session_id)` and records the coordinator's id when prepare brings
+it (R6-3). The enrolment epoch the note floated is **not** built — the
+staleness it guards against is handled by refusing instead, below.
+
+**The fork is one `if`.** `Execute` routes an enrolled statement onto the
+context's session and an autocommit one onto a session of its own; `Finish`
+leaves an enrolled transaction open and keeps SS3's refusal *verbatim* for
+the autocommit path. `Running` gained a `std::optional<Session> own_session`
+plus a `Session*`, so which session is in play is a pointer rather than a
+second code path.
+
+**What is refused rather than guessed:**
+
+- A context whose transaction is no longer open is **not joinable** —
+  `UnknownOutcome`, not a silent new transaction. This is what the epoch
+  would otherwise be for: a stale enrolment cannot be joined because a closed
+  one is refused and an open one is the transaction the coordinator means.
+- An enrolled statement that *ends* its own transaction (a shipped `COMMIT`)
+  is `Unsupported` and the context is dropped. The decision is the
+  coordinator's (D4), and a context left standing after its transaction died
+  would run the next statement outside any transaction.
+- A failed `BEGIN` records **nothing** — no half-open context for the next
+  statement to join. A spent transaction-id lease surfaces here as the
+  `TxnConflict` it is, retryable, and crosses back intact.
+
+Refused enrolments are counted apart from `unanswerable()`, which is a
+*duplicate* count whose every member is a client told `UNKNOWN_OUTCOME`; an
+enrolment refusal is neither a duplicate nor in doubt, and folding the two
+would make the one number SS-B4 reads mean two unrelated things.
+
+**Not yet handled, and named so R6-3 finds it**: a context whose session is
+*poisoned* (`kFailedTxn`) is still joinable, because `in_explicit_txn()` is
+`state_ != kIdle`. Every later statement then meets the failed-txn gate and
+returns "current transaction is aborted", which carries nothing telling the
+coordinator "this participant is doomed, decide ABORT". That is R6-3's to
+answer; what R6-2 owes it is the note.
+
+**The lifetime bound, and the reason it is generous.** `kShippedTxnIdleCeilingNs`
+is five minutes of *idleness* — the stamp moves when a statement **finishes**,
+so a statement that runs four minutes does not eat its coordinator's grace.
+It is a backstop for a lost abort, not a normal-path bound: a cross-owner
+transaction is a client's `BEGIN … COMMIT` and the gap between two of its
+statements is client think time, which has no engine-side bound. Being wrong
+tightly rolls back a transaction a client is still using — a wrong answer.
+
+**The sweep is registered twice, and the first cut registered it once.** A
+peer gets it from `CoreRuntime::Run`; core 0's executor belongs to
+`Expeditor`, which is a different object, so the original registration
+covered cores 1..N−1 while three comments and this file claimed "every core".
+That was a false report of compliance on the case the comment itself names —
+core 0 is a participant whenever a peer's client writes a core-0-owned
+relation, which under a rotating `AssignOwnerCore` is ordinary. Both the tick
+and the shutdown rollback now exist in `Expeditor::Serve` as well, the latter
+immediately after `scheduler.Run()` returns — the same "the reactor has
+stopped, nothing will decide one now" moment `~CoreRuntime` uses.
+
+**A second cost the first draft did not price.** An enrolment is not only a
+read-horizon pin; it is one of `txn::kMaxTrackedLiveTxns` (64), the whole
+core's supply, **shared with every local client**. Enough abandoned
+enrolments would refuse an unrelated connection's `BEGIN` with `OutOfSpace`
+and nothing naming the cause. `kShippedMaxEnrolled = 16` — a quarter of the
+table — is the cap, and past it a participant refuses `TxnConflict`, the one
+code the wire's retryable bit follows, because another cross-owner
+transaction ending is a thing that happens on its own.
+
+**A constraint R6-3 must honour, written here because that is where it would
+silently become wrong**: `ExpireEnrolled` is only sound while nothing has
+prepared. After a participant replies prepared it may not unilaterally abort
+(D4), so R6-3 must exclude prepared contexts from the sweep, and the ceiling
+for those belongs to D5's in-doubt resolution instead. The sweep already
+skips a context with a statement running on it, for the reason
+`TcpServer::CloseClient` defers teardown behind `in_flight`.
+
+### What D2 does and does not give D3 — and it is isolation-dependent
+
+A first draft of this note claimed D3's per-core ReadView "mostly falls out
+of D2". **That is only true under REPEATABLE READ, and it is not the
+default.** `CommandDispatcher::default_isolation_` is `kReadCommitted`, and
+`TransactionManager::StartStatement` re-mints the read view on every
+statement under RC — holding one transaction open across statements
+therefore does *not* by itself give a participant a stable view. Under RR it
+does: `StartStatement` is a no-op there, so the view taken at `BEGIN` is the
+view every statement of that transaction sees.
+
+So, precisely:
+
+- **Under RR**, D2's held transaction delivers "a ReadView per core"
+  structurally. A watermark would add only the stronger property of pinning
+  that view to a point the *coordinator* has observed.
+- **Under RC** (today's default and what an enrolled statement runs at), the
+  view is deliberately re-minted per statement, so there is no stable view
+  for a watermark to stabilise — and none is wanted, because seeing
+  everything committed before the statement began is what RC *means*.
+
+That is an argument **for** D3's own proposed answer to its `[OPEN]`: carry
+watermarks only for RR. The two halves agree, and R6-2 is the evidence.
+
+**And a gap the same reading exposes**: the coordinator's isolation level
+never crosses. `EnrolFor` opens with the *participant's* `default_isolation()`
+— its own server config — so a client that writes `BEGIN ISOLATION LEVEL
+REPEATABLE READ` gets an RC participant transaction and does not learn it.
+Whichever way D3 is ratified, the level has to travel or the answer above is
+about a level nobody selected. `reserved0[3]` still has room.
+
+### An unrelated soundness note R6 invalidates
+
+`TransactionManager::IsInFlight`'s header says it is per-core and that a
+transaction on another core answers false — *"Sound for its one user only
+while CC3 refuses cross-core writes."* **R6 is what makes CC3 stop
+refusing.** Nothing in R6-2 depends on it (a participant's transaction is
+local and this core's own manager knows it), but the note's stated premise
+expires somewhere in this series, and R6-8 is where the refusal actually
+lifts. Recorded so it is found then rather than assumed still true.
 
 ## Open, carried from the work order
 

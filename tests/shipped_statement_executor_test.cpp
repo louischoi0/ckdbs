@@ -71,7 +71,7 @@ protected:
 
     Answer Ship(const std::string& sql, std::uint64_t session_id, std::uint64_t sequence,
                 Role role = Role::kReadWrite, std::uint32_t requester = 0,
-                bool retry = false) {
+                bool retry = false, bool in_txn = false) {
         StatementShipServer::ShippedStatement statement;
         statement.requester = requester;
         statement.session_id = session_id;
@@ -79,6 +79,7 @@ protected:
         statement.target_oid = 0;
         statement.role = role;
         statement.retry = retry;
+        statement.in_txn = in_txn;
         statement.text = sql;
 
         auto answer = std::make_shared<Answer>();
@@ -381,6 +382,265 @@ TEST_F(ShippedStatementExecutorTest, ARetryThatMeetsAPresentRecordIsStillAnswere
     EXPECT_EQ(retried.text, first.text);
     EXPECT_EQ(executor_->executed(), 1u);
     EXPECT_EQ(executor_->deduped(), 1u);
+}
+
+// ---- R6-2: the participant's transaction context ---------------------------
+//
+// The row's whole content is that an *enrolled* statement runs under a
+// transaction the owner holds across statements, while an autocommit one is
+// untouched. What is pinned, in the order it would hurt:
+//
+//   1. two enrolled statements share one transaction, and it is still open
+//      between them - the property everything else in R6 rests on;
+//   2. the autocommit path is **byte-for-byte what SS3 built**, refusal
+//      included, because R6-2 must not be a tax on the common case;
+//   3. nothing leaks: an abandoned context is rolled back by the ceiling,
+//      and a live one is not.
+
+TEST_F(ShippedStatementExecutorTest, TwoEnrolledStatementsShareOneOpenTransaction) {
+    const Answer first = Ship("INSERT INTO t VALUES (7)", /*session_id=*/99, /*sequence=*/1,
+                              Role::kReadWrite, /*requester=*/0, /*retry=*/false,
+                              /*in_txn=*/true);
+    ASSERT_TRUE(first.status.ok()) << first.status.message();
+    EXPECT_EQ(executor_->enrolled(), 1u);
+    EXPECT_EQ(executor_->enrolments(), 1u);
+    // Still open: the statement finished and the transaction did not.
+    EXPECT_EQ(txns_->ActiveCount(), 1u) << "the enrolled transaction was closed under R6-2";
+
+    const Answer second = Ship("INSERT INTO t VALUES (8)", 99, 2, Role::kReadWrite, 0, false,
+                               /*in_txn=*/true);
+    ASSERT_TRUE(second.status.ok()) << second.status.message();
+    // **One** transaction for both, not two: a second `enrolments()` would
+    // mean the second statement opened its own, which is the failure that
+    // makes a cross-owner transaction non-atomic on this core.
+    EXPECT_EQ(executor_->enrolments(), 1u);
+    EXPECT_EQ(executor_->enrolled(), 1u);
+    EXPECT_EQ(txns_->ActiveCount(), 1u);
+    EXPECT_EQ(executor_->executed(), 2u);
+}
+
+TEST_F(ShippedStatementExecutorTest, AnEnrolledWriteIsInvisibleUntilItsTransactionEnds) {
+    // Isolation, from outside the transaction: the row a held transaction
+    // wrote must not be readable by an ordinary local statement while that
+    // transaction is still open. This is the property that makes prepare
+    // (R6-3) meaningful - if the write were already visible there would be
+    // nothing for a decision to decide.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                     /*in_txn=*/true)
+                    .status.ok());
+    EXPECT_EQ(Rows().find(",7"), std::string::npos)
+        << "an uncommitted cross-owner write was visible: " << Rows();
+
+    // And it appears once the transaction ends - which R6-2 has no decide
+    // leg for, so the ceiling's rollback is used here only to show the row
+    // was genuinely uncommitted rather than never written.
+    clock_.Advance(kShippedTxnIdleCeilingNs);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_EQ(Rows().find(",7"), std::string::npos) << "a rolled-back write survived: " << Rows();
+}
+
+TEST_F(ShippedStatementExecutorTest, AnAutocommitStatementIsUntouchedByR62) {
+    // The no-regression half, and the reason the wire carries a bit rather
+    // than the owner inferring anything: with `in_txn` unset the path is
+    // exactly SS3's - the statement commits on its own and leaves no
+    // context behind.
+    const Answer out = Ship("INSERT INTO t VALUES (7)", 99, 1);
+    ASSERT_TRUE(out.status.ok()) << out.status.message();
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_EQ(executor_->enrolments(), 0u);
+    EXPECT_EQ(txns_->ActiveCount(), 0u) << "an autocommit shipped statement left a transaction";
+    EXPECT_NE(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+TEST_F(ShippedStatementExecutorTest, AnAutocommitBeginIsStillRefusedExactlyAsBefore) {
+    // SS3's refusal, unmoved by R6-2. A `BEGIN` that arrives *without* the
+    // enrolment bit is still the shape that would leave a transaction
+    // `active_` on a session nothing can reach again.
+    const Answer out = Ship("BEGIN", /*session_id=*/99, /*sequence=*/1);
+    ASSERT_TRUE(out.answered);
+    EXPECT_EQ(out.status.code(), StatusCode::kUnsupported) << out.status.message();
+    EXPECT_EQ(txns_->ActiveCount(), 0u) << "a shipped BEGIN left a transaction running";
+    EXPECT_EQ(executor_->enrolled(), 0u);
+}
+
+TEST_F(ShippedStatementExecutorTest, AnEnrolledStatementThatEndsItsTransactionIsRefused) {
+    // The decision belongs to the coordinator (D4). A shipped `COMMIT` would
+    // take it away, and leaving the context standing afterwards would let
+    // the next statement run outside any transaction while the coordinator
+    // still believed one was open.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                     /*in_txn=*/true)
+                    .status.ok());
+    ASSERT_EQ(executor_->enrolled(), 1u);
+
+    const Answer committed = Ship("COMMIT", 99, 2, Role::kReadWrite, 0, false, /*in_txn=*/true);
+    ASSERT_TRUE(committed.answered);
+    EXPECT_EQ(committed.status.code(), StatusCode::kUnsupported) << committed.status.message();
+    EXPECT_NE(committed.status.message().find("belongs to the coordinator"), std::string::npos)
+        << committed.status.message();
+    // The context is gone rather than left half-alive.
+    EXPECT_EQ(executor_->enrolled(), 0u);
+}
+
+TEST_F(ShippedStatementExecutorTest, AnAbandonedTransactionIsRolledBackAtTheIdleCeiling) {
+    // The backstop for a coordinator that never decides. Nothing on a
+    // healthy path reaches it, which is why the counter is worth having.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                     /*in_txn=*/true)
+                    .status.ok());
+    ASSERT_EQ(txns_->ActiveCount(), 1u);
+
+    // Not yet: one nanosecond under the ceiling is still a live transaction,
+    // and tearing it down early reaches the client as an abort it did not
+    // ask for.
+    clock_.Advance(kShippedTxnIdleCeilingNs - 1);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 1u) << "a transaction was expired before the ceiling";
+    EXPECT_EQ(executor_->enrolment_expiries(), 0u);
+
+    clock_.Advance(1);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_EQ(executor_->enrolment_expiries(), 1u);
+    EXPECT_EQ(txns_->ActiveCount(), 0u) << "the ceiling did not unwind the transaction";
+}
+
+TEST_F(ShippedStatementExecutorTest, AStatementKeepsItsTransactionAliveAcrossTheCeiling) {
+    // Idleness, not age: a transaction still receiving statements is not the
+    // thing the sweep looks for, however old it is.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false, true)
+                    .status.ok());
+    for (std::uint64_t sequence = 2; sequence <= 4; ++sequence) {
+        clock_.Advance(kShippedTxnIdleCeilingNs - 1);
+        executor_->ExpireEnrolled();
+        ASSERT_EQ(executor_->enrolled(), 1u) << "expired at sequence " << sequence;
+        ASSERT_TRUE(Ship("INSERT INTO t VALUES (8)", 99, sequence, Role::kReadWrite, 0, false,
+                         true)
+                        .status.ok());
+    }
+    EXPECT_EQ(executor_->enrolment_expiries(), 0u);
+    EXPECT_EQ(executor_->enrolments(), 1u);
+}
+
+TEST_F(ShippedStatementExecutorTest, TwoCoordinatorsHoldTwoSeparateTransactions) {
+    // The dedup key's argument, one level up: a session id is minted per
+    // core, so core 2's session 99 and core 3's session 99 are different
+    // transactions and must not share one.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, /*requester=*/2, false,
+                     /*in_txn=*/true)
+                    .status.ok());
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (8)", 99, 1, Role::kReadWrite, /*requester=*/3, false,
+                     /*in_txn=*/true)
+                    .status.ok());
+    EXPECT_EQ(executor_->enrolled(), 2u);
+    EXPECT_EQ(executor_->enrolments(), 2u);
+    EXPECT_EQ(txns_->ActiveCount(), 2u);
+}
+
+TEST_F(ShippedStatementExecutorTest, RollingBackAllEnrolledLeavesNoTransactionBehind) {
+    // The teardown `~CoreRuntime` runs. A transaction that outlived its
+    // executor would pin `ReadHorizon()` for the life of the process, which
+    // is the hazard the autocommit refusal exists for - R6-2 must not
+    // reintroduce it by another door.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 2, false, true)
+                    .status.ok());
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (8)", 99, 1, Role::kReadWrite, 3, false, true)
+                    .status.ok());
+    ASSERT_EQ(txns_->ActiveCount(), 2u);
+
+    executor_->RollbackAllEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_EQ(txns_->ActiveCount(), 0u);
+    EXPECT_EQ(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+TEST_F(ShippedStatementExecutorTest, TheCeilingSkipsAContextAStatementIsRunningOn) {
+    // **The load-bearing line of R6-2**, and it survived the first round of
+    // mutation testing untested: `ExpireEnrolled`'s `running_` guard. A
+    // parked statement holds a raw `Session*` into the `Enrolled` the sweep
+    // would destroy, so tearing one out from under a live statement is a
+    // use-after-free - and it is also why `Finish` can trust that the
+    // context it finds is the one its statement ran on.
+    //
+    // Driven without pumping, so the statement is submitted and its
+    // coroutine has not run: `running_` is populated, which is exactly the
+    // state the guard is for.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                     /*in_txn=*/true)
+                    .status.ok());
+    ASSERT_EQ(executor_->enrolled(), 1u);
+
+    auto answer = std::make_shared<Answer>();
+    StatementShipServer::ShippedStatement second;
+    second.requester = 0;
+    second.session_id = 99;
+    second.sequence = 2;
+    second.role = Role::kReadWrite;
+    second.in_txn = true;
+    second.text = "INSERT INTO t VALUES (8)";
+    executor_->Seam()(std::move(second),
+                      [answer](const Status& status, std::string_view text) {
+                          answer->answered = true;
+                          answer->status = status;
+                          answer->text.assign(text);
+                      });
+    ASSERT_EQ(executor_->running(), 1u) << "the statement did not stay in flight";
+
+    clock_.Advance(kShippedTxnIdleCeilingNs);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 1u)
+        << "the sweep tore a context out from under a running statement";
+    EXPECT_EQ(executor_->enrolment_expiries(), 0u);
+
+    // And the statement it protected still completes on that context.
+    for (int i = 0; i < 64 && !answer->answered; ++i) scheduler_->RunOnce();
+    ASSERT_TRUE(answer->answered);
+    EXPECT_TRUE(answer->status.ok()) << answer->status.message();
+    EXPECT_EQ(executor_->enrolments(), 1u);
+}
+
+TEST_F(ShippedStatementExecutorTest, AParticipantRefusesPastItsEnrolmentLimitRetryably) {
+    // The cap exists so a coordinator storm cannot take the whole core's
+    // 64-slot live-transaction table and refuse *local* clients' `BEGIN`
+    // with nothing naming the cause. Retryable, because another cross-owner
+    // transaction ending is a thing that happens on its own.
+    for (std::uint64_t coordinator = 1; coordinator <= kShippedMaxEnrolled; ++coordinator) {
+        ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite,
+                         static_cast<std::uint32_t>(coordinator), false, /*in_txn=*/true)
+                        .status.ok())
+            << "coordinator " << coordinator;
+    }
+    ASSERT_EQ(executor_->enrolled(), kShippedMaxEnrolled);
+
+    const Answer refused =
+        Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite,
+             static_cast<std::uint32_t>(kShippedMaxEnrolled + 1), false, /*in_txn=*/true);
+    ASSERT_TRUE(refused.answered);
+    EXPECT_EQ(refused.status.code(), StatusCode::kTxnConflict) << refused.status.message();
+    EXPECT_TRUE(IsRetryable(refused.status.code()));
+    EXPECT_EQ(executor_->enrolment_refusals(), 1u);
+    // Counted apart from the duplicate population, which means something
+    // else entirely.
+    EXPECT_EQ(executor_->unanswerable(), 0u);
+    EXPECT_EQ(executor_->enrolled(), kShippedMaxEnrolled) << "the refusal opened one anyway";
+}
+
+TEST_F(ShippedStatementExecutorTest, AnEnrolledStatementStillDedupesOnItsSequence) {
+    // R6-0's record is orthogonal to R6-2's context and must stay so: a
+    // duplicate inside a transaction is answered from the record, not run a
+    // second time into the same transaction.
+    const Answer first = Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                              /*in_txn=*/true);
+    ASSERT_TRUE(first.status.ok()) << first.status.message();
+
+    const Answer again = Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                              /*in_txn=*/true);
+    ASSERT_TRUE(again.status.ok()) << again.status.message();
+    EXPECT_EQ(again.text, first.text);
+    EXPECT_EQ(executor_->deduped(), 1u);
+    EXPECT_EQ(executor_->executed(), 1u);
+    EXPECT_EQ(executor_->enrolments(), 1u);
 }
 
 }  // namespace

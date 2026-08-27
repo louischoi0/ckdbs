@@ -524,6 +524,48 @@ TEST_F(StatementShipTest, TheRetryBitCrossesWithTheStatement) {
     EXPECT_TRUE(seen[1]);
 }
 
+TEST_F(StatementShipTest, ShippedStatementRequestOfEncodesTheInTxnBit) {
+    // R6-2's wire half. A dropped bit here makes every statement of a
+    // cross-owner transaction silently autocommit - each committing on its
+    // own, with no refusal anywhere - which is the non-atomicity R6 exists
+    // to prevent, so the byte gets the same two tests R6-0's did.
+    auto plain = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1");
+    ASSERT_TRUE(plain.ok()) << plain.status().message();
+    EXPECT_EQ(plain.value().in_txn, 0u);
+
+    auto enrolled = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1",
+                                              /*retry=*/false, /*in_txn=*/true);
+    ASSERT_TRUE(enrolled.ok()) << enrolled.status().message();
+    EXPECT_EQ(enrolled.value().in_txn, 1u);
+
+    // The two flags are independent bytes, not one field read twice.
+    auto both = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1",
+                                          /*retry=*/true, /*in_txn=*/false);
+    ASSERT_TRUE(both.ok());
+    EXPECT_EQ(both.value().retry, 1u);
+    EXPECT_EQ(both.value().in_txn, 0u);
+}
+
+TEST_F(StatementShipTest, TheInTxnBitCrossesWithTheStatement) {
+    std::vector<bool> seen;
+    InstallOwner([&](StatementShipServer::ShippedStatement st,
+                     StatementShipServer::ReplyFn reply) {
+        seen.push_back(st.in_txn);
+        reply(Status::OK(), "OK");
+    });
+
+    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES (1)").ok());
+    ASSERT_TRUE(client_
+                    ->Ship(1, 2, 99, 2, 4000, Role::kReadWrite, "INSERT INTO t VALUES (2)",
+                           /*retry=*/false, /*in_txn=*/true)
+                    .ok());
+    Pump();
+
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_FALSE(seen[0]) << "the default must not cross as enrolled";
+    EXPECT_TRUE(seen[1]);
+}
+
 TEST_F(StatementShipTest, AForgedTextLengthIsRefusedNotRead) {
     // The payload is bytes this core did not compute, and `text_len` is
     // the only thing between a forged length and a read past the array.

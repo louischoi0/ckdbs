@@ -839,11 +839,21 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // marked retry for one of them is answered `UnknownOutcome` rather
         // than from the record - an availability cost, not (since R6-0) a
         // re-execution risk, provided the sender marks its retries.
+        // `shipped_enrolled` (R6-2) is the population that is *not* free to
+        // sit there: each one is a live local transaction pinning this
+        // core's `ReadHorizon()`. `shipped_enrolment_expiries` non-zero
+        // means a coordinator abandoned one and the idle ceiling cleaned up
+        // after it - nothing on a healthy path reaches that ceiling, so it
+        // reads as a defect somewhere else rather than as a rate.
         os << " shipped_executed=" << shipped_statements_->executed()
            << " shipped_running=" << shipped_statements_->running()
            << " shipped_deduped=" << shipped_statements_->deduped()
            << " shipped_unanswerable=" << shipped_statements_->unanswerable()
-           << " shipped_early_evictions=" << shipped_statements_->early_evictions();
+           << " shipped_early_evictions=" << shipped_statements_->early_evictions()
+           << " shipped_enrolled=" << shipped_statements_->enrolled()
+           << " shipped_enrolments=" << shipped_statements_->enrolments()
+           << " shipped_enrolment_refusals=" << shipped_statements_->enrolment_refusals()
+           << " shipped_enrolment_expiries=" << shipped_statements_->enrolment_expiries();
     }
 
     // Group accounting against wall time (`docs/spec/sched.md` §4's last bullet;

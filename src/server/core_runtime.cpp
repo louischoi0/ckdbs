@@ -34,6 +34,16 @@ namespace kds::server {
 // scope), so a peer's teardown is the same sequence as the system core's.
 CoreRuntime::~CoreRuntime() {
     listener_.reset();
+    // R6-2: any cross-owner transaction this core was a participant in ends
+    // here, rolled back. The worker has joined, so nothing will decide one
+    // now, and a transaction left `active_` outlives the executor holding
+    // its session - which is the shape `shipped_statement_executor.hpp`
+    // refuses an autocommit statement for. Recovery would unwind these as
+    // losers at the next mount either way; doing it here is what keeps the
+    // in-process invariant ("no transaction outlives its executor") true
+    // rather than merely repaired later. Before the dispatcher's borrows are
+    // withdrawn below, because the rollback goes through it.
+    if (shipped_executor_.has_value()) shipped_executor_->RollbackAllEnrolled();
     // Before the reactor goes, because this body inverts declaration order
     // (see the header): `scheduler_` is dropped here, ahead of the
     // dispatcher that holds a view on it. Nothing below dispatches today,
@@ -919,6 +929,16 @@ void CoreRuntime::Run() {
     // would cost more than it measures.
     if (transport_ != nullptr && config_.wal_drain_interval_ns > 0) {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] { MaybeRefillLease(); });
+        // R6-2's idle ceiling on a cross-owner transaction this core is a
+        // participant in. **On every core, not only a peer**: the
+        // coordinator is whichever core holds the client's session, so core
+        // 0 is a participant whenever a peer's client writes a relation core
+        // 0 owns. It has to be a timer rather than a lazy sweep for the same
+        // reason the index-build ceiling is one - an abandoned context is
+        // exactly the one nothing arrives for.
+        scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
+            if (shipped_executor_.has_value()) shipped_executor_->ExpireEnrolled();
+        });
         // The transaction-id lease rides the same tick (PW1). A peer that
         // has never held a window reads as low, so the first tick asks and
         // a peer is ready to write before a client arrives - which is the

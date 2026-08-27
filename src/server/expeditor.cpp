@@ -1734,6 +1734,17 @@ Status Expeditor::Serve() {
 
     if (config_.wal_drain_interval_ns > 0) {
         scheduler.SubmitEvery(config_.wal_drain_interval_ns, drain);
+        // R6-2's idle ceiling, on **core 0 as well as the peers**. A peer
+        // gets this from `CoreRuntime::Run`; core 0's executor is this
+        // object's, so without a registration here the one core that is a
+        // participant whenever a peer's client writes a core-0-owned
+        // relation would never sweep an abandoned transaction - and that is
+        // the ordinary case under a rotating `AssignOwnerCore`, not an
+        // exotic one. The constant's derivation is in
+        // `shipped_statement_executor.hpp`; this is only where it is driven.
+        scheduler.SubmitEvery(config_.wal_drain_interval_ns, [this] {
+            if (shipped_executor_.has_value()) shipped_executor_->ExpireEnrolled();
+        });
     } else {
         logger_->Warn("wal", "drain cadence disabled; relaxed commits stay unsynced "
                              "until checkpoint or shutdown");
@@ -1741,6 +1752,14 @@ Status Expeditor::Serve() {
 
     logger_->Info("expeditor", "listening on 127.0.0.1:" + std::to_string(config_.port));
     scheduler.Run();
+    // R6-2, and the same moment `~CoreRuntime` uses on a peer: the reactor
+    // has stopped, so nothing will decide a cross-owner transaction this
+    // core is a participant in, and one left `active_` outlives the
+    // executor holding its session - pinning `ReadHorizon()` and holding a
+    // slot in the live-transaction table for the rest of the process.
+    // Before `BroadcastShutdown` below, because this is core 0's own state
+    // and the peers' teardown is their own.
+    if (shipped_executor_.has_value()) shipped_executor_->RollbackAllEnrolled();
     // Same teardown rule as CoreRuntime::Run: the audit reads store_, and
     // the pointer must go before the store does.
     exec::UninstallSuspendAudit();

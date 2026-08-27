@@ -186,7 +186,23 @@ struct ShippedStatementRequestPayload {
     // `UnknownOutcome`, never a second execution. Nothing sets this yet
     // (R6-3's routing layer will); it defaults to 0.
     std::uint8_t retry;
-    std::uint8_t reserved0[4];
+    // **R6-2: this statement belongs to a cross-owner transaction**, so the
+    // owner runs it under a transaction it holds open across statements
+    // rather than in autocommit, and does not end that transaction when the
+    // statement finishes. 0 is the autocommit shape SS3 built, unchanged.
+    //
+    // One byte, and it has to be a byte on *this* payload rather than an id:
+    // the owner cannot tell "enrolled" from "autocommit" by inspection, and
+    // there is no earlier message to enrol with, because **the first shipped
+    // statement is the enrolment** (D1 - participants are discovered as the
+    // transaction runs, not declared up front). What it does *not* carry is
+    // the coordinator's transaction id: that is 8 bytes against the 4 this
+    // payload had left, and it is not needed here - the owner finds the
+    // transaction by `(src_core, session_id)`, the pair every shipped
+    // statement already arrives under, and records the coordinator's id when
+    // prepare brings it (D2, `txn_2pc_service.hpp`).
+    std::uint8_t in_txn;
+    std::uint8_t reserved0[3];
     char text[kShippedStatementTextMax];  // not NUL-terminated; text_len bounds it
 };
 static_assert(sizeof(ShippedStatementRequestPayload) == sched::kCoreRingPayloadBytes,
@@ -240,7 +256,8 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
                                                                    std::uint64_t target_oid,
                                                                    Role role,
                                                                    std::string_view text,
-                                                                   bool retry = false);
+                                                                   bool retry = false,
+                                                                   bool in_txn = false);
 // The reply encode, same discipline: a reply too long to carry is turned
 // into a refusal that says so, never a truncated answer presented as one.
 StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t session_id,
@@ -317,6 +334,10 @@ public:
         // resend and an absent record must not be executed
         // (`ShippedStatementExecutor::Execute`).
         bool retry = false;
+        // R6-2's wire bit: run this under the transaction held for
+        // `(requester, session_id)`, opening one if this is the first
+        // statement, and leave it open when the statement finishes.
+        bool in_txn = false;
         std::string text;
     };
     using ExecuteFn = std::function<void(ShippedStatement statement, ReplyFn reply)>;
@@ -408,7 +429,7 @@ public:
     // reply wake it.
     Status Ship(std::uint32_t owner_core, std::uint64_t request_id, std::uint64_t session_id,
                 std::uint64_t sequence, std::uint64_t target_oid, Role role,
-                std::string_view text, bool retry = false);
+                std::string_view text, bool retry = false, bool in_txn = false);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.

@@ -4,7 +4,9 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "kds/base/log.hpp"
@@ -14,6 +16,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/statement_ship_service.hpp"
+#include "kds/txn/read_view.hpp"
 
 // **The owner's half of statement shipping** (SS3 of the statement-shipping
 // work order): what `StatementShipServer`'s seam does with a statement that
@@ -129,6 +132,60 @@ inline constexpr sched::MonoTimeNs kShippedDedupRetentionNs = 2 * kShippedStatem
 // says so.
 inline constexpr std::size_t kShippedDedupMaxRecords = 4096;
 
+// ---- R6-2: how long an enrolled transaction may go untouched -------------
+//
+// **A backstop for a lost abort, not a normal-path bound**, and the
+// distinction decides the number. A cross-owner transaction is a client's
+// `BEGIN … COMMIT`, so the gap between two of its statements is client think
+// time and has no engine-side bound - the same is true of a local
+// transaction, which this engine lets a connection hold open indefinitely
+// and unwinds only when the socket dies (`tcp_server.cpp`'s close path,
+// `docs/spec/txn.md` §10-8). A participant has **no socket to notice that
+// death**, which is the whole reason a ceiling has to exist here at all.
+//
+// So it is set well above any coordinator-side deadline in the series rather
+// than tuned to a workload: five minutes against the shipped statement's ten
+// seconds. Being wrong in the tight direction rolls back a transaction a
+// client is still using, which reaches that client as an abort it did not
+// ask for - a wrong answer. Being wrong in the generous direction costs an
+// abandoned transaction pinning `ReadHorizon()` for five minutes **and one
+// of this core's `txn::kMaxTrackedLiveTxns` slots for the same five
+// minutes**, which is the half a first draft of this paragraph left out:
+// the table is 64 entries and it is shared with every *local* client, so
+// enough abandoned enrolments would refuse an unrelated connection's
+// `BEGIN` and nothing would say why. `kShippedMaxEnrolled` below is what
+// keeps that from being local clients' problem.
+//
+// **`Expire` is only sound while nothing here has prepared.** After a
+// participant replies prepared it may not unilaterally abort (D4), so R6-3
+// must exclude prepared contexts from this sweep - the ceiling then belongs
+// to the in-doubt resolution D5 states, not to this constant. Written here
+// because R6-2 is where the sweep is introduced and R6-3 is where it would
+// silently become wrong.
+inline constexpr sched::MonoTimeNs kShippedTxnIdleCeilingNs = 300ull * 1'000'000'000ull;
+static_assert(kShippedTxnIdleCeilingNs > kShippedStatementDeadlineNs,
+              "a participant must outwait the coordinator's per-statement deadline, or a "
+              "transaction is torn down under a statement that is still on its way");
+
+// How many cross-owner transactions one core will hold as a participant.
+//
+// **A bound on a shared resource, not on memory** - which is what separates
+// it from `kShippedDedupMaxRecords` above. Every enrolment is a live local
+// transaction, and `txn::kMaxTrackedLiveTxns` (64) is the whole core's
+// supply of those, shared with every ordinary client on it. Without a cap
+// here, enough coordinators would take all 64 and a local `BEGIN` would be
+// refused `OutOfSpace` with nothing pointing at the cause.
+//
+// A quarter of the table, so three quarters stay local. Past it a
+// participant refuses **`TxnConflict`** - the one code the wire's
+// `retryable` bit follows (`status.hpp`, and PW6's finding (2)) - because
+// the right response is to retry once another cross-owner transaction ends,
+// which is a thing that happens on its own.
+inline constexpr std::size_t kShippedMaxEnrolled = 16;
+static_assert(kShippedMaxEnrolled < txn::kMaxTrackedLiveTxns,
+              "a participant may not take the whole core's live-transaction table; local "
+              "clients share it and would be refused BEGIN with nothing naming the cause");
+
 class ShippedStatementExecutor {
 public:
     // `dispatcher` is this core's own - the one a local connection would
@@ -181,25 +238,115 @@ public:
     // would grow with the shipping rate if a key ever took a second node.
     std::size_t records() const noexcept { return answered_order_.size(); }
 
+    // ---- R6-2 ------------------------------------------------------------
+
+    // Cross-owner transactions this core is a participant in right now.
+    // Each one is a live local transaction, so each one pins
+    // `ReadHorizon()` - which is why the number is worth reading and why
+    // the ceiling below exists.
+    std::size_t enrolled() const noexcept { return enrolled_.size(); }
+    // Transactions opened on this core's behalf of a coordinator, ever.
+    std::uint64_t enrolments() const noexcept { return enrolments_; }
+    // Enrolments this core refused: its own limit, or a transaction-id
+    // lease it could not draw from. Apart from `unanswerable()` because
+    // neither is a duplicate and neither is in doubt - both are retryable,
+    // and a coordinator may act on them.
+    std::uint64_t enrolment_refusals() const noexcept { return enrolment_refusals_; }
+    // Transactions the idle ceiling rolled back because no decide came.
+    // **Non-zero means a coordinator abandoned one**, which is a defect
+    // somewhere else - nothing on a healthy path reaches the ceiling.
+    std::uint64_t enrolment_expiries() const noexcept { return enrolment_expiries_; }
+
+    // Rolls back every enrolled transaction idle past
+    // `kShippedTxnIdleCeilingNs`. Driven from the reactor's periodic tick,
+    // the way `PendingIndexBuilds::Expire` is - a lazy sweep would never run
+    // for an abandoned context, since nothing arrives for it by definition.
+    //
+    // **R6-3 must exclude prepared contexts**: a participant that has
+    // replied prepared may not unilaterally abort.
+    void ExpireEnrolled();
+
+    // Rolls back every enrolled transaction, whatever its age. The shutdown
+    // path: an open transaction that outlives its executor pins the horizon
+    // for the life of the process, and this core is about to stop being able
+    // to answer for it either way.
+    //
+    // **Precondition: the reactor has stopped.** Unlike `ExpireEnrolled`
+    // this does not skip a context a statement is running on, and it is
+    // sound only because its callers run after the worker joined - a
+    // suspended `CoroTask` destroyed rather than completed never invokes its
+    // completion (`sched/coro.hpp`), so the `Session*` a parked statement
+    // holds is never dereferenced. Called from a live reactor with a
+    // statement in flight, it is a use-after-free.
+    void RollbackAllEnrolled();
+
 private:
     // What one shipped statement holds while it runs. Heap-allocated and
     // stable: `DispatchAsync` borrows `text` as a `string_view` and writes
     // `out` when it finishes, both across every park it takes.
     struct Running {
         std::string text;
-        Session session;
+        // **Engaged only on the autocommit path.** An enrolled statement
+        // runs on the session its transaction is held by (`Enrolled`), which
+        // outlives this struct - so the session cannot live here, and a
+        // pointer says which one is in play without a second code path.
+        std::optional<Session> own_session;
+        Session* session = nullptr;
         DispatchOutcome out;
         StatementShipServer::ReplyFn reply;
         // The identity's third component. The first two are the map key.
         std::uint64_t sequence = 0;
 
+        // Derived, not stored: the two constructors already say which case
+        // this is, and a third could forget to set a flag. Deliberately not
+        // `session->in_explicit_txn()`, which is a different question - that
+        // is also true of the failure `Finish` must still catch, an
+        // autocommit statement that opened a transaction.
+        bool enrolled() const noexcept { return !own_session.has_value(); }
+
+        // Autocommit: this statement owns its session and dies with it.
         Running(std::string statement, txn::IsolationLevel isolation, Role role)
-            : text(std::move(statement)), session(isolation) {
-            session.set_role(role);
+            : text(std::move(statement)), own_session(std::in_place, isolation) {
+            own_session->set_role(role);
+            session = &*own_session;
         }
+        // Enrolled: the transaction's session, owned by `Enrolled`.
+        Running(std::string statement, Session& enrolled_session)
+            : text(std::move(statement)), session(&enrolled_session) {}
     };
 
     using DedupKey = std::pair<std::uint32_t, std::uint64_t>;  // (requester, session id)
+
+    // ---- R6-2: a cross-owner transaction's participant half --------------
+    //
+    // One per `(coordinator core, session id)` that has shipped an enrolled
+    // statement. It holds the **local** transaction (D2: this core's own id,
+    // from this core's own lease) on a session that outlives the statement
+    // that opened it - the `KwpLoadServer` shape, which holds one session's
+    // transaction across many messages through the ordinary
+    // `Dispatch("BEGIN"/"COMMIT"/"ROLLBACK")` seam and adds no transaction
+    // code of its own.
+    //
+    // `coordinator_txn_id` is 0 until prepare brings it (R6-3). D2 asks the
+    // participant to record the coordinator's `(session_id, transaction_id)`
+    // beside its own, and only the first half of that pair is knowable here:
+    // the statement path carries no transaction id, by the sizing argument
+    // in `statement_ship_service.hpp`.
+    struct Enrolled {
+        Session session;
+        // The coordinator's, recorded when prepare brings it (R6-3). D2 asks
+        // for it by name, which is why it is here before its writer is.
+        std::uint64_t coordinator_txn_id = 0;
+        // Moved when a statement *finishes*, so the ceiling measures
+        // idleness: a long transaction that is still being used is not the
+        // thing the sweep is looking for.
+        sched::MonoTimeNs touched_at_ns = 0;
+
+        Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
+            : session(isolation), touched_at_ns(now) {
+            session.set_role(role);
+        }
+    };
 
     // The outcome kept for a duplicate to be answered from.
     struct Answered {
@@ -219,6 +366,18 @@ private:
     void Remember(const DedupKey& key, std::uint64_t sequence, const Status& status,
                   std::string_view text);
     void Expire();
+    // Opens the transaction for `key` if it has none, and answers the
+    // session to run on. Refuses without leaving a half-open context - a
+    // spent transaction-id lease refuses `TxnConflict` here, and that is a
+    // retryable refusal the coordinator may act on.
+    StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role);
+    // Rolls `it`'s transaction back and drops the context. **Rollback only**
+    // - R6-3's decide leg adds a commit arm when it has a caller, and adding
+    // one now would also hide a trap: `Dispatch("COMMIT")` finishes a group
+    // commit inline, so a commit from this timer-driven path would take a
+    // blocking `fdatasync` on the reactor.
+    void EndEnrolled(std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it,
+                     std::string_view why);
 
     std::uint32_t core_id_;
     CommandDispatcher& dispatcher_;
@@ -239,10 +398,18 @@ private:
     // bounds this list and not merely the map above it.
     std::list<DedupKey> answered_order_;
 
+    // R6-2's contexts. `unique_ptr` for the same reason `running_` uses one:
+    // a running statement holds a `Session*` into the entry across every
+    // park it takes, and a map node's value must not move under it.
+    std::map<DedupKey, std::unique_ptr<Enrolled>> enrolled_;
+
     std::uint64_t executed_ = 0;
     std::uint64_t deduped_ = 0;
     std::uint64_t unanswerable_ = 0;
     std::uint64_t early_evictions_ = 0;
+    std::uint64_t enrolments_ = 0;
+    std::uint64_t enrolment_refusals_ = 0;
+    std::uint64_t enrolment_expiries_ = 0;
 };
 
 }  // namespace kds::server
