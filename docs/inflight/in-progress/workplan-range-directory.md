@@ -348,6 +348,26 @@ listener enumerates catalog relations on a remount — so **first boot,
 not remount, is the cell where a per-relation cost would have shown**,
 and it showed none.
 
+**Verdict, same day, M2 (worktree `v2.4.0-range-foundation-1`, source-read
+at `v2.2.1-69-g3a60dc6`): H4 held; C1 does not re-open.** The overflow
+range went 113 → 112 pages (`well_known.hpp:351,356`), and the ~68 held
+*exactly* on re-derivation — 5-byte slot + 20-byte tuple header + 94-byte
+`SysColumnRow` = 119 bytes into 8,140 usable, `floor = 68` — because a
+catalog row carries **no Keystone word** (`catalog.cpp:368-374` says so in
+words); with one, the answer would be 64, so the comment's number is right
+for a reason and not by rounding. Ceiling 7,684 → 7,616 rows (range-only,
+the comment's own framing — the root page, `kCatalogPageColumns = 5` at
+`well_known.hpp:272`, is deliberately not added: first boot already puts
+11 bootstrap column rows on it, `catalog.cpp:764-770`, `:865-871`). Read against
+the four scenario benches (`bench/docs/README.md:71`; the fifth driver,
+`scenario4_cabinopt_days.py`, is narrower at 20 columns total): widest
+single relation is scenario1's `daily_stats` at 12 columns → **~635×**
+under the ceiling; the widest *whole scenario* (scenario2's 68 columns
+across eight relations) → **112×**. Both clear the falsifier's 10× by an
+order of magnitude or more; RA2's own cost is 68 rows ≈ 0.89% of the
+ceiling. Full derivation with every site:
+`bench/v2.4.0/results-m2-catalog-ceiling-v2.2.1-69-g3a60dc6.md`.
+
 ---
 
 ## 4. Decisions this plan does not take
