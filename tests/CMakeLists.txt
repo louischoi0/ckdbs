@@ -41,6 +41,7 @@ add_executable(kds_tests
     trx_id_lease_service_test.cpp
     statement_ship_service_test.cpp
     shipped_statement_executor_test.cpp
+    txn_2pc_wire_test.cpp
     core_runtime_test.cpp
     step_pipeline_test.cpp
     step_descriptor_test.cpp

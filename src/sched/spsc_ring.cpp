@@ -42,6 +42,10 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kAssertionBuildRequest: return "ASSERTION_BUILD_REQUEST";
         case RingMessageKind::kAssertionBuildReply: return "ASSERTION_BUILD_REPLY";
         case RingMessageKind::kAssertionBuildDone: return "ASSERTION_BUILD_DONE";
+        case RingMessageKind::kTxnPrepareRequest: return "TXN_PREPARE_REQUEST";
+        case RingMessageKind::kTxnPrepareReply: return "TXN_PREPARE_REPLY";
+        case RingMessageKind::kTxnDecideRequest: return "TXN_DECIDE_REQUEST";
+        case RingMessageKind::kTxnDecideReply: return "TXN_DECIDE_REPLY";
     }
     return "unknown";
 }

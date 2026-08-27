@@ -149,6 +149,31 @@ enum class RingMessageKind : std::uint16_t {
     kAssertionBuildRequest = 30,
     kAssertionBuildReply = 31,
     kAssertionBuildDone = 32,
+
+    // coordinator <-> participant: a transaction whose writes touch
+    // relations owned by two or more cores, committed atomically (R6 of
+    // `instructions/v2.4.0/2pc.md`, server/txn_2pc_service.hpp). The
+    // coordinator is the **arrival core** - the one holding the client's
+    // session (D1) - and the participants are relation owners, discovered
+    // as the transaction runs rather than declared up front.
+    //
+    // Two phases, four kinds. Prepare carries
+    // `server::TxnPrepareRequestPayload` and the participant answers
+    // prepared-or-refused in `TxnParticipantReplyPayload`, matched to its
+    // waiter by `request_id`; decide carries `TxnDecideRequestPayload` and
+    // is acknowledged on the same reply payload. **The decision is the
+    // coordinator's COMMIT record, not the decide message** - the message
+    // only carries it, which is why a lost one costs a resend rather than
+    // an outcome.
+    //
+    // Not sent yet: R6-1 is the wire, and the waiter, the durable prepare
+    // and the decision record are R6-3's. Declared here now for the reason
+    // the step kinds were - a subsystem that arrives with an enum of its
+    // own is what central enumeration exists to prevent.
+    kTxnPrepareRequest = 33,
+    kTxnPrepareReply = 34,
+    kTxnDecideRequest = 35,
+    kTxnDecideReply = 36,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -178,6 +203,10 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kAssertionBuildRequest:
         case RingMessageKind::kAssertionBuildReply:
         case RingMessageKind::kAssertionBuildDone:
+        case RingMessageKind::kTxnPrepareRequest:
+        case RingMessageKind::kTxnPrepareReply:
+        case RingMessageKind::kTxnDecideRequest:
+        case RingMessageKind::kTxnDecideReply:
             return true;
         case RingMessageKind::kUnset:
             return false;
