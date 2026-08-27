@@ -14,7 +14,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
-// The assertion WAL records and their replay (docs/spec/feat-assertion.md §7,
+// The assertion WAL records and their replay (docs/spec/assertion.md §7,
 // workplan AST05).
 //
 // The test worth reading is the fold: a live run mutates a page and a group
@@ -355,7 +355,7 @@ protected:
         // The live writer's order again: the directory drops the entry and the
         // page keeps the bytes with `kEntryOrphaned` set, which is what lets a
         // linkage rebuild reading only pages agree with the directory
-        // (`AssertionEnforcer::AbortTxn`, `docs/spec/feat-assertion.md` §7).
+        // (`AssertionEnforcer::AbortTxn`, `docs/spec/assertion.md` §7).
         auto page = live_store_.Get(kEntryPage);
         ASSERT_TRUE(page.ok());
         auto view = BoundCabinPage::Open(page.value().bytes());

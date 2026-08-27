@@ -8,7 +8,7 @@
 #include "alloc_counter.hpp"
 #include "kds/sched/clock.hpp"
 
-// The lazy-decay score (docs/spec/feat-physical-optimizer.md R1, workplan PX02).
+// The lazy-decay score (docs/spec/physical-optimizer.md R1, workplan PX02).
 //
 // The precision contract these tests pin: exact at whole half-lives,
 // bucketed between them. The exact points are asserted as equalities; the

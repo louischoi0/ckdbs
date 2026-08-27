@@ -69,7 +69,7 @@ enum class RecordType : std::uint8_t {
     // advisory waystone family.
     kVarHeapAppend = 16,
     // A secondary-index entry appended to a leaf: the slot it landed in and
-    // its bytes (docs/spec/feat-index.md §12.1). Logged because an index is
+    // its bytes (docs/spec/index.md §12.1). Logged because an index is
     // maintained on every write and a missing entry is a **lost row**, not a
     // lost hint - the same argument that makes the var-heap authoritative.
     //
@@ -84,7 +84,7 @@ enum class RecordType : std::uint8_t {
     // page images, and those images are taken after the entry is in - so
     // emitting this as well would apply it twice.
     kIndexInsert = 17,
-    // ---- The assertion records (docs/spec/feat-assertion.md §7, AST05) --------
+    // ---- The assertion records (docs/spec/assertion.md §7, AST05) --------
     //
     // A Bound Cabin is an authoritative constraint substrate, so its
     // maintenance is logged on the var-heap's and the index's argument:
@@ -158,7 +158,7 @@ enum class RecordType : std::uint8_t {
     // Appending them later is exactly what this enum's append-only rule is
     // for.
     //
-    // The PL handoff (docs/spec/spec-page-lsn-cross-stream.md §9 rule 1,
+    // The PL handoff (docs/spec/page-lsn-cross-stream.md §9 rule 1,
     // workplan-peer-writer.md PW1c-1): *this page left this stream at this
     // LSN*, appended by the outgoing owner after the page is flushed
     // durable and before the incoming owner is granted write rights. The

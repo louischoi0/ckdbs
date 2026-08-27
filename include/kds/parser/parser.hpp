@@ -71,11 +71,11 @@ private:
     StatusOr<IndexStmt> ParseIndex(bool drop);
 
     // `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
-    // (docs/spec/spec-alter.md AL7), with `ALTER` already consumed. Every other
+    // (docs/spec/alter.md AL7), with `ALTER` already consumed. Every other
     // form under ALTER is refused here, by name and position (AL1).
     StatusOr<AlterStmt> ParseAlter();
 
-    // `{CREATE | DROP} ASSERTION ...` (docs/spec/feat-assertion.md §3), with the
+    // `{CREATE | DROP} ASSERTION ...` (docs/spec/assertion.md §3), with the
     // leading two words already consumed. One production for both, for
     // ParseCabin's reason - see AssertionStmt (ast.hpp).
     StatusOr<AssertionStmt> ParseAssertion(bool drop);
@@ -85,10 +85,10 @@ private:
     // names the list in every error.
     //
     // `cap == 0` means **no cap**, which is what an assertion's GROUP BY list
-    // takes: `feat-assertion.md` §3 declares no ceiling on it, and inventing
+    // takes: `assertion.md` §3 declares no ceiling on it, and inventing
     // one here would settle a number nothing has measured. An index's lists
     // pass their own `[PROPOSED]` caps, which are refusals and never
-    // truncations (docs/spec/feat-index.md §13).
+    // truncations (docs/spec/index.md §13).
     Status ParseDeclaredColumnList(std::vector<IndexColumnRef>& out, const char* what,
                                    std::size_t cap);
 

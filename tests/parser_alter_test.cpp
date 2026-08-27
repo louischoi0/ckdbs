@@ -6,7 +6,7 @@
 
 #include "kds/parser/parser.hpp"
 
-// ALT01 - the ALTER grammar (docs/spec/spec-alter.md AL1, AL7).
+// ALT01 - the ALTER grammar (docs/spec/alter.md AL1, AL7).
 //
 // Two things this file holds down. **The refusal surface is the feature**:
 // AL1 makes v1 catalog-only, so ADD/DROP/MODIFY/SET answer a positioned

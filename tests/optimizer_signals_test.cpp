@@ -11,7 +11,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// The cabin optimizer's input signals (feat-physical-optimizer.md §II.2,
+// The cabin optimizer's input signals (physical-optimizer.md §II.2,
 // workplan PHY01). Three claims carry the acceptance: decayed accumulation
 // is exact where the decay contract says it is, a snapshot is an immutable
 // versioned value, and the counters are correct under a scripted workload

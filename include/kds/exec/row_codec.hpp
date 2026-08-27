@@ -146,7 +146,7 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
                      std::span<parser::AstValue> out);
 
 // Rewrites a literal into the storage form of `col`'s type, in place
-// (docs/spec/spec-types.md §3.1).
+// (docs/spec/types.md §3.1).
 //
 // A `'2026-08-07'` against a `DATE` column becomes the epoch integer
 // 20672; a `'12.34'` against a `DECIMAL(10,2)` becomes the unscaled 1234
@@ -162,7 +162,7 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 // `"2026-08-07"`, the two never met, and an observed value silently
 // stopped seeing rows inserted after it was observed - a Cabin returning
 // fewer rows than exist, which is the one failure mode
-// `docs/spec/feat-cabin.md` §5 calls out as invisible without a baseline to
+// `docs/spec/cabin.md` §5 calls out as invisible without a baseline to
 // compare against. Any path that turns a written literal into a value the
 // engine compares or keys on must come through here.
 Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);
@@ -256,7 +256,7 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
 // The two above find their cells at the row layout's offsets. This one takes
 // the cell directly, because a secondary index entry carries its covered
 // columns **concatenated in the index's declared order** rather than at the
-// relation's offsets (docs/spec/feat-index.md §7) - and re-deriving what a cell
+// relation's offsets (docs/spec/index.md §7) - and re-deriving what a cell
 // means from an entry would be a second decoder for the same bytes.
 //
 // `column_index` is only what a reported spill names, so an entry-side caller
@@ -270,7 +270,7 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
 // falling back to int_val otherwise.
 //
 // `type_val` is the **column's** catalog type, and rendering is the one
-// place it is needed (docs/spec/spec-types.md §3.3). A `DATE` and a
+// place it is needed (docs/spec/types.md §3.3). A `DATE` and a
 // `TIMESTAMP` decode to the integers they are - epoch days and epoch
 // microseconds - so the value alone cannot say which, or that either is a
 // date at all. That is deliberate: decode does not format, and the string
@@ -341,7 +341,7 @@ struct OrderKey {
     Int128 num = 0;
     std::string str;
     bool is_str = false;
-    // D3 (`docs/spec/spec-null.md`): NULL orders above every value, so ASC puts
+    // D3 (`docs/spec/null.md`): NULL orders above every value, so ASC puts
     // NULLs last and the ordinary descending flip puts them first - no
     // NULLS FIRST/LAST grammar exists to override it. Two NULLs compare
     // equal, and the sort's `seq` tiebreak keeps the order total.

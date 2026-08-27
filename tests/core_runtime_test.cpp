@@ -1606,7 +1606,7 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
     //
     // The three `tc.tag` statements above are the walked join, which is
     // the shape the statement-local inner build serves
-    // (docs/spec/spec-join-inner-build.md): locally the inner step builds a map
+    // (docs/spec/join-inner-build.md): locally the inner step builds a map
     // on its first outer row and probes it thereafter, while the shipped
     // side gets `ShippedForm`'s walk with the annotation cleared. So the
     // equivalence those rows assert is **build against shipped walk**, not

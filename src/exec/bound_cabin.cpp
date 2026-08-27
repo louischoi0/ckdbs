@@ -83,7 +83,7 @@ const GroupHeader* BoundCabin::Find(const std::string& key) const {
     for (const GroupHeader& header : it->second) {
         // The confirmation. Without it a colliding hash would return someone
         // else's group, which for an authoritative structure is a wrong
-        // answer and not a slow one (docs/spec/feat-cabin.md §12.3).
+        // answer and not a slow one (docs/spec/cabin.md §12.3).
         if (header.key == key) return &header;
     }
     return nullptr;
@@ -133,7 +133,7 @@ Status BoundCabin::AdoptGroupId(const std::string& key, std::uint32_t group_id) 
         // hand-built record, which is worth refusing on its own terms.
         return Status::Corruption(
             "bound cabin: a replayed record carries group id 0, which is the reserved 'no group' "
-            "value (docs/spec/feat-assertion.md §5.1)");
+            "value (docs/spec/assertion.md §5.1)");
     }
     if (GroupHeader* existing = FindMutable(key); existing != nullptr) {
         if (existing->group_id != group_id) {

@@ -134,7 +134,7 @@ StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
                            const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
 
 // Every conjunct but the one at `skip` - the inner build's bucketing
-// predicate (spec-join-inner-build.md §2: the map holds every row passing
+// predicate (join-inner-build.md §2: the map holds every row passing
 // the *non-correlated* residual). Together with the skipped conjunct this
 // is exactly EvaluateAll, which is what keeps emission untouched.
 StatusOr<bool> EvaluateAllExcept(const std::vector<const catalog::Schema*>& schemas,

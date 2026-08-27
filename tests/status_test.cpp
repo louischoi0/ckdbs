@@ -129,7 +129,7 @@ TEST(StatusTest, ResourceExhaustedIsNotRetryable) {
 }
 
 TEST(StatusTest, AssertionViolationIsNotRetryable) {
-    // docs/spec/feat-assertion.md §4.4. The one race a retry could win - a
+    // docs/spec/assertion.md §4.4. The one race a retry could win - a
     // refusal caused by a reservation that later aborts - is §4.3's bounded
     // false rejection, accepted rather than encoded: granting the bit would
     // make every client spin on a group that is genuinely full. The enum

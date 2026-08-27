@@ -984,7 +984,7 @@ TEST(SimOracleTest, AnUnknownRowCostsOnlyTheCountsItCouldChange) {
 // baked into another session's banked set.
 //
 // **Fixed** by declining to record from a view that can still be
-// contradicted (`docs/spec/feat-cabin.md` §6a): a recording walk banks nothing
+// contradicted (`docs/spec/cabin.md` §6a): a recording walk banks nothing
 // while any transaction is in flight, its own included. Written gated, it
 // ran SKIPPED for as long as the gap stood and is an ordinary regression
 // test now.

@@ -119,7 +119,7 @@ SCHEMA = {
 CREATE_ORDER = ("organizations", "ships", "operations", "cargos", "fees",
                 "recipes", "freights", "charges")
 
-# ---- the foreign keys (docs/spec/impl-foreign-keys.md) ------------------------
+# ---- the foreign keys (docs/spec/foreign-keys.md) ------------------------
 #
 # `--fk` declares these three, as (child, column, parent):
 FOREIGN_KEYS = (
@@ -134,7 +134,7 @@ FOREIGN_KEYS = (
 # three fire on the forward check only - nothing in this workload deletes a
 # parent, which is the honest shape of an insert-dominated OLTP run.
 
-# ---- the Cabin (docs/spec/feat-cabin.md) --------------------------------------
+# ---- the Cabin (docs/spec/cabin.md) --------------------------------------
 #
 # `--cabin` declares one, on exactly this column:
 CABIN_RELATION, CABIN_COLUMN, CABIN_TYPE = "recipes", "cargo_type", "int32"
@@ -373,7 +373,7 @@ def explain_ddl_failure(base, suffix, reply, cabin, fk):
         cols = ", ".join(f"{c}.{col} -> {p}"
                          for c, col, p in FOREIGN_KEYS if c == base)
         abort(f"--fk: this server does not understand REFERENCES.\n"
-              f"  {cols} needs a build with docs/spec/impl-foreign-keys.md in it "
+              f"  {cols} needs a build with docs/spec/foreign-keys.md in it "
               f"(FK-M1); re-run without --fk, or rebuild the server.", reply)
     if fk and "heap relation" in reply:
         abort(f"--fk: the parent of a foreign key on {base} is a heap relation, "
@@ -385,7 +385,7 @@ def explain_ddl_failure(base, suffix, reply, cabin, fk):
     if cabin and base == CABIN_RELATION and "CABIN" in upper:
         abort(f"--cabin: this server does not understand the column cabin "
               f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} {CABIN_TYPE} CABIN` "
-              f"needs a build with docs/spec/feat-cabin.md in it; re-run without "
+              f"needs a build with docs/spec/cabin.md in it; re-run without "
               f"--cabin, or rebuild the server.", reply)
     if "no room" in reply or "reserved catalog page range" in reply:
         abort(f"could not create {base}_{suffix}: the catalog is out of column "
@@ -622,7 +622,7 @@ COMMITTED, REJECTED_CAPACITY, REJECTED_CREDIT, CONFLICTED, FAILED = (
 # customer by bookers carrying the same shipper's cargo - and a workload can
 # be heavy on one and free of the other. `read` covers a conflict raised
 # before either update, which today means only a foreign-key check meeting an
-# in-flight writer (docs/spec/impl-foreign-keys.md reuses kTxnConflict for it);
+# in-flight writer (docs/spec/foreign-keys.md reuses kTxnConflict for it);
 # `commit` covers one raised by COMMIT itself.
 AXIS_OPERATIONS, AXIS_ORGANIZATIONS = "operations", "organizations"
 AXIS_READ, AXIS_COMMIT = "read", "commit"
@@ -1277,7 +1277,7 @@ def probe_reads(exec_, tables, sample_op, sample_org):
     server accepts.
 
     The third one is why this function exists. **Nothing in this repo
-    aggregates over a joined chain today**: `docs/spec/feat-aggregate.md` AG1
+    aggregates over a joined chain today**: `docs/spec/aggregate.md` AG1
     puts the fold over the statement's RowSink and leaves the compiled chain
     byte-identical, so a group key resolving to a *second* step's column
     should work - but 'should' is not a measurement, and the reporter of
@@ -1501,10 +1501,10 @@ def main():
                              "which is what makes a booking's fee count vary "
                              "(default: 6)")
     parser.add_argument("--fk", action="store_true",
-                        help="declare the three foreign keys (docs/spec/impl-foreign-keys.md)")
+                        help="declare the three foreign keys (docs/spec/foreign-keys.md)")
     parser.add_argument("--cabin", action="store_true",
                         help=f"declare a Cabin on {CABIN_RELATION}.{CABIN_COLUMN} "
-                             f"(docs/spec/feat-cabin.md)")
+                             f"(docs/spec/cabin.md)")
     parser.add_argument("--echo", action="store_true",
                         help="print every statement and its reply to stderr. Not "
                              "free: a write per statement")

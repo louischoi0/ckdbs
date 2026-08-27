@@ -26,7 +26,7 @@
 // instances. Two is the smallest n that excludes the one-shot case.
 //
 // `n = 1` for a **user-declared** pattern
-// (docs/spec/spec-create-pattern-user-defined-patterns-v1.md section 7): a
+// (docs/spec/create-pattern-user-defined-patterns-v1.md section 7): a
 // declaration *is* the evidence n=2 waits for. An operator who wrote
 // `CREATE PATTERN` has already said this shape repeats, and making them
 // prove it again with traffic is asking a question that was answered.

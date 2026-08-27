@@ -43,7 +43,7 @@ bool TouchesNoPage(RecordType type) noexcept {
         // PAGE_HANDOFF names a page in its envelope but redo must not even
         // load it: from the handoff LSN on, the page belongs to another
         // stream, and loading it here is the exact cross-stream touch the
-        // record exists to end (spec-page-lsn-cross-stream.md §9 rule 3).
+        // record exists to end (page-lsn-cross-stream.md §9 rule 3).
         // Analysis is the consumer (PW1c-2).
         case RecordType::kPageHandoff:
         case RecordType::kTxnBegin:
@@ -245,7 +245,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             return Status::OK();
         }
         if (IsAssertionRecord(record.type())) {
-            // RC07's, and blocked on feat-assertion.md §7's genesis
+            // RC07's, and blocked on assertion.md §7's genesis
             // decision. Counted rather than dropped so the deferral shows
             // up in the report instead of being assumed.
             ++stats.deferred_assertions;
@@ -353,7 +353,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                 "redo: page " + std::to_string(page_id) + " is stamped by stream " +
                 std::to_string(stamp - 1) + " inside stream " + std::to_string(core_id) +
                 "'s redo scope - a handoff record or the rule-6 acquisition restamp was "
-                "lost or mis-ordered (spec-page-lsn-cross-stream.md §9 rules 5-6)");
+                "lost or mis-ordered (page-lsn-cross-stream.md §9 rules 5-6)");
         }
 
         // RV5, the whole of idempotence. An FPI is gated too: a page

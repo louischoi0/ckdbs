@@ -383,13 +383,13 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // DROP TABLE, and naming what DROP does take beats a generic refusal
     // that leaves a client unsure whether the word was recognized. The list
     // in the message is the whole of what exists, so it grows with the
-    // targets: CABIN joined it with the Cabin feature (docs/spec/feat-cabin.md),
-    // INDEX with the index grammar (docs/spec/feat-index.md §10), ASSERTION with
-    // the assertion catalog (docs/spec/feat-assertion.md §8.3, AST03). This test
+    // targets: CABIN joined it with the Cabin feature (docs/spec/cabin.md),
+    // INDEX with the index grammar (docs/spec/index.md §10), ASSERTION with
+    // the assertion catalog (docs/spec/assertion.md §8.3, AST03). This test
     // is meant to be edited when one is added - that is what pins the list to
     // reality rather than to whatever it happened to say.
     //
-    // `DROP TABLE` joined the list with docs/spec/spec-drop-table.md (DT01) -
+    // `DROP TABLE` joined the list with docs/spec/drop-table.md (DT01) -
     // the edit this comment scheduled - and the RESTRICT hook AST03 could
     // not wire finally has its DDL. An unknown table now answers NotFound
     // from resolution, not a target-list refusal.

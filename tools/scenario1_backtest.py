@@ -55,7 +55,7 @@ computed by this driver at generation time and stored, exactly as a real
 pipeline would materialize them, and every model comparison at the end is
 **calculated client-side** from rows the join returned.
 
-Aggregates themselves *are* expressible now (`docs/spec/feat-aggregate.md`
+Aggregates themselves *are* expressible now (`docs/spec/aggregate.md`
 resolved `docs/spec/parser-v2.md` I14): `COUNT`, `SUM`, `MIN`, `MAX` and
 `GROUP BY`. They are measured as their own phases (`agg-*`) rather than
 folded into the phases above, because rewriting the model comparison to
@@ -134,7 +134,7 @@ offered precisely so that difference can be measured rather than assumed.
 Two engine features can be switched on to change how the reads are served,
 and neither may change an answer:
 
-    --cabin   a Cabin (docs/spec/feat-cabin.md) on `daily_stats.session_no` and
+    --cabin   a Cabin (docs/spec/cabin.md) on `daily_stats.session_no` and
               `model_results.model_id` - the two columns every FilterScan in
               this scenario filters on. An observed value's rows are served
               without walking the relation. Note the cross-section case is
@@ -269,7 +269,7 @@ SCHEMA = {
 CREATE_ORDER = ("exchanges", "symbols", "sessions", "daily_bars",
                 "daily_stats", "models", "model_results")
 
-# ---- the Cabin (docs/spec/feat-cabin.md) --------------------------------------
+# ---- the Cabin (docs/spec/cabin.md) --------------------------------------
 #
 # Two cabins, on the two columns this scenario filters by equality:
 #
@@ -288,7 +288,7 @@ CREATE_ORDER = ("exchanges", "symbols", "sessions", "daily_bars",
 # slower one.
 CABIN_COLUMNS = (("daily_stats", "session_no"), ("model_results", "model_id"))
 
-# ---- the foreign keys (docs/spec/impl-foreign-keys.md) ------------------------
+# ---- the foreign keys (docs/spec/foreign-keys.md) ------------------------
 #
 # (child, column, parent). Every one of these is a reference this data
 # already had - the driver only ever writes ids it created - so declaring
@@ -507,7 +507,7 @@ def create_tables(client, suffix, cabin, fk, bars_clustered):
         # beats a syntax error pointing into the middle of a column.
         if fk and "REFERENCES" in reply.upper():
             abort(f"--fk: this server does not understand REFERENCES.\n  It "
-                  f"needs a build with docs/spec/impl-foreign-keys.md in it "
+                  f"needs a build with docs/spec/foreign-keys.md in it "
                   f"(FK-M1); re-run without --fk, or rebuild the server.",
                   reply)
         if fk and "heap relation" in reply:
@@ -518,7 +518,7 @@ def create_tables(client, suffix, cabin, fk, bars_clustered):
                   f"--fk.", reply)
         if cabin and "CABIN" in reply.upper():
             abort(f"--cabin: this server does not understand the column cabin "
-                  f"policy.\n  It needs a build with docs/spec/feat-cabin.md in "
+                  f"policy.\n  It needs a build with docs/spec/cabin.md in "
                   f"it; re-run without --cabin, or rebuild the server.", reply)
         if "no room" in reply or "reserved catalog page range" in reply:
             abort(f"could not create {base}_{suffix}: the catalog is out of "
@@ -1058,7 +1058,7 @@ def compare_all_sql(suffix):
     one whose result the client then reduces itself.
 
     Deliberately not rewritten to `SUM(...) GROUP BY model_id`, which the
-    grammar now takes (`docs/spec/feat-aggregate.md`): this phase prices the
+    grammar now takes (`docs/spec/aggregate.md`): this phase prices the
     *join*, and its PostgreSQL twin has to issue the same statement for the
     two numbers to mean anything. The fold is measured on its own, in the
     `agg-*` phases."""
@@ -1230,7 +1230,7 @@ def run_read_phases(client, suffix, symbols, session_count, bar_count, ops,
     phases.append(phase)
 
 
-# ---- the aggregate shapes (docs/spec/feat-aggregate.md) -----------------------
+# ---- the aggregate shapes (docs/spec/aggregate.md) -----------------------
 #
 # The rollups a research notebook issues beside the backtest: how many bars
 # per symbol, what the price range was, how wide each session was.
@@ -1266,7 +1266,7 @@ def run_read_phases(client, suffix, symbols, session_count, bar_count, ops,
 # structural reason: PostgreSQL plans a HashAggregate or a GroupAggregate and
 # may read the grouping column from an index, while ckdbs walks the relation
 # and folds outside the executor with no plan choice at all
-# (docs/spec/feat-aggregate.md AG1).
+# (docs/spec/aggregate.md AG1).
 #
 # **This comment used to predict that ckdbs would not be close on the
 # high-cardinality shape. It was measured backwards** - see
@@ -1292,7 +1292,7 @@ def run_aggregate_phases(client, suffix, session_count, ops, rng, phases):
     # knowing rather than discovering: volume is drawn under 50,000,000 and
     # there are ~60,480 bars, so the sum tops out near 3e15 against an
     # int64 accumulator's 9.2e18. A `SUM` that crossed it would fail the
-    # statement rather than wrap (docs/spec/feat-aggregate.md §3.3), which would
+    # statement rather than wrap (docs/spec/aggregate.md §3.3), which would
     # show up here as an error count, not a wrong number.
     phase = Phase("agg-global", "whole-relation fold, no GROUP BY")
     for _ in range(scans):
@@ -2048,7 +2048,7 @@ def main():
     parser.add_argument("--cabin", dest="cabin", action="store_true",
                         default=False,
                         help="declare Cabins on daily_stats.session_no and "
-                             "model_results.model_id (docs/spec/feat-cabin.md): "
+                             "model_results.model_id (docs/spec/cabin.md): "
                              "the two columns every FilterScan here filters "
                              "on. Default off, so the baseline stays what it "
                              "has always been - run it both ways and compare "
@@ -2060,7 +2060,7 @@ def main():
 
     parser.add_argument("--fk", dest="fk", action="store_true", default=False,
                         help="declare the four foreign keys this data "
-                             "already satisfies (docs/spec/impl-foreign-keys.md). "
+                             "already satisfies (docs/spec/foreign-keys.md). "
                              "Every ingested row then probes its parents "
                              "before it is written; nothing here deletes, so "
                              "the reverse check never fires. Requires "
@@ -2084,7 +2084,7 @@ def main():
                              "shapes (default: on). Each is priced against "
                              "the unaggregated statement above it, and the "
                              "set spans the group-count range that decides "
-                             "a fold's cost (docs/spec/feat-aggregate.md)")
+                             "a fold's cost (docs/spec/aggregate.md)")
     parser.add_argument("--no-aggregates", dest="aggregates",
                         action="store_false",
                         help="skip the aggregate phases - needed against a "

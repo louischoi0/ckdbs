@@ -9,7 +9,7 @@
 #include "kds/parser/ast.hpp"
 #include "kds/server/command_dispatcher.hpp"
 
-// The assertion violation surface (docs/spec/feat-assertion.md §4.4, AS9,
+// The assertion violation surface (docs/spec/assertion.md §4.4, AS9,
 // workplan AST08): the message format, its type-correct group-key rendering,
 // the enforced-ceiling rule, and the wire spelling.
 //
@@ -65,7 +65,7 @@ TEST(AssertionViolationMessage, SumSpellsItsColumnAndVarcharKeysRenderAsText) {
 
 TEST(AssertionViolationMessage, ADateGroupKeyRendersAsADateNotAnEpochDay) {
     // The reason the two-argument FormatValue is mandatory here
-    // (docs/spec/spec-types.md §3.3): a DATE decodes to the integer it is, and an
+    // (docs/spec/types.md §3.3): a DATE decodes to the integer it is, and an
     // error message showing `trade_date=0` would be a number nobody declared.
     const std::vector<GroupKeyPart> group = {
         {"trade_date", catalog::kTypeValDate, Int(0)},

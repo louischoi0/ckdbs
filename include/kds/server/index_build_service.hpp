@@ -45,7 +45,7 @@
 //
 // The window is sound only because of what `Backfill` indexes: **every
 // version** the relation holds, uncommitted and delete-marked included
-// (docs/spec/feat-index.md §10a). A rollback on the owner writes pages without
+// (docs/spec/index.md §10a). A rollback on the owner writes pages without
 // passing the dispatcher's gate - compensation goes through the
 // transaction manager, not a statement - so a window that refused
 // statements alone would still see pages change under the build if the

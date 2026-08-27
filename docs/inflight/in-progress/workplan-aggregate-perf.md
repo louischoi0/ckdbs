@@ -1,6 +1,6 @@
 # Aggregate query performance — workplan
 
-Tasks `AP01`-`AP06`, companion to `docs/spec/feat-aggregate.md`. Every item here
+Tasks `AP01`-`AP06`, companion to `docs/spec/aggregate.md`. Every item here
 is grounded in a measurement in `bench/results-aggregate.md` or
 `bench/results-scenario1-vs-pg.md`; anything that is not is named as a
 guess.
@@ -322,7 +322,7 @@ the aggregation section says what moved and what did not.
 
 ## Not on this list, and why
 
-- **Pre-aggregation below a join.** Rejected by `feat-aggregate.md` §1, not
+- **Pre-aggregation below a join.** Rejected by `aggregate.md` §1, not
   deferred: it needs an operator inside the chain, which means teaching the
   step-kind trust table about a step that reads no relation. Revisit only if
   measured traffic presents the shape.

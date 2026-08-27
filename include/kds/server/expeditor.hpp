@@ -102,7 +102,7 @@ Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
                                std::uint32_t cores, catalog::PlacementPolicy placement);
 
-// EV4 (docs/spec/spec-eviction.md §6), under the operator invariant of
+// EV4 (docs/spec/eviction.md §6), under the operator invariant of
 // 2026-08-24: the key is an instance total and every core's share is
 // equal - `frames / min(cores, hardware cores)` as ratified, which is
 // `frames / cores` on every instance that exists, because Expeditor::Open
@@ -124,7 +124,7 @@ public:
         std::uint16_t port = 15432;
 
         // Resident-frame budget for the **whole instance**, divided evenly
-        // per core with the remainder to core 0 (docs/spec/spec-eviction.md §6
+        // per core with the remainder to core 0 (docs/spec/eviction.md §6
         // EV4 - built 2026-08-24; docs/workplan-pageref.md MG06); 0 =
         // unbounded. The sweep arms only on a core whose share is nonzero,
         // and a nonzero total below `cores` is refused at boot
@@ -209,7 +209,7 @@ public:
         std::uint64_t max_rows_touched = exec::kDefaultRowTouchBudget;
 
         // BI3's per-statement row cap for a multi-row INSERT
-        // (docs/spec/spec-bulkinsert.md, `max_insert_rows`). A refusal, never a
+        // (docs/spec/bulkinsert.md, `max_insert_rows`). A refusal, never a
         // truncation; must be at least 1.
         std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows;
 
@@ -263,7 +263,7 @@ public:
         // history that does not exist when the optimizer arrives.
         bool access_statistics = true;
 
-        // ---- Physical optimizer (docs/spec/feat-physical-optimizer.md) -------
+        // ---- Physical optimizer (docs/spec/physical-optimizer.md) -------
 
         // R3's mode: `off` or `shadow` (default). Shadow costs nothing at
         // rest - the planner is pull-only, computed when `SHOW RELAYOUT`
@@ -324,7 +324,7 @@ public:
         // of its own until a measured workload argues for one.
         stats::CabinOptimizerConfig CabinOptimizerSettings() const;
 
-        // ---- Cabin (docs/spec/feat-cabin.md) ---------------------------------
+        // ---- Cabin (docs/spec/cabin.md) ---------------------------------
 
         // Whether Cabins may be built and served (`cabins`, default on).
         //
@@ -364,7 +364,7 @@ public:
         std::size_t cabin_max_values = 4096;
         std::size_t cabin_max_entries_per_value = 4096;
 
-        // AG11's caps (docs/spec/feat-aggregate.md §6), both `[PROPOSED]` and
+        // AG11's caps (docs/spec/aggregate.md §6), both `[PROPOSED]` and
         // both held here for the reason the Cabin pair above are: nothing
         // may depend on either number, only on the rule they enforce - a
         // cap **fails the statement**, never truncates the group set and

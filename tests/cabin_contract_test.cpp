@@ -11,7 +11,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 
-// **The cabin contract** (docs/spec/feat-cabin.md, workplan CB10). The Waystone
+// **The cabin contract** (docs/spec/cabin.md, workplan CB10). The Waystone
 // suite's shape, pointed at a structure with the opposite trust class - and
 // the difference is what this file has to prove.
 //
@@ -121,7 +121,7 @@ const std::vector<std::string>& Queries() {
         "SELECT * FROM b WHERE id = 3",
         "SELECT * FROM b",
 
-        // ---- The correlated probe (feat-cabin.md §4a) ------------------
+        // ---- The correlated probe (cabin.md §4a) ------------------
         //
         // Self-joins whose inner side is keyed by the outer row's `sym` -
         // no literal, so the inner step is a per-outer-row CabinProbe on
@@ -175,7 +175,7 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
 }
 
 // What a relayout mover will do to every page it touches, done by hand
-// because no mover exists (docs/spec/feat-physical-optimizer.md §6). Sweeps the
+// because no mover exists (docs/spec/physical-optimizer.md §6). Sweeps the
 // user id range; absent ids just miss.
 std::size_t BumpEveryUserPage(Instance& db) {
     std::size_t bumped = 0;
@@ -322,7 +322,7 @@ TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
 
 TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     // **The epoch check made real for the Cabin's hints**
-    // (docs/spec/feat-physical-optimizer.md R4, workplan PX04). Every hint was
+    // (docs/spec/physical-optimizer.md R4, workplan PX04). Every hint was
     // recorded at epoch 0; the page side moves here, as a relayout mover
     // will move it. A btree relation must notice per entry, resolve the pk,
     // and stamp the healed hint with the *bumped* epoch - a heal that wrote
@@ -603,7 +603,7 @@ TEST(CabinContractTest, ACabinIsNotTrailReplayable) {
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kRange));
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kScan));
     // A secondary index is authoritative too, and lands on the same side of
-    // the line for the same reason (docs/spec/feat-index.md §8): an index probe
+    // the line for the same reason (docs/spec/index.md §8): an index probe
     // answers with a *set*, and a trail has no witness for a row inserted
     // since it was recorded.
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexProbe));
@@ -631,7 +631,7 @@ TEST(CabinContractTest, DdlRefusesWhatCanNeverWork) {
 }
 
 TEST(CabinContractTest, ColumnPolicyDecidesWhoMayCreateACabin) {
-    // C7 (docs/spec/feat-cabin.md §8.1). Three policies, three behaviours, and
+    // C7 (docs/spec/cabin.md §8.1). Three policies, three behaviours, and
     // the one that matters most is `NO CABIN`: it must be refused at the
     // catalog, not merely absent from the grammar, because that is the door
     // every future auto-creator will also come through.
@@ -816,7 +816,7 @@ TEST(CabinContractTest, AnExplicitKeyRelationServesTheOrderItWalks) {
 }
 
 TEST(CabinContractTest, ACorrelatedExistsConvergesToObservedSets) {
-    // feat-cabin.md §4a's non-convergence, closed: an EXISTS whose every
+    // cabin.md §4a's non-convergence, closed: an EXISTS whose every
     // outer key has a qualifying match stops each recording walk before it
     // can commit, so the probed values re-observed forever and every
     // execution paid the full miss path. In sub-chain mode the walk now

@@ -39,7 +39,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
 }
 
 TEST(PageHeaderTest, TheStreamStampRoundTripsAndDefaultsToNeverStamped) {
-    // PW1c-3 (spec-page-lsn-cross-stream.md §9 rule 4): the flags word
+    // PW1c-3 (page-lsn-cross-stream.md §9 rule 4): the flags word
     // carries core_id + 1 of the stream that last wrote the page, and a
     // zeroed page reads 0 - never stamped, the no-backfill default every
     // pre-PW1c-3 page relies on.
@@ -217,7 +217,7 @@ TEST(PageHeaderTest, UnformattedPageTypeHasNoSupportedVersion) {
     EXPECT_EQ(MaxSupportedFormatVersion(PageType::kInvalid), 0u);
 }
 
-// ---- Relayout epoch (docs/spec/feat-physical-optimizer.md R4, workplan PX03) --
+// ---- Relayout epoch (docs/spec/physical-optimizer.md R4, workplan PX03) --
 
 TEST(PageHeaderTest, RelayoutEpochRoundTripsAndBumpsByOne) {
     Page page{};

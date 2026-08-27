@@ -15,7 +15,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 
 // `CREATE PATTERN` / `DROP PATTERN`
-// (docs/spec/spec-create-pattern-user-defined-patterns-v1.md).
+// (docs/spec/create-pattern-user-defined-patterns-v1.md).
 //
 // The property the whole feature rests on - that a declared body and the
 // live traffic it means to match hash to one pattern_id - is pinned in

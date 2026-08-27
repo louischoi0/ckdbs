@@ -151,7 +151,7 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
     if (value.type == parser::ValueType::kNull) {
         // -1, the one NULL convention (protocol.md §6). Decided before the
         // engine could store a NULL, which is why NULL storage landing
-        // (spec-null.md) was no wire break: a stored NULL ships as the
+        // (null.md) was no wire break: a stored NULL ships as the
         // length this format always reserved for it.
         PutLE(out, static_cast<std::uint32_t>(0xFFFFFFFFu), 4);
         return Status::OK();
@@ -162,7 +162,7 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
         case kTypeValInt16:
         case kTypeValInt32:
         case kTypeValInt64:
-        // A date and a timestamp *are* integers (spec-types.md TY5): the
+        // A date and a timestamp *are* integers (types.md TY5): the
         // decoder hands them over as kInt, and WireTypeLen already knows
         // their widths, so the int arm is their arm.
         case kTypeValDate:

@@ -262,7 +262,7 @@ differs from the paragraph above:
   `manual/sql/sql.md` §5's "an autocommit statement is its own transaction
   and unwinds fully". Whether that is a defect or the honest end state of a
   commit that reached its record and lost its fsync belongs to
-  `docs/spec/txn.md` §8 and `docs/spec/spec-ddl-transactional.md`, not here. The
+  `docs/spec/txn.md` §8 and `docs/spec/ddl-transactional.md`, not here. The
   harness accepts both outcomes and asserts the one thing neither reading
   disputes: that the relation must not *half* exist.
 
@@ -352,7 +352,7 @@ silently skipped:
 **What it found in the engine: one wrong answer**, and it was fixed the
 next day. A Cabin entry set banked inside a transaction outlived the
 ROLLBACK that restored the row and was then served as authoritative
-(`docs/spec/feat-cabin.md` §6a, `docs/inflight/known-gaps.md`). Chasing the fix found the
+(`docs/spec/cabin.md` §6a, `docs/inflight/known-gaps.md`). Chasing the fix found the
 other half of the same rule — a set banked while *another* session's
 transaction is in flight loses the rows that transaction commits — which
 is what ruled out un-observing on rollback as a repair. Both halves are

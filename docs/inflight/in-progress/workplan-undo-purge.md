@@ -67,7 +67,7 @@ too little). Listed for completeness, recommended never.
 to the undo log's own free list and the next chain growth reuses it
 (`FormatUndoPage` again — `PAGE_INIT{kUndo}` is an existing record type
 recovery already applies). This dodges the engine-wide page-reuse gate
-(`feat-physical-optimizer.md` §6 gate 3 is about *heap* pages and trail
+(`physical-optimizer.md` §6 gate 3 is about *heap* pages and trail
 validation; no advisory structure points into undo) and stale
 `undo_ptr`s are harmless by the soundness fact above — no valid
 traversal dereferences into a purged record. Undo stops *growing*;

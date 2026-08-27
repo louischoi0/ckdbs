@@ -3,7 +3,7 @@
 Status: **ADOPTED**
 Related documents: `docs/spec/page.md` (S1 common header, S2 PageRef, S7 per-core
 buffer pool, S9 checksums, S11 mmap rejection), `docs/spec/wal.md`
-(WAL-before-data), `docs/spec/feat-assertion.md` §5 (Bound Cabin pinned class),
+(WAL-before-data), `docs/spec/assertion.md` §5 (Bound Cabin pinned class),
 `docs/spec/sched.md` (scheduling groups), `docs/inflight/in-progress/workplan-testing.md`.
 
 *(Filenames corrected 2026-08-10: this list was written against names that
@@ -37,7 +37,7 @@ follows directly from standing engine contracts:
 
 | ID | Decision |
 |----|----------|
-| EV1 | Replacement policy: **CLOCK (second-chance) with a per-frame usage counter**. Access bumps the counter (saturating); the sweep hand decrements and reclaims frames at zero. No LRU lists. A temperature-model variant reusing the physical-optimizer lazy-decay score (`docs/spec/feat-physical-optimizer.md` R1) is reserved as an **experimental hook only**, gated behind the same experimental status as the physical optimizer itself. |
+| EV1 | Replacement policy: **CLOCK (second-chance) with a per-frame usage counter**. Access bumps the counter (saturating); the sweep hand decrements and reclaims frames at zero. No LRU lists. A temperature-model variant reusing the physical-optimizer lazy-decay score (`docs/spec/physical-optimizer.md` R1) is reserved as an **experimental hook only**, gated behind the same experimental status as the physical optimizer itself. |
 | EV2 | Dirty handling: a **background writeback task** (background scheduling group) keeps a supply of clean frames; eviction prefers clean frames. Forced synchronous writeback is the fallback only. **Flush-before-evict** is mandatory: WAL durable up to the page LSN before the frame is reused. Page checksums (S9) are computed at writeback. |
 | EV3 | Pinning is a **page-class attribute**, not a per-page runtime flag. v1 pinned classes: **fixed catalog pages** and **Bound Cabin pages** (AS6). Waystone/trail pages and meta-pool pages are evictable (Waystone is advisory — loss is a performance event, never a correctness event; the meta pool has its own entry-level eviction and is not double-pinned at page level). Debug builds assert on any eviction attempt against a pinned class. PageRef (S2) pins are, as always, absolute: a frame with a live pin is never a sweep candidate. |
 | EV4 | Strict per-core pools. **No cross-core frame stealing, no rebalancing in v1.** Pool size is a boot-time setting, divided evenly across cores by default. (Rationale: any stealing path reintroduces cross-core synchronization, forfeiting the lock-free property. Skewed-placement rebalancing is a reserved future item.) |
@@ -166,7 +166,7 @@ tiny-pool profile before promotion.
 
 - Cross-core frame stealing / dynamic rebalancing (EV4) — reserved.
 - Page-kind priority weighting (EV7) — reserved pending measurements.
-- Temperature-unified eviction via decay scores (`docs/spec/feat-physical-optimizer.md` R1) — experimental hook only;
+- Temperature-unified eviction via decay scores (`docs/spec/physical-optimizer.md` R1) — experimental hook only;
   the hook is a single policy seam in the sweep's victim test, nothing more.
 - Prefetching — out of scope for this document (belongs to the scan/executor
   layer).

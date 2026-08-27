@@ -114,7 +114,7 @@ public:
         std::uint32_t core_count = 1;
 
         // This core's share of the instance frame budget
-        // (`buffer_pool_frames`, docs/spec/spec-eviction.md §6: the key is a
+        // (`buffer_pool_frames`, docs/spec/eviction.md §6: the key is a
         // total, divided evenly per core - EV4). 0 = unbounded, the same
         // meaning SetFrameBudget gives it. Core 0's share - the even part
         // plus the division remainder - is applied by Expeditor::Open at

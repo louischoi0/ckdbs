@@ -258,7 +258,7 @@ SysTableRow SampleTableRow() {
     return row;
 }
 
-// ---- sys.indexes (docs/spec/feat-index.md §12, workplan IX03) ---------------
+// ---- sys.indexes (docs/spec/index.md §12, workplan IX03) ---------------
 
 SysIndexRow SampleIndexRow() {
     SysIndexRow row{};

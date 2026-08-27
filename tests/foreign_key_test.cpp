@@ -15,7 +15,7 @@
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
 
-// **FK-M1: the catalog and the DDL surface** (docs/spec/impl-foreign-keys.md §1).
+// **FK-M1: the catalog and the DDL surface** (docs/spec/foreign-keys.md §1).
 //
 // What this milestone owes, and therefore what this file proves in three
 // groups: a foreign key is **declarable**, **introspectable**, and
@@ -46,7 +46,7 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
-// ---- The row (docs/spec/impl-foreign-keys.md §1) -------------------------------
+// ---- The row (docs/spec/foreign-keys.md §1) -------------------------------
 
 TEST(SysFkeyRow, RoundTripsThroughItsCodec) {
     catalog::SysFkeyRow row{};
@@ -104,7 +104,7 @@ TEST_F(ForeignKeyTest, ReferencesDeclaresAForeignKey) {
     EXPECT_EQ(fk.child_rel_oid, trades.value());
     EXPECT_EQ(fk.parent_rel_oid, accounts.value());
     EXPECT_EQ(fk.child_column_no, 1u);
-    // account_id is NOT NULL by default (spec-null.md D1), so the
+    // account_id is NOT NULL by default (null.md D1), so the
     // declaration stamps no kFkNullable.
     EXPECT_EQ(fk.flags, 0u);
     EXPECT_NE(fk.fk_id, 0u);
@@ -620,7 +620,7 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
     EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1"), "DELETED 1");
 }
 
-// ---- NULL fk values: MATCH SIMPLE, both directions (spec-null.md §4) ------
+// ---- NULL fk values: MATCH SIMPLE, both directions (null.md §4) ------
 
 // A NULL child key satisfies the constraint vacuously: the insert probes no
 // parent, and the stored NULL never blocks the parent side of anything.

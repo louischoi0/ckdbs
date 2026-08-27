@@ -79,7 +79,7 @@ enum class AccessKind : std::uint8_t {
     // the relation's primary key. Emitted since the BETWEEN half of V08.
     kRange,
     // An equality against a literal on a non-pk column that carries a
-    // **Cabin** (docs/spec/feat-cabin.md): a probe of the Cabin's observed set,
+    // **Cabin** (docs/spec/cabin.md): a probe of the Cabin's observed set,
     // falling back to the walk below when the value has not been observed.
     //
     // The third trust class, and the only kind here that is neither a pk
@@ -96,7 +96,7 @@ enum class AccessKind : std::uint8_t {
     // branch taken inside this kind, never the kind itself.
     kCabinProbe,
     // An equality on a **prefix of a secondary index's key**
-    // (docs/spec/feat-index.md §8): descend the index, walk its entries while the
+    // (docs/spec/index.md §8): descend the index, walk its entries while the
     // prefix matches, resolve each pk through the clustered tree.
     //
     // The second entry in the first trust class: an index is authoritative
@@ -207,7 +207,7 @@ struct CabinProbe {
     // Unused when `key_from` below is set.
     parser::AstValue value;
 
-    // The correlated form (docs/spec/feat-cabin.md §4a): the probed value is an
+    // The correlated form (docs/spec/cabin.md §4a): the probed value is an
     // *earlier step's* or an enclosing chain's column - a join key - read
     // from the frame per outer row. The outer row is fixed for the whole
     // of this step's execution, so the value is stable exactly as long as
@@ -226,7 +226,7 @@ struct CabinProbe {
     // evidence that waiting exists to gather, so asking traffic to prove it
     // again asks a question that was answered.
     //
-    // **Only for the literal shape** (feat-cabin.md §4a, amended CB14). The
+    // **Only for the literal shape** (cabin.md §4a, amended CB14). The
     // argument above is about a value the operator *named*; the correlated
     // form above probes a value per outer row that nobody named, so it takes
     // `n = 2` whatever this says. `key_from.has_value()` is the test, and
@@ -250,7 +250,7 @@ struct CabinProbe {
 // `Step::residual`, so downgrading the step to a plain kScan still cannot
 // change the result. Here that property carries the whole trust argument -
 // an index's entry set for a key is a *superset* of the qualifying visible
-// pks (docs/spec/feat-index.md §1), and the surplus is subtracted by re-checking
+// pks (docs/spec/index.md §1), and the surplus is subtracted by re-checking
 // the predicate against the resolved version. That re-check is not extra
 // code; it is the residual the compiler already attached.
 struct IndexProbe {
@@ -258,7 +258,7 @@ struct IndexProbe {
 
     // The tree. Copied off the cached `TableAccess::IndexRef`, which is the
     // one field on that struct a split can move - and it is republished in
-    // place rather than by invalidation (feat-index.md §12a), so a chain
+    // place rather than by invalidation (index.md §12a), so a chain
     // compiled before a split still names a page that is *a* page of the
     // tree. IX11 re-reads it from the catalog rather than trusting this
     // across a write.
@@ -276,7 +276,7 @@ struct IndexProbe {
     // `key_width + 8` bytes.
     //
     // **Encoded here, at compile time.** Coercion is a compile-time act
-    // (docs/spec/spec-types.md §3.1) and so is the encoding that follows it, so
+    // (docs/spec/types.md §3.1) and so is the encoding that follows it, so
     // no per-row key building happens on the read path. `low` pads the
     // unpinned tail with 0x00 and `high` with 0xFF, which are the true
     // bounds because a key column's leading discriminator byte is 1 for
@@ -289,7 +289,7 @@ struct IndexProbe {
     std::vector<std::uint16_t> key_cols;
     std::vector<std::uint16_t> covered_cols;
 
-    // The correlated form (docs/spec/feat-index.md §8a): the leading key
+    // The correlated form (docs/spec/index.md §8a): the leading key
     // column's value comes from an *earlier step's row* - a join key - so
     // it cannot be encoded at compile time. When set, `eq_prefix == 1`,
     // `ranged == false`, and `low`/`high` above are pure padding templates
@@ -302,7 +302,7 @@ struct IndexProbe {
     std::optional<ColumnRef> key_from;
 };
 
-// The walked-join annotation (docs/spec/spec-join-inner-build.md §5, workplan
+// The walked-join annotation (docs/spec/join-inner-build.md §5, workplan
 // JB1): the statement-local inner build's compile half.
 //
 // **An annotation on a kScan, never a kind.** Set when every structure arm
@@ -586,7 +586,7 @@ enum class StatementClass : std::uint8_t {
 // silently changing what stored rows mean.
 std::uint8_t StoredStatementClass(StatementClass klass) noexcept;
 
-// ---- Aggregation (docs/spec/feat-aggregate.md §4) -----------------------------
+// ---- Aggregation (docs/spec/aggregate.md §4) -----------------------------
 //
 // **A property of the chain, never a step in it.** AG1 puts the fold
 // outside the executor: the dispatcher wraps its row sink, and the steps
@@ -625,7 +625,7 @@ struct AggregateItem {
     std::uint32_t type_val = 0;
 
     // A `DECIMAL` column's scale, resolved at compile for the same reason
-    // `type_val` is (spec-types.md §3.2). `SUM` folds unscaled int64 and
+    // `type_val` is (types.md §3.2). `SUM` folds unscaled int64 and
     // the answer's scale is the column's, so `Finish` needs the number and
     // must not have to ask the catalog for it - the fold sits outside the
     // executor and has no catalog to ask. Zero for every other type.
@@ -693,7 +693,7 @@ struct StepChain {
     // The catalog `type_val` of each projected column, in the same order,
     // resolved at compile for the same reason `column_names` is: the
     // emission boundary renders a `DATE` as a date rather than an epoch
-    // day (docs/spec/spec-types.md §3.3), and asking the catalog for the type
+    // day (docs/spec/types.md §3.3), and asking the catalog for the type
     // once per column per *row* is exactly the per-row cost decode was
     // kept free of. Empty for `SELECT *`, which renders from the schema
     // the dispatcher already resolves. Never read on an execute path.

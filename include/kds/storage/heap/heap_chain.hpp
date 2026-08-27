@@ -157,7 +157,7 @@ struct ChainAppendBatchResult {
     std::vector<BatchTouchedPage> pages;   // in chain order
 };
 
-// T3's sorted fill (spec-bulkinsert.md §8, docs/inflight/in-progress/workplan-t3.md): places
+// T3's sorted fill (bulkinsert.md §8, docs/inflight/in-progress/workplan-t3.md): places
 // `payloads` - whose Keystone ids must be exactly first_id, first_id+1, …
 // in order, engine-issued from AllocateRowIdRange - into the chain with
 // one page fetch per *page* instead of per row. The tail fills first
@@ -197,7 +197,7 @@ StatusOr<ChainAppendBatchResult> ChainAppendBatch(
 // overwrites or delete-marks, and passing kRead from one of those loses
 // the write.
 // `fetcher`, when given and `access` is kRead, routes the page fetches
-// through it - ring mode for a bulk scan (docs/spec/spec-eviction.md §5,
+// through it - ring mode for a bulk scan (docs/spec/eviction.md §5,
 // workplan EVT06), so the walk reuses a few frames cyclically instead of
 // flooding the pool. Null is the ordinary path, byte-identical to before
 // the parameter existed. Ignored for a write walk: the ring never

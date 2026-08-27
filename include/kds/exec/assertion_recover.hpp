@@ -22,7 +22,7 @@
 // recycling the segment holding that `ASSERT_BUILD`, and `wal.md` §13 lists
 // retention as ordinary operational configuration. A retention setting that
 // silently becomes a correctness setting is the wrong coupling to ship
-// (`feat-assertion.md` §7).
+// (`assertion.md` §7).
 //
 // The anchor already names the last checkpoint, so this scans from
 // `checkpoint_lsn` - a **narrower** range than redo's, and one where the first

@@ -1,4 +1,4 @@
-# T3 — the sorted heap fill (spec-bulkinsert.md §8, v1)
+# T3 — the sorted heap fill (bulkinsert.md §8, v1)
 
 Decisions T3-1..T3-6 resolve §8's prerequisites for a v1 that violates no
 standing rule; tasks TS01-TS04. **v1 is a heap sorted fill inside the T1

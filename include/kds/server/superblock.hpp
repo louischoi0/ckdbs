@@ -70,7 +70,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // sys.pattern_defs: the file would mount and then fail on the first access
 // the statistics path tried to record, naming a table that every build
 // after this one creates at bootstrap.
-// 7 -> 8: bootstrap gained `sys.cabins` (docs/spec/feat-cabin.md §10) on a fixed
+// 7 -> 8: bootstrap gained `sys.cabins` (docs/spec/cabin.md §10) on a fixed
 // page id a pre-existing file does not have - the third repeat of the
 // 5 -> 6 shape. Worth stating once for all three: a *new bootstrap
 // relation* is as breaking as a row layout change and less obvious about
@@ -94,7 +94,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // recovery under a changed core count is [OPEN] (wal.md section 3): a
 // database whose streams were written by N cores must not be mounted by M
 // until something decides what happens to the other streams.
-// 10 -> 11: bootstrap gained `sys.fkeys` (docs/spec/impl-foreign-keys.md §1) on a
+// 10 -> 11: bootstrap gained `sys.fkeys` (docs/spec/foreign-keys.md §1) on a
 // fixed page id a pre-existing file does not have - the fourth repeat of the
 // 5 -> 6 shape, and the one where mounting anyway would be worst. A
 // version-10 file has no page 13, so `CREATE TABLE ... REFERENCES` would
@@ -102,7 +102,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // lands - every write path would read an empty foreign-key list and enforce
 // nothing. A constraint that silently does not run is not a degraded mode.
 // 11 -> 12: `SysIndexRow` was rewritten for multi-column and covering
-// indexes (docs/spec/feat-index.md §12, workplan IX03) - a root page, a name, and
+// indexes (docs/spec/index.md §12, workplan IX03) - a root page, a name, and
 // two column arrays where there had been one `col_pos`.
 //
 // **The reason here is not the reason the four bumps above had, and the
@@ -118,7 +118,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 //
 // The price is the usual one and is not reduced by any of that: every
 // pre-existing data file stops mounting.
-// 12 -> 13: bootstrap gained `sys.assertions` (docs/spec/feat-assertion.md §8.2,
+// 12 -> 13: bootstrap gained `sys.assertions` (docs/spec/assertion.md §8.2,
 // workplan AST03) on fixed page 14 - the **fifth repeat of the 5 -> 6
 // shape**, and it carries a second break the four before it did not.
 //

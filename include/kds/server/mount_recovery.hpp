@@ -126,7 +126,7 @@ struct MountRecovery {
     std::uint32_t relations_missing_pages = 0;
 
     // Delete-marked catalog rows a previous mount left behind, retired
-    // before the listener bound (DT10, `spec-ddl-transactional.md` §5c).
+    // before the listener bound (DT10, `ddl-transactional.md` §5c).
     // Non-zero says this mount followed a crash or a shutdown that left a
     // transactional DROP's rows half-resolved; zero is the ordinary case
     // and the one a clean shutdown always produces.
@@ -183,7 +183,7 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
 // The other half - rows whose relation the catalog lost - **cannot be computed
 // at all**: resolving a page to its relation needs a page->relation index,
 // `page.md` has none, and its absence is already the named blocker on page reuse
-// (`docs/spec/feat-physical-optimizer.md` §6 gate 3). Building the set instead means
+// (`docs/spec/physical-optimizer.md` §6 gate 3). Building the set instead means
 // walking every page of every relation at every mount. So `SHOW META` reports
 // this number and states the other case in words; RC09's task entry carries the
 // full argument.
@@ -195,7 +195,7 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 
 // Assertion enforcement, resumed (RC07's mount wiring, AS6a).
 //
-// `feat-assertion.md` §7 promises enforcement "immediately at restart - no
+// `assertion.md` §7 promises enforcement "immediately at restart - no
 // rebuild scan, no enforcement gap", and until this ran the engine contradicted
 // it: `SHOW ASSERTIONS` reported `enforcing=0` for every surviving assertion,
 // honestly, because the registry is memory-resident and nothing refilled it.

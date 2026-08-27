@@ -139,7 +139,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     os << Indent(depth) << "step " << step.step_id << ' ' << AccessKindName(step.kind) << ' '
        << (step.rel_name.empty() ? "oid=" + std::to_string(step.rel_oid) : step.rel_name);
     if (step.key.has_value()) os << " key=" << FormatOperand(*step.key);
-    // A correlated index probe's key source (docs/spec/feat-index.md §8a),
+    // A correlated index probe's key source (docs/spec/index.md §8a),
     // rendered from the probe's own field - the executor's single
     // authority; nothing is mirrored into `Step::key` for it.
     if (step.index.has_value() && step.index->key_from.has_value()) {
@@ -150,7 +150,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     }
     if (step.cabin.has_value()) {
         os << " cabin=" << step.cabin->cabin_id << " on=col" << step.cabin->col_pos;
-        // A correlated probe (feat-cabin.md §4a) is keyed per outer row;
+        // A correlated probe (cabin.md §4a) is keyed per outer row;
         // printing the default-constructed `value` for it would show a
         // key the probe never uses.
         if (step.cabin->key_from.has_value()) {
@@ -163,7 +163,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         // probe is one the engine may drop on its own judgement.
         if (step.cabin->managed) os << " cabin_optimizer=true";
     }
-    // The walked join's build annotation (docs/spec/spec-join-inner-build.md,
+    // The walked join's build annotation (docs/spec/join-inner-build.md,
     // workplan JB7), rendered in the Cabin line's own vocabulary because
     // it names the same two things: the own column the map is keyed on,
     // and the outer column each key is read from. **Visible before
@@ -419,7 +419,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.rows_examined > 0) {
             os << " sel=" << (counters.rows_matched * 100 / counters.rows_examined) << '%';
         }
-        // The physical optimizer's S2 currency (feat-physical-optimizer.md
+        // The physical optimizer's S2 currency (physical-optimizer.md
         // §II.2): pages this step read - exact for walks, one per keyed
         // access. Printed whenever the step examined anything, because
         // "how many pages did that cost" is the number the cost-benefit
@@ -438,7 +438,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.trail_replays > 0) os << " replays=" << counters.trail_replays;
         if (counters.trail_misses > 0) os << " trail_misses=" << counters.trail_misses;
         if (counters.range_pages_pruned > 0) os << " range_stopped_early=1";
-        // Cabin (docs/spec/feat-cabin.md §7). A hit means the step served an
+        // Cabin (docs/spec/cabin.md §7). A hit means the step served an
         // observed value's entry set **authoritatively** and did not walk;
         // the entries/hint pair below says how much of that was the C6
         // location advice and how much needed a pk resolution.
@@ -454,7 +454,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.cabin_hint_misses > 0) os << " hint_misses=" << counters.cabin_hint_misses;
         if (counters.cabin_recordings > 0) os << " cabin_recorded=" << counters.cabin_recordings;
 
-        // The index's three numbers (docs/spec/feat-index.md §7). The gap between
+        // The index's three numbers (docs/spec/index.md §7). The gap between
         // `index_scanned` and `index_resolved` is what the layer saved, and
         // `index_filtered` is the part of that gap a COVERING clause bought -
         // the only honest price for one, since a covered column saves a
@@ -469,7 +469,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
             os << " index_resolved=" << counters.index_rows_resolved;
         }
 
-        // The statement-local inner build (spec-join-inner-build.md §4's
+        // The statement-local inner build (join-inner-build.md §4's
         // honesty clause). Printed for **every annotated step, including
         // `inner_built=0`**: a step carrying the annotation that did not
         // publish paid per-row walks for the statement, and that is

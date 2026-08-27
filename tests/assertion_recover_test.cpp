@@ -459,7 +459,7 @@ TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
         << "a recovered cabin must satisfy the check the spec calls the proof";
 }
 
-// The AS6b decision of 2026-08-12 (`docs/spec/feat-assertion.md` §7), and the case
+// The AS6b decision of 2026-08-12 (`docs/spec/assertion.md` §7), and the case
 // no fold can reach: the abort happens **before** the checkpoint, so its
 // ASSERT_ROLLBACK is not in the scan's range and the page walk is the only
 // thing that sees the entry. Before `kEntryOrphaned` the walk could not tell it

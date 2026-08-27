@@ -91,7 +91,7 @@ TEST(DevicePageStoreTest, CreateAtThenGetReturnsTheSamePage) {
 }
 
 TEST(DevicePageStoreTest, StampPageLsnStampsTheOwningStream) {
-    // PW1c-3 (spec-page-lsn-cross-stream.md §9 rule 4): every logged
+    // PW1c-3 (page-lsn-cross-stream.md §9 rule 4): every logged
     // mutation funnels through StampPageLsn, so the stream stamp rides the
     // LSN stamp - core_id + 1, and this store's default identity is core 0.
     auto device = MakeDevice();

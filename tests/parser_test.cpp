@@ -342,7 +342,7 @@ TEST(ParserTest, StatementTypeNameMatchesVariant) {
     EXPECT_STREQ(StatementTypeName(Parse("CREATE TABLE t (a int64)").value()), "CREATE TABLE");
 }
 
-// ---- Nullability (docs/spec/spec-null.md §2.3, D1) ------------------------------
+// ---- Nullability (docs/spec/null.md §2.3, D1) ------------------------------
 
 TEST(ParserTest, AColumnIsNotNullUnlessDeclaredNull) {
     auto stmt = Parse("CREATE TABLE t (id int64, a int64 NULL, b int64 NOT NULL, c varchar)");

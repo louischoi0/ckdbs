@@ -986,7 +986,7 @@ statement shipping, and the fdatasync-overlap flag are sound.
    1's pages carry stream 1's stamp; at `cores = 1` core 0 can neither claim
    nor write them, and the reverse (created at 2, mounted at 4: class 2
    stamped by core 0, mapped to core 2) fails the same way. A changed core
-   count is `[OPEN]` (`docs/spec/wal.md:46`, `spec-page-lsn-cross-stream.md`
+   count is `[OPEN]` (`docs/spec/wal.md:46`, `page-lsn-cross-stream.md`
    §9's table). Honest v1: persist the creating `cores` in each sub-anchor
    and refuse a mount at a different value, naming `wal.md` §3.
 
@@ -1071,7 +1071,7 @@ statement shipping, and the fdatasync-overlap flag are sound.
     heap default, the 639 `CREATE TABLE` sites in 59 test files keep their
     substrate, `default_key_mode` is already gone, and `emit_in_key_order`'s
     per-scan Keystone read now falls only on `kUnordered` relations. The
-    physical-optimizer Part I item (`feat-physical-optimizer.md` R8, §4:
+    physical-optimizer Part I item (`physical-optimizer.md` R8, §4:
     heap-only substrate) and Waystone's heap-case win
     (`waystone-concpets.md:9`: 26–34× on heap, 3–7% slower on btree) return
     only if the operator restates D1 as "`BTREE` default". Deletions now:

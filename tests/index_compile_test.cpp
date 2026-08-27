@@ -8,7 +8,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// `kIndexProbe` / `kIndexRange` in the compiler (docs/spec/feat-index.md §§8-9,
+// `kIndexProbe` / `kIndexRange` in the compiler (docs/spec/index.md §§8-9,
 // workplan IX10).
 //
 // The claims under test, in order of how badly getting them wrong would

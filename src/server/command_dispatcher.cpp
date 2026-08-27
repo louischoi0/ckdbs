@@ -141,7 +141,7 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // explicitly rather than by omission, so the two look alike where they
     // are read.
     {StatusCode::kFkViolation, "FK_VIOLATION retryable=0 "},
-    // The third constraint spelling (docs/spec/feat-assertion.md §4.4, AS9),
+    // The third constraint spelling (docs/spec/assertion.md §4.4, AS9),
     // shaped exactly like FK_VIOLATION and for its reason. Its spelling
     // landed before its producer did, because a client written against it
     // must not see the message arrive as a bare "ERR ..." in the meantime.
@@ -1069,7 +1069,7 @@ DispatchOutcome CommandDispatcher::HandleShowAccess() {
         os << " rel=";
         if (access.ok()) {
             // Unfiltered by design (DT3c): a diagnostic answers "what does
-            // this instance hold" - spec-ddl-transactional.md §5.
+            // this instance hold" - ddl-transactional.md §5.
             auto name = catalog_.ListTables();
             bool named = false;
             if (name.ok()) {
@@ -1125,7 +1125,7 @@ std::string PercentString(double fraction) {
 DispatchOutcome CommandDispatcher::HandleShowBudget() {
     // Unfiltered by design (DT3c): a diagnostic surface answers "what does
     // this instance hold", not "what may this statement touch" - see
-    // spec-ddl-transactional.md §5.
+    // ddl-transactional.md §5.
     auto tables = catalog_.ListTables();
     if (!tables.ok()) {
         return {"ERR " + tables.status().message(), false};
@@ -1482,7 +1482,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
            << " pk=" << (is_pk ? "yes" : "no")
            << " autoincrement=" << (is_pk ? "if-omitted" : "no");
 
-        // The declared cabin policy (docs/spec/feat-cabin.md), printed for every
+        // The declared cabin policy (docs/spec/cabin.md), printed for every
         // non-pk column. The *effective* value, so `auto` covers both "the
         // engine may decide" and "nothing was said" - the difference is
         // recorded on disk and matters only to whoever writes the promotion
@@ -1496,7 +1496,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
                                                                          : "auto");
 
             // What this column references, if anything
-            // (docs/spec/impl-foreign-keys.md §1). Read from the relation's own
+            // (docs/spec/foreign-keys.md §1). Read from the relation's own
             // outgoing list rather than by asking the catalog per column,
             // which is the same absence rule the cabin mask follows.
             if (access.ok()) {
@@ -1699,7 +1699,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // **The claim this may carry is core-0-scoped**, not "isolated"
             // outright: `IsInFlight` answers about one core's transactions,
             // and it is every writer's core only while CC3 refuses
-            // cross-core writes (`docs/spec/spec-ddl-transactional.md` §5a).
+            // cross-core writes (`docs/spec/ddl-transactional.md` §5a).
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
             auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -1905,7 +1905,7 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
         os << " rel=";
         bool named = false;
         // Unfiltered by design (DT3c): a diagnostic surface answers "what
-        // does this instance hold" - spec-ddl-transactional.md §5.
+        // does this instance hold" - ddl-transactional.md §5.
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& obj : tables.value()) {
                 if (obj.oid != row.table_oid) continue;
@@ -2191,7 +2191,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
-        // protected (feat-cabin.md - un-observing is always legal).
+        // protected (cabin.md - un-observing is always legal).
         if (cabins_ != nullptr) {
             for (const std::uint64_t cabin_id : dropped_cabins) cabins_->Forget(cabin_id);
         }
@@ -2352,7 +2352,7 @@ DispatchOutcome CommandDispatcher::BeginForeignAssertionBuild(const parser::Asse
     // nothing is burned: no id issued, no page written, the transaction as
     // it was. It is a divergence from the local arm, which takes this
     // statement inside a transaction and publishes at once (assertions are
-    // not transactional DDL, `docs/spec/spec-ddl-transactional.md` §5) - named
+    // not transactional DDL, `docs/spec/ddl-transactional.md` §5) - named
     // here rather than left to be found.
     if (session.in_explicit_txn()) {
         return {ErrorReply(Status::Unsupported(
@@ -2486,7 +2486,7 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
         os << " rel=";
         bool named = false;
         // Unfiltered by design (DT3c): a diagnostic surface answers "what
-        // does this instance hold" - spec-ddl-transactional.md §5.
+        // does this instance hold" - ddl-transactional.md §5.
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& obj : tables.value()) {
                 if (obj.oid != def.target_oid) continue;
@@ -2532,7 +2532,7 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
 }
 
 DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
-    // The physical optimizer's shadow report (docs/spec/feat-physical-optimizer.md
+    // The physical optimizer's shadow report (docs/spec/physical-optimizer.md
     // §5, workplan PX06). Read-only by construction: the bare form's planner
     // takes no PageStore, and the per-relation form's walk is a census
     // priced through the statement budget.
@@ -2647,7 +2647,7 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         os << " rel=";
         bool named = false;
         // Unfiltered by design (DT3c): a diagnostic surface answers "what
-        // does this instance hold" - spec-ddl-transactional.md §5.
+        // does this instance hold" - ddl-transactional.md §5.
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& obj : tables.value()) {
                 if (obj.oid != row.rel_oid) continue;
@@ -2774,7 +2774,7 @@ DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
     return {os.str(), false};
 }
 
-// ---- Foreign-key checks (docs/spec/impl-foreign-keys.md §§2-4) ----------------
+// ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) ----------------
 
 StatusOr<txn::ReadView> CommandDispatcher::CheckView(const WriteScope& scope) {
     // **Minted here, not taken from the statement.** A constraint check reads
@@ -2958,7 +2958,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
 
         // **Deliberately unfiltered, and this is a decision rather than an
-        // omission** (spec-ddl-transactional.md §6's second open item: what two
+        // omission** (ddl-transactional.md §6's second open item: what two
         // transactions creating the same name should do).
         //
         // Resolving this under the session's view would hide another
@@ -3028,7 +3028,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             row.notnull = col.notnull;  // D1: NOT NULL unless declared NULL
             row.cabin_policy = col.cabin_policy;
 
-            // ---- decimal(p, s) (docs/spec/spec-types.md TY2, TY9) ----------------
+            // ---- decimal(p, s) (docs/spec/types.md TY2, TY9) ----------------
             //
             // The pair replaces the type's default `len`, which for a decimal
             // was never read as a width - `RowLayout::ColumnWidth` gives every
@@ -3180,7 +3180,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             }
         }
 
-        // ---- `CABIN` on a column creates one now (docs/spec/feat-cabin.md) -------
+        // ---- `CABIN` on a column creates one now (docs/spec/cabin.md) -------
         //
         // The policy is enforced at exactly two moments, and this is the first:
         // an *enabled* column gets its Cabin as part of the CREATE TABLE that
@@ -3337,7 +3337,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     if (Status s = exec::LogSpills(wal_, page_store_, spills, txn_id, owner_oid); !s.ok()) return s;
 
     // The index entries this row is now reachable through, before the row
-    // itself (docs/spec/feat-index.md §12.1). Same direction as the var-heap
+    // itself (docs/spec/index.md §12.1). Same direction as the var-heap
     // above, reached from the opposite pointer: a dangling entry is dropped
     // by verification, a row with no entry is lost.
     if (Status s = LogIndexWrites(index_writes, txn_id); !s.ok()) return s;
@@ -3928,7 +3928,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
         return {ErrorReply(affinity), false};
     }
 
-    // ---- The bulk loop (docs/spec/spec-bulkinsert.md §2.3, §4) ---------------
+    // ---- The bulk loop (docs/spec/bulkinsert.md §2.3, §4) ---------------
     //
     // One write scope, one resolution, one affinity check - and then the
     // full single-row pipeline per row, in the same order (BI2). Admission
@@ -4190,7 +4190,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     }
     const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;
 
-    // ---- The forward check (docs/spec/impl-foreign-keys.md §2) ---------------
+    // ---- The forward check (docs/spec/foreign-keys.md §2) ---------------
     //
     // **Before the id is allocated**, which is a stronger form of §2's
     // "before the heap write": a refused row costs no undo work *and* no
@@ -4209,7 +4209,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         }
     }
 
-    // ---- The admission check (docs/spec/feat-assertion.md §6.2 step 2) -------
+    // ---- The admission check (docs/spec/assertion.md §6.2 step 2) -------
     //
     // Pure, and before the id for FK's reason: a refused row burns nothing.
     // The reservation (step 3) happens after placement, when the entry has
@@ -4277,7 +4277,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         return ErrorReply(placed.status());
     }
 
-    // ---- The Cabin witness (docs/spec/feat-cabin.md §5) ----------------------
+    // ---- The Cabin witness (docs/spec/cabin.md §5) ----------------------
     //
     // **Before the log, deliberately.** A WAL failure below reports an error
     // and leaves the tuple in the page - that is a stated, accepted gap
@@ -4290,7 +4290,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     NoteCabinWrite(ta, body, /*first_col_pos=*/1, row_id, placed.value().page_id,
                    placed.value().slot);
 
-    // ---- Index maintenance (docs/spec/feat-index.md §2) ----------------------
+    // ---- Index maintenance (docs/spec/index.md §2) ----------------------
     //
     // Beside the Cabin witness and before the log, for the same reason and a
     // stronger one: a Cabin that missed an append can be un-observed, and an
@@ -4317,7 +4317,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         return ErrorReply(s);
     }
 
-    // ---- The reservation (docs/spec/feat-assertion.md §6.2 step 3) -----------
+    // ---- The reservation (docs/spec/assertion.md §6.2 step 3) -----------
     //
     // The arrival entry, the group delta, the ASSERT_RESERVE record - after
     // placement so the entry carries the row's real location, before the
@@ -4671,7 +4671,7 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
     // catalog's back, so anything cached about them while the transaction
     // was open now describes rows that are gone.
     //
-    // The commit half is DT9's (`spec-ddl-transactional.md` §5b). The old
+    // The commit half is DT9's (`ddl-transactional.md` §5b). The old
     // comment here said "a commit leaves the rows in place, so what was
     // cached about them stays true", which was correct until an unfiltered
     // read started asking whether a mark's deleter is still in flight:
@@ -5020,7 +5020,7 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 }  // namespace
 
 // Executes `chain` with an `Aggregator` in place of the row formatter, and
-// emits the fold's output rows (docs/spec/feat-aggregate.md AG1, workplan AG06).
+// emits the fold's output rows (docs/spec/aggregate.md AG1, workplan AG06).
 //
 // `header` is the column-heading line the caller already built from
 // `chain.column_names` - which for an aggregated chain labels the *fold's*
@@ -5471,7 +5471,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // The optimizer's S1 widens this beyond Waystone's shape guard, and the
     // difference is the point: a *scan-only* statement is exactly the shape
     // whose decayed frequency the cabin optimizer's CREATE decision prices
-    // (feat-physical-optimizer.md §II.4's f_i), and it is the one shape
+    // (physical-optimizer.md §II.4's f_i), and it is the one shape
     // invariant 9 keeps Waystone away from. The trail and replay reads
     // below still guard on their own switches, so deriving the identity
     // here costs nothing they did not already pay.
@@ -5705,7 +5705,7 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
             // Unreachable: encode is the only gate (spec §7) and it already
             // accepted this row, so a literal that reaches here parses. If
             // that ever stops being true, un-observing is the right answer
-            // and always legal (feat-cabin.md §1) - a set that might have
+            // and always legal (cabin.md §1) - a set that might have
             // missed an append is not a superset, and serving it would lose
             // a row.
             if (auto stale = stats::MakeCabinKey(access.CabinOn(col).id, values[at]);
@@ -6038,7 +6038,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // when this relation has a Cabin - it is what tells the write hook
         // whether a key column actually moved (§5's third row). A relation
         // with no Cabin copies nothing.
-        // ...and what tells the index hook the same thing (feat-index.md §2).
+        // ...and what tells the index hook the same thing (index.md §2).
         // A relation with neither copies nothing.
         std::vector<parser::AstValue> previous;
         if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() ||
@@ -6161,7 +6161,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             return s;
         }
 
-        // ---- The Cabin witness, UPDATE half (docs/spec/feat-cabin.md §5) -----
+        // ---- The Cabin witness, UPDATE half (docs/spec/cabin.md §5) -----
         //
         // `row.value()` now holds the **new** values, so this appends the pk
         // to v′'s set for every cabined column. The old value's set is
@@ -6196,7 +6196,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // version - both for the same reason the var-heap has: a replay must
         // never reach a pointer that resolves to nothing, and a version no
         // index entry names is a row a probe cannot find
-        // (docs/spec/feat-index.md §12.1).
+        // (docs/spec/index.md §12.1).
         if (wal_ != nullptr && scope.txn != nullptr) {
             // The var-heap first, for the reason the comment above gives and
             // INSERT already obeyed: the cell in the tuple record below points
@@ -6517,7 +6517,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // 6), so the rows already written stay and the client must
         // ROLLBACK. That is the deviation from SQL savepoints would close.
         // An assertion violation poisons like any other write failure (the
-        // AS9 resolution, feat-assertion.md §4.4); the statement's
+        // AS9 resolution, assertion.md §4.4); the statement's
         // reservations stay pending and ROLLBACK's hook unwinds them with
         // everything else.
         if (!result.ok()) session.Poison();
@@ -6689,7 +6689,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             }
         }
 
-        // ---- The reverse check (docs/spec/impl-foreign-keys.md §3) ----------
+        // ---- The reverse check (docs/spec/foreign-keys.md §3) ----------
         //
         // RESTRICT: a row still referenced may not be deleted. Run per
         // qualifying row, since the id being deleted *is* the value every
@@ -6768,7 +6768,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         }
 
         // No Cabin write hook, and no index one either: removal is
-        // forbidden (feat-cabin.md section 5, feat-index.md IX2), because an
+        // forbidden (cabin.md section 5, index.md IX2), because an
         // older snapshot may still match this row through the undo chain.
         // The entry stays and the read-time check subtracts it - which is
         // the visibility predicate as well as the key re-check.

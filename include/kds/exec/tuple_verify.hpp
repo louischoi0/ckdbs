@@ -14,7 +14,7 @@
 // through the same code. A Waystone trail entry names `(page_id, slot)` for
 // a pk it recorded (`docs/spec/waystone-concpets.md` §2 rules 1-2); a Cabin entry
 // carries the same triple as an advisory *hint* on top of an authoritative
-// pk (`docs/spec/feat-cabin.md` C6, which requires the check to run "under the
+// pk (`docs/spec/cabin.md` C6, which requires the check to run "under the
 // same rules as waystone entries - shared validation code, not a parallel
 // implementation, two verifiers would be where the bugs live").
 //
@@ -31,7 +31,7 @@
 // could tell "the page went away" from "someone else's row is there" would
 // be tempted to trust the second.
 //
-// ---- The epoch check (docs/spec/feat-physical-optimizer.md R4, PX04) ----------
+// ---- The epoch check (docs/spec/physical-optimizer.md R4, PX04) ----------
 //
 // **The page epoch is checked here since 2026-08-09**, which is Waystone
 // spec §2's rule 2 made enforceable and the Cabin's `page_epoch` made a

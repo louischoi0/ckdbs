@@ -57,7 +57,7 @@ enum class StatusCode {
     // client on it. Failing after a bounded amount of work is the kinder
     // answer than a connection that never replies.
     kResourceExhausted,
-    // A write would leave a foreign key unsatisfied (docs/spec/impl-foreign-keys.md
+    // A write would leave a foreign key unsatisfied (docs/spec/foreign-keys.md
     // F2): a child row referencing a parent that is not there, or a parent
     // delete with a child still referencing it. RESTRICT, the only action v1
     // has.
@@ -73,7 +73,7 @@ enum class StatusCode {
     // compatibility surface (docs/spec/protocol.md §11) - one code wide.
     kFkViolation,
     // A write would take a declared assertion's group aggregate past its
-    // bound (docs/spec/feat-assertion.md §4.4, AS9): the admission check on the
+    // bound (docs/spec/assertion.md §4.4, AS9): the admission check on the
     // relation's home core refused the statement before anything was
     // mutated.
     //

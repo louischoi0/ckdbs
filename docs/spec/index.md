@@ -34,7 +34,7 @@ whole of the design:
 | Waystone trail | nothing — advisory always | nothing |
 
 An index is a Cabin that observed everything. That is not a metaphor: the
-invariant is `feat-cabin.md` §1's, verbatim, with the observation
+invariant is `cabin.md` §1's, verbatim, with the observation
 precondition struck out.
 
 > **IX1 — observed ⇒ complete becomes simply complete, superset form, per
@@ -68,7 +68,7 @@ both naming the same pk.
 - Either reader probing `v′`: symmetric.
 
 No entry has to be removed for any of those four to be right, which is the
-same reason `feat-cabin.md` §5 calls removal *incorrect* rather than merely
+same reason `cabin.md` §5 calls removal *incorrect* rather than merely
 unnecessary. An older snapshot may still match through the undo chain.
 
 ---
@@ -85,7 +85,7 @@ Two rules ride along, and both are load-bearing rather than tidy:
 - **An UPDATE that touches no key or covered column of an index must not
   append to it.** Otherwise the entry set grows by one per write forever:
   correct by IX1's superset rule, and useless. This is section 5's third row
-  in `feat-cabin.md`, which `CabinContractTest.AnUpdateThatDoesNotTouchThe
+  in `cabin.md`, which `CabinContractTest.AnUpdateThatDoesNotTouchThe
   KeyColumnAppendsNothing` already pins for the Cabin; the index gets the
   same test.
 - **Nothing reclaims.** A superseded entry costs memory, a page, and a
@@ -115,7 +115,7 @@ Cabin, and it is why v1 declines to also make it a constraint (IX11).
 An entry's payload is the pk. Resolving a pk costs one descent on a btree
 relation and a **chain scan** on a heap one — so an index over a heap
 relation would turn one full scan into N partial ones. This is the identical
-rule and the identical argument as `impl-foreign-keys.md` F1's refusal of a
+rule and the identical argument as `foreign-keys.md` F1's refusal of a
 heap parent.
 
 Three consequences, all of them simplifications, and the reason this
@@ -516,7 +516,7 @@ exactly the right question.
 The two kinds **execute identically** — both walk the entries between two
 encoded bounds — so the split is a statistics distinction, the same one
 `kFilterScan` draws against `kScan`. The bounds are encoded **at compile
-time**: coercion is a compile-time act (`spec-types.md` §3.1) and so is the
+time**: coercion is a compile-time act (`types.md` §3.1) and so is the
 encoding that follows it, so no per-row key building happens on the read path
 — except the correlated form (§8a), which prices its one per-row encode there.
 `low` pads its unpinned tail with `0x00` and `high` with `0xFF`, which are the
@@ -577,7 +577,7 @@ transactional), a reader holding an older snapshot must find its version
 through the new index. Every version of a logical tuple shares one pk, so the
 walk is bounded by the chain and the entries are the same shape. Omitting it
 would make an old-snapshot read silently return fewer rows — the failure
-`feat-cabin.md` §5 calls invisible without a baseline. A **delete-marked** row
+`cabin.md` §5 calls invisible without a baseline. A **delete-marked** row
 is walked like any other: gone for newer readers, still there for older ones,
 which is exactly the case the undo chain exists for.
 
@@ -609,7 +609,7 @@ build.
 > **IX11 — `UNIQUE` is refused.**
 
 Enforcing uniqueness makes the index a **constraint**, which needs the
-visibility question `impl-foreign-keys.md` §4 settled — latest state, never
+visibility question `foreign-keys.md` §4 settled — latest state, never
 walks undo, an in-flight writer of the same key is *busy* rather than a
 violation — and a second write-conflict path on the insert hook. v1 is a read
 accelerator that cannot fail a write for a reason of its own. `kIndexFlagUnique`
@@ -824,7 +824,7 @@ off is a catalog act: `DROP INDEX`.
 - **Descending, partial and expression indexes** (§11).
 - **Index maintenance cost as an input to `CABIN AUTO`.** A column with an
   index should presumably never earn a Cabin; that belongs with the promotion
-  policy in `feat-cabin.md` §8.1, which nothing consumes yet.
+  policy in `cabin.md` §8.1, which nothing consumes yet.
 - **Per-range local vs global indexes under range ownership** (added
   2026-08-24). `docs/spec/crosscore.md` §6a gates an indexed relation from
   splitting until this decides; reading on record there: local per range,

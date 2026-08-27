@@ -254,7 +254,7 @@ namespace {
 // column, which is the shape a secondary index serves locally and the
 // descriptor cannot ship. Each test reshapes only the step whose kind it
 // is about: the plan test makes the inner a kProbe, the downgrade tests
-// (docs/spec/feat-index.md §8a) a structure kind.
+// (docs/spec/index.md §8a) a structure kind.
 struct DowngradeFixture {
     catalog::Schema outer_schema;
     catalog::Schema inner_schema;

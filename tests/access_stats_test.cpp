@@ -134,7 +134,7 @@ TEST_F(AccessStatsTest, EveryAccessKindIsRecordedTheSameWay) {
     EXPECT_TRUE(Shape(exec::AccessKind::kScan, "b", 0).has_value());
 }
 
-// ---- Secondary indexes (docs/spec/feat-index.md §8, workplan IX16) -----------
+// ---- Secondary indexes (docs/spec/index.md §8, workplan IX16) -----------
 
 TEST_F(AccessStatsTest, AnIndexAccessIsRecordedByTheSameCallAsEveryOther) {
     // IX16's whole claim: the two new kinds needed no recording code, because

@@ -183,7 +183,7 @@ TEST(RowCodecKeystoneTest, ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth) {
 // sides and answered false whenever either parse failed, so every
 // comparison with an ordinary uint64 operand was a non-match.
 //
-// Found while building MIN/MAX over uint64 (docs/spec/feat-aggregate.md §3.3),
+// Found while building MIN/MAX over uint64 (docs/spec/aggregate.md §3.3),
 // which could not descend below INT64_MAX - but the bug was never about
 // aggregation: `WHERE big = 5` returned no rows.
 
@@ -410,7 +410,7 @@ TEST(RowCodecTypesTest, ADecimalWithTheWrongScaleIsRefusedRatherThanRescaled) {
     EXPECT_NE(s.message().find("rescale"), std::string::npos) << s.message();
 }
 
-// ---- NULL round trips (docs/spec/spec-null.md §2, §3, §6) -----------------------
+// ---- NULL round trips (docs/spec/null.md §2, §3, §6) -----------------------
 
 catalog::SysColumnRow NullableCol(std::uint32_t pos, std::string_view name,
                                   std::uint32_t type_val, std::uint32_t len = 0) {

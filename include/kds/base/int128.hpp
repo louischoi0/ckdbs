@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-// The 128-bit integer the wide decimal rides on (docs/spec/spec-types.md TY2:
+// The 128-bit integer the wide decimal rides on (docs/spec/types.md TY2:
 // `p > 18` is a separate 16-byte type, never a widening of the 8-byte one).
 //
 // `__int128` is a GCC/Clang builtin rather than standard C++, and that is a

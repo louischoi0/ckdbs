@@ -1,6 +1,6 @@
 # Bulk ingestion — workplan
 
-Tasks `BLK01`-`BLK08` for `docs/spec/spec-bulkinsert.md` (BI1-BI14). **T1 is
+Tasks `BLK01`-`BLK08` for `docs/spec/bulkinsert.md` (BI1-BI14). **T1 is
 built (BLK01-BLK05, 2026-08-10); T2 is gated** on a substrate the engine
 does not have, and the gate is named rather than worked around.
 

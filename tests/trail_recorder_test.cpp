@@ -90,7 +90,7 @@ TEST_F(TrailRecorderTest, AnObservedInstanceRecordsOnItsSecondExecution) {
 
 TEST_F(TrailRecorderTest, ADeclaredPatternRecordsOnItsFirstExecution) {
     // A declaration *is* the evidence n=2 waits for
-    // (spec-create-pattern-user-defined-patterns-v1.md section 7), so
+    // (create-pattern-user-defined-patterns-v1.md section 7), so
     // making an operator prove it again with traffic asks a question they
     // already answered.
     ASSERT_EQ(Run("CREATE PATTERN p($id int64) OF SELECT * FROM t WHERE id = $id").substr(0, 7),

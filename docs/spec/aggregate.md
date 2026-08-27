@@ -6,7 +6,7 @@ item's "do not implement either path" is lifted by this document and only by it.
 Companion tasks: `docs/workplan-aggregate.md`. Markers: `[CONFIRMED]`,
 `[PROPOSED]`, `[OPEN]`. Consistent with `docs/spec/parser-v2.md` (J-series, step
 chains), `docs/rules/rules.md`, `docs/spec/waystone-concpets.md` (trail model),
-`docs/spec/feat-cabin.md`, `docs/spec/crosscore.md` (CC-series), `docs/spec/txn.md`.
+`docs/spec/cabin.md`, `docs/spec/crosscore.md` (CC-series), `docs/spec/txn.md`.
 
 ## 0. Decision Record `[CONFIRMED 2026-08-06]`
 
@@ -261,7 +261,7 @@ like `durability`.
   tuple onward. `HasReplayableStep` unmoved.
 - **Cabin**: a `kCabinProbe` step under a fold serves exactly as under a
   stream; the residual re-check the fold's rows passed through is the same
-  one §4 of `feat-cabin.md` requires.
+  one §4 of `cabin.md` requires.
 - **Patterns**: `CREATE PATTERN … OF SELECT COUNT(*) …` is legal; the body
   compiles and fingerprints as any body does.
 - **Class / access stats**: AG14 — unchanged; `RecordChainAccess` sees the

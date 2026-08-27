@@ -169,7 +169,7 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
     return coro.result();
 }
 
-// ---- The resumable walk (docs/spec/spec-join-inner-build.md §6, JB6) ---------
+// ---- The resumable walk (docs/spec/join-inner-build.md §6, JB6) ---------
 //
 // A stopping sub-chain's walk is cut short by its own sink, so the map it
 // filled covers a *prefix* of the relation. Making that partiality safe
@@ -658,7 +658,7 @@ private:
         co_return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
     }
 
-    // ---- Cabin (docs/spec/feat-cabin.md §4) -----------------------------------
+    // ---- Cabin (docs/spec/cabin.md §4) -----------------------------------
     //
     // A non-pk equality on a cabined column: probe the Cabin's observed set,
     // and fall back to the walk when the value has not been observed.
@@ -677,7 +677,7 @@ private:
     // time literal, the residual is the whole predicate, and downgrading
     // this step to a plain kScan returns the same rows in the same order.
     // The value a cabin step probes for: the literal, or the correlated
-    // form's frame value (feat-cabin.md §4a). Re-read rather than threaded
+    // form's frame value (cabin.md §4a). Re-read rather than threaded
     // through the call chain - the outer row is fixed for this step's
     // whole execution, so every call within it resolves to the same value,
     // and the stability argument lives here once instead of alongside
@@ -764,7 +764,7 @@ private:
         }
 
         // **A set may only be banked from a view nothing can later
-        // contradict** (feat-cabin.md §6a, which carries the argument and
+        // contradict** (cabin.md §6a, which carries the argument and
         // the assumption it rests on). The set outlives this statement and
         // is authoritative for every later reader, so two things forbid
         // recording: an **in-flight** transaction, whose write this walk
@@ -861,7 +861,7 @@ private:
                  ((step.filter_columns >> step.build->col_pos) & 1) != 0));
     }
 
-    // The walked join's lazy build (docs/spec/spec-join-inner-build.md §2,
+    // The walked join's lazy build (docs/spec/join-inner-build.md §2,
     // workplan JB3): the annotated step's first walk runs exactly as
     // written and buckets, as a side effect, every row passing the step's
     // non-correlated residual - including rows failing the current outer
@@ -916,7 +916,7 @@ private:
         co_return walked;
     }
 
-    // The stopping sub-chain's prefix map (docs/spec/spec-join-inner-build.md
+    // The stopping sub-chain's prefix map (docs/spec/join-inner-build.md
     // §6, workplan JB6). An `EXISTS`-class sub-chain's walk is cut by its
     // own sink at the first qualifying row, so the map it filled covers a
     // *prefix* of the relation. This does not complete the map - it makes
@@ -1107,7 +1107,7 @@ private:
         co_return Status::OK();
     }
 
-    // A secondary-index probe or range (docs/spec/feat-index.md §§1, 7).
+    // A secondary-index probe or range (docs/spec/index.md §§1, 7).
     //
     // **Two phases, as ServeFromCabin is, and for a related reason.** Phase 1
     // walks the index between the bounds the compiler encoded and collects
@@ -1140,7 +1140,7 @@ private:
         const IndexProbe& probe = *step.index;
 
         // The **live** root, not the one compiled in: a split republishes it
-        // in place on the cached entry (feat-index.md §12a), and a chain
+        // in place on the cached entry (index.md §12a), and a chain
         // compiled before a write may name a page that is no longer the top
         // of the tree.
         const catalog::TableAccess::IndexRef* ix = nullptr;
@@ -1162,7 +1162,7 @@ private:
             co_return co_await RunWalkStep(steps, index, step, access);
         }
 
-        // The correlated form (feat-index.md §8a): the bounds are built
+        // The correlated form (index.md §8a): the bounds are built
         // here, per outer row - the padding templates copied, the frame
         // value encoded once into the leading width. Every decline takes
         // the walk, per this function's opening rule.
@@ -1291,7 +1291,7 @@ private:
         // and refill the very buffer the outer loop was walking, so the
         // outer step resolved the *inner* step's pks and the reply silently
         // lost rows - an accelerator changing a query result, which
-        // feat-index.md §1 forbids outright.
+        // index.md §1 forbids outright.
         //
         // The buffer is handed back after the loop, so the single-index-step
         // chain - the common one - still reuses one allocation across rows,
@@ -1655,7 +1655,7 @@ private:
 
             // The walk's page count, exact by construction: the chain hands
             // the visitor one page's slots consecutively, so a transition
-            // is a fetch (feat-physical-optimizer.md §II.2 S2).
+            // is a fetch (physical-optimizer.md §II.2 S2).
             if (page_id != walk_last_page) {
                 ++stats_.For(step.step_id).pages_fetched;
                 walk_last_page = page_id;
@@ -1946,7 +1946,7 @@ private:
         // The page's relayout epoch at the moment of access, captured under
         // the span because the trail record below runs after its release -
         // recorded so replay's rule 2 has something real to compare
-        // (docs/spec/feat-physical-optimizer.md R4, PX04). One u64 load per
+        // (docs/spec/physical-optimizer.md R4, PX04). One u64 load per
         // accepted tuple.
         std::uint64_t observed_epoch = 0;
         {
@@ -2060,7 +2060,7 @@ private:
         StepStats& step_stats = stats_.For(step.step_id);
         ++step_stats.rows_examined;
 
-        // ---- Cabin recording (docs/spec/feat-cabin.md §4's miss path) ---------
+        // ---- Cabin recording (docs/spec/cabin.md §4's miss path) ---------
         //
         // **Before the residual, and that is the whole subtlety.** The set
         // being recorded is the set of rows whose *key column* equals the
@@ -2159,7 +2159,7 @@ private:
             // made *before* the cap is consulted, so an unkeyable row - a
             // NULL keys nothing, no equality matches it (MakeValueKey's
             // contract) - neither consumes a slot nor trips a cap it
-            // never pressed. Real since spec-null.md landed (NU1-NU8,
+            // never pressed. Real since null.md landed (NU1-NU8,
             // 2026-08-20); the contract suite's NULL case pins it.
             if (!building_->over_cap) {
                 if (auto key = stats::MakeValueKey(slots[building_->col_pos]);
@@ -2364,7 +2364,7 @@ private:
     PageId memo_page_ = kInvalidPageId;
     std::uint16_t memo_slot_ = 0;
 
-    // ---- Cabin (docs/spec/feat-cabin.md) --------------------------------------
+    // ---- Cabin (docs/spec/cabin.md) --------------------------------------
     //
     // The core-local observed sets, or null when no Cabin is configured.
     // Shared with every sub-chain for the reason the collector and the

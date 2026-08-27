@@ -85,7 +85,7 @@ ok	a2266ff85c0a8df6	184a15bf54848454	INSERT INTO t VALUES (-5)
 ok	a2266ff85c0a8df6	67b70b73c6120ee9	INSERT INTO t VALUES (18446744073709551615)
 ok	a2266ff85c0a8df6	7a677b8bea1e608e	INSERT INTO t VALUES ('it is fine')
 ok	a2266ff85c0a8df6	b5d414774c8002cc	insert into t values (1);
-# [BLK] Multi-row VALUES (docs/spec/spec-bulkinsert.md BI5): row count is not
+# [BLK] Multi-row VALUES (docs/spec/bulkinsert.md BI5): row count is not
 # part of the template, so the N-row statement carries the 1-row
 # statement's pattern_id - the same hash as the lines above - and later
 # rows' values fold into arg_hash only. Every pre-existing hash this
@@ -221,7 +221,7 @@ InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 O
 # An ordinal stays refused, and for a reason DESC never had: it names a
 # select-list position, which is a second spelling of a thing that already
 # has one. An aggregated statement's tail also stays refused, which is what
-# keeps feat-aggregate.md section 10's decision open.
+# keeps aggregate.md section 10's decision open.
 ok	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
 ok	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
 ok	cfd92d5cf2657bf9	183288bf5470b5dc	SELECT * FROM t LIMIT 20
@@ -237,7 +237,7 @@ Unsupported	da3c546ef95221a8	b5d416774c800632	SELECT * FROM t WHERE id IN (SELEC
 InvalidArgument	cfd92d5cf2657bf9	184a11bf54847d88	SELECT * FROM t LIMIT -1
 InvalidArgument	cfd92d5cf2657bf9	064a8a899bed480c	SELECT * FROM t LIMIT 1.5
 InvalidArgument	7a69afcc608c62f9	935e8a7428e56318	SELECT * FROM t OFFSET 5 LIMIT 10
-# [AG01] Aggregates. I14 is resolved by docs/spec/feat-aggregate.md, so this
+# [AG01] Aggregates. I14 is resolved by docs/spec/aggregate.md, so this
 # parses now — and the hash did not move, which is the whole of §2's
 # fingerprint argument: nothing was reserved and no token type was added,
 # so `count` lexes as the identifier it always was.
@@ -249,7 +249,7 @@ ok	489356a113ef4e44	cbf29ce484222325	SELECT SUM(DISTINCT x) FROM t
 # column reference.
 ok	ff41a860584dc5e0	cbf29ce484222325	SELECT count FROM t
 ok	060af4ce805c88ca	b5d414774c8002cc	SELECT * FROM t WHERE group = 1
-# AVG folds since 2026-08-07 (feat-aggregate.md §3.4): the verdict flipped
+# AVG folds since 2026-08-07 (aggregate.md §3.4): the verdict flipped
 # with its task, and the hash did not move - AVG was always an ordinary
 # identifier to the lexer, which is what the non-reservation rule buys.
 # The type rule (decimal columns only) is the compiler's, invisible here.
@@ -265,7 +265,7 @@ ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
 ok	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
 ok	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
 
-# ---- ALTER (docs/spec/spec-alter.md AL1, AL7) -----------------------------------
+# ---- ALTER (docs/spec/alter.md AL1, AL7) -----------------------------------
 # ALTER is not a patternable leading word, so every line is "-". The
 # refusal class is the feature: v1 is catalog-only, and ADD/DROP answer a
 # positioned Unsupported carrying invariant 13's reason.
@@ -418,7 +418,7 @@ InvalidArgument	-	-	*
 InvalidArgument	-	-	?
 InvalidArgument	-	-	(SELECT * FROM t)
 # [CREATE PATTERN] `DROP` became a statement head; [DT01] made TABLE one
-# of its objects (docs/spec/spec-drop-table.md), so the verdict flipped with
+# of its objects (docs/spec/drop-table.md), so the verdict flipped with
 # its task - `DROP` is not a patternable head and the hashes stay "-".
 ok	-	-	DROP TABLE t
 ok	-	-	drop table t;
@@ -506,7 +506,7 @@ InvalidArgument	0758626484394051	183c9cbf54792c5d	SELECT * FROM t WHERE amt = 12
 InvalidArgument	0765f6648444c629	b5d410774c7ffc00	SELECT * FROM t WHERE amt = .5
 InvalidArgument	b46f83ccad484d09	ae5e91f4b62d26a6	SELECT * FROM t WHERE amt = 1.2.3
 
-# ---- CREATE INDEX / DROP INDEX (docs/spec/feat-index.md §10) --------------------
+# ---- CREATE INDEX / DROP INDEX (docs/spec/index.md §10) --------------------
 #
 # Every line here is new, and not one pre-existing line moved: `index`,
 # `covering` and `unique` reach the lexer as ordinary identifiers, exactly as
@@ -532,7 +532,7 @@ InvalidArgument	-	-	CREATE INDEX ix (a)
 InvalidArgument	-	-	CREATE INDEX ix ON t
 InvalidArgument	-	-	DROP INDEX
 
-# ---- CREATE ASSERTION / DROP ASSERTION (docs/spec/feat-assertion.md §3) ---------
+# ---- CREATE ASSERTION / DROP ASSERTION (docs/spec/assertion.md §3) ---------
 #
 # Every line here is "-  -": assertion DDL carries no pattern, because its
 # leading word is CREATE. The point of the block is the *verdicts*, and that
@@ -590,7 +590,7 @@ ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
 Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
 Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
 
-# ---- Physical optimizer surface (docs/spec/feat-physical-optimizer.md, PX06) ----
+# ---- Physical optimizer surface (docs/spec/physical-optimizer.md, PX06) ----
 # SHOW is a dispatcher verb, not SQL - the verdict matches SHOW TABLES above -
 # and `relayout` stays an ordinary identifier: no keyword moved for the report
 # surface, which the two SELECTs pin by fingerprinting like any column/table.

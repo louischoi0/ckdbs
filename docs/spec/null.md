@@ -16,7 +16,7 @@ and leaves the rest of that rule untouched.
 
 Companion specs: `docs/rules/rule-fixed-length-tuple.md` (the tagged cell and the
 fixed-length rule), `docs/spec/heap-and-tuple.md` §3.3 (row layout),
-`docs/spec/spec-types.md`, `docs/spec/feat-index.md`, `docs/spec/feat-aggregate.md`,
+`docs/spec/types.md`, `docs/spec/index.md`, `docs/spec/aggregate.md`,
 `docs/inflight/in-progress/parser-v2-workplan.md` V08.
 
 ---
@@ -98,7 +98,7 @@ this column's" from being computed on an execute path.
 after the columns leaves every existing column offset where it is, and a
 zero-filled payload reads as "nothing is NULL" — which is exactly what a row
 written before this feature means. The same argument that let `group_id` ride
-in the Bound Cabin entry's zero padding (`docs/spec/feat-assertion.md` §5.1).
+in the Bound Cabin entry's zero padding (`docs/spec/assertion.md` §5.1).
 
 ### 2.2 Why this costs existing data nothing
 
@@ -116,7 +116,7 @@ the bitmap by nullable columns rather than by all columns:
 - **No format break and no migration.** `row_size` is byte-identical for every
   relation that exists today, so no data file needs rewriting and no superblock
   version has to move. Contrast the decimal `(precision, scale)` decision
-  (`docs/spec/spec-types.md` TY9), which rode inside an existing field precisely
+  (`docs/spec/types.md` TY9), which rode inside an existing field precisely
   because widening `SysColumnRow` would have stopped every pre-existing data
   file from mounting.
 - **Pay-per-use.** A 40-column relation with no nullable column pays 0 bytes,
@@ -186,23 +186,23 @@ belongs to the doc named — a workplan should not discover them one at a time.
 - **The primary key is never NULL**, and this is not a policy but invariant 11:
   the pk is carried by the Keystone word, which has no NULL encoding. Refuse at
   `CREATE TABLE` if the first column is declared nullable.
-- **Secondary indexes** (`docs/spec/feat-index.md` §13). Whether a NULL key is
+- **Secondary indexes** (`docs/spec/index.md` §13). Whether a NULL key is
   stored at all, and where it sorts. Oracle omits NULLs from B-tree indexes
   entirely, which is why `IS NULL` cannot use one there — a real trade, not an
   oversight. `[OPEN]`.
-- **Aggregates** (`docs/spec/feat-aggregate.md`). `COUNT(*)` counts rows,
+- **Aggregates** (`docs/spec/aggregate.md`). `COUNT(*)` counts rows,
   `COUNT(col)` skips NULLs; `SUM`/`MIN`/`MAX` skip them; `AVG`'s denominator is
   the non-NULL count; an all-NULL group's `SUM` is NULL, not 0.
 - **`GROUP BY`.** `exec::EncodeGroupKey()` needs a NULL encoding that cannot
   collide with any real value, and NULL groups with NULL under the standard's
   "not distinct" rule — which is the opposite of `=` and has to be written
   down where the key is encoded.
-- **Assertions** (`docs/spec/feat-assertion.md`). A Bound Cabin group key derives
+- **Assertions** (`docs/spec/assertion.md`). A Bound Cabin group key derives
   from `EncodeGroupKey`, so it inherits the above; and a NULL in a `SUM` column
   contributes nothing, which the entry's inline aggregate value must represent.
 - **`ORDER BY`** (`docs/workplan-order-by.md`). `NULLS FIRST` / `NULLS LAST`,
   and what the default is per direction. `[OPEN]`.
-- **Foreign keys** (`docs/spec/impl-foreign-keys.md`). Already anticipated:
+- **Foreign keys** (`docs/spec/foreign-keys.md`). Already anticipated:
   `kFkNullable` exists at `include/kds/catalog/rows.hpp:841`. A NULL child key
   satisfies the constraint vacuously.
 - **The wire and the client** (`docs/spec/client-manual.md`,
@@ -218,7 +218,7 @@ belongs to the doc named — a workplan should not discover them one at a time.
 - Whether a NULL key enters a secondary index, and its sort position (§4).
 - `ORDER BY` NULL ordering and its per-direction default (§4).
 - Whether `ALTER TABLE ADD COLUMN <nullable>` is ever allowed. It changes
-  `row_size`, so under `docs/spec/spec-alter.md` AL1 — catalog-only renames,
+  `row_size`, so under `docs/spec/alter.md` AL1 — catalog-only renames,
   everything data-moving refused — it is refused today, and this spec does not
   change that. Recorded because "add a nullable column" is the one ALTER users
   expect to be free, and here it is a rewrite.

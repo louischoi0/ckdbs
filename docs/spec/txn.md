@@ -330,7 +330,7 @@ The horizon is **per-core**, sound while every reader reads its own
 core's versions (CC3/CC4); a cross-core writer must extend it.
 
 Two purges consume the horizon: the catalog delete-mark purge
-(`spec-ddl-transactional.md` §5d) and, **as of 2026-08-19, the undo
+(`ddl-transactional.md` §5d) and, **as of 2026-08-19, the undo
 purge** (`docs/inflight/in-progress/workplan-undo-purge.md`, ratified horizon-only /
 internal-recycle / purge-on-growth): a settled undo page — newest writer
 below the horizon — recycles into the log's own next growth, so this
@@ -508,7 +508,7 @@ compensation. What is *not* yet true is isolation at the SQL surface
 (another session can still see the uncommitted relation, DT3c) and
 durability (below). Atomicity,
 isolation and consistency for DDL are specified in
-`docs/spec/spec-ddl-transactional.md` and built per
+`docs/spec/ddl-transactional.md` and built per
 `docs/inflight/in-progress/workplan-ddl-transactional.md` — by stamping catalog rows with the
 real transaction id and filtering catalog reads through the same
 visibility predicate user reads use, which is why *live* rollback needs
@@ -571,7 +571,7 @@ noting about the list itself — it records priorities, not
 impossibilities.** *Recovery* (§8) was built (RC01-RC11,
 `docs/workplan-wal-recovery.md`). *Transactional DDL* (§7) was reopened
 by direction 2026-08-15 and is specified in
-`docs/spec/spec-ddl-transactional.md`; its atomicity/isolation half is being
+`docs/spec/ddl-transactional.md`; its atomicity/isolation half is being
 built, its durability half is not (that is RV3, and §7's paragraph
 still holds for it).
 

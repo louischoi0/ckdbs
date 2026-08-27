@@ -12,7 +12,7 @@
 
 // KWP v0's frame-type registry and the payload codecs of the frames it
 // uses (docs/inflight/in-progress/workplan-kwp-load.md KW2, docs/spec/protocol.md §4,
-// docs/spec/spec-bulkinsert.md §3.1).
+// docs/spec/bulkinsert.md §3.1).
 //
 // **The first concrete numbers on the wire, and append-only forever** -
 // the sys.access_stats rule, on a surface clients compile against: a

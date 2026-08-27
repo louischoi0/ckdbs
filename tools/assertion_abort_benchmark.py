@@ -7,7 +7,7 @@ runs on every one of them and `AbortTxn` runs on none. This driver is the
 abort half, and it exists because that half acquired a page write:
 `AbortTxn` now does a page read-modify-write plus a `StampPageLsn` per aborted
 reservation, to set `kEntryOrphaned` on the entry the reservation wrote
-(`docs/spec/feat-assertion.md` §7, AS6b). The claim made for that change is that it
+(`docs/spec/assertion.md` §7, AS6b). The claim made for that change is that it
 is "what commit was already paying to clear `kEntryReserved`". This driver is
 what tests the claim, because the two paths batch differently:
 

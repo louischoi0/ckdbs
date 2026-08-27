@@ -19,7 +19,7 @@ class WalManager;
 }
 
 // `sys.assertions`: the declaration of every group-level constraint on this
-// instance (docs/spec/feat-assertion.md §8.2, workplan AST03).
+// instance (docs/spec/assertion.md §8.2, workplan AST03).
 //
 // ---- What is stored, and what deliberately is not -----------------------
 //

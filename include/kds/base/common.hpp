@@ -78,7 +78,7 @@ enum class PageType : std::uint8_t {
     // version, so the physical optimizer never has a reason to move one.
     kVarHeap = 10,
 
-    // A secondary index (docs/spec/feat-index.md §4): the internal nodes that
+    // A secondary index (docs/spec/index.md §4): the internal nodes that
     // route a descent, and the leaves that hold the entries.
     //
     // **Not kBtreeInternal/kBtreeLeaf, and the distinction is the design.**
@@ -97,15 +97,15 @@ enum class PageType : std::uint8_t {
     kIndexInternal = 11,
     kIndexLeaf = 12,
 
-    // A Bound Cabin's entry pages (docs/spec/feat-assertion.md §5,
-    // docs/spec/feat-cabin.md §12, workplan AST04).
+    // A Bound Cabin's entry pages (docs/spec/assertion.md §5,
+    // docs/spec/cabin.md §12, workplan AST04).
     //
     // **Its own class rather than a subtype flag on a Cabin page**, and the
-    // reason is `docs/spec/spec-eviction.md` EV3: pinning is a page-class
+    // reason is `docs/spec/eviction.md` EV3: pinning is a page-class
     // attribute resolved from the page kind, and a subtype flag would put
     // the answer one indirection past where the sweep can cheaply ask. It
     // is also what makes an observational Cabin's page - if one is ever
-    // made durable (feat-cabin.md §11 leaves that open) - a *different*
+    // made durable (cabin.md §11 leaves that open) - a *different*
     // class with a different lifecycle, which §12's class table requires.
     //
     // Headered, checksummed and authoritative: the aggregate a group header

@@ -35,7 +35,7 @@ txn::ReadView CabinOptimizerExecutor::MintCheckView() {
     // visible to it - so the busy-row abort that protects completeness stops
     // firing, and an in-flight transaction's uncommitted delete-mark reads as
     // kAbsent: the row is skipped, its ROLLBACK restores it, and the banked
-    // set is missing a live pk. That is feat-cabin.md §6a's break exactly, in
+    // set is missing a live pk. That is cabin.md §6a's break exactly, in
     // the other site that banks a set.
     //
     // The default view is the opposite fallback and the safe one: it makes

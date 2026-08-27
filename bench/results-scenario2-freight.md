@@ -1113,7 +1113,7 @@ step 1 Probe cargos   AS c key=0:0.3
 
 The inner side binds to `cargos.id`, which is the Keystone primary key, so
 the structure ladder stops at its **first** arm — the pk probe. The build is
-the ladder's *last* arm (`docs/spec/spec-join-inner-build.md` §5), reached only
+the ladder's *last* arm (`docs/spec/join-inner-build.md` §5), reached only
 when the pk, both index and both Cabin arms decline. Nothing in this schema
 can reach it. `bench/results-scenario3-library.md` is where that arm is
 measured.

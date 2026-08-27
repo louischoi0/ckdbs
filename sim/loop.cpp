@@ -330,7 +330,7 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
     // which. The relation is adopted. What would be a finding is a
     // relation that half exists — visible by one route and absent by
     // another — and EXISTS is not that; the routes are what
-    // `spec-ddl-transactional.md`'s own test walks.
+    // `ddl-transactional.md`'s own test walks.
     if (IsErr(reply) && it.faults_on() && op.kind == Op::Kind::kCreateTable) {
         ++it.verdict.errored_ops;
         it.trace.Note("create-table errored at op " + std::to_string(op_index) + ", retried");

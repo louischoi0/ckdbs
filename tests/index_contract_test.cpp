@@ -12,7 +12,7 @@
 #include "kds/storage/index/index_page.hpp"
 #include "kds/txn/manager.hpp"
 
-// **The index contract** (docs/spec/feat-index.md §1, workplan IX12), modelled on
+// **The index contract** (docs/spec/index.md §1, workplan IX12), modelled on
 // `waystone_contract_test.cpp` and holding an index to a *higher* bar than
 // that file holds a trail to.
 //

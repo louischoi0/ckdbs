@@ -14,9 +14,9 @@ against each other says something a single-structure benchmark cannot:
 
     a FilterScan     walk the whole chain, keep the rows that match
     a Cabin          authoritative *only for values queries have observed*
-                     (docs/spec/feat-cabin.md) - a hit needs no relation opened
+                     (docs/spec/cabin.md) - a hit needs no relation opened
     a secondary index  authoritative for every value, always maintained
-                     (docs/spec/feat-index.md)
+                     (docs/spec/index.md)
 
 PostgreSQL answers it exactly one way, with a btree index, which is what
 makes it a clean baseline here rather than a second set of numbers.
@@ -103,7 +103,7 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # ---- the schema ----------------------------------------------------------
 #
 # Every relation is BTREE, and that is a hard requirement rather than a
-# preference: `docs/spec/feat-index.md` §3 permits a secondary index only on a
+# preference: `docs/spec/index.md` §3 permits a secondary index only on a
 # btree-clustered relation, because an index entry names a pk and resolving
 # one needs a pk descent. A HEAP relation here would make `--index-mode`
 # fail at CREATE INDEX with a refusal naming the storage form.
@@ -134,7 +134,7 @@ CREATE_ORDER = ("users", "books", "reservations", "loans")
 #
 # Each mode is a list of (index_suffix, relation, key columns, covering
 # columns). The name carries the run suffix too, because an index name is
-# unique **instance-wide** (feat-index.md §10) - two runs sharing a data
+# unique **instance-wide** (index.md §10) - two runs sharing a data
 # file would collide on a bare `loans_user_idx`.
 #
 # `none` is the baseline and is deliberately an empty list rather than a
@@ -152,12 +152,12 @@ INDEX_MODES = {
     ),
     # Multi-column keys, for the two shapes that filter on two columns.
     # `overdue` is (status, due_day): a prefix probe on status followed by a
-    # range on due_day is the composite case feat-index.md §5 encodes for.
+    # range on due_day is the composite case index.md §5 encodes for.
     "composite": (
         ("loans_status_due", "loans", ("status", "due_day"), ()),
         ("books_branch_genre", "books", ("branch_id", "genre"), ()),
     ),
-    # COVERING (feat-index.md §7). Note §7 is explicit that there is no
+    # COVERING (index.md §7). Note §7 is explicit that there is no
     # index-only scan: covering columns save a *decode*, not the pk descent.
     # Measuring how little that is worth is the point of including it.
     "covering": (
@@ -173,7 +173,7 @@ INDEX_MODES["all"] = (INDEX_MODES["single"] + INDEX_MODES["composite"]
 
 # The Cabin is the other accelerator for a non-pk equality, and the reason
 # this scenario can say something about *which* structure to reach for. One
-# column only: docs/spec/feat-cabin.md C3 keeps a Cabin single-column.
+# column only: docs/spec/cabin.md C3 keeps a Cabin single-column.
 CABIN_RELATION = "loans"
 CABIN_COLUMN = "user_id"
 CABIN_TYPE = "int64"
@@ -325,7 +325,7 @@ def explain_ddl_failure(base, reply, cabin):
     if cabin and base == CABIN_RELATION and "CABIN" in upper:
         abort(f"--cabin: this server does not understand the column cabin "
               f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} {CABIN_TYPE} "
-              f"CABIN` needs a build with docs/spec/feat-cabin.md in it; re-run "
+              f"CABIN` needs a build with docs/spec/cabin.md in it; re-run "
               f"without --cabin, or rebuild the server.", reply)
     if "no room" in reply or "reserved catalog page range" in reply:
         abort(f"could not create {base}: the catalog is out of column space.\n"
@@ -367,13 +367,13 @@ def explain_index_failure(stmt, reply):
     if "unsupported" in lowered or "expected" in lowered:
         abort(f"this server does not understand CREATE INDEX.\n"
               f"  `{stmt}`\n"
-              f"  Secondary indexes need a build with docs/spec/feat-index.md in "
+              f"  Secondary indexes need a build with docs/spec/index.md in "
               f"it (IX05 for the grammar, IX09 for the backfill). Re-run "
               f"with --index-mode none, or rebuild the server.", reply)
     if "heap" in lowered:
         abort(f"CREATE INDEX refused a heap relation.\n"
               f"  `{stmt}`\n"
-              f"  feat-index.md §3 permits an index only on a btree-"
+              f"  index.md §3 permits an index only on a btree-"
               f"clustered relation. This scenario declares all four BTREE, "
               f"so seeing this means SCHEMA was edited.", reply)
     if "ever held a row" in lowered or "populated" in lowered:
@@ -484,7 +484,7 @@ def show_indexes(exec_):
     """`SHOW INDEXES`, as printed. Carries height and entry counts walked
     from the tree, which is the only way to tell a declared index from a
     populated one - the catalog can say an index exists and never what is
-    in it (feat-index.md §10)."""
+    in it (index.md §10)."""
     return exec_("SHOW INDEXES")
 
 
@@ -717,8 +717,8 @@ def verify(client, tables, sizes, users, sample, rng):
     1. Each relation holds the row count the load claims.
     2. A `WHERE user_id = ?` answer equals the same rows found by a full
        scan filtered client-side. This is the one that would catch an
-       index serving an incomplete set - the failure feat-cabin.md §5 calls
-       invisible without a baseline, and feat-index.md §1 inherits.
+       index serving an incomplete set - the failure cabin.md §5 calls
+       invisible without a baseline, and index.md §1 inherits.
     3. Every loan's user_id names a user that exists.
     4. The no-literal join's reply equals the expectation computed from two
        full scans client-side, compared **row for row in order**: outer

@@ -682,7 +682,7 @@ workflow. D1 was settled 2026-08-26, so the series has started.
 
 Nothing in this plan frees a page, and nothing in it needs anything to.
 Reclamation is blocked elsewhere and for its own reasons —
-`docs/spec/feat-physical-optimizer.md` §6 gate 3 (a reallocated page breaks trail
+`docs/spec/physical-optimizer.md` §6 gate 3 (a reallocated page breaks trail
 validation), `docs/inflight/known-gaps.md`'s record that `DROP TABLE` orphans pages by
 decision, and `extent_lease.hpp`'s "nothing frees an extent" — and none of
 those is made easier or harder by how many bitmap pages exist. `FreeMapFree()`

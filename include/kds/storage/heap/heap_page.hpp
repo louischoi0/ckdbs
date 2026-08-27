@@ -231,7 +231,7 @@ public:
     PageId next_page_id() const;
     void set_next_page_id(PageId next);
 
-    // The common header's relayout epoch (docs/spec/feat-physical-optimizer.md
+    // The common header's relayout epoch (docs/spec/physical-optimizer.md
     // R4), surfaced here because the callers that need it at tuple-access
     // time hold a PageView, not the raw span. Read-only on purpose: bumping
     // is the mover's act, through storage::BumpRelayoutEpoch on the span it

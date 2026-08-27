@@ -10,7 +10,7 @@ measurements.
 Deliverables: `tools/scenario2_freight.py`, `tools/pg_scenario2_freight.py`,
 `tools/compare_scenario2.py`, `bench/results-scenario2-freight.md`. Markers:
 `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/spec/txn.md`,
-`docs/spec/impl-foreign-keys.md`, `docs/spec/feat-cabin.md`, `docs/spec/feat-aggregate.md`,
+`docs/spec/foreign-keys.md`, `docs/spec/cabin.md`, `docs/spec/aggregate.md`,
 `docs/spec/parser-v2.md`.
 
 Sibling workloads, and what each already owns:
@@ -110,7 +110,7 @@ file. Nothing reclaims a catalog row: there is no `DROP TABLE`.
 
 **Why each clustering.** BTREE wherever the transaction probes by pk or a
 foreign key needs a parent to descend into — a heap parent is refused at
-declaration (`docs/spec/impl-foreign-keys.md` F1), so `--fk` requires it. HEAP for
+declaration (`docs/spec/foreign-keys.md` F1), so `--fk` requires it. HEAP for
 the two append-only ledgers, which are written at the chain tail and never
 probed by pk.
 
@@ -285,7 +285,7 @@ SELECT c.org_id, SUM(f.cbm) FROM freights f JOIN cargos c
 ```
 
 The third had to be confirmed before the rest was written, because **nothing
-else in this repo aggregates over a joined chain**. `docs/spec/feat-aggregate.md`
+else in this repo aggregates over a joined chain**. `docs/spec/aggregate.md`
 AG1 puts the fold over the statement's `RowSink` and leaves the compiled
 chain byte-identical, so a group key resolving to a *second* step's column
 should work — and `S2-01`'s probe measured that it does, on real rows and not
@@ -430,7 +430,7 @@ it change what later tasks should expect:
 - ~~**Whether `GROUP BY` resolves a key on a joined chain**~~ — **answered
   2026-08-06 by `S2-01`'s probe: it does**, with correct values over real
   rows (§6). It was a capability question about the engine, not a choice.
-  `docs/spec/feat-aggregate.md` documents no join case either way; this is the
+  `docs/spec/aggregate.md` documents no join case either way; this is the
   first workload to exercise one.
 - **Whether the credit check needs its own status code.** Today an over-credit
   booking is a driver-side rollback, indistinguishable at the wire from a

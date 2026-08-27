@@ -280,7 +280,7 @@ TEST(ExpeditorConfigTest, KnownKeysCoverEveryKeyTheOverlayReads) {
     }
 }
 
-// ---- Aggregation caps (docs/spec/feat-aggregate.md §6, AG11) ---------------
+// ---- Aggregation caps (docs/spec/aggregate.md §6, AG11) ---------------
 
 TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     Expeditor::Config config;
@@ -297,7 +297,7 @@ TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     EXPECT_EQ(config.aggregate_max_distinct, 256u);
 }
 
-// ---- Physical optimizer (docs/spec/feat-physical-optimizer.md R1/R3) --------
+// ---- Physical optimizer (docs/spec/physical-optimizer.md R1/R3) --------
 
 TEST(ExpeditorConfigTest, PhysicalOptimizerParsesOffAndShadowDefaultingToShadow) {
     Expeditor::Config config;

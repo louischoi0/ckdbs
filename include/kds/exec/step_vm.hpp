@@ -98,7 +98,7 @@ struct StepStats {
     // path that a row count does not imply.
     std::uint64_t spill_fetches = 0;
 
-    // Pages this step demonstrably read (feat-physical-optimizer.md §II.2
+    // Pages this step demonstrably read (physical-optimizer.md §II.2
     // S2 - the cost-benefit model's currency is page accesses, and this is
     // its collector). Counted exactly where the count is exact: a walk
     // counts each chain page once as the visitor crosses onto it, and every
@@ -133,7 +133,7 @@ struct StepStats {
     // was pruned, and `rows_examined` is what tells those apart.
     std::uint64_t range_pages_pruned = 0;
 
-    // Secondary index (docs/spec/feat-index.md §§1, 7).
+    // Secondary index (docs/spec/index.md §§1, 7).
     //
     // `index_entries_scanned` counts entries the walk read between its two
     // bounds; `index_rows_resolved` counts the pks it then descended for.
@@ -153,7 +153,7 @@ struct StepStats {
     std::uint64_t index_entries_filtered = 0;
     std::uint64_t index_rows_resolved = 0;
 
-    // Cabin (docs/spec/feat-cabin.md §7's "ANALYZE narrates all three").
+    // Cabin (docs/spec/cabin.md §7's "ANALYZE narrates all three").
     //
     // `cabin_hits` counts probes served from an observed value's entry set -
     // authoritatively, so the relation was **not** walked; `cabin_misses`
@@ -177,7 +177,7 @@ struct StepStats {
     std::uint64_t cabin_hint_misses = 0;
     std::uint64_t cabin_recordings = 0;
 
-    // The statement-local inner build (spec-join-inner-build.md §4's
+    // The statement-local inner build (join-inner-build.md §4's
     // honesty clause; workplan JB3/JB4 collect, JB7 prints).
     //
     // `inner_builds` counts maps this step *published* - a completed first
@@ -252,7 +252,7 @@ struct ExecStats {
 // for that step alone. Deleting every trail in the database changes
 // latency and nothing else (invariant 8).
 // `cabins`, when given, is the core-local Cabin store (stats/cabin_store.hpp,
-// docs/spec/feat-cabin.md). **Passing it cannot change what this returns either**,
+// docs/spec/cabin.md). **Passing it cannot change what this returns either**,
 // and the argument is a third variation on the same theme: a Cabin supplies a
 // set of *locations*, each of which is then read and filtered by the code a
 // walk would have fed - visibility, the residual (which still carries the

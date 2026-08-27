@@ -180,7 +180,7 @@ Status CheckDecimalPrecisionScale(std::uint32_t precision, std::uint32_t scale) 
             "decimal precision " + std::to_string(precision) + " is outside 1.." +
             std::to_string(kMaxDecimalPrecision) +
             "; a wider decimal needs an int128 representation, which is a separate type "
-            "rather than a widening of this one (docs/spec/spec-types.md TY2)");
+            "rather than a widening of this one (docs/spec/types.md TY2)");
     }
     if (scale > precision) {
         return Status::InvalidArgument("decimal scale " + std::to_string(scale) +

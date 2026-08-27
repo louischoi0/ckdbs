@@ -57,7 +57,7 @@
 //
 // Covers exactly what the engine can store (`src/exec/row_codec.cpp`): the
 // signed ints, `uint64`, `bool`, `char`, `varchar`, and - since the types
-// work (`docs/spec/spec-types.md`) - `date`, `timestamp` and `decimal(p, s)`.
+// work (`docs/spec/types.md`) - `date`, `timestamp` and `decimal(p, s)`.
 // `float` is refused at CREATE TABLE, so no column can hold one and
 // nothing here encodes one.
 //
