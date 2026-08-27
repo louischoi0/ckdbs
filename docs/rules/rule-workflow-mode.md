@@ -199,16 +199,19 @@ under it with their priorities, builds nothing, and hands the plan to
    task id is recommended, so `reporter-agent` can trace state back to
    it — `critics-developer` review per step (§2), `ck-tester` per feature
    (§3), sync-and-report at land time (§4).
-3. **The go-ahead gate does not move.** `CLAUDE.md` §4 requires an
-   explicit go-ahead before anything pushes to `origin main`; workflow
-   mode grants none of its own authority, and cannot — that push stays
-   the user's decision, not the loop's, regardless of how autonomously
-   the rest of the task was decided. A task that reaches this gate
-   reports `awaiting go-ahead` as its outcome — it does not push itself,
-   and the loop does not block waiting for one: it moves on to the next
-   pending task **under the same milestone**.
+3. **The push gate does not move, and it is not a task outcome.**
+   `CLAUDE.md` §4 requires an explicit go-ahead before anything pushes to
+   `origin main`; workflow mode grants none of its own authority, and
+   cannot — that push stays the user's decision, not the loop's,
+   regardless of how autonomously the rest of the task was decided.
+   **But nothing in the loop waits on it.** Work that is finished, gated
+   and committed on its branch is `done` — the push is a separate act by
+   a different party, not a state the task sits in. There is no
+   `awaiting go-ahead` outcome: the concept here is self-enhanced
+   development, and a queue full of tasks parked on a human is the
+   opposite of it. Unpushed branches accumulate; the loop keeps moving.
 4. `intermediary-agent` reports the task's outcome — done, blocked,
-   awaiting go-ahead, or no task found — back to the loop driver.
+   failed, or no task found — back to the loop driver.
 5. **If the task turned up unscoped work** — a fix that needs its own
    review cycle, a measurement `ck-tester` should run separately, a
    question that names an `Open Decision` — `intermediary-agent` does
@@ -261,11 +264,74 @@ the two agent files rather than left as intent:
   (`POST /issue/{project}/`) go back to meaning what `reporter-agent`
   always used them for: problems the work surfaced.
 
-Also on the server and **not yet used by either agent**: `POST
-/tasks/{id}/claim/` and `/release/`, an exclusive 30-minute lease so two
-sessions can't work one task at once, with `GET /tasks/?claimable=true`
-as its advisory filter. One loop against one milestone doesn't need it;
-two loops sharing a milestone would. Unadopted, not rejected.
+**Phases** (2026-08-27): `intermediary-agent` cuts a milestone into
+phases before tasks, and **the phase — not the task — is the unit the
+target project's own development process wraps**: one working context per
+phase, the per-step gates per task, the landing gates at the phase's last
+task. **The phase's work is committed on its branch at the end of every
+iteration and the loop moves straight on**: only the push to
+`origin main` waits for the operator, and waiting for it is not something
+the loop does — an uncommitted phase left behind while the next iteration
+opens a different working context is stranded work, which is the failure
+this rule exists to prevent. cws has no phase entity, so a
+phase is a convention carried in `priority` — phase N owns the band
+`N*100`…`N*100+99`, which composes with the loop's existing lower-runs-
+first order and needs no second field. A phase may be a single task.
+`intermediary-agent.md` states the procedure; this file states that the
+base process is applied at phase granularity rather than per task.
+
+**The `state` column is adopted** (2026-08-27): a task carries a workflow
+state — `init`, `pending`, `inprogress`, `done`, `blocked`, `cancelled` —
+moved only by `POST /tasks/{id}/state/`, since a transition is not a field
+edit and `POST /tasks/` and `PATCH` both refuse it. The loop's contract:
+**claim first, then `inprogress`, before any work** (the claim can lose a
+race and the state call cannot, so setting the label first would mislabel
+another session's task), and a **terminal state in the same breath as the
+result**, never a finished task left at `inprogress`. Note that
+`GET /tasks/?pending=true` is the *timestamp* derivation and `state=pending`
+is this column — two different things that read alike.
+
+**The claim lease is adopted** (2026-08-27): `POST /tasks/{id}/claim/`
+and `/release/`, an exclusive 30-minute lease so two sessions can't work
+one task at once, with `GET /tasks/?claimable=true` as its advisory
+filter. `intermediary-agent` claims at the moment work starts — step 4 of
+its work phase — because **a claim is how this schema says "in
+progress"**: a task row has no status column, `status` lives only on
+results, and a result is a finished signal that would drop the task out
+of the pending list mid-work. Re-claiming refreshes the lease, which a
+task outrunning 30 minutes must do or be stolen; reporting a result
+releases the lease on its own.
+
+## Stopping and resuming a run
+
+Workflow mode is meant to run unattended, not irreversibly. A run is
+halted with the **`workflow-stop`** skill, never by simply abandoning the
+session: an abandoned loop leaves a task at `inprogress` that nothing
+clears, a claim lease held by a dead session, and possibly uncommitted
+work in a phase worktree that is on no branch.
+
+The skill stops the driver first (so no wakeup lands on top of the
+wrap-up), settles the task in flight to a terminal state and releases its
+lease, verifies every phase worktree is committed, syncs through
+`reporter-agent` with the milestone id and the fact that this is a halt —
+so a stopped run and a finished one do not read alike — and **prints the
+whole run's work log into the main session**, which is the one place it
+would otherwise be lost, since a subagent's report is never shown to the
+user. It does not push and does not delete worktrees; those stay separate
+decisions, and the second belongs to `worktree-safe-exit`.
+
+A stopped run is picked back up with **`workflow-resume`**, which adopts
+the existing milestone rather than planning a second one — **a duplicate
+milestone is permanent, since cws has no delete endpoint, and it splits
+the queue so neither half ever reads as finished.** It repairs what the
+stop left: an `inprogress` task whose lease has expired goes back to
+`pending`, while one whose lease is still live belongs to another session
+and is not touched at all. It also surfaces a gap the queue cannot see on
+its own — **a `blocked` task is excluded from every `pending=true` fetch**,
+because it was reported against, so a milestone can read as finished with
+blocked work still in it. `workflow-resume` lists those and asks; it never
+retries one on its own, since a task blocked for a real reason and retried
+automatically is a loop.
 
 ## Open
 
@@ -274,10 +340,10 @@ two loops sharing a milestone would. Unadopted, not rejected.
   what counts as confirmation — the file existing, the section existing,
   or the section actually saying what the task claimed — is not settled.
   Today it reads as file-and-section.
-- **Who gives the go-ahead** for a task parked at `awaiting go-ahead` —
-  an operator checking in periodically, or some other signal `cws`
-  carries. Undecided; until it is, those tasks simply accumulate
-  unmerged.
+- **When the unpushed branches get pushed.** No task waits on this any
+  more (the outcome was removed 2026-08-27), so nothing stalls — but the
+  branches do accumulate, and who pushes them, on what cadence, is still
+  the operator's and still unstated.
 - **Worktree/branch naming for loop-driven work** — whether it needs a
   marker distinct from ordinary work (e.g. carrying the cws task id)
   beyond "name it for the work." Recommended above, not yet ratified as

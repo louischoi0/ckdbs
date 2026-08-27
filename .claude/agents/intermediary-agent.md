@@ -33,7 +33,7 @@ truth for the server's surface — when a call here seems wrong, when you
 need an endpoint this file doesn't cover, or when in doubt at all, check
 `/help` before guessing or inventing a call.
 
-## The loop has two phases
+## The loop has two stages
 
 **Iteration 1 plans. Iteration 2 onward works the plan.** No development
 work happens in iteration 1, and no planning happens after it.
@@ -61,7 +61,7 @@ not this run's work no matter how pending it looks.
      endpoint, so a duplicate milestone is permanent.
    - **If it exists and already has tasks** (`GET
      {SERVER_URL}/tasks/?milestone_id={id}`), the plan was already made
-     by an earlier run — adopt it and go straight to the work phase.
+     by an earlier run — adopt it and go straight to the work stage.
      Don't re-plan, and don't add tasks the earlier plan didn't have.
    - Otherwise `POST {SERVER_URL}/milestones/`:
      ```json
@@ -71,8 +71,33 @@ not this run's work no matter how pending it looks.
    - **Record the returned `id`.** It scopes every fetch for the rest of
      the run, and it is what `reporter-agent` matches on.
 
-3. **Break the goal into tasks, each registered under that milestone.**
-   `POST {SERVER_URL}/tasks/`:
+3. **Break the goal into phases first, then tasks inside each phase.**
+
+   A **phase** is the unit between the milestone and a task: smaller than
+   the milestone, and **one or more** tasks — a phase of exactly one task
+   is legal and ordinary. It is the unit the target project's own
+   development process is applied to (see step 4 of the work stage), so
+   cut phases where that process has a natural seam: a group of tasks
+   that would sensibly share one branch, be reviewed together, and land
+   together.
+
+   **cws has no phase entity** — there is no phase table and no phase
+   field — so a phase is a *convention this file owns*, carried in
+   `priority`:
+
+   - **Phase N occupies the priority band `N*100` … `N*100+99`.** Phase 1
+     is 100-199, phase 2 is 200-299. Within a band keep the existing
+     gaps-of-ten habit (110, 120, 130) so a later subtask slots in
+     without a renumber.
+   - Because the loop already runs **lower priority first**, the bands
+     order the phases and the offsets order the work inside one. No
+     second sort, no extra field.
+   - **Name the phase on the first line of every member's `content`** —
+     `Phase 2 — the durable prepare`, then the task's own summary. That
+     is what lets a later iteration tell which phase it is in and what
+     the phase is *for*, since the band alone gives only a number.
+
+   Then register each task. `POST {SERVER_URL}/tasks/`:
    ```json
    {"version": "...", "title": "SS1 — <short name>", "content": "<markdown>",
     "type": "implement", "milestone_id": "<milestone id>",
@@ -85,32 +110,58 @@ not this run's work no matter how pending it looks.
      token of `title`** (`SS1 — ...`). Don't invent new ids or slugs:
      that id is what `reporter-agent` later uses as the cws issue
      `alias`, and what the owning doc under `docs/` is keyed on.
-   - **`milestone_id` is mandatory on every task this phase creates.** A
+   - **`milestone_id` is mandatory on every task this stage creates.** A
      task created without it is invisible to the rest of the loop, which
      never fetches outside the milestone.
    - **`derived_from`** carries the parent task's id where the plan makes
      one task a subtask of another. It's checked app-side, so create the
      parent first and use the id its response returned.
    - **`priority` is an integer and the server fixes no direction.** This
-     loop's convention is **lower runs first** (`1` before `10`). Set it
-     from the plan's own dependency order: a task gated on another gets a
-     strictly higher number than its gate, so the gate is always fetched
-     first. Leave gaps (10, 20, 30) so a later subtask can slot between
-     two without a renumber.
+     loop's convention is **lower runs first** (`1` before `10`), and the
+     phase band above is laid on top of it: the number is
+     `N*100 + offset`, N the phase and the offset the position inside it.
+     Set the offset from the plan's own dependency order — a task gated
+     on another gets a strictly higher number than its gate, so the gate
+     is always fetched first — and leave gaps of ten so a later subtask
+     can slot between two without a renumber. **A dependency that crosses
+     a phase boundary is a sign the phases are cut wrong**: a phase is
+     supposed to land as a unit, so anything gating a later phase belongs
+     in the earlier one.
    - **`content` is a summary with a pointer, not the work order.** The
      ~1.2 KB cap applies here as it does to results — name the
      instruction file and section, or the owning doc under `docs/`,
      rather than pasting it.
+   - **`state` is not settable here.** Every task is created `init` and
+     moves only through `POST /tasks/{id}/state/`; `POST /tasks/` and
+     `PATCH /tasks/{id}/` both refuse the field, because a transition is
+     not a field edit. This stage leaves them at `init` — the first
+     thing the work stage does to a task is move it to `inprogress`, so
+     `init` reads as "planned, never picked up".
 
 4. **Do no development work in this iteration.** The plan is the output.
    Report the milestone id and the task ids created, hand off to
-   `reporter-agent` (step 6 of the work phase), and let the next
+   `reporter-agent` (step 6 of the work stage), and let the next
    iteration start the work.
 
 ## Iteration 2 onward — one task per iteration, milestone-scoped
 
 1. **Fetch only this milestone's tasks.**
-   `GET {SERVER_URL}/tasks/?milestone_id={id}&pending=true`.
+   `GET {SERVER_URL}/tasks/?milestone_id={id}&pending=true&claimable=true`.
+   - `claimable=true` leaves out what another session currently holds. It
+     is **advisory** — a task can be claimed between this read and yours,
+     which is why step 4 treats a 409 as ordinary rather than as a fault.
+   - **`pending=true` and `state=pending` are two different things, and
+     conflating them is the trap this schema sets.** The query parameter
+     is derived from timestamps — `last_shipped_at == raised_at`, "never
+     reported against" — and is what this loop's queue is built on. The
+     `state` *column* is a separate workflow label (`init`, `pending`,
+     `inprogress`, `done`, `blocked`, `cancelled`) that only
+     `POST /tasks/{id}/state/` moves. This step filters on the timestamp
+     one.
+   - **Skip anything already `done` or `cancelled`.** A task can carry
+     one of those and still be `pending=true` if nothing was ever
+     reported against it, so read each candidate's `state` and pass over
+     those two before picking. A `blocked` one may be retried.
    - **The unfiltered `GET {SERVER_URL}/tasks/?pending=true` is not used
      once a milestone is in scope, and no fetch ever carries a different
      `milestone_id`.** A task belonging to another milestone, or to no
@@ -135,14 +186,88 @@ not this run's work no matter how pending it looks.
      and never overrides that project's CLAUDE.md.
    - If that CLAUDE.md names its own subagents (e.g. an architecture
      reviewer, a test runner) and a workflow that uses them, use them the
-     way that project's workflow says to — not ad hoc. Ckdbs
-     (`ckdbs/CLAUDE.md` in this repo) is a concrete example: worktree per
-     task, a `critics-developer` review per step, a `ck-tester` run per
-     feature, sync-then-stop before any push.
+     way that project's workflow says to — not ad hoc.
+   - **The phase, not the task, is what that process wraps.** A task is
+     one step inside a phase; the phase is the thing that gets a branch,
+     a landing and a sign-off. Concretely, using the task's priority band
+     to tell which phase it is in:
+     - **First task of a phase** (nothing pending in this band ranks
+       lower): open whatever working context the project's process asks
+       for and **name it for the phase, not for the task** — in ckdbs,
+       one worktree per phase.
+     - **Every task, including the first:** the per-step gates still run
+       per task. In ckdbs that is a `critics-developer` review of the
+       step just built.
+     - **Last task of a phase** (nothing else pending in this band):
+       run the phase's landing gates — in ckdbs the `ck-tester` run, the
+       full suite, the sync onto the work branch — then **commit on the
+       work branch and go straight to the next iteration.** Gated,
+       committed work is **`done`** — the push to `origin main` is a
+       separate act by the operator, not a state a task sits in, and
+       there is no outcome that waits on it. Unpushed branches
+       accumulate; the loop keeps moving.
+     - A phase of exactly one task is first and last at once, and gets
+       the whole process in that single iteration.
+   - **Commit every iteration, never carry uncommitted work across
+     one.** This is what makes the loop uninterrupted rather than merely
+     unattended. A task that finished its own step commits that step on
+     the phase's branch before reporting; the phase's last task commits
+     the landing. Two reasons, and the second is not tidiness: the next
+     iteration may open a *different* phase's working context, and
+     uncommitted changes left in the previous one are stranded there —
+     invisible to the branch, and lost the moment that context is
+     cleaned up. A loop that pauses to be pushed is a loop that stopped.
+   - **Do not land a phase in the middle.** Half a phase on a branch is
+     what the grouping exists to prevent: if a task in the middle fails
+     or blocks, commit what is genuinely finished, report it, and let the
+     loop pick the next task — but leave the phase's *landing* gates for
+     the task that actually ends the phase.
+   - Ckdbs (`ckdbs/CLAUDE.md` in this repo) is the concrete example:
+     worktree per phase, a `critics-developer` review per task, a
+     `ck-tester` run and the full suite at the phase's end, sync-then-stop
+     before any push.
    - If the target project has no CLAUDE.md or no special workflow, work
      it the way any careful change to that codebase would be made —
      small, tested, reviewed if a review tool is available.
-4. **Do the task.** The task's `content` describes what's needed; `type`
+4. **Claim it, mark it `inprogress`, then do the task.** Two calls, in
+   this order, before any work:
+
+   **(a) Take the lease.** `POST {SERVER_URL}/tasks/{id}/claim/` with
+   `{"agent": "<this run's identity>"}`.
+
+   **(b) Move the state.** `POST {SERVER_URL}/tasks/{id}/state/` with
+   `{"state": "inprogress"}`.
+
+   **The claim goes first, and the order is not arbitrary.** The claim is
+   the exclusive gate — it can lose a race and return 409 — while the
+   state call is unconditional and would happily succeed on a task
+   another session is already working. Setting `inprogress` first and
+   then failing to claim would leave a task labelled as this session's
+   work when it is somebody else's.
+
+   The two are different things and the loop needs both: the **claim** is
+   an exclusive 30-minute lease that expires, the **state** is a durable
+   label that does not. A lease alone cannot be read as progress once it
+   expires; a state alone cannot stop two sessions colliding.
+   - **Take it here, not at pick time.** The lease runs 30 minutes from
+     the claim and orienting in an unfamiliar project can eat a chunk of
+     that, so claiming when work actually begins is what keeps the lease
+     covering the work rather than the reading.
+   - **409 means another agent holds it.** `claimable=true` in step 1 is
+     advisory — the claim call is what decides — so a 409 is ordinary,
+     not an error: leave that task alone, go back to step 2 and pick the
+     next one by priority.
+   - **Use an identity unique to this run**, not the bare string
+     `intermediary-agent`. `release` checks identity, so two loops
+     sharing one would each be able to drop the other's lease.
+   - **Re-claim to heartbeat.** Claiming a task this agent already holds
+     refreshes the lease, and a lease older than 30 minutes may be stolen
+     by another agent. A task that will outrun 30 minutes — in ckdbs a
+     single full-suite run is minutes and a whole row with its review is
+     far longer — must re-claim as it goes, or it can be stolen out from
+     under a working session.
+
+   The task's `content` describes what's needed; `type`
    (`implement`/`experimental`/`hotfix`/`benchmarking`/`revising`/...) is
    a hint about its shape, not a rulebook — don't over-index on it.
 5. **Report back — always, success or not.** `POST
@@ -158,27 +283,65 @@ not this run's work no matter how pending it looks.
      verified, what's left. Put anything longer in the target project's
      own tree (a doc, a commit message, a PR description) and reference
      it rather than pasting it here.
-   - This is the *only* step that talks to cws about a task's own state —
-     don't poll or update it any other way.
+   - **A result is a *finished* signal, never a started one.** Posting one
+     bumps `last_shipped_at`, and `pending` is derived from
+     `last_shipped_at == raised_at` — so a status like `in_progress`
+     posted here would drop the task out of the `pending=true` list and
+     make "Finishing" fire while the work is still running, besides
+     dropping the claim. Announce work starting with the **claim** in
+     step 4; report here only once there is an outcome to report.
+   - Posting a result **releases the claim by itself**, atomically with
+     the insert, so the success path needs no `release` call. Use
+     `POST {SERVER_URL}/tasks/{id}/release/` only to hand a task back
+     *without* reporting — abandoning it for a reason that is not an
+     outcome.
+   - **Move the state to its terminal value in the same breath.**
+     `POST {SERVER_URL}/tasks/{id}/state/` with `done`, `blocked` or
+     `cancelled` — whichever the result's `status` just said. Gated,
+     committed work is `done` even when its branch is unpushed: the push
+     is the operator's separate act, not a state the task waits in.
+     Leaving a finished task at `inprogress` is the one wrong answer —
+     nothing else clears it, and the next reader cannot tell it from work
+     genuinely under way.
+   - Apart from the claim/release lease and the state transitions in
+     step 4 and here, this is the only step that talks to cws about a
+     task — don't poll or update it any other way.
 6. **Hand off to the reporter.** Invoke
    [reporter-agent](reporter-agent.md) as this iteration's callback, and
    **give it the milestone id** — it syncs anything this iteration
    surfaced (new issues, milestone progress, follow-up subtasks) back to
    cws. Don't do that syncing yourself.
-7. **Loop.** Back to step 1 of *this* phase — never back to planning.
+7. **Loop.** Back to step 1 of *this* stage — never back to planning.
    Work this iteration surfaced but did not scope for is not built inline
    and is not planned by you either: it goes to `reporter-agent` as a
    subtask, which creates it **under this same `milestone_id`** so a
    later iteration can actually fetch it. If running under `/loop` or a
    scheduled wakeup, let that mechanism pace the next iteration rather
-   than spinning in a tight loop.
+   than spinning in a tight loop — but **pace it by what the queue holds,
+   not by a default.**
+
+   cws is a remote queue nothing notifies you about, so the delay belongs
+   to how fast that queue's state actually changes, and an iteration that
+   leaves pending tasks under the milestone has *already* changed it.
+   **Iteration 1 always leaves them**, which makes the tick after planning
+   the fastest one available — never the 20-30 minute idle tick a
+   self-paced wakeup defaults to. Treating a queue you just filled as idle
+   is the misreading this paragraph exists to prevent: it costs the run a
+   quarter of an hour before any work starts.
+
+   Concretely. Pending tasks remain under the milestone → wake at the
+   floor, which `ScheduleWakeup` clamps to **60 s**; anything faster is
+   not self-pacing's to give and has to come from the driver
+   (`/loop 20s …`), so ask for it there rather than passing a smaller
+   number here. The pending list came back empty → that is the only
+   genuinely idle case, and it is where a long delay belongs.
 
 ## Finishing
 
 When the milestone-scoped pending list comes back empty, the run is over:
 check the goal's completion condition — the milestone's criteria, the
 same check `reporter-agent` runs — and report plainly which tasks landed
-and which reported `failed`, `blocked` or `awaiting go-ahead`. Then stop.
+and which reported `failed` or `blocked`. Then stop.
 Don't fall back to the global pending queue: this run is scoped to the
 milestone it was given, and a milestone whose criteria aren't met yet is
 a finding to report, not a reason to go looking for other work.
