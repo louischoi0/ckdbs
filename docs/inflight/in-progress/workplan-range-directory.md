@@ -525,8 +525,14 @@ reversible). **RA5 landed 2026-08-27** in the
 same worktree: C4's two tables are §10 — D2's anchor pricing (10a, the
 collision is not a blocker; the table gives the cost basis) and D6's
 range-size unit table (10b, both units at the benches' three bulk-relation
-widths). The RA series is complete; M3's baseline capture remains, and
-the build resumes at RD2 after the decision session.
+widths). The RA series is complete. **M3 landed 2026-08-27** in the same
+worktree at `7b48f6e`: the pre-range baseline captured as
+`bench/v2.4.0/results-m3-pre-range-baseline-v2.2.1-76-g7b48f6e.md` — arm R
+(read) / arm I (insert) / arm S (shipped), with that file's §9 re-read
+contract binding on RD9(a): same-sitting rebuild of `7b48f6e` as the
+before arm, never a cross-sitting subtraction of this file's numbers. The
+order's M cells are all captured, and the build resumes at RD2 after the
+decision session.
 RD2 wants D2, RD7 wants D4, and **D1 removes the btree half entirely** —
 it is `crosscore.md` §9's, not this plan's. D6 blocks nothing: once RD5
 is built, choosing it is a config value, not a rewrite.
