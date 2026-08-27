@@ -410,6 +410,27 @@ self-heal — CC10) binds both:
   `docs/spec/heap-and-tuple.md`).
 - **Foreign keys** — gate: an FK parent or child does not split
   (`docs/spec/foreign-keys.md`; the §6 bullet above says why).
+- **Assertions** — the fifth gate, found by RD4's C2 enumeration
+  (2026-08-27, `workplan-range-directory.md` §9) rather than carried from
+  v1, which is why this bullet is younger than its four siblings. An
+  assertion's Bound Cabin is owner-built from the owner's own lease and
+  **appended to by every write to the relation** (PW1c-6c,
+  `workplan-peer-writer.md` §7d), its live directory is memory-resident
+  on that one core, and its aggregate is keyed on group columns that
+  need not include the pk (`ResolveAssertionColumns` refuses none) — so a
+  group's rows straddle any range boundary, a second
+  owner core's appends hit `MayWrite`'s refusal, and a core whose
+  registry never heard of the assertion admits the write **unchecked**
+  (the Finding 2 failure,
+  `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`). Gate: an
+  asserted relation — one the owner's registry holds live (`AnyOn`) *or*
+  knows and cannot enforce (`CannotEnforce`) — does not split **or
+  migrate**; the migration half for Cabin's reason in stronger form,
+  since a mid-run move leaves the incoming owner's registry empty and
+  emptiness admits silently. The fact deliberately does not ride
+  `TableAccess` (`assertion_check.hpp`'s header: the plan cache must not
+  depend on the assertion set), so the gate function takes the
+  enforcer, not the access struct alone.
 - **Waystone and statistics** — advisory (invariant 8): recording stays
   per owning core, a stale trail misses and falls through, and **no
   gate is needed** — worst case the trail is deleted, which invariant 8
@@ -419,9 +440,9 @@ self-heal — CC10) binds both:
 
 What remains splittable in the first build — non-spilling
 (`SchemaCanSpill` false; invariant 13 makes *every* relation
-fixed-length, so the spill is the gate), unindexed, un-cabined, FK-free
-relations — is narrow and real. The gates are lifted by the owning
-decisions, never by relaxing the decline.
+fixed-length, so the spill is the gate), unindexed, un-cabined, FK-free,
+**un-asserted** relations — is narrow and real. The gates are lifted by
+the owning decisions, never by relaxing the decline.
 
 ### 6b. Inserts and the Tail — Id-Block-Aligned Spreading (v2, R4)
 

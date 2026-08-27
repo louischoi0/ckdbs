@@ -606,6 +606,26 @@ delete-mark purge (`ddl-transactional.md` §5d) and the undo purge
 the log's own growth, so this run's chain plateaus). Everything else
 still waits on its own gate, so:
 
+- **A dropped relation's `sys.access_stats` ghosts consume the
+  instance-wide shape cap** — found 2026-08-27 by RD4's C2 enumeration
+  (worktree `v2.4.0-range-foundation-1`,
+  `workplan-range-directory.md` §9a's sweep), **source-read**. The
+  *ghosts themselves are a ratified decision*, not a defect:
+  `docs/spec/drop-table.md` DT4 says the rows "stay as ghosts (keyed by
+  an oid that can never be reissued, they can never mis-attribute;
+  `SHOW ACCESS` may list them and honesty costs a row)", and the drop
+  sweeps at `src/catalog/catalog.cpp:1729-1767` accordingly cover
+  `sys.tables`, `sys.columns`, `sys.indexes`, `sys.fkeys`, `sys.cabins`
+  (and probe `sys.ranges`) and not this one. **What DT4 priced at one
+  row of honesty is not the whole price**: `Catalog::RecordAccess`
+  (`:2584-2630`) refuses every *new* shape instance-wide once `live >=
+  kMaxAccessShapes` (`rows.hpp:681`, 4096), so dead relations' rows
+  narrow the budget of live ones, and an instance that creates and drops
+  relations in a loop degrades the statistic for everything. Wants
+  either a sweep arm in `DropTable` beside the five that exist (which
+  DT2's oid tombstone already makes safe — the floor comes from
+  `sys.objects`, not from these rows) or a DT4 amendment that prices the
+  cap alongside the row.
 - **Every `cores = 1` versus `cores = N` ratio in `bench/` is partly a
   measurement of how awake the machine is** — found 2026-08-26
   (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §7b). A
