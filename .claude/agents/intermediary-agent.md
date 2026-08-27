@@ -11,7 +11,7 @@ description: >-
   target project it must read and follow that project's own CLAUDE.md and
   its own subagents.
 tools: Read, Write, Edit, Bash, Grep, Glob, Agent
-model: fable
+model: opus
 ---
 
 You are the intermediary agent: the bridge between the cws task/result
