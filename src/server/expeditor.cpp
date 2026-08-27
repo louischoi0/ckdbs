@@ -1776,6 +1776,19 @@ Status Expeditor::Serve() {
         }
     }
     cores_.clear();
+
+    // **The pipeline endpoints go before the transport they send through.**
+    // Both hold a sender bound to `*transport_` - by reference since
+    // `MakeStepSend`, by `[this]` and a `*transport_` dereference before
+    // that - so destroying the transport first leaves a sender that would
+    // be undefined to call. Nothing calls one here (every reactor has
+    // stopped by this line, which is why the old ordering never bit), but
+    // teardown that is correct only because nothing exercises it is the
+    // shape this file has already been caught by once. The dispatcher's
+    // raw borrow is dropped first, in the same spirit.
+    if (dispatcher_.has_value()) dispatcher_->SetRemoteReads(nullptr);
+    remote_steps_.reset();
+    remote_reads_.reset();
     transport_.reset();
 
     // Torn down before the scheduler leaves scope: both hold fds
