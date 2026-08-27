@@ -134,3 +134,5 @@ series: `instructions/v2.3.0-reactor-wake.md` §5 asks for RW-B's raw driver
 output archived beside its results, and an order's own instruction outranks
 the general exemption. The files were back-filled rather than re-measured —
 they are the same JSON the tables above were computed from.
+
+> **The JSONs are there; the driver logs are not** (found 2026-08-27). `.gitignore`'s `*.log` had been swallowing the second half of every archive since the first one, so `bench/v2.3.0/archive/cell1-r1/` holds this run's JSON summaries and none of its logs. The rule now carries an exception for `bench/*/archive/**/*.log`, and the archives written after that date carry both; these logs were not reconstructed, because what is on disk here can no longer be matched to these runs with confidence.

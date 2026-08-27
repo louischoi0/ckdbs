@@ -1,0 +1,17 @@
+
+== multi-core: cores=4, 6 relations x 2000 rows ==
+   placement: bench0 owner_core=3  bench1 owner_core=1  bench2 owner_core=2  bench3 owner_core=3  bench4 owner_core=1  bench5 owner_core=2
+   host: workdir on ext4, 1-minute load 1.98 at start
+   ddl session on core 0 after 1 connection(s); 6 writer session(s) on cores [1, 2, 3] after 14 connection(s)
+   refills: core 1: rowid 2/2 wait_max=1.6ms (submit 0.0ms/0it, to-grant 1.6ms/627it, resume 0.0ms/1it), trxid 3/3 wait_max=35.5ms (submit 0.0ms/0it, to-grant 35.5ms/148145it, resume 1.0ms/1it), extent 1/1 wait_max=6.3ms (submit 0.0ms/0it, to-grant 5.4ms/4it, resume 1.0ms/1it); core 2: rowid 2/2 wait_max=0.7ms (submit 0.0ms/0it, to-grant 0.7ms/1395it, resume 0.0ms/1it), trxid 3/3 wait_max=35.5ms (submit 0.0ms/0it, to-grant 35.5ms/148764it, resume 1.5ms/1it), extent 1/1 wait_max=6.3ms (submit 0.0ms/0it, to-grant 5.1ms/4it, resume 1.2ms/1it); core 3: rowid 2/2 wait_max=1.4ms (submit 0.0ms/0it, to-grant 1.4ms/2475it, resume 0.0ms/1it), trxid 3/3 wait_max=35.5ms (submit 0.0ms/0it, to-grant 35.5ms/130044it, resume 0.9ms/1it), extent 1/1 wait_max=10.3ms (submit 0.0ms/0it, to-grant 9.2ms/7it, resume 1.0ms/1it)
+   verify: survivors as expected (1000, and one more in bench0 for the probe row)
+   retries: insert=20
+   wall=11.12s  aggregate=3,779 stmt/s  errors=0
+   insert        n= 12001  p50=   1948us  p99=   2696us
+   point-select  n= 12000  p50=     24us  p99=     95us
+   update        n= 12000  p50=   2209us  p99=   2813us
+   delete        n=  6000  p50=   2142us  p99=   2797us
+   scan          n=     6  p50=    997us  p99=   1442us
+
+== multi only ==
+   3,779 stmt/s over 11.12s

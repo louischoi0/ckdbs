@@ -141,3 +141,5 @@ unrun. Cell 5 matters most for this change specifically: the commit path is
 the one D5 identified as breakable, it is covered by a unit test that fails
 by a full second if the post-task hook's answer is wrong, and it has **not**
 been measured end to end.
+
+> **The JSONs are there; the driver logs are not** (found 2026-08-27). `.gitignore`'s `*.log` had been swallowing the second half of every archive since the first one, so `bench/v2.3.0/archive/cell3-parked/` holds this run's JSON summaries and none of its logs. The rule now carries an exception for `bench/*/archive/**/*.log`, and the archives written after that date carry both; these logs were not reconstructed, because what is on disk here can no longer be matched to these runs with confidence.

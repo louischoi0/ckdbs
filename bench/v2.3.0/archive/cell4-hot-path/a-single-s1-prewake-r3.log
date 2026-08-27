@@ -1,0 +1,67 @@
+{
+  "arm": "single",
+  "cores": 1,
+  "sessions": 1,
+  "rows": 4000,
+  "relations": 1,
+  "seat": "owner",
+  "same_owner": false,
+  "rows_total": 4000,
+  "relations_created": [
+    "hot0"
+  ],
+  "relations_used": [
+    "hot0"
+  ],
+  "owner_cores": {
+    "hot0": 0
+  },
+  "owner_core": 0,
+  "session_seats": [
+    0
+  ],
+  "session_relations": [
+    "hot0"
+  ],
+  "warmup_retries": 0,
+  "cpu_busy": {
+    "cpu0": 0.028,
+    "cpu1": 0.0209,
+    "cpu2": 0.0046,
+    "cpu3": 0.0277,
+    "cpu4": 0.0303,
+    "cpu5": 0.0233,
+    "cpu6": 0.0093,
+    "cpu7": 0.0235
+  },
+  "wall_s": 4.3335,
+  "attempted": 4000,
+  "executed": 4000,
+  "refused": 0,
+  "refusal_rate": 0.0,
+  "refusal_classes": {},
+  "sent": 4000,
+  "inserted": 4000,
+  "inserts_per_second": 923.0,
+  "retries": 0,
+  "errors": 0,
+  "first_error": null,
+  "insert_p50_us": 1071.6,
+  "insert_p99_us": 1379.2,
+  "insert_p0_us": 701.1,
+  "insert_p25_us": 1015.0,
+  "insert_p75_us": 1140.8,
+  "insert_p95_us": 1282.4,
+  "insert_mean_us": 1080.7,
+  "verify_per_relation": {
+    "hot0": {
+      "expected": 4001,
+      "got": 4001,
+      "ok": true
+    }
+  },
+  "verify": "rows as expected",
+  "owner_cores_distinct": [
+    0
+  ]
+}

@@ -8,6 +8,14 @@ build*/
 # segment directory (kds.db.wal/), and the log. kds.conf.sample is
 # committed; a real kds.conf is not.
 *.log
+# ...except a benchmark run's archived driver output. `bench/docs/README.md`
+# requires a run to archive "JSON summaries and logs, never data files", and
+# the rule above had been quietly swallowing the second half since the first
+# archive: every `bench/*/archive/` on main holds its JSONs and none of its
+# logs. The logs carry what the JSON does not - the driver's own host check,
+# the per-core lease-refill legs, the NOT RUN refusals - and a results file
+# that cites them needs them present.
+!bench/*/archive/**/*.log
 kds.db
 kds.db.*
 kds.conf
