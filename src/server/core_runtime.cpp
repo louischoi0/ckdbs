@@ -52,7 +52,16 @@ CoreRuntime::~CoreRuntime() {
         dispatcher_->SetStatementShip(nullptr);
         dispatcher_->SetShippedStatements(nullptr);
     }
-    scheduler_.reset();
+    // **`scheduler_.reset()` used to stand here and is deliberately gone.**
+    // It inverted declaration order to enforce a contract that declaration
+    // order already keeps: `scheduler_` is declared above every borrower,
+    // so reverse-order destruction drops all seven of them first. Dropping
+    // it here instead did the opposite of what its own comment argued for,
+    // and `MakeStepSend` made that reachable rather than theoretical -
+    // `remote_steps_` now holds a `sched::Scheduler&` and would have
+    // outlived it by the width of this function. The hand-nulled borrows
+    // above stay: they are for members declared *below* the dispatcher,
+    // which reverse order takes first, and that order no line here can fix.
 }
 
 StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,

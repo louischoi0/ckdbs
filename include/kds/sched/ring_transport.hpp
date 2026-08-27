@@ -150,10 +150,14 @@ public:
     // Every ring in the matrix is created with the same `max_payload`
     // (`Create`'s one parameter), so any of them answers for all.
     //
-    // The empty guard is **not** a dead branch for `core_count == 0`,
-    // which `Create` refuses: it is for a **moved-from** transport, whose
-    // `rings_` the move constructor above has emptied. `Expeditor::Serve`
-    // uses exactly that constructor, so the state is reachable.
+    // The empty guard answers no live caller: `Create` refuses
+    // `core_count == 0`, and the one other empty state - a **moved-from**
+    // transport - is not a usable object at all (the move constructor
+    // above says so, and `TrySend` on one would index a `rings_` the move
+    // emptied while `core_count_` survived it). The guard is here so
+    // `front()` cannot be UB, not because something reaches this in that
+    // state; every `max_payload()` call in the engine is
+    // `server::MakeStepSend`'s, on a transport it was handed live.
     std::size_t max_payload() const noexcept override {
         return rings_.empty() ? 0 : rings_.front().max_payload();
     }
