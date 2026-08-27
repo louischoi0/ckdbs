@@ -99,6 +99,88 @@ subtask is created under this run's own `milestone_id`, always** — the
 loop fetches nothing else, so a subtask filed anywhere else is a subtask
 the loop that raised it can never pick up.
 
+## What the loop optimizes for
+
+Five standing emphases. They are not extra steps bolted onto the
+iteration above — they are what makes an unattended loop worth running
+instead of a queue of scripted edits, and each one is checkable in the
+task's report.
+
+**Self-enhancement — the loop improves the machinery it runs on.** An
+iteration that hits friction fixes it where it lives rather than working
+around it silently: an ambiguous rule in `docs/rules/`, a missing step in
+`.claude/agents/intermediary-agent.md` or `reporter-agent.md`, a doc that
+sent the task to the wrong file, a stale claim in `CLAUDE.md`'s milestone
+table. That fix is part of the iteration's output and is reported as
+such. **Bounded, and the bound is the point**: self-enhancement never
+edits a Hard Invariant, never relaxes a gate in the Session Workflow,
+never widens its own authority — in particular it cannot grant itself the
+go-ahead the push gate withholds. It sharpens the process; it does not
+rewrite what the process is allowed to do. A change to this file or to an
+agent file is a change like any other: reviewed, and named in the report.
+
+**Reasoning — done before the edit, and written down.** The loop's value
+is that thinking happens where the work does, not that edits arrive
+quickly. A task begins by reading the owning spec, `docs/inflight/`, the
+tests and the git history, and the reasoning is recorded before the first
+edit rather than reconstructed after it. `CLAUDE.md`'s standing rule
+applies unchanged and hardest here — **re-measure a premise before
+building the fix**, because no reviewer is watching the guess. A task
+whose report cannot state *why* this approach and *what was ruled out* is
+not finished, however green its suite; and the long form of that
+reasoning lands in the owning doc under "Documentation" above, not in the
+cws result field.
+
+**Hypothesis, verification, and the plan that follows from it.** Most
+non-trivial tasks start from a guess — where the cost is, why the test
+fails, which layer owns the bug. Workflow mode requires that guess be
+**stated as a hypothesis with the check that would falsify it**, and the
+check run before anything is built on it. Verification is evidence, not
+assent: a measurement in `build-release` carrying its `git describe
+--tags`, a test that fails before and passes after, a spec section that
+says it. **A refuted hypothesis is a result, not a wasted iteration** —
+it is written down with the same care as a confirmed one, because the
+next iteration has no memory and would otherwise pay for the same guess
+twice.
+
+Then the plan is re-formed on what the check returned, in the same
+iteration, before the loop moves on. Confirmed: the dependent tasks stand
+and the next one proceeds. Refuted: every task that rested on that
+premise is rewritten, re-prioritized, or replaced with new tasks under
+the same `milestone_id` — **a plan is never left standing on a premise
+this iteration just disproved**, and "the queue still says so" is not a
+reason to build the next task. Hypothesis, check, verdict and the plan
+change it forced all land in the owning doc under "Documentation" below;
+the cws report names them and points there.
+
+**Achieving the milestone — the milestone is the unit of success, not the
+task count.** Tasks are one decomposition of the goal, made at planning
+time with the least information the run will ever have. When working a
+task shows the decomposition wrong, `intermediary-agent` re-plans inside
+the milestone — re-prioritizing, splitting a task, filing new ones under
+the same `milestone_id` — rather than following a plan it has already
+disproved. Two things it may not do: widen into a second milestone (the
+scope rule under "One task source" is absolute), or call a milestone met
+because its task list emptied. Completion is the milestone's criteria
+checked against the tree. **Partial is reported as partial**, with what
+is missing named and pointed at its doc.
+
+**Review in various aspects — one pass is not a review.** Every step
+takes `critics-developer` (Session Workflow §2) and every feature takes
+`ck-tester` (§3); beyond that floor, the loop reviews the change from the
+aspects it actually touches, because a single reviewer reading for
+correctness will not notice a broken durability claim or a doc left
+stale. The aspects, applied where they apply: correctness against the
+Hard Invariants; conformance to the spec the change claims to implement;
+crash, recovery and restart behaviour; concurrency, cross-core and
+ownership; performance and per-statement overhead; and the doc trail the
+task owes. **An aspect that does not apply is named as not applying** —
+"no on-disk format touched, so no recovery aspect" — never dropped in
+silence, since silence and unexamined read identically in a report. Where
+an aspect wants a different reader, use the agent that owns it —
+`kdbs-architect` for structure, `ck-tester` for measurement — rather than
+folding every aspect into one pass.
+
 ## Autonomy — research and decide, never ask
 
 Workflow mode has no user to answer a clarifying question mid-loop —
@@ -198,7 +280,11 @@ under it with their priorities, builds nothing, and hands the plan to
    **unmodified**: a worktree named for the work (§1) — carrying the cws
    task id is recommended, so `reporter-agent` can trace state back to
    it — `critics-developer` review per step (§2), `ck-tester` per feature
-   (§3), sync-and-report at land time (§4).
+   (§3), sync-and-report at land time (§4). Inside that, the emphases of
+   "What the loop optimizes for" apply: the task's hypothesis and its
+   falsifier are stated before the first edit, the falsifier is run
+   before anything is built on the guess, and the review is read from
+   every aspect the change touches, not one.
 3. **The go-ahead gate does not move.** `CLAUDE.md` §4 requires an
    explicit go-ahead before anything pushes to `origin main`; workflow
    mode grants none of its own authority, and cannot — that push stays
@@ -216,10 +302,16 @@ under it with their priorities, builds nothing, and hands the plan to
    into the owning doc under `docs/` (per "Documentation" above), states
    the follow-up as one or more subtasks pointing at that doc, and hands
    them to `reporter-agent` along with the iteration's other output.
+5b. **If verification refuted the premise the plan rested on**,
+   `intermediary-agent` states the re-plan in the same iteration — which
+   tasks are now wrong, and what replaces them — and hands it to
+   `reporter-agent` with the rest of the iteration's output. It does not
+   leave a disproved task standing for a later iteration to build.
 6. `reporter-agent` syncs the task outcome, checks that any doc update
-   the task claimed is actually there, and enqueues the handed-off
-   subtasks into cws **under the same `milestone_id`**, then the loop
-   returns to step 1. A subtask waits its turn like any other pending
+   the task claimed is actually there, enqueues the handed-off subtasks
+   into cws **under the same `milestone_id`**, and applies any handed-off
+   re-plan with `PATCH {SERVER_URL}/tasks/{id}/`, then the loop returns to
+   step 1. A subtask waits its turn like any other pending
    task — its `priority` places it, and it does not jump the queue or run
    inline in the iteration that raised it.
 7. **The run ends when the milestone-scoped pending list is empty**, not
@@ -260,6 +352,16 @@ the two agent files rather than left as intent:
   `POST /tasks/{id}/results/` — not an issue-shaped workaround. Issues
   (`POST /issue/{project}/`) go back to meaning what `reporter-agent`
   always used them for: problems the work surfaced.
+
+- **Editing a task in place exists** — `PATCH {SERVER_URL}/tasks/{id}/`
+  writes only the keys present (an explicit `null` clears a nullable
+  column, and `raised_at`/`last_shipped_at`/`claimed_by`/`claimed_at` are
+  refused by name). That is what makes the re-plan under "What the loop
+  optimizes for" an operation and not an intention: a task whose premise
+  this iteration disproved gets its `content` and `priority` rewritten
+  rather than left to be built as planned. `reporter-agent` makes the
+  call, per the split — `intermediary-agent` decides the re-plan, the
+  reporter tells cws.
 
 Also on the server and **not yet used by either agent**: `POST
 /tasks/{id}/claim/` and `/release/`, an exclusive 30-minute lease so two
