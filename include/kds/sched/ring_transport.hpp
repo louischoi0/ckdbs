@@ -92,16 +92,9 @@ public:
 
     virtual std::uint32_t core_count() const noexcept = 0;
 
-    // The largest payload `TrySend` will accept, in bytes.
-    //
-    // Here rather than left to the caller's own configuration because a
-    // sender that has to be *told* its transport's capacity is a sender
-    // that can be told wrong - and was. `kStepBatchTargetBytes` was 32x
-    // this number for the whole life of the pipeline, so a cross-core read
-    // of 42 rows answered zero rows with no error at all
-    // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
-    // Asking the transport is the only reading that cannot drift from what
-    // `TrySend` actually enforces.
+    // The largest payload `TrySend` will accept, in bytes - the same
+    // number that call enforces, so a sender sizing against this one
+    // cannot drift from what it will actually be allowed to send.
     virtual std::size_t max_payload() const noexcept = 0;
 
     // Wakes written across every destination (waker.hpp). Instance-wide
@@ -155,8 +148,12 @@ public:
     std::uint32_t core_count() const noexcept override { return core_count_; }
 
     // Every ring in the matrix is created with the same `max_payload`
-    // (`Create`'s one parameter), so any of them answers for all. Empty
-    // only at `core_count == 0`, which `Create` refuses.
+    // (`Create`'s one parameter), so any of them answers for all.
+    //
+    // The empty guard is **not** a dead branch for `core_count == 0`,
+    // which `Create` refuses: it is for a **moved-from** transport, whose
+    // `rings_` the move constructor above has emptied. `Expeditor::Serve`
+    // uses exactly that constructor, so the state is reachable.
     std::size_t max_payload() const noexcept override {
         return rings_.empty() ? 0 : rings_.front().max_payload();
     }

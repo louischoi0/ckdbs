@@ -149,11 +149,13 @@ protected:
     void MakeServer(RemoteStepServer::SubmitFn submit) {
         server_.emplace(
             boot_->catalog, *store_, /*core_id=*/1,
-            [this](std::uint32_t dst, sched::RingMessageKind kind,
-                   std::vector<std::byte> payload) {
+            // No ring here: the sender is captured, so `kNoRingSlot` is
+            // the truthful slot and comes from the seam's own default.
+            StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
                 sent_.push_back(Sent{dst, kind, std::move(payload)});
                 return Status::OK();
-            },
+            }},
             nullptr, /*batch_target_bytes=*/1, std::move(submit));
     }
 
@@ -720,10 +722,11 @@ TEST_F(RemoteStepServiceTest, AStageReadsAtLatestCommittedAndNotAnInFlightWriter
     // A server wired to that manager mints its view when the stage opens.
     server_.emplace(
         boot_->catalog, *store_, /*core_id=*/1,
-        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> p) {
+        StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                            std::vector<std::byte> p) {
             sent_.push_back(Sent{dst, kind, std::move(p)});
             return Status::OK();
-        },
+        }},
         nullptr, /*batch_target_bytes=*/1, RemoteStepServer::SubmitFn{}, &mgr);
     server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
     GrantCredits(4);
@@ -1044,10 +1047,11 @@ TEST_F(ConsumingStageTest, TheRowTouchBudgetBoundsTheWholeStageNotOneInputRow) {
     // Per stage, the second row's walk crosses the ceiling.
     server_.emplace(
         boot_->catalog, *store_, /*core_id=*/1,
-        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> p) {
+        StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                            std::vector<std::byte> p) {
             sent_.push_back(Sent{dst, kind, std::move(p)});
             return Status::OK();
-        },
+        }},
         nullptr, /*batch_target_bytes=*/1,
         [this](std::unique_ptr<sched::Task> task) { tasks_.push_back(std::move(task)); },
         /*txns=*/nullptr, exec::Budget(12));
@@ -1219,12 +1223,14 @@ TEST_F(RemoteStepServiceTest, NoBatchExceedsTheCeilingWhenRowWidthsVary) {
     constexpr std::size_t kSlot = 256;
     server_.emplace(
         boot_->catalog, *store_, /*core_id=*/1,
-        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
-            sent_.push_back(Sent{dst, kind, std::move(payload)});
-            return Status::OK();
-        },
+        StepSendSeam{[this](std::uint32_t dst, sched::RingMessageKind kind,
+                            std::vector<std::byte> payload) {
+                         sent_.push_back(Sent{dst, kind, std::move(payload)});
+                         return Status::OK();
+                     },
+                     /*max_message_bytes=*/kSlot},
         nullptr, /*batch_target_bytes=*/kStepBatchTargetBytes, RemoteStepServer::SubmitFn{},
-        /*txns=*/nullptr, exec::Budget(), /*max_message_bytes=*/kSlot);
+        /*txns=*/nullptr, exec::Budget());
 
     // Enough rows that the batch target (32 KiB) is never the thing that
     // seals: only the ceiling can be.
@@ -1271,8 +1277,8 @@ TEST_F(RemoteStepServiceTest, ABatchSendThatFailsTearsThePipelineDownInsteadOfLe
     std::size_t sends = 0;
     server_.emplace(
         boot_->catalog, *store_, /*core_id=*/1,
-        [this, &sends](std::uint32_t dst, sched::RingMessageKind kind,
-                       std::vector<std::byte> payload) {
+        StepSendSeam{[this, &sends](std::uint32_t dst, sched::RingMessageKind kind,
+                                   std::vector<std::byte> payload) {
             sent_.push_back(Sent{dst, kind, std::move(payload)});
             // The first batch fails the way an oversize payload now does -
             // not backpressure, which the retry task owns and which must
@@ -1282,7 +1288,7 @@ TEST_F(RemoteStepServiceTest, ABatchSendThatFailsTearsThePipelineDownInsteadOfLe
                 return Status::InvalidArgument("step message is wider than the ring slot");
             }
             return Status::OK();
-        },
+        }},
         nullptr, /*batch_target_bytes=*/1, RemoteStepServer::SubmitFn{});
 
     server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
