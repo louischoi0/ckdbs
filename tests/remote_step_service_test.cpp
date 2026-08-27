@@ -1202,5 +1202,51 @@ TEST_F(ConsumingStageTest, ACancelReachesAWalkParkedInsideItsInputRow) {
     EXPECT_TRUE(upstream_cancelled) << "crosscore.md §7: the upstream was left parked";
 }
 
+TEST_F(RemoteStepServiceTest, ABatchSendThatFailsTearsThePipelineDownInsteadOfLeakingIt) {
+    // `Drain`'s send-failure arm was dead code for the pipeline's whole
+    // life - the send seam returned OK unconditionally - and it became
+    // reachable the day that seam learned to refuse an oversize payload
+    // (docs/inflight/bugs/step-batch-wider-than-ring-slot-vanishes.md).
+    //
+    // What it did when first reached is what this pins: `SendFn` takes
+    // the payload **by value**, so a failing send has already moved the
+    // batch out of the queue, and breaking without popping leaves a
+    // moved-from vector at the head. `batches` is then non-empty forever,
+    // so the EOF-and-erase arm is skipped, and no credit will re-enter -
+    // the session has just been answered with the error. One leaked
+    // `pipelines_` entry per failed send, on a path nobody had run.
+    std::size_t sends = 0;
+    server_.emplace(
+        boot_->catalog, *store_, /*core_id=*/1,
+        [this, &sends](std::uint32_t dst, sched::RingMessageKind kind,
+                       std::vector<std::byte> payload) {
+            sent_.push_back(Sent{dst, kind, std::move(payload)});
+            // The first batch fails the way an oversize payload now does -
+            // not backpressure, which the retry task owns and which must
+            // keep its own path. Everything after is let through so the
+            // error itself can be observed arriving.
+            if (kind == sched::RingMessageKind::kStepBatch && sends++ == 0) {
+                return Status::InvalidArgument("step message is wider than the ring slot");
+            }
+            return Status::OK();
+        },
+        nullptr, /*batch_target_bytes=*/1, RemoteStepServer::SubmitFn{});
+
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+
+    EXPECT_EQ(server_->open_pipelines(), 0u)
+        << "a failed batch send left the pipeline behind; nothing will ever erase it";
+
+    // And the failure is *reported*, not swallowed: silence here is the
+    // whole defect this file's neighbour documents.
+    bool errored = false;
+    for (const Sent& s : sent_) {
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
+            << "a stage whose batch was lost must never claim a clean end";
+        if (s.kind == sched::RingMessageKind::kStepError) errored = true;
+    }
+    EXPECT_TRUE(errored) << "the session was told nothing about a batch it will never receive";
+}
+
 }  // namespace
 }  // namespace kds::server

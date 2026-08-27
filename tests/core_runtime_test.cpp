@@ -3144,6 +3144,119 @@ TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRow
         << "a shipped read must answer exactly what the owner answers";
 }
 
+// ---- The step pipeline at the ring slot it actually sends through -------
+
+TEST_F(CoreRuntimeTest, AStepBatchWiderThanTheRingSlotStillDeliversEveryRow) {
+    // P4e's equivalence rig proves the pipeline's reply is the local reply
+    // byte for byte - but it hands each message to the far side by calling
+    // its handler directly, so no batch it builds is ever measured against
+    // a ring slot. Production sends the same batch through
+    // `sched::kCoreRingPayloadBytes` (1,024) while the server seals at
+    // `kStepBatchTargetBytes` (32 KiB) or, unconditionally, at the end of
+    // the walk. This runs the P4c single-step shape over a **real** ring at
+    // both production sizes and compares the row count the session sees
+    // against the owner's own answer, at growing widths.
+    //
+    // A two-column int64 row is 24 encoded bytes (a 4-byte length plus 8
+    // per column), the STEP_BATCH header is 24 and the row-batch header 2
+    // (wire/row_codec.cpp), so 24 + 2 + 24n crosses 1,024 at n = 42 - the
+    // measured first loss exactly.
+    std::optional<SessionStepClient> client;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "wide_batch");
+
+    // The owner's rows. `OpenForeignIndexRig` leaves three (10, 20, 30) and
+    // a 16-id lease, so both are extended here.
+    auto more = rig.catalog2->AllocateRowIdRange(rig.oid, 512);
+    ASSERT_TRUE(more.ok()) << more.status().message();
+    rig.peer->row_id_leases().Grant(rig.oid, more.value(), 512);
+    constexpr int kRows = 120;
+    for (int base = 0; base < kRows; base += 10) {
+        std::string ins = "INSERT INTO wide_batch VALUES ";
+        for (int i = 0; i < 10; ++i) {
+            if (i > 0) ins += ", ";
+            ins += "(" + std::to_string(1000 + base + i + 1) + ")";
+        }
+        const std::string reply = rig.peer->dispatcher().Dispatch(ins).response;
+        ASSERT_NE(reply.rfind("ERR", 0), 0u) << reply;
+    }
+
+    // Core 0's session-side pipeline client, wired exactly as
+    // `Expeditor::Serve` wires it: the send is a `SendRetryTask` on the
+    // real transport, and the three consumer kinds are registered on core
+    // 0's reactor.
+    client.emplace(/*core_id=*/0,
+                   [&rig](std::uint32_t dst, sched::RingMessageKind kind,
+                          std::vector<std::byte> payload) {
+                       sched::MessageHeader out{};
+                       out.src_core = 0;
+                       out.dst_core = dst;
+                       out.session_core = 0;
+                       out.kind = static_cast<std::uint16_t>(kind);
+                       out.sched_group =
+                           static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+                       rig.core0->Submit(
+                           sched::MakeSendRetryTask(rig.ring(), out, payload));
+                       return Status::OK();
+                   });
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kStepBatch,
+                                             [&client](const sched::MessageHeader&,
+                                                       std::span<const std::byte> payload) {
+                                                 client->OnStepBatch(payload);
+                                             })
+                    .ok());
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kStepEof,
+                                             [&client](const sched::MessageHeader&,
+                                                       std::span<const std::byte> payload) {
+                                                 client->OnStepEof(payload);
+                                             })
+                    .ok());
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kStepError,
+                                             [&client](const sched::MessageHeader&,
+                                                       std::span<const std::byte> payload) {
+                                                 client->OnStepError(payload);
+                                             })
+                    .ok());
+    rig.dispatcher->SetRemoteReads(&*client);
+
+    // The text protocol separates rows with a literal backslash-n (the P4e
+    // expectations above are spelled that way), so the row count is the
+    // number of separators: one heading line, then one per row.
+    auto rows_in = [](const std::string& reply) {
+        std::size_t rows = 0;
+        for (std::size_t at = reply.find("\\n"); at != std::string::npos;
+             at = reply.find("\\n", at + 2)) {
+            ++rows;
+        }
+        return rows;
+    };
+
+    // `SELECT *` with a residual stays the star shape the single-step
+    // pipeline takes (command_dispatcher.cpp's eligibility test), so the
+    // predicate is the width dial: `v <= n` is exactly n rows.
+    for (int n : {1, 8, 20, 30, 38, 40, 41, 42, 43, 44, 48, 64, 100, 120}) {
+        const std::string sql =
+            "SELECT * FROM wide_batch WHERE v > 1000 AND v <= " + std::to_string(1000 + n);
+        const std::string local = rig.peer->dispatcher().Dispatch(sql).response;
+        ASSERT_NE(local.rfind("ERR", 0), 0u) << local;
+        ASSERT_EQ(rows_in(local), static_cast<std::size_t>(n)) << local;
+
+        DispatchOutcome out;
+        auto statement = rig.Start(sql.c_str(), out);
+        ASSERT_TRUE(rig.Drive(*statement, 1024)) << "n=" << n << ": " << out.response;
+        // Nothing shipped as text: this shape takes the pipeline, which
+        // sits above the shipping fork. Without this the test could pass
+        // by measuring the other path.
+        ASSERT_EQ(rig.peer->shipped_statements()->executed(), 0u) << "n=" << n;
+        EXPECT_EQ(rows_in(out.response), static_cast<std::size_t>(n))
+            << "n=" << n << " reply: " << out.response;
+        EXPECT_EQ(out.response, local) << "n=" << n;
+    }
+}
+
 TEST_F(CoreRuntimeTest, UpdateAndDeleteShipToTheOwnerToo) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_dml");
