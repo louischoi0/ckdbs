@@ -138,7 +138,16 @@ not this run's work no matter how pending it looks.
      thing the work stage does to a task is move it to `inprogress`, so
      `init` reads as "planned, never picked up".
 
-4. **Do no development work in this iteration.** The plan is the output.
+4. **Record the plan's hypotheses and its completion condition.** A plan
+   is a set of guesses about how the work decomposes. Where the
+   instruction file states them (ckdbs's orders carry a "Hypotheses —
+   each with its falsifier" section and a measurement table), carry them
+   through verbatim into the task `content` of the row each one gates;
+   where it doesn't, write the ones the breakdown assumed. The milestone's
+   criteria are the goal's completion condition — not the emptying of the
+   task list.
+
+5. **Do no development work in this iteration.** The plan is the output.
    Report the milestone id and the task ids created, hand off to
    `reporter-agent` (step 6 of the work stage), and let the next
    iteration start the work.
@@ -269,7 +278,35 @@ not this run's work no matter how pending it looks.
 
    The task's `content` describes what's needed; `type`
    (`implement`/`experimental`/`hotfix`/`benchmarking`/`revising`/...) is
-   a hint about its shape, not a rulebook — don't over-index on it.
+   a hint about its shape, not a rulebook — don't over-index on it. How
+   the task is worked is the target project's business, but five things
+   are this loop's and hold in every project
+   (`docs/rules/rule-workflow-mode.md`, "What the loop optimizes for"):
+   - **Reason first, in writing.** Read the owning docs, the tests and
+     the git history before the first edit, and record why this approach
+     and what was ruled out. Reconstructed-afterwards reasoning is not
+     the same artifact.
+   - **State the hypothesis with its falsifier, and run the falsifier
+     before building on it.** Most tasks start from a guess about where
+     the cost is or which layer owns the bug. Write the guess down, write
+     what would disprove it, check it, and record the verdict either way
+     — **a refuted hypothesis is a result**, and the next iteration has
+     no memory but what you wrote.
+   - **Re-plan on what the check returned.** If the premise a queued task
+     rested on is now disproved, that task is wrong: say which tasks
+     change and how, and hand the re-plan to `reporter-agent`, which
+     applies it with `PATCH {SERVER_URL}/tasks/{id}/`. Never build the
+     next task on a premise this iteration just disproved.
+   - **Review from every aspect the change touches**, not one pass —
+     correctness and invariants, spec conformance, crash/recovery,
+     concurrency, overhead, and the doc trail — using the target
+     project's own reviewers for the aspects they own. An aspect that
+     doesn't apply is *named* as not applying.
+   - **Fix the machinery when it is the thing that's wrong.** An
+     ambiguous rule, a stale doc, a gap in this file or in
+     `reporter-agent.md` gets fixed where it lives and named in the
+     report. Bounded: never a project invariant, never a review or push
+     gate, never your own authority.
 5. **Report back — always, success or not.** `POST
    {SERVER_URL}/tasks/{id}/results/`:
    ```json
@@ -280,9 +317,11 @@ not this run's work no matter how pending it looks.
      enforced server-side; pick what's true.
    - Keep `content` to a summary (roughly 1.2 KB raw text is the current
      server-side cap — it 413s past that): what changed, what was
-     verified, what's left. Put anything longer in the target project's
-     own tree (a doc, a commit message, a PR description) and reference
-     it rather than pasting it here.
+     verified, what's left. Name the hypothesis's verdict, any decision
+     made without operator input, and any re-plan the verdict forced —
+     each as one line pointing at the doc that carries it. Put anything
+     longer in the target project's own tree (a doc, a commit message, a
+     PR description) and reference it rather than pasting it here.
    - **A result is a *finished* signal, never a started one.** Posting one
      bumps `last_shipped_at`, and `pending` is derived from
      `last_shipped_at == raised_at` — so a status like `in_progress`
@@ -309,8 +348,9 @@ not this run's work no matter how pending it looks.
 6. **Hand off to the reporter.** Invoke
    [reporter-agent](reporter-agent.md) as this iteration's callback, and
    **give it the milestone id** — it syncs anything this iteration
-   surfaced (new issues, milestone progress, follow-up subtasks) back to
-   cws. Don't do that syncing yourself.
+   surfaced (new issues, milestone progress, follow-up subtasks, and any
+   re-plan of already-queued tasks) back to cws. Don't do that syncing
+   yourself.
 7. **Loop.** Back to step 1 of *this* stage — never back to planning.
    Work this iteration surfaced but did not scope for is not built inline
    and is not planned by you either: it goes to `reporter-agent` as a

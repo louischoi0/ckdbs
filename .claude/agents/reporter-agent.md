@@ -85,7 +85,18 @@ don't duplicate that.
    - The ~1.2 KB cap on `content` applies here too: point at the doc
      under `docs/` that carries the reasoning, don't paste it.
 
-3. **Milestone progress.** `GET {SERVER_URL}/milestones/{id}/` for the
+3. **Re-plan of already-queued tasks, handed to you by
+   `intermediary-agent`.** When an iteration's verification disproved the
+   premise a queued task rested on, the intermediary decides what changes
+   and you make the call: `PATCH {SERVER_URL}/tasks/{id}/` with only the
+   keys that change (`content`, `priority`, `type`, `derived_from`;
+   `null` clears a nullable one). `raised_at`, `last_shipped_at`,
+   `claimed_by` and `claimed_at` are refused by name — leases move only
+   through claim/release. **You apply the re-plan; you never author it**
+   — if what you were handed doesn't say which task and which field, ask
+   rather than deciding it yourself.
+
+4. **Milestone progress.** `GET {SERVER_URL}/milestones/{id}/` for the
    one you were given (or `GET {SERVER_URL}/milestones/` matched on
    `directory` if you were given a path instead). Check its criteria
    against what is actually true in the project, then:
@@ -99,13 +110,16 @@ don't duplicate that.
      is still outstanding. Don't advance a state that the project's own
      files don't support.
 
-4. **The doc trail.** A task reported `done` under workflow mode owes a
+5. **The doc trail.** A task reported `done` under workflow mode owes a
    doc update where one was owed (`docs/rules/rule-workflow-mode.md`,
    "Documentation"). Confirm the file and section the task claimed
    actually exist before treating that claim as synced, and point cws at
    the doc rather than copying its content into the server. A `done` with
    no corresponding doc update is a reporting defect — say so rather than
-   passing the claim through unchecked.
+   passing the claim through unchecked. The same check covers what the
+   emphases owe: a task whose report names a hypothesis verdict, a
+   decision made without operator input, or a measurement must have it
+   written in the owning doc, not only in the cws result.
 
 ## What not to do
 
@@ -114,5 +128,8 @@ don't duplicate that.
 - Don't create a duplicate issue — always check the alias first.
 - Don't create a task outside this run's milestone, or without a
   `milestone_id` at all.
+- Don't re-plan on your own judgement — `PATCH /tasks/{id}/` is only ever
+  applied to a re-plan `intermediary-agent` handed you, never one you
+  decided.
 - Don't bypass the HTTP API (no raw SQL against KDS) for any gap you find
   — report the gap instead.
