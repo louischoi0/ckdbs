@@ -222,16 +222,11 @@ TEST(SysPatternRowTest, CatalogConstantsDoNotCollide) {
     EXPECT_NE(kSysPatternsTable, kSysIndexesTable);
     EXPECT_LT(kSysPatternsTable, kUserOidStart);
 
-    // The bootstrap pages are fixed ids handed to CreateAt(), never
-    // allocated - so a collision with another catalog page or with the
-    // first user page would be found at Bootstrap() time, in a failure
-    // that says nothing about the cause.
-    EXPECT_NE(kCatalogPagePatterns, kCatalogPageTypes);
-    EXPECT_NE(kCatalogPagePatterns, kCatalogPageColumns);
-    EXPECT_NE(kCatalogPagePatterns, kCatalogPageObjects);
-    EXPECT_NE(kCatalogPagePatterns, kCatalogPageTables);
-    EXPECT_NE(kCatalogPagePatterns, kCatalogPageIndexes);
-    EXPECT_LT(kCatalogPagePatterns, 128u);  // kds::server::kFirstUserPageId
+    // The page half of this test is gone: it hand-checked five of what are
+    // now twelve roots, and well_known.hpp's
+    // `CatalogRootsAreDistinctAndBelowOverflow()` static_assert covers all
+    // of them - distinctness and the sub-user-range bound - at compile
+    // time, over the one list every root already joins.
 }
 
 // ---- sys.tables ------------------------------------------------------

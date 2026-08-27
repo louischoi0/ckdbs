@@ -242,8 +242,9 @@ interleaved.
   interleaving (`free, headerless, free, headerless, …`) keeps it and keeps
   the arithmetic a single multiply-add.
 - **The costs, named.** The sub-128 range is **fully spoken for**:
-  `kCatalogOverflowFirst = 15` through `kCatalogOverflowLimit = 128`
-  (`well_known.hpp:326`, `:331`) is catalog overflow, and 128 is
+  `kCatalogOverflowFirst = 16` (15 when this was written; sys.ranges took
+  15 as its root at superblock v16) through `kCatalogOverflowLimit = 128`
+  (`well_known.hpp`) is catalog overflow, and 128 is
   `kFirstUserPageId`. A reserved map region therefore has to move
   `kFirstUserPageId`, which is a **superblock version bump** — the block at
   `include/kds/server/superblock.hpp:52-160` records six precedents, and the

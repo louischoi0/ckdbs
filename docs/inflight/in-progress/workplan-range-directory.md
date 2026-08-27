@@ -313,6 +313,24 @@ task's. **H4**: the arithmetic above is computable now from
 schema is **M2's**. Verdicts land in this section when the suite and the
 cells report.
 
+**Verdict, same day (worktree `v2.4.0-range-foundation-1`): H1's suite
+half held.** In one sitting, the full suite ran **2774/2774** and
+`scripts/sim.sh` **171/171** at the pre-RA2 tree (code-identical to
+`b0b6e8a`), then **2775/2775** (the +1 is RD1's own new test) and
+**171/171** after the edit; the only pre-existing test the edit touched is
+`assertion_catalog_test.cpp`'s exact overflow pin, fixed by shape.
+End-to-end with the built binary: a v15 file is refused at the door —
+`startup failed: superblock version 15 is not this build's (16)`, and
+bootstrap declines to treat it as a fresh database — while a fresh v16
+file creates at 16 pages, remounts, and answers `SHOW TABLES` with
+`ranges` in the list and `DESCRIBE ranges` with `oid=133
+root_page_id=15`. The review's runtime probe found `SELECT`/`INSERT`/
+`DROP TABLE`/`CREATE TABLE` against `ranges` byte-identical to the same
+statements against `cabins`/`fkeys`. **H4's arithmetic stands as
+written** (112 overflow pages at start 16, ~7,600-column ceiling); the
+read against the widest scenario schema stays M2's. Mount *cost* stays
+M1's — not measured here, stated so it is not implied.
+
 ---
 
 ## 4. Decisions this plan does not take
@@ -429,7 +447,7 @@ remaining row of this plan depends on it.
 |---|---|---|
 | ~~**RD0(a)**~~ | ~~**Probe and record, before building.** The §6 reachability probe at production sizing — a cross-core read whose batch exceeds `kCoreRingPayloadBytes`, asserting on row count against the same statement locally; its outcome decides `docs/inflight/bugs/` versus `known-gaps.md`.~~ **Closed 2026-08-27 — it was already done before this row was picked up.** The probe ran and reproduced at 42 rows under the test that landed with the report at `5a9bfd0`; `7148343` fixed it and pinned the pipeline leak it exposed with a second test; `dcdc5e5` retired the report. The framing question was answered **bug report**, and the residue is in `known-gaps.md`. Not owed work | none |
 | ~~**RD0(b)(c)**~~ | ~~**The doc half, still owed.** (b) The §1 gate reading and (c) §0's three reversed sentences, amended in place in `crosscore.md` §6a/§8 and the blueprint's R3 row. Carried as **RA1** of `instructions/v2.4.0/range-foundation.md` §5.~~ **Closed 2026-08-27 in worktree `v2.4.0-range-foundation-1` (RA1).** The three sentences are amended in place — `crosscore.md` §6a's refusal sentence, §8 test 13, the blueprint's R3 row — and §0's `[OPEN]` closure landed with it (§0 carries the full site list, the two extra indexes included). (b)'s §1 gate reading was already written into §1 at scoping and needed no further landing | none |
-| **RD1** | **`sys.ranges` exists and is empty.** Oid **133** (verified free: table oids are 100, 110-116, 130-132; the column-oid bases run 120-123 and 140-145), fixed root page **15**, `kCatalogOverflowFirst` → 16, `kSuperBlockVersion` → **16** with a ledger entry quoting the 12 → 13 precedent. Joins all five exhaustive lists: `kAllWellKnownOids` (`well_known.hpp:215-230`, compile-gated), `kAllCatalogPages` (`:291-296`), the `static_assert` at `:333`, `Bootstrap()`'s `kSysTables` (`catalog.cpp:532-557` — note the hard-coded `std::array<…, 9>`), and the `DropTable` sweep chain (`:1704-1736`, or rows outlive the relation). Fixed-offset row per `SysCabinRow`'s template — every field fixed-width. **`tests/assertion_catalog_test.cpp:109` is `EXPECT_EQ(kCatalogOverflowFirst, 15u)` — an exact pin this row breaks and must edit.** That file's own comment at `:102-106` argues exact pins are the wrong shape (which is why `:107` is `>=`); the same reasoning applies to `:109`, and it was missed once already at 13 → 14 | none |
+| ~~**RD1**~~ | ~~**`sys.ranges` exists and is empty.** Oid **133**, fixed root page **15**, `kCatalogOverflowFirst` → 16, `kSuperBlockVersion` → **16** with a ledger entry quoting the 12 → 13 precedent. Joins all five exhaustive lists and the `DropTable` sweep chain.~~ **Built 2026-08-27 in worktree `v2.4.0-range-foundation-1` (RA2), gated by §3a's C1.** Oid 133, root 15, both bumps landed with the verbatim 12 → 13 quote in the ledger. Every list joined: `kAllWellKnownOids`, `kAllCatalogPages`, `Bootstrap()`'s array (widened 9 → 10), and the `DropTable` sweep — first in the chain, held by a function-local `RangeRowNotYetDefined` whose `Decode` refuses any tuple as Corruption until RD2's codec replaces it (the row format stays RD2's, gated on D2; nothing here decided it). The review's structural finding landed with it: the hand-edited overflow `static_assert` became `CatalogRootsAreDistinctAndBelowOverflow()` over `kAllCatalogPages`, so a future root joins one list and the compiler checks distinctness and the bound — the five exhaustive lists are now four. `assertion_catalog_test.cpp:109`'s exact pin was fixed by shape as its own `:102-106` argued, then subsumed by that `static_assert`. A v15 file refuses to mount naming both versions (`superblock.cpp:60`); the empty relation answers every SQL route byte-identically to `cabins`/`fkeys` (review probe), and `SHOW TABLES` gains `ranges`, which is the relation existing, not a behavior change | none |
 | **RD2** `[D2]` | **The directory row.** `SysRangeRow{rel_oid, lo, owner_core, entry_page}` per CC9. What this row adds beyond CC9's cell: the `lo = 0` and derived-`hi` rules are **enforced at the catalog door rather than assumed**, D2 is taken, and the anchor's `index_oid == 0` collision is recorded as its reason | RD1 |
 | **RD3** | **Resolution and publication.** `ResolveRanges(rel_oid, predicate) -> {owner_core, entry_page}[]`, plan-time, from the session core's cache (§2a of the spec). Publication decided per §2b — and **the choice is forced by where RD5 allocates**, not preferred. §2c's plan-time-only rule enforced by shape. **The zero-cost invariant binds hardest here** (*"a one-range relation on its owner core must add zero instructions over today"*): the unsplit path gains no scan, no lookup, no allocation, and RD9 measures it rather than an inspection asserting it | RD2 |
 | **RD4** | **The gates, declined by name (§6a).** `RangeEligible(access)` over four fields already on `TableAccess` — `SchemaCanSpill(schema)` (`src/catalog/schema.cpp:29`), `indexes.empty()` (`schema.hpp:371`), the **live-id** `cabin_ids` test `CheckWriteAffinity` uses at `command_dispatcher.cpp:3631-3633` (**not** `cabin_mask != 0`, **not** emptiness — both are the wrong test, stated there), `fkeys_out.empty() && fkeys_in.empty()` (`schema.hpp:311-312`) — plus D1's btree decline. Per §0 a decline is a logged engine decision naming the gate, with no token and no byte. Built and tested **before** anything can allocate a second range | RD2 |
@@ -449,12 +467,14 @@ peer writer — §8's row 10 says so.
 
 ## 8. Where to pick this up
 
-At `acb2540`, **nothing is built** — with one correction made 2026-08-27:
-**RD0(a) is closed**, and was closed before this plan was picked up, by
-`7148343` on `main` (§6). **RD0(b)(c) landed 2026-08-27** as RA1 in
-worktree `v2.4.0-range-foundation-1` (§7's row carries what it amended).
-**RD1 and RD4 are unblocked**, and under
-`instructions/v2.4.0/range-foundation.md` they are RA2 and RA3.
+At `acb2540`, **nothing is built** — with three corrections made
+2026-08-27: **RD0(a) is closed**, and was closed before this plan was
+picked up, by `7148343` on `main` (§6). **RD0(b)(c) landed 2026-08-27** as
+RA1 in worktree `v2.4.0-range-foundation-1` (§7's row carries what it
+amended). **RD1 is built** — RA2 in the same worktree, gated by §3a's C1;
+`sys.ranges` exists empty at superblock v16 and §7's row carries the
+detail. **RD4 is next**: unblocked, and under
+`instructions/v2.4.0/range-foundation.md` it is RA3.
 RD2 wants D2, RD7 wants D4, and **D1 removes the btree half entirely** —
 it is `crosscore.md` §9's, not this plan's. D6 blocks nothing: RD5 is
 built so choosing it is a config value, not a rewrite.

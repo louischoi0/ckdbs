@@ -175,6 +175,23 @@ inline constexpr Oid kSysCabinsTable = 131;
 // mis-attribute.
 inline constexpr Oid kSysFkeysTable = 132;
 
+// sys.ranges (docs/spec/crosscore.md CC9): one row per range of a split
+// relation - rel oid, lo, owner core, entry page per CC9's cell; hi is the
+// next row's lo. A relation with no rows here is one range owned by
+// sys.tables.owner_core, which is every relation today.
+//
+// **Created empty at bootstrap (RD1) and codec-less on purpose.** The row
+// format is RD2's, gated on D2 (where the entry page is recorded -
+// docs/inflight/in-progress/workplan-range-directory.md §4), and nothing
+// writes a row before RD5's allocator exists. It bootstraps anyway - root
+// page fixed, oid fixed - because a peer can only fault pages below
+// kFirstUserPageId and the pre-invalidate flush walks a compile-time span,
+// so a directory every routing core reads must live on a fixed low page
+// (workplan-range-directory.md §3a's C1). Fixed-offset typed rows once RD2
+// defines them: everything CC9 names is fixed-width, so none of
+// sys.pattern_defs' reasons for the user-tuple format apply.
+inline constexpr Oid kSysRangesTable = 133;
+
 // The **floor** for user-created object oids, not a counter.
 //
 // `Catalog::GenerateUserOid()` starts here on an empty database and, on a
@@ -226,7 +243,7 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kSysPatternsTable,    kSysPatternDefsTable,  kSysAssertionsTable,
     kSysPatternDefsColumnOidBase,                kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
-    kUserOidStart,
+    kSysRangesTable,      kUserOidStart,
 };
 
 // O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
@@ -275,6 +292,11 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // sys.tables, where it is DDL-immutable and therefore cacheable.
 inline constexpr PageId kCatalogPageAssertions = 14;
 
+// Root heap page of sys.ranges (RD1). Fixed for the reason kSysRangesTable
+// states: a directory every routing core must read before any statement
+// runs cannot sit where a peer may not fault it.
+inline constexpr PageId kCatalogPageRanges = 15;
+
 // Every catalog relation's **root** page, in id order.
 //
 // One list, because two places now need "all of them at once" and a
@@ -292,7 +314,7 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,     kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,     kCatalogPagePatterns,
     kCatalogPagePatternDefs, kCatalogPageAccessStats, kCatalogPageCabins,
-    kCatalogPageFkeys,       kCatalogPageAssertions,
+    kCatalogPageFkeys,       kCatalogPageAssertions,  kCatalogPageRanges,
 };
 
 // ---- Where a catalog chain grows into ------------------------------------
@@ -311,10 +333,11 @@ inline constexpr PageId kAllCatalogPages[] = {
 // range can be named, an arbitrary set of general-supply ids cannot without
 // storing it somewhere durable.
 //
-// The range is what is left of the reserved low pages after the roots: ids
-// 14 up to the first user page. That is ~114 pages, and a page holds ~68
-// `sys.columns` rows, so the whole instance's ceiling moves from ~68
-// columns to ~7,800. It is a ceiling and not "unbounded" - saying so is the
+// The range is what is left of the reserved low pages after the roots, up
+// to the first user page - a page count the ledger below moves, so it is
+// not stated here as a number. A page holds ~68 `sys.columns` rows, and
+// the range times that is the whole instance's column ceiling (~7,600
+// with the range starting at 16). It is a ceiling and not "unbounded" - saying so is the
 // point, because the previous ceiling was also unstated until something hit
 // it.
 // Moved 14 -> 15 when sys.assertions claimed page 14 (AST03). The range is
@@ -323,15 +346,34 @@ inline constexpr PageId kAllCatalogPages[] = {
 // drops by ~68 columns each time. Both facts ride on the same superblock
 // version bump the new relation needed anyway: an existing file could have
 // put a catalog overflow page at id 14, and that file no longer mounts.
-inline constexpr PageId kCatalogOverflowFirst = 15;
+// Moved 15 -> 16 when sys.ranges claimed page 15 (RD1) - the same walk, on
+// the same superblock bump (15 -> 16), for the same reason.
+inline constexpr PageId kCatalogOverflowFirst = 16;
 
 // One past the last id a catalog chain may take. Must equal
 // kds::server::kFirstUserPageId; the static_assert lives in catalog.cpp,
 // which is free to include both headers.
 inline constexpr PageId kCatalogOverflowLimit = 128;
 
-static_assert(kCatalogOverflowFirst > kCatalogPageAssertions,
-              "the overflow range must start past every fixed root");
+// Distinctness and the overflow bound in one pass over the list that
+// already exists, for `WellKnownOidsAreDistinct()`'s reason: nothing else
+// puts the twelve root ids side by side, and the old form of this assert
+// named the single highest root by hand - a second hand-edited list that
+// every new bootstrap relation had to remember to update (and page 15 was
+// checked against eleven constants by eye when sys.ranges claimed it).
+// Joining `kAllCatalogPages` is now the whole job.
+constexpr bool CatalogRootsAreDistinctAndBelowOverflow() {
+    for (std::size_t i = 0; i < std::size(kAllCatalogPages); ++i) {
+        if (kAllCatalogPages[i] >= kCatalogOverflowFirst) return false;
+        for (std::size_t j = i + 1; j < std::size(kAllCatalogPages); ++j) {
+            if (kAllCatalogPages[i] == kAllCatalogPages[j]) return false;
+        }
+    }
+    return true;
+}
+static_assert(CatalogRootsAreDistinctAndBelowOverflow(),
+              "every fixed catalog root must be unique and sit below the overflow range; "
+              "add a new root past the highest and move kCatalogOverflowFirst with it");
 
 // Every page a catalog relation can occupy: the roots, then the whole
 // overflow range.

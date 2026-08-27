@@ -42,7 +42,7 @@ namespace kds::server {
 inline constexpr PageId kFirstUserPageId = 128;
 
 // Fixed page id the SuperBlock itself lives at. Reserved, same convention
-// as the catalog's fixed pages (kds::catalog::kCatalogPage*, ids 4-8):
+// as the catalog's fixed pages (kds::catalog::kCatalogPage*, ids 4-15):
 // registered via PageStore::CreateAt() with this exact value, never
 // handed out by a general-purpose allocator.
 inline constexpr PageId kSuperBlockPageId = 0;
@@ -173,7 +173,23 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // so `Decode` accepts a version-15 file and every row in it means what it
 // meant. Dropping the byte instead would have been the seventh break on
 // this list, and it would have bought nothing: the flag has a live reader.
-inline constexpr std::uint32_t kSuperBlockVersion = 15;
+// 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges`, the range
+// directory (docs/spec/crosscore.md CC9, workplan-range-directory.md RD1),
+// on fixed page 15 - the sixth repeat of the 5 -> 6 shape, and the second
+// carrying the 12 -> 13 entry's overflow-range break, which reads on this
+// bump letter for letter: *"A version-12 file that ever outgrew one of its
+// nine catalog roots put a `sys.columns` or `sys.tables` overflow page at
+// id 14 - and this build would create sys.assertions on top of it. That is
+// not a missing relation, it is a silently overwritten one, which is the
+// worst failure any bump on this list has protected against."* Here it is
+// a version-15 file that ever outgrew any of its eleven roots, its first
+// overflow id is 15, and the relation created on top would be sys.ranges;
+// `kCatalogOverflowFirst` moves 15 -> 16 on the same bump. The relation
+// itself is **empty and codec-less at this version** (the row is RD2's,
+// gated on D2) - the bump is not for what it holds but for where it sits,
+// and landing the epoch now, before R6's recovery fixtures exist, is the
+// ordering instructions/v2.4.0/range-foundation.md §0 argues costs nothing.
+inline constexpr std::uint32_t kSuperBlockVersion = 16;
 
 // ---- On-disk field layout ----------------------------------------------
 

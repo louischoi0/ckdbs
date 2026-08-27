@@ -631,11 +631,14 @@ still waits on its own gate, so:
   index build at all: a peer's free-map copy is a snapshot taken at
   `DevicePageStore::Open()`, and the only thing that refreshed it was a
   *relation grant*. `sys.indexes` fills its root page and spills onto
-  `kCatalogOverflowFirst` (page 15), which core 0 allocates from the map it
-  owns; the peer then invalidates its catalog, re-reads the chain, follows
-  `next_page_id` into page 15, and `IsAllocated` answers from a snapshot in
-  which that page does not exist — `NotFound`, no retryable bit, forever,
-  and every INSERT hits it because every INSERT maintains the index.
+  `kCatalogOverflowFirst` (page 15 at the time; the constant moved to 16
+  when sys.ranges claimed 15 as its root at superblock v16, so 15 in
+  this narrative is an overflow page, not the directory), which core 0
+  allocates from the map it owns; the peer then invalidates its catalog,
+  re-reads the chain, follows `next_page_id` into page 15, and
+  `IsAllocated` answers from a snapshot in which that page does not
+  exist — `NotFound`, no retryable bit, forever, and every INSERT hits it
+  because every INSERT maintains the index.
   Confirmed from the raw data file: page 15 **is** marked allocated on
   disk while the peer answered not-found. The fix is one call —
   `CoreRuntime::InvalidateCatalog()` now runs the pre-existing
