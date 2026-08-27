@@ -138,7 +138,9 @@ TEST(RangeEligibleTest, AnAssertionOnAnotherRelationDoesNotDecline) {
 
 TEST(RangeEligibleTest, PrecedenceIsTheDocumentedOrder) {
     // A relation tripping several gates names the first in the header's
-    // fixed order, so the decline's one reason is deterministic.
+    // fixed order, so the decline's one reason is deterministic. All six
+    // tripped at once, then cleared one per step: the walk pins the whole
+    // order, not just its head — a reordering anywhere breaks a step.
     AssertionEnforcer enforcer;
     LiveAssertion assertion;
     assertion.assertion_id = 504;
@@ -150,13 +152,43 @@ TEST(RangeEligibleTest, PrecedenceIsTheDocumentedOrder) {
     catalog::TableAccess::IndexRef index{};
     index.index_oid = 7002;
     access.indexes.push_back(index);
+    access.cabin_ids[1].id = 43;
+    access.schema.columns.push_back(Column(2, catalog::kTypeValVarchar));
+    access.cabin_ids.resize(access.schema.columns.size());
+    access.fkeys_out.push_back(catalog::ForeignKeyRef{.fk_id = 3, .rel_oid = 903});
+
     EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kBtree);
 
     access.clustered_type = catalog::ClusteredType::kHeap;
     EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kIndex);
 
     access.indexes.clear();
+    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kCabin);
+
+    access.cabin_ids[1].id = 0;
+    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kSpill);
+
+    access.schema.columns.pop_back();
+    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kForeignKey);
+
+    access.fkeys_out.clear();
     EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kAssertion);
+}
+
+TEST(RangeEligibleTest, ACatalogShapedRelationAnswersEligible) {
+    // The §9b scope hole, pinned executable (workplan-range-directory.md
+    // §9b): none of §6a's five facts is true of `sys.tables`, so every
+    // gate passes it — yet a catalog relation is categorically
+    // unsplittable, and §6a lists no such gate, so the function
+    // deliberately does not invent one. Whichever of §6a or RD5 takes
+    // the scope explicitly is the change that flips this expectation.
+    const AssertionEnforcer enforcer;
+    catalog::TableAccess access{};
+    access.oid = catalog::kSysTablesTable;
+    access.namespace_oid = catalog::kNamespaceSys;
+    access.clustered_type = catalog::ClusteredType::kHeap;
+    access.desc_page_id = kInvalidPageId;
+    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kNone);
 }
 
 TEST(RangeEligibleTest, GateNamesAreDistinctNonEmptyTokens) {

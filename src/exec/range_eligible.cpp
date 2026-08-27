@@ -1,7 +1,5 @@
 #include "kds/exec/range_eligible.hpp"
 
-#include <algorithm>
-
 namespace kds::exec {
 
 std::string_view RangeGateName(RangeGate gate) noexcept {
@@ -31,16 +29,9 @@ RangeGate RangeEligible(const catalog::TableAccess& access,
     if (!access.indexes.empty()) {
         return RangeGate::kIndex;
     }
-    // The live-id test, the same shape CheckWriteAffinity's whitelist uses
-    // (command_dispatcher.cpp) and for the same reason: `cabin_ids` is
-    // per-column-parallel with id 0 meaning "no Cabin", so emptiness is
-    // the wrong test, and so is `cabin_mask != 0` — a Cabin on a column
-    // past 64 folds into no bit. Not factored with that site: this order
-    // must not touch CheckWriteAffinity's cross-core arm (range-foundation
-    // §1's out-list), so unification waits for whichever of RD5/R6-8
-    // rewrites that decision point.
-    if (std::any_of(access.cabin_ids.begin(), access.cabin_ids.end(),
-                    [](const catalog::TableAccess::CabinRef& c) { return c.id != 0; })) {
+    // The live-id test; the wrong tests (`cabin_mask != 0`, emptiness) are
+    // named where the rule lives, on `AnyCabin` itself (schema.hpp).
+    if (access.AnyCabin()) {
         return RangeGate::kCabin;
     }
     // §6a's own words: invariant 13 makes every relation fixed-length, so

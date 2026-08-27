@@ -565,11 +565,11 @@ correct, with the reason), or **fifth gate**.
 | 4 | Secondary indexes (`indexes`, `index_mask`, anchor entries) | `schema.hpp:371,385` | **Gate.** Per-range vs global is `[OPEN]` (`index.md` §13) |
 | 5 | Cabins (`cabin_mask`, `cabin_ids`, memory-resident entry sets) | `schema.hpp:269,282` | **Gate**, by the **live-id** test (`command_dispatcher.cpp:3644-3646`'s shape): `cabin_ids` is column-parallel with id 0 = none, so emptiness gates everything and `cabin_mask` misses a column past 64 — the test pins both wrong tests |
 | 6 | Foreign keys (`fkeys_out`, `fkeys_in`) | `schema.hpp:311-312` | **Gate**, both directions: either end's check reads the other relation |
-| 7 | **Assertions** — `LiveAssertion` + `BoundCabinChainWriter` + the registry (`by_oid_`, `unenforceable_`) | `include/kds/exec/assertion_check.hpp:80-141` | **FIFTH GATE — H3's falsifier fired.** Split-unsound three ways: **(i)** the Bound Cabin's entry pages are one core's own-stamped chain, appended by *every* write (`ReserveInsert`/`AdmitAndReserveUpdate`/`ReserveDelete`; PW1c-6c), so a second owner core's appends die on `MayWrite`; **(ii)** the live directory is memory-resident on the one owner core, and a core whose registry never heard of the assertion admits writes **unchecked** — `AnyOn` false, `CannotEnforce` false, the exact Finding 2 failure (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`); **(iii)** the aggregate is keyed on group columns that **need not include the pk** — `ResolveAssertionColumns` (`src/exec/assertion_catalog.cpp:406`) refuses no column, so `GROUP BY <pk>` is legal and degenerate, and every other grouping straddles any id boundary, which is why per-range cabins do not compose. Legs (i) and (ii) each carry the gate alone; (iii) is why no per-range rebuild rescues it. Unrepresented in `TableAccess` **deliberately** — `assertion_check.hpp`'s header: the plan cache must not depend on the assertion set, so CREATE/DROP ASSERTION need no plan invalidation. The cost of that design lands here: the gate takes the enforcer. Binds split **and** migration, Cabin's reason in stronger form |
+| 7 | **Assertions** — `LiveAssertion` + `BoundCabinChainWriter` + the registry (`by_oid_`, `unenforceable_`) | `include/kds/exec/assertion_check.hpp:80-141` | **FIFTH GATE — H3's falsifier fired.** Split-unsound three ways: **(i)** the Bound Cabin's entry pages are one core's own-stamped chain, appended by *every* write (`ReserveInsert`/`AdmitAndReserveUpdate`/`ReserveDelete`; PW1c-6c), so a second owner core's appends die on `MayWrite`; **(ii)** the live directory is memory-resident on the one owner core, and a core whose registry never heard of the assertion admits writes **unchecked** — `AnyOn` false, `CannotEnforce` false, the exact Finding 2 failure (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`); **(iii)** the aggregate is keyed on group columns that **need not include the pk** — `ResolveAssertionColumns` (`src/exec/assertion_catalog.cpp:406`) refuses no column, so `GROUP BY <pk>` is legal and degenerate, and every other grouping straddles any id boundary, which is why per-range cabins do not compose. Legs (i) and (ii) each carry the gate alone; (iii) is why no per-range rebuild rescues it. Unrepresented in `TableAccess` **deliberately** — CREATE/DROP ASSERTION do **no `BumpVersion()`** (`src/exec/assertion_catalog.cpp:601-608` and `:745-746`: nothing cached is derived from a `sys.assertions` row), and a `TableAccess` entry drops only on a version bump, so an `asserted` bit on the struct would be stale by construction — admitting a split on a relation that took its assertion five statements ago. The cost of that design lands here: the gate takes the enforcer. Binds split **and** migration, Cabin's reason in stronger form |
 | 8 | Anchor page | `include/kds/storage/anchor_page.hpp:19-24` | **Invariant** under the gates: it holds `clustered_root` + index entries only; unindexed leaves the table empty, and per-range heads ride the directory row (CC9), not the anchor — RD6 sources heads from the directory |
 | 9 | Catalog rows (`sys.tables`/`sys.columns`/`sys.objects`), `next_id`, `key_order` | `rows.hpp` | **Invariant.** `next_id` is the lease substrate ranges align to (§6b); per-relation monotonicity becoming per-range is §6b's stated consequence (R4's loud doc), and range-order concatenation preserves global pk order because ranges partition the id space (RD7 §5) |
 | 10 | Row-id lease blocks (`RowIdLeaseTable`) | `row_id_lease.hpp` | **Invariant by construction** — the substrate §6b aligns ranges to |
-| 11 | Waystone trails, `sys.patterns` rows | invariants 8/9 | **No gate** (§6a): a block-aligned split moves no page (CC10's vacuous case), so an existing trail stays *correct*, not merely safe; migration's trail retirement is priced by CC10, not gated here |
+| 11 | Waystone trails, `sys.patterns`/`sys.pattern_defs` rows | invariants 8/9 | **No gate** (§6a): a block-aligned split moves no page (CC10's vacuous case), so an existing trail stays *correct*, not merely safe; migration's trail retirement is priced by CC10, not gated here |
 | 12 | Access statistics | `SHOW ACCESS`; recorder core-0-only (`core_runtime.cpp:258` — the peer dispatcher's `/*access_statistics=*/false`; premise at `core_runtime.hpp:65-67`) | **No gate** (§6a): advisory; per-core statistics gate the *mover* (R1/R5), not the substrate |
 | 13 | Cabin-optimizer managed state | `cabin_optimizer_exec.hpp` | **Invariant** — memory-resident observation; the moment it *enacts* a Cabin, row 5's gate holds. Its auto-CREATE on an already-split relation is the converse direction, §9b |
 | 14 | Statement-local inner build (`exec::InnerBuild`) | `inner_build.hpp:86` | **Invariant** — statement-scoped, dies with the statement, keys on rows read, not on placement |
@@ -600,8 +600,11 @@ the capped shape budget forever.
 
 ### 9b. What the enumeration found beyond the fifth gate — for RD5, named now
 
-Two **admission windows** invisible to any field read, and one **converse
-direction**, all landing with RD5 rather than here:
+Two **admission windows** invisible to any field read, one **converse
+direction**, and — added by the RD4 review (2026-08-27, worktree
+`v2.4.0-range-foundation-1`) — two **caller-side preconditions** and one
+**consequence for RD6**. All land with RD5 (the last with RD6) rather
+than here:
 
 - **The index-build window.** During an owner-side build
   (`PendingIndexBuilds::Covers`, `index_build_service.hpp`), `sys.indexes`
@@ -625,6 +628,47 @@ direction**, all landing with RD5 rather than here:
   after it** — a split relation that then takes an index is the same
   unsound state RD4 exists to prevent, reached through the other door.
   RD5's row in §7 now names both obligations.
+- **The owner-core precondition — and its failure mode is permissive.**
+  The function's header promises the answer is authoritative on the
+  relation's owner core only; nothing enforces it, and the wrong-core
+  answer is **`kNone`**, not a refusal. The concrete case: a peer-owned,
+  asserted relation asked on core 0. Core 0's registry holds neither
+  record — `mount_recovery.cpp:212-218` counts a foreign relation's
+  assertion `assertions_foreign` and `continue`s without `Adopt` *or*
+  `NoteUnenforceable` — so `AnyOn` and `CannotEnforce` are both false,
+  the four catalog gates pass, and the answer is *eligible* for exactly
+  the relation whose fifth gate should decline: Finding 2's failure
+  reached through the caller instead of the field. RD5 closes it one of
+  two ways — ask only on the owner core by construction (§6b already
+  puts the allocator there), or take the asking core in the signature
+  and decline on mismatch (a `kNotOwner` gate). Deliberately not taken
+  at RD4: a parameter whose only honest consumer is RD5's caller is
+  RD5's shape leaking (H2), and §6a names no such gate.
+- **The catalog-relation scope.** None of §6a's five facts is true of
+  `sys.tables` — heap-clustered, fixed-width, unindexed, un-cabined,
+  FK-free, un-asserted — so every gate passes it, yet it is
+  categorically unsplittable: its pages are core 0's by construction
+  (`core_runtime.hpp`'s peer rules 1-2), its chain head is a
+  compile-time `kCatalogPage*` constant rather than a directory row (so
+  RD6's per-range heads do not apply), and CC9 puts the directory itself
+  in the catalog. Nor is the shape unreachable:
+  `Catalog::FindTableOidByName` (`src/catalog/catalog.cpp:1396-1418`)
+  filters no namespace, so a system relation's `TableAccess` is
+  constructible through the ordinary door. §6a lists no catalog gate, so
+  the function does not invent one —
+  `tests/range_eligible_test.cpp`'s catalog-shape case pins the current
+  `kNone` answer executably — but whichever of §6a or RD5 takes the
+  scope must take it explicitly; the engine's idiom for the question is
+  `namespace_oid != catalog::kNamespacePublic` (AL7, DT3's drop and
+  rename refusals).
+- **For RD6: the caller-supplied-pk refusal moves with the boundary.**
+  A named pk is refused on a peer core because admitting one writes the
+  relation's `sys.tables` row, the system core's page
+  (`command_dispatcher.cpp:4266-4272`). After a split, a row whose id
+  lands in a peer-owned range inherits that refusal where the unsplit
+  relation admitted it. Fail-closed, so **not** a gate — but it changes
+  which INSERTs succeed on a split relation, and RD6 meets it as a
+  stated consequence rather than as a surprise.
 
 ### 9c. The shape built, and C3 left where it belongs
 

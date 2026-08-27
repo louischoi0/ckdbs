@@ -29,29 +29,21 @@
 // Concurrency: a pure function over its two arguments — no state, no
 // locks, nothing retained. The answer is **authoritative on the
 // relation's owner core only**: the four `TableAccess` gates are catalog
-// facts every core caches identically, but the `AssertionEnforcer` is
-// core-local and only the owner's registry holds the relation's live
-// directory (PW1c-6c — the owner builds and holds the Bound Cabin) or
-// its unenforceable record. RD5 allocates on the owner (§6b: a range
-// opens where the owner's lease carves its id block), so the authority
-// and the caller coincide by construction.
+// facts every core caches from the same core-0-written rows — a peer's
+// copy can be behind, which is the two windows named below — and the
+// `AssertionEnforcer` is core-local, so only the owner's registry holds
+// the relation's live directory (PW1c-6c — the owner builds and holds
+// the Bound Cabin) or its unenforceable record. RD5 allocates on the
+// owner (§6b: a range opens where the owner's lease carves its id
+// block), so the authority and the caller coincide by construction.
 //
-// **Scope, and a hole RD5 must close somewhere: a *catalog* relation
-// answers `kNone` here.** None of §6a's five facts is true of
-// `sys.tables` — heap-clustered, fixed-width, unindexed, un-cabined,
-// FK-free, un-asserted — so every gate below passes it, and yet it is
-// categorically unsplittable: its pages are core 0's by construction
-// (`core_runtime.hpp`'s peer rules 1-2), its chain head is a
-// compile-time `kCatalogPage*` constant rather than a directory row
-// (so RD6's per-range heads do not apply), and CC9 puts the directory
-// itself in the catalog. Nor is one unreachable by construction:
-// `Catalog::FindTableOidByName` does not filter on namespace, so a
-// `TableAccess` for a system relation is constructible through the
-// ordinary door. §6a lists no such gate, so **this function does not
-// invent one** — but whichever of §6a or RD5 takes the scope must take
-// it explicitly; the engine's existing idiom for the question is
-// `namespace_oid != catalog::kNamespacePublic` (AL7, DT3's drop and
-// rename refusals). Reported by the RD4 review, 2026-08-27.
+// **Scope: a *catalog* relation answers `kNone` here.** Every gate
+// passes `sys.tables`, yet a catalog relation is categorically
+// unsplittable — and §6a lists no such gate, so this function does not
+// invent one. The hole's evidence and the idiom that closes it
+// (`namespace_oid != catalog::kNamespacePublic`) are
+// `workplan-range-directory.md` §9b's, inherited by RD5 with the
+// admission windows below; the test pins the current answer.
 //
 // Two admission windows this function cannot see, named so RD5 closes
 // them rather than discovers them (§9's enumeration): an index build in

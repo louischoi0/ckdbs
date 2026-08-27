@@ -428,9 +428,11 @@ self-heal — CC10) binds both:
   migrate**; the migration half for Cabin's reason in stronger form,
   since a mid-run move leaves the incoming owner's registry empty and
   emptiness admits silently. The fact deliberately does not ride
-  `TableAccess` (`assertion_check.hpp`'s header: the plan cache must not
-  depend on the assertion set), so the gate function takes the
-  enforcer, not the access struct alone.
+  `TableAccess`: CREATE/DROP ASSERTION do no version bump
+  (`assertion_catalog.cpp`'s publish comment — nothing cached is derived
+  from a `sys.assertions` row), so a cached bit would be stale by
+  construction, and the gate function therefore takes the enforcer, not
+  the access struct alone.
 - **Waystone and statistics** — advisory (invariant 8): recording stays
   per owning core, a stale trail misses and falls through, and **no
   gate is needed** — worst case the trail is deleted, which invariant 8
