@@ -138,8 +138,10 @@ order of how much they settle:
 1. **It is 50× smaller than the floor it would have to be made of.**
    `IdleTimeoutMs` rounds up to whole milliseconds; a residual the rounding
    explains is ≥ 1,000 µs and this one is 20.
-2. **It does not move with the knob** (20.0 / 19.8 / 20.0 / 20.4 across the
-   sweep, 19.2 at 50 ms). A rounding artifact is a function of the timer
+2. **It does not move with the knob** — 20.0 / 19.8 / 20.0 / 20.4 across the
+   sweep, and **19.6 µs at a 50 ms drain interval** (shipped 42.9 against
+   seated 23.3 in §5's discriminator pair, the only point where both seats
+   were run that far out). A rounding artifact is a function of the timer
    deadline; this is a constant.
 3. **It is the size SS-B priced the wire at** — *"the wire itself is ~20 µs
    against a ~0.9 ms sync"* — and a shipped statement crosses it twice
@@ -243,11 +245,14 @@ knob — the p50 at that point is 43.5 µs, the same as everywhere else.
 
 ## 6. Gates
 
-- **Rows in = rows out** in every cell: across the sweep, the traces, the
-  discriminators and the ceiling cell, **142,800 INSERTs attempted, 142,800
-  executed, 0 refused**, `verify = rows as expected` in all 48 sweep runs.
-- **Correctness suite**: not executed by this cell — it is cell 6's, and
-  cell 3 last ran it green at 2741/2741.
+- **Rows in = rows out** in every run: the 48-run sweep is **142,800
+  INSERTs attempted, 142,800 executed, 0 refused**, and across all 66 runs
+  archived here — the sweep, the four traces, the six discriminators and the
+  four ceiling runs — **223,600 attempted, 223,600 executed, 0 refused**,
+  `verify = rows as expected` in every one.
+- **Correctness suite**: not executed by this cell — it is cell 6's, run at
+  `1a305ab` and recorded in
+  `bench/v2.3.0/results-correctness-cell6-v2.2.1-15-g1a305ab.md`.
 - **The null cell**: not run. Every arm here is a separate process with a
   fresh server and a fresh data file, which is the shape SS-B finding 10
   showed does not carry the harness's ~10% ordering bias (null cells 0.991
