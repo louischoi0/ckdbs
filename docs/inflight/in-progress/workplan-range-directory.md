@@ -491,7 +491,7 @@ remaining row of this plan depends on it.
 | **RD3** | **Resolution and publication.** `ResolveRanges(rel_oid, predicate) -> {owner_core, entry_page}[]`, plan-time, from the session core's cache (§2a of the spec). Publication decided per §2b — and **the choice is forced by where RD5 allocates**, not preferred. §2c's plan-time-only rule enforced by shape. **The zero-cost invariant binds hardest here** (*"a one-range relation on its owner core must add zero instructions over today"*): the unsplit path gains no scan, no lookup, no allocation, and RD9 measures it rather than an inspection asserting it | RD2 |
 | ~~**RD4**~~ | ~~**The gates, declined by name (§6a).** `RangeEligible(access)` over four fields already on `TableAccess` — `SchemaCanSpill(schema)` (`src/catalog/schema.cpp:29`), `indexes.empty()` (`schema.hpp:371`), the **live-id** `cabin_ids` test `CheckWriteAffinity` uses at `command_dispatcher.cpp:3631-3633` (**not** `cabin_mask != 0`, **not** emptiness — both are the wrong test, stated there), `fkeys_out.empty() && fkeys_in.empty()` (`schema.hpp:311-312`) — plus D1's btree decline. Per §0 a decline is a logged engine decision naming the gate, with no token and no byte. Built and tested **before** anything can allocate a second range.~~ **Built 2026-08-27 in worktree `v2.4.0-range-foundation-1` (RA3), gated by §9's C2 — with a fifth gate C2 found**: `RangeEligible(access, enforcer)` in `include/kds/exec/range_eligible.hpp` / `src/exec/range_eligible.cpp`, the four fields plus D1's btree decline plus the **assertion gate** (§9a row 7; the signature takes the `AssertionEnforcer` because the fact deliberately does not ride `TableAccess`). One caller: `tests/range_eligible_test.cpp` (H2 held, §9d). Gated on the order's RA2+C2 rather than this row's RD2, and rightly: the function reads `TableAccess` fields and the registry, never a `sys.ranges` row, so RD2's codec is nothing it needs — the row's RD2 gate was scoping conservatism, noted for the operator in cws issue `rd4-gate-rd2-mismatch` | ~~RD2~~ §9's C2 |
 | **RD5** | **Allocation — the system's half.** A second range opens where the row-id allocator already carves a disjoint block, so the boundary is that block's `first_id` and CC10's page-boundary rule is satisfied *vacuously* — §6b's own words, *"the new range starts as its own empty sub-structure (CC8) and no existing page straddles it"*. Rides `AllocateRowIdRange`/`RowIdLeaseTable` unchanged; the row and the entry page are what is new. **The size is one named constant reached through one function and swept by config** (§2a, D6), starting at `kRowIdLeasePerGrant`. `RangeEligible` asked first, always — **on the owner core** (the assertion gate's registry is core-local, §9c) — **and re-checked where the durable row lands**: §9b's two admission windows (an index build in flight, an assertion between core 0's half and the owner's adoption) are races `RangeEligible` cannot see, serialized through core 0's catalog stream (CC10 step 3). **The converse gates land with this row too** (§9b): CREATE INDEX / CREATE CABIN (auto included) / CREATE ASSERTION / an FK naming a split relation each decline until `crosscore.md` §9's placement decisions are taken. **C3's surface lands with this row's first caller, in the same change** (§9e, decided at RA4): the decline's log line and the per-core `range_split_declines` counters on `SHOW META` in `crosscore.md` §6's refusal-counter form — deferred from RA4 because a counter no caller increments reads structurally 0. **This row's shape is what answers §2b** — whether it runs on the drain tick (`core_runtime.cpp:1006-1016`, outside a borrow) or at the point of demand (`row_id_lease.hpp:88-95`, inside a running INSERT) | RD3, RD4 |
-| **RD6** | **Per-range chains, and the insert head (§2's survivor, CC8's "largest piece").** Each range is its own chain with its own head and tail. **The review's blocking finding lives here**: `sys.tables.desc_page_id` is CREATE-fixed (`catalog.cpp:2266`) and *every* insert path uses it as the head — `ChainInsert(page_store_, access.desc_page_id, …)` at `command_dispatcher.cpp:4466`, `ChainAppendBatch(…, ta.desc_page_id, …)` at `:4091`. A cut that clears the predecessor's `next_page_id` leaves `desc_page_id` heading the **lower** range, `ChainTail` returns that range's last page, and since every issued id is above its `min_key`, `ChainInsert` **accepts the row there** — no refusal fires, and the pk then routes the reader to the top range for a zero-row answer. `heap_tail_hint` cannot mask it: a hint from another chain *"is a logic error upstream that this layer cannot detect"* (`heap_chain.hpp:120-125`) and it dies with the cache entry (`schema.hpp:191-192`). **So this row's substance is that the insert head comes from the directory, per range, and `heap_tail_hint` becomes per range with it** — the cut is what *creates* the route, not what closes it. Plus the mutation API Part III will call (split / set / modify / merge, §0), one caller today, no policy | RD5 |
+| **RD6** | **Per-range chains, and the insert head (§2's survivor, CC8's "largest piece").** Each range is its own chain with its own head and tail. **The review's blocking finding lives here**: `sys.tables.desc_page_id` is CREATE-fixed (`catalog.cpp:2298-2302`, `UpdateRelationDescPage`'s own comment) and *every* insert path uses it as the head — `ChainInsert(page_store_, access.desc_page_id, …)` at `command_dispatcher.cpp:4466`, `ChainAppendBatch(…, ta.desc_page_id, …)` at `:4091`. A cut that clears the predecessor's `next_page_id` leaves `desc_page_id` heading the **lower** range, `ChainTail` returns that range's last page, and since every issued id is above its `min_key`, `ChainInsert` **accepts the row there** — no refusal fires, and the pk then routes the reader to the top range for a zero-row answer. `heap_tail_hint` cannot mask it: a hint from another chain *"is a logic error upstream that this layer cannot detect"* (`heap_chain.hpp:120-125`) and it dies with the cache entry (`schema.hpp:191-192`). **So this row's substance is that the insert head comes from the directory, per range, and `heap_tail_hint` becomes per range with it** — the cut is what *creates* the route, not what closes it. Plus the mutation API Part III will call (split / set / modify / merge, §0), one caller today, no policy | RD5 |
 | **RD7** `[D4]` | **The pipeline over ranges** — §5's shape, with all four of its costs built and none assumed: the `sibling` field, the plural `InputEdge`, the grouped `pending_remote`, the same `downstream_step` across siblings. Range-order concatenation; key-order-requiring shapes refused as `emit_in_key_order` already is. Inherits D5 — core-0-sessioned only | RD3, RD6, D4 |
 | **RD8** | **§8 test 9 — range equivalence**: every shippable shape over a split relation returns byte-identical results to the same rows unsplit on one core, the split the only variable, **matching rows straddling the boundary**; test 1's discipline, home `tests/core_runtime_test.cpp:1397+`. **§8 test 13** in its §0-amended form. **Plus the two the review's findings owe**: a post-split INSERT lands in the range its id names (§2, RD6), and a cross-range DML meets `crosscore.md:311-314`'s ratified retryable refusal rather than a wrong answer | RD7 |
 | **RD9** | **Measure, and choose D6.** Three cells. (a) RD3's zero-cost and RD8's fast-path claims. (b) **The range-size sweep** — 4,096 ids against the extent hypothesis and the sizes either side, read on both axes the size trades between: directory rows and non-pk fan-out at the small end, single-core concentration at the large end (CC8's stated reason for rejecting relation granularity). (c) The k-range read against the same rows unsplit, which prices the fan-out §2a says the gating discipline makes unavoidable in the first build. `build-release`, interleaved A/B, per `ck-tester`; results to `bench/<version>/` naming `git describe --tags` | RD8 |
@@ -821,32 +821,44 @@ it: `WriteAnchorRoot` dispatches `index_oid == 0` to the clustered-root
 slot before the table is consulted (`catalog.cpp:1116-1121`), redo
 dispatches identically (`redo.cpp:423-436`), and the WAL payload's own
 comment states the basis — *"no index oid is ever 0"*
-(`wal/payload.hpp:106`). CC9 makes `lo = 0` structural, not incidental: *"a
-non-empty directory carries a row at `lo = 0`, so the rows partition the
-whole id space"* (`crosscore.md` CC9). So a range keyed by its `lo` cannot
-store the first range's entry under key 0.
+(`wal/payload.hpp:106-107`). CC9 makes `lo = 0` structural, not
+incidental: *"a non-empty directory carries a row at `lo = 0`, so the rows
+partition the whole id space"* (`crosscore.md` CC9). So a range keyed by
+its `lo` cannot store the first range's entry under key 0.
 
-**Avoidance, priced in three shapes** — and the order's own framing ("a
-`lo` offset") turns out to be the one shape that does *not* work:
+**Avoidance, priced.** Shapes 2 and 3 are the two halves of one design
+(`lo = 0`, then every other `lo`), not competing options; the order's own
+framing ("a `lo` offset") is shape 1, and it is the one that does *not*
+work:
 
 1. **A bias alone fails.** Storing `lo + k` for constant k still shares
    one key space with live index oids: index oid `n` and a range at
    `lo = n − k` write the same key, and nothing in `FindEntry`
    (`anchor_page.cpp:28-33`) distinguishes them. An offset moves the
    collision from the sentinel to the index entries; it does not remove it.
-2. **`lo = 0` costs nothing, by identification.** The first range's entry
-   page *is* the clustered root: after any split the pre-split chain head
-   heads the lowest range (§7 RD6's finding — `desc_page_id` stays on the
-   lower range), and the clustered-root slot at offset 32 already records
-   exactly that page. No entry keyed 0 is ever needed; the sentinel
-   collision dissolves rather than being avoided.
+2. **`lo = 0` needs no entry, by identification.** The first range's entry
+   page *is* the clustered root. For a heap relation — the only class
+   ranges cover while D1 declines btree — the slot at offset 32 holds the
+   chain head for the relation's life: `InsertPlacement::new_root` is
+   *"always kInvalidPageId for a heap chain, which has no root to move"*
+   (`insert_placement.hpp:79-80`), so the sole caller of
+   `UpdateRelationDescPage` (`command_dispatcher.cpp:4413-4415`) fires only
+   on a btree level grow and never moves the slot. A chain-cut split leaves
+   that head on the **lowest** range (§7 RD6's finding, stated there of the
+   CREATE-fixed `sys.tables.desc_page_id`, which on a heap relation is that
+   same page). The sentinel collision therefore dissolves rather than being
+   avoided — at the price of one branch in every range-entry reader, which
+   resolves `lo = 0` from the slot and every other `lo` from the table.
 3. **`lo > 0` needs a tag, and the tag is cheap but not free.** A
    disambiguator in the key's high bits — e.g. `lo | (1<<63)` — is
    collision-free against ids (invariant 7: stored ids are zero-extended,
-   upper 24 bits 0) and against oids (sequential small integers), costs
-   one named constant masked at the two dispatch sites
-   (`catalog.cpp:1116`, `redo.cpp:423`) plus any new reader, no format
-   bump (the key is an opaque u64 in an existing layout) and no WAL change
+   upper 24 bits 0) and against oids (sequential small integers). It
+   changes **neither** dispatch site: a tagged `lo` is never 0, so
+   `catalog.cpp:1116` and `redo.cpp:423` route it to the entry table
+   unchanged, and `FindEntry`'s full-word compare cannot match it against
+   a live oid. The cost is one named constant in the new range-entry
+   reader and writer, no format bump (the key is an opaque u64 in an
+   existing layout) and no WAL change
    (`AnchorUpdatePayload.index_oid` is u64 and round-trips verbatim,
    `payload.hpp:109-116`). **The one real cost is doctrinal**: the stored
    word would be an id with a set high bit, which reads against invariant
@@ -860,20 +872,24 @@ store the first range's entry under key 0.
    pricing is visible.)
 
 **Verdict on the blocker question: the collision is not a blocker.** Shape
-2 makes `lo = 0` free and shape 3 prices `lo > 0` at one masked constant
-plus one spec sentence. D2 is therefore chosen on the columns below, not
-on the sentinel — which is what C4 asked the pricing to establish.
+2 removes `lo = 0`'s entry for one branch in the reader, and shape 3
+prices `lo > 0` at one tag constant plus one spec sentence — no dispatch
+site, no format and no WAL record moves. D2 is therefore chosen on the
+columns below, not on the sentinel — which is what C4 asked the pricing to
+establish.
 
 **The table.** CC9's directory row against the anchor, every cell
 source-read at `11ee83f` except the one row marked *projected*:
 
 | column | CC9 directory row (`sys.ranges`) | anchor entries |
 |---|---|---|
+| **Already spent** | `sys.ranges` exists, empty and mounting at superblock v16 — oid 133, root 15 (RA2/RD1, `7318e7e`, §3); the format epoch and the overflow page are paid | nothing is built — and the epoch stays paid either way, so choosing the anchor now also strands a bootstrapped dead catalog relation at v16 |
+| Plan-time resolution on the owner core — where §7 RD3's zero-cost invariant binds hardest | a catalog-cache read, and the one-range case is the *absence* of rows, answered from the cache the statement already holds | a relation-page read per resolution, or a derived per-core cache the anchor has no version counter to invalidate — either is instructions the unsplit path does not pay today |
 | Record's home | catalog relation, core 0's stream (CC10 step 3) | the owner's own relation page, own-stamped (`anchor_page.hpp:9-13`) |
 | Cross-core readability — every routing core resolves at plan time (CC9) | rides the catalog cache and `kCatalogInvalidate` broadcast, machinery CC9 already specifies | a peer-owned page; no cross-core read short of D1's `[OPEN]` shared-structure mechanism — the directory would inherit the very decision that blocks btree ranges |
 | Serialization of §9b's two admission windows | CC10 step 3's *"durable directory row before any grant"* in core 0's stream **is** the serialization point §9b names | an owner-local write serializes nothing against core-0 catalog races; a new mechanism plus an amendment of CC10's ratified step 3 (2026-08-24) would be owed |
 | Split-record write cost | one core-0 catalog write + sync, per split — the round trip CC10 mandates anyway | one local page write + `ANCHOR_UPDATE` in the owner's stream; cheaper, and the saving is real only if CC10 step 3 is also amended away |
-| Capacity | the shared overflow pool, 112 pages (M2 §3); at CC9's four named fields (rel oid, lo, owner core, entry page ≈ 24 B payload → 49 B footprint → 166 rows/page, *projected* — RD2 owns the codec) ≈ thousands of rows, and delete-marked catalog rows purge via the §5d machinery (RV3) | **679 slots, shared with index history, never reclaimed** — no removal record exists (`anchor_page.hpp:91-96`), so lifetime splits per relation are capped at 679 minus every index the relation ever declared |
+| Capacity | the shared overflow pool, 112 pages (M2 §3); at CC9's four named fields (rel oid and lo as u64s, owner core, entry page = 24 B payload — a catalog row carries **no Keystone word**, §3's M2 finding, so 10b's 8-byte lead does not apply here — → 49 B footprint → 166 rows/page, *projected* — RD2 owns the codec) ≈ thousands of rows, and delete-marked catalog rows purge via the §5d machinery (RV3) | **679 slots, shared with index history, never reclaimed** — no removal record exists (`anchor_page.hpp:91-96`), so lifetime splits per relation are capped at 679 minus every index the relation ever declared |
 | Collision at `lo = 0` | none — `lo` is a row field | dissolved by identification (shape 2); `lo > 0` tagged (shape 3) |
 | Crash story | CC10's *"a crash before step 4 aborts the migration"* leans on the row's durability ordering — already ratified | `ANCHOR_UPDATE` redo exists (`redo.cpp:410-436`) but the ordering against the grant does not; it would be written new |
 | §9a row 8's verdict | stays **invariant** — the anchor keeps holding clustered root + index entries only | flips: the anchor becomes per-range state, and the enumeration row is revised |
@@ -887,11 +903,11 @@ relations carry the three widths: `daily_bars` — *"the bulk relation"*
 the default 200,000 rows this is most of the load phase's wall clock"*
 (`tools/scenario2_freight.py:485-487`, and `--cargos`'s help at
 `:1427-1429`); `loans` — *"the bulk relation and the row-set axis"*
-(`tools/scenario3_library.py:7,50,561,834`). `scenario0_stockmarket.py`
+(`tools/scenario3_library.py:50`). `scenario0_stockmarket.py`
 names none (its measured insert relation, `trades`, appears in the
 envelope note below). All are int-only schemas, so no width depends on
-`kds.inline_cell_width`; every column is NOT NULL by D1's default, so
-every bitmap is 0 bytes.
+`kds.inline_cell_width`; every column is NOT NULL by `null.md`'s D1
+default, so every bitmap is 0 bytes.
 
 **Widths, derived per `RowLayout::Build`** (`src/catalog/row_layout.cpp:47-110`:
 8-byte Keystone word for column 0, then `ColumnWidth` per column — int64 8,
@@ -903,8 +919,9 @@ int32 4 — then a 0-byte bitmap):
 | `cargos` | `scenario2_freight.py:98-101` | 8 + 3×8 + 6×4 | **56** |
 | `daily_bars` | `scenario1_backtest.py:244-247` | 8 + 7×8 + 1×4 | **68** |
 
-**The page arithmetic** (all sites source-read, M2 §4c's derivation
-reused): an empty heap page offers `8188 − 48 = 8140` bytes
+**The page arithmetic** (all sites source-read, reusing the derivation in
+`bench/v2.4.0/results-m2-catalog-ceiling-v2.2.1-69-g3a60dc6.md` §4c): an
+empty heap page offers `8188 − 48 = 8140` bytes
 (`heap_page.cpp:87-90` on `kNextPageIdOffset = 8188`,
 `kHeapHeaderOffset + kHeaderSize = 48`), and a row of payload W charges
 `5 + 20 + W` (`kSlotOnDiskSize`, `kTupleHeaderOnDiskSize`,
@@ -925,7 +942,10 @@ Both row-count columns are ceilings: the id unit's because id space is not
 dense (an abandoned lease's remainder, and a named pk above the high-water
 mark, both leave gaps — `heap-and-tuple.md` §4.1), the extent unit's
 because dead versions keep their slots until purge. The pages column
-assumes dense fill and is a floor on slack.
+assumes dense fill, so it is a floor on the page count — a sparser
+range fills *more* pages, and the extent-fraction column is likewise a
+lower bound; so is the last column, which divides an exact count by
+the id unit's ceiling.
 
 **What the table shows, stated so the numbers are not read alone:**
 
@@ -950,8 +970,8 @@ assumes dense fill and is a floor on slack.
   or "smaller" than the other by testing today's schemas is not a
   property of the unit.
 - **One caveat the three named widths carry**: all three named bulk
-  relations are declared `BTREE` by their drivers, and D1's decline means
-  no btree relation can split until the shared-structure mechanism lands
+  relations are declared `BTREE` by their drivers, and §4's D1 decline
+  means no btree relation can split until the shared-structure mechanism lands
   — so the arithmetic above is the heap page's, the storage class ranges
   cover today, applied to the widths the benches actually use. Btree leaf
   capacity is not computed here; it becomes relevant only when D1 is
@@ -967,18 +987,18 @@ RD5 as one swept constant either way (§2a).
 
 ### 10c. Verdicts and residue
 
-- **RA3's orthogonality reasoning re-verified at RA5**: both tables are
-  id/page/layout arithmetic and publication-machinery pricing; the gate
-  count (five plus D1 after H3's refutation) appears in neither. The one
-  contact point is conditional and is now *in* the table: §9a row 8's
-  "invariant" verdict presumes CC9, and 10a's last row says what flips if
-  the anchor is chosen instead. Task 17 was rightly left unchanged by the
-  H3 re-plan.
-- **No re-plan of M3 or RA0f follows from this section**: M3 captures the
-  pre-range baseline and RA0f corrects a comment; neither consumes D2's or
-  D6's inputs.
-- Standing issue `range-merge-open-tension` bears on 10a's capacity row
-  (merge would add anchor-entry removal pressure the anchor cannot meet);
-  `scenario2-freight-stale-ceiling-comment` was noticed again at
-  `scenario2_freight.py:83-84` during the census and stays open where it
-  is filed.
+- **The RA3-time judgement that H3's refutation left C4 untouched is
+  re-verified here**: both tables are id/page/layout arithmetic and
+  publication-machinery pricing, and the gate count (five plus §4's D1
+  after §9's refutation) appears in neither. The one contact point is
+  conditional and is now *in* the table: §9a row 8's "invariant" verdict
+  presumes CC9, and 10a's last row says what flips if the anchor is chosen
+  instead. For the same reason nothing here re-plans the order's remaining
+  rows (M3's baseline capture, and the RA0f comment correction tracked as
+  a cws issue): neither consumes D2's or D6's inputs.
+- Two cws issues (§7 RD4's `rd4-gate-rd2-mismatch` set the idiom) touch
+  this section: `range-merge-open-tension` bears on 10a's capacity row —
+  merge would add anchor-entry removal pressure the anchor cannot meet —
+  and `scenario2-freight-stale-ceiling-comment` is the fact noticed again
+  during the census: `scenario2_freight.py:83-84` still says "~7,800"
+  where M2 derived 7,616. Both stay open in cws, not here.
