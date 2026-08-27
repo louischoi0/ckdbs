@@ -331,6 +331,23 @@ written** (112 overflow pages at start 16, ~7,600-column ceiling); the
 read against the widest scenario schema stays M2's. Mount *cost* stays
 M1's — not measured here, stated so it is not implied.
 
+**Verdict, same day, M1 (worktree `v2.4.0-range-foundation-1`, measured
+at `v2.2.1-68-g7318e7e` against `b0b6e8a`): H1's mount half held.**
+Boot-to-listener, fresh file both arms, interleaved in one sitting, the
+noise band fixed by an A/A pilot *before* the A/B was read
+(`bench/v2.4.0/results-m1-mount-cost-v2.2.1-68-g7318e7e.md`): first
+boot's median delta is +3.56 ms against the same-binary control's
++2.18 ms — v16 the *faster* arm once slot position is netted — and
+remount's paired median 1.75 ms against a 1.68 ms control, under the
+driver's ~2 ms polling resolution. The falsifier fires on no subset,
+including with the non-stationary first reps dropped. One mechanism
+corrected at the review: the tenth relation does mount-time work only on
+the *create* path — `Catalog::Bootstrap()` runs on a fresh file only
+(`src/bootstrap/bootstrap.cpp:123`) and nothing between exec and the
+listener enumerates catalog relations on a remount — so **first boot,
+not remount, is the cell where a per-relation cost would have shown**,
+and it showed none.
+
 ---
 
 ## 4. Decisions this plan does not take
