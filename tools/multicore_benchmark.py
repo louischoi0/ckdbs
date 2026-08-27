@@ -37,6 +37,7 @@ never tmpfs) on a quiet box - both are checked, `--force` overrides.
 
 import argparse
 import collections
+import json
 import os
 import shutil
 import socket
@@ -488,7 +489,23 @@ def summarize(tag, cores, wall, all_phases, owner_cores, tables, rows, report):
         first = next(ph.first_error for phases in all_phases.values()
                      for ph in phases.values() if ph.first_error)
         print(f"   first error: {first}")
-    return total_stmts / wall
+    phase_stats = {}
+    for name in PHASES:
+        lats = sorted(sum((phases[name].latencies for phases in all_phases.values()), []))
+        if not lats:
+            continue
+        phase_stats[name] = {
+            "n": len(lats),
+            "p50_us": lats[len(lats) // 2] * 1e6,
+            "p99_us": lats[int(len(lats) * 0.99)] * 1e6,
+        }
+    return {
+        "tag": tag, "cores": cores, "tables": tables, "rows": rows,
+        "wall_s": wall, "statements": total_stmts, "errors": errors,
+        "throughput_stmts_s": total_stmts / wall,
+        "owner_cores": {str(n): c for n, c in owner_cores.items()},
+        "phases": phase_stats,
+    }
 
 
 def main():
@@ -516,6 +533,18 @@ def main():
     ap.add_argument("--max-connects", type=int, default=256,
                     help="how many connections to open while hunting for sessions on "
                          "the needed cores before giving up (the kernel distributes)")
+    ap.add_argument("--only", choices=("both", "single", "multi"), default="both",
+                    help="run one configuration instead of both, so the ratio can be "
+                         "computed from **separate processes**. The default runs "
+                         "single-core then multi-core in this one process, and that "
+                         "shape carries a measured ordering bias - a cores=1 against "
+                         "cores=1 null cell returns 1.099, because the second arm "
+                         "always runs later (SS-B finding 10). Every cell in "
+                         "`bench/v2.1.0/results-multicore-writers-v2.1.0.md` was taken "
+                         "with the default, so a `--only` ratio is unbiased but is NOT "
+                         "directly comparable with those numbers.")
+    ap.add_argument("--json", default="",
+                    help="write this run's per-configuration summary here")
     ap.add_argument("--force", action="store_true",
                     help="run even on tmpfs or a loaded box")
     ap.add_argument("--retry-deadline", type=float, default=DEFAULT_RETRY_DEADLINE_S,
@@ -533,9 +562,13 @@ def main():
     results = {}
     # The baseline never carries peer listeners: `cores = 1` has no peer to
     # listen, and the server refuses the pairing.
-    for tag, cores, port, listeners in (("single-core", 1, args.port, False),
-                                        ("multi-core", args.cores, args.port + 1,
-                                         args.peer_listeners)):
+    configs = [("single-core", 1, args.port, False),
+               ("multi-core", args.cores, args.port + 1, args.peer_listeners)]
+    if args.only == "single":
+        configs = configs[:1]
+    elif args.only == "multi":
+        configs = configs[1:]
+    for tag, cores, port, listeners in configs:
         wall, phases, owners, report = run_config(
             binary, args.workdir, tag, cores, port, args.tables, args.rows,
             args.placement, listeners, args.max_connects, args.retry_deadline, args.force)
@@ -556,13 +589,29 @@ def main():
         results[tag] = summarize(tag, cores, wall, phases, owners,
                                  args.tables, args.rows, report)
 
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump({"only": args.only, "cores": args.cores, "tables": args.tables,
+                       "rows": args.rows, "placement": args.placement,
+                       "peer_listeners": bool(args.peer_listeners),
+                       "configs": results}, fh, indent=2)
+
+    if args.only != "both":
+        # One configuration per process is the point of --only: the ratio is
+        # computed outside, from two runs that were never each other's
+        # second arm.
+        only = results[configs[0][0]]
+        print(f"\n== {args.only} only ==\n   " +
+              ("not run (see above)" if only is None else
+               f"{only['throughput_stmts_s']:,.0f} stmt/s over {only['wall_s']:.2f}s"))
+        return
     single, multi = results["single-core"], results["multi-core"]
     if single is None or multi is None:
         print("\n== comparison ==\n   not computed: a configuration could not run "
               "(see above)")
         return
     print(f"\n== comparison ==\n   multi-core / single-core throughput: "
-          f"{multi / single:.3f}x")
+          f"{multi['throughput_stmts_s'] / single['throughput_stmts_s']:.3f}x")
     if args.placement == "creating":
         print("   (expected ~1.0x at placement=creating whatever the pipeline can do:\n"
               "    every relation is on core 0, so no statement ships - "
