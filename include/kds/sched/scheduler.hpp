@@ -376,6 +376,23 @@ private:
     // fix's own measure of itself: zero on a build without parks, and
     // climbing on exactly the workload that used to burn a core.
     std::atomic<std::uint64_t> parked_idle_blocks_{0};
+    // How long this reactor has actually spent inside the block, and how
+    // many wakes arrived to find nothing on the ring (D7 of the v2.3.0
+    // order). Plain integers, unlike the three above: nothing outside this
+    // reactor's own thread has a use for them, so they follow the
+    // class-level rule rather than the wake protocol's exception. Both are
+    // touched only on an iteration that was about to block or that a wake
+    // ended, which is by construction an iteration with nothing to run.
+    //
+    // `idle_block_ns_` is what makes the reactor's wall clock add up:
+    // `run_wall_ns - sum(polled_ns_total) - idle_block_ns` is the time
+    // charged to no group *and* spent doing something (sched.md §4's gap),
+    // where before it was that plus the sleep in one lump.
+    std::uint64_t idle_block_ns_ = 0;
+    std::uint64_t spurious_wakes_ = 0;
+    // Set by the waker's own io handler, read after the inbox drain, reset
+    // at the top of every iteration: an iteration the eventfd ended.
+    bool woken_by_waker_ = false;
 
 public:
     // The wake path, from this reactor's side. `idle_blocks` counts
@@ -396,6 +413,31 @@ public:
     std::uint64_t parked_idle_blocks() const noexcept {
         return parked_idle_blocks_.load(std::memory_order_relaxed);
     }
+    // Wall time inside a `PollReady` this reactor was **allowed** to block
+    // in - its sleep, plus the syscall around it. An iteration with
+    // anything runnable passes a timeout of 0 and is not counted, so this
+    // is the idle policy's own time and never a busy reactor's. The
+    // denominator `run_wall_ns()` already provides.
+    std::uint64_t idle_block_ns() const noexcept { return idle_block_ns_; }
+    // Wakes written to **this** reactor's eventfd, by any sender. Zero
+    // where the wake path is not armed.
+    std::uint64_t wakes_received() const noexcept {
+        return waker_.has_value() ? waker_->wakes() : 0;
+    }
+    // Wakes this instance's transport has written to *every* destination,
+    // so the same number on every core and equal to the sum of every
+    // core's `wakes_received()`. Instance-wide because the counter is the
+    // transport's: one object serves all N reactors.
+    std::uint64_t wakes_sent() const noexcept {
+        return transport_ != nullptr ? transport_->wakes_sent() : 0;
+    }
+    // Wakes this reactor read whose iteration then drained no message.
+    // Not a defect: the sender publishes before it wakes, so the message
+    // can be taken by the iteration that raced the flag, one ahead of the
+    // eventfd being read - the ordinary outcome of what `wake_race_skips`
+    // counts from the other side. A number climbing far past that one
+    // would mean senders waking a core they had nothing for.
+    std::uint64_t spurious_wakes() const noexcept { return spurious_wakes_; }
     // Whether this reactor can be woken at all. False on every single-core
     // build, where nothing can send to it.
     bool wake_armed() const noexcept { return waker_.has_value(); }

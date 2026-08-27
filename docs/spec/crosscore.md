@@ -188,6 +188,16 @@ silently; this is the teardown correctness rule, not an error.
 - Rationale: ring backpressure protects the *transport*; credits bound the
   *per-request* buffering so one fat pipeline cannot exhaust a peer core's
   batch memory. Credit memory is preallocated per edge at `STEP_OPEN`.
+- **A successful send wakes a sleeping destination; a refused one wakes
+  nobody** (2026-08-26, `docs/spec/sched.md` §7 and its invariant 7). This
+  is the half of backpressure that used to be missing rather than a new
+  rule: the send stays non-blocking and fallible, and the wake follows the
+  push, so a message never waits out the destination's idle block. The
+  refused case is deliberate and tested — waking a core for a message that
+  is not in the ring is the spin the wake exists to remove, moved to the
+  sender. What it was worth is in `bench/v2.3.0/`: a cross-core round trip
+  on an idle peer cost a flat ~1.06 ms before it and **20.0 µs** after,
+  independent of `wal_drain_interval_us` over a 50× range.
 
 ## 5. Isolation Semantics
 

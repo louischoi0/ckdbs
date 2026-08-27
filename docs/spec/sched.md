@@ -21,7 +21,9 @@ loop:
   3. drain cross-core inboxes     // per-peer SPSC rings; enqueue as tasks
   4. run ready tasks              // pick by group policy (§4), up to loop budget
   5. submit pending I/O           // batch submission
-  6. idle policy if nothing ran   // §7
+  6. idle policy if nothing ran   // §7 - the block is phase 1's, and
+                                  //   what ends it is a timer, an fd,
+                                  //   or (2026-08-26) a peer's wake
 ```
 
 Rules:
@@ -48,6 +50,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 - **Two floors under the share law (2026-08-25, `docs/inflight/in-progress/workplan-peer-writer.md` PW7).** Within one reactor iteration a task is polled **at most once** — a task that suspends is not re-polled until the next iteration, and a task submitted by a poll waits for the next iteration — and every group with a task ready when the iteration began is polled **at least once**, whatever its ratio says, in fixed group order (`foreground`, `maintenance`, `system`: a saturated reactor hands the first poll of every iteration to `foreground`, a systematic 1-in-64 bias stated rather than hidden). The loop budget is clamped at construction to at least the group count, or the second floor could not hold. Both were forced by a trace, not a preference: a parked coroutine answers `kSuspended` in nanoseconds, and the loop budget re-polled a peer's parked lease-refill task up to 64 times an iteration, charging each poll to the `system` group (share 50); the group then owed the `foreground` (share 1000) twenty times that, and because a statement's time is the WAL drain's fdatasync — outside every group's account — the debt took hundreds of iterations to clear, during which the *next* refill sat unpolled (546 ms, 395 iterations, measured on the tree committed as `v2.0.0-52-g2c6ae23`). The share law still governs everything past one poll per group. **The consequence, stated**: a coroutine chain that used to advance up to 64 steps inside one iteration now advances one per iteration, each iteration paying one `PollReady` — paid for on the four-writer cell (0.99–1.03×), **unmeasured on the shape that pays most**, P4d's cross-core step pipeline under load. The accounting gap it exposed stands: reactor time spent outside task polls (the drain, the idle block) is charged to no group.
 - **The accounting gap is measurable from outside since 2026-08-26** (T4 of the statement-shipping pretasks). The gap itself is unchanged - reactor time outside task polls is still charged to no group - but it can now be *read* rather than argued about. `SHOW META` prints `sched_wall_us` (reactor wall clock since its first iteration), `sched_iterations`, and per group `sched_<group>_polled_us`, `sched_<group>_polls` and `sched_<group>_consumed_us`. **Two counters per group, and the distinction is load-bearing**: `consumed_us` is the share law's own input and is *halved periodically* (`MaybeDecayConsumedRuntime`) so history does not dominate the pick, which makes it a scheduling weight and never a total; `polled_us` and `polls` are cumulative and never decay. So `sched_wall_us - sum(sched_*_polled_us)` is the time charged to nobody - the `PollReady` idle block on a quiet reactor, the WAL drain's `fdatasync` on a committing one - and a spin is visible as `polls` climbing while `polled_us` does not. `bench/v2.1.0` §11-5 recorded this as *not measurable from outside the process on this tree* and owed it to whoever next touched this section; this is that debt paid. The counters cost two integer adds per poll, on the poll path.
 - **A parked coroutine is not runnable, and since 2026-08-26 the idle policy knows it.** The two floors above are about how a *ready* task is picked; this is about what "ready" means. A task that suspends goes back on its queue, so a queue is not a test of whether there is work — and reading one for the other made a reactor holding a single parked waiter spin at ~90% of a core, 3.1M polls a second at 0.059 µs each, the cost per poll flat while the count climbed (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §7). §7 carries the rule and its one hazard; what belongs here is the consequence for this section's accounting: **an idle block is still charged to no group**, so the time that used to appear as `system`-group polls now appears as unaccounted wall clock. The gap did not grow — the same nanoseconds were always outside every group's account — but its *shape* changed, and a reading of `sched_wall_us - Σ polled_us` taken before this date is not comparable with one taken after.
+- **The block is measured since 2026-08-27, so the lump separates** (the v2.3.0 order's D7). `SHOW META` prints `sched_idle_block_us` — wall time inside a `PollReady` this reactor was *allowed* to block in — beside the counters above, which makes `sched_wall_us − Σ sched_*_polled_us − sched_idle_block_us` the time charged to nobody that was **not** sleep. That is the reading this section has wanted since `bench/v2.1.0` §11-5: on a shipped run at `13c6d4d` plus this change (`cores = 4`, one session on a foreign arrival core, `relaxed`, 2,000 statements) an arrival core reads **79.5% sleep and 10.3% unaccounted work**, and an idle peer **99.7% sleep and 0.2% work**, where both used to arrive as one ~90% figure with no way to tell a sleeping reactor from a busy one whose work nobody charges. SS-B's "92–96% charged to no group" (its claim 3) is therefore readable rather than merely true. **The charging *decision* is still open** — an idle block still belongs to no group, and D1 of that order says so explicitly; what closed is the argument about what the number contains.
 - **SLO feedback:** a per-core controller observes foreground latency (e.g., p99 over a sliding window). When latency exceeds the configured SLO, it reduces `maintenance` shares; when there is headroom, it restores them gradually. This is the single mechanism by which "SLO-aware relayout throttling" is implemented — relayout code itself never self-throttles with sleeps.
 - Group accounting is core-local. There is no global coordinator; per-core controllers act independently.
 
@@ -79,6 +82,16 @@ When phase 4 finds no runnable task:
 - **blocking mode** — arm eventfd/ring wakeups and block until an event. For development and shared machines. **The block shipped with the reactor; the eventfd wakeup landed 2026-08-26** (`include/kds/sched/waker.hpp`). Between the two, this bullet described a mechanism the code did not have: a reactor blocked in `epoll_wait` and **nothing ended that block when a ring message arrived**, because a ring is a store to shared memory and epoll cannot watch memory. Measured cost of the gap: a flat ~1.07 ms on every shipped statement, tracking the idle block over a fivefold range of `wal_drain_interval_us` and identical with the device sync in the path and without it (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §4a).
 - Mode is a runtime option per reactor. Code must not assume either mode.
 
+**The block is accountable.** `SHOW META` prints `sched_idle_blocks`,
+`sched_parked_idle_blocks`, `sched_wake_race_skips`, `sched_idle_block_us`,
+`sched_wakes_sent`, `sched_wakes_received` and `sched_spurious_wakes`
+(§4's last bullet for what the duration buys, `docs/spec/client-manual.md`
+§3 field by field). Two of them are checks rather than measurements: the
+instance's `sched_wakes_sent` must equal the sum of the cores'
+`sched_wakes_received`, and `sched_spurious_wakes` climbing far past
+`sched_wake_race_skips` would mean senders waking cores they have nothing
+for.
+
 **The wake, and its one atomic.** One `Waker` (an eventfd) per reactor,
 armed at `AttachTransport` and registered with that reactor's backend like
 any other readable handle — so a single-core build arms nothing and pays
@@ -100,7 +113,10 @@ forbids.
 **A block always has a ceiling.** `max_idle_block_ms` (10 ms) bounds every
 idle block, so a wake that is somehow missed costs latency and never
 liveness. That is not belt-and-braces; the census below has two entries that
-depend on it.
+depend on it. **`PollReady` is never given a negative timeout** — invariant
+7a — and the ceiling is visible from outside a binary that predates the
+rule: at `wal_drain_interval_us = 50000` the pre-wake engine's shipped
+statement stops at **11.0 ms, not 50** (`bench/v2.3.0/results-knob-sweep-cell2-v2.2.1-14-g13c6d4d.md` §3a).
 
 **Parked is not ready.** `IdleTimeoutMs` does not read a non-empty queue as
 work to do. A block is permitted only after a full iteration in which
@@ -121,6 +137,27 @@ drain interval on *every commit* — trading a spin for a durability
 regression. That is why `SetPostTaskHook` takes a `std::function<bool()>`
 and why both drain sites answer it with `HasPendingGroupCommits()`, read
 before the drain clears it.
+
+**What the two halves bought, and what they cost** — RW-B, measured on an
+8-CPU host and filed under `bench/v2.3.0/`. Stated here because an idle
+policy that is only argued about is how the last one survived for a year:
+
+| | before (`bce12d0`) | after (`13c6d4d`) | cell |
+|---|---|---|---|
+| shipped statement, `group`, one session per owner | 0.416 of seated | **0.989** | `results-reactor-wake-r1-…` |
+| shipped p50 against `wal_drain_interval_us` 1000→5000 | 1,083 → 5,118 µs (1:1) | **43.2 → 43.5 µs** (flat) | `results-knob-sweep-cell2-…` |
+| the same at a 50 ms drain interval | 11.0 ms — the 10 ms ceiling, not the knob | **42.4 µs** | `results-knob-sweep-cell2-…` |
+| what is left over a seated statement | the block | **20.0 µs, the wire, knob-independent** | `results-knob-sweep-cell2-…` |
+| arrival core holding one parked waiter | 0.862 busy | **0.032** | `results-parked-is-not-ready-…` |
+| the same at K = 4, ratio and CPU | 0.912, cpu 0.923 | **0.999, cpu 0.028** | `results-hot-path-cell4-…` |
+| `cores = 1` throughput | — | **1.017–1.030×** (no syscall to pay) | `results-hot-path-cell4-…` |
+| the commit path (D5's hazard) | — | **no regression at any drain interval** | `results-commit-path-cell5-…` |
+| K = 1 on a box with spare cores | — | **0.900× throughput, +31.5 µs p50, +277 µs p99** | `results-parked-is-not-ready-…` |
+
+The last row is the cost and is not netted off: a reactor that used to spin
+noticed its reply in nanoseconds, and one that sleeps has to be woken. **The
+cost is concentrated exactly where the core was idle anyway** — it is gone
+by K = 4 — which is the trade §7 makes and the operator's to accept.
 
 **Every park and what ends it** (taken at `bce12d0`, re-checked after the
 wake and the park rule landed). This is the table a change to the idle
@@ -148,6 +185,22 @@ The reactor depends only on injectable interfaces: **I/O backend, clock, RNG, cr
 - The simulated environment can inject I/O errors and torn writes, delay/reorder cross-core messages, and skew per-core clocks.
 - A failure reproduces from `(seed, build)` alone. CI runs the simulator across many seeds; any nondeterminism (iteration-order dependence, address-dependent hashing, real-time reads) is a build-rejecting defect.
 - Practical consequences: containers used by the scheduler must have deterministic iteration order; hashing must be seed-stable; task IDs are sequential per core, never derived from pointers.
+
+**Where the wake path is covered, and where it is not** (2026-08-27). The
+seed-driven harness under `sim/` — `scripts/sim.sh`'s 171 runs — builds a
+whole *instance* on crashable in-memory devices and drives it through
+`CommandDispatcher`; it constructs **no reactor at all**, so it has no idle
+block to interrupt and the wake path has no representation in it. Its role
+here is a regression gate, not coverage: 171 runs, 0 failures at `13c6d4d`.
+The deterministic coverage the wake needs therefore lives in the scheduler
+suite (`tests/scheduler_test.cpp`) against the **real** epoll backend, which
+is the only place a block exists to be ended — including the composed shape,
+a coroutine parked on a flag only a peer's message sets, on a reactor that
+"parked is not ready" has allowed to sleep, with the test carrying **its
+own deadline** so a lost wake fails a named assertion rather than timing out
+a suite. The `SimRingTransport` answers the wake's two halves honestly and
+wakes nobody: its reactors are multiplexed by a seeded harness, and a second
+"who runs now" input is the nondeterminism this section forbids.
 
 ## 9. Invariants
 

@@ -91,6 +91,13 @@ public:
     virtual void SetWakeTarget(std::uint32_t core, WakeTarget target) = 0;
 
     virtual std::uint32_t core_count() const noexcept = 0;
+
+    // Wakes written across every destination (waker.hpp). Instance-wide
+    // and diagnostic, so it is given a default rather than made pure: a
+    // transport that cannot wake anything - the simulated one, whose
+    // reactors are multiplexed by the harness - answers 0 truthfully and
+    // has nothing to override.
+    virtual std::uint64_t wakes_sent() const noexcept { return 0; }
 };
 
 // The real transport: one SpscRing per **ordered** core pair, so a channel
@@ -138,7 +145,7 @@ public:
     // Wakes actually written across every destination. Zero on a
     // single-core build and on any run where no core ever slept with work
     // arriving; it is the count that says the path is live.
-    std::uint64_t wakes_sent() const noexcept {
+    std::uint64_t wakes_sent() const noexcept override {
         return wakes_sent_.load(std::memory_order_relaxed);
     }
 

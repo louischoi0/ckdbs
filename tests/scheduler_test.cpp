@@ -779,6 +779,11 @@ TEST_F(SchedulerWakeTest, AMessageToABlockedReactorArrivesWithoutWaitingOutTheBl
         << "the message waited out the idle block instead of interrupting it";
     EXPECT_GE(transport.value().wakes_sent(), 1u)
         << "the sender never wrote a wake, so the arrival was luck";
+    // D7's pair, from the two ends: what the transport wrote is what this
+    // reactor's own eventfd received, and `SHOW META` prints both so the
+    // sum over cores can be checked against the instance total.
+    EXPECT_GE(scheduler.wakes_received(), 1u) << "the wake reached no eventfd";
+    EXPECT_EQ(scheduler.wakes_sent(), transport.value().wakes_sent());
 }
 
 // The other half of the wake's contract, and the half a latency test cannot
@@ -840,6 +845,57 @@ TEST_F(SchedulerWakeTest, ARefusedSendWakesNobody) {
     ASSERT_FALSE(transport.value().TrySend(header, {}).ok()) << "the ring should be full";
     EXPECT_EQ(transport.value().wakes_sent(), 1u)
         << "a refused send woke the target anyway, for a message it does not have";
+}
+
+TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
+    // D7 of `instructions/v2.3.0-reactor-wake.md`: the idle block used to
+    // be invisible from outside the process, so `sched_wall_us - sum(
+    // polled_us)` was sleep and work in one lump. These four counters are
+    // what separate them, and each is asserted against a fact the test
+    // arranges rather than against itself.
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+    auto backend = EpollIoBackend::Create();
+    ASSERT_TRUE(backend.ok());
+
+    SchedulerConfig config;
+    config.max_idle_block_ms = 50;
+    Scheduler scheduler(clock_, backend.value(), config);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+
+    EXPECT_EQ(scheduler.idle_block_ns(), 0u);
+    EXPECT_EQ(scheduler.wakes_received(), 0u);
+    EXPECT_EQ(scheduler.wakes_sent(), 0u);
+
+    // One iteration with nothing to do: it blocks for the configured 50 ms
+    // and the counter must show it. The bound is loose on purpose - this
+    // asserts the block is *measured*, not how long a kernel sleeps.
+    scheduler.RunOnce();
+    EXPECT_GE(scheduler.idle_blocks(), 1u);
+    EXPECT_GE(scheduler.idle_block_ns(), 10'000'000u)
+        << "a 50 ms block was not accounted for";
+    const std::uint64_t blocked_once = scheduler.idle_block_ns();
+
+    // Now the wake side. The reactor is not running, so it is not asleep
+    // and the send must not wake it - which also makes the next iteration
+    // the one that both drains and reads the eventfd.
+    MessageHeader header{};
+    header.src_core = 0;
+    header.dst_core = 1;
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
+    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
+    EXPECT_EQ(scheduler.wakes_sent(), 0u) << "an awake target was woken";
+
+    // The queued message is drained by the next iteration, which therefore
+    // does not block at all: the block counter must not move, and with no
+    // wake ever written nothing can have been spurious.
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.idle_block_ns(), blocked_once)
+        << "an iteration with a message waiting still slept";
+    EXPECT_EQ(scheduler.spurious_wakes(), 0u)
+        << "no wake has been written, so nothing can have been spurious";
+    EXPECT_EQ(scheduler.wakes_received(), 0u);
 }
 
 // ---- Parked is not ready (sched.md §7) ---------------------------------
@@ -1014,6 +1070,84 @@ TEST_F(SchedulerParkTest, TheHooksWorkIsProgressSoACommitDoesNotWaitOutABlock) {
     ASSERT_GE(io.timeouts.size(), 3u);
     EXPECT_EQ(io.timeouts[2], 0)
         << "the reactor blocked between the hook's work and the waiter's next poll";
+}
+
+// ---- The two halves together (the v2.3.0 order's RW4) -------------------
+
+TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
+    // **The shape the two halves exist for, and the one that hangs if
+    // either is wrong.** A coroutine parked on a flag that only a peer's
+    // message sets; a reactor that - since RW3 - is allowed to sleep on
+    // exactly that; and a block long enough that waiting it out would be
+    // unmistakable. Before "parked is not ready" this reactor would have
+    // spun instead of sleeping and would have noticed the message by luck;
+    // before the wake it would have slept through it.
+    //
+    // The deadline is the test's own, never CI's: a hang here must fail
+    // this test with a message, not time out a suite.
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+    auto backend = EpollIoBackend::Create();
+    ASSERT_TRUE(backend.ok());
+
+    SchedulerConfig config;
+    config.max_idle_block_ms = 1000;
+    Scheduler scheduler(clock_, backend.value(), config);
+    ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+
+    std::atomic<bool> resumed{false};
+    bool released = false;
+    auto waiter = [&released]() -> Coro {
+        co_await WaitFor{&released};
+        co_return Status::OK();
+    };
+    scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, waiter(),
+                                  [&resumed](const Status&) { resumed.store(true); }));
+    ASSERT_TRUE(scheduler
+                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                                            [&released](const MessageHeader&,
+                                                        std::span<const std::byte>) {
+                                                released = true;
+                                            })
+                    .ok());
+
+    std::thread reactor([&] { scheduler.Run(); });
+
+    // Wait for the reactor to be asleep **on the park** - which is what
+    // `parked_idle_blocks` counts and what nothing before RW3 could have
+    // produced. Bounded, so a reactor that never sleeps fails here rather
+    // than hanging.
+    const auto armed = std::chrono::steady_clock::now();
+    while (scheduler.parked_idle_blocks() == 0 &&
+           std::chrono::steady_clock::now() - armed < std::chrono::seconds(2)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    ASSERT_GE(scheduler.parked_idle_blocks(), 1u)
+        << "the reactor never slept on the parked coroutine; the test proves nothing";
+
+    MessageHeader header{};
+    header.src_core = 0;
+    header.dst_core = 1;
+    header.kind = static_cast<std::uint16_t>(RingMessageKind::kStepBatch);
+    header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
+    const auto sent = std::chrono::steady_clock::now();
+    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
+
+    while (!resumed.load() &&
+           std::chrono::steady_clock::now() - sent < std::chrono::milliseconds(900)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    const auto latency = std::chrono::steady_clock::now() - sent;
+
+    scheduler.Stop();
+    (void)transport.value().TrySend(header, {});
+    reactor.join();
+
+    ASSERT_TRUE(resumed.load()) << "the parked coroutine was never resumed";
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(latency).count(), 100)
+        << "the park waited out the idle block instead of being woken";
+    EXPECT_GE(transport.value().wakes_sent(), 1u)
+        << "nothing wrote a wake, so the resume was the block expiring";
 }
 
 }  // namespace

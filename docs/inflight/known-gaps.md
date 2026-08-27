@@ -881,7 +881,17 @@ still waits on its own gate, so:
   every commit — `SetPostTaskHook` therefore takes a `std::function<bool()>`
   and both drain sites answer with `HasPendingGroupCommits()`.
   `SHOW META`/`Scheduler::parked_idle_blocks()` counts the blocks that used
-  to be spins. The old text, for what it was:
+  to be spins, and **the fix is measured**: arrival-core CPU 0.862 → 0.032
+  at one parked waiter, 0.923 → 0.028 at four, against a throughput ratio
+  that rises 0.912 → 0.999 at four and falls 0.900× at one
+  (`bench/v2.3.0/results-parked-is-not-ready-v2.2.1-12-g12c0ebb.md`,
+  `bench/v2.3.0/results-hot-path-cell4-v2.2.1-14-g13c6d4d.md`). **The
+  accounting gap is now readable too** — `sched_idle_block_us`, added
+  2026-08-27 — so `wall - Σ polled - idle_block` separates sleep from
+  uncharged work: an arrival core is 79.5% sleep and 10.3% unaccounted work
+  where the two used to arrive as one ~90% lump. The gap itself is
+  unchanged: an idle block still belongs to no group, and *that* decision
+  stays open. The old text, for what it was:
   the spin was **unfixed**;
   the accounting gap is **unfixed but no longer invisible** — since
   2026-08-26 (T4 of the statement-shipping pretasks) `SHOW META` prints
@@ -934,9 +944,21 @@ still waits on its own gate, so:
   `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` — five
   items clean and two findings, which is the track SS-B's order assumes
   and does not test.
-- **Shipping costs ~2× at one session per owner, and the cause is a
-  scheduler property rather than the wire** (measured 2026-08-26, the same
-  file). The memo's claim 2 is upheld and by more than it predicted: 0.526
+- ~~**Shipping costs ~2× at one session per owner, and the cause is a
+  scheduler property rather than the wire**~~ (measured 2026-08-26, SS-B) —
+  **closed 2026-08-27** (worktree `v2.3.0-rwc1`, the v2.3.0 order's
+  RW1-RW3), *with its numbers*:
+  the same cell reads **0.416 → 0.989** at `01da467`
+  (`bench/v2.3.0/results-reactor-wake-r1-v2.2.1-10-g01da467.md`), the
+  shipped-minus-seated delta falls from **1,059.6 µs to 20.0 µs** and stops
+  depending on `wal_drain_interval_us` at all — 43.2 / 43.2 / 43.2 / 43.5 µs
+  at 1000/2000/3000/5000, and 42.4 µs at **50,000**, against a pre-wake arm
+  that tracks the knob 1:1 to its 10 ms ceiling
+  (`bench/v2.3.0/results-knob-sweep-cell2-v2.2.1-14-g13c6d4d.md`). What is
+  left is the wire, and it is a **constant** rather than a ratio: 20 µs is
+  1% of a `group` statement and half of a `relaxed` one, which is the form
+  `docs/spec/crosscore.md` §9's routing decision now inherits. The original
+  entry, for what it was: The memo's claim 2 is upheld and by more than it predicted: 0.526
   (B1), 0.429 (B4 at K = 1), 0.531 sustained over 25,000 statements (B6),
   five reps each and an order of magnitude outside a 1.016 noise floor.
   **D6 ships unconditionally, so that penalty is being paid in the R1
@@ -958,8 +980,18 @@ still waits on its own gate, so:
   shipping, and deliberately unfixed by the run that found it.
   At four sessions and above the owner is never idle, the sleep never
   happens, and shipping runs at **0.93–0.99×** — inside the floor.
-- **One parked waiter already burns ~89% of an arrival core** (measured
-  2026-08-26, B4). Polls rise 3.1M → 7.9M/s from K = 1 to K = 16 while the
+- ~~**One parked waiter already burns ~89% of an arrival core**~~ (measured
+  2026-08-26, SS-B B4) — **closed 2026-08-27** (the same worktree, RW3),
+  *with its numbers*:
+  arrival-core CPU **0.862 → 0.032** at K = 1, every rep 0.784-0.915 before
+  and 0.026-0.051 after
+  (`bench/v2.3.0/results-parked-is-not-ready-v2.2.1-12-g12c0ebb.md`), and
+  **0.923 → 0.028** at K = 4 while the throughput ratio *rose* 0.912 → 0.999
+  (`bench/v2.3.0/results-hot-path-cell4-v2.2.1-14-g13c6d4d.md`). **The cost
+  is stated with it**: at K = 1 on a box with spare cores the trade is
+  0.900× throughput, +31.5 µs p50 and +277 µs p99 — a reactor that spun
+  noticed its reply in nanoseconds and one that sleeps must be woken — and
+  it is gone by K = 4. The original entry: Polls rise 3.1M → 7.9M/s from K = 1 to K = 16 while the
   cost per poll holds at 0.059–0.068 µs: the spin signature the pretasks
   could not build a population to look for, now built by shipping's own
   waiters. No throughput cost was observed *only because CPUs were free* —
