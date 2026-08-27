@@ -42,7 +42,13 @@ Three sentences are reversed, named rather than quietly reconciled:
 **One `[OPEN]` the direction closes.** `crosscore.md:447` and `:537` leave
 *"whether interleaved blocks are the default or opt-in"* open. Opt-in is a
 spelling the user would have to write. It reads as **default** — recorded
-as CLA's reading of the direction, correctable here.
+as CLA's reading of the direction, correctable here. **Closed in place
+2026-08-27** (RA1, worktree `v2.4.0-range-foundation-1`): `crosscore.md`
+§6b now states the default with this reading and its §9 entry is struck;
+the sweep found the `[OPEN]` indexed in two more places than the two
+sites above name — `blueprint-range-ownership.md` §12 and `CLAUDE.md`'s
+Open Decisions cross-core line — both amended in the same stroke so no
+index contradicts the spec.
 
 **What it does not reverse, and in fact points at.** §6b already
 specifies system allocation, ratified: *"each core inserts from its own
@@ -356,7 +362,7 @@ remaining row of this plan depends on it.
 | # | Task | Gate |
 |---|---|---|
 | ~~**RD0(a)**~~ | ~~**Probe and record, before building.** The §6 reachability probe at production sizing — a cross-core read whose batch exceeds `kCoreRingPayloadBytes`, asserting on row count against the same statement locally; its outcome decides `docs/inflight/bugs/` versus `known-gaps.md`.~~ **Closed 2026-08-27 — it was already done before this row was picked up.** The probe ran and reproduced at 42 rows under the test that landed with the report at `5a9bfd0`; `7148343` fixed it and pinned the pipeline leak it exposed with a second test; `dcdc5e5` retired the report. The framing question was answered **bug report**, and the residue is in `known-gaps.md`. Not owed work | none |
-| **RD0(b)(c)** | **The doc half, still owed.** (b) The §1 gate reading and (c) §0's three reversed sentences, amended in place in `crosscore.md` §6a/§8 and the blueprint's R3 row. Carried as **RA1** of `instructions/v2.4.0/range-foundation.md` §5 | none |
+| ~~**RD0(b)(c)**~~ | ~~**The doc half, still owed.** (b) The §1 gate reading and (c) §0's three reversed sentences, amended in place in `crosscore.md` §6a/§8 and the blueprint's R3 row. Carried as **RA1** of `instructions/v2.4.0/range-foundation.md` §5.~~ **Closed 2026-08-27 in worktree `v2.4.0-range-foundation-1` (RA1).** The three sentences are amended in place — `crosscore.md` §6a's refusal sentence, §8 test 13, the blueprint's R3 row — and §0's `[OPEN]` closure landed with it (§0 carries the full site list, the two extra indexes included). (b)'s §1 gate reading was already written into §1 at scoping and needed no further landing | none |
 | **RD1** | **`sys.ranges` exists and is empty.** Oid **133** (verified free: table oids are 100, 110-116, 130-132; the column-oid bases run 120-123 and 140-145), fixed root page **15**, `kCatalogOverflowFirst` → 16, `kSuperBlockVersion` → **16** with a ledger entry quoting the 12 → 13 precedent. Joins all five exhaustive lists: `kAllWellKnownOids` (`well_known.hpp:215-230`, compile-gated), `kAllCatalogPages` (`:291-296`), the `static_assert` at `:333`, `Bootstrap()`'s `kSysTables` (`catalog.cpp:532-557` — note the hard-coded `std::array<…, 9>`), and the `DropTable` sweep chain (`:1704-1736`, or rows outlive the relation). Fixed-offset row per `SysCabinRow`'s template — every field fixed-width. **`tests/assertion_catalog_test.cpp:109` is `EXPECT_EQ(kCatalogOverflowFirst, 15u)` — an exact pin this row breaks and must edit.** That file's own comment at `:102-106` argues exact pins are the wrong shape (which is why `:107` is `>=`); the same reasoning applies to `:109`, and it was missed once already at 13 → 14 | none |
 | **RD2** `[D2]` | **The directory row.** `SysRangeRow{rel_oid, lo, owner_core, entry_page}` per CC9. What this row adds beyond CC9's cell: the `lo = 0` and derived-`hi` rules are **enforced at the catalog door rather than assumed**, D2 is taken, and the anchor's `index_oid == 0` collision is recorded as its reason | RD1 |
 | **RD3** | **Resolution and publication.** `ResolveRanges(rel_oid, predicate) -> {owner_core, entry_page}[]`, plan-time, from the session core's cache (§2a of the spec). Publication decided per §2b — and **the choice is forced by where RD5 allocates**, not preferred. §2c's plan-time-only rule enforced by shape. **The zero-cost invariant binds hardest here** (*"a one-range relation on its owner core must add zero instructions over today"*): the unsplit path gains no scan, no lookup, no allocation, and RD9 measures it rather than an inspection asserting it | RD2 |
@@ -379,8 +385,10 @@ peer writer — §8's row 10 says so.
 
 At `acb2540`, **nothing is built** — with one correction made 2026-08-27:
 **RD0(a) is closed**, and was closed before this plan was picked up, by
-`7148343` on `main` (§6). **RD0(b)(c), RD1 and RD4 are unblocked**, and
-under `instructions/v2.4.0/range-foundation.md` they are RA1, RA2 and RA3.
+`7148343` on `main` (§6). **RD0(b)(c) landed 2026-08-27** as RA1 in
+worktree `v2.4.0-range-foundation-1` (§7's row carries what it amended).
+**RD1 and RD4 are unblocked**, and under
+`instructions/v2.4.0/range-foundation.md` they are RA2 and RA3.
 RD2 wants D2, RD7 wants D4, and **D1 removes the btree half entirely** —
 it is `crosscore.md` §9's, not this plan's. D6 blocks nothing: RD5 is
 built so choosing it is a config value, not a rewrite.

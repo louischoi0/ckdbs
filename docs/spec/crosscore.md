@@ -375,13 +375,20 @@ did.
 A split relation has no single owner core, so the v1 co-location rule
 does not survive a split as written. Each auxiliary's placement under a
 split belongs to its owning doc; none has decided; and until one does,
-**the conservative gate is that the relation does not split**. A
-`SPLIT RANGE` (working name, blueprint R3) targeting a gated relation is
-refused with the gate's name — `Unsupported`, understood and declined,
-carrying the offending token's byte position per the standing refusal
-rule — which keeps every listed option viable. The gates below bind
-**split**; whole-relation **migration** moves everything together and
-preserves co-location, so only the Cabin gate (its state is
+**the conservative gate is that the relation does not split**. There
+is no user-facing range DDL, in this phase or any later one — a range
+is information the user does not have; the system allocates and
+enforces it (operator direction 2026-08-27, retracting the
+`SPLIT RANGE` working name blueprint R3 carried). The gates bind
+wherever a range would be created — today the only such path is the
+range allocator's admission check
+(`docs/inflight/in-progress/workplan-range-directory.md` RD4), and any
+later creation path inherits them, the mover's included (CC10). A gated
+relation is declined as a logged engine decision naming the gate — no
+statement asks for the range, so no offending token and no byte
+position — which keeps every listed option viable. The gates below
+bind **split**; whole-relation **migration** moves everything together
+and preserves co-location, so only the Cabin gate (its state is
 memory-resident on the outgoing core, and its miss path does not
 self-heal — CC10) binds both:
 
@@ -414,7 +421,7 @@ What remains splittable in the first build — non-spilling
 (`SchemaCanSpill` false; invariant 13 makes *every* relation
 fixed-length, so the spill is the gate), unindexed, un-cabined, FK-free
 relations — is narrow and real. The gates are lifted by the owning
-decisions, never by relaxing the refusal.
+decisions, never by relaxing the decline.
 
 ### 6b. Inserts and the Tail — Id-Block-Aligned Spreading (v2, R4)
 
@@ -444,8 +451,12 @@ the tails; R3/R4 owns building the second. Consequences, stated now:
   keys: since 2026-08-25 they must still be at or above the mark
   (`docs/spec/heap-and-tuple.md` §4.1), which is the same tail this section
   is about. The spreading problem is the chain's, not the issuer's.
-- Whether interleaved blocks are the default or opt-in is `[OPEN]`
-  (§9): a single-writer relation gains nothing from them.
+- Interleaved blocks are the **default** — closed 2026-08-27 under the
+  operator's range direction: a range is information the user does not
+  have, and opt-in is a spelling the user would have to write. Recorded
+  as CLA's reading of the direction, correctable. That a single-writer
+  relation gains nothing from them bounds the default's benefit, not
+  who decides it.
 
 ## 7. Cancellation, Errors, Early Termination
 
@@ -525,11 +536,13 @@ mechanism, R3-R5:
    their own range's tail; ids ascend per range; ids stay globally
    unique (K1's issue-once contract across cores); invariant 3 holds
    per range.
-13. **Split gates:** `SPLIT RANGE` on an indexed, cabined, spilling, or
-   FK-linked relation is refused with the gate's name and the offending
-   token's byte position (§6a); on an eligible relation the directory
-   rows appear (the lo = 0 row included, CC9) and an unaffected
-   relation's fast path is byte-identical to before.
+13. **Split gates:** the allocator's admission check declines an
+   indexed, cabined, spilling, or FK-linked relation, names the gate,
+   and the relation stays one range (§6a — an engine decision, not a
+   statement refusal: no token, no byte); on an eligible relation the
+   allocator opens the second range and the directory rows appear (the
+   lo = 0 row included, CC9), and an unaffected relation's fast path is
+   byte-identical to before.
 
 ## 9. Open Items
 
@@ -546,7 +559,9 @@ mechanism, R3-R5:
   per-range local vs global secondary indexes (`docs/spec/index.md`
   §13), Cabin (`docs/spec/cabin.md` §11), var-heap partition
   (`docs/spec/heap-and-tuple.md`), FK (`docs/spec/foreign-keys.md`).
-- Id-block interleave default (§6b): default or opt-in.
+- ~~Id-block interleave default (§6b): default or opt-in~~ — closed
+  2026-08-27 as **default**, CLA's reading of the operator's range
+  direction, correctable; §6b carries it.
 - The shared-structure access mechanism (blueprint §8) — CC8's
   one-boundary btree hop lands on it, so it gates R3's btree ranges,
   not only "every core equivalent".
