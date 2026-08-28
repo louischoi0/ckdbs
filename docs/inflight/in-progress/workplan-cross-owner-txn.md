@@ -153,7 +153,7 @@ this workplan means the v2.4.0 path.
 | R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
 | R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
-| **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. CP2 concluded. Overhead not measured |
+| **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured |
 | RP8 | R6-B cells B1-B5 | — |
 
 ## R6-0 — the retry bit
@@ -2113,6 +2113,14 @@ byte-identical across the trees and `sim.sh`'s four fresh seeds are derived
 from the date: nine seeds × (3 modes × 2 fault settings × 3 value profiles +
 1 advisory pair) = 171 either side. **R6 adds 83 tests and no regression**,
 in the suite or in the corpus.
+
+**Re-run after the merge**, because a green suite before a merge says
+nothing about after one. `origin/main` had moved four commits under this
+work — the varchar/char milestone (VC-A, VC-B) — and the merge at `6cc8236`
+was clean. On the merged tree: **2,917 tests pass, 0 fail**, and the kill
+matrix is **12/12** again, the asymmetric state reached at three points.
+The gate is therefore reported against the tree that would be pushed, not
+against the one it was built on.
 
 One correction to an earlier row while the number was in hand: the R6-8
 review section records **2,864** green, and `dae5ce2` measures **2,865**. A
