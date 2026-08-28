@@ -65,6 +65,7 @@ add_library(kds
     src/server/session_step_client.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
+    src/catalog/range_directory.cpp
     src/catalog/keystone_budget.cpp
     src/catalog/schema.cpp
     src/catalog/foreign_key.cpp

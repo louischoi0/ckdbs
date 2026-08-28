@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "kds/base/common.hpp"
+#include "kds/catalog/range_directory.hpp"
 #include "kds/catalog/rows.hpp"
 
 // In-memory schema, built from the sys.columns rows for a given rel_id,
@@ -210,6 +211,21 @@ struct TableAccess {
     // core's id everywhere else.
     std::uint32_t owner_core = 0;
 
+    // This relation's ranges, as `sys.ranges` describes them (CC9, RD3),
+    // filled from `Catalog::RangesOf` through `RangeTargetsFrom`.
+    // **Empty is the ordinary value** and means one range owned by
+    // `owner_core` above and headed by `desc_page_id`, which is the branch
+    // RD3's zero-cost invariant is read from - `range_directory.hpp` owns
+    // that argument and the resolver that enforces it.
+    //
+    // Cacheable by this struct's own admission test, on a fact that is not
+    // DDL but publishes like it: `Catalog::InsertRangeRow` ends in
+    // `BumpVersion`, so a new boundary drops every entry here, this one
+    // included. That is the §2b choice and its consequence in one place -
+    // whoever writes a range row may **not** be holding a
+    // `const TableAccess*`, because this vector dies with the entry.
+    std::vector<RangeTarget> ranges;
+
     // Whether an id has ever landed on this relation out of order
     // (well_known.hpp's KeyOrder, docs/spec/heap-and-tuple.md section 4.1), from
     // sys.tables.
@@ -346,15 +362,20 @@ struct TableAccess {
     // **This is the one field on this struct that can move without DDL, and
     // the exception is deliberate rather than overlooked.** A root split
     // during an ordinary INSERT republishes `root_page_id` through
-    // `Catalog::UpdateIndexRoot()`, which bumps the catalog version and so
-    // drops this entry - meaning a caller **holding a `const TableAccess*`
-    // across an index insert that grows a level is holding a dangling
-    // pointer**. That is not a new hazard: `desc_page_id` has exactly the
-    // same property for a clustered btree, and `InsertInner` handles it by
-    // doing the relink last and using only plain ids afterwards, with a
-    // comment saying so. The index write hook (IX06) must do the same. The
-    // alternative - not caching the root - costs a sys.indexes scan per
-    // statement, which is what this whole struct exists to avoid.
+    // `Catalog::UpdateIndexRoot()`. **It used to do that with a version
+    // bump, which dropped this entry and dangled the running statement's
+    // `const TableAccess*`; since PW2-4 it writes the anchor and updates
+    // this field in place instead, so the entry survives** - the same
+    // license and the same one-field/one-owner test the four other in-place
+    // updates pass (catalog_cache.hpp). The hazard the bump created is
+    // therefore gone rather than merely documented; what remains is that
+    // `root_page_id` read before an index insert that grows a level is
+    // behind afterwards, which is why `InsertInner` does its relink last
+    // and uses only plain ids after it, and why the index write hook (IX06)
+    // must do the same. `desc_page_id` has exactly the same property for a
+    // clustered btree and takes the same treatment. The alternative - not
+    // caching the root - costs a sys.indexes scan per statement, which is
+    // what this whole struct exists to avoid.
     struct IndexRef {
         Oid index_oid = 0;
         PageId root_page_id = kInvalidPageId;

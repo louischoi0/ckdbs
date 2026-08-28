@@ -1104,6 +1104,19 @@ StatusOr<std::vector<SysRangeRow>> Catalog::RangesOf(Oid rel_oid) {
                 "; a boundary belongs to one range");
         }
     }
+    // The row's own ceiling (`SysRangeRow::lo`), read here and not only
+    // written at `InsertRangeRow`. RD3 derives `hi` from the *next* row's
+    // `lo` and gives the last row `kIdSpaceEnd`, so a boundary above the
+    // 40-bit space produces a `RangeTarget` with `lo > hi` - a value that
+    // struct's own comment says cannot exist. Checking the last row is
+    // checking all of them: they are sorted ascending by here.
+    if (mine.back().lo > kMaxKeystoneId) {
+        return Status::Corruption(
+            "sys.ranges: relation " + std::to_string(rel_oid) +
+            " has a range row at lo = " + std::to_string(mine.back().lo) +
+            ", above the 40-bit Keystone id ceiling (" + std::to_string(kMaxKeystoneId) +
+            "), so no id could ever fall in it and the range it derives is inverted");
+    }
     return mine;
 }
 
@@ -2138,6 +2151,23 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
               [](const TableAccess::IndexRef& a, const TableAccess::IndexRef& b) {
                   return a.index_oid < b.index_oid;
               });
+
+    // The relation's ranges (RD3, CC9), in one sys.ranges scan like the
+    // three above, and **empty on every relation this engine has today** -
+    // nothing allocates a second range until RD5.
+    //
+    // Fatal, and for the index list's reason rather than the Cabin's. A
+    // directory this call cannot read leaves `access.ranges` empty, which
+    // by CC9 *means* "one range at `owner_core`, headed by
+    // `desc_page_id`" - so a split relation whose rows are unreadable
+    // would route every statement to the core and the chain head of its
+    // lower range and answer from there. That is a wrong answer with
+    // nothing logged, which is the class RD6's insert-head defect belongs
+    // to; failing the fill keeps it a refusal, and keeps it scoped to the
+    // one relation whose rows are torn.
+    auto ranges = RangesOf(oid);
+    if (!ranges.ok()) return ranges.status();
+    access.ranges = RangeTargetsFrom(ranges.value());
 
     return cache_.PutTableAccess(std::move(access));
 }

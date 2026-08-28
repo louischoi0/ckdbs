@@ -303,6 +303,42 @@ TEST_F(CatalogTest, ARangeBoundaryAboveTheKeystoneCeilingIsRefused) {
     EXPECT_TRUE(catalog_.InsertRangeRow(beyond).ok());
 }
 
+TEST_F(CatalogTest, TheReaderRefusesAnAboveCeilingBoundaryTheWriterNeverWrote) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // The same ceiling on the **read** side, and it is RD3 that made it
+    // load-bearing rather than symmetric: `hi` is derived as the next row's
+    // `lo` with `kIdSpaceEnd` on the last, so a stored boundary above the
+    // space derives a `RangeTarget` with `lo > hi` - a value that struct
+    // says cannot exist, and one RB3 would read an `entry_page` off. The
+    // writer's refusal above is not enough, because these bytes can reach
+    // page 15 without passing it.
+    SysRangeRow first{};
+    first.rel_oid = 4000;
+    first.lo = 0;
+    first.owner_core = 0;
+    first.entry_page = 400;
+    ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
+
+    SysRangeRow beyond{};
+    beyond.range_id = 99;
+    beyond.rel_oid = 4000;
+    beyond.lo = kMaxKeystoneId + 4;
+    beyond.owner_core = 1;
+    beyond.entry_page = 401;
+    {
+        auto bytes = store_.Get(kCatalogPageRanges);
+        ASSERT_TRUE(bytes.ok());
+        heap::PageView page(bytes.value().bytes());
+        const auto encoded = beyond.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, kBootstrapXid).ok());
+    }
+
+    auto refused = catalog_.RangesOf(4000);
+    EXPECT_FALSE(refused.ok()) << "an inverted range was served";
+    EXPECT_EQ(refused.status().code(), StatusCode::kCorruption);
+}
+
 TEST_F(CatalogTest, EveryRangeRowCarriesAnIdOfItsOwnInTheIdentitySlot) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
@@ -370,6 +406,92 @@ TEST_F(CatalogTest, DroppingARelationRetiresItsRangeRowsAndNoOthers) {
     auto kept = catalog_.RangesOf(survivor.rel_oid);
     ASSERT_TRUE(kept.ok());
     EXPECT_EQ(kept.value().size(), 1u) << "the sweep took another relation's range";
+}
+
+TEST_F(CatalogTest, ACachedAccessCarriesTheRelationsRangesAndTheyRepublishOnInsert) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto oid =
+        catalog_.CreateTable(kNamespacePublic, "split_me", MinimalPkSchema(), ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // The ordinary answer for every relation this engine has today, and
+    // the branch RD3's zero-cost invariant is read from.
+    auto unsplit = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(unsplit.ok()) << unsplit.status().message();
+    EXPECT_TRUE(unsplit.value()->ranges.empty());
+
+    SysRangeRow first{};
+    first.rel_oid = oid.value();
+    first.lo = 0;
+    first.owner_core = unsplit.value()->owner_core;
+    first.entry_page = unsplit.value()->desc_page_id;
+    ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
+    SysRangeRow second = first;
+    second.lo = 4096;
+    second.owner_core = 1;
+    second.entry_page = 900;
+    ASSERT_TRUE(catalog_.InsertRangeRow(second).ok());
+
+    // Publication (§2b): `InsertRangeRow` ends in `BumpVersion`, so the
+    // entry filled above is gone and the next fill carries the boundary.
+    // A cached routing answer that survived this is the bug that section
+    // exists to prevent.
+    auto split = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    ASSERT_EQ(split.value()->ranges.size(), 2u);
+    EXPECT_EQ(split.value()->ranges[0].hi, 4096u);
+    EXPECT_EQ(split.value()->ranges[1].hi, kIdSpaceEnd);
+
+    // And the resolver reads that vector, which is the storage §2c's shape
+    // argument is about (`range_directory.hpp`).
+    auto routed = ResolveRanges(split.value()->ranges, PkSpan::Equality(5000));
+    ASSERT_TRUE(routed.ok()) << routed.status().message();
+    ASSERT_EQ(routed.value().size(), 1u);
+    EXPECT_EQ(routed.value()[0].owner_core, 1u);
+    EXPECT_EQ(routed.value()[0].entry_page, 900u);
+}
+
+TEST_F(CatalogTest, ARelationWhoseDirectoryIsTornCannotBeOpenedAtAll) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto torn =
+        catalog_.CreateTable(kNamespacePublic, "torn", MinimalPkSchema(), ClusteredType::kHeap);
+    ASSERT_TRUE(torn.ok()) << torn.status().message();
+    auto healthy =
+        catalog_.CreateTable(kNamespacePublic, "healthy", MinimalPkSchema(), ClusteredType::kHeap);
+    ASSERT_TRUE(healthy.ok()) << healthy.status().message();
+
+    // The shape `InsertRangeRow` refuses to create and a partial mount-time
+    // undo can still leave (its own note): rows, and no `lo = 0` row.
+    // Written straight onto page 15, past the writer's door, because that
+    // door is shut against it.
+    SysRangeRow orphan{};
+    orphan.range_id = 1;
+    orphan.rel_oid = torn.value();
+    orphan.lo = 4096;
+    orphan.owner_core = 1;
+    orphan.entry_page = 401;
+    {
+        auto bytes = store_.Get(kCatalogPageRanges);
+        ASSERT_TRUE(bytes.ok());
+        heap::PageView page(bytes.value().bytes());
+        const auto encoded = orphan.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, kBootstrapXid).ok());
+    }
+
+    // Fatal to opening *that* relation: an empty `ranges` means "one range
+    // at owner_core" by CC9, so serving the fill would route every
+    // statement to the lower range's chain head and answer from there - a
+    // wrong answer with nothing logged.
+    auto refused = catalog_.InitTableAccess(torn.value());
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kCorruption);
+
+    // And scoped to it. Reading the whole directory as one unit would have
+    // made one relation's torn rows an unusable instance.
+    auto fine = catalog_.InitTableAccess(healthy.value());
+    EXPECT_TRUE(fine.ok()) << fine.status().message();
 }
 
 TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {

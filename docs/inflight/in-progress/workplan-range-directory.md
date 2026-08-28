@@ -548,6 +548,15 @@ the layer this table does not carry: what the build must **conclude**
 **D1 and D3 are not**, and D1 leaves the order's own measurement subject
 unrepresentative on purpose rather than by omission (its §7).
 
+**Built since**, in worktree `v2.5.0-ragne-directory`: **RD2** as RB0 at
+`b7bc72e` — the directory row, with `range_id` added at its review because
+`lo` was sitting in the identity slot every catalog row's first eight bytes
+are. **RD3** as RB1 on top of it — `TableAccess::ranges` filled at the
+catalog fill, `ResolveRanges` over it, and **CD1 in §12**, which is where
+the zero-cost invariant is stated as the two numbers it actually is. §12a
+carries the two debts RB1 hands to RB2 and RB3. **The build resumes at
+RD5** (RB2), whose §2b answer — CD2 — is the next conclusion owed.
+
 ## 9. RD4 — the hypotheses, the C2 enumeration, the fifth gate, and C3's decision
 
 Gate **C2** of `instructions/v2.4.0/range-foundation.md` §3, run 2026-08-27
@@ -1069,3 +1078,89 @@ triggers, merge, migration), which is `physical-optimizer.md` Part III's
 and unwritten.
 
 ---
+
+## 12. CD1 — the zero-cost invariant, measured against what it actually claims
+
+Built as RB1 in worktree `v2.5.0-ragne-directory` on top of `b7bc72e`;
+`include/kds/catalog/range_directory.hpp` owns the code-level argument and
+this section owns the conclusion the work order (§3) asks for.
+
+**CD1 is two numbers, and RD9(a) measures one of them.** The RD3 row above
+words the invariant as *"the unsplit path gains no scan, no lookup, no
+allocation"*, and that is true of the **statement** path and false of the
+**cache-fill** path. Stated as two, because a single sentence covering both
+would have to be the weaker one:
+
+| path | what RB1 added | how often |
+|---|---|---|
+| **Statement, cache hit** | Nothing. `ResolveRanges`, `RangeTargetsFrom` and `TableAccess::ranges` have no caller outside `InitTableAccess` and the tests — source-read, `git grep`, RB1 | every statement |
+| **Cache fill** | One pinned read of catalog page 15 (`RangesOf`), and **zero heap allocations** on the unsplit answer — `reserve(0)` is a no-op, an empty vector does not allocate, and the move-assign into an empty target does not either | once per relation per catalog epoch |
+
+So the mechanism CD1 asks to be named is: **a router reads
+`access.ranges.empty()`** — one load from an entry it is already holding
+and one predictable branch — **and nothing else**. That is inside the "one
+predictable branch on a cached field" bound §3 sets. What is outside it,
+and is stated rather than netted away, is the fill: `BumpVersion` drops the
+whole cache on every DDL and every peer invalidation broadcast, so the
+first statement after either pays that scan. **RD9(a) measures the
+statement path; it does not measure the fill**, and the results file says
+so rather than letting a steady-state number stand for both.
+
+**HD1 is therefore confirmed on the statement path and unasserted on the
+fill.** The falsifier §4 names — *work on the unsplit path beyond one
+cached-field branch* — did not fire.
+
+**Two shapes decided here, recorded because the code no longer argues
+them.** The resolver's signature is `ResolveRanges(access.ranges, span)`
+rather than the plan's `ResolveRanges(rel_oid, predicate)`: every caller
+arrives holding the `const TableAccess*` — it needed it for the
+`ranges.empty()` branch one line earlier — and a parameter that re-derives
+what the caller already holds is a second way for the two to disagree. And
+the resolver **refuses** an empty directory rather than synthesising the
+one-range answer, because a total function would make a caller that
+wandered off the unsplit path correct-but-slow and silent; the refusal
+makes it a test failure.
+
+**What "enforced by shape" does and does not mean, corrected at the RB1
+review before RB3 and RB4 quote it.** §2c's rule — *a resolved range set is
+a plan-time value, re-resolved after any park, never re-validated with
+`catalog_version()`* — is held by returning a **span into
+`TableAccess::ranges`** rather than a vector. That is not a language
+guarantee that the set cannot outlive the park: a span is trivially
+copyable and will sit in a coroutine frame exactly as happily as a vector
+would. What it changes is **how a broken caller fails** — a use-after-free,
+which a sanitizer catches, instead of a stale answer, which nothing catches
+— and that the value carries no version to re-validate against, which is
+the half §2c states literally. **The rule stays the caller's to keep.**
+
+### 12a. Three debts RB1 hands forward, each with the row that owns it
+
+Found at RB1's `critics-developer` pass and written here rather than left
+to be rediscovered at the symptom.
+
+- **RB3 (RD6) — `entry_page` and the in-place cache license.**
+  `Catalog::UpdateDescPage` and `Catalog::UpdateIndexRoot` mutate a cached
+  entry **without** a version bump (catalog_cache.hpp's one-field/one-owner
+  licence). Today `ranges` is always empty, so nothing can go stale. From
+  RB3 on, `ranges[i].entry_page` **is** the per-range insert head, and a
+  clustered-root move that rewrites `desc_page_id` in place would leave
+  every `entry_page` untouched — the same wrong-answer-with-nothing-logged
+  class RD6's own finding belongs to. RB3 must either republish the range
+  row on a root move or put `entry_page` outside the in-place licence, and
+  say which.
+- **RB2 (RD5) — the publication asymmetry, now reachable from every
+  relation open.** `RangesOf` scans with `view = nullptr`, so an
+  **uncommitted** range row is visible to every session's fill; and
+  `InsertRangeRow` bumps the version *before* commit, which its own note
+  already admits lets a peer re-read a split that later rolls back. RB1
+  widens the exposure from "a range reader" to "any relation open". No
+  consequence today — no writer exists — and it belongs in **CD2**'s
+  write-up as a constraint RB2 inherits, not as something RB2 discovers.
+- **Closed at RB1, not handed on**: the reader's door now enforces
+  `SysRangeRow`'s own 40-bit ceiling as well as CC9's two partition rules
+  (`Catalog::RangesOf`). Only the *writer* checked it before, which cost
+  nothing until RD3 derived `hi` from the next row's `lo` — a stored
+  `lo > kMaxKeystoneId` then produces a `RangeTarget` with `lo > hi`, a
+  value that struct says cannot exist, and RB3 reads `entry_page` off
+  exactly such a range.
+
