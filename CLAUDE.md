@@ -305,7 +305,8 @@ interface that keeps every listed option viable.
   operator**: R6-7 executed the revisit and found 2PC changes nothing about
   page identity across streams — the decision lives in one stream, no wire
   payload carries an LSN, and the recovery-time resolution is a lookup
-  rather than a comparison — so CLA's proposal is to decline PL-A again.
+  rather than a cross-stream comparison — so CLA's proposal is to decline
+  PL-A again.
   The verdict is the operator's to rule on; `page-lsn-cross-stream.md` §9
   and `workplan-cross-owner-txn.md`'s R6-7 carry the argument.) (Undo retention was ratified and built 2026-08-19,
   `docs/inflight/in-progress/workplan-undo-purge.md` — `SnapshotTooOld` surfacing reopens only

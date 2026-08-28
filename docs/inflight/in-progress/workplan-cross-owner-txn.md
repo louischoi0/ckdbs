@@ -1308,16 +1308,39 @@ the transaction could be lost without anything refusing.
 
 ### The joint nobody had tested
 
-`Expeditor::Serve`'s tail runs, per peer: the executor's
-`RollbackAllEnrolled` (which passes over a prepared context), then
-`CoreRuntime::ShutdownCheckpoint`, which **flushes the core's pages first
-and then checkpoints** — PW3b's order, and its own comment gives the
-reason: *"an empty dirty table makes the redo start the `CHECKPOINT_BEGIN`
-LSN itself."*
+The stop sequence ends, on every core, in `CoreRuntime::ShutdownCheckpoint`
+— which **flushes the core's pages first and then checkpoints**, PW3b's
+order, and `core_runtime.hpp` gives the reason: *"with the table empty the
+redo start is the BEGIN LSN itself and the next mount reads this
+checkpoint's own two records rather than everything since the oldest dirty
+page."*
 
-That sentence is exactly the hazard. A redo start at the `CHECKPOINT_BEGIN`
-LSN is **past the `TXN_PREPARE`**, so the next mount would scan from after
-the record that says "this transaction is not this core's to decide", find
+**Where `RollbackAllEnrolled` sits relative to it differs by core, and the
+review of this row is what established that** — the row's first prose said
+"per peer, the rollback then the checkpoint", and that is core 0's order,
+not a peer's:
+
+- **core 0**: `Serve` calls its own executor's `RollbackAllEnrolled`
+  (`expeditor.cpp:1827`) as soon as the reactor stops, and its final
+  `Sync()` + `Checkpoint()` are the last two statements of the function —
+  rollback, *then* checkpoint;
+- **a peer**: `Serve` syncs and calls `core->ShutdownCheckpoint()`
+  (`expeditor.cpp:1861`) inside the per-core loop, and the peer's
+  `RollbackAllEnrolled` runs later still, in `~CoreRuntime`
+  (`core_runtime.cpp:46`) when `cores_.clear()` destroys it — checkpoint,
+  *then* rollback.
+
+**The floor's property is the same under either order, and that is why the
+fixture models one of them.** `RollbackAllEnrolled` never touches a
+prepared context (D4, and R6-3's own test pins it), so the set
+`OldestPreparedLsn()` reports is byte-identical before and after it: the
+checkpoint reads the same number whichever side of the rollback it runs on.
+What the peer's inverted order does cost is stated in "What this row does
+not prove" below.
+
+**PW3b's own sentence, quoted above, is exactly the hazard.** A redo start
+at the `CHECKPOINT_BEGIN` LSN is **past the `TXN_PREPARE`**, so the next
+mount would scan from after the record that says "this transaction is not this core's to decide", find
 the active-list entry the checkpoint carried, read it as an ordinary loser,
 and roll back a transaction the coordinator may have committed and
 acknowledged to a client. R6-4's floor is what prevents it, and until this
@@ -1325,10 +1348,12 @@ row the floor was tested only against a **scripted** `ActiveTransactions`
 answering a number the test chose.
 
 `Txn2pcShutdownTest` closes that: a real statement shipped, a real prepare
-through the executor's seam, and then the stop sequence in `Serve`'s own
-order over a target whose dirty table is empty *because the flush already
-happened*. Three properties, and **the first two fail if the floor is
-removed** — verified by removing it and watching them fail, then restoring:
+through the executor's seam, and then the stop sequence in core 0's order
+(rollback, then checkpoint) over a target whose dirty table is empty
+*because the flush already happened*. Three properties, and **all three
+fail if the floor is removed** — verified by removing the two lines in
+`checkpointer.cpp:149-151`, watching every one of them fail alongside the
+R6-4 unit test, and restoring:
 
 - the published redo start is at or below the LSN
   `TransactionManager::OldestPreparedLsn()` reports, which is the wiring
@@ -1336,9 +1361,14 @@ removed** — verified by removing it and watching them fail, then restoring:
 - the mount that scans from exactly that anchor still finds the prepare —
   `analysis.prepared == 1`, `losers == 0`, and the `PreparedTxn` naming the
   coordinator the resolution will look the decision up in;
-- a **second** checkpoint while still in doubt holds the floor too, since it
-  is computed per checkpoint from the live transaction rather than
-  remembered.
+- a **second** checkpoint while still in doubt holds the floor too, because
+  the floor is applied to every checkpoint from the live transaction rather
+  than only to the one that first saw the prepare. (It does not
+  discriminate a floor computed once and cached — that would answer the
+  same LSN. And its first assertion is the same property the fixture above
+  asserts, so it is an `ASSERT`: with the floor gone this fixture must stop
+  at the shared precondition rather than report the second checkpoint as
+  the thing that broke.)
 
 The third fixture pins the other half: with nothing prepared, a shutdown
 checkpoint publishes the `CHECKPOINT_BEGIN` LSN exactly as it did before
@@ -1373,11 +1403,12 @@ Two consequences worth stating rather than leaving implied:
   answered `UnknownOutcome` (R6-5) stays in doubt until the next mount, and
   the floor therefore pins the redo start at its prepare for the whole life
   of the process — so checkpoints stop shortening recovery on that core,
-  with nothing failing and nothing to see in a log. `SHOW META`'s
-  `txn_in_doubt_unresolved` is what separates this case from C4's; C4 shows
-  as a checkpoint Error line and this shows as a counter. The repair for one
-  is a `wal.md` §11 behaviour decision, and for the other it is R6-8's live
-  path plus a mount.
+  with nothing failing and nothing to see in a log. `SHOW META`'s in-doubt
+  block is what separates this case from C4's: C4 shows as a checkpoint
+  Error line, and this shows as a counter — `txn_in_doubt` while anything
+  is pinning the redo start, `txn_in_doubt_unresolved` for the subset no
+  runtime path can finish. The repair for one is a `wal.md` §11 behaviour
+  decision, and for the other it is R6-8's live path plus a mount.
 
 C4 stays where it is — `known-gaps.md`, unfixed, owned by `wal.md` §11 —
 with the re-read recorded there.
@@ -1390,7 +1421,23 @@ test at all, since nothing builds an `Expeditor` with `cores > 1`"* — and
 R6-6 inherits that gap rather than closing it: the sequence is pinned at the
 level below, exactly as PW3b pinned its own. What is untested in both cases
 is the same wiring, and RP7's kill −9 matrix against a real two-core server
-is where it is exercised.
+is where it is exercised. **The peer's inverted order above is what that
+gap costs**: nothing exercised it, so the row's first prose asserted core
+0's order of a peer and no test could contradict it.
+
+**And one thing the peer's order costs that is not R6-6's to fix**, named
+here because this row is the one that read the sequence: a peer's
+`RollbackAllEnrolled` runs *after* its final `Sync()` and after its
+`ShutdownCheckpoint`, so the compensations it writes and the pages it
+dirties are both dropped — nothing drains that core's WAL or flushes its
+store again, and neither destructor does. The two are lost *together*, so
+the next mount finds the transaction in the checkpoint's active list, calls
+it a loser and rolls it back from a durable image that never saw the
+partial undo: **correct, and correct only because both halves are lost at
+once.** The cost is that a graceful stop leaves a peer's abandoned
+cross-owner transactions to be rolled back at the next mount rather than
+at the stop — and a prepared one is untouched either way (D4). It belongs
+to PW3b's call site, beside S6.
 
 ## R6-7 — PL-A's revisit, and CP4
 
@@ -1424,12 +1471,25 @@ That is the second decision the clause hoped PL-A would pay for.
   record *is* the decision; nothing is assembled, so nothing is ordered.
 - **The wire carries no LSN at all.** All five payloads in
   `server/txn_2pc_service.hpp` — prepare, decide, the participant reply, and
-  R6-5's ask and answer — hold ids, a status, a decision byte and a retry
-  bit. The type `wal::Lsn` does not appear in that header once.
-- **D2 keeps every stream's ids stream-local**, and the enforcement is a
-  refusal rather than a convention: `CoreRuntime::Open` will not mount a
-  stream naming a trx id above the superblock's ceiling, so a foreign id in
-  a stream is a stream that does not open.
+  R6-5's ask and answer — hold ids, a status, a decision byte, a retry bit
+  and, on the reply, the refusal's own message bytes. The type `wal::Lsn`
+  does not appear in that header once.
+- **D2 keeps every stream's ids stream-local, by construction on the write
+  path.** The participant runs its own local transaction and its envelope
+  carries *that* id; the coordinator's `(session, transaction)` ride in the
+  `TXN_PREPARE` payload, where nothing keys a stream's own recovery on
+  them. **This one is a construction and not a refusal, and the correction
+  is the review's** (RP4/RP5 review): the row first cited
+  `CoreRuntime::Open`'s mount check — "a stream naming a trx id above the
+  superblock's ceiling does not open" — as the enforcement, and it is not.
+  Every core draws its ids from **one** counter, the superblock's
+  `next_trx_id`, in blocks core 0 grants (`txn/trx_id.hpp`, PW1), so a
+  coordinator's id is an ordinary id *below* the ceiling and that check
+  passes over it. What the check enforces is a stream naming ids that were
+  never granted; foreign-versus-own is not a distinction it can make. The
+  claim below does not rest on it: what matters for PL-A is that the ids
+  are not LSNs and are never ordered against each other, which the
+  resolver's `std::map::find` is.
 - **R6-4's resolution is two independent reads**, which HP5 predicted and
   the row confirmed with its site: `prepared_resolver.cpp`'s scan reads
   `record.header.txn_id` and `record.type()` and touches no LSN.

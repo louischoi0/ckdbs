@@ -341,8 +341,14 @@ Consequences that bind other work:
   nothing here.** The decision lives in exactly one stream (D4), so nothing
   is assembled across streams and nothing is ordered; the protocol's five
   wire payloads carry no LSN at all; per-participant trx ids stay
-  stream-local by D2, enforced by a mount refusal; and the recovery-time
-  resolution is a lookup of one id in one file, never a comparison. The one
+  stream-local by D2 — by construction on the write path, since the
+  envelope carries the participant's own id and the coordinator's ids ride
+  in the payload; and the recovery-time resolution is a lookup of one id in
+  one file, **never a cross-stream comparison**. (It makes exactly one
+  comparison, and both its numbers belong to the coordinator: the scan of
+  that stream must reach the durable point *that* stream's own anchor was
+  published with, `prepared_resolver.cpp:125`. A within-stream completeness
+  check another core happens to run is not a crossing.) The one
   interaction that does exist runs the safe way — a prepared transaction
   lowers its core's redo start, so a scan meets *more* handoff records in
   order, which rule 3's forward scan and rule 6's restamp already handle;

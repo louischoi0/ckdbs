@@ -270,10 +270,12 @@ the owner's workplan.
   defect: a transaction still in doubt pins the redo start at its prepare,
   so on a core holding one the checkpoints stop shortening recovery with
   nothing failing. The two are told apart from outside — C4 leaves a
-  checkpoint Error line, the other shows as `SHOW META`'s
-  `txn_in_doubt_unresolved`.
-  The fix is a behaviour decision that
-  belongs to `wal.md` §11: reset on failure and lose the snapshot, or keep
+  checkpoint Error line, and the other shows in `SHOW META`'s in-doubt
+  block: **`txn_in_doubt`** is what is pinning the redo start right now,
+  and `txn_in_doubt_unresolved` is the subset that will still be pinning it
+  at the stop, since its coordinator answered `UnknownOutcome` and only a
+  mount can finish it.
+  The fix is a behaviour decision that belongs to `wal.md` §11: reset on failure and lose the snapshot, or keep
   it and give the paced path a resumer.
 - ~~**A clean shutdown publishes no anchor**~~ — **fixed 2026-08-12** for the
   graceful path: `Expeditor::Serve` now checkpoints on its way out, and

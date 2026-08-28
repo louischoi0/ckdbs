@@ -1532,17 +1532,28 @@ TEST_F(Txn2pcBlockedWriterTest, AnOrdinaryInFlightWriterIsNotWaitedOnAtAll) {
 // meets R6-4's floor, which is the one interaction that can lose the
 // transaction silently.
 //
-// The sequence `Expeditor::Serve`'s tail runs, in its order: the executor
-// leaves prepared contexts alone (`RollbackAllEnrolled`), then the core's
-// pages are flushed and a checkpoint is published
-// (`CoreRuntime::ShutdownCheckpoint`). **A flush before a checkpoint empties
-// the dirty table**, and an empty dirty table would otherwise make the redo
-// start the `CHECKPOINT_BEGIN`'s own LSN — past the `TXN_PREPARE`, so the next
-// mount would scan from after the record that says "do not decide this", read
-// the active-list entry as an ordinary loser, and roll back a transaction the
-// coordinator may have committed. The floor is what stops that, and this is
-// the fixture that models the case exactly: a target whose dirty table is
-// empty *because* the flush already happened.
+// The stop sequence ends on every core in `CoreRuntime::ShutdownCheckpoint`,
+// which flushes the core's pages and only then checkpoints. **A flush before
+// a checkpoint empties the dirty table**, and an empty dirty table would
+// otherwise make the redo start the `CHECKPOINT_BEGIN`'s own LSN — past the
+// `TXN_PREPARE`, so the next mount would scan from after the record that says
+// "do not decide this", read the active-list entry as an ordinary loser, and
+// roll back a transaction the coordinator may have committed. The floor is
+// what stops that, and this is the fixture that models the case exactly: a
+// target whose dirty table is empty *because* the flush already happened.
+//
+// **Where `RollbackAllEnrolled` falls relative to that checkpoint differs by
+// core**, and this fixture models core 0's order — rollback first
+// (`expeditor.cpp:1827`), then the final `Sync()` and `Checkpoint()` that end
+// `Serve`. A **peer** runs them the other way round: `Serve` calls
+// `core->ShutdownCheckpoint()` inside its per-core loop (`:1861`) and the
+// peer's `RollbackAllEnrolled` runs later still, in `~CoreRuntime`
+// (`core_runtime.cpp:46`) when `cores_.clear()` destroys it. The property
+// under test is the same under either order, and that is the point worth
+// stating rather than assuming: `RollbackAllEnrolled` never touches a
+// prepared context (D4, `APreparedTransactionIsLeftInDoubtAtShutdown...`
+// above), so `OldestPreparedLsn()` reports the same LSN on both sides of it
+// and the checkpoint reads the same number whichever side it runs on.
 
 class Txn2pcShutdownTest : public Txn2pcParticipantTest {
 protected:
@@ -1569,8 +1580,10 @@ TEST_F(Txn2pcShutdownTest, APreparedTransactionSurvivesTheStopSequenceAndTheMoun
     const wal::Lsn prepared_at = txns_->OldestPreparedLsn();
     ASSERT_NE(prepared_at, 0u) << "the prepare never reached the transaction manager";
 
-    // Step 1 of the stop: the executor leaves it. D4 forbids the unilateral
-    // abort, so this core stops still owing an answer.
+    // Step 1 of the stop, in core 0's order: the executor leaves it. D4
+    // forbids the unilateral abort, so this core stops still owing an
+    // answer. (A peer reaches the same state one step later - see the
+    // fixture's note.)
     executor_->RollbackAllEnrolled();
     ASSERT_EQ(executor_->left_in_doubt_at_stop(), 1u);
     ASSERT_EQ(executor_->enrolled(), 1u);
@@ -1627,11 +1640,15 @@ TEST_F(Txn2pcShutdownTest, AStopWithNothingPreparedPublishesTheAnchorItAlwaysDid
 }
 
 TEST_F(Txn2pcShutdownTest, TheFloorHoldsAcrossASecondCheckpointWhilstStillInDoubt) {
-    // A cadence checkpoint fires, then the stop's. The floor is per
-    // checkpoint and reads the *live* prepare each time, so a transaction
-    // still in doubt pins every one of them - which is the price R6-4 named
-    // (an in-doubt transaction pins the log's redo start) and the thing that
-    // would break if the floor were computed once and remembered.
+    // A cadence checkpoint fires, then the stop's. The floor is applied per
+    // checkpoint from the live transaction, so a transaction still in doubt
+    // pins **every** one of them - which is the price R6-4 named (an
+    // in-doubt transaction pins the log's redo start). What this
+    // discriminates is a floor applied only on the checkpoint that first
+    // saw the prepare: the second checkpoint's own `RedoStartFrom` would
+    // then publish its `CHECKPOINT_BEGIN` LSN and the anchor would outrun
+    // the record. (It does *not* discriminate a floor computed once and
+    // cached - that would answer the same LSN here.)
     ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
     ASSERT_TRUE(Prepare().status.ok());
     const wal::Lsn prepared_at = txns_->OldestPreparedLsn();
@@ -1641,7 +1658,11 @@ TEST_F(Txn2pcShutdownTest, TheFloorHoldsAcrossASecondCheckpointWhilstStillInDoub
     FlushedTarget target;
     wal::Checkpointer checkpointer(*wal_, target, *txns_, anchor);
     ASSERT_TRUE(checkpointer.RunToCompletion().ok());
-    EXPECT_LE(anchor.anchor().redo_start_lsn, prepared_at);
+    // A precondition, not this fixture's subject - the fixture above owns
+    // that property. `ASSERT` so that a broken floor fails there and stops
+    // here, rather than reporting the *second* checkpoint as what dropped
+    // a floor the first one never held.
+    ASSERT_LE(anchor.anchor().redo_start_lsn, prepared_at);
 
     ASSERT_EQ(Local("INSERT INTO t VALUES (9, 1)").rfind("INSERTED", 0), 0u);
     executor_->RollbackAllEnrolled();
