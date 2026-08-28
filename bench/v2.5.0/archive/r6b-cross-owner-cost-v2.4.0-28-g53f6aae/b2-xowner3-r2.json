@@ -1,0 +1,47 @@
+{
+  "arm": "xowner",
+  "participants": 3,
+  "cores": 4,
+  "placement": "rotate",
+  "reps": 1,
+  "txns_per_rep": 300,
+  "owners": {
+    "t0": 1,
+    "t1": 2,
+    "t2": 3,
+    "t3": 1,
+    "t4": 2,
+    "t5": 3,
+    "t6": 1,
+    "t7": 2,
+    "t8": 3,
+    "t9": 1,
+    "t10": 2,
+    "t11": 3
+  },
+  "tables": [
+    "t0",
+    "t1",
+    "t2"
+  ],
+  "per_rep": [
+    {
+      "p0": 1936.9,
+      "p25": 2215.5,
+      "p50": 2495.2,
+      "p95": 3304.0,
+      "p99": 3870.1,
+      "n": 300,
+      "mean": 2551.4
+    }
+  ],
+  "committed_units": 300,
+  "refused_units": 0,
+  "rows_expected_each": 320,
+  "rows_actual": {
+    "t0": 320,
+    "t1": 320,
+    "t2": 320
+  },
+  "rows_match": true
+}

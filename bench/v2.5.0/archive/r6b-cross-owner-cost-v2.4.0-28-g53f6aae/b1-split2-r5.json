@@ -1,0 +1,41 @@
+{
+  "arm": "split",
+  "participants": 2,
+  "cores": 3,
+  "placement": "rotate",
+  "reps": 1,
+  "txns_per_rep": 300,
+  "owners": {
+    "t0": 1,
+    "t1": 2,
+    "t2": 1,
+    "t3": 2,
+    "t4": 1,
+    "t5": 2,
+    "t6": 1,
+    "t7": 2
+  },
+  "tables": [
+    "t0",
+    "t1"
+  ],
+  "per_rep": [
+    {
+      "p0": 1044.1,
+      "p25": 1453.5,
+      "p50": 1557.0,
+      "p95": 1792.8,
+      "p99": 1865.8,
+      "n": 300,
+      "mean": 1550.9
+    }
+  ],
+  "committed_units": 300,
+  "refused_units": 0,
+  "rows_expected_each": 320,
+  "rows_actual": {
+    "t0": 320,
+    "t1": 320
+  },
+  "rows_match": true
+}

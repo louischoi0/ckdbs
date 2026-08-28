@@ -1,0 +1,32 @@
+{
+  "arm": "local",
+  "participants": 1,
+  "cores": 1,
+  "placement": "creating",
+  "reps": 1,
+  "txns_per_rep": 300,
+  "owners": {
+    "t0": 0
+  },
+  "tables": [
+    "t0"
+  ],
+  "per_rep": [
+    {
+      "p0": 761.8,
+      "p25": 1202.6,
+      "p50": 1365.3,
+      "p95": 1673.5,
+      "p99": 1798.4,
+      "n": 300,
+      "mean": 1325.9
+    }
+  ],
+  "committed_units": 300,
+  "refused_units": 0,
+  "rows_expected_each": 320,
+  "rows_actual": {
+    "t0": 320
+  },
+  "rows_match": true
+}

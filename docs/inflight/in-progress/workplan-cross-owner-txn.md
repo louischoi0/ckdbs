@@ -154,7 +154,7 @@ this workplan means the v2.4.0 path.
 | R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
 | **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured |
-| RP8 | R6-B cells B1-B5 | — |
+| RP8 | R6-B cells B1-B5 | **Run 2026-08-28**, `53f6aae`. `bench/v2.5.0/results-r6b-cross-owner-cost-v2.4.0-28-g53f6aae.md`. D7's ~2x holds, HP1 holds, HP2's falsifier does not fire; B5 structurally blocked |
 
 ## R6-0 — the retry bit
 
@@ -2237,6 +2237,66 @@ an exception, which `wait_for_port` cannot do.
   leaves, and closing it means giving `sim/` more than one core and a log
   directory, which is a workplan of its own.
 
+## RP8 — the B cells, and what they settled
+
+Run on `worktree-v2.5.0-crosscore-protocol-2` at `53f6aae`
+(`v2.4.0-28-g53f6aae`), same sitting as RP7. The numbers, the method and
+every caveat live in
+`bench/v2.5.0/results-r6b-cross-owner-cost-v2.4.0-28-g53f6aae.md`; this is
+the row's summary and the three things the milestone must carry forward.
+
+**B1/B2/B3 — the predictions hold.** Seven interleaved rounds, 300
+committed transactions per arm per round, 2,100 per arm, rows in = rows out
+on every cell and no refusals. A two-owner transaction costs **1.479x** the
+same work done as two separate one-owner transactions (the cell's own
+comparison, measured inside one instance) and **1.975x** a one-owner commit
+in D7's framing, p99 1.085x and 1.867x respectively. **HP2's falsifier does
+not fire on either reading.** Width is flat from two participants to four
+and first clears the noise floor at five, which is D7's "two deep, up to
+four wide" shape and `bench/v2.1.0` §3a's overlap curve again. **HP1 holds**:
+one-owner transactions on an R6 build against a same-sitting build of the
+pre-R6 tag sit in [0.929, 1.031], inside a ~19% noise band the run
+established from its own repeated cell — **D1's gate passes**.
+
+**A hypothesis raised and refuted in the same sitting, recorded because the
+first half of it is true.** A 20-transaction smoke sample read 3.55x and
+suggested D7 undercounted the durable syncs by one. The *mechanism* is
+real and confirmed by source at three sites — the coordinator's prepare
+wait (`command_dispatcher.cpp:368`), its own decide-durability wait
+(`:419-434`), and its wait for participants' post-decide commit-acks
+(`:470`, each gated on the participant's own `IsDurable` park in
+`shipped_statement_executor.cpp:751-786`) — and all three use the identical
+durability primitive, so none is structurally free. The *cost prediction*
+is false: three confirmed sequential waits do not cost 3x, and the measured
+aggregate sits under a naive additive model in all seven rounds. Two
+candidate explanations are named in the results file and neither is
+confirmed. The lesson the file draws is about the host: a one-rep number on
+this device cannot distinguish a 2x design from a 3x one.
+
+**B4 — the refusal counter's third era, confirmed at scale.** R6-8's
+conversion holds across every `xowner` cell: up to 10,500 cross-owner
+explicit-transaction writes, **zero** refusals. What still refuses is
+`CheckReadAffinity`'s classes and the residue CP3 already named; only
+subquery-in-`WHERE` was reachable from an ordinary client session and it is
+confirmed live. Found on the way: **`txn_decide_refusals` has no `SHOW META`
+projection at all** — `Txn2pcClient::decide_refusals()` is a test-only
+accessor — so R6-8's caution about misreading it governs a unit test, not
+anything an operator can see.
+
+**B5 — not merely unrun, structurally blocked, and it is a finding about
+D3.** The scenario workload cannot reach the two-phase path in any
+deployment shape: its booking transaction **reads** a foreign relation
+before it writes, and `CommandDispatcher::CheckReadAffinity`
+(`command_dispatcher.cpp:4422-4443`) refuses every cross-core read
+unconditionally, in a transaction or out of one, independent of R6-8. So
+the number B5 exists to produce — what fraction of a realistic workload
+takes the two-phase path — is **zero, for a reason that has nothing to do
+with the commit protocol**. Cross-owner *writes* became reachable at R6-8;
+cross-owner *reads* inside a transaction did not, and until they do, R6
+accelerates a shape no scenario in this tree can express. That is the
+sizing input the order wanted, arriving as a blocker rather than a
+percentage.
+
 ## Open, carried from the work order
 
 - **D1–D7 are ratified** (2026-08-28) and so are both `[OPEN]`s
@@ -2245,6 +2305,15 @@ an exception, which `wait_for_port` cannot do.
   each — R6-3's isolation-level crossing, R6-5's named ceiling constant and
   its non-`UnknownOutcome` refusal, R6-5's sizing of the in-doubt ask,
   R6-9's two doc sentences, and B1's p50-and-p99 reporting.
+- **The two-phase path is unreachable from any scenario in this tree, and
+  the blocker is a *read*** (RP8's B5, above). `CheckReadAffinity` refuses
+  every cross-core read unconditionally, so a transaction that reads a
+  peer-owned relation before writing — which is what a realistic booking or
+  ordering workload does — never gets as far as a cross-owner commit. R6 is
+  built, correct and measured, and nothing that exists exercises it end to
+  end outside a purpose-built driver. **Whoever picks up the cross-core read
+  path inherits R6's usefulness**, and until then the milestone's own B5
+  number is zero by construction rather than by workload.
 - **`wal.md` §3's second `[OPEN]` is answered** (CP1, R6-4's section above):
   a core-count change is already refused at the door by the superblock's
   pinned `core_count`, so recovery never meets a prepare from a stream it
