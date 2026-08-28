@@ -631,6 +631,31 @@ public:
                   std::uint64_t transaction_id, TxnDecision decision,
                   std::span<const std::uint32_t> participants);
 
+    // **An ABORT nobody waits for** (R6-8): a `ROLLBACK`'s decide leg.
+    //
+    // D4 says a coordinator tells its participants either way, and a
+    // rollback is the "either" - but it is not a commit and must not be
+    // shaped like one. Two differences, and each is the reason this is a
+    // second entry point rather than a flag on the one above:
+    //
+    //   - **No waiter, so no park.** The caller that most needs this is
+    //     `TcpServer::CloseClient`'s rollback, which runs through the
+    //     synchronous `Dispatch()` and cannot await anything. A rollback
+    //     also has nothing to learn from an acknowledgement: the outcome is
+    //     abort whatever any participant says, and a participant that never
+    //     hears rolls back on its own idle ceiling.
+    //   - **No decision record**, for the same reason: the record exists so
+    //     an in-doubt participant can ask (R6-5), and a participant of a
+    //     rolled-back transaction is never in doubt - it never prepared,
+    //     because a `ROLLBACK` sends no prepare at all.
+    //
+    // Refuses on the shapes `Prepare`/`Decide` refuse, and for their reason:
+    // every refusal happens before the first message leaves. A refusal here
+    // is not a failed rollback - this core's own half is already unwound -
+    // so the caller logs it rather than reporting it.
+    Status AbortAndForget(std::uint64_t session_id, std::uint64_t transaction_id,
+                          std::span<const std::uint32_t> participants);
+
     // The parked coordinator's predicate: every participant answered, the
     // deadline passed, or the waiter is gone. One clock read per turn.
     bool Settled(std::uint64_t request_id) const;
@@ -676,6 +701,12 @@ public:
     // reads, and a refusal from `Prepare` sent none and is not counted.
     std::uint64_t prepare_messages() const noexcept { return prepare_messages_; }
     std::uint64_t decide_messages() const noexcept { return decide_messages_; }
+    // Of those, the ones sent by a `ROLLBACK` with nobody waiting for the
+    // acknowledgement (R6-8). Counted apart because they are the decides
+    // whose participants' replies are *expected* to find no waiter: without
+    // this, `late_replies()` on a rollback-heavy workload would read as a
+    // deadline problem it is not.
+    std::uint64_t aborts_forgotten() const noexcept { return aborts_forgotten_; }
     // Phases that ended with a participant unheard from. Non-zero means a
     // transaction was aborted (prepare) or a participant left in doubt
     // (decide) for the ring or a core, not for anything the data said.
@@ -744,6 +775,7 @@ private:
     std::map<DecisionKey, DecisionRecord> decisions_;
     std::uint64_t prepare_messages_ = 0;
     std::uint64_t decide_messages_ = 0;
+    std::uint64_t aborts_forgotten_ = 0;
     std::uint64_t phase_timeouts_ = 0;
     std::uint64_t prepare_refusals_ = 0;
     std::uint64_t decide_refusals_ = 0;

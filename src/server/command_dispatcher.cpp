@@ -315,6 +315,31 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         };
         co_await sched::WaitUntil{&settled};
         *out = FinishShippedStatement(shipped);
+        // **A shipped statement that failed inside an explicit transaction
+        // poisons it, exactly as a local one does** (R6-8 review; txn.md §6
+        // and §10-8). The local path poisons in `EndWrite`, which an
+        // enrolled ship deliberately skips - it has nothing to end here -
+        // so the poison has to be taken where the *owner's* verdict
+        // arrives, which is here and nowhere earlier: at ship time the
+        // statement had not run yet.
+        //
+        // Without it the two halves of one transaction disagree about what
+        // a failed statement means. The owner's failure is per transaction
+        // like every other (`INSERT` of ten rows failing on the seventh
+        // leaves six written in the participant's open transaction), so a
+        // client told `ERR` could `COMMIT` anyway and make those six
+        // durable - where the same statement against a local relation
+        // would have refused every command until `ROLLBACK`. The deadline's
+        // `UnknownOutcome` is the same rule and the sharper case: whether
+        // the statement ran cannot be established, so the one thing the
+        // transaction must not do is commit.
+        //
+        // Autocommit is untouched: `in_explicit_txn()` is false there, and
+        // the scope already unwound.
+        Session& shipped_session = session != nullptr ? *session : autocommit_session_;
+        if (shipped_session.in_explicit_txn() && out->response.rfind("ERR ", 0) == 0) {
+            shipped_session.Poison();
+        }
     }
 
     if (out->pending_cross_owner_commit.has_value() && txn_2pc_ != nullptr) {
@@ -4022,7 +4047,7 @@ std::optional<std::uint32_t> CommandDispatcher::SoleForeignOwner(const exec::Ste
 }
 
 Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& scope) {
-    if (!scope.owned) {
+    if (scope.txn != nullptr && !scope.owned) {
         // **R6-8: an enrolled ship, and there is nothing here to end.** The
         // scope is the client's own open transaction, which this core goes
         // on running - the statement went to another owner, this half wrote
@@ -4032,9 +4057,18 @@ Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& 
         // aborted by its own first shipped statement, and the client would
         // be told to ROLLBACK a transaction that is intact.
         //
-        // Unreachable before R6-8, and not defensively written: `MayShip`
-        // admitted only an autocommit session, so every scope that reached
-        // here was owned.
+        // The verdict a shipped statement's owner returns still poisons,
+        // and `DispatchAsync` takes it where that verdict arrives - here
+        // there is no verdict yet.
+        //
+        // **`scope.txn != nullptr` is load-bearing, not defence** (R6-8
+        // review): a dispatcher with no transaction manager also produces
+        // an unowned scope, and its end is `EndWrite`'s no-manager arm
+        // settling the statement's assertion reservations under
+        // `kBootstrapXid`. That arm is the autocommit ship's on such a
+        // configuration and predates this row, so the test is what keeps
+        // R6-8 to the shape it claims - an explicit transaction, which is
+        // the only unowned scope that has a transaction behind it.
         return Status::OK();
     }
     return EndWrite(session, scope,
@@ -6922,7 +6956,61 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     if (!session.in_explicit_txn()) {
         return {"ERR no transaction is open", false};
     }
-    return RollbackLocal(session);
+
+    // **A rollback tells its participants too** (R6-8, D4: *"any refusal or
+    // timeout → ABORT. Either way it then tells the participants"*). The
+    // R6-8 review found this leg missing entirely: `HandleCommit` forked on
+    // `has_participants()` and this did not, so a client's `ROLLBACK`, a
+    // poisoned transaction's forced one, and the one `TcpServer::CloseClient`
+    // sends when a connection dies all ended this core's half and told
+    // nobody - leaving each participant holding uncommitted rows, pinning
+    // that core's `ReadHorizon()` and one of its sixteen enrolment slots,
+    // until the five-minute idle ceiling swept it. On a loop any client can
+    // run.
+    //
+    // **Read off the session before `RollbackLocal`**, because `Finish()`
+    // clears the participant list with the transaction - and the id must be
+    // read while the transaction is still there.
+    std::vector<std::uint32_t> participants;
+    std::uint64_t session_id = 0;
+    std::uint64_t transaction_id = 0;
+    if (session.has_participants() && txn_2pc_ != nullptr && session.ship_id() != 0 &&
+        session.transaction() != nullptr) {
+        participants = session.participants();
+        session_id = session.ship_id();
+        transaction_id = session.transaction()->id();
+    }
+
+    DispatchOutcome out = RollbackLocal(session);
+
+    // **After the local half, and unconditionally afterwards.** This core's
+    // transaction is already unwound, so a send that refuses changes no
+    // outcome - it costs the participants their idle ceiling instead of a
+    // message, which is exactly what this leg improves on and not something
+    // to report to a client that asked to roll back and did.
+    //
+    // Sent with nobody waiting (`AbortAndForget`): the outcome is abort
+    // whatever a participant answers, and the caller that most needs this
+    // path - the connection-close rollback - runs through the synchronous
+    // `Dispatch()` and could not park for an acknowledgement at all.
+    if (!participants.empty()) {
+        if (Status s = txn_2pc_->AbortAndForget(session_id, transaction_id, participants);
+            !s.ok()) {
+            if (logging(LogLevel::kWarn)) {
+                log_->Warn("2pc", "core " + std::to_string(core_id_) +
+                                      " rolled back transaction " +
+                                      std::to_string(transaction_id) +
+                                      " and could not tell its participants: " + s.message() +
+                                      "; they will be swept by their idle ceiling");
+            }
+        } else if (logging(LogLevel::kDebug)) {
+            log_->Debug("2pc", "core " + std::to_string(core_id_) + " told " +
+                                   std::to_string(participants.size()) +
+                                   " participant(s) to abort transaction " +
+                                   std::to_string(transaction_id));
+        }
+    }
+    return out;
 }
 
 DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {

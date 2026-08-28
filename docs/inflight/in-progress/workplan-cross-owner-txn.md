@@ -1614,6 +1614,7 @@ declined, which after this row is:
 | no coordinator armed, inside a transaction (`txn_2pc_ == nullptr`) | single-core and fixtures again; a transaction cannot be made cross-owner by a core that cannot decide it |
 | a session that already arrived shipped | the hop limit — what arrived shipped does not ship on |
 | an `UPDATE`/`DELETE` whose `WHERE` carries a subquery | the fork resolves nothing about a second relation, so the affinity answer is the honest one |
+| a KWP **load chunk** (`ExecuteInsert`, `line.empty()`) | there is no statement text to ship — a load chunk arrives already parsed, so the fork has nothing to send and the relation's owner cannot be reached (`kwp_load_server.cpp:443`) |
 | a poisoned session inside a transaction | defence: the failed-txn gate refuses the statement earlier |
 
 **Site 2, the CC3 home-core arm — unreachable on any path this engine
@@ -1627,9 +1628,13 @@ transaction's writes splitting across two streams) with the fact recorded
 at the site.
 
 **So on a production multi-core instance with shipping and 2PC armed, the
-third era is three classes**: the synchronous path, the hop limit, and the
-subquery shape. That is the roadmap's remaining cross-core write debt
-stated exactly, and it is what B4 measures.
+third era is four classes**: the synchronous path, the hop limit, the
+subquery shape, and the KWP load chunk. That is the roadmap's remaining
+cross-core write debt stated exactly, and it is what B4 measures. (The
+review of this row corrected the count: the first writing of it said three
+and left the load chunk out, which is a live path — `KwpLoadServer` calls
+`ExecuteInsert` with no text, and `command_dispatcher.hpp`'s note on `line`
+already said what that costs.)
 
 **Refusals that are not this counter's and are untouched**: `PeerDdlRefused`
 (DDL on a peer, which also carries §5d's purge-gate argument),
@@ -1654,6 +1659,78 @@ not what the hypothesis means: its subject is *"every **other** refusal"*.
 Every other refusal test in the suite passes unedited — 2,862 green — and
 that is HP4's real claim, confirmed.
 
+### The `critics-developer` pass, and what it moved
+
+Run against `7eaa14a`. **Two client-visible transaction-contract bugs, both
+on the path this row makes live, and one of them a durable wrong answer** —
+which is the argument for reviewing a row that opens a gate rather than one
+that adds a mechanism.
+
+**Bug 1 — a rolled-back cross-owner write committed with the *next*
+transaction.** A participant's context is keyed on `(coordinator core,
+session_id)` and nothing else, because the statement leg carries no
+transaction id; `Session::ship_id()` was minted once and kept for the
+connection's life. So two consecutive transactions of one session were
+indistinguishable to a participant — and since nothing tells a participant
+about a transaction that never reached prepare, a `ROLLBACK` left its
+context standing for the *next* transaction's first shipped statement to
+join. The review reproduced it on the two-core rig: `BEGIN; INSERT 91;
+ROLLBACK; BEGIN; INSERT 92; COMMIT;` leaves **both** 91 and 92 durable on
+the peer. Fixed at `Session::Finish()`, which drops the shipping id where
+the transaction enrolled anyone — conditioned on `participants_`, so an
+autocommit session's id is still minted once and the measured path is
+untouched.
+
+**Bug 2 — an owner's refusal left the transaction committable.** A failed
+statement inside `BEGIN` poisons the session (`txn.md` §6, §10-8); the
+local path takes that in `EndWrite`, which an enrolled ship deliberately
+skips, and nothing took it where the owner's verdict arrives. A client told
+`ERR` could `COMMIT` — and because failure atomicity is per transaction on
+the participant too, a ten-row `INSERT` failing on the seventh leaves six
+rows in the participant's open transaction for that `COMMIT` to make
+durable. The `UnknownOutcome` at the shipped deadline was the same hole and
+worse. Fixed in `DispatchAsync`, immediately after `FinishShippedStatement`.
+
+**Bug 3, low** — `AbandonWriteForShipping`'s new early return also swallowed
+the *no-manager* scope, whose end settles assertion reservations under
+`kBootstrapXid`. Its comment claimed every scope reaching it before R6-8 was
+owned; a dispatcher with no transaction manager also yields `owned ==
+false`. Guarded on `scope.txn != nullptr` now — unreachable in production
+wiring, and exactly the byte-identical claim HP4 makes.
+
+**And a gap the review found and left, closed here** — the row's real
+omission. `HandleCommit` forked on `has_participants()` and
+`HandleRollback` did not, so a client's `ROLLBACK`, a poisoned
+transaction's forced one, and the one `TcpServer::CloseClient` sends on a
+dropped connection all ended this core's half and **told nobody**: each
+participant went on holding its rows, pinning that core's read horizon and
+one of its sixteen enrolment slots, until the five-minute idle ceiling — on
+a loop any client can run. D4 already requires the telling (*"either way it
+then tells the participants"*), so this is D4 built rather than a decision
+taken. `Txn2pcClient::AbortAndForget` sends the abort with **no waiter
+opened at all**, which is the shape a rollback wants rather than a
+compromise: the outcome is abort whatever a participant answers, and the
+caller that most needs it — the connection-close rollback — runs through
+the synchronous `Dispatch()` and could not park for an acknowledgement.
+Counted apart as `aborts_forgotten()`, since those acknowledgements are
+*expected* to find no waiter and would otherwise read as a deadline problem.
+
+**One false claim in this row's own prose, corrected**: the rollback test
+said the owner's half was unwound "by the idle sweep at worst, and by the
+decide leg's abort on the ordinary path". Neither happened — the test
+passed because the participant's transaction was still *open*. It now
+asserts the release.
+
+**Cuts proposed and not taken**, with reasons: `(MayShip || MayEnrolShip)`
+appears at three sites and could be one `MayShipWrite` — worth doing, and
+worth doing where a fourth write path is added rather than as a rename in
+the row that introduced the second predicate; `ShipStatement`'s
+`session.transaction() != nullptr` is unreachable (`Adopt` never stores
+null) and reads as a possibility that does not exist; and
+`statement_ship_service.hpp` includes `txn/manager.hpp` for one enum a
+forward declaration would cover. Taken: none of the three changes
+behaviour, and the first is the only one that would prevent a defect.
+
 ### Tests
 
 `tests/core_runtime_test.cpp`'s two-core rig gains core 0's coordinator
@@ -1661,13 +1738,92 @@ half, so the whole protocol runs over a real ring with the peer's
 participant half wired by `AttachTransport` as production wires it: a write
 inside a transaction ships, enrols its owner and is invisible until the
 `COMMIT` runs both phases; a `ROLLBACK` sends no prepare and leaves the
-owner's rows alone; the coordinator's level reaches the participant's
-enrolled transaction while the peer's own default stays READ COMMITTED, so
-the two are distinguishable; and a core with no coordinator armed keeps the
-old refusal, counted where `crosscore.md` §6 says it is.
+owner's rows unseen (**not unwound** — the review below corrected that
+claim, and the test now says which); the coordinator's level reaches the
+participant's enrolled transaction while the peer's own default stays READ
+COMMITTED, so the two are distinguishable; and a core with no coordinator
+armed keeps the old refusal, counted where `crosscore.md` §6 says it is.
 
-Full suite green: **2,862 tests**. Overhead not measured — the v2-stage A/B
+The review adds two regression tests, one per correctness bug, and the
+abort leg adds two more: the participant *releases* on a `ROLLBACK` rather
+than merely staying uncommitted, and a dropped connection's synchronous
+rollback reaches its participants too.
+
+Full suite green: **2,865 tests**. Overhead not measured — the v2-stage A/B
 suspension of 2026-08-24 stands.
+
+### The `critics-developer` pass, and what it moved
+
+Run against `7eaa14a`. **Two correctness bugs on the path this row makes
+reachable, one of them a wrong answer a client can produce in three
+statements**, plus one guard narrowed and three prose claims corrected.
+
+**Bug 1 — a rolled-back cross-owner write committed with the next
+transaction.** A participant's context is keyed on
+`(coordinator core, session_id)` and nothing else: the statement leg
+carries no transaction id, so two consecutive transactions of one session
+are indistinguishable there — while `Session::ship_id()` was minted once
+and kept for the connection's life. Nothing tells a participant about a
+transaction that never reached prepare (`RollbackLocal` sends no message),
+so the context outlived its transaction and the *next* transaction's first
+shipped statement joined it. Reproduced end to end on the two-core rig:
+`BEGIN; INSERT peer(91); ROLLBACK; BEGIN; INSERT peer(92); COMMIT` left
+**both** rows on the owner. Fixed in `Session::Finish()` — a transaction
+that enrolled anyone drops the shipping id, so the next one addresses a
+fresh context. Conditioned on `participants_`, so the autocommit path's id
+is still minted once and kept, and only a cross-owner transaction pays the
+extra dedup record. Regression test:
+`ARolledBackCrossOwnerTransactionsWritesDoNotCommitWithTheNext`.
+
+**Bug 2 — an owner's refusal left the transaction committable.** Failure
+atomicity is per transaction (`txn.md` §6, §10-8): a statement that fails
+inside `BEGIN` poisons the session and the client must `ROLLBACK`. The
+local path takes that poison in `EndWrite`, which an enrolled ship
+deliberately skips — and nothing took it where the *owner's* verdict
+arrives, which is the only place it can be taken, since at ship time the
+statement had not run. So a client told `ERR` could `COMMIT`, and an
+owner-side statement that failed part-way (its rows stay in the
+participant's open transaction, per-transaction atomicity again) made those
+rows durable. The deadline's `UnknownOutcome` was the same hole and the
+sharper case. Fixed in `DispatchAsync`, one test either side:
+`AShippedStatementTheOwnerRefusesPoisonsTheTransactionThatSentIt`.
+
+**A guard narrowed.** `AbandonWriteForShipping`'s new early return tested
+`!scope.owned`, whose comment claimed every scope reaching it before R6-8
+was owned. A dispatcher with **no transaction manager** also produces an
+unowned scope, and its end is `EndWrite`'s no-manager arm settling the
+statement's assertion reservations under `kBootstrapXid` — the autocommit
+ship's path on such a configuration, which HP4 calls byte-identical. Now
+`scope.txn != nullptr && !scope.owned`, which is the shape the row means.
+
+**Left open, and named because R6-8 is what makes it reachable: a
+`ROLLBACK` never reaches its participants.** `HandleCommit` forks on
+`has_participants()`; `HandleRollback` does not, so a client's `ROLLBACK` —
+and a poisoned transaction's, and the one `TcpServer::CloseClient` sends
+for a dropped connection — ends the coordinator's half and tells nobody.
+Each abandoned participant holds its rows uncommitted, pins that core's
+`ReadHorizon()`, and holds one of `kShippedMaxEnrolled` (16) and one of
+`kMaxTrackedLiveTxns` (64) until `kShippedTxnIdleCeilingNs` — **five
+minutes**, on a loop any client can run. Not fixed here because the fix is
+a decision, not an edit: the abort decide is a park, so it either makes
+`ROLLBACK` wait a ring round trip (a client-visible latency change on a
+path that never had one) or needs a fire-and-forget lane whose waiter
+nothing closes; and `TcpServer`'s close path calls the **synchronous**
+`Dispatch`, which cannot park at all. `StartDecision` already accepts an
+abort for an unprepared context, so the participant side needs nothing.
+Recorded in `known-gaps.md`.
+
+**Prose corrected at the source**, three claims: the rollback test's *"the
+owner's half is unwound before this returns"* (nothing unwinds it — the row
+is unseen because the participant's transaction is still open, and the test
+now asserts the open context rather than implying it away); CP3's class
+list, which omitted the KWP load chunk and so counted three classes where
+there are four; and `AbandonWriteForShipping`'s *"every scope that reached
+here was owned"*.
+
+Suite after the fixes: **2,864 green** — the 2,862 above plus one
+regression test per bug. Overhead not measured, the v2-stage suspension
+standing.
 
 ## Open, carried from the work order
 

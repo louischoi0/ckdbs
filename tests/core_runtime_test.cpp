@@ -3207,9 +3207,18 @@ TEST_F(CoreRuntimeTest, AWriteInsideATransactionEnrolsItsOwnerAndTheCommitRunsBo
 }
 
 TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone) {
-    // The other end of the same path, and the one that would be silent if
-    // it were wrong: a client's ROLLBACK must unwind the *participant's*
-    // half too, which it does through the decide leg's abort.
+    // The other end of the same path: a client's ROLLBACK unwinds the
+    // *participant's* half too, and does not merely leave it invisible.
+    //
+    // **The distinction is this test's whole subject**, because for one
+    // commit it was the weaker of the two. The R6-8 review found the
+    // rollback leg missing - `HandleCommit` forked on `has_participants()`
+    // and `HandleRollback` did not - so the row was unseen only because
+    // the participant's transaction had not committed, and the real
+    // unwinding waited five minutes for `kShippedTxnIdleCeilingNs`. D4 says
+    // a coordinator tells its participants either way; `AbortAndForget` is
+    // that leg, and the assertions below are what separate "told" from
+    // "not yet swept".
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "cross_owner_rb");
 
@@ -3229,13 +3238,57 @@ TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone
     // asking a participant to prepare a transaction that is about to be
     // aborted would cost a sync for nothing.
     EXPECT_EQ(rig.txn2pc->prepare_messages(), 0u);
-    // The owner's half is unwound before this returns - by the idle sweep
-    // at worst, and by the decide leg's abort on the ordinary path.
     for (int i = 0; i < 32; ++i) rig.Pump();
     const std::string rows =
         rig.peer->dispatcher().Dispatch("SELECT * FROM cross_owner_rb").response;
     EXPECT_EQ(rows.find(",42"), std::string::npos) << rows;
     EXPECT_FALSE(session.has_participants());
+
+    // **The owner's half is gone, not merely uncommitted**: the abort
+    // reached it, it rolled back and released - no enrolment, no live
+    // transaction pinning that core's read horizon, no enrolment slot held
+    // for five minutes.
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolled(), 0u)
+        << "the ROLLBACK never reached the participant";
+    EXPECT_EQ(rig.peer->shipped_statements()->decides_aborted(), 1u);
+    EXPECT_EQ(rig.peer->shipped_statements()->in_doubt(), 0u);
+    // Sent with nobody waiting, which is what the counter separates: a
+    // participant's acknowledgement finding no waiter is expected here and
+    // must not read as a deadline problem.
+    EXPECT_EQ(rig.txn2pc->aborts_forgotten(), 1u);
+    EXPECT_EQ(rig.txn2pc->waiting(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, AConnectionThatDiesMidCrossOwnerTransactionAbortsItsParticipants) {
+    // The caller the abort leg is really for: `TcpServer::CloseClient`
+    // rolls a dropped connection's transaction back through the
+    // **synchronous** `Dispatch()`, which cannot park - so a decide leg
+    // that waited for acknowledgements could not serve it at all, and a
+    // dropped connection would leave a participant holding rows until its
+    // idle ceiling. Driven here as that path drives it.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cross_owner_drop");
+
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome out;
+    auto write = rig.Start("INSERT INTO cross_owner_drop VALUES (45)", out, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << out.response;
+    ASSERT_TRUE(session.has_participants());
+    ASSERT_EQ(rig.peer->shipped_statements()->enrolled(), 1u);
+
+    // What the close path runs, verbatim: no coroutine, no reactor of its
+    // own, nothing to await.
+    const std::string rb = rig.dispatcher->Dispatch("ROLLBACK", &session).response;
+    EXPECT_EQ(rb.rfind("ROLLBACK", 0), 0u) << rb;
+    for (int i = 0; i < 32; ++i) rig.Pump();
+
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolled(), 0u)
+        << "a dropped connection left its participant holding the transaction";
+    EXPECT_EQ(rig.peer->shipped_statements()->decides_aborted(), 1u);
+    const std::string rows =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM cross_owner_drop").response;
+    EXPECT_EQ(rows.find(",45"), std::string::npos) << rows;
 }
 
 TEST_F(CoreRuntimeTest, TheCoordinatorsIsolationLevelCrossesToTheParticipant) {
@@ -3300,6 +3353,97 @@ TEST_F(CoreRuntimeTest, AWriteInsideATransactionOnACoreWithNoCoordinatorKeepsIts
 
     // Restored so the rig unwinds the way every other test leaves it.
     rig.dispatcher->SetTxn2pc(&*rig.txn2pc);
+}
+
+TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionsWritesDoNotCommitWithTheNext) {
+    // **The R6-8 review's regression test, and it caught a wrong answer.**
+    // A participant's transaction context is keyed on
+    // `(coordinator core, session_id)` and nothing else - the statement leg
+    // carries no transaction id - and a `ROLLBACK` tells a participant
+    // nothing, since a transaction that never reached prepare has no decide
+    // leg. So the context outlived the transaction that opened it, and with
+    // the shipping id stable for the connection's life the *next*
+    // transaction's first shipped statement joined it. Its `COMMIT` then
+    // committed both halves: writes the client had rolled back became
+    // durable on the owner.
+    //
+    // The fix is one line in `Session::Finish()` - a transaction that
+    // enrolled anyone drops the shipping id, so the next one addresses a
+    // fresh context. What it does *not* fix, and what this test therefore
+    // does not assert, is the abandoned context itself: it is still there,
+    // holding its rows uncommitted until `kShippedTxnIdleCeilingNs`.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cross_owner_reuse");
+
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome first_out;
+    auto first = rig.Start("INSERT INTO cross_owner_reuse VALUES (91)", first_out, &session);
+    ASSERT_TRUE(rig.Drive(*first)) << first_out.response;
+    ASSERT_EQ(first_out.response.rfind("INSERTED", 0), 0u) << first_out.response;
+    const std::uint64_t rolled_back_ship_id = session.ship_id();
+
+    DispatchOutcome rb_out;
+    auto rollback = rig.Start("ROLLBACK", rb_out, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb_out.response;
+    for (int i = 0; i < 32; ++i) rig.Pump();
+
+    // The second transaction, on the same connection.
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome second_out;
+    auto second = rig.Start("INSERT INTO cross_owner_reuse VALUES (92)", second_out, &session);
+    ASSERT_TRUE(rig.Drive(*second)) << second_out.response;
+    ASSERT_EQ(second_out.response.rfind("INSERTED", 0), 0u) << second_out.response;
+    EXPECT_NE(session.ship_id(), rolled_back_ship_id)
+        << "the second transaction addressed the first's participant context";
+
+    DispatchOutcome commit_out;
+    auto commit = rig.Start("COMMIT", commit_out, &session);
+    ASSERT_TRUE(rig.Drive(*commit)) << commit_out.response;
+    EXPECT_EQ(commit_out.response.rfind("COMMIT trx_id=", 0), 0u) << commit_out.response;
+    for (int i = 0; i < 32; ++i) rig.Pump();
+
+    const std::string rows =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM cross_owner_reuse").response;
+    EXPECT_EQ(rows.find(",91"), std::string::npos)
+        << "a rolled-back cross-owner write committed with the next transaction: " << rows;
+    EXPECT_NE(rows.find(",92"), std::string::npos) << rows;
+}
+
+TEST_F(CoreRuntimeTest, AShippedStatementTheOwnerRefusesPoisonsTheTransactionThatSentIt) {
+    // **The other half of the same review finding**: failure atomicity is
+    // per transaction (`txn.md` §6), so a statement that fails inside
+    // `BEGIN` puts the session in `failed-txn` and the client must
+    // `ROLLBACK`. The local path takes that poison in `EndWrite`, which an
+    // enrolled ship skips - it has nothing to end - so before the fix an
+    // owner's refusal left the transaction committable, and the rows an
+    // owner-side statement wrote before its own failure would have
+    // committed under a client that had been told `ERR`.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cross_owner_refuse");
+
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome out;
+    // A caller-supplied pk, which a peer refuses per row
+    // (`workplan-peer-writer.md` §7a): the coordinator parses it, finds the
+    // relation foreign and ships it, and the *owner* is what refuses - so
+    // the refusal arrives after the statement left, which is the shape
+    // this test needs and the one only an owner-side failure has.
+    auto write = rig.Start("INSERT INTO cross_owner_refuse VALUES (1, 99)", out, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << out.response;
+    ASSERT_NE(out.response.find("a caller-supplied primary key cannot be written on core 1"),
+              std::string::npos)
+        << "the fixture no longer refuses this statement on the owner: " << out.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u) << "it did not reach the owner";
+
+    EXPECT_TRUE(session.failed()) << "an owner's refusal left the transaction committable";
+    const std::string refused = rig.dispatcher->Dispatch("COMMIT", &session).response;
+    EXPECT_NE(refused.find("current transaction is aborted"), std::string::npos) << refused;
+
+    DispatchOutcome rb_out;
+    auto rollback = rig.Start("ROLLBACK", rb_out, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb_out.response;
 }
 
 TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRows) {

@@ -109,6 +109,31 @@ public:
         // list is the same fact one level out (R6-3): the cores this
         // transaction enrolled are not the next one's.
         home_core_ = kUnbound;
+        // **And the shipping identity, where this transaction enrolled
+        // anyone** (R6-8 review). A participant's transaction context is
+        // keyed on `(coordinator core, session_id)` alone
+        // (`ShippedStatementExecutor::DedupKey`) - the statement leg carries
+        // no transaction id, so two consecutive transactions of one session
+        // are indistinguishable there. With the id stable for the
+        // connection's life, a *second* transaction's first shipped
+        // statement joined the *first* transaction's context whenever that
+        // context outlived its coordinator - which every `ROLLBACK` leaves
+        // it doing, since nothing tells a participant about a transaction
+        // that never reached prepare. The rolled-back writes then committed
+        // with the next transaction's: a wrong answer, and the one this
+        // clearing removes.
+        //
+        // Conditioned on `participants_`, so it costs exactly the sessions
+        // that ran a cross-owner transaction: an autocommit session's id is
+        // still minted once and kept for its life (SS2's dedup record is
+        // per `(core, session)`, and the measured autocommit path is
+        // untouched), and a one-owner transaction never enrolled anyone and
+        // never had a participant context to leave behind. What it costs
+        // the population it does apply to is one more dedup record per
+        // cross-owner transaction on each participant - retention-bounded
+        // at `kShippedDedupRetentionNs` and capped by
+        // `kShippedDedupMaxRecords`, whose early eviction is counted.
+        if (!participants_.empty()) ship_id_ = 0;
         participants_.clear();
         return ended;
     }
@@ -150,9 +175,15 @@ public:
     // last outcome per `(arrival core, session)` so a duplicate is answered
     // rather than run twice, which against engine-issued primary keys is
     // the difference between an answer and a second row. The id is minted
-    // by the dispatcher on this session's first ship and is stable for its
-    // life; the sequence counts the statements this session has shipped.
+    // by the dispatcher on this session's first ship; the sequence counts
+    // the statements this session has shipped.
     // Zero means "never shipped", which is why the dispatcher mints from 1.
+    //
+    // **Stable for the session's life, with one exception**: a transaction
+    // that enrolled a participant drops it at `Finish()`, so the next
+    // transaction ships under a fresh id. The reason is at that clearing -
+    // the participant's context is keyed on this id and nothing else, so a
+    // reused id lets one transaction inherit another's half.
     std::uint64_t ship_id() const noexcept { return ship_id_; }
     void set_ship_id(std::uint64_t id) noexcept { ship_id_ = id; }
     std::uint64_t NextShipSequence() noexcept { return ++ship_sequence_; }

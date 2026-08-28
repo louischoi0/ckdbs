@@ -433,6 +433,65 @@ Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
     return Status::OK();
 }
 
+Status Txn2pcClient::AbortAndForget(std::uint64_t session_id, std::uint64_t transaction_id,
+                                    std::span<const std::uint32_t> participants) {
+    // The same shape checks `OpenPhase` makes, and made here because there
+    // is no phase to open: an out-of-range core is the one send failure
+    // `MakeSendRetryTask` does not retry, and the coordinator is not one of
+    // its own participants.
+    if (participants.empty()) {
+        return Status::InvalidArgument(
+            "cross-owner transaction: an abort over no participants is not an abort; a "
+            "one-owner transaction rolls back locally and tells nobody");
+    }
+    if (transaction_id == 0) {
+        return Status::InvalidArgument(
+            "cross-owner transaction: an abort must name the coordinator's transaction id, and "
+            "0 is the id no transaction has");
+    }
+    for (std::size_t i = 0; i < participants.size(); ++i) {
+        if (participants[i] >= transport_.core_count()) {
+            return Status::InvalidArgument(
+                "cross-owner transaction: core " + std::to_string(participants[i]) +
+                " is not a core of this instance, which has " +
+                std::to_string(transport_.core_count()));
+        }
+        if (participants[i] == core_id_) {
+            return Status::InvalidArgument(
+                "cross-owner transaction: core " + std::to_string(core_id_) +
+                " is the coordinator and cannot be one of its own participants");
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (participants[i] == participants[j]) {
+                return Status::InvalidArgument(
+                    "cross-owner transaction: core " + std::to_string(participants[i]) +
+                    " is named twice in one abort");
+            }
+        }
+    }
+
+    TxnDecideRequestPayload request{};
+    request.session_id = session_id;
+    request.transaction_id = transaction_id;
+    request.decision = static_cast<std::uint8_t>(TxnDecision::kAbort);
+    // A first attempt, like every other decide this core sends: R6-5's ask
+    // is the only leg that sets the bit.
+    request.retry = 0;
+    // **No request id, because no waiter answers to one.** 0 is what
+    // `MessageHeader` calls "no request" - a system message belonging to no
+    // statement - and that is exactly what this is: the participant's reply
+    // finds no waiter and is counted a late reply, which is the honest
+    // reading of an acknowledgement nobody asked for.
+    for (std::uint32_t core : participants) {
+        ++decide_messages_;
+        ++aborts_forgotten_;
+        sched::SubmitSendPod(scheduler_, transport_, core_id_, core, /*session_core=*/core_id_,
+                             /*request_id=*/0, sched::RingMessageKind::kTxnDecideRequest,
+                             request);
+    }
+    return Status::OK();
+}
+
 void Txn2pcClient::OnReply(TxnPhase phase, const sched::MessageHeader& header,
                            std::span<const std::byte> payload) {
     TxnParticipantReplyPayload reply{};

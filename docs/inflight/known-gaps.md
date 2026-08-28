@@ -1277,6 +1277,46 @@ still waits on its own gate, so:
   the coordinator's stream. `SHOW META`'s `txn_in_doubt_unresolved` counts
   exactly that population, and it is 0 on every healthy path. Reachable only
   from a test until R6-8, like the rest of the series.
+- **A cross-owner transaction's `ROLLBACK` never reaches its participants**
+  (2026-08-28, found by the R6-8 review at `7eaa14a`). `HandleCommit` forks
+  on `session.has_participants()` and runs D4's two phases; `HandleRollback`
+  has no such fork, so a client's `ROLLBACK` — and the one a poisoned
+  transaction forces, and the one `TcpServer::CloseClient` sends when a
+  connection drops — ends the coordinator's half and tells nobody. Each
+  abandoned participant goes on holding its rows uncommitted, pinning that
+  core's `ReadHorizon()`, and holding one of `kShippedMaxEnrolled` (16) and
+  one of `txn::kMaxTrackedLiveTxns` (64) until `kShippedTxnIdleCeilingNs`
+  rolls it back — **five minutes**, and a client can open one per
+  transaction. **Not a wrong answer**: the abandoned transaction never
+  commits, and the review closed the path by which it *did* become one (a
+  later transaction of the same session inheriting the context — fixed at
+  `Session::Finish()`, which now drops the shipping id where the
+  transaction enrolled anyone). What it is, is a stall and a shared-table
+  exhaustion reachable from an ordinary client loop. The participant side
+  needs nothing — `StartDecision` already applies an abort to an unprepared
+  context — so what is owed is the coordinator's send, and the reason it is
+  not a one-line fix is that the decide is a **park**: `ROLLBACK` would
+  either wait a ring round trip it has never waited for, or need a
+  fire-and-forget lane whose phase waiter nothing closes, and the
+  connection-close path calls the synchronous `Dispatch`, which cannot park
+  at all.
+  **Closed 2026-08-28, the same day, by the second of those**:
+  `Txn2pcClient::AbortAndForget` sends the abort to every participant with
+  **no waiter opened at all** — so there is none to close, and nothing
+  parks. That is the shape a rollback wants rather than a compromise: the
+  outcome is abort whatever a participant answers, and a participant that
+  never hears still has its idle ceiling. `HandleRollback` now reads the
+  participants off the session *before* `RollbackLocal`, since `Finish()`
+  clears them with the transaction, and sends after the local half is
+  unwound — a refusal there changes no outcome and is logged rather than
+  reported to a client that asked to roll back and did. The messages are
+  counted apart as `aborts_forgotten()`, because their acknowledgements are
+  *expected* to find no waiter and would otherwise read as a deadline
+  problem in `late_replies()`. Pinned by
+  `ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone` (the
+  participant releases rather than merely staying uncommitted) and
+  `AConnectionThatDiesMidCrossOwnerTransactionAbortsItsParticipants`, which
+  drives the synchronous path the close handler uses.
 - **Core-count change is a mount-time operation, and nothing implements it**
   (operator direction, 2026-08-28). The `[OPEN]` in `wal.md` §3,
   `superblock.hpp`'s pin and `blueprint-range-ownership.md` §12 is now
