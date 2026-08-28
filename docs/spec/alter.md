@@ -23,10 +23,17 @@ understands and declines — `Unsupported`, with a position and the reason:
   page allocation, and the reader-horizon question — which is the physical
   optimizer's gated territory (`physical-optimizer.md` §6), not a
   catalog edit. Refused, not deferred-and-half-done.
-- **Widening (`ALTER ... TYPE varchar(n)` in any spelling).** Permanently
-  out, not open: the tagged cell has no per-column width to widen
-  (`rule-fixed-length-tuple.md` — no `VARCHAR(n)`/`ALTER WIDEN` surface
-  at all is a design decision this spec does not get to reopen).
+- **Widening (`ALTER ... TYPE varchar(n)` / `char(n)` in any spelling).**
+  Permanently out, not open — **and its reason was corrected 2026-08-28**,
+  because the one this bullet used to give became false. It read: "the
+  tagged cell has no per-column width to widen". Since
+  `rule-fixed-length-tuple.md` §4's amendment a cell *does* have a
+  per-column width, declared by `varchar(N)`. What keeps widening out is
+  the same rule that keeps `ADD COLUMN` out, one bullet up: a cell's width
+  is part of the row-size constant (invariant 13), so changing it rewrites
+  every tuple of the relation. That is a mover's job and the physical
+  optimizer's gated territory, not a catalog edit — and refusing it is not
+  a statement about whether per-column widths exist.
 - **Constraint and default surfaces** (`ADD CONSTRAINT`, `SET DEFAULT`,
   …): each belongs to the feature that owns the object (`CREATE
   ASSERTION` exists; defaults do not), and a second spelling of an

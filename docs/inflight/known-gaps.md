@@ -1798,3 +1798,24 @@ All fixed by `b11cc81`; the suite is green.
   **assertions enforce nothing** predates the transaction work and AST07
   respectively; both are built (verified in
   `src/server/command_dispatcher.cpp`).
+- Any doc, comment or task brief claiming **`VARCHAR(n)` does not exist as
+  a surface** — `docs/spec/heap-and-tuple.md` §3.3's "no `VARCHAR(n)`/`ALTER
+  WIDEN` surface at all" and `docs/rules/rule-fixed-length-tuple.md` §4's
+  global-only rationale — was true until **2026-08-28** and is amended at
+  both sources. `varchar(N)` declares that column's `kds.inline_cell_width`;
+  `ALTER … WIDEN` stays refused, on the corrected reason (a cell width is
+  part of the row-size constant, so changing it rewrites every row).
+- **`decimal128(p, s)` cannot be written**, though
+  `src/server/command_dispatcher.cpp`'s CREATE TABLE comment says it can:
+  *"Writing `decimal128(p, s)` names the wide type directly and its bounds
+  refuse p <= 18."* The parser accepts a type argument list for `DECIMAL`,
+  `CHAR` and `VARCHAR` only (`src/parser/parser.cpp`), so `decimal128(24, 6)`
+  is refused as *"type 'decimal128' takes no arguments"* before the
+  dispatcher sees it, and `tests/types_contract_test.cpp`'s refusal list
+  passes for the wrong reason. **Nothing is lost** — the wide type is
+  reached by promotion, `decimal(24, 6)`, which is what
+  `tests/types_e2e_test.cpp` exercises and what `DESCRIBE` renders as
+  `decimal128(24,6)`. Found 2026-08-28 by VC-0 of the `varchar(N)` work and
+  deliberately not fixed there: it is a change to the same parser production
+  that work touches, and an unasked type change inside another feature's
+  review is how a review stops being one.

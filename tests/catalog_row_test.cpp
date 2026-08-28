@@ -495,6 +495,21 @@ TEST(SysColumnRowDecimalTest, ColumnTypeTextRendersTheDeclaredForm) {
     chr.len = 8;
     EXPECT_EQ(ColumnTypeText(chr, "char"), "char(8)");
 
+    // A varchar renders a width only when the column declared one. `len` of
+    // 0 is not "unset": it is the instance's kds.inline_cell_width, which is
+    // what every varchar column carried before `varchar(N)` existed - and
+    // printing that number here would report a column property the column
+    // does not have.
+    SysColumnRow var{};
+    var.type_val = kTypeValVarchar;
+    var.len = 32;
+    EXPECT_EQ(ColumnTypeText(var, "varchar"), "varchar(32)");
+
+    SysColumnRow legacy{};
+    legacy.type_val = kTypeValVarchar;
+    legacy.len = 0;
+    EXPECT_EQ(ColumnTypeText(legacy, "varchar"), "varchar");
+
     // Every other type's width comes from its type_val, so the bare name
     // is the whole truth and `len` says nothing a reader wants.
     SysColumnRow i64{};

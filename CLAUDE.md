@@ -42,6 +42,7 @@ statements, not style.
 | Aggregation (GROUP BY, COUNT/SUM/MIN/MAX/AVG) | Built (AG01-AG10) | `docs/spec/aggregate.md` |
 | Aggregate performance | AP01-AP03 built, AP05 next | `docs/inflight/in-progress/workplan-aggregate-perf.md` (start at "Where to pick this up") |
 | Types: DATE, TIMESTAMP, DECIMAL, DECIMAL128 | Built (TY01-TY11); `float` stays refused | `docs/spec/types.md` |
+| `char(N)` / `varchar(N)` | **Declarable 2026-08-28** (VC-A). `char(N)` is a fixed N-byte cell (`char` alone is `char(1)`; a NUL in the value is refused, since the type reads back to the first one). **`varchar(N)`'s N *is* that column's `kds.inline_cell_width`** — one concept at a narrower scope, the same `[16, 4096]` validator, and by operator rule no second name for it anywhere. N is a width, not a length cap: a longer value spills as always. A bare `varchar` stores `len = 0`, which every pre-existing column carries and which reads as the instance width — so no format bump and an existing file mounts byte-identical. This **reverses** v1's global-only decision (`rule-fixed-length-tuple.md` §4 keeps the old argument and what the build proved wrong about it: the row codec never read the instance width per cell, so the "one codec path" cost it avoided did not exist). Widening stays refused, on a corrected reason | `docs/spec/types.md` §2b, `docs/rules/rule-fixed-length-tuple.md` §4, `instructions/v2.5.0/varchar-char-architecture.md` |
 | NULL storage and semantics | **Built 2026-08-20** (NU1-NU8): a tail null bitmap sized to *nullable* columns — every all-`NOT NULL` relation keeps a byte-identical layout, no format bump. Ratified: **D1** NOT NULL default, `NULL` opt-in (divergence from standard SQL, noted in `manual/sql/`); **D2** nullable index keys refused, covered columns included; **D3** NULLs sort largest (ASC last / DESC first). The bitmap is sole authority — tag/bitmap disagreement is Corruption; WHERE is three-valued with `IS [NOT] NULL`; a NULL fk key is vacuous (display-only) | `docs/spec/null.md` |
 | Waystone (pattern-keyed access trails) | Recording + replay built (P01-P13); retention/decay/epoch bumps not (P15-P17) | `docs/spec/waystone-concpets.md`, `docs/inflight/in-progress/waystone-workplan.md` |
 | CREATE PATTERN | Built through spec §8 step 4 | `docs/spec/create-pattern-user-defined-patterns-v1.md` |
@@ -122,7 +123,7 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 10. No single canonical in-memory tuple; consistency comes from page pin and latch discipline.
 11. **Every** relation's pk is a unique 40-bit id, carried only by the Keystone word, never rebound, **never updatable**. First column must be integer-typed. **Amended 2026-08-11, amended again 2026-08-25** (`docs/spec/heap-and-tuple.md` §4.1): where the id comes from is a per-**row** fact — the `INSERT` names it or omits it — and there is no key mode. `sys.tables.next_id` is a high-water mark on what has been placed; uniqueness follows from it with no page read for an omitted key and for a named key at or above it. A named key **below** the mark is btree-only, proved by the descent, and refused `OutOfRange` on a heap relation. Read §4.1 before relying on ordering — monotonicity is per-relation and now also per-*history*, never engine-wide, and `sys.tables.key_order` is the only truthful reading of it.
 12. The tuple MVCC header is exactly `trx_id:48 | undo_ptr | data_len | flags` = 20 bytes. There is no `xmax`.
-13. **Every tuple is fixed-length**: row size is a schema constant, variable-width values occupy one tagged cell of `kds.inline_cell_width` bytes. A disagreeing length is `Corruption`, never interpreted.
+13. **Every tuple is fixed-length**: row size is a schema constant, variable-width values occupy one tagged cell of `kds.inline_cell_width` bytes — the instance's, or the column's own where `varchar(N)` declared one (2026-08-28; the width is per *column*, never per row). A disagreeing length is `Corruption`, never interpreted.
 14. **Var-heap values are immutable per version** and `kVarHeap` pages are never relocated. Authoritative data — advisory rules do not apply to it.
 
 ## Working Rules
@@ -279,7 +280,9 @@ interface that keeps every listed option viable.
 
 - **Storage** (`docs/spec/heap-and-tuple.md` §8, `docs/spec/page.md`,
   `docs/rules/rule-fixed-length-tuple.md`): heap page split policy;
-  `inline_cell_width` default; spilled-value size cap; prefix-inlining
+  `inline_cell_width` default (**now the default a bare `varchar` takes**,
+  not the only width — `varchar(N)` overrides it per column, which sharpens
+  this question rather than closing it); spilled-value size cap; prefix-inlining
   trigger; purge cadence; the 16 reserved Keystone bits; id reuse; I/O
   backend; whether invariant 3 is ever relaxed. (*Whether a heap relation
   may take a caller-named pk* was **closed 2026-08-25** — yes, at or above

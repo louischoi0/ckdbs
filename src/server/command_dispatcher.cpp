@@ -8,6 +8,7 @@
 
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
+#include "kds/storage/tagged_cell.hpp"  // varchar(N)'s bounds are the cell width's
 #include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
 #include "kds/sched/scheduler.hpp"       // SHOW META's group accounting (sched.md 4)
 
@@ -3208,6 +3209,26 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             row.notnull = col.notnull;  // D1: NOT NULL unless declared NULL
             row.cabin_policy = col.cabin_policy;
 
+            // ---- The arity refusals, both above the type arms ---------------
+            //
+            // A type that takes no arguments refuses the ones it was given,
+            // rather than dropping them: silently ignoring an argument leaves
+            // an operator believing they said something. Both are unreachable
+            // through the parser, which decides arity by the type name - so
+            // this is the catalog's own defense against a statement that
+            // arrived by another door, and the two live together because a
+            // third argument-taking type must find one place to extend, not
+            // two (the phase-A review's shape note).
+            const bool takes_precision = row.type_val == catalog::kTypeValDecimal ||
+                                          row.type_val == catalog::kTypeValDecimalWide;
+            const bool takes_width = row.type_val == catalog::kTypeValChar ||
+                                      row.type_val == catalog::kTypeValVarchar;
+            if ((col.has_precision && !takes_precision) || (col.has_width && !takes_width)) {
+                return {"ERR type '" + col.type_name + "' takes no arguments (byte " +
+                            std::to_string(col.type_arg_byte_offset) + ")",
+                        false};
+            }
+
             // ---- decimal(p, s) (docs/spec/types.md TY2, TY9) ----------------
             //
             // The pair replaces the type's default `len`, which for a decimal
@@ -3247,13 +3268,47 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 }
                 row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
                                                   static_cast<std::uint8_t>(col.scale));
-            } else if (col.has_precision) {
-                // Unreachable through the parser too, and refused rather than
-                // ignored: silently dropping the arguments would leave an
-                // operator believing they had said something.
-                return {"ERR type '" + col.type_name + "' takes no precision or scale (byte " +
-                            std::to_string(col.type_byte_offset) + ")",
-                        false};
+            } else if (row.type_val == catalog::kTypeValChar) {
+                // ---- char(N) / varchar(N) --------------------------------
+                //
+                // **The two say different things with one number**, and the
+                // difference is the whole design:
+                //
+                //   char(N)     N is the cell. The value lives in exactly
+                //               those bytes or is refused.
+                //   varchar(N)  N is *this column's* kds.inline_cell_width -
+                //               a width, not a cap. It is therefore
+                //               validated by the instance setting's own
+                //               validator and never by a second one, which
+                //               is the operator's rule and the reason no
+                //               `max_inline_char_size` exists.
+                if (col.has_width) {
+                    if (col.width == 0) {
+                        return {"ERR column '" + col.name +
+                                    "' cannot be char(0) - every column must occupy bytes (byte " +
+                                    std::to_string(col.type_arg_byte_offset) + ")",
+                                false};
+                    }
+                    row.len = col.width;
+                }
+                // Nothing said: `char` is `char(1)`, which is the sys.types
+                // default already in `row.len` and what the standard means
+                // by a bare `char`. Not refused the way a bare `decimal` is
+                // - that refusal guards a silent decision about what a
+                // stored value *means*, and char(1) decides nothing.
+            } else if (row.type_val == catalog::kTypeValVarchar) {
+                if (col.has_width) {
+                    if (Status s = storage::CheckInlineCellWidth(col.width); !s.ok()) {
+                        return {"ERR column '" + col.name + "': " + s.message() + " (byte " +
+                                    std::to_string(col.type_arg_byte_offset) + ")",
+                                false};
+                    }
+                    row.len = col.width;
+                }
+                // Nothing said: `len` stays 0, which is what every varchar
+                // column written before this version carries and what it has
+                // always meant - the instance's pinned width. That is the
+                // whole compatibility story; no file changes, no bump.
             }
 
             schema.columns.push_back(row);

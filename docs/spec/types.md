@@ -85,6 +85,46 @@ production — fingerprintable yet unrecordable, so no stored `pattern_id`
 moves and **`kFingerprintVersion` stays 1**. Every pre-existing golden
 corpus line passes unchanged as the witness.
 
+## 2b. `char(N)` and `varchar(N)` `[CONFIRMED 2026-08-28]`
+
+```
+type ::= ... | CHAR [ ( int ) ] | VARCHAR [ ( int ) ]
+```
+
+Built under `instructions/v2.5.0/`, which owns the design; this section is
+what a reader of this spec needs and no more. Both are **optional** single
+arguments, which is why the grammar brackets them and `DECIMAL`'s are not
+bracketed — a bare `decimal` is refused because a default scale decides
+what a value *means*, and neither default here decides anything.
+
+**`char(N)` — a fixed cell of N bytes.** `char` alone is `char(N=1)`, the
+standard's own default and what this engine has always stored. Values are
+zero-padded to `N` and read back to the first NUL; a longer value is
+refused naming `N`, and a value *containing* a NUL is refused, because the
+type could not read it back as written. Comparison is byte-wise over the
+unpadded value, so `'ab' <> 'ab '` — there is no `PAD SPACE` collation, a
+divergence the manual states.
+
+**`varchar(N)` — the tagged cell, with N as that column's width.** `N` is
+this column's `kds.inline_cell_width`, in the same unit and validated by
+the same `storage::CheckInlineCellWidth`, so `16 ≤ N ≤ 4096` and
+`varchar(8)` is refused. **There is no second threshold and no second name
+for one.** `N` is a width, not a length cap: a value longer than `N − 3`
+spills to the var-heap exactly as it always has, and the only length
+refusal remains 8144 bytes. A bare `varchar` takes the instance's width.
+
+**Neither costs a format event**, which is the point of putting both in
+`len` — see §4a, whose argument this reuses unchanged: a `char`'s `len` was
+always its width, and a `varchar`'s was always 0, which has always meant
+"the instance's". Reading 0 that way is what lets a pre-2026-08-28 file
+mount byte-identical. `DESCRIBE` renders `char(8)` and `varchar(32)`, and a
+bare `varchar` renders **no** width, because the instance's number is not a
+property of the column and must not be reported as one.
+
+The full rules, the reversal of v1's global-only decision and what the
+build proved wrong about its rationale: `docs/rules/rule-fixed-length-tuple.md`
+§4.
+
 ## 2a. The wide decimal `[CONFIRMED 2026-08-07]`
 
 TY2's separate type, built. **A type is still four things**: width 16
@@ -228,6 +268,12 @@ every type but two**: `RowLayout::ColumnWidth` reads it only for `char`, and
 derives every other width from `type_val` alone. Its remaining readers were
 display-only.
 
+*(Amended 2026-08-28: `RowLayout::ColumnWidth` now reads `len` for **three**
+types — `char`, `varchar` and the decimal pair — since `varchar(N)` puts a
+column's cell width there too, with 0 meaning the instance's. The argument
+below is unchanged and is why that fit with no format event; §2b states the
+new reading.)*
+
 So `(p, s)` — two values bounded by 18 — pack into `len`'s low sixteen bits,
 precision high and scale low, with explicit shift/mask helpers
 (`PackDecimalLen`, `DecimalPrecisionOf`, `DecimalScaleOf` in
@@ -241,7 +287,7 @@ exactly that, and the fkey one is the most recent.
 **What it cost, stated so nobody has to rediscover it:** `len` is no longer
 readable as "a width" without knowing the column's type. Two paths read it
 that way — `sys.columns` and `DESCRIBE` — and both now render the *declared
-type* instead (`decimal(10,2)`, `char(8)`, `date`) through one function,
+type* instead (`decimal(10,2)`, `char(8)`, `varchar(32)`, `date`) through one function,
 `ColumnTypeText`, so they cannot come to disagree. `sys.columns`'s `len`
 column is replaced by `type`; `DESCRIBE` drops `len=` and its `type=` now
 carries the parameters. Both are client-visible surface changes and are the

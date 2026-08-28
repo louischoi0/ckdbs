@@ -27,12 +27,12 @@ The honest cost, accepted knowingly: variable-length management is **relocated, 
 
 - A relation's tuple layout is a sequence of fixed-size cells at offsets computable from the schema alone. Row size is a per-relation constant; in-page slot addressing is arithmetic.
 - Fixed-width types (integers, floats, bool, timestamps, the Keystone word, MVCC header) occupy their natural widths as today.
-- Every variable-width type (`TEXT`/`VARCHAR`, future blobs) occupies exactly **one tagged cell** of `kds.inline_cell_width` bytes (§3), regardless of the value stored.
+- Every variable-width type (`TEXT`/`VARCHAR`, future blobs) occupies exactly **one tagged cell** (§3), regardless of the value stored. Its width is `kds.inline_cell_width` — the instance's, or **the column's own** when it was declared `varchar(N)` (§4, amended 2026-08-28).
 - No code path may produce a tuple whose size differs from its relation's constant. This is asserted in the row codec, not policed by convention.
 
 ## 3. The Tagged Cell `[CONFIRMED format; widths PROPOSED]`
 
-Cell width `W = kds.inline_cell_width`. Layout (memcpy codec, `static_assert`ed, LE — rules.md §2/§5):
+Cell width `W = kds.inline_cell_width`, which since 2026-08-28 is a **per-column** number with an instance default (§4). Layout (memcpy codec, `static_assert`ed, LE — rules.md §2/§5):
 
 | Tag (`u8` at offset 0) | Layout after tag | Meaning |
 |---|---|---|
@@ -40,17 +40,31 @@ Cell width `W = kds.inline_cell_width`. Layout (memcpy codec, `static_assert`ed,
 | `kInline` | `len u16`, then `len` bytes, zero padding | value fits: `len ≤ W − 3` |
 | `kSpilled` | `len u32`, `varheap_ptr u64` (`page_id u32 · slot u16 · reserved u16`) | bytes live in the var-heap |
 
-- The inline capacity is therefore `W − 3`; the spill decision is a pure function of value length — no heuristics, no per-row variance.
+- The inline capacity is therefore `W − 3`; the spill decision is a pure function of value length **and of that column's `W`** — no heuristics, no per-row variance. Two `varchar` columns in one row may have different `W` and therefore different spill points; neither can vary row to row.
 - An UPDATE that crosses the boundary in either direction changes the cell's *tag*, never the tuple's size.
 - Rationale for a tag byte over sentinels: NULL, empty string, and spilled must be distinguishable without reading the var-heap, and the tag is where future cell kinds (V4 revisit) land without a format bump.
 
-## 4. The Global Constant `[CONFIRMED semantics; default PROPOSED]`
+## 4. The Instance Default and the Column Override `[CONFIRMED semantics; default PROPOSED]`
+
+**Amended 2026-08-28** (`instructions/v2.5.0/varchar-char-architecture.md` §3.2, operator-ratified). This section previously read "The Global Constant" and refused a per-column width outright; the v1 argument is kept below as history, because a reversal that erases what it reversed cannot be audited.
 
 `kds.inline_cell_width` is configuration-referenced but **instance-pinned**: read from configuration once at bootstrap, written into the superblock, and validated at every startup — a running configuration that disagrees with the superblock refuses to start (`InvalidArgument`, naming both values). It cannot be hot-changed; on-disk tuple layout depends on it, so changing it for existing data is a rebuild, which is `Unsupported` (V5).
 
-Rationale for global-over-per-column (the decision that replaced the strawman): one number instead of a schema decision users can get wrong; one codec path instead of per-column widths threaded through every layout computation; no `VARCHAR(n)` grammar, no `ALTER … WIDEN` question — V5 falls out for free. The recorded cost: uniform padding overhead where a per-column width would have been tighter. Accepted as the simplicity trade.
+What changed is its **scope**, not its meaning. It is now the *default* a `varchar` column takes, and `varchar(N)` overrides it for that column:
 
-Default: **64 bytes** `[PROPOSED]` — chosen so common OLTP strings (codes, names, references) never touch the var-heap; the honest counter-cost is 64 B per string column per row. The default stays `[PROPOSED]` until measured against real target-schema string-length distributions (§9); the *semantics* above are confirmed regardless of the number.
+- `N` **is** that column's `kds.inline_cell_width`. Same unit (cell bytes, tag and length included), same capacity formula `N − 3`, same three tags, same spill path. **There is no second threshold and no second name for one** — the operator's rule, stated twice; a review that finds a `max_inline_char_size` or any equivalent has found a defect.
+- `N` is validated by `storage::CheckInlineCellWidth` and nothing else, so the bounds are the instance setting's: `[16, 4096]`. `varchar(8)` is therefore refused — the narrowest cell must still hold a 13-byte spilled descriptor (§3). That wart is accepted rather than patched with a second validator.
+- `N` is **not a length cap**. A value longer than `N − 3` spills; it is not refused. The only length refusal is one var-heap page (8144 bytes, §9).
+- A bare `varchar` stores `len = 0` in `sys.columns` and reads at the instance width. **This is the whole compatibility story**: every varchar column written before this amendment carries 0, 0 has always meant the instance width, so no format bumps and an existing file mounts byte-identical. `varchar(64)` under a 64-byte instance and a bare `varchar` are the same column in every byte but that one.
+- The width rides in `SysColumnRow::len`, the field TY9 already overloaded for a decimal's `(p, s)` and `char`'s width — which is why this costs no catalog format change either (`docs/spec/types.md` §4a).
+
+**V5 still holds, on its true reason.** `ALTER … TYPE varchar(M)` is permanently out because changing a cell's width rewrites every row of the relation (§2's constant), not — as the v1 text had it — because no per-column width exists to widen.
+
+> **The v1 argument, kept as history.** *"Rationale for global-over-per-column (the decision that replaced the strawman): one number instead of a schema decision users can get wrong; one codec path instead of per-column widths threaded through every layout computation; no `VARCHAR(n)` grammar, no `ALTER … WIDEN` question — V5 falls out for free. The recorded cost: uniform padding overhead where a per-column width would have been tighter. Accepted as the simplicity trade."*
+>
+> Two of its three claims survived the build and one did not. The `ALTER … WIDEN` question did fall out for free — V5 is unchanged, only its reason is corrected. The padding cost was real, and a per-column width is what removes it. **The "one codec path" claim was wrong**, and measurably so: the row codec never read the instance width per cell in the first place — it derives every cell's span from `RowLayout::offsets` (`CellOf`/`MutableCellOf`), so per-column widths threaded through nothing. The whole change below the parser was one line of `RowLayout::ColumnWidth`. The v1 decision was paying a padding cost to avoid a complexity that did not exist.
+
+Default: **64 bytes** `[PROPOSED]` — chosen so common OLTP strings (codes, names, references) never touch the var-heap; the honest counter-cost is 64 B per *undeclared* string column per row, which a declared width is now the way to avoid. The default stays `[PROPOSED]` until measured against real target-schema string-length distributions (§9); the *semantics* above are confirmed regardless of the number.
 
 ## 5. The Var-Heap `[CONFIRMED]`
 

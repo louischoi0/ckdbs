@@ -3,6 +3,7 @@
 #include <string>
 
 #include "kds/catalog/well_known.hpp"
+#include "kds/storage/tagged_cell.hpp"  // varchar(N)'s bounds are the cell width's
 
 namespace kds::catalog {
 
@@ -38,6 +39,28 @@ bool SchemaCanSpill(const Schema& schema) noexcept {
 
 Status CheckDeclarableColumnTypes(const Schema& schema) {
     for (const auto& col : schema.columns) {
+        // A declared varchar cell width, checked at the catalog's own door
+        // for the reason the decimal check below is here: the dispatcher
+        // bounds it and the parser does not, so a schema built by neither -
+        // a tool, a test, a future caller - is exactly what this is for.
+        // **And nothing else catches it**: `RowLayout::Build` accepts an
+        // 8-byte varchar cell happily, and the relation then refuses every
+        // INSERT with a message about a cell width nobody can trace to a
+        // declaration.
+        //
+        // `char` needs no arm here, deliberately: `Build` runs on the same
+        // schema seven lines after this function and already refuses a
+        // zero-width column, so a second refusal would be a third wording
+        // of one condition (the phase-A review's S-1).
+        //
+        // A varchar's `len` of 0 is not unset: it is "the instance's
+        // width", which every pre-v2.5.0 column carries, so only a
+        // *declared* width is checked.
+        if (col.type_val == kTypeValVarchar && col.len != 0) {
+            if (Status s = storage::CheckInlineCellWidth(col.len); !s.ok()) {
+                return s.WithContext("column '" + std::string(NameView(col.name)) + "'");
+            }
+        }
         // A decimal with no scale stored has values with no defined
         // meaning. The parser refuses a bare `decimal` and the dispatcher
         // packs the pair, so reaching here with an unset one means the
