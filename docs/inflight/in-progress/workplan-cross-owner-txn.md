@@ -147,7 +147,7 @@ this workplan means the v2.4.0 path.
 | R6-1 | Wire and sizing (D6) | **Built 2026-08-27**, this worktree |
 | R6-2 | Participant transaction context (D2) | **Built 2026-08-27**, this worktree |
 | R6-3 | Prepare and decide (D4) | **Built 2026-08-28**, `63a0f43` |
-| R6-4 | Recovery (D4) | — |
+| R6-4 | Recovery (D4) | **Built 2026-08-28**, this worktree |
 | R6-5 | In-doubt handling (D5) | — |
 | R6-6 | PW3b extension | — |
 | R6-7 | PL-A revisit | — |
@@ -725,6 +725,144 @@ participant (the fast path's zero prepare messages, commit, a refused prepare,
 a silent participant, and the no-reactor refusal). `tests/wal_payload_test.cpp`
 gained TXN_PREPARE's round trip and its zero-id corruption.
 
+## R6-4 — recovery, and CP1
+
+Built on `r6-4-prepare-recovery`. The row that makes R6-3's durable state
+mean something: a transaction this core prepared is now resolved at mount
+instead of rolled back as a loser.
+
+### The fourth outcome
+
+`TxnOutcome::kPrepared`. Analysis had three verdicts and a `TXN_PREPARE`
+fits none of them - a prepared transaction is not a winner, not an aborted
+transaction whose compensations are already in the log, and emphatically not
+a loser. Adding it is what stops undo from rolling back a transaction the
+coordinator may have committed and acknowledged to a client, which is the
+one durable disagreement two-phase commit exists to prevent.
+
+Three details the scan needs, each a way to get it wrong:
+
+- **A terminal record outranks a prepare.** The scan is forward, so a
+  participant that heard its decide leg writes `TXN_COMMIT` or `TXN_ABORT`
+  after its prepare and needs no resolution at all - `note_txn` is amended
+  so `kPrepared` is the one outcome that may never overwrite an existing
+  one.
+- **`prepared_txns` is pruned to the `kPrepared` set at the end of the
+  scan**, rather than erased at each terminal record. That keeps the scan a
+  single forward pass with no look-behind, and it makes the map exactly the
+  set `RecoverCore` must resolve.
+- **A prepare naming no transaction is `Corruption`.** The envelope's id is
+  the participant's own (D2) and is what everything downstream keys on.
+
+### The resolution, and the two reads it is made of
+
+`wal::PreparedResolver` is a phase injected the way `UndoPhase` is, and for
+one more reason: the ask reaches **another core's log**, and the layout of a
+log directory is `server/`'s to know. `server::CoordinatorStreamResolver`
+opens `wal-<coordinator core>-*.log` and scans it for the coordinator's
+transaction id.
+
+**It is not a cross-stream comparison, and that is the row's whole
+soundness argument.** Guideline 3 forbids ordering two streams' records
+against each other; nothing here orders anything. The participant's own
+records say what to redo; the coordinator's say whether it committed, found
+by matching an id. Two independent reads. The prepare's LSN is carried only
+so a refusal can name it, and is never compared with anything in the other
+stream. **HP5 holds, with the site**: `prepared_resolver.cpp`'s scan reads
+`record.header.txn_id` and `record.type()` and touches no LSN at all.
+
+**Where it runs**: immediately after analysis, before the loser refusal and
+before redo. It has to be before the refusal because it decides which set
+each prepared transaction joins, and it is read-only, so a mount that
+refuses here has written nothing.
+
+**Why an absent decision is an abort rather than a guess.** The scan starts
+at LSN 0 and reads the coordinator's whole stream, so "no COMMIT and no
+ABORT for this id" is a fact about every byte that core made durable -
+nothing recycles a segment in this engine. And the two sides reach that
+verdict independently: a coordinator with no COMMIT record for its own
+transaction rolls it back at its own mount, because analysis calls a
+transaction with no terminal record a loser. Participant and coordinator
+abort the same transaction for the same reason, from their own streams, with
+no message between them.
+
+**What refuses the mount**, because a wrong answer here is worse than no
+answer:
+
+- a prepared transaction with **no resolver installed** - this core may
+  neither roll it back nor publish it, so it does not open (the refusal
+  `RecoverCore` already makes for losers with no undo phase, one protocol
+  up);
+- an **absent coordinator stream**. Every core publishes a completion
+  checkpoint at every mount (RC08), so a core of this database with no
+  segment files is a log directory that lost a file, not a core that never
+  wrote - and answering "abort" could discard a transaction its coordinator
+  committed and told a client about;
+- a prepare naming **this core as its own coordinator**: a coordinator never
+  writes `TXN_PREPARE`.
+
+### CP1 — recovery across a core-count change
+
+The work order names R6-4 as the place `wal.md` §3's second `[OPEN]` is
+answered, and asks for the three shapes enumerated with what mount does for
+each. **The answer is that the question is already closed by a refusal this
+engine has had since M6, and R6 does not reopen it.**
+
+`SuperBlockFields::core_count` pins the count at bootstrap, and
+`bootstrap.cpp` refuses any mount whose configured `cores` differs, naming
+both numbers and telling the operator to restart at the pinned count. So:
+
+| shape | what mount does |
+|---|---|
+| **Fewer cores than the database was created with** | Refused at the door, before any stream is opened. Recovery never runs, so a prepare naming a core outside the new range is never read |
+| **More cores** | The same refusal, in the same place, for the same reason |
+| **Same count, re-indexed** | **Not detectable, and not made worse by R6.** Streams are named by index and carry no other identity, so a database whose streams were swapped mounts and misreads every one of them - its own heap records included, long before any prepare is reached. What would make it detectable is a per-stream identity (a uuid in the segment header, or a superblock slot), which is a format change and belongs to whoever lifts the pin |
+
+Two things worth stating beyond the table, because they are what the
+`[OPEN]` was actually worried about:
+
+- **The resolution reads a file, not a running core.** The `[OPEN]`'s
+  scenario - "a PREPARE record sits in a stream whose core no longer exists"
+  - is not a problem for this mechanism even if the pin is one day lifted:
+  `wal-<core>-*.log` is resolvable whether or not a reactor is currently
+  serving it, and the mount refuses by name when the file is absent rather
+  than guessing.
+- **A hang is not reachable here** (HP3). The resolution is a bounded scan
+  of a finite file; every failure is a refusal with a message, and there is
+  no wait of any kind in the phase.
+
+The `[OPEN]` itself is R6-9's to close in `wal.md`, with this as its answer.
+
+### What the row deliberately does not do
+
+- **It writes no terminal record for a resolved commit.** A resolved *abort*
+  gets one for free - undo writes `TXN_ABORT` for every loser it rolls back,
+  so the next mount reads that transaction as `kAborted` and asks nobody. A
+  resolved commit has no such writer, so it is re-resolved at each mount
+  until a completion checkpoint moves the scan start past its prepare -
+  which RC08 publishes at the end of every mount, so in practice once. The
+  repeat costs one scan of the coordinator's stream and is idempotent; a
+  writer for it would be a new recovery-time append path, and this row does
+  not need one.
+- **It caches nothing.** Two prepared transactions on one coordinator open
+  that stream twice. The population is bounded by `kShippedMaxEnrolled` per
+  core and a mount is not a hot path; a cache here would be invalidated by
+  nothing at all.
+
+### Tests
+
+`tests/prepared_recovery_test.cpp`, three fixtures for the three ways to get
+this wrong: analysis calling a prepare a loser (the fourth outcome, its
+identity, and both ways a stream decides its own prepare), the resolver
+guessing (committed, aborted, no decision, absent stream, self-named
+coordinator), and the mount publishing or rolling back on its own authority
+(no resolver refuses; a committed verdict leaves undo untouched; an aborted
+verdict hands the transaction to undo; a refused resolution refuses the
+mount). The coordinator's stream is written independently of the
+participant's in every case, so neither knows the other's LSNs - which is
+the arrangement that makes "no cross-stream comparison" visible rather than
+merely claimed.
+
 ## Open, carried from the work order
 
 - **D1–D7 are ratified** (2026-08-28) and so are both `[OPEN]`s
@@ -733,10 +871,10 @@ gained TXN_PREPARE's round trip and its zero-id corruption.
   each — R6-3's isolation-level crossing, R6-5's named ceiling constant and
   its non-`UnknownOutcome` refusal, R6-5's sizing of the in-doubt ask,
   R6-9's two doc sentences, and B1's p50-and-p99 reporting.
-- **R6-4 must answer `wal.md` §3's second `[OPEN]`** — recovery across a
-  core-count change. A refusal to mount is an answer, and is recorded as one.
-  **R6-3 made it the next row rather than a later one**: a prepared
-  participant now leaves a durable TXN_PREPARE that analysis still reads as a
-  loser, so the state R6-4 exists to resolve is on disk from `63a0f43`
-  onward. Nothing ships out of this series before RP7's gate, which is what
-  keeps that a sequenced gap rather than a shipped one.
+- **`wal.md` §3's second `[OPEN]` is answered** (CP1, R6-4's section above):
+  a core-count change is already refused at the door by the superblock's
+  pinned `core_count`, so recovery never meets a prepare from a stream it
+  cannot place, and the resolution reads a **file** rather than a running
+  core in any case. The re-indexed-at-the-same-count shape is undetectable
+  with the current format and is not made worse by R6. Closing the `[OPEN]`
+  in `wal.md` itself is R6-9's.

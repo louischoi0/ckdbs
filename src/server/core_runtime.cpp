@@ -152,9 +152,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // prints the whole RC09 block only when `timings.timed` says a clock was
     // there, so an untimed recovery here would silently drop the phase
     // numbers *and* the completion checkpoint's, which AttachTransport times.
-    auto recovered =
-        RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
-                           *runtime->store_, *runtime->undo_log_, &*runtime->wal_, log, &clock);
+    // The wal dir goes in too (R6-4): a transaction this core prepared and
+    // never heard the outcome of is resolved by reading its coordinator's
+    // stream, which is another file in that same directory.
+    auto recovered = RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
+                                        *runtime->store_, *runtime->undo_log_, &*runtime->wal_,
+                                        log, &clock, config.wal_dir);
     if (!recovered.ok()) return recovered.status();
     // Kept, not discarded: the dispatcher's `SHOW META` prints it and a test
     // reads it (PW3b) - the one field that says whether the last stop

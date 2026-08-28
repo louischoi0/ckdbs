@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "kds/base/common.hpp"
 #include "kds/base/log.hpp"
@@ -100,6 +101,17 @@ struct MountRecovery {
     std::uint64_t transactions_rolled_back = 0;
     std::uint64_t compensations = 0;
 
+    // ---- What the cross-owner resolution decided (R6-4) ----
+    //
+    // `prepared` is what analysis found; the two below are how they
+    // resolved and sum to it. All three are 0 on every stream that never
+    // took part in a cross-owner transaction, which is every stream until
+    // R6-8 opens that path - so a nonzero one is the mount saying it
+    // finished a two-phase commit somebody else started.
+    std::uint64_t prepared = 0;
+    std::uint64_t prepared_committed = 0;
+    std::uint64_t prepared_aborted = 0;
+
     // ---- The caller's two obligations ----
     PageId page_floor = kInvalidPageId;
     bool page_floor_raised = false;
@@ -170,10 +182,19 @@ struct MountRecovery {
 // unlogged compensation is a rollback the next recovery cannot see happened
 // (`txn/recovery_undo.hpp`).
 // `clock`, when given, times the phases into `MountRecovery::timings` (RC09).
+//
+// `wal_dir` is where this instance's streams live, and it is what lets a
+// **prepared** transaction be resolved (R6-4): the verdict is in the
+// coordinator's stream, which is another file in that directory
+// (`prepared_resolver.hpp`). Empty means no resolver is installed, and a
+// stream that holds a prepared transaction then **refuses the mount** rather
+// than guessing - which is the right answer for the fixtures that pass
+// nothing here, since they have no other core's stream to read.
 StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
-                                          Logger* log, const sched::Clock* clock = nullptr);
+                                          Logger* log, const sched::Clock* clock = nullptr,
+                                          const std::string& wal_dir = {});
 
 // RV3's honest counter - **the half of it that can be computed**.
 //

@@ -66,6 +66,17 @@ enum class TxnOutcome : std::uint8_t {
     kAborted = 1,
     // No terminal record. Undo owes this transaction a rollback.
     kLoser = 2,
+    // **A durable TXN_PREPARE and no terminal record** (R6-3/R6-4, D4):
+    // this core is a participant in a cross-owner transaction whose
+    // outcome it does not hold. It is emphatically **not** a loser - it may
+    // have been committed by its coordinator, and rolling it back would
+    // make two streams disagree durably, which is the one failure
+    // two-phase commit exists to prevent - and it is not a winner either.
+    // The verdict lives in exactly one stream, the coordinator's, and
+    // `PreparedResolver` (wal/recovery.hpp) is what reads it. Nothing
+    // downstream may treat this outcome as either of the other three; a
+    // mount that cannot resolve it refuses instead.
+    kPrepared = 3,
 };
 
 const char* TxnOutcomeName(TxnOutcome outcome) noexcept;
@@ -98,6 +109,24 @@ struct TxnState {
     std::uint64_t last_undo_ptr = 0;  // txn::kNoUndoPtr, not named here: wal/ sits below txn/
 };
 
+// One prepared-but-undecided transaction, and the handle its verdict is
+// reachable by (R6-4). The participant's own id is the map key; every other
+// field is the **coordinator's**, straight out of the TXN_PREPARE payload,
+// because the decision lives in that core's stream and nowhere else (D4).
+//
+// `prepare_lsn` is this stream's, kept for the mount line and for a
+// refusal's message - never to be compared against anything in the
+// coordinator's stream. Two streams' LSNs are incomparable
+// (`workplan-crosscore.md` guideline 3), and the resolution deliberately
+// needs no such comparison: it is a **lookup of one id in one stream**, not
+// an ordering of two.
+struct PreparedTxn {
+    std::uint32_t coordinator_core = 0;
+    std::uint64_t coordinator_session_id = 0;
+    std::uint64_t coordinator_txn_id = 0;
+    Lsn prepare_lsn = 0;
+};
+
 struct AnalysisResult {
     // Where the scan began and where the stream actually ended.
     Lsn scan_start_lsn = 0;
@@ -125,6 +154,13 @@ struct AnalysisResult {
     std::map<PageId, Lsn> dirty_pages;
 
     std::map<std::uint64_t, TxnState> transactions;
+
+    // The `kPrepared` subset, with what each one needs to be resolved
+    // (R6-4). Keyed by the **participant's** transaction id - this stream's
+    // own - so the entry and `transactions[id]` name the same transaction.
+    // Empty on every stream that never took part in a cross-owner
+    // transaction, which is every stream before R6-8 opens that path.
+    std::map<std::uint64_t, PreparedTxn> prepared_txns;
 
     // The oldest recLSN in `dirty_pages`, or `end_lsn` when nothing was
     // dirtied - "the earliest point redo must actually touch", which is at
@@ -161,6 +197,11 @@ struct AnalysisResult {
     std::uint64_t winners = 0;
     std::uint64_t aborted = 0;
     std::uint64_t losers = 0;
+    // Transactions this stream prepared and holds no outcome for. **Nonzero
+    // means the mount cannot finish on this stream alone**: `RecoverCore`
+    // refuses without a resolver, for the reason it refuses losers with no
+    // undo phase.
+    std::uint64_t prepared = 0;
 };
 
 // wal.md §11-3's rule, in one place: the redo start is the checkpoint's own

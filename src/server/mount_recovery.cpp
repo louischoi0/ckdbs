@@ -1,10 +1,12 @@
 #include "kds/server/mount_recovery.hpp"
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "kds/exec/assertion_catalog.hpp"
+#include "kds/server/prepared_resolver.hpp"
 #include "kds/exec/assertion_recover.hpp"
 #include "kds/txn/recovery_undo.hpp"
 #include "kds/wal/recovery.hpp"
@@ -14,7 +16,8 @@ namespace kds::server {
 StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
-                                          Logger* log, const sched::Clock* clock) {
+                                          Logger* log, const sched::Clock* clock,
+                                          const std::string& wal_dir) {
     // A zeroed slot means no checkpoint was ever published: scan from the
     // head of the stream, and disable the durable-point check because there
     // is no published point to hold the scan to (`analysis.hpp`).
@@ -23,7 +26,17 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     start.anchor_durable_lsn = anchor.durable_lsn;
 
     txn::RecoveryUndo undo(undo_log, wal);
-    auto report = wal::RecoverCore(device, core_id, store, start, &undo, clock);
+    // R6-4's resolver, built here for the reason the undo phase is: this is
+    // the layer that knows where a log directory lives, and `wal/` may not
+    // open a file by core id. Absent with no directory - and a stream that
+    // then holds a prepared transaction refuses the mount rather than
+    // guessing at its outcome (`prepared_resolver.hpp`).
+    std::optional<CoordinatorStreamResolver> resolver;
+    if (!wal_dir.empty()) {
+        resolver.emplace(wal_dir, device.segment_size(), core_id, log);
+    }
+    auto report = wal::RecoverCore(device, core_id, store, start, &undo, clock,
+                                   resolver.has_value() ? &*resolver : nullptr);
     if (!report.ok()) {
         // Propagated, not logged-and-continued. The status already carries
         // the phase and the core (`recovery.cpp`), and RV1 makes it the
@@ -44,6 +57,9 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     out.pages_healed = report.value().redo.pages_healed;
     out.transactions_rolled_back = undo.transactions();
     out.compensations = undo.compensations();
+    out.prepared = report.value().prepared;
+    out.prepared_committed = report.value().prepared_committed;
+    out.prepared_aborted = report.value().prepared_aborted;
     out.page_floor = report.value().high_water.page_floor;
     out.page_floor_raised = report.value().high_water.page_floor_raised;
     out.next_trx_id = report.value().high_water.next_trx_id;
@@ -67,6 +83,13 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                           ", skipped-not-dirty " + std::to_string(out.redo_skipped_not_dirty) +
                           ", healed " + std::to_string(out.pages_healed) + " page(s); undo wrote " +
                           std::to_string(out.compensations) + " compensation(s)" +
+                          (out.prepared != 0
+                               ? "; " + std::to_string(out.prepared) +
+                                     " prepared transaction(s) resolved against their "
+                                     "coordinators (" +
+                                     std::to_string(out.prepared_committed) + " committed, " +
+                                     std::to_string(out.prepared_aborted) + " aborted)"
+                               : "") +
                           (out.torn_tail ? "; tail was torn" : "") +
                           (out.timings.timed
                                ? "; analysis " + std::to_string(out.timings.analysis_ns / 1000) +

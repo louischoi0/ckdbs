@@ -86,6 +86,51 @@ public:
     virtual Status RollBack(storage::PageStore& store, const AnalysisResult& analysis) = 0;
 };
 
+// **Where a prepared transaction's verdict comes from** (R6-4, D4).
+//
+// A `TxnOutcome::kPrepared` transaction is one this stream promised not to
+// decide: it made its work durable, replied prepared, and from that moment
+// may not abort unilaterally. Its outcome lives in exactly one stream - the
+// coordinator's - so recovery has to *ask*, and the asking is what this
+// interface is.
+//
+// An interface for `UndoPhase`'s reasons, and one more: the ask reaches
+// **another core's log**, which `wal/` cannot open on its own - the layout
+// of a log directory is `server/`'s. So the mechanism is here and the
+// lookup is injected, exactly as the undo phase is.
+//
+// **What it must not do**, stated because the temptation is the obvious
+// implementation: compare LSNs across streams. Two streams' LSNs are
+// incomparable (`workplan-crosscore.md` guideline 3), and no comparison is
+// needed - the verdict is a *lookup of one transaction id in one stream*,
+// and the participant's own records say what to redo. Two independent
+// reads, never an ordering.
+class PreparedResolver {
+public:
+    virtual ~PreparedResolver() = default;
+
+    // The verdict for one prepared transaction, which may only be:
+    //
+    //   - `kWinner`  - the coordinator's stream holds the COMMIT that
+    //                  decided it. This half stands; redo has already
+    //                  replayed it and undo must not touch it.
+    //   - `kLoser`   - the coordinator decided ABORT, or decided nothing at
+    //                  all before it stopped. Either way nothing committed
+    //                  anywhere, and undo owes this transaction its
+    //                  rollback.
+    //
+    // **Not `kAborted`**: that outcome means "already compensated by
+    // records in this stream", and a prepared participant wrote no
+    // compensations - it was waiting.
+    //
+    // A failure is a **refusal to mount**, not a default. Guessing either
+    // way is the one thing this protocol forbids: guessing commit publishes
+    // a transaction that may have aborted, guessing abort discards one the
+    // coordinator may have committed and told a client about.
+    virtual StatusOr<TxnOutcome> Resolve(std::uint64_t participant_txn_id,
+                                         const PreparedTxn& prepared) = 0;
+};
+
 // How long each phase took (`docs/spec/wal.md` §13's "recovery phase timings",
 // RC09). Zero throughout when no clock was supplied, which `timed` says
 // explicitly - an operator reading four zeroes must be able to tell "instant"
@@ -108,6 +153,14 @@ struct RecoveryReport {
     RedoStats redo;
     HighWaterRepair high_water;
     RecoveryTimings timings;
+
+    // What the resolution phase did (R6-4). `prepared` is what analysis
+    // found; the other two are how they resolved, and they sum to it. All
+    // three are 0 on every stream that never took part in a cross-owner
+    // transaction.
+    std::uint64_t prepared = 0;
+    std::uint64_t prepared_committed = 0;
+    std::uint64_t prepared_aborted = 0;
 
     // Whether an UndoPhase ran. False with no losers (nothing to do) and
     // false with none installed (in which case recovery failed and this
@@ -132,6 +185,11 @@ struct RecoveryReport {
 //     page reaches the end of the scan unhealed (`redo.hpp`);
 //   - the store cannot raise its allocation floor (`high_water.hpp`);
 //   - **analysis found losers and `undo` is null** - see above;
+//   - **analysis found prepared transactions and `resolver` is null**, or a
+//     resolution fails (R6-4): a prepared transaction handed to undo would
+//     be rolled back on a promise this core made not to decide, and one
+//     handed to nobody would be published uncommitted. Both are the same
+//     refusal as the loser case, one protocol up;
 //   - the undo phase itself fails.
 //
 // Every one of those is a refusal rather than a partial success, which is
@@ -144,6 +202,7 @@ struct RecoveryReport {
 StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                                      storage::PageStore& store, const AnalysisStart& start,
                                      UndoPhase* undo = nullptr,
-                                     const sched::Clock* clock = nullptr);
+                                     const sched::Clock* clock = nullptr,
+                                     PreparedResolver* resolver = nullptr);
 
 }  // namespace kds::wal

@@ -771,11 +771,15 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     //   - **no extent has been carved**, because the allocator's search hint
     //     must start above the floor recovery establishes (RC04's
     //     obligation 1, applied at StartPeers below).
+    // The wal dir goes in too (R6-4): core 0 is a participant like any
+    // other - a peer's client writes core-0-owned relations - so its stream
+    // can hold a prepared transaction whose verdict is in a peer's.
     auto recovered = RecoverCoreAtMount(/*core_id=*/0,
                                         expeditor->database_->superblock.wal_anchor(0),
                                         *expeditor->log_device_, *expeditor->store_,
                                         *expeditor->undo_log_, &*expeditor->wal_,
-                                        &*expeditor->logger_, &expeditor->clock_);
+                                        &*expeditor->logger_, &expeditor->clock_,
+                                        expeditor->config_.wal_dir);
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
 

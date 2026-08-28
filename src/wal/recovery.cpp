@@ -32,7 +32,8 @@ private:
 
 StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                                      storage::PageStore& store, const AnalysisStart& start,
-                                     UndoPhase* undo, const sched::Clock* clock) {
+                                     UndoPhase* undo, const sched::Clock* clock,
+                                     PreparedResolver* resolver) {
     RecoveryReport out;
     out.timings.timed = clock != nullptr;
 
@@ -45,6 +46,71 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                                              ": analysis");
     }
     out.analysis = analyzed.value();
+
+    // ---- 1a. Resolution: what a prepared transaction's coordinator said --
+    //
+    // **Before the loser refusal below, and before redo**, because it is
+    // what decides which set each prepared transaction joins - and it is
+    // read-only, so a mount that refuses here has written nothing.
+    //
+    // Two independent reads and no comparison (`PreparedResolver`): this
+    // stream's records say what to redo, the coordinator's say whether it
+    // was committed. Guideline 3 is not approached, let alone crossed.
+    out.prepared = out.analysis.prepared;
+    if (out.analysis.prepared != 0) {
+        if (resolver == nullptr) {
+            return Status::Unsupported(
+                "recovery of core " + std::to_string(core_id) + ": " +
+                std::to_string(out.analysis.prepared) +
+                " transaction(s) are prepared and undecided and no resolver is installed; this "
+                "core promised not to decide them, so it may neither roll them back nor "
+                "publish them (instructions/v2.4.0/2pc.md D4)");
+        }
+        for (const auto& [participant_txn_id, prepared] : out.analysis.prepared_txns) {
+            auto verdict = resolver->Resolve(participant_txn_id, prepared);
+            if (!verdict.ok()) {
+                // A refusal to mount, never a default. The message the
+                // resolver wrote says which core it could not ask and why.
+                return verdict.status().WithContext(
+                    "recovery of core " + std::to_string(core_id) +
+                    ": resolving prepared transaction " + std::to_string(participant_txn_id));
+            }
+            auto state = out.analysis.transactions.find(participant_txn_id);
+            if (state == out.analysis.transactions.end()) {
+                // Unreachable: `prepared_txns` is a subset of
+                // `transactions` by construction (analysis.cpp erases any
+                // entry whose transaction is not `kPrepared`). Refused
+                // rather than asserted, because the alternative is a
+                // transaction resolved into nothing.
+                return Status::Corruption(
+                    "recovery of core " + std::to_string(core_id) + ": prepared transaction " +
+                    std::to_string(participant_txn_id) + " has no analysis state");
+            }
+            switch (verdict.value()) {
+                case TxnOutcome::kWinner:
+                    state->second.outcome = TxnOutcome::kWinner;
+                    ++out.analysis.winners;
+                    ++out.prepared_committed;
+                    break;
+                case TxnOutcome::kLoser:
+                    state->second.outcome = TxnOutcome::kLoser;
+                    ++out.analysis.losers;
+                    ++out.prepared_aborted;
+                    break;
+                default:
+                    // `kAborted` would say "already compensated in this
+                    // stream", which a prepared participant never is, and
+                    // `kPrepared` would be the resolver answering the
+                    // question with itself.
+                    return Status::InvalidArgument(
+                        "recovery of core " + std::to_string(core_id) + ": the resolver of " +
+                        std::to_string(participant_txn_id) + " answered " +
+                        TxnOutcomeName(verdict.value()) +
+                        ", which is not a verdict a prepared transaction can take");
+            }
+            --out.analysis.prepared;
+        }
+    }
 
     // ---- The refusal, taken before a byte is written --------------------
     //

@@ -1206,16 +1206,20 @@ still waits on its own gate, so:
   cross-owner transaction** (2026-08-28, R6-3 at `63a0f43`). The row wrote
   the durable state - a TXN_PREPARE record naming the coordinator's
   `(core, session, transaction)`, synced before the participant replies
-  prepared - and **nothing reads it back yet**: analysis treats a record
-  whose envelope names a transaction as evidence that transaction existed,
-  so a prepared-but-undecided one is a loser and undo unwinds it at the next
-  mount, even where the coordinator's own stream holds the COMMIT that
-  decided it. **R6-4 is the row that resolves it** and is gated behind
-  nothing but its turn; the series ships as one at RP7's gate
-  (`instructions/v2.5.0/cross-owner-protocol.md` §5), so no build reaches an
-  operator with the prepare written and the recovery missing. Reachable
-  today only from a test: `MayShip` still refuses inside an explicit
-  transaction, so nothing enrols a participant on a live path until R6-8.
+  prepared - and nothing read it back, so a prepared-but-undecided
+  transaction was a loser and undo unwound it at the next mount, even where
+  the coordinator's own stream held the COMMIT that decided it.
+  **Fixed 2026-08-28 by R6-4**: analysis has a fourth outcome
+  (`TxnOutcome::kPrepared`), and a mount resolves each such transaction
+  against its coordinator's stream before redo - a lookup of one
+  transaction id in one file, never a cross-stream comparison. A committed
+  verdict leaves the transaction standing; an aborted one, or a coordinator
+  stream that holds no decision at all, hands it to undo. A mount that
+  cannot read the answer - no resolver installed, the coordinator's stream
+  absent - **refuses** rather than guessing.
+  Reachable only from a test either way until R6-8: `MayShip` still refuses
+  inside an explicit transaction, so nothing enrols a participant on a live
+  path.
 - **Nothing reclaims a shipped statement's waiter if its coroutine is
   destroyed rather than completed** (Part A, 2026-08-26).
   `StatementShipClient::Close` is reached only from

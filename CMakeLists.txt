@@ -45,6 +45,7 @@ add_library(kds
     src/server/remote_checkpoint_anchor.cpp
     src/server/core_runtime.cpp
     src/server/mount_recovery.cpp
+    src/server/prepared_resolver.cpp
     src/server/stop_signal.cpp
     src/exec/assertion_recover.cpp
     src/server/core_affinity.cpp

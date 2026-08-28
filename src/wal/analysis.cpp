@@ -12,6 +12,7 @@ const char* TxnOutcomeName(TxnOutcome outcome) noexcept {
         case TxnOutcome::kWinner: return "winner";
         case TxnOutcome::kAborted: return "aborted";
         case TxnOutcome::kLoser: return "loser";
+        case TxnOutcome::kPrepared: return "prepared";
     }
     return "?";
 }
@@ -53,9 +54,20 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         }
         out.max_txn_id = std::max(out.max_txn_id, txn_id);
         auto [it, inserted] = out.transactions.emplace(txn_id, TxnState{outcome, 0});
-        if (!inserted && outcome != TxnOutcome::kLoser) {
-            it->second.outcome = outcome;
+        if (inserted || outcome == TxnOutcome::kLoser) {
+            return;
         }
+        // **`kPrepared` is the one outcome that may not overwrite**, and
+        // the asymmetry is the point: a terminal record is this stream's
+        // own decision and outranks a promise made before it. The scan is
+        // forward, so a prepare cannot legally follow a commit for the same
+        // id - it could only arrive that way through id reuse, which the
+        // persisted trx-id ceiling forecloses - and this is what keeps a
+        // decided transaction from being re-opened if it ever did.
+        if (outcome == TxnOutcome::kPrepared && it->second.outcome != TxnOutcome::kLoser) {
+            return;
+        }
+        it->second.outcome = outcome;
     };
 
     // RV10's chain head. Always overwritten rather than kept, because the
@@ -155,6 +167,35 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                 // redo will replay them. Not a loser (analysis.hpp).
                 note_txn(record.header.txn_id, TxnOutcome::kAborted);
                 break;
+            case RecordType::kTxnPrepare: {
+                // **R6-4: this core promised not to decide.** The outcome
+                // is provisional and stays so until a resolver reads the
+                // coordinator's stream; a TXN_COMMIT or TXN_ABORT later in
+                // *this* scan overrides it, which is the participant's own
+                // decided end and needs no resolution at all.
+                auto decoded = DecodeTxnPrepare(record.payload);
+                if (!decoded.ok()) {
+                    return decoded.status();
+                }
+                if (record.header.txn_id == kNoTxnId) {
+                    // The envelope's id is the participant's own local
+                    // transaction (D2) and is what everything downstream
+                    // keys on. A prepare that names none describes no
+                    // transaction to resolve.
+                    return Status::Corruption(
+                        "wal analysis: TXN_PREPARE at lsn " +
+                        std::to_string(record.header.lsn) +
+                        " belongs to no transaction; a prepare is a promise about a "
+                        "transaction this stream holds");
+                }
+                note_txn(record.header.txn_id, TxnOutcome::kPrepared);
+                PreparedTxn& prepared = out.prepared_txns[record.header.txn_id];
+                prepared.coordinator_core = decoded.value().coordinator_core;
+                prepared.coordinator_session_id = decoded.value().coordinator_session_id;
+                prepared.coordinator_txn_id = decoded.value().coordinator_txn_id;
+                prepared.prepare_lsn = record.header.lsn;
+                break;
+            }
             case RecordType::kCheckpointBegin: {
                 // The seed: both tables as they stood when the checkpoint
                 // began. This is why the record is written at all, and why
@@ -226,6 +267,21 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
             case TxnOutcome::kWinner: ++out.winners; break;
             case TxnOutcome::kAborted: ++out.aborted; break;
             case TxnOutcome::kLoser: ++out.losers; break;
+            case TxnOutcome::kPrepared: ++out.prepared; break;
+        }
+    }
+    // A transaction whose scan ended in a terminal record is decided, and
+    // its prepare is then history rather than an open question - so the
+    // entry goes, and `prepared_txns` holds exactly the `kPrepared` set
+    // that `RecoverCore` must resolve. Erasing here rather than at the
+    // terminal record keeps the scan a single forward pass with no
+    // look-behind.
+    for (auto it = out.prepared_txns.begin(); it != out.prepared_txns.end();) {
+        auto state = out.transactions.find(it->first);
+        if (state != out.transactions.end() && state->second.outcome == TxnOutcome::kPrepared) {
+            ++it;
+        } else {
+            it = out.prepared_txns.erase(it);
         }
     }
     return out;
