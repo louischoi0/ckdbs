@@ -118,6 +118,63 @@ TEST(UndoPageTest, ADeleteMarkCarriesNoImage) {
     EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
 }
 
+// **Every type the enum names must be writable.** The appender carries its
+// own list of accepted types, and a type missing from it is a record
+// nothing can write - the failure `wal::kMaxAssignedRecordType` shipped
+// once (record.hpp) and that `kVarHeapAppend` reproduced here, caught by
+// `ckdbs-sim` at seed 4 rather than by this file. So the assertion is the
+// whole enum, not one new member.
+TEST(UndoPageTest, EveryNamedRecordTypeIsWritable) {
+    PageBuf buf{};
+    ASSERT_TRUE(FormatUndoPage(AsSpan(buf), 91, kInvalidPageId).ok());
+
+    for (UndoRecordType type : {UndoRecordType::kOverwrite, UndoRecordType::kDeleteMark,
+                                UndoRecordType::kInsert, UndoRecordType::kVarHeapAppend}) {
+        UndoRecordFields r = OverwriteRecord(77, kNoUndoPtr);
+        r.type = static_cast<std::uint8_t>(type);
+        const std::vector<std::byte> image =
+            type == UndoRecordType::kOverwrite ? BytesOf("prior") : std::vector<std::byte>{};
+
+        auto offset = UndoPageAppend(AsSpan(buf), r, image);
+        ASSERT_TRUE(offset.ok()) << "type " << static_cast<int>(type) << ": "
+                                 << offset.status().message();
+        auto read = UndoPageRead(AsConstSpan(buf), offset.value());
+        ASSERT_TRUE(read.ok());
+        EXPECT_EQ(read.value().fields.type, static_cast<std::uint8_t>(type));
+    }
+
+    // And a number the enum does not name is still refused, so the list is
+    // a whitelist rather than a formality.
+    UndoRecordFields bogus = OverwriteRecord(77, kNoUndoPtr);
+    bogus.type = 99;
+    EXPECT_FALSE(UndoPageAppend(AsSpan(buf), bogus, {}).ok());
+
+    // **The write side and the read side must agree**, which they did not
+    // when each carried its own list: kVarHeapAppend was admitted by the
+    // appender and then refused by the decoder, so recovery failed on a
+    // record the engine had just written. They share `IsWritableUndoRecordType`
+    // now, and this asserts the property rather than the implementation.
+    EXPECT_TRUE(IsWritableUndoRecordType(static_cast<std::uint8_t>(UndoRecordType::kOverwrite)));
+    EXPECT_TRUE(IsWritableUndoRecordType(static_cast<std::uint8_t>(UndoRecordType::kDeleteMark)));
+    EXPECT_TRUE(IsWritableUndoRecordType(static_cast<std::uint8_t>(UndoRecordType::kInsert)));
+    EXPECT_TRUE(
+        IsWritableUndoRecordType(static_cast<std::uint8_t>(UndoRecordType::kVarHeapAppend)));
+    EXPECT_FALSE(IsWritableUndoRecordType(static_cast<std::uint8_t>(UndoRecordType::kInvalid)));
+    EXPECT_FALSE(IsWritableUndoRecordType(99));
+}
+
+TEST(UndoPageTest, AVarHeapAppendCarriesNoImage) {
+    // It supersedes nothing - releasing the slot is the whole
+    // compensation - so like a delete-mark and an insert it has no
+    // before-image, and one supplied anyway is refused.
+    PageBuf buf{};
+    ASSERT_TRUE(FormatUndoPage(AsSpan(buf), 91, kInvalidPageId).ok());
+
+    UndoRecordFields r = OverwriteRecord(77, kNoUndoPtr);
+    r.type = static_cast<std::uint8_t>(UndoRecordType::kVarHeapAppend);
+    EXPECT_FALSE(UndoPageAppend(AsSpan(buf), r, BytesOf("nothing reads this")).ok());
+}
+
 TEST(UndoPageTest, RecordsChainByPriorUndoPtr) {
     PageBuf buf{};
     ASSERT_TRUE(FormatUndoPage(AsSpan(buf), 91, kInvalidPageId).ok());

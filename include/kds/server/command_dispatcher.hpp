@@ -1355,6 +1355,23 @@ private:
     // `owner_oid` (page.md §2a): the target relation's oid, carried by any
     // PAGE_INIT this insert emits so redo re-stamps what the live path
     // stamped.
+    // Gives every spilled value a rollback: one undo record per spill, in
+    // the writing transaction's chain, plus the trail entry a live Abort
+    // reads. Both compensate by releasing the slot.
+    //
+    // **Called before whatever logs the VARHEAP_APPENDs**, because an
+    // UNDO_WRITE must precede the record it can undo - RV3's rule for
+    // catalog writes, for the same reason: redo alone must never resurrect
+    // an append the undo phase has no record to release.
+    //
+    // A scope with no transaction records nothing, which is the pre-existing
+    // unowned path (a dispatcher built without a manager, and the
+    // `kNoTxnId` writes `LogChainInsert` makes for sys.pattern_defs and the
+    // assertion catalog). Those spills still leak on rollback, and that is
+    // stated in `workplan-varchar-char.md` rather than silently true.
+    Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t pk,
+                      const std::vector<exec::AppendedSpill>& spills);
+
     Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      std::uint64_t owner_oid,

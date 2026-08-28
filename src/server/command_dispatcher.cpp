@@ -3521,6 +3521,20 @@ Status CommandDispatcher::AwaitDdlDurability() {
 }
 
 
+Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_oid,
+                                     std::uint64_t pk,
+                                     const std::vector<exec::AppendedSpill>& spills) {
+    if (scope.txn == nullptr) return Status::OK();
+    for (const exec::AppendedSpill& spill : spills) {
+        if (Status s = txn_->NoteVarHeapAppend(*scope.txn, rel_oid, spill.ptr.page_id,
+                                                spill.ptr.slot, pk);
+            !s.ok()) {
+            return s;
+        }
+    }
+    return Status::OK();
+}
+
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
                                     std::uint64_t owner_oid,
@@ -4388,12 +4402,11 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // spillable schemas, so the sink is never reached.
     std::vector<std::vector<std::byte>> payloads;
     payloads.reserve(stmt.rows.size());
-    std::vector<exec::AppendedSpill> no_spills;
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         auto encoded =
             exec::EncodeRow(ta.schema, ta.layout, first.value() + k, stmt.rows[k],
-                            exec::VarHeapSink{&page_store_, ta.varheap_page_id, &no_spills,
-                                              ta.oid});
+                            exec::VarHeapSink{&page_store_, ta.varheap_page_id,
+                                              /*appended=*/nullptr, ta.oid});
         if (!encoded.ok()) {
             return {"ERR " + encoded.status().message() + " (row " + std::to_string(k + 1) + ")",
                     false};
@@ -4688,6 +4701,15 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
     }
+
+    // The spills, **after** the row's own record and not before it. The
+    // only ordering this owes is "before `LogInsert` writes the
+    // VARHEAP_APPENDs"; putting it here shortens the window in which the
+    // tuple sits in the page with no trail entry naming it, which is a row
+    // a rollback would not undo. `Abort` has no suspension point, so
+    // reversing the trail's order relative to the two writes is
+    // unobservable.
+    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return ErrorReply(s);
 
     // Logged after the page is mutated and before the client is answered -
     // see the ordering note in this class's header for why that is safe
@@ -6413,17 +6435,23 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // an UPDATE that spilled a value wrote the bytes into a var-heap page
         // and told the log nothing, leaving a recovered tuple whose cell
         // points at bytes no record describes (`docs/inflight/known-gaps.md`'s var-heap
-        // entry, hole 3). Collected only when there is a log to write them to,
-        // the same condition the index half above uses.
+        // entry, hole 3).
+        //
+        // Collected when there is a log to write them to **or a transaction
+        // to roll them back** - the second half added with VC-B3, because a
+        // live Abort needs the trail entry whether or not anything is
+        // logged, and an unlogged dispatcher that dropped the collector
+        // would leak every value a rolled-back UPDATE spilled.
         //
         // `appended_spills`, not `spills`: the enclosing scope already has a
         // `PendingSpill` list, which is the opposite direction - values this
         // statement *read* out of the var-heap to evaluate the WHERE clause.
         std::vector<exec::AppendedSpill> appended_spills;
+        const bool collect_spills = wal_ != nullptr || scope.txn != nullptr;
         auto encoded = exec::EncodeRow(
             ta.schema, ta.layout, id.value(), body,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
-                              wal_ != nullptr ? &appended_spills : nullptr, ta.oid});
+                              collect_spills ? &appended_spills : nullptr, ta.oid});
         if (!encoded.ok()) return encoded.status();
 
         // HOT-style in-place overwrite - see PageView::OverwriteTuple's
@@ -6527,6 +6555,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // never reach a pointer that resolves to nothing, and a version no
         // index entry names is a row a probe cannot find
         // (docs/spec/index.md §12.1).
+        // Each spill's rollback, before the records that make the spill
+        // durable: an UNDO_WRITE must precede the VARHEAP_APPEND it can
+        // undo, so redo alone can never resurrect an append the undo phase
+        // has no record to release (RV3's ordering rule, wal.md §11a).
+        // Outside the logging gate below because the trail entry is what a
+        // *live* Abort reads, and that is owed whether or not there is a log.
+        if (Status s = NoteSpills(scope, ta.oid, id.value(), appended_spills); !s.ok()) {
+            return s;
+        }
+
         if (wal_ != nullptr && scope.txn != nullptr) {
             // The var-heap first, for the reason the comment above gives and
             // INSERT already obeyed: the cell in the tuple record below points

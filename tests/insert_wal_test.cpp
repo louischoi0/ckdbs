@@ -373,6 +373,88 @@ TEST_F(InsertWalTest, ASpilledValueIsLoggedBeforeTheTupleThatPointsAtIt) {
     EXPECT_LT(vh, insert) << "VARHEAP_APPEND must precede the HEAP_INSERT pointing at it";
 }
 
+TEST_F(InsertWalTest, ASpilledValuesUndoRecordPrecedesItsAppend) {
+    // **The other ordering, and the one VC-B3 added.** An UNDO_WRITE must
+    // precede the VARHEAP_APPEND it can undo, so redo alone can never
+    // resurrect an append the undo phase has no record to release - RV3's
+    // rule for catalog writes, reached from the same direction.
+    //
+    // Needs the transactional dispatcher: the undo record is written under
+    // `scope.txn`, and a dispatcher with no manager has no transaction to
+    // chain it to (which is the pre-existing unowned path, stated in
+    // workplan-varchar-char.md, not a case this asserts).
+    CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
+
+    // **Scoped to the INSERT's own records**, the way this file's first
+    // test scopes its count. CREATE TABLE runs under a transaction of its
+    // own and writes four UNDO_WRITEs, so a search from the log's start
+    // satisfies the ordering below with a record the INSERT never wrote -
+    // which it did, and the assertion held with `NoteSpills` deleted.
+    const std::size_t before = RecordTypes().size();
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('" + std::string(500, 'u') + "')")
+                  .response.substr(0, 8),
+              "INSERTED");
+
+    std::vector<wal::RecordType> types = RecordTypes();
+    auto index_of = [&](wal::RecordType type) -> std::size_t {
+        for (std::size_t i = before; i < types.size(); ++i) {
+            if (types[i] == type) return i;
+        }
+        return types.size();
+    };
+
+    const std::size_t undo = index_of(wal::RecordType::kUndoWrite);
+    const std::size_t vh = index_of(wal::RecordType::kVarHeapAppend);
+    ASSERT_LT(undo, types.size()) << "the spill wrote no undo record";
+    ASSERT_LT(vh, types.size()) << "the value spilled but no VARHEAP_APPEND was logged";
+    EXPECT_LT(undo, vh) << "UNDO_WRITE must precede the VARHEAP_APPEND it can release";
+
+    // **Two**, and the count is what makes the ordering above a statement
+    // about the *spill's* record: the insert writes one of its own (RV10),
+    // so with a single UNDO_WRITE here the ordering would be that one's and
+    // would still hold with nothing noting the spill.
+    const std::vector<wal::RecordType> tail(
+        types.begin() + static_cast<std::ptrdiff_t>(before), types.end());
+    EXPECT_EQ(CountOf(tail, wal::RecordType::kUndoWrite), 2u)
+        << "one undo record for the spill and one for the insert";
+}
+
+TEST_F(InsertWalTest, AnUpdatesSpillIsNotedAndItsUndoRecordPrecedesItsAppend) {
+    // The UPDATE side of the same ordering, and the path phase B changed
+    // more: its spill collector used to be gated on `wal_ != nullptr`
+    // alone, so an unlogged dispatcher noted nothing and a rolled-back
+    // UPDATE leaked every value it spilled.
+    CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('short')").response.substr(0, 8), "INSERTED");
+
+    const std::size_t before = RecordTypes().size();
+    ASSERT_EQ(d.Dispatch("UPDATE t SET s = '" + std::string(500, 'w') + "' WHERE id = 1")
+                  .response.substr(0, 7),
+              "UPDATED");
+
+    std::vector<wal::RecordType> types = RecordTypes();
+    const std::vector<wal::RecordType> tail(
+        types.begin() + static_cast<std::ptrdiff_t>(before), types.end());
+    auto index_in_tail = [&](wal::RecordType type) -> std::size_t {
+        for (std::size_t i = 0; i < tail.size(); ++i) {
+            if (tail[i] == type) return i;
+        }
+        return tail.size();
+    };
+
+    // Two undo records: the before-image, and the spill's. One would mean
+    // the spill was not noted, and the ordering below would be the
+    // before-image's rather than a statement about the spill.
+    EXPECT_EQ(CountOf(tail, wal::RecordType::kUndoWrite), 2u)
+        << "one undo record for the before-image and one for the spill";
+    ASSERT_LT(index_in_tail(wal::RecordType::kVarHeapAppend), tail.size())
+        << "the value spilled but no VARHEAP_APPEND was logged";
+    EXPECT_LT(index_in_tail(wal::RecordType::kUndoWrite),
+              index_in_tail(wal::RecordType::kVarHeapAppend));
+}
+
 TEST_F(InsertWalTest, GrowingTheVarHeapChainLogsTheNewPageAndTheLinkThatReachesIt) {
     // The hole recovery walked into. `varheap::ChainAppend` grows a chain
     // through the store's plain allocation path, and a VARHEAP_APPEND says

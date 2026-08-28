@@ -41,6 +41,11 @@
 // and the undo record has no `rel_oid` - there is no room for one and
 // `page.md` has no page->relation index to derive it from.
 //
+// **One record type is outside this argument entirely**: kVarHeapAppend
+// names a var-heap slot, not a row, so there is no pk at the address and
+// no locator question to answer. It is compensated before the page is
+// opened as a heap page at all, and releasing the slot is the whole of it.
+//
 // So recovery takes the **no-locator branch** the live path already ships:
 // check the pk at the address, and on a mismatch **fail the mount** rather
 // than compensate a row this transaction never wrote. Narrow in practice -

@@ -204,11 +204,108 @@ name for the threshold exists anywhere in the diff. Findings applied:
 
 | row | what | state |
 |---|---|---|
-| VC-B1 | `kVarHeapAppend` (undo, trail), `kVarHeapRelease` (WAL) + the `kMaxAssignedRecordType` move | ☐ |
-| VC-B2 | `PageRelease`, `PageLiveSlots`, `NotFound` on a tombstone, redo | ☐ |
-| VC-B3 | the append's undo record and trail entry; `Compensate`; `RecoveryUndo` | ☐ |
-| VC-B4 | the ownership fact, pinned | ☐ |
-| VC-B5 | phase B prose | ☐ |
+| VC-B1 | `kVarHeapAppend` (undo, trail), `kVarHeapRelease` (WAL) + the `kMaxAssignedRecordType` move | ☑ |
+| VC-B2 | `PageRelease`, `PageLiveSlots`, `NotFound` on a tombstone, redo | ☑ |
+| VC-B3 | the append's undo record and trail entry; `Compensate`; `RecoveryUndo` | ☑ |
+| VC-B4 | the ownership fact, pinned | ☑ `tests/varheap_lifetime_test.cpp` |
+| VC-B5 | phase B prose | ☑ `txn.md` §3.3/§6, `wal.md` §11a, `rule-fixed-length-tuple.md` §5, `heap-and-tuple.md` §3.4, `recovery_undo.hpp`, `varheap.hpp`, `undo_page.hpp` |
+
+### What phase B found that the order did not predict
+
+**A second whitelist, and the sim found it.** `UndoRecordType` had its
+accepted-type list written out twice — once in `UndoPageAppend`, once in
+`UndoPageRead` — so `kVarHeapAppend` was refused on write ("undo record
+type 4 is not a writable type", `ckdbs-sim` seed 4, op 28), and after that
+was fixed in isolation the *decoder* refused the record the engine had just
+written, failing a recovery. This is `wal::kMaxAssignedRecordType`'s
+failure one layer down, and it is now one predicate,
+`IsWritableUndoRecordType`, consulted by both sides, with a test asserting
+they agree rather than asserting either list.
+
+**The UPDATE path collected spills only when there was a WAL.** The trail
+entry a live `Abort` reads is owed whether or not anything is logged, so
+an unlogged dispatcher would have leaked every value a rolled-back UPDATE
+spilled. The collector's condition is now `wal_ != nullptr || scope.txn != nullptr`.
+
+**A stated gap, not closed by phase B**: a spill logged with `kNoTxnId` —
+`LogChainInsert`'s path, used by `sys.pattern_defs` and the assertion
+catalog — has no transaction to chain an undo record to, so a rolled-back
+`CREATE PATTERN`'s spilled body text still leaks. It leaked before this
+work too; VC-C7's mount-time sweep is what would collect it.
+
+### Phase B's review, and what it changed
+
+`critics-developer`, run against the finished phase B and asked
+specifically to attack the ownership premise. **It could not break it** —
+`EncodeRow` never dedups, UPDATE resolves spilled cells to full strings
+before re-encoding, the bulk fast path is gated by
+`varheap_page_id == kInvalidPageId`, leaf division and relayout move a
+version rather than duplicating it, and statement shipping re-parses text
+on the owner. No double-free path exists. What it did find:
+
+- **A silent heap-corruption hole in `PageRelease`** (fixed by the
+  reviewer). A heap page carries `nr_slots` at the *same body offset* the
+  var-heap does, so a release naming a heap page passed the slot bound and
+  wrote two zero bytes over `min_key` or a slot pointer — invariant 2,
+  broken silently, in the one undo type that skips the pk identity check
+  saving every other type from a mis-addressed record. `PageWriteAt` had
+  the identical hole and now carries the same guard.
+- **The ordering test was vacuous** (fixed by the reviewer, then extended).
+  `CREATE TABLE` writes four `UNDO_WRITE`s of its own, so a search from the
+  log's start satisfied "UNDO_WRITE before VARHEAP_APPEND" using records
+  the INSERT never wrote — proven by deleting `NoteSpills` and watching it
+  still pass. It is scoped to the statement's own records now, with a count
+  assertion, because the ordering alone is still satisfiable by the
+  insert's own record. The UPDATE path gained the equivalent test.
+- **`heap-and-tuple.md` §3.4 still carried the claim phase B falsified.**
+  Its rules-file sibling was amended and the spec's own ordering bullet was
+  not — and `CLAUDE.md` says the spec outranks the rules file, so the
+  authoritative document contradicted both the code and its own rules file.
+- **A mount failure the sim structurally cannot catch** (finding 4, fixed
+  here). Phase B's own ordering puts the `UNDO_WRITE` *before* the
+  `PAGE_INIT`/`VARHEAP_APPEND`, so a log whose readable prefix ends between
+  them leaves the loser's chain naming a slot redo never created, and
+  `PageRelease`'s Corruption propagated to a refused mount. An append that
+  was never redone has nothing to undo: it counts as `already_done_`. The
+  `kInsert` twin of this is **left alone and recorded in `known-gaps.md`** —
+  same shape, but changing recovery semantics for a record type that
+  predates this work does not belong inside its review.
+- **The INSERT path's failure window**, narrowed: `NoteSpills` sat between
+  the tuple landing in the page and its own `AppendUndo`/`NoteInsert`, so a
+  failure there left a row no rollback would undo. It runs after
+  `NoteInsert` now; the only ordering it owes is "before `LogSpills`".
+
+Simplifications applied: `VarHeapReleasePayload` lost its `reserved` field
+(2 bytes, `SLOT_RETIRE`-shaped, and nothing follows it to align); the
+release-and-log block, written twice and about to be written a third time
+by phase C's drain, is one `txn::ReleaseVarHeapSlot`; the undo record moved
+into `TransactionManager::NoteVarHeapAppend`, so the chain link lives in
+the class that owns the chain; ~40 lines of comment that restated one
+claim in six places reduced to citations. Kept against the review's
+suggestion: nothing — every finding was applied or recorded.
+
+### Phase C landmines, recorded before they are hit
+
+Found by phase B's review; each is a rule phase C must state or a check it
+must carry.
+
+1. **Index covered-column entries hold spill pointers.** Phase C multiplies
+   the dangling-pointer case from "rolled-back rows" to "every superseded
+   version". Harmless while nothing follows them; `docs/spec/index.md` §13
+   now records it as a second gate on the index-only scan.
+2. **`PageRelease` refuses `slot >= nr_slots`.** A recycle resets
+   `nr_slots` to 0, so any queued release outstanding across a recycle of
+   its page becomes a failure. **The queue must be purged of a page's
+   entries when that page is recycled** — with `ReleaseOutcome`'s
+   `kNothingToRelease` as the fallback if one is missed.
+3. **`PageLiveSlots() == 0` is true of a fresh page too.** The recycle
+   predicate is `PageSlotCount() > 0 && PageLiveSlots() == 0`; the header
+   says so and the function cannot.
+4. **`kOverwrite`'s undo image carries the old version's spill pointer.** A
+   superseded slot dies when its undo record becomes unreachable, which
+   coincides with the writer falling below `ReadHorizon()` **because of**
+   the undo purge's soundness fact — cite `workplan-undo-purge.md`, do not
+   re-derive it.
 
 ### Phase C — reclaim
 

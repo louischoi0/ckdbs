@@ -1805,6 +1805,39 @@ All fixed by `b11cc81`; the suite is green.
   both sources. `varchar(N)` declares that column's `kds.inline_cell_width`;
   `ALTER … WIDEN` stays refused, on the corrected reason (a cell width is
   part of the row-size constant, so changing it rewrites every row).
+- **Recovery's undo phase refuses the mount when a loser's `kInsert` record
+  names a slot redo never created.** `RecoveryUndo::Compensate`'s
+  already-done branch (`src/txn/recovery_undo.cpp`) covers only *slot inside
+  the directory, reads back nothing*; a slot **past** the directory falls
+  through to the identity check and fails the mount with "row id N is no
+  longer at page P slot S". That state is legitimate: an `UNDO_WRITE` is
+  written before the `HEAP_INSERT` it can undo, so a log whose readable
+  prefix ends between them leaves the chain naming a slot that was never
+  created. An insert that was not redone has nothing to retire.
+
+  **The var-heap twin of this was fixed 2026-08-28** — `kVarHeapAppend`
+  counts a missing slot or a missing page as `already_done_` — and the
+  reviewer of that work identified the `kInsert` case as the same shape,
+  recommending one answer for both. It was **deliberately not changed
+  there**: it is a recovery-semantics change for a record type that
+  predates the work, and making it inside another feature's review is how a
+  review stops being one. The proposed answer is the same one
+  `kVarHeapAppend` took.
+
+  Neither case is reachable by `ckdbs-sim`: `MemoryLogDevice::Crash()` drops
+  everything since the last `Sync`, and `sim/faults.hpp` records that torn
+  injection waits on a `Crash(prefix)` primitive that does not exist. **171
+  green sim runs are not evidence about this.**
+
+- **A rolled-back spill made with `kNoTxnId` leaks.** `exec::LogChainInsert`
+  logs its spills under `kNoTxnId` — the path `sys.pattern_defs` and the
+  assertion catalog use — so there is no transaction to chain an undo
+  record to and no compensation. A rolled-back `CREATE PATTERN`'s spilled
+  body text stays in the var-heap. Pre-existing in effect (nothing
+  reclaimed anything before 2026-08-28); what is new is that every *other*
+  spill is now released, so this is the remaining hole rather than the
+  general case. A mount-time sweep collects it.
+
 - **`decimal128(p, s)` cannot be written**, though
   `src/server/command_dispatcher.cpp`'s CREATE TABLE comment says it can:
   *"Writing `decimal128(p, s)` names the wide type directly and its bounds

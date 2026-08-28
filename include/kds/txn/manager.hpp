@@ -93,6 +93,11 @@ enum class TrailAction : std::uint8_t {
     kInsert = 1,      // compensated by RetireSlot
     kOverwrite = 2,   // compensated by putting `image` back
     kDeleteMark = 3,  // compensated by clearing the mark
+    // A value spilled into the var-heap; compensated by releasing its slot.
+    // `page_id`/`slot` name a **kVarHeap** page, not a heap one - so this
+    // entry skips the row-identity probe every other action is compensated
+    // under, because there is no row at the address to probe.
+    kVarHeapAppend = 4,
 };
 
 struct TrailEntry {
@@ -102,8 +107,8 @@ struct TrailEntry {
     std::uint16_t slot = 0;
     std::uint64_t pk = 0;
 
-    // The header to restore. For an insert these are meaningless and the
-    // slot is retired instead.
+    // The header to restore. For an insert, and for a var-heap append,
+    // these are meaningless - the slot is retired or released instead.
     std::uint64_t prior_trx_id = 0;
     std::uint64_t prior_undo_ptr = kNoUndoPtr;
 
@@ -368,6 +373,24 @@ public:
     void NoteOverwrite(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
                        std::uint16_t slot, std::uint64_t pk, std::uint64_t prior_trx_id,
                        std::uint64_t prior_undo_ptr, std::span<const std::byte> image);
+    // Records a var-heap append so a rollback can release the slot it
+    // wrote: **the undo record and the trail entry both**, which is why
+    // this one returns a Status where its three siblings return void.
+    //
+    // `page_id`/`slot` are the **var-heap** address the tuple's cell now
+    // points at, and `pk` the row that pointed there - carried for the
+    // diagnostic, never for an identity check, since a var-heap slot has no
+    // Keystone word to check against.
+    //
+    // It writes the record here rather than leaving it to the caller for
+    // the reason `AppendUndo` exists at all: an undo record is a link in
+    // the transaction's chain (RV10), and a caller that appended the trail
+    // entry and forgot the record would break the chain in a way nothing
+    // notices until a crash. The three heap actions predate that argument
+    // and still split the two calls; this one does not have to.
+    Status NoteVarHeapAppend(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
+                             std::uint16_t slot, std::uint64_t pk);
+
     void NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
                         std::uint16_t slot, std::uint64_t pk, std::uint64_t prior_trx_id,
                         std::uint64_t prior_undo_ptr);

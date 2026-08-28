@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -147,6 +148,149 @@ TEST(VarHeapPageTest, AnOutOfRangeSlotIsCorruption) {
 
     EXPECT_EQ(PageRead(AsConst(buf), 1).status().code(), StatusCode::kCorruption);
     EXPECT_EQ(PageRead(AsConst(buf), 9999).status().code(), StatusCode::kCorruption);
+}
+
+// ---- Release (VC-B2) -----------------------------------------------------
+//
+// The one operation that ends a value. Every test here defends a property
+// the lifetime model leans on, not just the mechanics.
+
+TEST(VarHeapPageTest, ReleaseTombstonesExactlyOneSlot) {
+    PageBuf buf{};
+    ASSERT_TRUE(FormatPage(AsSpan(buf)).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("first")).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("second")).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("third")).ok());
+
+    ASSERT_TRUE(PageRelease(AsSpan(buf), 1).ok());
+
+    EXPECT_EQ(PageRead(AsConst(buf), 1).status().code(), StatusCode::kNotFound);
+    // Its neighbours are untouched - a release is not a compaction.
+    auto first = PageRead(AsConst(buf), 0);
+    ASSERT_TRUE(first.ok());
+    EXPECT_EQ(TextOf(first.value()), "first");
+    auto third = PageRead(AsConst(buf), 2);
+    ASSERT_TRUE(third.ok());
+    EXPECT_EQ(TextOf(third.value()), "third");
+
+    EXPECT_EQ(PageLiveSlots(AsConst(buf)), 2);
+    // The directory does not shrink: slots stay dense, so the count of
+    // slots and the count of *live* slots are different questions.
+    EXPECT_EQ(PageSlotCount(AsConst(buf)), 3);
+}
+
+TEST(VarHeapPageTest, AReleasedSlotReadsAsNotFoundRatherThanCorruption) {
+    // The status is the contract, not a detail: under the lifetime model no
+    // live traversal reaches a tombstone, so a checker that meets one is
+    // looking at an expected death and must not report damage.
+    PageBuf buf{};
+    ASSERT_TRUE(FormatPage(AsSpan(buf)).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("doomed")).ok());
+    ASSERT_TRUE(PageRelease(AsSpan(buf), 0).ok());
+
+    EXPECT_EQ(PageRead(AsConst(buf), 0).status().code(), StatusCode::kNotFound);
+    // A slot that never existed is still Corruption - the two are not the
+    // same answer and must not collapse into one.
+    EXPECT_EQ(PageRead(AsConst(buf), 1).status().code(), StatusCode::kCorruption);
+}
+
+TEST(VarHeapPageTest, ReleaseIsIdempotent) {
+    // What makes it legal as a rollback compensation and as a redo
+    // application: a crash mid-rollback replays a prefix of the
+    // compensations, and every one of them must be a no-op the second time
+    // (recovery_undo.hpp - no CLR).
+    PageBuf buf{};
+    ASSERT_TRUE(FormatPage(AsSpan(buf)).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("doomed")).ok());
+
+    ASSERT_TRUE(PageRelease(AsSpan(buf), 0).ok());
+    const PageBuf once = buf;
+    ASSERT_TRUE(PageRelease(AsSpan(buf), 0).ok());
+    EXPECT_EQ(std::memcmp(buf.data(), once.data(), buf.size()), 0)
+        << "a second release changed the page";
+}
+
+TEST(VarHeapPageTest, AReleaseLeavesTheValueBytesUntouched) {
+    // Invariant 14, literally. A released value is *dead*, not moved and
+    // not overwritten: the release writes a slot, and the page's value
+    // region is byte-identical across it.
+    PageBuf buf{};
+    ASSERT_TRUE(FormatPage(AsSpan(buf)).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("the bytes that stay")).ok());
+
+    auto before = PageRead(AsConst(buf), 0);
+    ASSERT_TRUE(before.ok());
+    const std::size_t value_at = static_cast<std::size_t>(before.value().data() - buf.data());
+    const std::size_t value_len = before.value().size();
+    const PageBuf snapshot = buf;
+
+    ASSERT_TRUE(PageRelease(AsSpan(buf), 0).ok());
+
+    EXPECT_EQ(std::memcmp(buf.data() + value_at, snapshot.data() + value_at, value_len), 0)
+        << "the release moved or rewrote the value's bytes";
+}
+
+TEST(VarHeapPageTest, ReleasingASlotOnAPageThatIsNotAVarHeapPageIsCorruption) {
+    // Not a formality. A heap page carries `nr_slots` at the *same* body
+    // offset this file reads, so without the page-type check a
+    // mis-addressed release passes the bound test and writes two zero bytes
+    // over `min_key` - invariant 2, broken silently. The input is untrusted
+    // where it matters: recovery's undo takes the target page id off an
+    // undo page a crash may have torn, and the pk identity check that saves
+    // every other record type is the one thing this type skips.
+    PageBuf buf{};
+    storage::FormatPage(AsSpan(buf), PageType::kHeap, /*flags=*/0, /*owner_oid=*/9);
+    const PageBuf untouched = buf;
+
+    EXPECT_EQ(PageRelease(AsSpan(buf), 0).code(), StatusCode::kCorruption);
+    EXPECT_EQ(std::memcmp(buf.data(), untouched.data(), buf.size()), 0)
+        << "a release refused on a heap page still wrote to it";
+}
+
+TEST(VarHeapPageTest, ReleasingASlotThePageDoesNotHaveIsCorruption) {
+    PageBuf buf{};
+    ASSERT_TRUE(FormatPage(AsSpan(buf)).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("only one")).ok());
+
+    EXPECT_EQ(PageRelease(AsSpan(buf), 1).code(), StatusCode::kCorruption);
+    EXPECT_EQ(PageRelease(AsSpan(buf), 9999).code(), StatusCode::kCorruption);
+}
+
+TEST(VarHeapPageTest, APageWithEverySlotReleasedReportsNoLiveSlots) {
+    // The recycle predicate: `PageLiveSlots == 0` with `PageSlotCount > 0`
+    // is a page holding nothing any traversal can reach, which is what
+    // makes reformatting it in place safe.
+    PageBuf buf{};
+    ASSERT_TRUE(FormatPage(AsSpan(buf)).ok());
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("v" + std::to_string(i))).ok());
+    }
+    EXPECT_EQ(PageLiveSlots(AsConst(buf)), 5);
+
+    for (std::uint16_t i = 0; i < 5; ++i) {
+        ASSERT_TRUE(PageRelease(AsSpan(buf), i).ok());
+    }
+    EXPECT_EQ(PageLiveSlots(AsConst(buf)), 0);
+    EXPECT_GT(PageSlotCount(AsConst(buf)), 0);
+}
+
+TEST(VarHeapPageTest, AnEmptyValueIsStillDistinguishableFromAReleasedOne) {
+    // The edge the tombstone's choice of `offset == 0` has to survive: a
+    // zero-length value is legal, and it must not read as dead. It cannot,
+    // because its *offset* is still inside the value area - the length was
+    // never what said "alive".
+    PageBuf buf{};
+    ASSERT_TRUE(FormatPage(AsSpan(buf)).ok());
+    ASSERT_TRUE(PageAppend(AsSpan(buf), Bytes("")).ok());
+
+    auto empty = PageRead(AsConst(buf), 0);
+    ASSERT_TRUE(empty.ok()) << empty.status().message();
+    EXPECT_EQ(empty.value().size(), 0u);
+    EXPECT_EQ(PageLiveSlots(AsConst(buf)), 1);
+
+    ASSERT_TRUE(PageRelease(AsSpan(buf), 0).ok());
+    EXPECT_EQ(PageRead(AsConst(buf), 0).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(PageLiveSlots(AsConst(buf)), 0);
 }
 
 // ---- The chain -----------------------------------------------------------
