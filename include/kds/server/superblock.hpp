@@ -262,6 +262,27 @@ struct SuperBlockFields {
     // [OPEN], and a refusal at the door is what keeps this file from
     // deciding it by accident.
     //
+    // **The `[OPEN]` narrowed on 2026-08-28** (operator direction; the same
+    // paragraph is in `docs/spec/wal.md` §3 and
+    // `docs/inflight/in-progress/blueprint-range-ownership.md` §12). *When*
+    // a core count may change is settled: **at mount, in both directions**,
+    // inside the window RV1 already establishes - after the superblock is
+    // read, before the listener binds. Online change is not supported and is
+    // not a goal. *How* the reorganisation works is still open, and this
+    // refusal stands until it is built. Three constraints ride with the
+    // direction and bear on this field directly:
+    //
+    //   - **prepared transactions resolve before anything is reorganised**
+    //     (R6-4's `PreparedResolver`), because reassigning or discarding a
+    //     coordinator's stream destroys the evidence a prepare is resolved
+    //     against; an unresolved prepare refuses the mount;
+    //   - **this field is written last**, so a crash mid-reorganisation
+    //     reads as the old count and the work reruns - which makes
+    //     idempotence a requirement on the reassignment, not a nicety;
+    //   - **modulo is not required.** Placement policy belongs with the
+    //     range mover; correctness needs only that relations whose owner
+    //     core no longer exists are moved.
+    //
     // Never zero in a legal image: CreateFresh takes the count from a
     // configuration that has already refused 0, and Decode refuses a zero
     // outright - a version-9 image decodes this field out of the reserved

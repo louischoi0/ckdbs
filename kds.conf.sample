@@ -506,6 +506,33 @@ sort_max_rows = 1048576
 # measuring it.
 join_build_max_rows = 65536
 
+# ---- Cross-owner transactions ----------------------------------------------
+
+# How long a write waits for a row held by a transaction this core has
+# **prepared** for a cross-owner commit and is waiting for the coordinator
+# to decide (docs/spec/txn.md, the two-phase commit protocol's D5). Such a
+# transaction may neither commit nor abort here until it is told, so it
+# holds its rows - and this is the bound on how long anyone else waits for
+# them.
+#
+# At the ceiling the statement is refused TXN_CONFLICT with retryable=1,
+# and the message names the wait rather than only the row. It is never
+# UNKNOWN_OUTCOME: the refused statement did nothing at all, so telling a
+# client to go and read its data would be wrong.
+#
+# The default is ~100x the healthy decision window this host measures
+# (a ~0.94 ms commit sync plus a ~21 us ring hop each way, so about 2 ms
+# end to end) and sits deliberately below the coordinator's own 10 s phase
+# deadline: a writer refused here is refused for a decision that is late,
+# not for one that is merely slow.
+#
+# `in_doubt_ceiling_ms = 0` refuses immediately instead of waiting. It is
+# not an off-switch - it is the other policy, kept reachable so the two can
+# be measured against each other. Only a transaction spanning two owners
+# can put a row in this state, so on a single-core instance this key does
+# nothing.
+in_doubt_ceiling_ms = 200
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

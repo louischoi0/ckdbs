@@ -148,7 +148,7 @@ this workplan means the v2.4.0 path.
 | R6-2 | Participant transaction context (D2) | **Built 2026-08-27**, this worktree |
 | R6-3 | Prepare and decide (D4) | **Built 2026-08-28**, `63a0f43` |
 | R6-4 | Recovery (D4) | **Built 2026-08-28**, this worktree |
-| R6-5 | In-doubt handling (D5) | — |
+| R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b` |
 | R6-6 | PW3b extension | — |
 | R6-7 | PL-A revisit | — |
 | R6-8 | Dispatch | — |
@@ -833,6 +833,59 @@ Two things worth stating beyond the table, because they are what the
 
 The `[OPEN]` itself is R6-9's to close in `wal.md`, with this as its answer.
 
+#### CP1 amended 2026-08-28 — the operator narrows the `[OPEN]` rather than accepting the refusal as the end state
+
+The direction arrived after R6-4 landed and changes what CP1 may claim.
+**The table above stays true of the engine as built** — a differing `cores`
+is refused at the door and recovery never meets a prepare from a stream it
+cannot place — but the sentence *"the question is already closed by a
+refusal this engine has had since M6"* was CLA reading a scope gap as a
+settled decision. It is not: the refusal is the current behaviour, not the
+end state.
+
+The operator's direction, recorded in the terms it arrived in:
+
+- **The count may change in both directions**, increase and decrease.
+- **The reorganisation is a mount-time operation**, inside the window RV1
+  already establishes — after the superblock is read, before the listener
+  binds. **Online change is not supported and is not a goal.**
+- That is **a scope decision, not an architectural exclusion**, and it
+  forecloses nothing an online path would need: revocation and quiesce would
+  layer onto the same reassignment logic rather than replace it. At mount
+  there is no fault grant to revoke, because the store is built fresh —
+  which is what `device_page_store.hpp`'s "nothing revokes a fault grant"
+  would otherwise make expensive.
+
+Three constraints ride with it and are **not negotiable**:
+
+1. **Prepared transactions resolve before anything is reorganised.**
+   Reassigning or discarding a coordinator's stream destroys the evidence
+   R6-4 resolves a prepare against, so the resolver runs first and **an
+   unresolved prepare refuses the mount**. R6-4 already refuses a mount it
+   cannot resolve (no resolver, absent coordinator stream, a self-named
+   coordinator); what this adds is an ordering requirement on a phase that
+   does not exist yet, and it is the reason the constraint is written down
+   *now* rather than when that phase is built.
+2. **`core_count` is written last**, so a crash mid-reorganisation reads as
+   the old count and the work reruns. **Reassignment must be idempotent** —
+   a requirement on the mechanism, not a property to hope for.
+3. **Modulo is not required.** Placement policy is open and belongs with
+   R5's mover; correctness requires only that relations whose owner core no
+   longer exists are moved.
+
+**What this leaves R6-9.** `wal.md` §3's `[OPEN]` is *narrowed*, not closed:
+**when** is settled, **how** is not. The three sites that carried it —
+`wal.md` §3, `superblock.hpp`'s pin, `blueprint-range-ownership.md` §12 —
+each carry the narrowing as of `056cf9b`, so R6-9's remaining work there is
+to cite this section rather than to decide anything.
+
+**One consequence for this milestone, stated because it is easy to miss.**
+Constraint 1 makes R6-5's `txn_in_doubt_unresolved` an operational number
+rather than a diagnostic one: a transaction whose coordinator answered
+`UnknownOutcome` stays prepared until a mount resolves it, and under the
+direction that same prepare would **refuse** a mount that was asked to
+change the core count. The two features meet at exactly one field.
+
 ### What the row deliberately does not do
 
 - **It writes no terminal record for a resolved commit.** A resolved *abort*
@@ -961,6 +1014,193 @@ mount). The coordinator's stream is written independently of the
 participant's in every case, so neither knows the other's LSNs - which is
 the arrangement that makes "no cross-stream comparison" visible rather than
 merely claimed.
+
+## R6-5 — in-doubt, and D5's two bounded waits
+
+Built on `v2.5.0-cross-core-owner-protocol-2` at `056cf9b`. The row that
+turns "in doubt" from a state the participant sits in into one it acts on,
+and the row that answers D5's `[OPEN]` in the operator's ratified direction.
+
+### The third exchange, and the first live sender of R6-0's bit
+
+`kTxnResolveRequest`/`kTxnResolveReply` (37, 38), 24 bytes each — the
+smallest messages in the protocol, and the sizing the D6 row of §2 above
+said this leg was still owed. A participant that replied prepared and has
+heard no decide for `kTxnInDoubtCeilingNs` asks its coordinator what was
+decided; the answer is a code and a decision byte, no words, because a
+participant is not a client and nothing it is told here is rendered for
+anyone.
+
+**The ask carries R6-0's retry bit set, always, and that is not a
+formality.** It is what makes answering from a record instead of by
+re-deciding safe: a coordinator that no longer holds the record must answer
+`UnknownOutcome` (D5), and the bit is what says the sender knows that. An
+ask that arrives with the bit **clear** is refused `InvalidArgument` rather
+than served — the contract `known-gaps.md` states ("every retry path built
+from R6-3 on has to set it") is a promise about senders, and this is the one
+leg where a violation could otherwise be silent. R6-0 has had no live sender
+since it landed; it has one now, which is the correction that entry was
+carrying.
+
+### The coordinator's memory, and the two ways it can be honest
+
+A `DecisionRecord` per `(session_id, transaction_id)`, opened **at the first
+prepare** and written **before the decide messages go out**. Both moments
+are load-bearing and neither is where a first draft would have put it:
+
+- **Opened at prepare**, because an ask that lands while the prepare phase
+  is still open must be answered *"not yet, ask again"* and not
+  *"unknown"* — the second is terminal by D5, so a participant told it stops
+  asking about a transaction whose decision is milliseconds away and waits
+  for the next mount instead.
+- **Written before the sends**, because the decision is already durable in
+  this core's stream by then (`DispatchAsync`'s order, D4's reason), so a
+  decide message the ring drops is still answerable with the real decision.
+  Recording after the loop would leave exactly the window that produces the
+  ask.
+
+`Close` drops the record when every participant acknowledged — nobody is
+left to ask, and keeping it would hold a map node for the retention on the
+**healthy** path, which is every cross-owner transaction. A phase that timed
+out keeps it, because the participant that did not acknowledge is precisely
+the one that will ask. Past `kTxnDecisionRetentionNs` (10 × the phase
+deadline) it is dropped and the answer becomes `UnknownOutcome`, which is
+not a correctness bound but a bound on how long a rare failure may keep
+asking: the durable record the retention does **not** touch is this core's
+stream, which R6-4 reads at the next mount.
+
+### D5's `[OPEN]`, built as ratified: the writer blocks
+
+**The wait is on the statement, not on the row, and that is forced.** A
+first-updater-wins conflict is found inside a row callback under a page
+span, which is no place to park — so the statement is refused having written
+nothing, `DispatchAsync` parks until the doubt clears, and the statement
+runs again from the top. What the client sees is one statement that took a
+while, which is what "blocks" means to it.
+
+**"Having written nothing" is what makes the re-run a repeat rather than a
+second application**, and it is checked rather than assumed: `BeginWrite`
+marks the transaction's trail length and `EndWrite` compares — a statement
+that wrote rows before it hit the conflict (`SET v = v + 1` over four rows,
+conflicting on the fifth) is **not** re-runnable at any price and is
+answered with the conflict it produced, unwaited. Only the clean case
+reaches the park.
+
+**The poison is withheld while the wait is still possible.** Inside an
+explicit transaction a failed statement poisons the session (`txn.md`
+§10-8), and a poisoned session cannot run the statement again — a wait whose
+end is a forced `ROLLBACK` is not a wait. So `EndWrite` skips the poison for
+exactly this refusal, and `DispatchAsync` applies it at the ceiling, where
+the statement has genuinely failed.
+
+**One deadline covers every blocker.** The bound is taken before the first
+wait and shared by every later one, so a statement blocked, freed, and
+blocked again by a *second* in-doubt transaction still ends within one
+ceiling — which is what keeps HP3 true of a shape that is otherwise a loop
+with a bounded body.
+
+**The refusal at the ceiling**, per §2's three obligations: `TxnConflict`,
+because `IsRetryable` admits that code alone and a client's retry loop reads
+the bit it sets — so RP3 takes the "name it by message under that code"
+branch and does **not** widen `IsRetryable`, which would have been a
+wire-contract change; **not** `UnknownOutcome`, which would tell a client to
+go and read data its statement never touched; and named, so the message says
+a coordinator has not decided rather than only that a row is busy.
+
+### The ceiling, proposed and derived — `kTxnInDoubtCeilingNs` = 200 ms
+
+CLA's to propose and measure (§2). **The derivation is the healthy decision
+window on this host**, not a round number: a coordinator's decision sync
+(~0.94 ms single-stream, `bench/v2.1.0/results-multicore-writers-v2.1.0.md`
+§3's 1,066/s and `results-shipping-pretasks-v2.1.0-10-g82a2749.md` §3a's
+1,118/s), plus a sibling participant's prepare sync still in flight (the
+same ~0.94 ms; four streams overlap at 3.371× on this volume, §3a, so a
+four-wide prepare costs each participant ~1.1 ms rather than 4 × 0.94), plus
+two ring hops at ~21 µs (§3a). About **2 ms at the median**. 200 ms is ~100×
+that and ~18× the largest unattributed latency this host has (the ~11 ms
+periodic stall, `results-knob-sweep-cell2` §5): a writer never meets the
+refusal on a healthy path, and one that meets a genuinely lost decision is
+refused inside a fifth of a second rather than after the coordinator's ten.
+
+**It sits deliberately *under* `kTxnPhaseDeadlineNs`**, and that is a choice.
+A coordinator may legitimately take up to that deadline to decide when
+another participant is silent, so an ask inside that window is answered "not
+yet" at the cost of one round trip, and a writer refused inside it is
+refused for a transaction that is slow rather than lost. Sizing the ceiling
+to the coordinator's worst case instead would make every blocked writer pay
+a failure's price on a healthy day; the ratified rule bounds the *stall*, and
+the stall is the writer's.
+
+**Reached through one function** — `CommandDispatcher::InDoubtCeilingNs()` —
+and swept as `in_doubt_ceiling_ms`. **The measured sweep is not this row's**:
+it needs a live cross-owner path, which `MayShip` and `CheckWriteAffinity`
+still refuse until R6-8, so the number above is the proposal and its
+derivation, and RP8 is where a measurement can replace it. Stated rather
+than left implied, because §2 ratified the obligation and not the number.
+
+**`in_doubt_ceiling_ms = 0` is not an off-switch**: it is D5's *other*
+branch — refuse retryably up front — reachable by configuration so the two
+can be measured against each other. It is also what an unconfigured
+dispatcher holds, which is every fixture, so a test that has no cross-owner
+transaction to be in doubt about behaves exactly as it did before this row.
+
+### What this row closes that R6-3 left open
+
+**`FinishDecision`'s prepared residue retries itself now**, and by the path
+R6-3 predicted rather than by a new one. That review recorded a decided end
+that fails leaving a prepared context standing with nothing to retry it —
+residue on the abort arm, genuine doubt on the commit arm. Both are now
+reached by the in-doubt sweep: the context is still prepared, so it asks on
+the next ceiling, the coordinator answers from a record it kept (the
+participant's refusal means the phase did not settle `AllPrepared`, so
+`Close` kept it), and `Resolve` runs `StartDecision` again. Retrying an
+**abort** this way is not the unilateral abort D4 forbids — the decision is
+the coordinator's and it is being re-applied, not re-made.
+
+### Named costs and debts this row creates
+
+- **An in-doubt participant asks for ever, by decision.** There is no cap on
+  asks: a capped participant would hold locks with nothing left that could
+  free it before the next mount, and an ask is two ring messages against a
+  transaction that is already blocking writers. What ends the asking is an
+  answer — including `UnknownOutcome`, which is terminal and stops it.
+- **An `UnknownOutcome` answer leaves a transaction nothing at runtime can
+  finish.** It holds its rows, blocks their writers for a ceiling each, and
+  pins the log's redo start (R6-4's floor) until the next mount resolves it
+  against the coordinator's stream. `txn_in_doubt_unresolved` in `SHOW META`
+  is the number that says this has happened, and it is the one field in the
+  new block worth alerting on.
+- **The block is row-granular in its trigger and statement-granular in its
+  wait.** A statement that already wrote rows is refused rather than waited
+  on, which is a stricter answer than "blocks writers of the same rows"
+  literally promises. Recorded rather than hidden: the alternative is
+  re-applying a partially applied statement, and that is a wrong answer
+  rather than a slow one.
+- **Nothing reaches any of this on a live path yet.** `MayShip` still refuses
+  inside an explicit transaction and `CheckWriteAffinity` still refuses the
+  cross-owner write, so R6-8 is the row that makes an in-doubt participant
+  reachable outside a test — which is also when B-cell measurement of the
+  ceiling becomes possible.
+
+### Tests
+
+`tests/txn_2pc_protocol_test.cpp` gains three fixtures for D5's three sides:
+the coordinator's memory (a decision answered, a still-open phase told to
+ask again, an absent record answered `UnknownOutcome` and never guessed, the
+retention forgetting one, the record's lifetime across an acknowledged and
+an unacknowledged decide phase, and a clear retry bit refused), the
+participant's wait (one ask per ceiling and not before, a commit and an
+abort applied from the answer, and an `UnknownOutcome` leaving the
+transaction in doubt rather than guessing), and the blocked writer (a wait
+that ends in the statement running, a ceiling that ends in the named
+retryable non-`UnknownOutcome` refusal, `0` as D5's other branch, a
+transaction not poisoned while it waits, and an **ordinary** in-flight
+writer not waited on at all — the narrowness that keeps a client's think
+time out of this). `tests/txn_2pc_wire_test.cpp` gains the ask's sizing and
+the ceiling's two ordering assertions.
+
+Full suite green at `056cf9b`: **2,853 tests, 16 new**. Overhead not
+measured — the v2-stage A/B suspension of 2026-08-24 stands.
 
 ## Open, carried from the work order
 

@@ -1202,6 +1202,15 @@ still waits on its own gate, so:
   The sentence above said "R6-3's routing layer" because that was the row
   the resend was expected in when R6-0 was written; the obligation is
   unchanged and its owner moved.
+  **Closed 2026-08-28 by R6-5** (`056cf9b`): the in-doubt ask
+  (`kTxnResolveRequest`) is the first live sender of the bit, and it sets it
+  on every send because an ask is a resend by construction - the decide it
+  asks about was the first attempt. The contract now has a second half the
+  owner can enforce rather than only trust: an ask arriving with the bit
+  **clear** is refused `InvalidArgument` and counted
+  (`Txn2pcClient::resolve_refusals`), so a sender that does not know the
+  rule is told rather than quietly served. Still true of the *statement*
+  leg, which has no resender yet.
 - **A participant that crashes while prepared loses its half of a
   cross-owner transaction** (2026-08-28, R6-3 at `63a0f43`). The row wrote
   the durable state - a TXN_PREPARE record naming the coordinator's
@@ -1229,6 +1238,45 @@ still waits on its own gate, so:
   coordinator stream whose tail the crash took as "no decision", which is an
   abort (fixed by applying `Analyze`'s anchor-honesty check to the
   coordinator's stream too).
+- **An in-doubt participant holds its rows until the next mount, and a
+  writer of them used to be refused with nothing to wait for** (2026-08-28,
+  R6-3/R6-4 at `e06c117`). A participant that replied prepared and lost its
+  coordinator's decide had no way to ask for it: recovery resolved such a
+  transaction, but only at the *next mount*, so a live instance could hold
+  locks indefinitely with every writer of those rows getting a
+  first-updater-wins conflict that would recur on every retry.
+  **Closed 2026-08-28 by R6-5** (`056cf9b`), both halves. The participant
+  asks its coordinator once per `kTxnInDoubtCeilingNs` (200 ms) over the
+  third ring exchange and applies the answer through the ordinary decide
+  path; the coordinator answers from a decision record opened at its first
+  prepare and written before its decide messages, so a lost decide is
+  answered with the real decision and a still-open prepare phase is answered
+  "ask again" rather than "unknown". A writer of the held rows now **blocks**
+  under the same ceiling and is then refused by name - `TxnConflict`, and
+  deliberately **not** `UnknownOutcome`, since its own statement did nothing.
+  **What stays open, and it is the number to watch**: a coordinator that no
+  longer holds the record answers `UnknownOutcome`, which is terminal — that
+  transaction goes on holding its rows, blocking their writers a ceiling at a
+  time, and pinning the log's redo start until a mount resolves it against
+  the coordinator's stream. `SHOW META`'s `txn_in_doubt_unresolved` counts
+  exactly that population, and it is 0 on every healthy path. Reachable only
+  from a test until R6-8, like the rest of the series.
+- **Core-count change is a mount-time operation, and nothing implements it**
+  (operator direction, 2026-08-28). The `[OPEN]` in `wal.md` §3,
+  `superblock.hpp`'s pin and `blueprint-range-ownership.md` §12 is now
+  *narrowed*: the count may change **in both directions**, the reorganisation
+  runs **at mount** in RV1's window, and **online change is not supported and
+  is not a goal** — a scope decision that forecloses nothing an online path
+  would need. **How** stays open, so what the engine does today is unchanged:
+  `bootstrap.cpp` refuses a mount whose `cores` differs from the pinned
+  count, naming both numbers. Three constraints bind whoever builds it —
+  prepared transactions resolve **first** and an unresolved prepare refuses
+  the mount (reassigning a coordinator's stream destroys R6-4's evidence);
+  `core_count` is written **last**, so a crash reruns the work and
+  reassignment must be **idempotent**; and **modulo is not required**, since
+  placement is the range mover's and correctness needs only that relations
+  whose owner core is gone are moved. Full statement:
+  `workplan-cross-owner-txn.md`'s "CP1 amended 2026-08-28".
 - **Nothing reclaims a shipped statement's waiter if its coroutine is
   destroyed rather than completed** (Part A, 2026-08-26).
   `StatementShipClient::Close` is reached only from
