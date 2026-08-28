@@ -470,6 +470,13 @@ bool TransactionManager::IsInFlight(std::uint64_t trx_id) const noexcept {
     return false;
 }
 
+bool TransactionManager::IsInDoubt(std::uint64_t trx_id) const noexcept {
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (t->id_ == trx_id) return t->active_ && t->prepared_;
+    }
+    return false;
+}
+
 StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
     for (std::size_t word = 0; word < reader_used_.size(); ++word) {
         if (reader_used_[word] == ~std::uint64_t{0}) continue;

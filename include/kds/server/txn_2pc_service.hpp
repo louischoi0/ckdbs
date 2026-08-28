@@ -203,6 +203,48 @@ static_assert(offsetof(TxnParticipantReplyPayload, message) ==
                   kTxnParticipantReplyFixedBytes,
               "kTxnParticipantReplyFixedBytes must be what the header above `message` costs");
 
+// ---- R6-5: the in-doubt ask, the third exchange (D5) ---------------------
+//
+// The only leg a **participant** opens. A core that replied prepared and
+// has waited out `kTxnInDoubtCeilingNs` with no decide asks its coordinator
+// what it decided. Two properties, each one a line here:
+//
+//   - **The ask is a retry, and says so.** `retry` is R6-0's bit and is
+//     always 1 on this leg - there is no first attempt, since the decide
+//     the coordinator already sent was the first. A coordinator that no
+//     longer holds the record therefore answers `UnknownOutcome` and never
+//     re-decides (D5); an ask that arrives with the bit clear is refused as
+//     the anomaly it is, because that is the one way the contract known-gaps
+//     names - "every retry path built from R6-3 on has to set it" - could be
+//     violated by a sender and go unnoticed.
+//   - **The answer carries the decision or the reason there is none, and
+//     no words.** A participant is not a client: nothing it is told here is
+//     rendered for anyone, so the reply is a code and a decision byte. The
+//     code says which of three things is true - decided (`kOk`, and the
+//     byte is `kCommit`/`kAbort`), not decided yet (`kTxnConflict`: the
+//     coordinator's prepare phase is still open, ask again after another
+//     ceiling), or unknowable (`kUnknownOutcome`: the record is gone, and
+//     the next mount resolves it against the coordinator's stream, R6-4).
+
+// Participant -> coordinator: what did you decide for this transaction?
+struct TxnResolveRequestPayload {
+    std::uint64_t session_id;      // the coordinator's
+    std::uint64_t transaction_id;  // the coordinator's (D2)
+    std::uint8_t retry;            // R6-0's bit; **always 1** on this leg
+    std::uint8_t reserved0[7];
+};
+static_assert(sizeof(TxnResolveRequestPayload) == 24);
+
+// Coordinator -> participant: the decision, or why there is none.
+struct TxnResolveReplyPayload {
+    std::uint64_t session_id;
+    std::uint64_t transaction_id;
+    std::uint32_t status_code;  // StatusCode: kOk decided, kTxnConflict not yet, kUnknownOutcome gone
+    std::uint8_t decision;      // TxnDecision; kUnset unless status_code is kOk
+    std::uint8_t reserved0[3];
+};
+static_assert(sizeof(TxnResolveReplyPayload) == 24);
+
 // The ring copies these byte for byte, which is only defined for a
 // trivially copyable type. `sched::SubmitSendPod` asserts the same thing of
 // whatever it is handed (send_retry.hpp), so these are the *earlier* check:
@@ -211,6 +253,8 @@ static_assert(offsetof(TxnParticipantReplyPayload, message) ==
 static_assert(std::is_trivially_copyable_v<TxnPrepareRequestPayload>);
 static_assert(std::is_trivially_copyable_v<TxnDecideRequestPayload>);
 static_assert(std::is_trivially_copyable_v<TxnParticipantReplyPayload>);
+static_assert(std::is_trivially_copyable_v<TxnResolveRequestPayload>);
+static_assert(std::is_trivially_copyable_v<TxnResolveReplyPayload>);
 
 // ---- D6: the sizing answer, which R6-1 exists to give -------------------
 //
@@ -222,12 +266,13 @@ static_assert(std::is_trivially_copyable_v<TxnParticipantReplyPayload>);
 // therefore R6's *neighbour* and not its gate, which is what D6 asked to be
 // established here.
 //
-// **What this answer covers, stated so it is not read wider than it is**:
-// the prepare and decide legs, which are R6-1's scope. D5 needs a *third*
-// exchange - an in-doubt participant asking the coordinator, with R6-0's bit
-// set, answerable `UnknownOutcome` - and that kind does not exist yet. It
-// carries ids and a bit, so it will fit; but it is R6-5's to declare and to
-// size, and no assertion here has looked at it.
+// **What this answer covers**: the prepare and decide legs, which were
+// R6-1's scope, and since R6-5 the in-doubt ask as well - the third
+// exchange D5 needs, which R6-1 said was R6-5's to declare and to size. It
+// carries ids and a bit, and the answer a code and a byte: 24 bytes each
+// leg, the smallest messages in the protocol. The sizing obligation §2 of
+// the workplan's ratification record left open for this leg is discharged
+// by the two assertions that end this block.
 //
 // The assertions are written against `kCoreRingPayloadBytes` rather than
 // against 1,024, so that a future resize of the slot re-checks them instead
@@ -240,6 +285,12 @@ static_assert(sizeof(TxnDecideRequestPayload) <= sched::kCoreRingPayloadBytes,
               "crosscore.md §9's sizing decision becomes R6's gate - do not shrink a field");
 static_assert(sizeof(TxnParticipantReplyPayload) <= sched::kCoreRingPayloadBytes,
               "R6-1/D6: a participant reply must fit one ring slot; if it ever does not, "
+              "crosscore.md §9's sizing decision becomes R6's gate - do not shrink a field");
+static_assert(sizeof(TxnResolveRequestPayload) <= sched::kCoreRingPayloadBytes,
+              "R6-5/D6: an in-doubt ask must fit one ring slot; if it ever does not, "
+              "crosscore.md §9's sizing decision becomes R6's gate - do not shrink a field");
+static_assert(sizeof(TxnResolveReplyPayload) <= sched::kCoreRingPayloadBytes,
+              "R6-5/D6: an in-doubt answer must fit one ring slot; if it ever does not, "
               "crosscore.md §9's sizing decision becomes R6's gate - do not shrink a field");
 
 // ---- The decodes, and R6-3's encodes ------------------------------------
@@ -295,6 +346,79 @@ TxnParticipantReplyPayload TxnParticipantReplyOf(std::uint64_t session_id,
 // Being generous is therefore cheap on both legs and wrong on neither.
 inline constexpr sched::MonoTimeNs kTxnPhaseDeadlineNs = 10ull * 1'000'000'000ull;
 
+// ---- R6-5: the in-doubt ceiling (D5's `[OPEN]`, ratified 2026-08-28) -----
+//
+// **One number, two waits, and both end in something named.** A prepared
+// participant that has heard no decide for this long asks its coordinator
+// (`Txn2pcServer::Ask`), and asks again every ceiling until it is answered.
+// A writer on that core that meets a row the in-doubt transaction holds
+// parks for at most this long (`CommandDispatcher`'s `InDoubtBlock`) and is
+// then refused - **retryably and by name, and not `UnknownOutcome`**: its
+// own statement did nothing and may be retried, which is the opposite of
+// what that code tells a client. The operator ratified "block, with a
+// bounded ceiling ending in a named refusal" over "refuse retryably up
+// front"; this is the bound.
+//
+// **Derived, not picked, and the derivation is the healthy decision
+// window on this host.** From a participant's prepare reply to its decide:
+// the coordinator's decision sync (~0.94 ms single-stream,
+// `bench/v2.1.0/results-multicore-writers-v2.1.0.md` §3 - 1,066/s - and
+// `results-shipping-pretasks-v2.1.0-10-g82a2749.md` §3a - 1,118/s), any
+// sibling participant's prepare sync still in flight (the same ~0.94 ms;
+// four streams overlap at 3.371× on this volume, §3a, so a four-wide
+// prepare costs each participant ~1.1 ms rather than 4 × 0.94), and two
+// ring hops at ~21 µs (§3a's "21-23 µs against a ~0.9 ms sync"). About
+// 2 ms at the median. The tail is where M3 found shipping's cost (+76% p99
+// against +11% p50, `bench/v2.4.0/results-m3-*.md`), and the largest
+// unattributed latency on this host is the ~11 ms periodic stall
+// (`bench/results-knob-sweep-cell2` §5). 200 ms is ~100× the healthy window
+// and ~18× the stall: a writer never meets the refusal on a healthy path,
+// and one that meets a genuinely lost decision is refused inside a fifth
+// of a second rather than after the coordinator's ten.
+//
+// **It is deliberately under `kTxnPhaseDeadlineNs`**, and that is a choice
+// rather than an oversight. A coordinator may legitimately take up to that
+// deadline to decide when another participant is silent, so an ask sent
+// inside that window is answered "not yet decided" and costs one round trip
+// per ceiling, and a writer refused inside it is refused for a transaction
+// that is not lost but slow. Sizing the ceiling to the coordinator's worst
+// case instead would make every blocked writer pay a failure's price on a
+// healthy day; the ratified rule is a ceiling on the stall, and the stall
+// is the writer's.
+//
+// **Reached through one function** - `CommandDispatcher::InDoubtCeilingNs()`
+// - and config-swept as `in_doubt_ceiling_ms` (§2's obligation). This is the
+// default and the proposal; the sweep that measures it needs a live
+// cross-owner path, which is R6-8's, so it is RP8's cell and not this row's.
+inline constexpr sched::MonoTimeNs kTxnInDoubtCeilingNs = 200ull * 1'000'000ull;
+static_assert(kTxnInDoubtCeilingNs < kTxnPhaseDeadlineNs,
+              "a writer blocked on an in-doubt row must be refused inside the window in which "
+              "its coordinator may still legitimately be deciding, not after it - and a "
+              "shipped writer must be refused before its own arrival core presumes it lost, "
+              "which is the same number (kShippedStatementDeadlineNs, statement_ship_service.hpp)");
+
+// How long the coordinator keeps a decision a participant may still ask
+// about. **Not a correctness bound** - a participant that asks after this
+// is answered `UnknownOutcome` and resolves at the next mount (R6-4), which
+// is D5's own answer - but a bound on how long a rare failure can keep
+// asking before it is told to stop. Ten times the longest legitimate
+// silence in the protocol, the phase deadline: a participant whose every
+// ask and answer inside a hundred seconds was lost is not a participant the
+// ring is going to reach. A record is dropped the moment every participant
+// acknowledges its decide, so on a healthy path nothing is ever held this
+// long, or at all.
+inline constexpr sched::MonoTimeNs kTxnDecisionRetentionNs = 10 * kTxnPhaseDeadlineNs;
+static_assert(kTxnDecisionRetentionNs > kTxnPhaseDeadlineNs + 2 * kTxnInDoubtCeilingNs,
+              "a participant must be able to ask at least once after the coordinator's "
+              "slowest legitimate decision and still find the record");
+
+// The memory bound under the time bound, `kShippedDedupMaxRecords`'s shape:
+// a record is held only for a transaction whose decide some participant did
+// not acknowledge, which is a failure population, so a cap this size is a
+// ceiling on a storm and not on a workload. Past it the oldest record is
+// dropped early and counted (`Txn2pcClient::decisions_evicted()`).
+inline constexpr std::size_t kTxnDecisionMaxRecords = 1024;
+
 // ---- The participant's half: the transport ------------------------------
 //
 // `StatementShipServer`'s shape, and deliberately the same one: decode,
@@ -332,22 +456,60 @@ public:
     using PrepareFn = std::function<void(PrepareAsk, ReplyFn)>;
     using DecideFn = std::function<void(DecideAsk, ReplyFn)>;
 
+    // R6-5: what the coordinator answered an in-doubt ask with. `status` is
+    // `OK` with a real `decision`, or the reason there is none -
+    // `kTxnConflict` for "not decided yet, ask again", `kUnknownOutcome`
+    // for "the record is gone, the next mount resolves this" - in the
+    // coordinator's code with no message, which is all the wire carries.
+    struct ResolveAnswer {
+        std::uint32_t coordinator = 0;
+        std::uint64_t session_id = 0;
+        std::uint64_t transaction_id = 0;
+        Status status;
+        TxnDecision decision = TxnDecision::kUnset;
+    };
+    using ResolveFn = std::function<void(ResolveAnswer)>;
+
+    // `resolve` is the third seam (R6-5): what this core does with an
+    // answer to an ask it sent. Empty means this core never asks - the
+    // fixture that drives prepare and decide by hand - and an answer that
+    // arrives anyway is counted and dropped.
     Txn2pcServer(std::uint32_t core_id, sched::Scheduler& scheduler,
                  sched::RingTransport& transport, PrepareFn prepare, DecideFn decide,
-                 Logger* log = nullptr) noexcept
+                 ResolveFn resolve = {}, Logger* log = nullptr) noexcept
         : core_id_(core_id),
           scheduler_(scheduler),
           transport_(transport),
           prepare_(std::move(prepare)),
           decide_(std::move(decide)),
+          resolve_(std::move(resolve)),
           log_(log) {}
 
     void OnPrepare(const sched::MessageHeader& header, std::span<const std::byte> payload);
     void OnDecide(const sched::MessageHeader& header, std::span<const std::byte> payload);
 
+    // ---- R6-5: the in-doubt ask, from this core as a participant --------
+
+    // Installs the receiver for the coordinator's answers. Captures `this`
+    // with no unregister, so this server must outlive every pump of its
+    // scheduler - `Txn2pcClient::RegisterReplyReceivers`'s rule.
+    Status RegisterResolveReplyReceiver();
+    // Asks `coordinator` what it decided for `(session_id, transaction_id)`.
+    // R6-0's bit is set on every send: this leg has no first attempt. The
+    // answer reaches the `resolve` seam whenever it arrives; nothing parks
+    // on it, because the participant's context *is* the waiter and its
+    // sweep re-asks on the ceiling.
+    void Ask(std::uint32_t coordinator, std::uint64_t session_id, std::uint64_t transaction_id);
+    void OnResolveReply(const sched::MessageHeader& header, std::span<const std::byte> payload);
+
     std::uint64_t prepares() const noexcept { return prepares_; }
     std::uint64_t decides() const noexcept { return decides_; }
     std::uint64_t replies() const noexcept { return replies_; }
+    // Asks this core sent, and answers it received. The two differ by the
+    // asks still on the ring and the answers the coordinator's own ring
+    // refused; on a healthy path both read 0, because no decide is lost.
+    std::uint64_t asks() const noexcept { return asks_; }
+    std::uint64_t resolve_replies() const noexcept { return resolve_replies_; }
 
 private:
     void Reply(std::uint32_t coordinator, std::uint64_t request_id,
@@ -359,10 +521,17 @@ private:
     sched::RingTransport& transport_;
     PrepareFn prepare_;
     DecideFn decide_;
+    ResolveFn resolve_;
     Logger* log_;
     std::uint64_t prepares_ = 0;
     std::uint64_t decides_ = 0;
     std::uint64_t replies_ = 0;
+    std::uint64_t asks_ = 0;
+    std::uint64_t resolve_replies_ = 0;
+    // An ask's request id, minted here since no statement owns one. Not a
+    // waiter key - nothing parks on an ask - but the header needs one and a
+    // captured header should say which ask an answer was to.
+    std::uint64_t next_ask_id_ = 1;
 };
 
 // ---- The coordinator's half ---------------------------------------------
@@ -422,9 +591,11 @@ public:
           clock_(clock),
           log_(log) {}
 
-    // Installs both reply receivers. The handlers capture `this` and there
-    // is no unregister, so **the client must outlive every pump of that
-    // scheduler** - `StatementShipClient::RegisterReplyReceiver`'s rule.
+    // Installs both reply receivers, and (R6-5) the receiver for the one
+    // *request* this half takes - a participant's in-doubt ask. The handlers
+    // capture `this` and there is no unregister, so **the client must
+    // outlive every pump of that scheduler** -
+    // `StatementShipClient::RegisterReplyReceiver`'s rule.
     Status RegisterReplyReceivers();
 
     // Opens the waiter and sends prepare to every participant. **Every
@@ -432,12 +603,23 @@ public:
     // one knows no participant was asked: an empty participant list, a core
     // this instance does not have, a duplicate participant, or a request id
     // that still has a phase parked on it.
+    //
+    // R6-5: also opens this transaction's **decision record** as undecided,
+    // so an ask that lands between the first prepare and the decision is
+    // answered "not yet" rather than "unknown" - the window in which a
+    // participant would otherwise stop asking about a transaction whose
+    // decide is seconds away.
     Status Prepare(std::uint64_t request_id, std::uint64_t session_id,
                    std::uint64_t transaction_id, std::span<const std::uint32_t> participants);
 
     // The decide leg, same discipline. `decision` may not be `kUnset` - a
     // decide that names no decision is the one thing a participant refuses
     // into doubt, so it is refused here first, where it costs nothing.
+    //
+    // R6-5: records the decision **before** the sends, whatever they do. The
+    // caller has already made it durable (that is the order
+    // `DispatchAsync` keeps), so from here an ask is answered with it even
+    // if the decide messages themselves are refused by the ring.
     Status Decide(std::uint64_t request_id, std::uint64_t session_id,
                   std::uint64_t transaction_id, TxnDecision decision,
                   std::span<const std::uint32_t> participants);
@@ -446,9 +628,39 @@ public:
     // deadline passed, or the waiter is gone. One clock read per turn.
     bool Settled(std::uint64_t request_id) const;
     const TxnPhaseOutcome* Find(std::uint64_t request_id) const;
+    // Closes the phase. R6-5: a decide phase every participant acknowledged
+    // takes its decision record with it - nobody is left to ask - and one
+    // that was not keeps the record for `kTxnDecisionRetentionNs`.
     void Close(std::uint64_t request_id);
 
+    // ---- R6-5: answering an in-doubt participant ------------------------
+
+    // A participant's ask (`kTxnResolveRequest`). Answered from the record
+    // and never by re-deciding: decided → the decision; opened but not
+    // decided → `kTxnConflict`, ask again; no record → `kUnknownOutcome`.
+    // An ask with R6-0's bit clear is refused `kInvalidArgument`, since a
+    // sender that leaves it clear is the defect the bit exists to catch.
+    void OnResolveAsk(const sched::MessageHeader& header, std::span<const std::byte> payload);
+
     std::size_t waiting() const noexcept { return waiting_.size(); }
+    // Decision records held right now. Non-zero means a transaction whose
+    // decide some participant has not acknowledged, or one still between
+    // its prepare and its decision.
+    std::size_t decisions_held() const noexcept { return decisions_.size(); }
+    // Asks answered with a decision, with "not yet", and with
+    // `UnknownOutcome`. The first is the population R6-5 exists for; the
+    // third is a participant that stays in doubt until the next mount.
+    std::uint64_t resolutions_answered() const noexcept { return resolutions_answered_; }
+    std::uint64_t resolutions_undecided() const noexcept { return resolutions_undecided_; }
+    std::uint64_t resolutions_unknown() const noexcept { return resolutions_unknown_; }
+    // Asks refused outright: a clear retry bit, or a payload of the wrong
+    // size. A protocol anomaly, never a workload property.
+    std::uint64_t resolve_refusals() const noexcept { return resolve_refusals_; }
+    // Records dropped by the retention, and by the memory bound before it.
+    // Either turns a later ask into `UnknownOutcome`; the second means a
+    // storm, and the first means a participant that never asked.
+    std::uint64_t decisions_forgotten() const noexcept { return decisions_forgotten_; }
+    std::uint64_t decisions_evicted() const noexcept { return decisions_evicted_; }
 
     // ---- What this core reports (D7's counters, one level up) -----------
 
@@ -482,12 +694,32 @@ private:
     void OnReply(TxnPhase phase, const sched::MessageHeader& header,
                  std::span<const std::byte> payload);
 
+    // R6-5: one transaction's decision, for a participant that asks. Keyed
+    // by the coordinator's `(session_id, transaction_id)` - this core's own
+    // ids, so no collision is possible - and opened undecided at the first
+    // prepare. `decided_at_ns` is 0 until `Decide`; the retention runs from
+    // it, or from `opened_at_ns` for a record nothing ever decided.
+    struct DecisionRecord {
+        TxnDecision decision = TxnDecision::kUnset;
+        sched::MonoTimeNs opened_at_ns = 0;
+        sched::MonoTimeNs decided_at_ns = 0;
+    };
+    using DecisionKey = std::pair<std::uint64_t, std::uint64_t>;
+
+    // Drops records past `kTxnDecisionRetentionNs`. Lazy, at the two
+    // moments a record matters - an ask, and a new record's insertion -
+    // rather than on a timer: a record nobody asks about costs 40 bytes and
+    // a map node, and a timer to reclaim that would cost more than it
+    // reclaims.
+    void ExpireDecisions(sched::MonoTimeNs now);
+
     std::uint32_t core_id_;
     sched::Scheduler& scheduler_;
     sched::RingTransport& transport_;
     const sched::Clock& clock_;
     Logger* log_;
     std::map<std::uint64_t, TxnPhaseOutcome> waiting_;
+    std::map<DecisionKey, DecisionRecord> decisions_;
     std::uint64_t prepare_messages_ = 0;
     std::uint64_t decide_messages_ = 0;
     std::uint64_t phase_timeouts_ = 0;
@@ -495,6 +727,12 @@ private:
     std::uint64_t decide_refusals_ = 0;
     std::uint64_t identity_mismatches_ = 0;
     std::uint64_t late_replies_ = 0;
+    std::uint64_t resolutions_answered_ = 0;
+    std::uint64_t resolutions_undecided_ = 0;
+    std::uint64_t resolutions_unknown_ = 0;
+    std::uint64_t resolve_refusals_ = 0;
+    std::uint64_t decisions_forgotten_ = 0;
+    std::uint64_t decisions_evicted_ = 0;
 };
 
 }  // namespace kds::server

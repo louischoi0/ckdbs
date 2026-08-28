@@ -174,6 +174,20 @@ enum class RingMessageKind : std::uint16_t {
     kTxnPrepareReply = 34,
     kTxnDecideRequest = 35,
     kTxnDecideReply = 36,
+
+    // ---- Cross-owner transactions: the in-doubt ask (R6-5, D5) ----------
+    //
+    // The third exchange, and the only one a **participant** opens: a core
+    // that replied prepared and has waited out its ceiling with no decide
+    // asks the coordinator what it decided. The ask carries
+    // `server::TxnResolveRequestPayload` with R6-0's bit **set** - it is a
+    // retry in Finding 1's sense, so a coordinator that no longer holds the
+    // record answers `UnknownOutcome` rather than re-deciding - and the
+    // answer is `TxnResolveReplyPayload`: the decision, or the reason there
+    // is none. The message resolves a participant; it never decides
+    // anything, since the decision is the coordinator's COMMIT record.
+    kTxnResolveRequest = 37,
+    kTxnResolveReply = 38,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -207,6 +221,8 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kTxnPrepareReply:
         case RingMessageKind::kTxnDecideRequest:
         case RingMessageKind::kTxnDecideReply:
+        case RingMessageKind::kTxnResolveRequest:
+        case RingMessageKind::kTxnResolveReply:
             return true;
         case RingMessageKind::kUnset:
             return false;

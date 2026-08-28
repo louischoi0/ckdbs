@@ -401,6 +401,15 @@ public:
         // exec/budget.hpp).
         std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
 
+        // How long a writer waits for a row held by a transaction this core
+        // prepared and is in doubt about, before it is refused by name
+        // (R6-5, D5's ratified ceiling). Milliseconds in the file, because
+        // the quantity an operator reasons about here is a client-visible
+        // stall and microseconds would be noise on it. The semantics have
+        // one home, at `kTxnInDoubtCeilingNs` (server/txn_2pc_service.hpp),
+        // which also carries the derivation of the default.
+        sched::MonoTimeNs in_doubt_ceiling_ns = kTxnInDoubtCeilingNs;
+
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
         // kGroup batch nobody is waiting on; a drain with nothing pending

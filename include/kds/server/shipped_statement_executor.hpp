@@ -240,6 +240,16 @@ public:
             Decide(ask, std::move(reply));
         };
     }
+    // R6-5's third seam: the coordinator's answer to an ask this core sent.
+    Txn2pcServer::ResolveFn ResolveSeam() {
+        return [this](Txn2pcServer::ResolveAnswer answer) { Resolve(answer); };
+    }
+    // The transport this core asks its coordinators through (R6-5). Set by
+    // the wiring after both objects exist - the server holds this
+    // executor's seams, so the executor cannot hold the server by
+    // construction - and null on every fixture that drives the seams
+    // directly, where an in-doubt context simply waits with nothing to ask.
+    void SetTxn2pcServer(Txn2pcServer* server) noexcept { txn_2pc_server_ = server; }
 
     // Statements this core ran on another core's behalf, and finished.
     std::uint64_t executed() const noexcept { return executed_; }
@@ -320,16 +330,39 @@ public:
     // as one at RP7's gate.
     std::uint64_t left_in_doubt_at_stop() const noexcept { return left_in_doubt_at_stop_; }
 
+    // Prepares this core has asked a coordinator about, ever (R6-5). One
+    // per ceiling per in-doubt transaction, so a rising number against a
+    // flat `in_doubt()` is a coordinator that is not answering.
+    std::uint64_t in_doubt_asks() const noexcept { return in_doubt_asks_; }
+    // In-doubt transactions a coordinator's answer resolved, split by what
+    // it said. **`in_doubt_resolved_unknown()` is the one that matters**:
+    // it counts transactions whose coordinator no longer holds the record,
+    // which stay prepared here until the next mount reads that
+    // coordinator's stream (R6-4) - and which go on holding their locks and
+    // blocking writers of their rows until then.
+    std::uint64_t in_doubt_resolved_committed() const noexcept {
+        return in_doubt_resolved_committed_;
+    }
+    std::uint64_t in_doubt_resolved_aborted() const noexcept {
+        return in_doubt_resolved_aborted_;
+    }
+    std::uint64_t in_doubt_resolved_unknown() const noexcept {
+        return in_doubt_resolved_unknown_;
+    }
+
     // Rolls back every enrolled transaction idle past
-    // `kShippedTxnIdleCeilingNs`. Driven from the reactor's periodic tick,
-    // the way `PendingIndexBuilds::Expire` is - a lazy sweep would never run
-    // for an abandoned context, since nothing arrives for it by definition.
+    // `kShippedTxnIdleCeilingNs`, and (R6-5) asks about every prepared one
+    // that has been in doubt for `kTxnInDoubtCeilingNs`. Driven from the
+    // reactor's periodic tick, the way `PendingIndexBuilds::Expire` is - a
+    // lazy sweep would never run for an abandoned context, since nothing
+    // arrives for it by definition.
     //
-    // **A prepared context is excluded** (R6-3, D4): a participant that has
-    // replied prepared may not unilaterally abort, so the ceiling stops
-    // applying to it and the wait becomes D5's in-doubt resolution instead.
-    // The exclusion is the sweep's, not the constant's - `in_doubt()` is
-    // what says how many contexts it is passing over.
+    // **A prepared context is not the ceiling's** (R6-3, D4): a participant
+    // that has replied prepared may not unilaterally abort, so
+    // `kShippedTxnIdleCeilingNs` stops applying to it and D5's ask applies
+    // instead. That is the whole difference between the two halves of this
+    // sweep - one ends transactions, the other asks about them and ends
+    // nothing.
     void ExpireEnrolled();
 
     // Rolls back every enrolled transaction, whatever its age - **except a
@@ -447,6 +480,14 @@ private:
         // coming, since nothing in this row resolves one. `AwaitPrepared`
         // applies it on wake.
         bool decision_pending = false;
+        // R6-5. When the last in-doubt ask went out, or when the promise
+        // was made if none has - the ceiling runs from whichever, so the
+        // first ask waits one ceiling after prepare and each later one a
+        // ceiling after the last. Separate from `touched_at_ns` because
+        // that one moves when a *statement* finishes, and a prepared
+        // context takes no statements: folding them would make the ask
+        // cadence depend on work that can no longer happen.
+        sched::MonoTimeNs asked_at_ns = 0;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
             : session(isolation), touched_at_ns(now) {
@@ -489,6 +530,14 @@ private:
     // ---- R6-3: the two phases, as this core sees them --------------------
     void Prepare(const Txn2pcServer::PrepareAsk& ask, Txn2pcServer::ReplyFn reply);
     void Decide(const Txn2pcServer::DecideAsk& ask, Txn2pcServer::ReplyFn reply);
+    // ---- R6-5: the coordinator's answer to an ask this core sent ---------
+    //
+    // Applied through the same `StartDecision` a decide message takes, with
+    // no reply to send: nobody is parked on this, and the coordinator
+    // already knows what it decided. An `UnknownOutcome` answer applies
+    // nothing - the context stays prepared and in doubt, which is the only
+    // honest state, and the next mount resolves it (R6-4).
+    void Resolve(const Txn2pcServer::ResolveAnswer& answer);
     // Parks until the prepare record is durable, then answers. A coroutine
     // rather than an inline `EnsureDurable` because this runs on the
     // participant's reactor, which serves every other connection on this
@@ -523,6 +572,8 @@ private:
     // This core's own stream, R6-3's prepare record's destination. Null on
     // an unlogged instance, which is the fixture case.
     wal::WalManager* wal_;
+    // R6-5's ask transport, borrowed. Null where nothing can ask.
+    Txn2pcServer* txn_2pc_server_ = nullptr;
 
     // **Keyed by the shipping identity**, which is what makes the record
     // reach the in-flight half of the window: a duplicate is recognised
@@ -560,6 +611,12 @@ private:
     std::uint64_t decides_aborted_ = 0;
     std::uint64_t decide_refusals_ = 0;
     std::uint64_t left_in_doubt_at_stop_ = 0;
+
+    // R6-5.
+    std::uint64_t in_doubt_asks_ = 0;
+    std::uint64_t in_doubt_resolved_committed_ = 0;
+    std::uint64_t in_doubt_resolved_aborted_ = 0;
+    std::uint64_t in_doubt_resolved_unknown_ = 0;
 };
 
 }  // namespace kds::server

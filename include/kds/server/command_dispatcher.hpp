@@ -269,6 +269,28 @@ struct DispatchOutcome {
     // ordinary retryable one and the transaction is still whole.
     std::optional<PendingCrossOwnerCommit> pending_cross_owner_commit = std::nullopt;
 
+    // A write this core refused because the row it wanted is held by a
+    // transaction this core **prepared and is in doubt about** (R6-5, D5).
+    //
+    // Set only where the refusal is one a re-run could get past: the
+    // statement wrote nothing before it hit the conflict, so running it
+    // again once the doubt clears is exactly what the client would do.
+    // `DispatchAsync` parks on the doubt and re-runs; a statement that had
+    // already written rows is not re-runnable - re-applying `SET v = v + 1`
+    // to the rows it did write would be a second increment - and is
+    // answered with the conflict it produced, unblocked.
+    //
+    // **The synchronous `Dispatch()` never waits on one**, for the reason
+    // it never ships: a path with no reactor cannot park, and the honest
+    // answer there is the retryable conflict itself. So the block is a
+    // property of served connections, and a fixture sees the pre-R6-5
+    // behaviour.
+    struct InDoubtBlock {
+        std::uint64_t trx_id = 0;  // the in-doubt writer holding the row
+        std::uint64_t pk = 0;      // the row it holds
+    };
+    std::optional<InDoubtBlock> in_doubt_block = std::nullopt;
+
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/spec/wal.md
     // D2). `kNoLsn` means there is nothing to wait for - every relaxed
@@ -631,6 +653,17 @@ private:
     // The trx_id a write stamps: the scope's transaction, or
     // kBootstrapXid when there is no manager.
     static std::uint64_t WriterId(const WriteScope& scope);
+
+    // First-updater-wins, plus the one thing R6-5 adds to it: **who** the
+    // conflicting writer is. `TransactionManager::CheckWriteConflict` is
+    // unchanged and still decides the verdict; this notes, when the verdict
+    // is a conflict against a transaction this core prepared and is in
+    // doubt about, that the refusal is one a bounded wait could get past
+    // (D5's ratified "block, with a bounded ceiling ending in a named
+    // refusal"). One function for the two call sites, so the two write
+    // paths cannot come to disagree about which conflicts are waitable.
+    Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
+                                      std::uint64_t pk);
 
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables(Session& session);
@@ -1100,6 +1133,27 @@ public:
     // path they had, byte for byte. That is D1's fast path stated as a
     // wiring property rather than as a branch.
     void SetTxn2pc(Txn2pcClient* client) noexcept { txn_2pc_ = client; }
+
+    // ---- R6-5: D5's bounded wait, the one function it is reached through -
+    //
+    // How long a writer of a row held by an in-doubt transaction waits
+    // before it is refused by name. `kTxnInDoubtCeilingNs` is the default
+    // and carries the derivation; `in_doubt_ceiling_ms` is the config key
+    // that sweeps it, per the ratification's "a named constant reached
+    // through one function, and config-swept". Every reader of the value -
+    // the block below, the participant's ask cadence when a fixture sets it
+    // - goes through here rather than at the constant, so a swept value is
+    // swept everywhere.
+    //
+    // 0 is not an off-switch and is not special: it means a writer waits no
+    // time at all and is refused immediately, which is the *other* branch of
+    // D5's `[OPEN]` - "refuse retryably up front" - reachable by
+    // configuration for anyone who wants to measure the two against each
+    // other. It is not the server's default, and the operator ratified the
+    // block; it *is* what an unconfigured dispatcher holds, for the reason
+    // at the member's declaration.
+    sched::MonoTimeNs InDoubtCeilingNs() const noexcept { return in_doubt_ceiling_ns_; }
+    void set_in_doubt_ceiling_ns(sched::MonoTimeNs ns) noexcept { in_doubt_ceiling_ns_ = ns; }
 
     // The **owner's** half, for `SHOW META` only (D7): this core executes
     // other cores' statements, and nothing else in this class would ever
@@ -1594,6 +1648,36 @@ private:
     // end of DispatchAndStage(). One statement runs at a time on a core, so
     // this cannot hold two.
     wal::Lsn pending_commit_lsn_ = wal::kNoLsn;
+
+    // R6-5's three, on `pending_commit_lsn_`'s terms and for its reason:
+    // one statement runs at a time on a core, so a member is exact and
+    // threading three values through every `*Inner()` and `EndWrite` would
+    // be signatures on a dozen functions for a case that fires on a
+    // failure. All three are zeroed at the top of `DispatchAndStage` and
+    // read out at its end.
+    //
+    // `in_doubt_blocker_` is the in-doubt transaction that refused this
+    // statement, `in_doubt_blocked_pk_` the row it holds, and
+    // `statement_trail_mark_` the transaction's trail length when this
+    // statement's write scope opened - which is what says whether the
+    // statement wrote anything before it was refused, and therefore whether
+    // re-running it is a repeat or a second application.
+    std::uint64_t in_doubt_blocker_ = 0;
+    std::uint64_t in_doubt_blocked_pk_ = 0;
+    std::size_t statement_trail_mark_ = 0;
+
+    // D5's ceiling for this core, `InDoubtCeilingNs()`'s storage.
+    //
+    // **Zero here, and the number lives in one place** - the constant
+    // `kTxnInDoubtCeilingNs` in `server/txn_2pc_service.hpp`, which this
+    // header deliberately does not include (see the forward declarations
+    // above: it is included nearly everywhere). Every server sets this from
+    // the `in_doubt_ceiling_ms` config key, whose default *is* that
+    // constant, on both the core-0 and the peer dispatcher. A dispatcher
+    // nobody configured therefore does not wait, which is the pre-R6-5
+    // behaviour and the right one for a fixture with no cross-owner
+    // transactions to be in doubt about.
+    sched::MonoTimeNs in_doubt_ceiling_ns_ = 0;
 
     // The transaction manager, or null when this dispatcher predates
     // transactions - which every socket-free test does, and which is why

@@ -13,6 +13,9 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/sched/send_retry.hpp"
+// R6-5: the ceiling is asserted against the shipped statement's deadline,
+// which lives with the service that owns it rather than being restated.
+#include "kds/server/statement_ship_service.hpp"
 
 // R6-1: the cross-owner transaction wire, and D6's sizing answer.
 //
@@ -80,12 +83,17 @@ TEST(Txn2pcWireTest, TheReplyHoldsTheRefusalsAParticipantCanActuallyProduce) {
 TEST(Txn2pcWireTest, TheFourKindsAreKnownAndNamedAndCollideWithNothing) {
     // A kind the enum carries but `IsKnownRingMessageKind` does not is
     // **dropped on arrival**, and the coordinator would pay a full deadline
-    // to learn that its build disagrees with itself.
+    // to learn that its build disagrees with itself. Six since R6-5, whose
+    // ask leg drops even more quietly: nothing is parked on it, so an
+    // unknown kind there would cost a *ceiling* per participant and read as
+    // a coordinator that never answers.
     const sched::RingMessageKind kinds[] = {
         sched::RingMessageKind::kTxnPrepareRequest,
         sched::RingMessageKind::kTxnPrepareReply,
         sched::RingMessageKind::kTxnDecideRequest,
         sched::RingMessageKind::kTxnDecideReply,
+        sched::RingMessageKind::kTxnResolveRequest,
+        sched::RingMessageKind::kTxnResolveReply,
     };
     for (const sched::RingMessageKind kind : kinds) {
         EXPECT_TRUE(sched::IsKnownRingMessageKind(static_cast<std::uint16_t>(kind)))
@@ -101,14 +109,43 @@ TEST(Txn2pcWireTest, TheFourKindsAreKnownAndNamedAndCollideWithNothing) {
                  "TXN_DECIDE_REQUEST");
     EXPECT_STREQ(sched::RingMessageKindName(sched::RingMessageKind::kTxnDecideReply),
                  "TXN_DECIDE_REPLY");
+    EXPECT_STREQ(sched::RingMessageKindName(sched::RingMessageKind::kTxnResolveRequest),
+                 "TXN_RESOLVE_REQUEST");
+    EXPECT_STREQ(sched::RingMessageKindName(sched::RingMessageKind::kTxnResolveReply),
+                 "TXN_RESOLVE_REPLY");
 
     // The values, pinned because central enumeration is the whole point of
-    // that header: a second subsystem reusing 33-36 would be two protocols
+    // that header: a second subsystem reusing 33-38 would be two protocols
     // on one number, which the receiver cannot detect.
     EXPECT_EQ(static_cast<std::uint16_t>(sched::RingMessageKind::kTxnPrepareRequest), 33u);
     EXPECT_EQ(static_cast<std::uint16_t>(sched::RingMessageKind::kTxnPrepareReply), 34u);
     EXPECT_EQ(static_cast<std::uint16_t>(sched::RingMessageKind::kTxnDecideRequest), 35u);
     EXPECT_EQ(static_cast<std::uint16_t>(sched::RingMessageKind::kTxnDecideReply), 36u);
+    EXPECT_EQ(static_cast<std::uint16_t>(sched::RingMessageKind::kTxnResolveRequest), 37u);
+    EXPECT_EQ(static_cast<std::uint16_t>(sched::RingMessageKind::kTxnResolveReply), 38u);
+}
+
+TEST(Txn2pcWireTest, TheInDoubtAskIsSizedAndItsCeilingSitsUnderTheCoordinatorsDeadline) {
+    // **D6's answer for the leg R6-1 said was still owed one** (R6-5). The
+    // ask and its answer are the smallest messages in the protocol: ids and
+    // a bit, a code and a byte.
+    EXPECT_EQ(sizeof(TxnResolveRequestPayload), 24u);
+    EXPECT_EQ(sizeof(TxnResolveReplyPayload), 24u);
+    EXPECT_LE(sizeof(TxnResolveRequestPayload), sched::kCoreRingPayloadBytes / 32);
+    EXPECT_LE(sizeof(TxnResolveReplyPayload), sched::kCoreRingPayloadBytes / 32);
+
+    // D5's ceiling against the two deadlines it has to sit under, pinned
+    // here because both are one edit away from crossing: a ceiling above
+    // the coordinator's phase deadline would refuse a writer only after the
+    // coordinator had already given up, and one above a shipped statement's
+    // deadline would turn a bounded block into an `UNKNOWN_OUTCOME` for the
+    // client whose statement was blocked.
+    EXPECT_LT(kTxnInDoubtCeilingNs, kTxnPhaseDeadlineNs);
+    EXPECT_LT(kTxnInDoubtCeilingNs, kShippedStatementDeadlineNs);
+    // And the retention outlives the slowest legitimate silence plus an
+    // ask, which is what makes "no record" mean "genuinely gone" rather
+    // than "asked too early".
+    EXPECT_GT(kTxnDecisionRetentionNs, kTxnPhaseDeadlineNs + 2 * kTxnInDoubtCeilingNs);
 }
 
 TEST(Txn2pcWireTest, AZeroedDecideDecodesAsNoDecisionAtAll) {

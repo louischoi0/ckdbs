@@ -978,5 +978,490 @@ TEST_F(Txn2pcCommitTest, ACrossOwnerCommitFromAPathThatCannotParkIsRefusedBefore
     EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &session).response.rfind("ROLLBACK", 0), 0u);
 }
 
+// ---- R6-5: the in-doubt ask, and D5's bounded block ---------------------------
+//
+// Three fixtures again, for the three sides D5 has.
+//
+// **The coordinator's memory** (`Txn2pcResolveTest`): what a core answers a
+// participant that asks. Three answers and no fourth - the decision, "not
+// yet", and "cannot be established here" - and the last of those is
+// terminal, so the arm that produces it is the one worth being sure about.
+//
+// **The participant's wait** (`Txn2pcInDoubtTest`): one ask per ceiling and
+// the answer applied. What is pinned is that the ask is a *resend* by
+// construction - R6-0's bit set - because the whole safety of answering it
+// from a record rather than by re-deciding rests on that.
+//
+// **The writer's block** (`Txn2pcBlockedWriterTest`): a statement that wants
+// a row an in-doubt transaction holds waits and then runs, or waits out the
+// ceiling and is refused **by name, retryably, and not `UnknownOutcome`**.
+
+class Txn2pcResolveTest : public ::testing::Test {
+protected:
+    static constexpr std::uint64_t kSession = 7;
+    static constexpr std::uint64_t kTxn = 1234;
+
+    void SetUp() override {
+        auto transport = sched::RealRingTransport::Create(
+            /*core_count=*/2, 16, sched::kCoreRingPayloadBytes);
+        ASSERT_TRUE(transport.ok()) << transport.status().message();
+        transport_.emplace(std::move(transport.value()));
+        coordinator_.emplace(clock_, io0_);
+        participant_.emplace(clock_, io1_);
+        ASSERT_TRUE(coordinator_->AttachTransport(&*transport_, 0).ok());
+        ASSERT_TRUE(participant_->AttachTransport(&*transport_, 1).ok());
+
+        client_.emplace(/*core_id=*/0, *coordinator_, *transport_, clock_);
+        ASSERT_TRUE(client_->RegisterReplyReceivers().ok());
+
+        // The participant's half is the transport alone here: what is under
+        // test is what the coordinator answers, so the seam simply records.
+        server_.emplace(
+            /*core_id=*/1, *participant_, *transport_,
+            [](Txn2pcServer::PrepareAsk, Txn2pcServer::ReplyFn reply) { reply(Status::OK()); },
+            [](Txn2pcServer::DecideAsk, Txn2pcServer::ReplyFn reply) { reply(Status::OK()); },
+            [this](Txn2pcServer::ResolveAnswer answer) { answers_.push_back(answer); });
+        ASSERT_TRUE(server_->RegisterResolveReplyReceiver().ok());
+        // The decide leg too, so a phase this fixture closes can be one
+        // that was actually acknowledged - which is the difference the
+        // record's lifetime turns on.
+        ASSERT_TRUE(participant_
+                        ->RegisterMessageHandler(sched::RingMessageKind::kTxnDecideRequest,
+                                                 [this](const sched::MessageHeader& header,
+                                                        std::span<const std::byte> payload) {
+                                                     server_->OnDecide(header, payload);
+                                                 })
+                        .ok());
+    }
+
+    void Pump(int iterations = 20) {
+        for (int i = 0; i < iterations; ++i) {
+            coordinator_->RunOnce();
+            participant_->RunOnce();
+        }
+    }
+
+    sched::ManualClock clock_;
+    sched::NullIoBackend io0_;
+    sched::NullIoBackend io1_;
+    std::optional<sched::RealRingTransport> transport_;
+    std::optional<sched::Scheduler> coordinator_;
+    std::optional<sched::Scheduler> participant_;
+    std::optional<Txn2pcClient> client_;
+    std::optional<Txn2pcServer> server_;
+    std::vector<Txn2pcServer::ResolveAnswer> answers_;
+};
+
+TEST_F(Txn2pcResolveTest, ADecidedTransactionIsAnsweredWithItsDecisionAndNotReDecided) {
+    const std::vector<std::uint32_t> participants{1};
+    ASSERT_TRUE(client_->Prepare(1, kSession, kTxn, participants).ok());
+    Pump();
+    client_->Close(1);
+    ASSERT_TRUE(client_->Decide(2, kSession, kTxn, TxnDecision::kCommit, participants).ok());
+    // **The record is written before the sends**, so the ask below is
+    // answered even though this decide phase is never pumped or closed -
+    // which is the shape of a decide message the ring lost.
+    server_->Ask(/*coordinator=*/0, kSession, kTxn);
+    Pump();
+
+    ASSERT_EQ(answers_.size(), 1u);
+    EXPECT_TRUE(answers_[0].status.ok()) << answers_[0].status.message();
+    EXPECT_EQ(answers_[0].decision, TxnDecision::kCommit);
+    EXPECT_EQ(answers_[0].transaction_id, kTxn);
+    EXPECT_EQ(client_->resolutions_answered(), 1u);
+    EXPECT_EQ(client_->resolutions_unknown(), 0u);
+}
+
+TEST_F(Txn2pcResolveTest, APreparedButUndecidedTransactionIsToldToAskAgainRatherThanUnknown) {
+    // The window this exists for: the participant has prepared and the
+    // coordinator is still waiting on a *sibling* participant. Answering
+    // `UnknownOutcome` here would be terminal - the participant would stop
+    // asking about a transaction whose decision is milliseconds away.
+    const std::vector<std::uint32_t> participants{1};
+    ASSERT_TRUE(client_->Prepare(1, kSession, kTxn, participants).ok());
+    server_->Ask(/*coordinator=*/0, kSession, kTxn);
+    Pump();
+
+    ASSERT_EQ(answers_.size(), 1u);
+    EXPECT_FALSE(answers_[0].status.ok());
+    EXPECT_TRUE(answers_[0].status.retryable()) << answers_[0].status.message();
+    EXPECT_EQ(answers_[0].decision, TxnDecision::kUnset);
+    EXPECT_EQ(client_->resolutions_undecided(), 1u);
+    EXPECT_EQ(client_->resolutions_unknown(), 0u);
+}
+
+TEST_F(Txn2pcResolveTest, ATransactionThisCoreHasNoRecordOfIsUnknownAndNeverGuessed) {
+    server_->Ask(/*coordinator=*/0, kSession, /*transaction_id=*/999);
+    Pump();
+
+    ASSERT_EQ(answers_.size(), 1u);
+    EXPECT_EQ(answers_[0].status.code(), StatusCode::kUnknownOutcome);
+    EXPECT_EQ(answers_[0].decision, TxnDecision::kUnset);
+    EXPECT_EQ(client_->resolutions_unknown(), 1u);
+    // **Never `retryable`**: this is D5's terminal answer and a participant
+    // that retried it would ask for ever about a record that is gone.
+    EXPECT_FALSE(answers_[0].status.retryable());
+}
+
+TEST_F(Txn2pcResolveTest, AnAcknowledgedDecidePhaseKeepsNoRecordAndAnUnacknowledgedOneDoes) {
+    const std::vector<std::uint32_t> participants{1};
+    ASSERT_TRUE(client_->Decide(1, kSession, kTxn, TxnDecision::kCommit, participants).ok());
+    EXPECT_EQ(client_->decisions_held(), 1u);
+    Pump();
+    ASSERT_TRUE(client_->Settled(1));
+    client_->Close(1);
+    // Every participant acknowledged, so nobody is left to ask and the
+    // record would only be a map node held for the retention on the healthy
+    // path - which is every cross-owner transaction.
+    EXPECT_EQ(client_->decisions_held(), 0u);
+
+    // The unacknowledged case keeps it: the participant that did not
+    // acknowledge is exactly the one that will ask.
+    const std::vector<std::uint32_t> silent{1};
+    ASSERT_TRUE(client_->Decide(2, kSession, kTxn + 1, TxnDecision::kAbort, silent).ok());
+    clock_.Advance(kTxnPhaseDeadlineNs + 1);
+    ASSERT_TRUE(client_->Settled(2));
+    client_->Close(2);
+    EXPECT_EQ(client_->decisions_held(), 1u);
+}
+
+TEST_F(Txn2pcResolveTest, TheRetentionForgetsADecisionAndTheAnswerBecomesUnknown) {
+    const std::vector<std::uint32_t> participants{1};
+    ASSERT_TRUE(client_->Decide(1, kSession, kTxn, TxnDecision::kCommit, participants).ok());
+    clock_.Advance(kTxnDecisionRetentionNs + 1);
+
+    server_->Ask(/*coordinator=*/0, kSession, kTxn);
+    Pump();
+    ASSERT_EQ(answers_.size(), 1u);
+    EXPECT_EQ(answers_[0].status.code(), StatusCode::kUnknownOutcome);
+    EXPECT_EQ(client_->decisions_forgotten(), 1u);
+    EXPECT_EQ(client_->decisions_held(), 0u);
+}
+
+TEST_F(Txn2pcResolveTest, AnAskWithTheRetryBitClearIsRefusedRatherThanAnswered) {
+    // R6-0's contract has one live sender and this is it: an ask is a
+    // resend by construction. A sender that leaves the bit clear does not
+    // know that, and answering it as though it did is how the guarantee
+    // would be lost quietly - so the ask is refused rather than served from
+    // a record.
+    const std::vector<std::uint32_t> participants{1};
+    ASSERT_TRUE(client_->Decide(1, kSession, kTxn, TxnDecision::kCommit, participants).ok());
+
+    TxnResolveRequestPayload ask{};
+    ask.session_id = kSession;
+    ask.transaction_id = kTxn;
+    ask.retry = 0;
+    sched::SubmitSendPod(*participant_, *transport_, /*src_core=*/1, /*dst_core=*/0,
+                         /*session_core=*/0, /*request_id=*/77,
+                         sched::RingMessageKind::kTxnResolveRequest, ask);
+    Pump();
+
+    ASSERT_EQ(answers_.size(), 1u);
+    EXPECT_EQ(answers_[0].status.code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(client_->resolve_refusals(), 1u);
+    EXPECT_EQ(client_->resolutions_answered(), 0u);
+}
+
+// ---- The participant's wait ---------------------------------------------------
+
+class Txn2pcInDoubtTest : public Txn2pcParticipantTest {
+protected:
+    void SetUp() override {
+        Txn2pcParticipantTest::SetUp();
+        auto transport = sched::RealRingTransport::Create(
+            /*core_count=*/2, 16, sched::kCoreRingPayloadBytes);
+        ASSERT_TRUE(transport.ok()) << transport.status().message();
+        transport_.emplace(std::move(transport.value()));
+        ASSERT_TRUE(scheduler_->AttachTransport(&*transport_, 1).ok());
+        coordinator_reactor_.emplace(clock_, coordinator_io_);
+        ASSERT_TRUE(coordinator_reactor_->AttachTransport(&*transport_, 0).ok());
+
+        // This core's own 2PC transport, which is what its sweep asks
+        // through. The prepare and decide seams are the executor's own, as
+        // in a server - the ask is the only leg this fixture drives.
+        server_.emplace(/*core_id=*/1, *scheduler_, *transport_, executor_->PrepareSeam(),
+                        executor_->DecideSeam(), executor_->ResolveSeam());
+        ASSERT_TRUE(server_->RegisterResolveReplyReceiver().ok());
+        executor_->SetTxn2pcServer(&*server_);
+
+        // The coordinator's half: a real client, so what answers the ask is
+        // the code a coordinator runs and not a stub.
+        client_.emplace(/*core_id=*/0, *coordinator_reactor_, *transport_, clock_);
+        ASSERT_TRUE(client_->RegisterReplyReceivers().ok());
+    }
+
+    void TearDown() override {
+        if (executor_.has_value()) executor_->SetTxn2pcServer(nullptr);
+    }
+
+    void PumpBoth(int iterations = 20) {
+        for (int i = 0; i < iterations; ++i) {
+            (void)wal_->DrainOnce();
+            scheduler_->RunOnce();
+            coordinator_reactor_->RunOnce();
+        }
+    }
+
+    sched::NullIoBackend coordinator_io_;
+    std::optional<sched::RealRingTransport> transport_;
+    std::optional<sched::Scheduler> coordinator_reactor_;
+    std::optional<Txn2pcServer> server_;
+    std::optional<Txn2pcClient> client_;
+};
+
+TEST_F(Txn2pcInDoubtTest, AnInDoubtParticipantAsksOncePerCeilingAndNotBefore) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+    ASSERT_EQ(executor_->in_doubt(), 1u);
+
+    // Under the ceiling: nothing is asked. The prepared context is not the
+    // idle sweep's either, so this tick does nothing at all.
+    clock_.Advance(kTxnInDoubtCeilingNs / 2);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->in_doubt_asks(), 0u);
+
+    clock_.Advance(kTxnInDoubtCeilingNs);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->in_doubt_asks(), 1u);
+    // And not again on the very next tick: one ask per ceiling.
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->in_doubt_asks(), 1u);
+    clock_.Advance(kTxnInDoubtCeilingNs);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->in_doubt_asks(), 2u);
+
+    // The transaction is still prepared and still holds its rows: asking
+    // changes nothing about the participant's own state.
+    EXPECT_EQ(executor_->in_doubt(), 1u);
+    EXPECT_EQ(executor_->enrolled(), 1u);
+}
+
+TEST_F(Txn2pcInDoubtTest, TheCoordinatorsAnswerCommitsTheTransactionTheDecideNeverReached) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    // The coordinator decided and its decide message never arrived - the
+    // failure D5 is written for. `Decide` records before it sends, so the
+    // record is there for the ask even though this fixture never delivers
+    // the message to the participant's seam.
+    const std::vector<std::uint32_t> participants{1};
+    ASSERT_TRUE(client_->Decide(/*request_id=*/1, kSession, kCoordinatorTxn,
+                                TxnDecision::kCommit, participants)
+                    .ok());
+
+    clock_.Advance(kTxnInDoubtCeilingNs + 1);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->in_doubt_asks(), 1u);
+    PumpBoth(64);
+
+    EXPECT_EQ(executor_->in_doubt_resolved_committed(), 1u);
+    EXPECT_EQ(executor_->in_doubt(), 0u);
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_NE(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+TEST_F(Txn2pcInDoubtTest, AnUnknownAnswerLeavesTheTransactionInDoubtRatherThanGuessing) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    // No record on the coordinator at all: the ask is answered
+    // `UnknownOutcome`, which is terminal. Nothing is applied - committing
+    // would be on no authority and aborting would contradict a coordinator
+    // that may have committed - so the row stays invisible and the context
+    // stays prepared for the next mount to resolve (R6-4).
+    clock_.Advance(kTxnInDoubtCeilingNs + 1);
+    executor_->ExpireEnrolled();
+    PumpBoth(64);
+
+    EXPECT_EQ(executor_->in_doubt_resolved_unknown(), 1u);
+    EXPECT_EQ(executor_->in_doubt(), 1u);
+    EXPECT_EQ(executor_->enrolled(), 1u);
+    EXPECT_EQ(executor_->decides_committed(), 0u);
+    EXPECT_EQ(executor_->decides_aborted(), 0u);
+    EXPECT_EQ(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+TEST_F(Txn2pcInDoubtTest, AnAbortAnswerUnwindsTheParticipantsHalf) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+    const std::vector<std::uint32_t> participants{1};
+    ASSERT_TRUE(client_->Decide(/*request_id=*/1, kSession, kCoordinatorTxn,
+                                TxnDecision::kAbort, participants)
+                    .ok());
+
+    clock_.Advance(kTxnInDoubtCeilingNs + 1);
+    executor_->ExpireEnrolled();
+    PumpBoth(64);
+
+    EXPECT_EQ(executor_->in_doubt_resolved_aborted(), 1u);
+    EXPECT_EQ(executor_->in_doubt(), 0u);
+    EXPECT_EQ(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+// ---- The blocked writer -------------------------------------------------------
+//
+// D5's ratified `[OPEN]`: a writer of a row an in-doubt transaction holds
+// **blocks** under a ceiling rather than being refused up front. The
+// participant fixture is reused because the in-doubt transaction has to be
+// a real one - `Transaction::prepared` is raised by the prepare path, and a
+// test that set it by hand would prove nothing about the path that sets it.
+
+class Txn2pcBlockedWriterTest : public Txn2pcParticipantTest {
+protected:
+    void SetUp() override {
+        Txn2pcParticipantTest::SetUp();
+        dispatcher_->set_in_doubt_ceiling_ns(kTxnInDoubtCeilingNs);
+    }
+
+    // A local client's statement on the served path - the only entry point
+    // that may park, which is what the block needs.
+    DispatchOutcome RunAsync(const std::string& sql, Session& session, int turns = 64) {
+        auto out = std::make_shared<DispatchOutcome>();
+        auto done = std::make_shared<bool>(false);
+        scheduler_->Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground,
+            dispatcher_->DispatchAsync(sql, &session, out.get()),
+            [done](const Status&) { *done = true; }));
+        for (int i = 0; i < turns && !*done; ++i) {
+            (void)wal_->DrainOnce();
+            scheduler_->RunOnce();
+        }
+        return *out;
+    }
+};
+
+TEST_F(Txn2pcBlockedWriterTest, AWriterOfAnInDoubtRowWaitsAndThenRunsWhenTheDecisionArrives) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    // A local client wants the same row. It is held by a transaction this
+    // core prepared, so the write blocks instead of being refused.
+    Session local;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &local, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 16 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_FALSE(*done) << "the writer answered instead of waiting: " << out->response;
+
+    // The decision arrives well inside the ceiling, and the blocked
+    // statement then runs against the row the commit left.
+    ASSERT_TRUE(Decide(TxnDecision::kCommit).status.ok());
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done);
+    EXPECT_EQ(out->response.rfind("UPDATED", 0), 0u) << out->response;
+    EXPECT_NE(Rows().find(",3"), std::string::npos) << Rows();
+}
+
+TEST_F(Txn2pcBlockedWriterTest, AtTheCeilingTheWriterIsRefusedByNameRetryablyAndNotUnknown) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    Session local;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &local, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 16 && !*done; ++i) scheduler_->RunOnce();
+    ASSERT_FALSE(*done);
+
+    clock_.Advance(kTxnInDoubtCeilingNs + 1);
+    for (int i = 0; i < 64 && !*done; ++i) scheduler_->RunOnce();
+    ASSERT_TRUE(*done) << "the block has no ceiling, which is the hang HP3 forbids";
+
+    const Status refused = StatusFromErrorReply(out->response);
+    // **The three properties §2's obligation names**, each one a way to get
+    // this wrong: retryable, so a client's loop reads the bit the engine
+    // means; *not* `UnknownOutcome`, which would tell a client to go and
+    // read data its statement never touched; and named, so an operator sees
+    // a coordinator that has not decided rather than a busy neighbour.
+    EXPECT_TRUE(refused.retryable()) << out->response;
+    EXPECT_NE(refused.code(), StatusCode::kUnknownOutcome);
+    EXPECT_EQ(refused.code(), StatusCode::kTxnConflict);
+    EXPECT_NE(out->response.find("cross-owner"), std::string::npos) << out->response;
+    EXPECT_NE(out->response.find("coordinator"), std::string::npos) << out->response;
+    // The in-doubt transaction is untouched by the refusal: it is still
+    // prepared, still owed a decision, and still holding the row.
+    EXPECT_EQ(executor_->in_doubt(), 1u);
+}
+
+TEST_F(Txn2pcBlockedWriterTest, ADispatcherWithNoCeilingRefusesAtOnceWhichIsD5sOtherBranch) {
+    // 0 is not an off-switch: it is "refuse retryably up front", the branch
+    // the operator did *not* ratify, reachable by configuration so the two
+    // can be measured against each other.
+    dispatcher_->set_in_doubt_ceiling_ns(0);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    Session local;
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 3 WHERE id = 7", local);
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_TRUE(StatusFromErrorReply(out.response).retryable()) << out.response;
+}
+
+TEST_F(Txn2pcBlockedWriterTest, AWriterInsideATransactionIsNotPoisonedWhileItIsStillWaiting) {
+    // The block withholds the poison `EndWrite` would otherwise apply,
+    // because a poisoned session cannot run the statement again - and a
+    // wait whose end is a forced ROLLBACK is not a wait. The poison lands
+    // only if the ceiling is reached, at which point the statement has
+    // genuinely failed.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    Session local;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &local).response.rfind("BEGIN", 0), 0u);
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &local, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 16 && !*done; ++i) scheduler_->RunOnce();
+    ASSERT_FALSE(*done);
+    EXPECT_FALSE(local.failed()) << "a waiting statement has not failed yet";
+
+    ASSERT_TRUE(Decide(TxnDecision::kCommit).status.ok());
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done);
+    EXPECT_EQ(out->response.rfind("UPDATED", 0), 0u) << out->response;
+    EXPECT_FALSE(local.failed());
+    EXPECT_EQ(dispatcher_->Dispatch("COMMIT", &local).response.rfind("COMMIT", 0), 0u);
+}
+
+TEST_F(Txn2pcBlockedWriterTest, AnOrdinaryInFlightWriterIsNotWaitedOnAtAll) {
+    // The narrowness that makes the block safe: only an **in-doubt**
+    // transaction is waited for. An ordinary in-flight writer ends on its
+    // own, so first-updater-wins answers immediately, exactly as it did
+    // before R6-5 - a statement that waited on one would be waiting on a
+    // client's think time.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
+    // No prepare: the shipped transaction is open but not in doubt.
+
+    Session local;
+    const DispatchOutcome out = RunAsync("UPDATE t SET v = 3 WHERE id = 7", local);
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_EQ(StatusFromErrorReply(out.response).code(), StatusCode::kTxnConflict);
+    EXPECT_EQ(out.response.find("coordinator"), std::string::npos)
+        << "an ordinary conflict must keep its own words: " << out.response;
+}
+
 }  // namespace
 }  // namespace kds::server

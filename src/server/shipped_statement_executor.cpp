@@ -480,12 +480,21 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
         // that is the property of the instance, not of this row. Stated
         // rather than silently taken, because "prepared" is a durability
         // claim everywhere else in this file.
-        // No `set_prepare_lsn` on this arm: there is no record for a
-        // checkpoint's redo start to be held below, because there is no
-        // record.
+        // **The LSN is 0 on this arm and the flag is still raised** (R6-5):
+        // there is no record for a checkpoint's redo start to be held
+        // below, because there is no record - but a writer of this
+        // transaction's rows must block on it here exactly as it would on a
+        // logged core, since what it is waiting for is a *decision* and
+        // that arrives over the ring either way. `MarkPrepared(0)` is the
+        // one call that says both, which is why the flag is not derived
+        // from the LSN.
         context.prepared = true;
+        context.asked_at_ns = clock_.Now();
         ++in_doubt_;
         ++prepared_;
+        if (txn::Transaction* txn = context.session.transaction(); txn != nullptr) {
+            txn->MarkPrepared(wal::kNoLsn);
+        }
         reply(Status::OK());
         return;
     }
@@ -550,6 +559,10 @@ sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
     // context may not be aborted by this core (D4), which is what
     // `ExpireEnrolled` and `RollbackAllEnrolled` both read.
     context.prepared = true;
+    // R6-5's ceiling runs from the promise: the first ask goes out one
+    // ceiling from here, not one ceiling from whenever a statement last
+    // finished on this context.
+    context.asked_at_ns = clock_.Now();
     ++in_doubt_;
     ++prepared_;
     // **The checkpoint must not outrun this record** (R6-4): a prepared
@@ -557,9 +570,11 @@ sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
     // table as an ordinary transaction, and a redo start that advanced past
     // the prepare would leave the next mount reading it as a loser. The
     // transaction carries the LSN and `OldestPreparedLsn` is what the
-    // checkpointer floors at.
+    // checkpointer floors at. The same call raises the flag a **writer** of
+    // this transaction's rows reads (R6-5, `Transaction::prepared`), which
+    // is why one function sets both.
     if (txn::Transaction* txn = context.session.transaction(); txn != nullptr) {
-        txn->set_prepare_lsn(lsn);
+        txn->MarkPrepared(lsn);
     }
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("2pc", "core " + std::to_string(core_id_) + " prepared core " +
@@ -805,17 +820,124 @@ void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
     if (reply) reply(status);
 }
 
+void ShippedStatementExecutor::Resolve(const Txn2pcServer::ResolveAnswer& answer) {
+    const DedupKey key{answer.coordinator, answer.session_id};
+    auto it = enrolled_.find(key);
+    if (it == enrolled_.end()) {
+        // The decide arrived while the ask was in flight and released the
+        // context. Nothing to do and nothing wrong: this is what a
+        // coordinator answering both looks like, and the ask cost one round
+        // trip.
+        return;
+    }
+    Enrolled& context = *it->second;
+    if (!context.prepared || context.phase_running ||
+        running_.find(key) != running_.end()) {
+        // Not this core's to act on right now. A context that is no longer
+        // prepared was decided between the ask and the answer; one with a
+        // phase or a statement running is mid-decide already, and applying
+        // a second decision under it is what `Decide`'s own guards refuse.
+        return;
+    }
+    if (context.coordinator_txn_id != answer.transaction_id) {
+        // The answer names a different transaction than the one this
+        // context prepared. `Decide`'s identity check, on the leg that
+        // carries no waiter to check it for us.
+        ++decide_refusals_;
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("2pc", "core " + std::to_string(core_id_) + " asked about transaction " +
+                                   std::to_string(context.coordinator_txn_id) +
+                                   " and was answered about " +
+                                   std::to_string(answer.transaction_id) + "; ignored");
+        }
+        return;
+    }
+
+    if (!answer.status.ok()) {
+        if (answer.status.code() == StatusCode::kUnknownOutcome) {
+            // **The coordinator no longer holds the record** (D5). Nothing
+            // is applied: committing would make this core's half durable on
+            // no authority, and aborting would contradict a coordinator
+            // that may have committed. The context stays prepared, stays in
+            // doubt, goes on holding its locks - and the next mount reads
+            // the coordinator's *stream*, which is the durable record its
+            // memory is not (R6-4). Counted, because this is the one
+            // outcome that is not resolved by the time this returns.
+            ++in_doubt_resolved_unknown_;
+            if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+                log_->Warn("2pc", "core " + std::to_string(core_id_) + " asked core " +
+                                      std::to_string(answer.coordinator) +
+                                      " about transaction " +
+                                      std::to_string(answer.transaction_id) +
+                                      " and was told the outcome cannot be established there; "
+                                      "this core stays in doubt until the next mount resolves "
+                                      "it against that core's stream");
+            }
+            // Not asked again: the answer is terminal. The stamp still
+            // moves so the sweep does not re-ask every tick.
+            context.asked_at_ns = clock_.Now();
+            return;
+        }
+        // "Not decided yet" and anything else: keep waiting, ask again on
+        // the next ceiling. The stamp moved when the ask went out, so the
+        // cadence is already one ask per ceiling and this needs no action.
+        return;
+    }
+
+    const bool commit = answer.decision == TxnDecision::kCommit;
+    if (commit) {
+        ++in_doubt_resolved_committed_;
+    } else {
+        ++in_doubt_resolved_aborted_;
+    }
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("2pc", "core " + std::to_string(core_id_) + " resolved transaction " +
+                              std::to_string(answer.transaction_id) + " as " +
+                              (commit ? "COMMIT" : "ABORT") + " by asking core " +
+                              std::to_string(answer.coordinator));
+    }
+    // No reply: nobody is parked on this, and the coordinator already knows
+    // what it decided. `StartDecision` is the same entry point a decide
+    // message takes, so "never commit unprepared work" is asked once.
+    StartDecision(it, commit, {});
+}
+
 void ShippedStatementExecutor::ExpireEnrolled() {
     // Before the clock read: on every live path today this map is empty,
     // and this runs on every core's drain tick.
     if (enrolled_.empty()) return;
     const sched::MonoTimeNs now = clock_.Now();
     for (auto it = enrolled_.begin(); it != enrolled_.end();) {
-        // **A prepared context is not the sweep's** (R6-3, D4): this core
-        // promised not to abort it unilaterally, and the ceiling that
-        // applies to it is D5's in-doubt resolution, not this one. The
-        // number of contexts this passes over is `in_doubt()`.
+        // **A prepared context is not the idle ceiling's** (R6-3, D4): this
+        // core promised not to abort it unilaterally, and the ceiling that
+        // applies to it is D5's, which asks rather than ends. The number of
+        // contexts this passes over is `in_doubt()`.
         if (it->second->prepared) {
+            // **D5's bounded wait, from the participant's side** (R6-5).
+            // One ask per ceiling, for as long as it takes: the alternative
+            // - a cap on asks - would leave a participant holding locks
+            // with nothing left that could free it before the next mount,
+            // and asking costs two ring messages against a transaction that
+            // is already blocking writers. The stamp moves before the send,
+            // so a ring that refuses the send still costs one ceiling
+            // rather than one tick.
+            Enrolled& context = *it->second;
+            const bool busy =
+                context.phase_running || running_.find(it->first) != running_.end();
+            if (!busy && txn_2pc_server_ != nullptr &&
+                now - context.asked_at_ns >= kTxnInDoubtCeilingNs) {
+                context.asked_at_ns = now;
+                ++in_doubt_asks_;
+                if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+                    log_->Warn("2pc", "core " + std::to_string(core_id_) +
+                                          " has been in doubt about core " +
+                                          std::to_string(it->first.first) + "'s transaction " +
+                                          std::to_string(context.coordinator_txn_id) +
+                                          " for its ceiling; asking what was decided");
+                }
+                txn_2pc_server_->Ask(it->first.first, it->first.second,
+                                     context.coordinator_txn_id);
+            }
             ++it;
             continue;
         }
