@@ -3662,6 +3662,365 @@ TEST_F(CoreRuntimeTest, AStatementInsideATransactionShipsAndEnrolsSinceR68) {
     ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
 }
 
+// **The pipeline, wired exactly as `Expeditor::Serve` wires it**
+// (`src/server/expeditor.cpp`) - the send is a `SendRetryTask` on the real
+// transport and the three consumer kinds are registered on core 0's
+// reactor.
+//
+// It exists because `ForeignIndexRig` deliberately installs no pipeline,
+// and for a **read** that omission is not neutral: the two remote-read fast
+// paths in `HandleSelect` sit *above* the shipping fork and take
+// `SELECT * FROM <peer relation>` whole, so a rig without them measures a
+// route production does not take. Every RR1 test below wires it, which is
+// what makes "the read ships" a statement about the server rather than
+// about the fixture.
+void WireRemoteReads(ForeignIndexRig& rig, std::optional<SessionStepClient>& client) {
+    client.emplace(/*core_id=*/0,
+                   [&rig](std::uint32_t dst, sched::RingMessageKind kind,
+                          std::vector<std::byte> payload) {
+                       sched::MessageHeader out{};
+                       out.src_core = 0;
+                       out.dst_core = dst;
+                       out.session_core = 0;
+                       out.kind = static_cast<std::uint16_t>(kind);
+                       out.sched_group =
+                           static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+                       rig.core0->Submit(sched::MakeSendRetryTask(rig.ring(), out, payload));
+                       return Status::OK();
+                   });
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kStepBatch,
+                                             [&client](const sched::MessageHeader&,
+                                                       std::span<const std::byte> payload) {
+                                                 client->OnStepBatch(payload);
+                                             })
+                    .ok());
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kStepEof,
+                                             [&client](const sched::MessageHeader&,
+                                                       std::span<const std::byte> payload) {
+                                                 client->OnStepEof(payload);
+                                             })
+                    .ok());
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kStepError,
+                                             [&client](const sched::MessageHeader&,
+                                                       std::span<const std::byte> payload) {
+                                                 client->OnStepError(payload);
+                                             })
+                    .ok());
+    rig.dispatcher->SetRemoteReads(&*client);
+}
+
+TEST_F(CoreRuntimeTest, AReadInsideATransactionShipsAndEnrolsSinceRR1) {
+    // **RR1: the read half of enrolment**, and the mirror of
+    // `AStatementInsideATransactionShipsAndEnrolsSinceR68` above. Until
+    // 2026-08-28 the read site tested `MayShip` alone, which refuses inside
+    // an explicit transaction - so this statement fell through to
+    // `CheckReadAffinity` and was refused, while the identical read outside
+    // a transaction shipped. RP8's B5 is what found it: a realistic
+    // transaction reads before it writes, so the refusal made the whole
+    // two-phase path unreachable from any workload in this tree.
+    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_txn_read");
+    WireRemoteReads(rig, reads);
+
+    Session session;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT * FROM shipped_txn_read", out, &session);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find(",10"), std::string::npos) << out.response;
+    // **And it shipped rather than pipelined**, which is the whole claim:
+    // this rig has the pipeline wired, and `SELECT *` on a single foreign
+    // relation is exactly the shape the single-step pipeline takes. Inside
+    // a session that can enrol it is diverted, because the pipeline answers
+    // from a view outside this transaction.
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u) << "it did not reach the owner";
+
+    // **A read enrols**, which is the part that costs something: the owner
+    // holds a transaction open for it and the coordinator's COMMIT will run
+    // two phases over a participant that only read. That is the price of
+    // the read seeing this transaction's own uncommitted writes on that
+    // core (the test below), and it is stated rather than optimised - a
+    // read-only participant reply is a protocol change and out of this
+    // order's scope.
+    EXPECT_TRUE(session.has_participants());
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolled(), 1u);
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+}
+
+TEST_F(CoreRuntimeTest, ACrossOwnerTransactionReadsBackItsOwnUncommittedWriteOnThePeer) {
+    // **Why the read has to ship rather than be answered from a snapshot**
+    // (RR1). A transaction that wrote a row on a peer and then reads that
+    // relation must see its own uncommitted write; only the peer's own
+    // transaction can show it, so the read joins that transaction. Nothing
+    // else does: the row is not on this core, and no view this core holds
+    // can make a peer's uncommitted row visible.
+    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "read_own_write");
+    WireRemoteReads(rig, reads);
+
+    Session session;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome wrote;
+    auto write = rig.Start("INSERT INTO read_own_write VALUES (77)", wrote, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << wrote.response;
+    ASSERT_EQ(wrote.response.rfind("INSERTED", 0), 0u) << wrote.response;
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT * FROM read_own_write", out, &session);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    EXPECT_NE(out.response.find(",77"), std::string::npos)
+        << "a cross-owner transaction did not see its own write on the peer: " << out.response;
+
+    // And nobody else does, because it is not committed: the owner's own
+    // autocommit read runs under a fresh view of the owner's history.
+    const std::string outside =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM read_own_write").response;
+    EXPECT_EQ(outside.find(",77"), std::string::npos)
+        << "an uncommitted cross-owner write was visible outside its transaction: " << outside;
+
+    // One participant and one context for both statements - the second
+    // joined the first's transaction rather than opening a second one.
+    EXPECT_EQ(session.participants().size(), 1u);
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolments(), 1u);
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+}
+
+TEST_F(CoreRuntimeTest, AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsContextIsGone) {
+    // **RR0's correctness half, and the answer to CR2.** A participant's
+    // context is keyed on `(coordinator core, session_id)` and nothing
+    // else, and two things end one while its coordinator's transaction is
+    // still open: the idle ceiling (`kShippedTxnIdleCeilingNs`) and this
+    // core stopping. Before the `join` bit the next statement of that
+    // transaction found no context and opened a **fresh** one; prepare and
+    // commit then made the second half durable, the first half was gone,
+    // and the client was told the whole transaction committed.
+    //
+    // `RollbackAllEnrolled` is the ceiling's effect without the ceiling's
+    // clock - this rig runs on a `SystemClock`, and what is under test is
+    // what happens *after* a context disappears, not what makes it
+    // disappear.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "join_gone");
+
+    Session session;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome first;
+    auto write = rig.Start("INSERT INTO join_gone VALUES (81)", first, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << first.response;
+    ASSERT_EQ(first.response.rfind("INSERTED", 0), 0u) << first.response;
+    ASSERT_EQ(rig.peer->shipped_statements()->enrolments(), 1u);
+
+    rig.peer->shipped_statements()->RollbackAllEnrolled();
+    ASSERT_EQ(rig.peer->shipped_statements()->enrolled(), 0u);
+
+    DispatchOutcome second;
+    auto again = rig.Start("INSERT INTO join_gone VALUES (82)", second, &session);
+    ASSERT_TRUE(rig.Drive(*again)) << second.response;
+    EXPECT_EQ(second.response.rfind("ERR", 0), 0u)
+        << "a statement opened a second transaction for one cross-owner transaction: "
+        << second.response;
+    EXPECT_NE(second.response.find("TXN_CONFLICT"), std::string::npos) << second.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->join_refusals(), 1u);
+    // The refusal is the whole point: no second context was opened.
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolments(), 1u);
+    EXPECT_TRUE(session.failed())
+        << "the transaction stayed committable after half of it was rolled back";
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+}
+
+TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionCarriesOneWatermarkPerParticipant) {
+    // **RR0 / D3, both halves of the ratified `[OPEN]` in one test.**
+    // REPEATABLE READ carries a watermark per participant - the
+    // `up_to_trx_id` that participant's own transaction pinned, in that
+    // core's own id space - and it does not move across the transaction's
+    // statements, which is the consistent-per-core snapshot D3 promises.
+    // READ COMMITTED carries none at all, which is the `[OPEN]` ratified
+    // "yes, RC skips the watermark entirely" and is why the default level
+    // pays nothing for any of this.
+    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "watermark_rr");
+    WireRemoteReads(rig, reads);
+
+    Session rr;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN ISOLATION LEVEL REPEATABLE READ", begun, &rr);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome first;
+    auto read = rig.Start("SELECT * FROM watermark_rr", first, &rr);
+    ASSERT_TRUE(rig.Drive(*read)) << first.response;
+    ASSERT_NE(first.response.rfind("ERR", 0), 0u) << first.response;
+    const std::uint64_t watermark = rr.ParticipantWatermark(1);
+    EXPECT_NE(watermark, 0u) << "an RR participant reported no watermark";
+
+    // **What "consistent per core" means, made concrete rather than
+    // asserted**: the participant commits a row of its own between the two
+    // reads, and the second read must not show it. Without the pinned view
+    // the two reads differ by exactly this row, which is what makes the
+    // equality below a statement about isolation and not about a relation
+    // nobody touched.
+    ASSERT_EQ(rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO watermark_rr VALUES (444)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    DispatchOutcome second;
+    auto again = rig.Start("SELECT * FROM watermark_rr", second, &rr);
+    ASSERT_TRUE(rig.Drive(*again)) << second.response;
+    EXPECT_NE(second.response.rfind("ERR", 0), 0u) << second.response;
+    EXPECT_EQ(rr.ParticipantWatermark(1), watermark)
+        << "the participant's snapshot moved under a REPEATABLE READ transaction";
+    EXPECT_EQ(second.response, first.response)
+        << "two reads of one relation in one RR transaction disagreed";
+    EXPECT_EQ(second.response.find(",444"), std::string::npos)
+        << "a REPEATABLE READ transaction saw a commit that happened after it began: "
+        << second.response;
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &rr);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+
+    Session rc;
+    DispatchOutcome rc_begun;
+    auto rc_begin = rig.Start("BEGIN", rc_begun, &rc);
+    ASSERT_TRUE(rig.Drive(*rc_begin)) << rc_begun.response;
+    DispatchOutcome rc_out;
+    auto rc_read = rig.Start("SELECT * FROM watermark_rr", rc_out, &rc);
+    ASSERT_TRUE(rig.Drive(*rc_read)) << rc_out.response;
+    ASSERT_NE(rc_out.response.rfind("ERR", 0), 0u) << rc_out.response;
+    EXPECT_EQ(rc.ParticipantWatermark(1), 0u)
+        << "READ COMMITTED carried a watermark it is ratified to skip";
+    // And it is not merely unwatermarked - it reads the latest committed
+    // state, which is the level's own contract and the reason a watermark
+    // for it would name a view already gone.
+    EXPECT_NE(rc_out.response.find(",444"), std::string::npos) << rc_out.response;
+
+    DispatchOutcome rc_rb;
+    auto rc_rollback = rig.Start("ROLLBACK", rc_rb, &rc);
+    ASSERT_TRUE(rig.Drive(*rc_rollback)) << rc_rb.response;
+}
+
+TEST_F(CoreRuntimeTest, AnOverLongShippedReadIsRefusedAndLeavesItsTransactionOpen) {
+    // **The price RR1's gate has, pinned rather than described.** A read
+    // inside a cross-owner transaction ships, and a shipped answer must fit
+    // one ring slot - so past `kShippedStatementReplyTextMax` the client is
+    // refused. Two things about that refusal matter, and this test is for
+    // them rather than for the cap:
+    //
+    // 1. it is a **refusal**, never a truncated answer wearing an OK;
+    // 2. it **does not end the transaction**. A read has no effect, so
+    //    failure atomicity has nothing to protect here, and a local
+    //    `SELECT` that fails leaves its transaction open - the two have to
+    //    agree, and until RR1 they agreed only because reads never shipped.
+    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "big_read");
+    WireRemoteReads(rig, reads);
+
+    // Enough rows that the reply cannot fit. `OpenForeignIndexRig` leaves
+    // three and a 16-id lease, so both are extended.
+    auto more = rig.catalog2->AllocateRowIdRange(rig.oid, 512);
+    ASSERT_TRUE(more.ok()) << more.status().message();
+    rig.peer->row_id_leases().Grant(rig.oid, more.value(), 512);
+    // Ten statements, not three hundred: the rig grants the peer sixteen
+    // transaction ids, and each `INSERT` is one.
+    for (int base = 0; base < 300; base += 30) {
+        std::string ins = "INSERT INTO big_read VALUES ";
+        for (int i = 0; i < 30; ++i) {
+            if (i > 0) ins += ", ";
+            ins += "(" + std::to_string(100000 + base + i) + ")";
+        }
+        const std::string r = rig.peer->dispatcher().Dispatch(ins).response;
+        ASSERT_NE(r.rfind("ERR", 0), 0u) << r;
+    }
+
+    Session session;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT * FROM big_read", out, &session);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR", 0), 0u)
+        << "an answer too long to carry was carried anyway: " << out.response;
+    EXPECT_NE(out.response.find("UNKNOWN_OUTCOME"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("read the data back"), std::string::npos)
+        << "a read was told to read the data back: " << out.response;
+
+    // Still open, and still usable: the write below is the proof, because a
+    // poisoned session refuses everything but ROLLBACK.
+    ASSERT_FALSE(session.failed()) << "a failed read ended its transaction";
+    DispatchOutcome wrote;
+    auto write = rig.Start("INSERT INTO big_read VALUES (99999)", wrote, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << wrote.response;
+    EXPECT_EQ(wrote.response.rfind("INSERTED", 0), 0u) << wrote.response;
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+}
+
+TEST_F(CoreRuntimeTest, TheSameReadOutsideATransactionTakesThePipelineAndHasNoCap) {
+    // The other half of the sentence above, and what keeps the gate from
+    // reading as a general regression: the pipeline is untouched for every
+    // session that cannot enrol, which is every autocommit one. Same
+    // relation, same rows, same statement - answered whole.
+    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "big_read_auto");
+    WireRemoteReads(rig, reads);
+
+    auto more = rig.catalog2->AllocateRowIdRange(rig.oid, 512);
+    ASSERT_TRUE(more.ok()) << more.status().message();
+    rig.peer->row_id_leases().Grant(rig.oid, more.value(), 512);
+    // Ten statements, not three hundred: the rig grants the peer sixteen
+    // transaction ids, and each `INSERT` is one.
+    for (int base = 0; base < 300; base += 30) {
+        std::string ins = "INSERT INTO big_read_auto VALUES ";
+        for (int i = 0; i < 30; ++i) {
+            if (i > 0) ins += ", ";
+            ins += "(" + std::to_string(100000 + base + i) + ")";
+        }
+        const std::string r = rig.peer->dispatcher().Dispatch(ins).response;
+        ASSERT_NE(r.rfind("ERR", 0), 0u) << r;
+    }
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT * FROM big_read_auto", out);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    ASSERT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
+    EXPECT_GT(out.response.size(), kShippedStatementReplyTextMax)
+        << "the answer fit one slot, so this shape proves nothing about the cap";
+    // The pipeline ran it, not the ship path.
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
+}
+
 TEST_F(CoreRuntimeTest, ASynchronousDispatchDoesNotShipBecauseItCannotAwaitTheAnswer) {
     // The rule that keeps `UnknownOutcome` rare: a path that cannot park
     // must not send, because a statement the owner may commit would have

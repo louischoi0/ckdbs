@@ -26,7 +26,12 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                                        std::to_string(statement.sequence) +
                                        "; answered from the record, not run again");
             }
-            reply(it->second.status, it->second.text);
+            // **No watermark on a replayed answer** (RR0). The record holds
+            // an outcome, not a view: the transaction that pinned that view
+            // may since have been decided, and re-stating a watermark from
+            // a record would tell the coordinator this core is still
+            // reading where it once read.
+            reply(it->second.status, it->second.text, 0);
             return;
         }
         if (statement.sequence < it->second.sequence) {
@@ -41,7 +46,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                       " for this session and no longer holds the outcome of sequence " +
                       std::to_string(statement.sequence) +
                       "; whether it ran cannot be established from here"),
-                  {});
+                  {}, 0);
             return;
         }
     }
@@ -68,7 +73,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                   " is still running a statement for this session, so whether sequence " +
                   std::to_string(statement.sequence) +
                   " ran cannot be established from here"),
-              {});
+              {}, 0);
         return;
     }
 
@@ -91,7 +96,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
                   " holds no record of sequence " + std::to_string(statement.sequence) +
                   " for this session; this is a retry, so whether it ran cannot be "
                   "established from an absent record"),
-              {});
+              {}, 0);
         return;
     }
 
@@ -111,7 +116,8 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
         // every autocommit one does - the fallback is this core's default,
         // exactly as before.
         auto enrolled = EnrolFor(key, statement.role,
-                                 statement.isolation.value_or(dispatcher_.default_isolation()));
+                                 statement.isolation.value_or(dispatcher_.default_isolation()),
+                                 statement.join);
         if (!enrolled.ok()) {
             // No context was left half-open: `EnrolFor` refuses before it
             // records anything. A spent transaction-id lease and a full
@@ -124,7 +130,7 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
             // folding it in would make the one number SS-B4 reads mean two
             // unrelated things.
             ++enrolment_refusals_;
-            reply(enrolled.status(), {});
+            reply(enrolled.status(), {}, 0);
             return;
         }
         running = std::make_unique<Running>(std::move(statement.text),
@@ -165,6 +171,11 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
     // back - so the text goes empty; a success's line **is** the answer.
     Status status = StatusFromErrorReply(state->out.response);
     std::string_view text;
+    // RR0: 0 unless the enrolled arm below finds a REPEATABLE READ context
+    // still standing, which is the only shape that has a watermark to
+    // report - an autocommit statement is a whole transaction, and an RC
+    // one is ratified to skip it.
+    std::uint64_t watermark = 0;
     if (status.ok()) {
         text = state->out.response;
     }
@@ -197,8 +208,27 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
         // measures idleness: a statement that ran four minutes must not
         // leave its coordinator one minute of grace.
         if (it_enrolled != enrolled_.end()) it_enrolled->second->touched_at_ns = clock_.Now();
+        // **RR0 / D3: the watermark this core is reading this transaction
+        // at**, taken from the lookup that was already here rather than
+        // from one of its own - the RC path must pay nothing this row did
+        // not exist to make it pay. It is the `up_to_trx_id` the context's
+        // transaction pinned, and REPEATABLE READ only, per D3's ratified
+        // `[OPEN]`: an RC transaction re-mints its view at every statement
+        // boundary by design (`TransactionManager::StartStatement`), so a
+        // watermark for it would name a view already gone and would invite
+        // the coordinator to check something RC never promised.
+        if (it_enrolled != enrolled_.end() &&
+            it_enrolled->second->session.isolation() == txn::IsolationLevel::kRepeatableRead) {
+            const txn::Transaction* held = it_enrolled->second->session.transaction();
+            // A view's high-water mark is at least `kFirstUserTrxId` and so
+            // is never 0, which is what lets 0 mean "none stated" on the
+            // wire.
+            if (held != nullptr) watermark = held->view().up_to_trx_id;
+        }
         if (it_enrolled != enrolled_.end() && !it_enrolled->second->session.in_explicit_txn()) {
             enrolled_.erase(it_enrolled);
+            // The context is gone and so is the promise it carried.
+            watermark = 0;
             status = Status::Unsupported(
                 "statement shipping: a statement inside a cross-owner transaction ended that "
                 "transaction; the decision belongs to the coordinator, not to a shipped "
@@ -228,7 +258,7 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
     }
 
     Remember(key, state->sequence, status, text);
-    state->reply(status, text);
+    state->reply(status, text, watermark);
 }
 
 void ShippedStatementExecutor::Remember(const DedupKey& key, std::uint64_t sequence,
@@ -271,7 +301,7 @@ void ShippedStatementExecutor::Remember(const DedupKey& key, std::uint64_t seque
 }
 
 StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor(
-    const DedupKey& key, Role role, txn::IsolationLevel isolation) {
+    const DedupKey& key, Role role, txn::IsolationLevel isolation, bool join) {
     if (auto it = enrolled_.find(key); it != enrolled_.end()) {
         // **A prepared transaction takes no more statements** (R6-3, D4).
         // Prepare is a promise that everything this transaction wrote is
@@ -305,6 +335,31 @@ StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor
                 "from here");
         }
         return it->second.get();
+    }
+
+    // **RR0: a statement that may only join has nothing to join.**
+    //
+    // The coordinator has shipped this transaction a statement to this core
+    // before, so a context existed and is gone. The reachable cause is the
+    // idle ceiling below (`ExpireEnrolled`), which rolls a context back and
+    // erases it while its coordinator's transaction is still open; this
+    // core having stopped and come back is the other, and both mean the
+    // same thing - this transaction's earlier work on this core is not
+    // there any more.
+    //
+    // Opening a fresh transaction here is what the bit exists to stop.
+    // Prepare and commit would then make the *second* half durable while
+    // the first was already rolled back, and nothing anywhere would say a
+    // transaction had committed in part: the coordinator would be told
+    // everything succeeded. Refused **retryably** instead, because that is
+    // exactly true - nothing of this transaction survives on this core, and
+    // running it again from the top has nothing to undo.
+    if (join) {
+        ++join_refusals_;
+        return Status::TxnConflict(
+            "cross-owner transaction: core " + std::to_string(core_id_) +
+            " no longer holds this session's transaction, so the statement cannot join it; "
+            "retry the transaction from the top");
     }
 
     // **The participant's own capacity, refused before the table's.** Every

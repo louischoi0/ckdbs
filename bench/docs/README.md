@@ -850,6 +850,127 @@ answer one pretask question and each carries its own docstring. Their run is
 `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`, whose
 "Reproducing" section has every invocation.
 
+### The cross-owner transaction probes (R6, 2026-08-28)
+
+Two drivers, and the pairing is deliberate: one asks what the protocol
+**costs** and the other asks whether it is **right**. Rule 7's entry for
+both, owed by RP8 and paid here.
+
+`bench/txn_2pc_cost_probe.py` — **what a cross-owner commit costs.** Three
+arms, one per invocation, because an arm sharing a process with another
+shares its page cache, its trx-id lease state and its WAL segment:
+`local` (one transaction on the core owning everything it writes — D1's
+fast path, and the unit of comparison), `xowner-N` (one transaction from a
+core-0 session writing N relations owned by N different peers — both
+phases), and `split-N` (the same N rows written by N separate one-owner
+transactions, each from a session on its own owner core). **Every arm
+writes the same rows**, which is what makes the ratios mean anything, and
+`COUNT(*)` at the end of each checks rows in = rows out. Reports p0/p25/
+p50/p95/p99 — never a single ratio, because M3 found shipping's cost in
+the tail, so a median alone would record a prediction confirmed while an
+unpredicted tail passed unnoticed. `bench/run_2pc_cost.sh` interleaves the
+arms; the driver itself runs one.
+
+```bash
+python3 bench/txn_2pc_cost_probe.py --arm xowner --participants 2 --json out.json
+```
+
+`bench/txn_2pc_kill_matrix_probe.py` — **whether a kill −9 anywhere in the
+protocol can tear a transaction.** Six crash points across both sides of
+the wire (`base::CrashPointHit`, armed by config and inert unless named),
+twelve cells with the ordinal siblings, `--repeat` passes each. Four cells
+expect **0** committed on both relations — a 1 there is a transaction
+nobody decided — and two expect **1**, where a 0 is a decision made
+durable and then not carried out. In all twelve, **unequal counts between
+the two relations are a torn transaction**, which is the failure two-phase
+commit exists to make impossible. Both sides of the wire are threads of one
+process, so a kill takes the coordinator and its participants down
+together; that is why the matrix is six points rather than eight. The
+`fastpath.*` cells are the control: a one-owner transaction and a
+`cores = 1` instance must be untouched.
+
+```bash
+python3 bench/txn_2pc_kill_matrix_probe.py --build-dir build-release --repeat 3 --json m.json
+```
+
+**No per-leg server-side timer exists** for prepare, decide and ack, which
+is why RP8 could not separate its two candidate explanations for why three
+confirmed sequential syncs do not cost 3×. It is the second time an
+instrument gap blocked an attribution — `shipped_statement_us` was the
+first, at M3 — and both belong to the observability subsystem rather than
+to either driver.
+
+### The R6-R read-half probes (RR2, 2026-08-28)
+
+Two more drivers, added when RR1 widened the read site (`HandleSelect`) to
+enrol and ship a foreign read inside an explicit transaction instead of
+refusing it — the change that made a read-then-write booking transaction
+reach the two-phase path at all (RP8's B5 blocker, closed here).
+
+`bench/txn_shipped_read_probe.py` — **what a cross-owner read costs.**
+Three arms, one point-lookup shape (`SELECT * FROM rt WHERE id = <i>` on a
+BTREE relation owned by a peer): `autocommit` (no `BEGIN` — `MayEnrolShip`
+is false, so the old single-step remote-read pipeline answers it), `rc`
+(`BEGIN`; `SELECT`; `COMMIT` at the session's default READ COMMITTED — the
+read now ships and enrols, and the `COMMIT` pays a cross-owner decide even
+though nothing was written), and `rr` (identical with `BEGIN ISOLATION
+LEVEL RR`, so D3's per-participant watermark rides the reply). Every leg is
+timed separately (`begin_us`/`select_us`/`commit_us`/`total_us`), because
+`select_us` alone is what answers "what does the read statement itself
+cost" without the 2PC commit folded in. Every reply is content-checked
+against what was seeded, not merely absence-of-`ERR` — `rows_match` in the
+JSON is the fraction that returned the exact seeded row. `--rows` sweeps
+rule 9's three sizes (a point lookup is not expected to scale with it, and
+the sweep is the evidence for that rather than an assumption of it).
+
+```bash
+python3 bench/txn_shipped_read_probe.py --arm rc --rows 1000 \
+    --reps 5 --txns 200 --server build-release/kds_server --json out.json
+```
+
+`bench/run_read_probe.sh <outdir> [reps] [txns] [rowsizes...]` interleaves
+the three arms at every row size, one process per arm per size, for the
+same drift-attribution reason `run_2pc_cost.sh` gives.
+
+`bench/txn_indoubt_ceiling_probe.py` — **`in_doubt_ceiling_ms` swept
+against both axes a prepared transaction's floor touches: a writer's stall
+(D5's bounded wait, `command_dispatcher.cpp`'s `in_doubt_block` loop) and
+how many bytes of WAL a checkpoint cannot truncate
+(`Checkpointer::Start`'s `OldestPreparedLsn()` floor).** Two modes: `live`
+loops a genuine N-owner cross-owner transaction against one fixed row per
+table while a `racer` connection **seated on the first table's owner core**
+repeats a plain local `UPDATE` against that same row, timed and classified
+per attempt (succeeded / refused by D5's ceiling / refused for an ordinary
+write-write conflict); `control` does the same duration with the holder
+writing **locally**, never `BEGIN`, so no participant is ever prepared —
+the baseline for "what would redo_start be with nothing prepared". Every
+server runs `log_level = debug` and a short `checkpoint_interval_ms`, so
+every tick publishes a core-tagged anchor line
+(`anchor published: core=<N> checkpoint_lsn=... redo_start=... durable_lsn=...`);
+an LSN is a byte offset (`wal/record.hpp`), so `durable_lsn - redo_start`
+is bytes retained with no conversion, and the driver reports the **peak**
+over every tick during the run, not just the last one (the last tick
+undercounts systematically — every prepared transaction has long since
+decided by the time the holder and racer stop).
+
+```bash
+python3 bench/txn_indoubt_ceiling_probe.py --mode live --ceiling-ms 5 \
+    --participants 4 --duration 4 --server build-release/kds_server --json out.json
+python3 bench/txn_indoubt_ceiling_probe.py --mode control --duration 4 \
+    --server build-release/kds_server --json control.json
+```
+
+**Why this cannot be a kill −9 probe, unlike `txn_2pc_kill_matrix_probe.py`
+above.** A participant's own recovery reads its coordinator's
+already-durable stream at mount, before the instance serves a connection —
+so a transaction killed prepared resolves during the restart that would
+otherwise let a driver observe it live, and never sits in-doubt afterward.
+The only live window this engine ever produces is the ordinary one — the
+gap between a participant's own prepare-durability and its coordinator's
+decide — and this driver races a writer against exactly that natural
+window, at swept ceiling values that bracket it, rather than manufacturing
+a longer one.
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers

@@ -67,11 +67,14 @@ protected:
         bool answered = false;
         Status status;
         std::string text;
+        // RR0 / D3: what this participant reported it is reading at.
+        std::uint64_t watermark = 0;
     };
 
     Answer Ship(const std::string& sql, std::uint64_t session_id, std::uint64_t sequence,
                 Role role = Role::kReadWrite, std::uint32_t requester = 0,
-                bool retry = false, bool in_txn = false) {
+                bool retry = false, bool in_txn = false, bool join = false,
+                std::optional<txn::IsolationLevel> isolation = std::nullopt) {
         StatementShipServer::ShippedStatement statement;
         statement.requester = requester;
         statement.session_id = session_id;
@@ -80,14 +83,18 @@ protected:
         statement.role = role;
         statement.retry = retry;
         statement.in_txn = in_txn;
+        statement.join = join;
+        statement.isolation = isolation;
         statement.text = sql;
 
         auto answer = std::make_shared<Answer>();
         executor_->Seam()(std::move(statement),
-                          [answer](const Status& status, std::string_view text) {
+                          [answer](const Status& status, std::string_view text,
+                                   std::uint64_t watermark) {
                               answer->answered = true;
                               answer->status = status;
                               answer->text.assign(text);
+                              answer->watermark = watermark;
                           });
         // The seam may answer immediately (a duplicate, a refusal that
         // costs nothing) or many turns later (an execution that parks).
@@ -288,7 +295,7 @@ TEST_F(ShippedStatementExecutorTest, ADuplicateThatMeetsItsOriginalStillRunningI
         statement.role = Role::kReadWrite;
         statement.text = "INSERT INTO t VALUES (7)";
         executor_->Seam()(std::move(statement),
-                          [answer](const Status& status, std::string_view text) {
+                          [answer](const Status& status, std::string_view text, std::uint64_t) {
                               answer->answered = true;
                               answer->status = status;
                               answer->text.assign(text);
@@ -506,6 +513,68 @@ TEST_F(ShippedStatementExecutorTest, AnAbandonedTransactionIsRolledBackAtTheIdle
     EXPECT_EQ(txns_->ActiveCount(), 0u) << "the ceiling did not unwind the transaction";
 }
 
+TEST_F(ShippedStatementExecutorTest, AStatementThatMayOnlyJoinIsRefusedOnceTheCeilingTookIt) {
+    // **RR0, and the failure the bit exists to stop.** The ceiling rolled
+    // the context back while the coordinator's transaction was still open;
+    // the next statement of that same transaction arrives with `join` set,
+    // finds nothing to join, and is refused **retryably** - the transaction
+    // has nothing left on this core and can be run again from the top.
+    //
+    // Without the bit the statement below opened a second transaction, and
+    // a later prepare/commit made *that* one durable while the first was
+    // already gone: a transaction committed in part, with the coordinator
+    // told it committed whole.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                     /*in_txn=*/true)
+                    .status.ok());
+    clock_.Advance(kShippedTxnIdleCeilingNs);
+    executor_->ExpireEnrolled();
+    ASSERT_EQ(executor_->enrolled(), 0u);
+    ASSERT_EQ(executor_->enrolments(), 1u);
+
+    const Answer refused = Ship("INSERT INTO t VALUES (8)", 99, 2, Role::kReadWrite, 0, false,
+                                /*in_txn=*/true, /*join=*/true);
+    EXPECT_FALSE(refused.status.ok()) << refused.text;
+    EXPECT_EQ(refused.status.code(), StatusCode::kTxnConflict);
+    EXPECT_TRUE(refused.status.retryable());
+    EXPECT_EQ(executor_->join_refusals(), 1u);
+    // Nothing was opened and nothing ran: `enrolments()` is still the one
+    // context the ceiling took.
+    EXPECT_EQ(executor_->enrolments(), 1u);
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_EQ(txns_->ActiveCount(), 0u);
+}
+
+TEST_F(ShippedStatementExecutorTest, AWatermarkIsReportedForRepeatableReadAndForNothingElse) {
+    // **RR0 / D3's ratified `[OPEN]`, at the participant.** The watermark
+    // is the `up_to_trx_id` this core's enrolled transaction pinned, and it
+    // is reported for REPEATABLE READ only - an RC transaction re-mints its
+    // view at every statement boundary, so a watermark for it would name a
+    // view already gone.
+    const Answer rr = Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
+                           /*in_txn=*/true, /*join=*/false,
+                           txn::IsolationLevel::kRepeatableRead);
+    ASSERT_TRUE(rr.status.ok()) << rr.status.message();
+    EXPECT_NE(rr.watermark, 0u);
+    // The same context, one statement later: pinned at BEGIN and not moved.
+    const Answer again = Ship("INSERT INTO t VALUES (8)", 99, 2, Role::kReadWrite, 0, false,
+                              true, /*join=*/true, txn::IsolationLevel::kRepeatableRead);
+    ASSERT_TRUE(again.status.ok()) << again.status.message();
+    EXPECT_EQ(again.watermark, rr.watermark);
+
+    const Answer rc = Ship("INSERT INTO t VALUES (9)", 98, 1, Role::kReadWrite, 0, false,
+                           /*in_txn=*/true, /*join=*/false,
+                           txn::IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(rc.status.ok()) << rc.status.message();
+    EXPECT_EQ(rc.watermark, 0u) << "READ COMMITTED reported a watermark it is ratified to skip";
+
+    // And an autocommit statement, which is a whole transaction and states
+    // no level at all.
+    const Answer autocommit = Ship("INSERT INTO t VALUES (10)", 97, 1);
+    ASSERT_TRUE(autocommit.status.ok()) << autocommit.status.message();
+    EXPECT_EQ(autocommit.watermark, 0u);
+}
+
 TEST_F(ShippedStatementExecutorTest, AStatementKeepsItsTransactionAliveAcrossTheCeiling) {
     // Idleness, not age: a transaction still receiving statements is not the
     // thing the sweep looks for, however old it is.
@@ -580,7 +649,7 @@ TEST_F(ShippedStatementExecutorTest, TheCeilingSkipsAContextAStatementIsRunningO
     second.in_txn = true;
     second.text = "INSERT INTO t VALUES (8)";
     executor_->Seam()(std::move(second),
-                      [answer](const Status& status, std::string_view text) {
+                      [answer](const Status& status, std::string_view text, std::uint64_t) {
                           answer->answered = true;
                           answer->status = status;
                           answer->text.assign(text);

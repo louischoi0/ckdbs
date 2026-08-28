@@ -317,7 +317,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             return statement_ship_->Settled(id);
         };
         co_await sched::WaitUntil{&settled};
-        *out = FinishShippedStatement(shipped);
+        Session& shipped_session = session != nullptr ? *session : autocommit_session_;
+        *out = FinishShippedStatement(shipped, shipped_session);
         // **A shipped statement that failed inside an explicit transaction
         // poisons it, exactly as a local one does** (R6-8 review; txn.md §6
         // and §10-8). The local path poisons in `EndWrite`, which an
@@ -339,8 +340,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         //
         // Autocommit is untouched: `in_explicit_txn()` is false there, and
         // the scope already unwound.
-        Session& shipped_session = session != nullptr ? *session : autocommit_session_;
-        if (shipped_session.in_explicit_txn() && out->response.rfind("ERR ", 0) == 0) {
+        //
+        // **RR1 narrows it to a write**, which is what it always described.
+        // The rule being matched is the *local* one, and locally a failed
+        // `SELECT` does not poison - `Poison()`'s call sites are the write,
+        // DDL and in-doubt paths, and none of them is a read. While only
+        // writes shipped the two agreed by construction; since reads ship,
+        // agreeing takes saying so. A failed shipped read therefore leaves
+        // the transaction open exactly as a failed local read does, and its
+        // participant - enrolled at ship time, whatever the answer - is
+        // still prepared and decided with the rest.
+        if (!shipped.read && shipped_session.in_explicit_txn() &&
+            out->response.rfind("ERR ", 0) == 0) {
             shipped_session.Poison();
         }
     }
@@ -1113,6 +1124,15 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " shipped_waiting=" << statement_ship_->waiting()
            << " shipped_late_executed=" << statement_ship_->late_executed_replies()
            << " shipped_identity_mismatches=" << statement_ship_->identity_mismatches();
+        // **RR0's one coordinator-side counter.** Non-zero means a
+        // participant answered from a snapshot other than the one this
+        // core's transaction had been reading it at, and the transaction
+        // was refused rather than committed across two views. Structurally
+        // 0 on a single-owner instance and on every READ COMMITTED
+        // transaction, which carries no watermark at all.
+        if (watermark_refusals_ != 0) {
+            os << " txn_watermark_refusals=" << watermark_refusals_;
+        }
     }
     if (shipped_statements_ != nullptr) {
         // The owner's side. `shipped_executed` against the arrival cores'
@@ -1138,7 +1158,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " shipped_enrolled=" << shipped_statements_->enrolled()
            << " shipped_enrolments=" << shipped_statements_->enrolments()
            << " shipped_enrolment_refusals=" << shipped_statements_->enrolment_refusals()
-           << " shipped_enrolment_expiries=" << shipped_statements_->enrolment_expiries();
+           << " shipped_enrolment_expiries=" << shipped_statements_->enrolment_expiries()
+           // RR0: statements that could only join a context and found none.
+           // It is `shipped_enrolment_expiries`' consequence seen from the
+           // other side - the expiry cleaned up, and this is the statement
+           // that arrived afterwards and was refused instead of silently
+           // opening a second transaction for the same one.
+           << " shipped_join_refusals=" << shipped_statements_->join_refusals();
         // **The in-doubt population and what became of it** (R6-5, D5).
         // `txn_in_doubt` is what this core is holding locks for right now
         // and cannot decide on its own; a non-zero
@@ -3872,7 +3898,8 @@ bool CommandDispatcher::MayEnrolShip(const Session& session) const noexcept {
 
 DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog::Oid oid,
                                                  std::uint32_t owner_core,
-                                                 std::string_view relation, Session& session) {
+                                                 std::string_view relation, Session& session,
+                                                 bool read) {
     // The identity the owner's dedup record keys on (D4). Minted on the
     // first ship and kept for the session's life, so a duplicate of *this*
     // statement is recognisable and the session's next statement is not.
@@ -3896,9 +3923,15 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     // instance does not have - so this refusal means the statement did not
     // run, and may say so in an ordinary spelling. After it returns OK the
     // only refusal left is `UnknownOutcome`.
+    // **RR0: whether this statement may open a context on the owner.** Read
+    // before `EnrolParticipant` below records this ship, so the enrolling
+    // statement carries 0 and every later one of the same transaction to
+    // the same owner carries 1. False on every autocommit ship, which
+    // enrols nobody and whose owner-side shape is unchanged.
+    const bool join = in_txn && session.HasParticipant(owner_core);
     if (Status s = statement_ship_->Ship(owner_core, request_id, session.ship_id(), sequence,
                                          oid, session.role(), line, /*retry=*/false, in_txn,
-                                         isolation);
+                                         isolation, join);
         !s.ok()) {
         return {ErrorReply(s), false};
     }
@@ -3928,7 +3961,7 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     }
     DispatchOutcome pending;
     pending.pending_shipped =
-        PendingShippedStatement{request_id, owner_core, std::string(relation)};
+        PendingShippedStatement{request_id, owner_core, std::string(relation), read};
     return pending;
 }
 
@@ -4032,7 +4065,7 @@ Status CommandDispatcher::DescribePrepareFailure(const TxnPhaseOutcome* phase) c
 }
 
 DispatchOutcome CommandDispatcher::FinishShippedStatement(
-    const PendingShippedStatement& shipped) {
+    const PendingShippedStatement& shipped, Session& session) {
     const ShippedStatementOutcome* reply = statement_ship_->Find(shipped.request_id);
     if (reply == nullptr || !reply->arrived) {
         // The deadline, or a waiter closed under the statement. **Never
@@ -4041,14 +4074,88 @@ DispatchOutcome CommandDispatcher::FinishShippedStatement(
         // This is the one refusal D4 exists to produce, and the client is
         // told what to do with it instead of being invited to retry.
         statement_ship_->Close(shipped.request_id);
+        const std::string waited =
+            std::to_string(kShippedStatementDeadlineNs / 1'000'000'000ull);
+        // **RR1: a read has no outcome to be unknown about.** The words
+        // above are a write's - *read the data back rather than retrying* -
+        // and telling a client that about its own `SELECT` is advice to do
+        // the thing it just failed to do. Whether the read ran changes
+        // nothing on the owner, so this is an ordinary failed statement:
+        // the code stays `UnknownOutcome`, because the answer genuinely did
+        // not arrive and nothing here may invite a retry loop under a
+        // `retryable` bit, and only the sentence that would be false is
+        // dropped. The enrolment stands either way - it was recorded when
+        // the statement left - so the participant is still prepared and
+        // decided with the rest of the transaction.
+        if (shipped.read) {
+            return {ErrorReply(Status::UnknownOutcome(
+                        "core " + std::to_string(shipped.owner_core) +
+                        " did not answer the read of '" + shipped.relation + "' within " +
+                        waited + " s; the read returned nothing and changed nothing")),
+                    false};
+        }
         return {ErrorReply(Status::UnknownOutcome(
                     "core " + std::to_string(shipped.owner_core) + " did not answer for '" +
-                    shipped.relation + "' within " +
-                    std::to_string(kShippedStatementDeadlineNs / 1'000'000'000ull) +
+                    shipped.relation + "' within " + waited +
                     " s; whether the statement ran cannot be established - read the data back "
                     "rather than retrying")),
                 false};
     }
+    // **RR0 / D3: the watermark, held here and checked against itself.**
+    //
+    // The owner reported the `up_to_trx_id` its enrolled REPEATABLE READ
+    // transaction is reading through; 0 means it reported none, which is
+    // every autocommit statement and every READ COMMITTED one, and nothing
+    // is held for those. The first reply from a participant establishes the
+    // value; every later one has to repeat it, because a participant's
+    // enrolled RR transaction pins its view once and never re-mints it
+    // (`TransactionManager::StartStatement`).
+    //
+    // **What can move it, and why this is a bound rather than a detector.**
+    // One thing moves a pinned view: the context being replaced by a newer
+    // one. RR0's `join` bit refuses that a whole leg earlier, on the
+    // participant, before the statement runs - so on this tree the false
+    // branch below is unreachable, and it is written down here rather than
+    // left for a later reader to infer, because the existence of a check is
+    // otherwise read as evidence that the case occurs. It is D3's rule
+    // stated where D3 says it lives, at the coordinator that carries the
+    // watermark, and it is one comparison on a field already in the reply.
+    //
+    // **What it cannot see**: a level that failed to cross. A participant
+    // running READ COMMITTED reports no watermark at all, so nothing is
+    // held and nothing is compared. That gap belongs to the wire's
+    // `isolation` byte and its own refusal.
+    //
+    // The statement has already run on the owner when this fires, which is
+    // why the answer is a refusal and not a repair: nothing the participant
+    // wrote can become durable without this core's decision, and the ERR
+    // poisons the transaction on the way out.
+    if (reply->status.ok() && reply->read_watermark != 0 &&
+        !session.NoteParticipantWatermark(shipped.owner_core, reply->read_watermark)) {
+        // Read before the close, which frees what it reads: `Find` returns
+        // a pointer into `waiting_`, and `Close` erases that node
+        // (statement_ship_service.cpp). The same rule the prepare phase's
+        // `DescribePrepareFailure` states one function down.
+        const std::uint64_t answered_at = reply->read_watermark;
+        statement_ship_->Close(shipped.request_id);
+        ++watermark_refusals_;
+        if (logging(LogLevel::kError)) {
+            log_->Error("2pc", "core " + std::to_string(core_id_) + " was reading core " +
+                                   std::to_string(shipped.owner_core) + " at watermark " +
+                                   std::to_string(session.ParticipantWatermark(
+                                       shipped.owner_core)) +
+                                   " and that core now answers at " +
+                                   std::to_string(answered_at) +
+                                   "; the transaction's snapshot of that core moved");
+        }
+        return {ErrorReply(Status::TxnConflict(
+                    "cross-owner transaction: core " + std::to_string(shipped.owner_core) +
+                    " answered from a different snapshot than the one this transaction has "
+                    "been reading it at, so REPEATABLE READ was not delivered; retry the "
+                    "transaction from the top")),
+                false};
+    }
+
     // The owner's own answer, and on the refusal arm its own spelling: the
     // code crossed, so `ErrorReply` here reproduces the line the owner
     // wrote, `retryable` bit included (statement_ship_service.hpp).
@@ -5982,10 +6089,33 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // walk in slot order and answer the clause wrongly. Refused here rather
     // than encoded: the wire format is versioned, and an honest affinity
     // refusal beats a reordered reply.
+    //
+    // **RR1: and not inside a transaction that can enrol.** The pipeline
+    // answers from the owning core's *latest-committed* view, outside any
+    // transaction this session holds (§5's CC4 rule). Inside a cross-owner
+    // transaction that is not the documented weakening it is inside an
+    // autocommit statement - it is a **wrong answer**: this transaction's
+    // own writes on that owner live in the transaction the owner is holding
+    // for it, and no view the pipeline can take shows them. So a session
+    // that may enrol takes the ship path below, where the read joins that
+    // transaction and sees them.
+    //
+    // The exclusion is `MayEnrolShip` and not `in_explicit_txn()`, so that
+    // exactly the sessions that can *reach* the ship path are diverted from
+    // this one: a dispatcher with no 2PC client, or a path that cannot
+    // park, keeps the pipeline it had and the behaviour it had with it.
+    //
+    // **Last in the chain, not first**, which is the same ordering argument
+    // the paragraph above makes about `InitTableAccess`: the shape tests
+    // are free and this one is a call, so a local read - which is every
+    // read on a single-core instance and most reads on any other - reaches
+    // its answer without ever asking. CP2's "free at the instruction level"
+    // is a claim about that path and this row does not spend it.
     if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 1 &&
         chain.value().hoisted.empty() && chain.value().star() &&
         !chain.value().aggregated() && !chain.value().sorted() &&
-        !chain.value().limit.has_value() && chain.value().offset == 0) {
+        !chain.value().limit.has_value() && chain.value().offset == 0 &&
+        !MayEnrolShip(session)) {
         const exec::Step& step = chain.value().steps[0];
         auto owner_access = catalog_.InitTableAccess(step.rel_oid);
         if (owner_access.ok() && owner_access.value()->owner_core != core_id_ &&
@@ -6021,7 +6151,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // this after a revision that had it the other way round). A plan or
     // an open the machinery refuses falls through to the honest affinity
     // refusal below, never a worse error.
-    if (remote_reads_ != nullptr && !analyze && TwoStepPipelineEligible(chain.value()).ok()) {
+    if (remote_reads_ != nullptr && !analyze &&
+        TwoStepPipelineEligible(chain.value()).ok() && !MayEnrolShip(session)) {
         auto outer_access = catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
         auto inner_access = catalog_.InitTableAccess(chain.value().steps[1].rel_oid);
         if (outer_access.ok() && inner_access.ok() &&
@@ -6055,11 +6186,30 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // before shipping existed; shipping the `ANALYZE` spelling itself
         // is a separate decision, since the owner would then describe a
         // run this core did not perform.
-        if (!analyze && MayShip(session)) {
+        // **RR1: the read half of enrolment**, and the same two gates the
+        // three write sites carry (`HandleInsert`, `HandleUpdate` and
+        // `HandleDelete`, each at its own dispatch fork). Until this
+        // row the read site tested `MayShip` alone, which requires
+        // `!in_explicit_txn()` - so a foreign read *inside* a transaction
+        // could not ship, fell through to the affinity refusal, and the
+        // identical read outside one shipped fine. The asymmetry made the
+        // whole two-phase path unreachable from any realistic workload,
+        // because a booking or ordering transaction reads before it writes
+        // (RP8's B5).
+        //
+        // It is the same mechanism as the write half and not a second one:
+        // `MayEnrolShip` is what decides the shape is admissible, and the
+        // enrolment it produces is the reason the read has to ship at all
+        // rather than be answered from a snapshot. A transaction that wrote
+        // a row on a peer and then reads it back must see its own
+        // uncommitted write, and only the peer's own transaction can show
+        // it - so the read joins that transaction (`join` on the wire) or
+        // opens it.
+        if (!analyze && (MayShip(session) || MayEnrolShip(session))) {
             if (std::optional<std::uint32_t> owner = SoleForeignOwner(chain.value());
                 owner.has_value() && !chain.value().steps.empty()) {
                 return ShipStatement(line, chain.value().steps[0].rel_oid, *owner,
-                                     chain.value().steps[0].rel_name, session);
+                                     chain.value().steps[0].rel_name, session, /*read=*/true);
             }
         }
         return {"ERR " + affinity.message(), false};

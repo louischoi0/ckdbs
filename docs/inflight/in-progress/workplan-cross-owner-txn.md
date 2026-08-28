@@ -153,7 +153,13 @@ this workplan means the v2.4.0 path.
 | R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
 | R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
-| **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured |
+| **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured. **Re-run whole on the tree with the read half in it** (§6's first requirement), `af36f24`: suite **2,929** green, `sim.sh` **171/0**, matrix **36/36**, one sitting; asymmetric participant state reached at three points. `bench/v2.5.0/archive/rr-kill-matrix-36cells.json` |
+| **RR0** | **The watermark (D3), and the join rule** | **Built 2026-08-28**, `acbd6b5` |
+| **RR1** | **The read half of enrolment** | **Built 2026-08-28**, `acbd6b5`, same commit as RR0 |
+| RR2 | The ceiling sweep, and CR3 | **Run 2026-08-28**, `2a1cdcc`. `bench/v2.5.0/results-rr-read-half-v2.4.0-32-g2a1cdcc.md`. HR4 holds; **CR3's second axis does not bind**, and that is the finding |
+| RR3 | B5 re-run, and CR4 | **Run 2026-08-28**, `2a1cdcc`, same file. **CR4 = 100%**, from RP8's zero. HR1's falsifier fires; HR5 is neither confirmed nor ruled out |
+| RR4 | R6-9 — the spec | **Written 2026-08-28**, `acbd6b5`: `docs/spec/cross-owner-txn.md` is new; `crosscore.md`, `wal.md` §3/§11-3/§15 and `client-manual.md` amended. The ceiling paragraph is owed RR2's number |
+| RR5 | The two RP8 debts | **Paid 2026-08-28**, `acbd6b5`: `bench/docs/README.md`'s cross-owner entry, and the per-leg timer gap recorded at `observability.md` §8a beside M3's |
 | RP8 | R6-B cells B1-B5 | **Run 2026-08-28**, `53f6aae`. `bench/v2.5.0/results-r6b-cross-owner-cost-v2.4.0-28-g53f6aae.md`. D7's ~2x holds, HP1 holds, HP2's falsifier does not fire; B5 structurally blocked |
 
 ## R6-0 — the retry bit
@@ -2297,6 +2303,426 @@ accelerates a shape no scenario in this tree can express. That is the
 sizing input the order wanted, arriving as a blocker rather than a
 percentage.
 
+## RR0 — the watermark, and the bug found under it
+
+Built on `v2.5.0-crosscore-protocol-3` at `acbd6b5`. Two things
+landed here and only one of them was on the order's list.
+
+### CR2, answered first, because it changed the row
+
+The order asks whether a cross-owner RR transaction can fail to see its own
+earlier write on another participant, and says the distinction is the
+conclusion: *"if it can, that is a correctness bug and not a staleness
+property"*. **It can, and it is a bug** — and the bug is not about
+REPEATABLE READ at all, which is why the fix is level-independent and why
+the watermark is not what closes it.
+
+A participant's context is keyed on `(coordinator core, session_id)` and
+nothing else (`ShippedStatementExecutor::DedupKey`); the statement leg
+carries no transaction id, by `statement_ship_service.hpp`'s sizing
+argument. Two things end a context while its coordinator's transaction is
+still open: the idle ceiling (`kShippedTxnIdleCeilingNs`, 300 s,
+`ExpireEnrolled`) and this core stopping. Both **erase** it. Before this
+row, the next statement of that same transaction found no context and
+`EnrolFor` opened a **fresh** one — and then:
+
+- prepare found a context and promised it durable,
+- the decided COMMIT committed it,
+- the coordinator was told every participant committed,
+- and the *first* half, the one the ceiling rolled back, was gone.
+
+A transaction committed in part, with nothing anywhere saying so. It needs a
+300-second idle gap inside one transaction and a second statement to the
+same participant after it, which is rare and entirely reachable — a client
+that holds a transaction open across a slow external call is the shape.
+
+**The fix is one wire byte**, `join` on `ShippedStatementRequestPayload`
+(the request had two reserved bytes; one is left). The coordinator sets it
+on every enrolled statement after the first it sent to that owner, which it
+reads from `Session::participants()` — the list it already keeps — so the
+enrolling statement carries 0 and every later one carries 1. A participant
+that is told "join, do not open" and finds nothing to join refuses
+**`TxnConflict`**, retryably, because that is exactly true: nothing of the
+transaction survives on that core and running it again from the top has
+nothing to undo. `SHOW META` projects `shipped_join_refusals`, which is
+`shipped_enrolment_expiries` seen from the other side.
+
+It is one byte rather than the coordinator's 8-byte transaction id — the
+thing that would otherwise be needed to tell a re-enrolment from a new
+transaction on the same session — because `Session::Finish()` already mints
+a fresh `ship_id` for every cross-owner transaction (the R6-8 review's
+clearing), so a key can only ever mean one transaction and *"have you got
+it"* is the whole question.
+
+**Demonstrated, not argued**: with the bit reverted,
+`AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsContextIsGone`
+(`tests/core_runtime_test.cpp`) answers `INSERTED oid=4000 id=5 page=130
+slot=4` where it now answers a refusal — the second transaction opened, and
+the first one's row was already rolled back.
+
+### HR2, confirmed: the watermark rides the reply and needs no new leg
+
+D3's ratified form has the coordinator carry a per-participant watermark and
+the participant read at or before it. Read against this engine, the
+coordinator **has observed nothing on a participant before that
+participant's first answer** — there is no earlier message and no shared
+clock — so the first reply *is* the first observation. The watermark
+therefore rides the reply leg: `ShippedStatementReplyPayload` gains a
+`read_watermark`, placed so the reply's fixed header stays 32 bytes and the
+reply text cap does not move.
+
+What the participant reports is its enrolled transaction's
+`ReadView::up_to_trx_id`, **in that core's own id space**, compared with
+nothing on any other core (`wal.md` guideline 3). **REPEATABLE READ only**,
+per D3's `[OPEN]` ratified *yes, READ COMMITTED skips the watermark
+entirely*: an RC transaction re-mints its view at every statement boundary
+by design (`TransactionManager::StartStatement`), so a watermark for it
+would name a view already gone.
+
+The coordinator holds one value per participant on the `Session`, cleared
+with the transaction by `Finish()`. The first reply establishes it; a later
+reply that names a different one is refused, because a participant's
+enrolled RR transaction pins its view once and never re-mints it. **What
+that check is actually for**, now that the join bit closes the re-enrolment
+route: it is the standing test on R6-8's level crossing. If the isolation
+byte ever failed to cross, the participant would run READ COMMITTED while
+its client was promised REPEATABLE READ, its view would move at every
+statement, and the transaction would be refused rather than answered from
+two snapshots. `SHOW META` projects `txn_watermark_refusals` when non-zero.
+
+**And "reads at or before it" is delivered by the pinned view, not by a
+value sent back down.** The participant's RR transaction pins at its own
+BEGIN and cannot move; there is no earlier position for the coordinator to
+push it to, because the coordinator had none to offer. The order's HR2 holds
+— no fourth leg, no new exchange — and D3's promise is delivered by R6-8's
+level crossing plus this row's guarantee that the pinned view cannot be
+silently replaced.
+
+### CR1 — what the RC path pays, named at the site
+
+An RC cross-owner **read** executes, over an RC autocommit foreign read:
+
+1. `MayEnrolShip(session)` at `command_dispatcher.cpp`'s read site — one
+   call, five pointer/bool tests, reached only because `MayShip` short-circuits
+   false inside a transaction. On the autocommit path `MayShip` is true and
+   `MayEnrolShip` is never called.
+2. In `ShipStatement`: the isolation optional (`session.transaction()->isolation()`),
+   `session.HasParticipant(owner_core)` — a linear scan of a vector whose
+   length is the transaction's participant count — and `EnrolParticipant`,
+   the same scan again with a possible `push_back`.
+3. On the participant: `EnrolFor`'s `enrolled_.find(key)` and the reuse of a
+   standing `Session` **instead of** constructing a fresh one per statement,
+   which is what the autocommit arm does. After the first statement this is
+   cheaper, not dearer.
+4. In `Finish`: the enrolled arm's `enrolled_.find(key)` — which was already
+   there before this row — and, inside it, one isolation compare. **The
+   watermark adds no lookup**: a first draft had a helper of its own doing a
+   second `find`, and it was folded into the existing one precisely because
+   the RC path must not pay for a mechanism it is ratified to skip.
+5. In `FinishShippedStatement`: `reply->read_watermark != 0`, which is false
+   at RC, so the comparison and nothing else.
+
+6. At the pipeline gate: one more `MayEnrolShip`, evaluated **last** in
+   each condition, after the free shape tests — so a local read never asks
+   it, which is what keeps CP2's "free at the instruction level" a claim
+   about the local path rather than one this row spent.
+
+**HR1 holds at the branch level**: there is no per-read work beyond the
+enrolment branch the write half already pays, plus one more test of the same
+predicate at the gate. But CR1's honest answer has **two** further halves
+the hypothesis did not ask for, and both are larger than anything above.
+
+**The first is a route change, not a branch.** Before this row a foreign
+read inside a transaction that reached `SELECT * FROM <peer relation>` was
+answered by the single-step pipeline; now it is shipped. Those are two
+different mechanisms with two different cost profiles — batched step
+messages against one statement carried as text and one reply — so R1 and R2
+are not measuring a branch's price but a substitution's. The pipeline is
+untouched for every session that cannot enrol, so no measurement ever taken
+on that path moves.
+
+**The second is per transaction: a cross-owner read makes its owner a full
+two-phase participant.** The
+read enrols, so at COMMIT the coordinator prepares a core that only read: a
+`TXN_PREPARE` record and its own `fdatasync` on that core's stream, plus the
+decide leg and its ack. That is a **per-transaction** cost, not a per-read
+one, and it is the price of the read seeing this transaction's own
+uncommitted writes on that core — which only that core's own transaction can
+show, and which nothing this core holds can supply. The standard remedy is
+the read-only-participant reply: a participant that wrote nothing answers
+prepare with "nothing to prepare, released" and drops out of the decide
+phase. That is a new answer on an existing leg rather than a fourth phase,
+but it changes `AllPrepared()` and what recovery expects, so it is **out of
+this order's scope by §1** and handed on named. The R1/R2 cells price what
+it would be worth.
+
+## RR1 — the read half
+
+Built on `v2.5.0-crosscore-protocol-3` at `acbd6b5`, in the
+same commit as RR0 because the watermark has nothing to report until a read
+can reach it.
+
+`command_dispatcher.cpp`'s read site now tests
+`(MayShip(session) || MayEnrolShip(session))`, which is the three write
+sites' spelling. **`Txn2pcService` is untouched** — HR3 asserted by diff:
+the change is a gate, two payload fields and a `Session` vector, and no
+protocol leg, crash point or recovery path moved.
+
+`SoleForeignOwner`'s two-foreign-owner refusal stays, per the order: a
+multi-owner *statement* is not this row's business, only a multi-owner
+*transaction*. So a read joining a local relation to a foreign one, or two
+foreign ones, is refused exactly as it was.
+
+### The gate the row first missed, and what a review is for
+
+A first draft of this row landed the gate and stopped there, recording the
+remote-step pipeline as *"a pre-existing property of CC4 this row leaves
+standing"*. The `critics-developer` pass showed that reading was wrong in
+the way that matters, and it showed it by **reproducing** rather than by
+arguing: it copied the row's own test, added the production
+`SetRemoteReads` wiring that `ForeignIndexRig` omits, and got
+
+```
+PROBE reply: id,v\n1,10\n2,20\n3,30
+PROBE shipped delta: 0
+```
+
+— the transaction never saw its own row 77, and the read never shipped at
+all. Two things had been missed. First, it is not only the *two-step* path:
+the **single-step** pipeline takes `SELECT * FROM <peer relation>` whole,
+which is the commonest read there is and the exact shape the row's own
+tests used. Second, the tests could not see it, because the rig installs no
+pipeline and production always does — so the row's headline claim was being
+proved against a wiring nobody runs.
+
+And it is not a weakening. Inside an autocommit statement, reading a peer
+at latest-committed is CC4's documented rule. Inside a cross-owner
+transaction it is a **wrong answer**: that transaction's own writes on the
+owner live in the transaction the owner holds for it, and no view the
+pipeline can take shows them. The order says so itself — CR2, *"if it can,
+that is a correctness bug and not a staleness property"*.
+
+**Both fast paths are now skipped for a session that can enrol**, gated on
+`MayEnrolShip` rather than on `in_explicit_txn()` so that exactly the
+sessions which can *reach* the ship path are diverted and every other
+configuration keeps the pipeline it had. Autocommit is untouched, and with
+it every measurement ever taken on that path.
+
+**The price is real and is stated rather than buried.** A shipped read's
+answer must fit one ring slot — 992 bytes of reply text — so a cross-owner
+transaction's read of a participant is bounded by that and is **refused**
+past it rather than truncated. Two consequences the row had to fix with it,
+both of which only became reachable because reads now ship:
+
+- an over-long answer arrived as `UnknownOutcome`, whose words are a
+  write's (*read the data back rather than retrying*) and are advice to do
+  the thing the statement just failed at. A read has no outcome to be
+  unknown about; the code stays, because the answer genuinely did not
+  arrive and nothing may invite a retry loop under a `retryable` bit, and
+  the false sentence goes;
+- **a failed shipped read poisoned its transaction**, where a failed
+  *local* `SELECT` does not — `Poison()`'s call sites are the write, DDL
+  and in-doubt paths. The two agreed by construction while only writes
+  shipped; since reads ship, agreeing takes saying so.
+  `PendingShippedStatement::read`, set at the read fork, is what says it.
+
+Both are pinned by `AnOverLongShippedReadIsRefusedAndLeavesItsTransactionOpen`,
+and its sibling `TheSameReadOutsideATransactionTakesThePipelineAndHasNoCap`
+holds the other half — the same statement, same rows, answered whole by the
+pipeline outside a transaction, with `shipped_executed` still 0.
+
+### The `critics-developer` pass, and what it moved
+
+Run against the working tree before `acbd6b5`.
+
+**Applied.** **C1**, a use-after-free the reviewer fixed itself: the
+watermark refusal's log line read `reply->read_watermark` *after* `Close()`
+had erased the node it points into — the same rule `DescribePrepareFailure`
+states one function down, and the ordinary arm ten lines below already
+followed. **C2**, the pipeline gate above. **C3** and **C4**, the two
+consequences of the gate. **C5**: `join_refusals_` was documented as
+*"counted apart from"* `enrolment_refusals_` and is in fact a **subset** —
+`Execute` counts every refusal `EnrolFor` returns — so the doc changed
+rather than the number, because an existing series reads that field.
+**C6**, two false claims in the row's own comments: the watermark check
+cannot see a level that failed to cross (an RC participant reports 0 and
+nothing is compared), and two watermarks are incomparable **not** because
+the id spaces differ — there is one instance-wide sequence, leased per core
+— but because each is a high-water mark over the ids *that* core issued.
+**S2**, `EnrolParticipant` duplicating `HasParticipant`'s loop verbatim.
+**S4**, line numbers copied from the work order that were stale in the tree
+the comment lives in.
+
+**Rejected, by name.** **S1** proposed the coordinator's watermark
+machinery as a candidate cut, on the ground that RR0's join bit makes its
+false branch unreachable — which is true, and which is why the reviewer
+offered the alternative rather than the deletion. Taken as the
+alternative: D3 is ratified, the check is one comparison on a field already
+in the reply, and the fix is that the comment now says plainly that the
+join rule is what makes it unreachable, so its existence is not read as
+evidence the case occurs. **S3** proposed replacing `watermarks_` with a
+vector parallel to `participants_` to drop a duplicated key column.
+Rejected: parallel vectors are the smell this codebase avoids, and the
+saving is a linear scan over a list whose length is the participant count.
+
+## RR2 and RR3 — the cells, and the three conclusions they settle
+
+Measured on `v2.5.0-crosscore-protocol-3` at `2a1cdcc`
+(`v2.4.0-32-g2a1cdcc`), `build-release`, interleaved, one sitting. Every
+number, its per-rep spread, its host and its caveats live in
+`bench/v2.5.0/results-rr-read-half-v2.4.0-32-g2a1cdcc.md`; this is the
+rows' summary and the four conclusions the order named. **Overhead A/B not
+run** (operator suspension, 2026-08-24), and **RP7's matrix is not this
+row's** — it is re-run by the developer at head, below.
+
+### CR4 — the line's product metric, and it is 100%
+
+**RP8's B5 was zero because a read was refused. It is now 100/100.** The
+same driver, the same parameters, the same deployment shape RP8 documented:
+`scenario2_freight` with `--txn`, whose booking transaction opens with a
+foreign `cargo-lookup` read that used to refuse every attempt. 100 bookings
+committed at 244-265 TPS, 82 invariant checks and 0 failures, and every
+committed booking is a genuine multi-participant cross-owner transaction —
+confirmed from the server's own `[2pc]` log naming two and three distinct
+participant cores per booking, not inferred from the absence of a refusal.
+**Under this deployment shape the two-phase fraction of a committed booking
+workload is 100%.**
+
+**RP8's §9 caveat holds unchanged and is restated rather than re-derived**:
+`peer_listeners=off` puts the client on core 0 and `rotate` never assigns
+core 0, so the client is foreign to *every* relation. That is the
+**maximal** cross-owner shape and therefore the ceiling of what a
+deployment would see, not its floor. What no run yet measures is a shape
+between the two extremes.
+
+One new cost the number came with: **5% of read attempts retried**, and
+every conflict in both cells was on the *read* rather than on either of the
+booking's two writes — one booker hammering a 200-cargo pool, so most
+likely ordinary MVCC contention rather than anything the read half
+introduced, but it is new and it is the read half's own contribution.
+
+### CR1 — HR1's falsifier fires, and it fires on the route
+
+The order asked for the RC read's cost *"named at the site"*, and said that
+if the answer is more than one branch, that is a finding. It is more, and
+the finding is the one this row's own CR1 section predicted before the
+cells ran: **RR1 did not add a branch to the cheap path, it routed an
+enrolled read onto the expensive one.**
+
+An autocommit foreign read costs ~44-47 µs p50, flat from 200 to 10,000
+rows — the purpose-built single-hop pipeline reader. The identical read
+inside `BEGIN` costs **2.25x-9.08x** that on its `select_us` leg, because
+it falls through both pipeline gates and reaches `ShipStatement`: the same
+function, ring messaging, session mint, sequence number, dedup record and
+full round trip in each direction that a shipped *write* takes.
+
+**HR1's falsifier therefore fires, and the hypothesis was wrong for the
+right reason.** What buys the cost is the only thing that can answer the
+transaction's own uncommitted write on that owner — the participant's own
+transaction, which only the ship path can join.
+
+**And the read's own cost is the smaller half.** `rc.commit_us` p50 runs
+2,007-3,290 µs against `rc.select_us`'s 109-304 µs: a read-only participant
+pays a **full cross-owner decide** at `COMMIT`, 7-30x what the read itself
+cost. The read-only-participant reply is what would remove it, and it is
+out of scope by §1 — but this is the number that says what it would be
+worth, which is what the R1/R2 cells existed to produce.
+
+### CR3 — the ceiling is chosen on one axis, because only one binds
+
+RP2's review made the in-doubt ceiling bound two things, and the order said
+a ceiling chosen on latency alone is chosen on half the evidence. **Swept,
+both axes, and the second does not move with the knob at all.**
+
+- **R3, the writer stall**: p0 tracks the configured ceiling closely (1.04-1.09
+  ms at 1 ms, 5.4-5.7 ms at 5 ms), p50/p99 run 2-6x higher under load — most
+  likely reactor queueing on the shared core, and **unconfirmed, because no
+  per-leg timer exists** (`observability.md` §8a, the third instance).
+  At 20 ms and 200 ms the refusal essentially never fires: one stray event
+  in ~60,000 attempts, none in ~43,000. **HR4 holds; 200 ms stands,
+  unforced.**
+- **R4, the log retained**: peak WAL bytes held per checkpoint tick is
+  99K-160K across *every* live ceiling and **103K-105K in the control where
+  no participant ever prepared**. Statistically indistinguishable. Ordinary
+  dirty-page checkpoint lag dominates completely.
+
+**So CR3's answer is not "the tighter of two bounds" but "one of the two is
+not a bound here".** The checkpoint floor is real in source and does hold
+the log back; what it is *not* is sensitive to `in_doubt_ceiling_ms`. What
+actually bounds a prepared transaction's duration, and so the log it can
+pin, is `kTxnPhaseDeadlineNs` (10 s — the coordinator's own prepare-phase
+deadline, ten times the ceiling and independent of it) where the
+coordinator is alive but slow, and **the next mount** where it is not.
+Neither is the knob RP2's review pointed at. A smaller
+`in_doubt_ceiling_ms` would not shrink the log-retention exposure, which
+means the second axis sharpens the reason for 200 ms rather than arguing
+against it.
+
+### HR5 — neither confirmed nor ruled out, and said so
+
+The one-owner fast path against a same-sitting build of the pre-R6 tag
+reads **[1.063, 1.259]** across percentiles, against RP8's stated
+[0.929, 1.031]. That band was RP8's sitting's own noise floor rather than a
+constant, and **this sitting's floor is wider** — `now`'s own repeated cell
+spreads 83.8% at p50 (31.9% excluding one anomalous round), above the
+6.3-25.9% delta the table reports. Read against this run's floor the ratio
+is inside the noise; read against `pre`'s narrower floor (18.3%) it is
+outside at three of five percentiles.
+
+Both readings are recorded because the honest answer is between them:
+excluding the anomalous round, `now` was at or above `pre` on **every one
+of the remaining six rounds** at p50, never below 1.0 — a consistent
+direction across independent samples, none of which clears its own noise
+band alone. **A plausible small cost, not ruled out and not confirmed**,
+and the first row in six where the fast path's freedom is not cleanly
+demonstrated. A cleaner answer needs more rounds or the anomalous round's
+cause understood, and neither was in this order.
+
+What the numbers do not contradict is the structural argument: RR0 and RR1
+touch no line a one-owner transaction reaches — `MayEnrolShip` is false
+without a 2PC client, the two pipeline gates ask it **last** so a local
+read never does, and `ShipStatement`, `FinishShippedStatement` and the
+watermark are all on the shipped path. That is an argument, not a
+measurement, and it is offered as the former.
+
+## §6 — the correctness list, bullet by bullet
+
+Run on `v2.5.0-crosscore-protocol-3` at `af36f24`, one sitting, after every
+review finding was applied.
+
+- **RP7's matrix re-run whole**, 12 cells x 3 passes on the tree with the
+  read half in it, because a read that crosses inside a transaction is a
+  new way to become a participant and every crash point is newly reachable
+  by a new path. **36/36**, asymmetric participant state reached at three
+  points. Archived beside the results.
+- **A cross-owner RR transaction sees a per-core consistent snapshot, and
+  the test says what that means** rather than asserting the phrase: the
+  participant commits a row of its own *between* the transaction's two
+  reads, and the second read must not show it
+  (`ARepeatableReadCrossOwnerTransactionCarriesOneWatermarkPerParticipant`).
+  The same test's RC half shows the opposite — RC does see it, which is the
+  level's own contract and the reason a watermark for it would name a view
+  already gone.
+- **CR2's own answer tested, and pinned both ways.**
+  `ACrossOwnerTransactionReadsBackItsOwnUncommittedWriteOnThePeer` holds the
+  positive case and fails without RR1's pipeline gate;
+  `AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsContextIsGone` holds
+  the negative one and, without the join bit, answers `INSERTED` where it
+  now refuses.
+- **`cores = 1` unchanged** — sixth consecutive row asserting it, and the
+  matrix's `fastpath.cores1` cell is what asserts it here. The one caveat
+  is RR3's HR5, above: the *measurement* of the one-owner path is not
+  clean, and that is stated rather than folded into this bullet.
+- **HP3 stays reported, not confirmed.** This order built no new protocol,
+  so nothing lets `sim/` mount a prepared transaction, and RP7's bound
+  carries forward unweakened: `sim.sh` 171/0 means the read half broke
+  nothing the corpus covers, and the corpus does not cover cross-owner
+  recovery (`known-gaps.md`).
+- **Full suite and `scripts/sim.sh`, one sitting, and the sitting named**:
+  2026-08-28 at `af36f24`, 2,929 green and 171/0.
+- **Overhead A/B: not run**, by the operator's 2026-08-24 suspension. Not
+  implied green.
+
 ## Open, carried from the work order
 
 - **D1–D7 are ratified** (2026-08-28) and so are both `[OPEN]`s
@@ -2305,15 +2731,39 @@ percentage.
   each — R6-3's isolation-level crossing, R6-5's named ceiling constant and
   its non-`UnknownOutcome` refusal, R6-5's sizing of the in-doubt ask,
   R6-9's two doc sentences, and B1's p50-and-p99 reporting.
-- **The two-phase path is unreachable from any scenario in this tree, and
-  the blocker is a *read*** (RP8's B5, above). `CheckReadAffinity` refuses
-  every cross-core read unconditionally, so a transaction that reads a
-  peer-owned relation before writing — which is what a realistic booking or
-  ordering workload does — never gets as far as a cross-owner commit. R6 is
-  built, correct and measured, and nothing that exists exercises it end to
-  end outside a purpose-built driver. **Whoever picks up the cross-core read
-  path inherits R6's usefulness**, and until then the milestone's own B5
-  number is zero by construction rather than by workload.
+- ~~**The two-phase path is unreachable from any scenario in this tree, and
+  the blocker is a *read***~~ (RP8's B5) — **closed by RR1**, `acbd6b5`,
+  and **measured at 100/100 committed** by RR3 at `2a1cdcc`.
+  The refusal was narrower than "unconditional": the read site tested
+  `MayShip` alone, which requires `!in_explicit_txn()`, so a foreign read
+  *inside* a transaction fell through to `CheckReadAffinity` while the
+  identical read outside one shipped. It now tests both gates. What
+  `CheckReadAffinity` still refuses is CP3's third era — a statement
+  spanning two owners, and one from a path that cannot park — and RR3 is
+  what turns B5 from a blocker back into a number.
+- **A cross-owner transaction's read of a participant is bounded by the
+  reply cap**, and that is the live limit RR1 leaves. A shipped read's
+  answer must fit one ring slot (992 bytes of reply text) and is refused
+  past it; the same read outside a transaction still takes the pipeline and
+  has no such bound. `crosscore.md` §9's ring sizing is what lifts it, and
+  until it is lifted the honest reading of "reads cross" is *reads of
+  bounded answers cross*.
+- **A read-only participant is prepared like any other** — a `TXN_PREPARE`
+  and an `fdatasync` on a core that only read — and RR3 priced it: the
+  decide costs **7-30x the read that enrolled it**, which makes this the
+  largest single number the read half leaves on the table. The standard
+  remedy is a read-only reply on the existing prepare leg, a new *answer*
+  rather than a fourth phase, but it changes `AllPrepared()` and what
+  recovery expects. Out of this order's scope by §1, handed on named.
+- **HR5 is not cleanly answered**, and it is the first row in six where the
+  one-owner fast path's freedom is not demonstrated: [1.063, 1.259] against
+  RP8's [0.929, 1.031], inside this sitting's own wider noise floor but
+  consistently in one direction across six of seven rounds. Neither
+  confirmed nor ruled out, and it wants either more rounds or the
+  anomalous round's cause before it is called either way.
+- **No per-leg server-side timer**, for the third time (`observability.md`
+  §8a). It blocked RP8's attribution of the three sequential syncs, and it
+  blocks RR2's attribution of why R3's p50/p99 run 2-6x its p0.
 - **`wal.md` §3's second `[OPEN]` is answered** (CP1, R6-4's section above):
   a core-count change is already refused at the door by the superblock's
   pinned `core_count`, so recovery never meets a prepare from a stream it

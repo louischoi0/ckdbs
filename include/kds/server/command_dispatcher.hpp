@@ -196,6 +196,16 @@ struct PendingShippedStatement {
     std::uint64_t request_id = 0;
     std::uint32_t owner_core = 0;
     std::string relation;
+    // **This statement was a read** (RR1). Set only at the read dispatch
+    // fork, so it is a fact about which site sent the statement and not a
+    // guess about what the statement did.
+    //
+    // Two refusals answer differently for one: a read has no effect, so a
+    // failure inside an explicit transaction must not poison it - a local
+    // `SELECT` that fails does not, and the two have to agree - and a lost
+    // answer is not an *unknown outcome*, because there is no outcome to be
+    // unknown about. Both were right while only writes shipped.
+    bool read = false;
 };
 
 // A `COMMIT` of a transaction whose writes touched more than one owner
@@ -1728,6 +1738,12 @@ private:
     // (crosscore.md §3, sched.md §7's determinism rule).
     std::uint64_t next_remote_request_ = 1;
 
+    // RR0 / D3: cross-owner transactions refused because a participant
+    // answered from a snapshot other than the one this transaction had been
+    // reading it at. Projected by `SHOW META` as `txn_watermark_refusals`,
+    // and only when non-zero.
+    std::uint64_t watermark_refusals_ = 0;
+
     // The read-path index switch (`indexes`, default on). Read-path only:
     // maintenance is not switchable, because an index that stops being
     // maintained is wrong rather than slow.
@@ -1803,11 +1819,12 @@ private:
     // client that sees one knows the statement did not run.
     DispatchOutcome ShipStatement(std::string_view line, catalog::Oid oid,
                                   std::uint32_t owner_core, std::string_view relation,
-                                  Session& session);
+                                  Session& session, bool read = false);
 
     // The parked statement's other end: the owner's answer, its deadline,
     // or a waiter that vanished.
-    DispatchOutcome FinishShippedStatement(const PendingShippedStatement& shipped);
+    DispatchOutcome FinishShippedStatement(const PendingShippedStatement& shipped,
+                                          Session& session);
 
     // ---- R6-3: the coordinator's commit --------------------------------
 

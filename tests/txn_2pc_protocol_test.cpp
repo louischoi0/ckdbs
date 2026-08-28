@@ -102,6 +102,9 @@ protected:
         bool answered = false;
         Status status;
         std::string text;
+        // RR0 / D3: what the participant reported it is reading at, 0 where
+        // it reported nothing.
+        std::uint64_t watermark = 0;
     };
 
     // The reactor's turn, plus the drain a reactor's post-task hook runs:
@@ -114,21 +117,27 @@ protected:
         }
     }
 
-    Answer Ship(const std::string& sql, std::uint64_t sequence, bool in_txn = true) {
+    Answer Ship(const std::string& sql, std::uint64_t sequence, bool in_txn = true,
+                bool join = false,
+                std::optional<txn::IsolationLevel> isolation = std::nullopt) {
         StatementShipServer::ShippedStatement statement;
         statement.requester = kCoordinator;
         statement.session_id = kSession;
         statement.sequence = sequence;
         statement.role = Role::kReadWrite;
         statement.in_txn = in_txn;
+        statement.join = join;
+        statement.isolation = isolation;
         statement.text = sql;
 
         auto answer = std::make_shared<Answer>();
         executor_->Seam()(std::move(statement),
-                          [answer](const Status& status, std::string_view text) {
+                          [answer](const Status& status, std::string_view text,
+                                   std::uint64_t watermark) {
                               answer->answered = true;
                               answer->status = status;
                               answer->text.assign(text);
+                              answer->watermark = watermark;
                           });
         Pump(answer);
         return *answer;
@@ -833,6 +842,48 @@ protected:
     std::optional<Txn2pcServer::PrepareAsk> prepared_;
     std::optional<Txn2pcServer::DecideAsk> decided_;
 };
+
+TEST(CrossOwnerWatermarkTest, TheCoordinatorHoldsOneWatermarkPerParticipantAndItMayNotMove) {
+    // **RR0 / D3, the coordinator's half as a state machine.** The first
+    // reply from a participant establishes the value; every later one has
+    // to repeat it, because a participant's enrolled REPEATABLE READ
+    // transaction pins its view once and never re-mints it. A value that
+    // moved is what
+    // `CommandDispatcher::FinishShippedStatement` turns into a refusal -
+    // it means either the context was re-opened under the transaction or
+    // the level did not cross and the participant is running READ
+    // COMMITTED while its client was promised REPEATABLE READ.
+    Session session;
+    EXPECT_EQ(session.ParticipantWatermark(1), 0u);
+
+    EXPECT_TRUE(session.NoteParticipantWatermark(1, 500));
+    EXPECT_EQ(session.ParticipantWatermark(1), 500u);
+    EXPECT_TRUE(session.NoteParticipantWatermark(1, 500)) << "the same value is not a move";
+    EXPECT_FALSE(session.NoteParticipantWatermark(1, 501));
+    // Refusing does not overwrite: the held value is what the transaction
+    // has been reading at, and the refusal names it.
+    EXPECT_EQ(session.ParticipantWatermark(1), 500u);
+
+    // Per participant, and the two are never compared with each other -
+    // they are points in two independent streams (`wal.md` guideline 3).
+    EXPECT_TRUE(session.NoteParticipantWatermark(2, 12));
+    EXPECT_EQ(session.ParticipantWatermark(2), 12u);
+    EXPECT_EQ(session.ParticipantWatermark(1), 500u);
+
+    // And it belongs to the transaction that observed it.
+    session.EnrolParticipant(1);
+    (void)session.Finish();
+    EXPECT_EQ(session.ParticipantWatermark(1), 0u);
+    EXPECT_EQ(session.ParticipantWatermark(2), 0u);
+}
+
+TEST(CrossOwnerWatermarkTest, HasParticipantIsWhatTheJoinBitIsReadFrom) {
+    Session session;
+    EXPECT_FALSE(session.HasParticipant(1));
+    session.EnrolParticipant(1);
+    EXPECT_TRUE(session.HasParticipant(1));
+    EXPECT_FALSE(session.HasParticipant(2));
+}
 
 TEST_F(Txn2pcCommitTest, AOneOwnerCommitSendsNoPrepareAndTakesThePathItAlwaysTook) {
     // D1's fast path, asserted the way the work order's §5 asks for it: by

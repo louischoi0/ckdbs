@@ -289,6 +289,19 @@ public:
     // neither is a duplicate and neither is in doubt - both are retryable,
     // and a coordinator may act on them.
     std::uint64_t enrolment_refusals() const noexcept { return enrolment_refusals_; }
+
+    // **RR0: statements refused because their context was gone.** A
+    // statement that may only join a transaction and found none - the idle
+    // ceiling having rolled it back, or this core having stopped and come
+    // back. A rising number means coordinators are holding cross-owner
+    // transactions open past `kShippedTxnIdleCeilingNs`.
+    //
+    // **A subset of `enrolment_refusals_`, not a count beside it.** Every
+    // refusal `EnrolFor` returns is counted there by its one caller, so the
+    // two must not be summed - this is *which* of those refusals were a
+    // context that existed and does not any more, against the rest, which
+    // are a context that could not be opened at all.
+    std::uint64_t join_refusals() const noexcept { return join_refusals_; }
     // Transactions the idle ceiling rolled back because no decide came.
     // **Non-zero means a coordinator abandoned one**, which is a defect
     // somewhere else - nothing on a healthy path reaches the ceiling.
@@ -559,7 +572,13 @@ private:
     // wrong promise. Used only when the context is opened; a statement
     // joining an existing one runs at the level that one was opened with,
     // since a transaction has one level for its life.
-    StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role, txn::IsolationLevel isolation);
+    // `join` is RR0's wire bit: true means this statement may join an
+    // existing context and may not open one, which is what the coordinator
+    // says on every statement after the first it sent this core in this
+    // transaction.
+    StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role, txn::IsolationLevel isolation,
+                                 bool join);
+
     // Rolls `it`'s transaction back and drops the context. **Rollback
     // only**, still: R6-3's commit arm is not here but in `Decide`, and for
     // the reason this comment already gave - `Dispatch("COMMIT")` finishes
@@ -641,6 +660,7 @@ private:
     std::uint64_t early_evictions_ = 0;
     std::uint64_t enrolments_ = 0;
     std::uint64_t enrolment_refusals_ = 0;
+    std::uint64_t join_refusals_ = 0;
     std::uint64_t enrolment_expiries_ = 0;
 
     // R6-3. `in_doubt_` is derived from `enrolled_`'s `prepared` flags and

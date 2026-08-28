@@ -17,12 +17,18 @@ everything shipped is the one-range instance of the rules below, and
 R1-R6). The unit, the directory and the routing are §2a; the widened
 write scope is CC3 and §6; split and migration are CC10 and §6a-§6b.
 
-Scope boundary: this spec covers cross-core **reads**. Cross-core **commit**
-(a transaction writing relations owned by more than one core) remains
-`[OPEN]` per `docs/spec/wal.md` §3 — reserved for a later 2PC design, not designed
-here. §6 defines the v1 restriction that keeps commit single-stream; since
-v2 "cross-core write" includes a statement or transaction writing two
-ranges owned by different cores, *even ranges of one relation* (CC3).
+Scope boundary, **revised 2026-08-28**: this spec covers cross-core
+**reads** and the routing every statement takes. Cross-core **commit** — a
+transaction touching relations owned by more than one core — is **built**,
+and its spec is `docs/spec/cross-owner-txn.md`; it is not designed here,
+and where the two disagree that one wins on the protocol and this one on
+routing. §6 defined the v1 restriction that kept commit single-stream, and
+§6's refusal list below now records which parts of it survive. Since v2
+"cross-core write" includes a statement or transaction writing two ranges
+owned by different cores, *even ranges of one relation* (CC3) — and
+multi-*range* transactions are the one part of the restriction that
+stands, because they inherit the commit protocol unchanged but need RD3's
+resolver to discover their participants.
 
 `[PROPOSED]` marks a default to confirm or amend before the affected part is
 built. `[OPEN]` marks a deferred decision that must not be assumed.
@@ -259,12 +265,29 @@ client manual states the widened form beside the v1 one.
 - **READ COMMITTED** statements: semantically equivalent to local execution —
   RC already permits each statement (and each lookup within it) to observe
   the latest committed state.
-- **REPEATABLE READ** transactions issuing cross-core reads: the remote
-  relation is read at latest-committed, not at the transaction's ReadView.
-  This is a **documented weakening**: RR guarantees hold per core, not
-  across cores. The client manual must state it; the server does not error.
-  Escalating to an error (or to snapshot forwarding) is `[OPEN]` alongside
-  the 2PC milestone.
+- **REPEATABLE READ** transactions issuing cross-core reads: **amended
+  2026-08-28, and the `[OPEN]` closes.** The weakening is now stated
+  positively rather than as an absence — a cross-owner RR transaction sees
+  a **consistent-per-core** snapshot: each participant pins one view for
+  the transaction's life and the coordinator carries that participant's
+  watermark, which is compared with nothing on any other core.
+  `docs/spec/cross-owner-txn.md` §3 owns the rule and
+  `docs/spec/client-manual.md` states it in the client's words. What is
+  **not** given, and never will be from a shared-nothing engine, is a
+  single global instant: two such transactions can disagree about the order
+  of two commits on two cores.
+
+  **The remote-step pipeline does not run inside such a transaction.** It
+  reads each core's latest-committed snapshot outside any enrolled
+  transaction, which inside a cross-owner transaction is not a weakening
+  but a **wrong answer** — that transaction's own writes on the owner live
+  in the transaction the owner holds for it, and no view this leg can take
+  shows them. So both remote-read fast paths are skipped for a session that
+  can enrol, and the read ships instead. The pipeline keeps every autocommit
+  route and every measurement made on one; what it costs a cross-owner
+  transaction is the shipped reply's one-slot cap — 992 bytes of reply text
+  — which refuses a larger answer rather than truncating it or answering it
+  wrongly (§9's ring sizing is what lifts that).
 - Catalog: the plan is resolved entirely on the session core from its
   catalog cache; a remote step trusts the descriptor in `STEP_OPEN` and does
   not re-resolve. DDL invalidation between resolve and execute surfaces as a
@@ -290,15 +313,21 @@ did.
   waiter under a deadline and answers with the owner's own reply, the
   `retryable` bit included.
 
-  Three things stay refused, and each is a scope statement rather than a
-  gap: a statement **inside an explicit transaction** (nothing crosses
-  transaction state), a statement **spanning two owners** (R6), and a
-  statement on a path that **cannot park** — the synchronous dispatch
-  entry, because sending from a path that cannot wait would leave a
-  statement the owner may have committed with nowhere to deliver its
-  answer. Shipping is **unconditional** where it applies: whether to ship
-  or to refuse by load is placement policy, which is §9's open decision
-  and does not ride along.
+  **The refusal list, third era (2026-08-28).** It was three things, and
+  the first of them is gone: a statement **inside an explicit
+  transaction** now ships and *enrols*, for writes since R6-8 and for
+  reads since RR1 — `docs/spec/cross-owner-txn.md`. Two stay, and each is
+  a scope statement rather than a gap: a statement **spanning two owners**
+  (a multi-owner *statement*, which is not the same thing as a
+  multi-owner *transaction* and is not what the commit protocol
+  addresses), and a statement on a path that **cannot park** — the
+  synchronous dispatch entry, because sending from a path that cannot wait
+  would leave a statement the owner may have committed with nowhere to
+  deliver its answer. `cross_core_write_refusals` counts what remains,
+  with its meaning unchanged across all three eras, which is what lets the
+  series be read end to end. Shipping is **unconditional** where it
+  applies: whether to ship or to refuse by load is placement policy, which
+  is §9's open decision and does not ride along.
 
   A lost or late answer is **not** a refusal. It is `UNKNOWN_OUTCOME`,
   non-retryable by construction, because this engine issues primary keys
@@ -576,11 +605,16 @@ mechanism, R3-R5:
 
 ## 9. Open Items
 
-- Cross-core commit protocol (2PC) and with it: multi-range write
-  statements and transactions, cross-core FK, RR snapshot forwarding,
-  write shipping inside explicit transactions (§6 counters feed this
-  design, with the undercount §6 names; PL-A's revisit clause arms with
-  2PC, `page-lsn-cross-stream.md` §9).
+- ~~Cross-core commit protocol (2PC)~~ — **built 2026-08-28**,
+  `docs/spec/cross-owner-txn.md`, at relation granularity. Write shipping
+  inside explicit transactions and read shipping inside them both landed
+  with it. What was gated behind it and is **still open**: multi-*range*
+  write statements and transactions (they inherit the protocol unchanged
+  and need RD3's resolver — blueprint §11's R6), cross-core FK, and RR
+  snapshot forwarding to the remote-step pipeline (§5's last paragraph).
+  PL-A's revisit clause fired and was executed (R6-7): 2PC changes nothing
+  about page identity across streams, and the verdict is the operator's
+  (`page-lsn-cross-stream.md` §9).
 - Split/migrate policy and its constants — triggers, thresholds,
   cadence, and merge (the mover is the physical optimizer's Part III;
   blueprint R5 owns the phase, the Part III spec owns the policy when

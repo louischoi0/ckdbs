@@ -32,7 +32,8 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
                                                                    Role role,
                                                                    std::string_view text,
                                                                    bool retry, bool in_txn,
-                                                                   std::optional<txn::IsolationLevel> isolation) {
+                                                                   std::optional<txn::IsolationLevel> isolation,
+                                                                   bool join) {
     if (text.empty()) {
         return Status::InvalidArgument("statement shipping: an empty statement is not a statement");
     }
@@ -58,6 +59,10 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
     // statement: the level is a promise about a transaction that spans
     // statements, and an autocommit one is not that.
     out.isolation = isolation.has_value() ? static_cast<std::uint8_t>(*isolation) : 0;
+    // RR0: "join, do not open". Meaningful only with `in_txn`, and a
+    // caller that sets it without one is asking for nothing - the owner
+    // reads it under `in_txn` alone.
+    out.join = join ? 1 : 0;
     out.text_len = static_cast<std::uint16_t>(text.size());
     std::memcpy(out.text, text.data(), text.size());
     return out;
@@ -66,11 +71,13 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
 StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t session_id,
                                                                std::uint64_t sequence,
                                                                const Status& status,
-                                                               std::string_view text) {
+                                                               std::string_view text,
+                                                               std::uint64_t read_watermark) {
     ShippedStatementReplyPayload out{};
     out.session_id = session_id;
     out.sequence = sequence;
     out.status_code = static_cast<std::uint32_t>(status.code());
+    out.read_watermark = read_watermark;
 
     // **The cap is asymmetric, and deliberately so.**
     //
@@ -179,14 +186,14 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
 
     auto text = ShippedStatementTextOf(request);
     if (!text.ok()) {
-        Reply(requester, request_id, session_id, sequence, text.status(), {});
+        Reply(requester, request_id, session_id, sequence, text.status(), {}, 0);
         return;
     }
     // Before the executor, because a rank this core cannot read is a
     // refusal and not an execution - and a refusal must cost nothing.
     auto role = ShippedStatementRoleOf(request);
     if (!role.ok()) {
-        Reply(requester, request_id, session_id, sequence, role.status(), {});
+        Reply(requester, request_id, session_id, sequence, role.status(), {}, 0);
         return;
     }
     // R6-8's level, on the same terms and for the same reason: a byte this
@@ -194,7 +201,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     // guessed for a transaction a client was promised something about.
     auto isolation = ShippedStatementIsolationOf(request);
     if (!isolation.ok()) {
-        Reply(requester, request_id, session_id, sequence, isolation.status(), {});
+        Reply(requester, request_id, session_id, sequence, isolation.status(), {}, 0);
         return;
     }
     if (!execute_) {
@@ -204,7 +211,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
         Reply(requester, request_id, session_id, sequence,
               Status::Unsupported("statement shipping: this core has no executor installed; "
                                   "the wire is built and the owner-side execution is not (SS3)"),
-              {});
+              {}, 0);
         return;
     }
 
@@ -221,17 +228,20 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     statement.retry = request.retry != 0;
     statement.in_txn = request.in_txn != 0;
     statement.isolation = isolation.value();
+    statement.join = request.join != 0;
     statement.text.assign(text.value());
     execute_(std::move(statement),
-             [this, requester, request_id, session_id, sequence](const Status& status,
-                                                                 std::string_view reply_text) {
-                 Reply(requester, request_id, session_id, sequence, status, reply_text);
+             [this, requester, request_id, session_id, sequence](
+                 const Status& status, std::string_view reply_text, std::uint64_t watermark) {
+                 Reply(requester, request_id, session_id, sequence, status, reply_text,
+                       watermark);
              });
 }
 
 void StatementShipServer::Reply(std::uint32_t requester, std::uint64_t request_id,
                                 std::uint64_t session_id, std::uint64_t sequence,
-                                const Status& status, std::string_view text) {
+                                const Status& status, std::string_view text,
+                                std::uint64_t read_watermark) {
     // The pair is decided **before** it is encoded, so there is one encode
     // and no arm that can fail. The earlier shape re-encoded on failure and
     // its own failure arm returned without sending - dropping the one thing
@@ -249,7 +259,13 @@ void StatementShipServer::Reply(std::uint32_t requester, std::uint64_t request_i
         answer_text = {};
     }
 
-    auto reply = ShippedStatementReplyOf(session_id, sequence, answer, answer_text);
+    auto reply = ShippedStatementReplyOf(session_id, sequence, answer, answer_text,
+                                         // **Dropped on the refusal arm**, including the
+                                         // over-long-answer one above: a watermark is a
+                                         // promise about a view the client's transaction is
+                                         // reading through, and a statement whose answer this
+                                         // core could not carry has no such promise to make.
+                                         answer.ok() ? read_watermark : 0);
     if (!reply.ok()) return;  // unreachable: neither arm above can refuse
     ++replies_;
     //  is the *requester's*, both ways: a shipped statement's
@@ -370,6 +386,12 @@ Status StatementShipClient::RegisterReplyReceiver() {
                 return;
             }
             it->second.text.assign(reply.text, reply.text_len);
+            // RR0 / D3: taken before the status is rebuilt, because the
+            // watermark is the owner's and this side neither interprets it
+            // nor compares it with anything of its own - the coordinator's
+            // session does that, once, against what it already held for
+            // this core (`CommandDispatcher::FinishShippedStatement`).
+            it->second.read_watermark = reply.read_watermark;
             it->second.status = Status::FromWire(reply.status_code, it->second.text);
             if (!it->second.status.ok()) ++refusals_;
             // A success carries the reply line in `text`; a refusal carries
@@ -385,7 +407,7 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
                                  std::uint64_t session_id, std::uint64_t sequence,
                                  std::uint64_t target_oid, Role role, std::string_view text,
                                  bool retry, bool in_txn,
-                                 std::optional<txn::IsolationLevel> isolation) {
+                                 std::optional<txn::IsolationLevel> isolation, bool join) {
     // **One live waiter per request id.** Reusing an id that still has a
     // statement parked on it would replace that statement's waiter with
     // this one's, and the identity check on the reply path cannot catch it -
@@ -413,7 +435,7 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
     }
     auto request =
         ShippedStatementRequestOf(session_id, sequence, target_oid, role, text, retry, in_txn,
-                                  isolation);
+                                  isolation, join);
     // A statement the wire refuses opens no waiter: nothing was sent, so
     // nothing will answer, and a waiter would only cost the statement a
     // deadline before saying what is already known.
