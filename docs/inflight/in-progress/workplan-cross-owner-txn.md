@@ -150,7 +150,7 @@ this workplan means the v2.4.0 path.
 | R6-4 | Recovery (D4) | **Built 2026-08-28**, this worktree |
 | R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b`; review at `ad0aa2f` |
 | R6-6 | PW3b extension | **Built 2026-08-28** (tests and prose; no engine change) |
-| R6-7 | PL-A revisit | — |
+| R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
 | R6-8 | Dispatch | — |
 | R6-9 | Docs | — |
 
@@ -1391,6 +1391,89 @@ R6-6 inherits that gap rather than closing it: the sequence is pinned at the
 level below, exactly as PW3b pinned its own. What is untested in both cases
 is the same wiring, and RP7's kill −9 matrix against a real two-core server
 is where it is exercised.
+
+## R6-7 — PL-A's revisit, and CP4
+
+Built on `v2.5.0-cross-core-owner-protocol-2`. **No engine code**, which the
+work order named as the expected outcome and as the finding if it were
+otherwise: nothing in R6-3 … R6-6 touches page identity across streams, and
+§ below says how that was checked rather than assumed.
+
+### The clause, and that it has fired
+
+`docs/spec/page-lsn-cross-stream.md` §9 reserved one: *"if cross-core commit
+(2PC) is ever ratified, PL-A is re-opened **by that decision** — one global
+LSN may then pay for both. Until then it is declined, not deferred."*
+D1–D7 were ratified on 2026-08-28, so **the clause has fired and PL-A is
+open.** `CLAUDE.md`'s Open Decisions index carries the same trigger in the
+Transactions & WAL line and now reads one event behind.
+
+### CP4 — what 2PC changes about cross-stream page handoff: nothing, and here is why
+
+The order asks for the argument rather than the assertion, so it is made
+from the built protocol and not from the design intent.
+
+**What PL-A would have bought 2PC.** One global LSN makes comparisons
+meaningful everywhere, so a decision could be *assembled* from several
+streams and recovery could order two streams' records against each other.
+That is the second decision the clause hoped PL-A would pay for.
+
+**The ratified protocol asks for neither, by construction.**
+
+- **D4 puts the decision in exactly one stream.** The coordinator's `COMMIT`
+  record *is* the decision; nothing is assembled, so nothing is ordered.
+- **The wire carries no LSN at all.** All five payloads in
+  `server/txn_2pc_service.hpp` — prepare, decide, the participant reply, and
+  R6-5's ask and answer — hold ids, a status, a decision byte and a retry
+  bit. The type `wal::Lsn` does not appear in that header once.
+- **D2 keeps every stream's ids stream-local**, and the enforcement is a
+  refusal rather than a convention: `CoreRuntime::Open` will not mount a
+  stream naming a trx id above the superblock's ceiling, so a foreign id in
+  a stream is a stream that does not open.
+- **R6-4's resolution is two independent reads**, which HP5 predicted and
+  the row confirmed with its site: `prepared_resolver.cpp`'s scan reads
+  `record.header.txn_id` and `record.type()` and touches no LSN.
+
+**The one comparison that looks cross-stream and is not.** R6-4's review
+added an anchor-honesty check to the resolver: core A, resolving its own
+prepare, reads core B's stream and refuses if the scan ends before the
+durable point **B's own anchor** was published with
+(`prepared_resolver.cpp:124-129`, `scan.end_lsn < anchor_durable_lsn`). Both
+numbers are B's, so this is a within-stream completeness check that A
+happens to perform — the same argument `analysis.hpp` makes about a stream's
+own scan, applied to somebody else's. It is worth naming precisely because
+it is the one place a reader would go looking for a violation of guideline 3
+and find something that superficially resembles one.
+
+**And the direction R6 *does* move a page-LSN fact — safely, by PL-B's own
+rule.** R6-4 floors a checkpoint's redo start at the oldest live prepare, so
+a participant holding one makes every later scan on that core **start
+earlier** than it otherwise would. PL-B rule 3 removes a handed-off page
+from the dirty table when the forward scan meets its `PAGE_HANDOFF`, and
+rule 6 restamps a returning page at re-acquisition — so a scan that starts
+earlier meets *more* handoff records, in order, and reaches the same state.
+Lowering a redo start is safe for the handoff contract; raising one past a
+handoff would not be, and nothing in R6 raises one. This is the only
+interaction between the two mechanisms and it runs in the harmless
+direction.
+
+**Verdict, and it is a proposal rather than a closure.** PL-A is re-opened
+by the clause and CLA's reading is to **decline it again**: the second
+decision it would have paid for does not exist, because the ratified 2PC was
+designed to need no cross-stream comparison and the built one demonstrably
+makes none. Its cost is unchanged — an atomic on the engine's hottest path,
+retracting `wal.md` §3's "no shared tail pointer, no lock, no atomic
+contention on the append path" and `workplan-crosscore.md` guideline 1. The
+comparison §7 said would change if 2PC arrived did change: it got *worse*
+for PL-A, because 2PC turned out to be free of the thing PL-A was going to
+subsidise.
+
+**This is not CLA's to close.** Storage and WAL decisions are the operator's
+(`CLAUDE.md` Open Decisions), and the clause re-opened a ratified decision
+rather than delegating it. R6-9 carries the proposal into
+`page-lsn-cross-stream.md` §9 once it is ruled on; until then that file
+records the revisit as executed with this verdict pending, and `CLAUDE.md`'s
+Transactions & WAL line needs the same correction.
 
 ## Open, carried from the work order
 
