@@ -1187,6 +1187,7 @@ Status Expeditor::Serve() {
             dispatcher->set_scheduler_view(nullptr);
             dispatcher->SetStatementShip(nullptr);
             dispatcher->SetShippedStatements(nullptr);
+            dispatcher->SetTxn2pc(nullptr);
             dispatcher->SetIndexBuilds(nullptr);
             dispatcher->SetAssertionBuilds(nullptr);
         }
@@ -1466,7 +1467,11 @@ Status Expeditor::Serve() {
         // The executor is built first: the server holds its seam. Both
         // borrow this function's `scheduler`, exactly as `index_builds_`
         // does, and nothing pumps them after `Serve` returns.
-        shipped_executor_.emplace(/*core_id=*/0, *dispatcher_, scheduler, clock_, &*logger_);
+        // The WAL goes in with it (R6-3): core 0 is a participant like any
+        // other - a peer's client writes core-0-owned relations - and a
+        // participant's prepare record is written into its own stream.
+        shipped_executor_.emplace(/*core_id=*/0, *dispatcher_, scheduler, clock_, &*logger_,
+                                  &*wal_);
         statement_ship_server_.emplace(/*core_id=*/0, scheduler, *transport_,
                                        shipped_executor_->Seam(), &*logger_);
         if (Status s = scheduler.RegisterMessageHandler(
@@ -1482,6 +1487,34 @@ Status Expeditor::Serve() {
         if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
         dispatcher_->SetStatementShip(&*statement_ship_client_);
         dispatcher_->SetShippedStatements(&*shipped_executor_);
+
+        // **Core 0's two halves of the cross-owner commit** (R6-3), on the
+        // same wiring rule and in the same order: the participant transport
+        // holds the executor's seams, and the coordinator client is
+        // registered before the dispatcher is told about it so a reply
+        // cannot beat its receiver.
+        txn_2pc_server_.emplace(/*core_id=*/0, scheduler, *transport_,
+                                shipped_executor_->PrepareSeam(),
+                                shipped_executor_->DecideSeam(), &*logger_);
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kTxnPrepareRequest,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    txn_2pc_server_->OnPrepare(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kTxnDecideRequest,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    txn_2pc_server_->OnDecide(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        txn_2pc_client_.emplace(/*core_id=*/0, scheduler, *transport_, clock_, &*logger_);
+        if (Status s = txn_2pc_client_->RegisterReplyReceivers(); !s.ok()) return s;
+        dispatcher_->SetTxn2pc(&*txn_2pc_client_);
 
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -

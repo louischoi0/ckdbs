@@ -16,7 +16,10 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/statement_ship_service.hpp"
+#include "kds/server/txn_2pc_service.hpp"
+#include "kds/txn/manager.hpp"
 #include "kds/txn/read_view.hpp"
+#include "kds/wal/manager.hpp"
 
 // **The owner's half of statement shipping** (SS3 of the statement-shipping
 // work order): what `StatementShipServer`'s seam does with a statement that
@@ -193,14 +196,21 @@ public:
     // to, nor the `StatementShipServer` whose `ReplyFn` its running
     // statements hold: **declare it after all three**, so it is destroyed
     // first.
+    // `wal` is this core's own stream, and it is what R6-3's prepare
+    // writes into. A null one is the fixture case and behaves the way
+    // every other unlogged path in this engine behaves - the record is not
+    // written and nothing pretends it was; what it costs is stated at
+    // `Prepare` rather than here, because that is the one caller for which
+    // "unlogged" changes a promise rather than a durability class.
     ShippedStatementExecutor(std::uint32_t core_id, CommandDispatcher& dispatcher,
                              sched::Scheduler& scheduler, const sched::Clock& clock,
-                             Logger* log = nullptr) noexcept
+                             Logger* log = nullptr, wal::WalManager* wal = nullptr) noexcept
         : core_id_(core_id),
           dispatcher_(dispatcher),
           scheduler_(scheduler),
           clock_(clock),
-          log_(log) {}
+          log_(log),
+          wal_(wal) {}
 
     ShippedStatementExecutor(const ShippedStatementExecutor&) = delete;
     ShippedStatementExecutor& operator=(const ShippedStatementExecutor&) = delete;
@@ -211,6 +221,23 @@ public:
         return [this](StatementShipServer::ShippedStatement statement,
                       StatementShipServer::ReplyFn reply) {
             Execute(std::move(statement), std::move(reply));
+        };
+    }
+
+    // ---- R6-3: the two seams `Txn2pcServer` takes ------------------------
+    //
+    // Here rather than in that class because **this** object owns the
+    // enrolment: a participant finds its transaction by
+    // `(coordinator core, session id)`, which is the key this map is built
+    // on, and the transport looks nothing up.
+    Txn2pcServer::PrepareFn PrepareSeam() {
+        return [this](Txn2pcServer::PrepareAsk ask, Txn2pcServer::ReplyFn reply) {
+            Prepare(ask, std::move(reply));
+        };
+    }
+    Txn2pcServer::DecideFn DecideSeam() {
+        return [this](Txn2pcServer::DecideAsk ask, Txn2pcServer::ReplyFn reply) {
+            Decide(ask, std::move(reply));
         };
     }
 
@@ -257,19 +284,62 @@ public:
     // somewhere else - nothing on a healthy path reaches the ceiling.
     std::uint64_t enrolment_expiries() const noexcept { return enrolment_expiries_; }
 
+    // ---- R6-3 ------------------------------------------------------------
+
+    // Transactions this core has replied **prepared** for and not yet been
+    // told the outcome of. Each one holds its locks and its transaction and
+    // may not be aborted here, so this is the population D5's in-doubt
+    // handling is about - and while it is non-zero, this core's shutdown
+    // cannot claim it left nothing undecided.
+    std::size_t in_doubt() const noexcept { return in_doubt_; }
+    // Prepares this core answered *prepared*, ever.
+    std::uint64_t prepared() const noexcept { return prepared_; }
+    // Prepares this core refused - the population that turns a coordinator's
+    // commit into an abort, with a reason the client reads.
+    std::uint64_t prepare_refusals() const noexcept { return prepare_refusals_; }
+    // Decides applied here, split by what they said. `decides_committed()`
+    // is the number that must equal the coordinator's committed cross-owner
+    // transactions once every ack is in.
+    std::uint64_t decides_committed() const noexcept { return decides_committed_; }
+    std::uint64_t decides_aborted() const noexcept { return decides_aborted_; }
+    // Decides this core could not apply, or would not: a decide for a
+    // transaction it never prepared, a commit whose local commit failed, an
+    // identity that is not the one it prepared under. **Non-zero is a
+    // protocol anomaly**, not a workload property.
+    std::uint64_t decide_refusals() const noexcept { return decide_refusals_; }
+    // Prepared transactions this core stopped with, rather than rolling
+    // them back. D4 forbids the rollback; R6-6 owns what the next mount
+    // does with them, and this is the number that says whether that path
+    // was reached.
+    std::uint64_t left_in_doubt_at_stop() const noexcept { return left_in_doubt_at_stop_; }
+
     // Rolls back every enrolled transaction idle past
     // `kShippedTxnIdleCeilingNs`. Driven from the reactor's periodic tick,
     // the way `PendingIndexBuilds::Expire` is - a lazy sweep would never run
     // for an abandoned context, since nothing arrives for it by definition.
     //
-    // **R6-3 must exclude prepared contexts**: a participant that has
-    // replied prepared may not unilaterally abort.
+    // **A prepared context is excluded** (R6-3, D4): a participant that has
+    // replied prepared may not unilaterally abort, so the ceiling stops
+    // applying to it and the wait becomes D5's in-doubt resolution instead.
+    // The exclusion is the sweep's, not the constant's - `in_doubt()` is
+    // what says how many contexts it is passing over.
     void ExpireEnrolled();
 
-    // Rolls back every enrolled transaction, whatever its age. The shutdown
-    // path: an open transaction that outlives its executor pins the horizon
-    // for the life of the process, and this core is about to stop being able
-    // to answer for it either way.
+    // Rolls back every enrolled transaction, whatever its age - **except a
+    // prepared one** (R6-3). The shutdown path: an open transaction that
+    // outlives its executor pins the horizon for the life of the process,
+    // and this core is about to stop being able to answer for it either
+    // way.
+    //
+    // The exception is not tidiness, it is D4. A prepared participant may
+    // not abort unilaterally, and a rollback here would append TXN_ABORT to
+    // this stream for a transaction the coordinator may already have
+    // committed in its own - which is the one durable disagreement this
+    // protocol exists to prevent. So a prepared context is *left*, counted
+    // in `left_in_doubt_at_stop()`, and its resolution belongs to the next
+    // mount (R6-4) or to D5's ask (R6-5). What it costs in the meantime is
+    // nothing: the process is stopping, so the horizon it pins dies with
+    // it.
     //
     // **Precondition: the reactor has stopped.** Unlike `ExpireEnrolled`
     // this does not skip a context a statement is running on, and it is
@@ -341,6 +411,31 @@ private:
         // idleness: a long transaction that is still being used is not the
         // thing the sweep is looking for.
         sched::MonoTimeNs touched_at_ns = 0;
+        // **This core has replied prepared and may no longer abort** (D4).
+        // Set only once the PREPARE record is durable, never at the append:
+        // a reply sent before the sync would promise a durability the
+        // device has not given, which is the one thing prepare means.
+        bool prepared = false;
+        // A phase is running on this context right now - the prepare
+        // awaiting its sync, or the decided `COMMIT`/`ROLLBACK` running.
+        // Held for the reason `running_` is held for a statement: both park,
+        // and a sweep that tore the session down under one would pull the
+        // ground from a live coroutine. `running_` cannot serve here
+        // because a phase is not a statement and takes no entry in it.
+        bool phase_running = false;
+        // The prepare record's LSN, which is what "durable" is tested
+        // against. Kept after the fact because it is what a resolution ask
+        // (R6-5) and a log line both want to name.
+        wal::Lsn prepare_lsn = wal::kNoLsn;
+        // The decide leg's state, held here because this context is what
+        // owns the transaction being ended and there is at most one
+        // decision per context. `DispatchAsync` writes `decision_out`
+        // across every park it takes, so it must not move - which is why
+        // the map's value is a `unique_ptr` (the same reason a running
+        // statement's `Session*` needs).
+        DispatchOutcome decision_out;
+        Txn2pcServer::ReplyFn decision_reply;
+        bool decision_commits = false;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
             : session(isolation), touched_at_ns(now) {
@@ -371,19 +466,42 @@ private:
     // spent transaction-id lease refuses `TxnConflict` here, and that is a
     // retryable refusal the coordinator may act on.
     StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role);
-    // Rolls `it`'s transaction back and drops the context. **Rollback only**
-    // - R6-3's decide leg adds a commit arm when it has a caller, and adding
-    // one now would also hide a trap: `Dispatch("COMMIT")` finishes a group
-    // commit inline, so a commit from this timer-driven path would take a
-    // blocking `fdatasync` on the reactor.
+    // Rolls `it`'s transaction back and drops the context. **Rollback
+    // only**, still: R6-3's commit arm is not here but in `Decide`, and for
+    // the reason this comment already gave - `Dispatch("COMMIT")` finishes
+    // a group commit inline, so a commit from a timer-driven path would
+    // take a blocking `fdatasync` on the reactor. The decide leg has a
+    // coroutine to park in and uses `DispatchAsync` instead.
     void EndEnrolled(std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it,
                      std::string_view why);
+
+    // ---- R6-3: the two phases, as this core sees them --------------------
+    void Prepare(const Txn2pcServer::PrepareAsk& ask, Txn2pcServer::ReplyFn reply);
+    void Decide(const Txn2pcServer::DecideAsk& ask, Txn2pcServer::ReplyFn reply);
+    // Parks until the prepare record is durable, then answers. A coroutine
+    // rather than an inline `EnsureDurable` because this runs on the
+    // participant's reactor, which serves every other connection on this
+    // core: a blocking sync here is the cost statement shipping exists to
+    // remove, paid once per cross-owner commit instead of once per
+    // statement.
+    sched::Coro AwaitPrepared(DedupKey key, wal::Lsn lsn, sched::MonoTimeNs deadline_ns,
+                              Txn2pcServer::ReplyFn reply);
+    // The decided end of the transaction, once the dispatcher's `COMMIT` or
+    // `ROLLBACK` has finished: read what it answered, drop the context, and
+    // acknowledge. The completion of a `DispatchAsync` task rather than a
+    // coroutine of its own - `Execute`/`Finish`'s shape, and for its
+    // reason: the dispatcher's coroutine is the thing that parks, and
+    // wrapping it in a second one would add a frame that waits on nothing.
+    void FinishDecision(const DedupKey& key);
 
     std::uint32_t core_id_;
     CommandDispatcher& dispatcher_;
     sched::Scheduler& scheduler_;
     const sched::Clock& clock_;
     Logger* log_;
+    // This core's own stream, R6-3's prepare record's destination. Null on
+    // an unlogged instance, which is the fixture case.
+    wal::WalManager* wal_;
 
     // **Keyed by the shipping identity**, which is what makes the record
     // reach the in-flight half of the window: a duplicate is recognised
@@ -410,6 +528,17 @@ private:
     std::uint64_t enrolments_ = 0;
     std::uint64_t enrolment_refusals_ = 0;
     std::uint64_t enrolment_expiries_ = 0;
+
+    // R6-3. `in_doubt_` is derived from `enrolled_`'s `prepared` flags and
+    // kept beside them rather than counted on demand, because the sweep and
+    // the shutdown path both consult it every tick.
+    std::size_t in_doubt_ = 0;
+    std::uint64_t prepared_ = 0;
+    std::uint64_t prepare_refusals_ = 0;
+    std::uint64_t decides_committed_ = 0;
+    std::uint64_t decides_aborted_ = 0;
+    std::uint64_t decide_refusals_ = 0;
+    std::uint64_t left_in_doubt_at_stop_ = 0;
 };
 
 }  // namespace kds::server

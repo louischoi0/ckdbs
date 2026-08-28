@@ -1,6 +1,11 @@
 #include "kds/server/txn_2pc_service.hpp"
 
+#include <cstring>
 #include <string>
+#include <utility>
+
+#include "kds/sched/send_retry.hpp"
+#include "kds/server/utf8_prefix.hpp"
 
 namespace kds::server {
 
@@ -29,6 +34,403 @@ StatusOr<std::string_view> TxnParticipantReplyMessageOf(const TxnParticipantRepl
                                        " bytes, which is not a length this payload can hold");
     }
     return std::string_view(reply.message, reply.message_len);
+}
+
+TxnParticipantReplyPayload TxnParticipantReplyOf(std::uint64_t session_id,
+                                                 std::uint64_t transaction_id,
+                                                 const Status& status) {
+    TxnParticipantReplyPayload out{};
+    out.session_id = session_id;
+    out.transaction_id = transaction_id;
+    out.status_code = static_cast<std::uint32_t>(status.code());
+    // A success carries no message, so the length stays 0 and the array
+    // stays zeroed - the reader's `message_len` bound then reads an empty
+    // view, which is what `TxnParticipantReplyMessageOf` calls legal.
+    if (status.ok()) return out;
+    const std::string& message = status.message();
+    const std::size_t len = Utf8PrefixLen(message, kTxnParticipantReplyMessageMax);
+    out.message_len = static_cast<std::uint16_t>(len);
+    if (len > 0) std::memcpy(out.message, message.data(), len);
+    return out;
+}
+
+// ---- The participant's half -----------------------------------------------
+
+void Txn2pcServer::OnPrepare(const sched::MessageHeader& header,
+                             std::span<const std::byte> payload) {
+    ++prepares_;
+    TxnPrepareRequestPayload request{};
+    if (payload.size() != sizeof(request)) {
+        // The one case that gets no reply: nothing here names the waiter
+        // parked on the other side. The coordinator's deadline is the
+        // backstop, and on this leg a deadline is an abort - which is safe,
+        // because a request this core could not read prepared nothing.
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("2pc", "prepare from core " + std::to_string(header.src_core) +
+                                   " has " + std::to_string(payload.size()) + " bytes, not " +
+                                   std::to_string(sizeof(request)) + "; dropped");
+        }
+        return;
+    }
+    std::memcpy(&request, payload.data(), sizeof(request));
+
+    // Copied out before the payload can die: the seam parks on a device
+    // sync, and `request` lives only as long as this call.
+    PrepareAsk ask;
+    ask.coordinator = header.src_core;
+    ask.session_id = request.session_id;
+    ask.transaction_id = request.transaction_id;
+    ask.retry = request.retry != 0;
+    const std::uint64_t request_id = header.request_id;
+
+    if (ask.transaction_id == 0) {
+        // The payload's own invariant, checked where the bytes arrive: a
+        // transaction id of 0 is the id no transaction has, so it cannot be
+        // recorded in a PREPARE record that recovery could resolve. Refused
+        // rather than prepared against, which would write a record no
+        // coordinator answers for.
+        Reply(ask.coordinator, request_id, sched::RingMessageKind::kTxnPrepareReply,
+              ask.session_id, ask.transaction_id,
+              Status::InvalidArgument(
+                  "cross-owner transaction: prepare names coordinator transaction 0, which no "
+                  "transaction has"));
+        return;
+    }
+    if (!prepare_) {
+        // The wire working and nothing executing on it must not look alike
+        // (SS1's rule): a core with no seam refuses by name rather than
+        // costing the coordinator a deadline it would read as an abort.
+        Reply(ask.coordinator, request_id, sched::RingMessageKind::kTxnPrepareReply,
+              ask.session_id, ask.transaction_id,
+              Status::Unsupported("cross-owner transaction: this core has no participant seam "
+                                  "installed; the wire is built and the participant is not"));
+        return;
+    }
+    prepare_(ask, [this, coordinator = ask.coordinator, request_id, session_id = ask.session_id,
+                   transaction_id = ask.transaction_id](const Status& status) {
+        Reply(coordinator, request_id, sched::RingMessageKind::kTxnPrepareReply, session_id,
+              transaction_id, status);
+    });
+}
+
+void Txn2pcServer::OnDecide(const sched::MessageHeader& header,
+                            std::span<const std::byte> payload) {
+    ++decides_;
+    TxnDecideRequestPayload request{};
+    if (payload.size() != sizeof(request)) {
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("2pc", "decide from core " + std::to_string(header.src_core) + " has " +
+                                   std::to_string(payload.size()) + " bytes, not " +
+                                   std::to_string(sizeof(request)) +
+                                   "; dropped, and this core stays in doubt");
+        }
+        return;
+    }
+    std::memcpy(&request, payload.data(), sizeof(request));
+
+    DecideAsk ask;
+    ask.coordinator = header.src_core;
+    ask.session_id = request.session_id;
+    ask.transaction_id = request.transaction_id;
+    ask.retry = request.retry != 0;
+    const std::uint64_t request_id = header.request_id;
+
+    // Refused rather than guessed, and the refusal leaves this core in
+    // doubt on purpose (the header's fail-closed paragraph): neither commit
+    // nor abort is the safe reading of a byte that names no decision.
+    auto decision = TxnDecisionOf(request);
+    if (!decision.ok()) {
+        Reply(ask.coordinator, request_id, sched::RingMessageKind::kTxnDecideReply,
+              ask.session_id, ask.transaction_id, decision.status());
+        return;
+    }
+    ask.decision = decision.value();
+
+    if (!decide_) {
+        Reply(ask.coordinator, request_id, sched::RingMessageKind::kTxnDecideReply,
+              ask.session_id, ask.transaction_id,
+              Status::Unsupported("cross-owner transaction: this core has no participant seam "
+                                  "installed; the wire is built and the participant is not"));
+        return;
+    }
+    decide_(ask, [this, coordinator = ask.coordinator, request_id, session_id = ask.session_id,
+                  transaction_id = ask.transaction_id](const Status& status) {
+        Reply(coordinator, request_id, sched::RingMessageKind::kTxnDecideReply, session_id,
+              transaction_id, status);
+    });
+}
+
+void Txn2pcServer::Reply(std::uint32_t coordinator, std::uint64_t request_id,
+                         sched::RingMessageKind kind, std::uint64_t session_id,
+                         std::uint64_t transaction_id, const Status& status) {
+    ++replies_;
+    // The identity rides back so the coordinator can check an answer
+    // against the waiter the ring matched it to rather than trust it.
+    const TxnParticipantReplyPayload reply =
+        TxnParticipantReplyOf(session_id, transaction_id, status);
+    // `session_core` is the *coordinator's*: the client's session lives
+    // there, so a reader of a captured header can see whose transaction is
+    // parked on this.
+    sched::SubmitSendPod(scheduler_, transport_, core_id_, coordinator,
+                         /*session_core=*/coordinator, request_id, kind, reply);
+}
+
+// ---- The coordinator's half -----------------------------------------------
+
+Status Txn2pcClient::RegisterReplyReceivers() {
+    if (Status s = scheduler_.RegisterMessageHandler(
+            sched::RingMessageKind::kTxnPrepareReply,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                OnReply(TxnPhase::kPrepare, header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    return scheduler_.RegisterMessageHandler(
+        sched::RingMessageKind::kTxnDecideReply,
+        [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+            OnReply(TxnPhase::kDecide, header, payload);
+        });
+}
+
+Status Txn2pcClient::OpenPhase(std::uint64_t request_id, TxnPhase phase,
+                               std::uint64_t session_id, std::uint64_t transaction_id,
+                               std::span<const std::uint32_t> participants) {
+    // **One live waiter per request id**, for `StatementShipClient::Ship`'s
+    // reason: reusing an id that still has a phase parked on it would
+    // replace that phase's waiter, and the identity check could not catch
+    // it - the identity it compares against would by then be this phase's.
+    if (waiting_.find(request_id) != waiting_.end()) {
+        return Status::InvalidArgument(
+            "cross-owner transaction: request id " + std::to_string(request_id) +
+            " already has a phase parked on it; ids are allocated per core and per phase");
+    }
+    if (participants.empty()) {
+        // D1's fast path is the *caller's* to take, and taking it here
+        // instead would hide a caller that thinks it has participants when
+        // it has none. A phase over nobody is a programming error, not a
+        // transaction shape.
+        return Status::InvalidArgument(
+            "cross-owner transaction: a phase over no participants is not a phase; a "
+            "one-owner transaction takes the single-core path and enters no protocol");
+    }
+    if (transaction_id == 0) {
+        return Status::InvalidArgument(
+            "cross-owner transaction: a phase must name the coordinator's transaction id, and "
+            "0 is the id no transaction has");
+    }
+    for (std::size_t i = 0; i < participants.size(); ++i) {
+        // Bounded before the send: an out-of-range core is the one send
+        // failure `MakeSendRetryTask` does not retry, so the message would
+        // be dropped and the phase would cost a whole deadline before
+        // saying what is already known here.
+        if (participants[i] >= transport_.core_count()) {
+            return Status::InvalidArgument(
+                "cross-owner transaction: core " + std::to_string(participants[i]) +
+                " is not a core of this instance, which has " +
+                std::to_string(transport_.core_count()));
+        }
+        if (participants[i] == core_id_) {
+            // The coordinator is not one of its own participants: its half
+            // of the transaction is the local one, which commits through
+            // its own stream and needs no message. Admitting it would have
+            // this core prepare a context it never enrolled.
+            return Status::InvalidArgument(
+                "cross-owner transaction: core " + std::to_string(core_id_) +
+                " is the coordinator and cannot be one of its own participants");
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            // A repeated participant would take two waiter slots and one
+            // reply, so the phase could only end on its deadline.
+            if (participants[i] == participants[j]) {
+                return Status::InvalidArgument(
+                    "cross-owner transaction: core " + std::to_string(participants[i]) +
+                    " is named twice in one phase's participants");
+            }
+        }
+    }
+
+    TxnPhaseOutcome& outcome = waiting_[request_id];
+    outcome.phase = phase;
+    outcome.session_id = session_id;
+    outcome.transaction_id = transaction_id;
+    outcome.participants.reserve(participants.size());
+    for (std::uint32_t core : participants) {
+        outcome.participants.push_back(TxnParticipantOutcome{core, false, Status::OK()});
+    }
+    outcome.outstanding = participants.size();
+    outcome.sent_ns = clock_.Now();
+    outcome.deadline_ns = outcome.sent_ns + kTxnPhaseDeadlineNs;
+    return Status::OK();
+}
+
+Status Txn2pcClient::Prepare(std::uint64_t request_id, std::uint64_t session_id,
+                             std::uint64_t transaction_id,
+                             std::span<const std::uint32_t> participants) {
+    if (Status s = OpenPhase(request_id, TxnPhase::kPrepare, session_id, transaction_id,
+                             participants);
+        !s.ok()) {
+        return s;
+    }
+    TxnPrepareRequestPayload request{};
+    request.session_id = session_id;
+    request.transaction_id = transaction_id;
+    // R6-0's bit, and R6-3 sends only first attempts: nothing resends a
+    // prepare yet. The resend path is D5's resolution ask (R6-5), which is
+    // where a set bit first has a sender.
+    request.retry = 0;
+    for (std::uint32_t core : participants) {
+        ++prepare_messages_;
+        sched::SubmitSendPod(scheduler_, transport_, core_id_, core, /*session_core=*/core_id_,
+                             request_id, sched::RingMessageKind::kTxnPrepareRequest, request);
+    }
+    return Status::OK();
+}
+
+Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
+                            std::uint64_t transaction_id, TxnDecision decision,
+                            std::span<const std::uint32_t> participants) {
+    if (decision == TxnDecision::kUnset) {
+        return Status::InvalidArgument(
+            "cross-owner transaction: a decide must name commit or abort; kUnset is the zeroed "
+            "buffer and a participant refuses it into doubt");
+    }
+    if (Status s =
+            OpenPhase(request_id, TxnPhase::kDecide, session_id, transaction_id, participants);
+        !s.ok()) {
+        return s;
+    }
+    TxnDecideRequestPayload request{};
+    request.session_id = session_id;
+    request.transaction_id = transaction_id;
+    request.decision = static_cast<std::uint8_t>(decision);
+    request.retry = 0;
+    for (std::uint32_t core : participants) {
+        ++decide_messages_;
+        sched::SubmitSendPod(scheduler_, transport_, core_id_, core, /*session_core=*/core_id_,
+                             request_id, sched::RingMessageKind::kTxnDecideRequest, request);
+    }
+    return Status::OK();
+}
+
+void Txn2pcClient::OnReply(TxnPhase phase, const sched::MessageHeader& header,
+                           std::span<const std::byte> payload) {
+    TxnParticipantReplyPayload reply{};
+    if (payload.size() != sizeof(reply)) {
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("2pc", "a participant reply from core " +
+                                   std::to_string(header.src_core) + " has " +
+                                   std::to_string(payload.size()) + " bytes, not " +
+                                   std::to_string(sizeof(reply)) + "; dropped");
+        }
+        return;
+    }
+    std::memcpy(&reply, payload.data(), sizeof(reply));
+
+    auto it = waiting_.find(header.request_id);
+    if (it == waiting_.end()) {
+        // The phase settled on its deadline and the coordinator has already
+        // acted: on prepare that means the transaction was aborted, on
+        // decide that the participant was left to D5's resolution. Nothing
+        // can be undone here; counting it is what makes a tight deadline
+        // legible.
+        ++late_replies_;
+        if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+            log_->Warn("2pc", "a participant's answer from core " +
+                                  std::to_string(header.src_core) +
+                                  " arrived after its phase settled (session " +
+                                  std::to_string(reply.session_id) + ", transaction " +
+                                  std::to_string(reply.transaction_id) + ")");
+        }
+        return;
+    }
+    // The leg, then the identity. **The leg first, and it is not
+    // redundant**: both legs of one transaction carry the same session and
+    // transaction id, so a prepare answer that arrives after the prepare
+    // phase timed out and the decide phase opened on this id would pass
+    // every identity test and be delivered as a decide acknowledgement.
+    if (it->second.phase != phase || reply.session_id != it->second.session_id ||
+        reply.transaction_id != it->second.transaction_id) {
+        ++identity_mismatches_;
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("2pc", "a participant's answer from core " +
+                                   std::to_string(header.src_core) + " names session " +
+                                   std::to_string(reply.session_id) + " transaction " +
+                                   std::to_string(reply.transaction_id) +
+                                   ", but its waiter holds session " +
+                                   std::to_string(it->second.session_id) + " transaction " +
+                                   std::to_string(it->second.transaction_id) + "; dropped");
+        }
+        return;
+    }
+
+    TxnParticipantOutcome* participant = nullptr;
+    for (TxnParticipantOutcome& p : it->second.participants) {
+        if (p.core == header.src_core) {
+            participant = &p;
+            break;
+        }
+    }
+    if (participant == nullptr) {
+        // A core that is not in this phase answered for it. Strictly worse
+        // than a late reply and counted with the mismatches for that
+        // reason: it is the shape of one transaction's answer reaching
+        // another's waiter.
+        ++identity_mismatches_;
+        return;
+    }
+    if (participant->replied) {
+        // A second answer from one participant. Absorbed rather than
+        // re-counted: `outstanding` has already been decremented, and
+        // decrementing it twice would settle a phase a participant is still
+        // owed.
+        ++late_replies_;
+        return;
+    }
+
+    auto message = TxnParticipantReplyMessageOf(reply);
+    if (!message.ok()) {
+        // Bytes this core did not compute, and a payload whose length is
+        // wrong is untrustworthy whole - `status_code` included. So the
+        // answer is not read as a success with an empty message: it is the
+        // refusal the length makes it, which on prepare aborts and on
+        // decide is counted as a participant that did not confirm.
+        participant->replied = true;
+        participant->status = message.status();
+    } else {
+        participant->replied = true;
+        participant->status = Status::FromWire(reply.status_code, std::string(message.value()));
+    }
+    --it->second.outstanding;
+    if (!participant->status.ok()) {
+        if (phase == TxnPhase::kPrepare) {
+            ++prepare_refusals_;
+        } else {
+            ++decide_refusals_;
+        }
+    }
+}
+
+bool Txn2pcClient::Settled(std::uint64_t request_id) const {
+    auto it = waiting_.find(request_id);
+    if (it == waiting_.end()) return true;
+    if (it->second.outstanding == 0) return true;
+    return clock_.Now() >= it->second.deadline_ns;
+}
+
+const TxnPhaseOutcome* Txn2pcClient::Find(std::uint64_t request_id) const {
+    auto it = waiting_.find(request_id);
+    return it == waiting_.end() ? nullptr : &it->second;
+}
+
+void Txn2pcClient::Close(std::uint64_t request_id) {
+    auto it = waiting_.find(request_id);
+    if (it == waiting_.end()) return;
+    // Counted at the close rather than at the settle, because that is where
+    // the phase's whole story is known: a participant still outstanding
+    // here never answered, whatever the caller decided to do about it.
+    if (it->second.outstanding != 0) ++phase_timeouts_;
+    waiting_.erase(it);
 }
 
 }  // namespace kds::server

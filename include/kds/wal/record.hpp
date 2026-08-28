@@ -183,6 +183,34 @@ enum class RecordType : std::uint8_t {
     // every page record: the envelope names the anchor page, the payload
     // the slot.
     kAnchorUpdate = 26,
+    // **The participant's prepare** (R6-3, `instructions/v2.4.0/2pc.md` D4):
+    // this core has made a cross-owner transaction's work durable in *its
+    // own* stream and may no longer abort it unilaterally. The envelope's
+    // txn_id is this core's **own** transaction id - D2 gives every
+    // participant a local id from its own lease, so no foreign id ever
+    // enters this stream - and the payload names the coordinator's
+    // `(core, session_id, transaction_id)`, which is the only handle
+    // recovery has for asking what was decided.
+    //
+    // **It is not a decision and it is not a commit.** The decision lives
+    // in exactly one stream, the coordinator's, as its ordinary TXN_COMMIT
+    // (D4): a decision assembled from several streams would be a
+    // cross-stream ordering question and `wal.md` guideline 3 forbids one.
+    // What this record says is narrower and is the whole of what a
+    // participant may say about itself: *everything below this LSN is
+    // durable, and this transaction's outcome is now someone else's to
+    // state*.
+    //
+    // Redo applies nothing for it (`TouchesNoPage` - it names no page).
+    // Its consumer is analysis, at R6-4: a transaction with a PREPARE and
+    // no TXN_COMMIT or TXN_ABORT after it is **in doubt**, not a loser,
+    // and resolving it against the coordinator's stream is that row's
+    // subject. Until R6-4 lands, analysis reads it the way it reads every
+    // record whose envelope names a transaction - as evidence the
+    // transaction existed - and a prepared-but-undecided transaction is
+    // still rolled back at mount, which is a **known gap of this row and
+    // not of the record's shape**.
+    kTxnPrepare = 27,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A
@@ -206,7 +234,7 @@ enum class RecordType : std::uint8_t {
 // Keep this pinned to the last enumerator when appending a type; the test that
 // every named type encodes is what proves it stayed pinned.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kAnchorUpdate);
+    static_cast<std::uint8_t>(RecordType::kTxnPrepare);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

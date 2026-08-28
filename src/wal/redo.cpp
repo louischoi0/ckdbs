@@ -49,6 +49,11 @@ bool TouchesNoPage(RecordType type) noexcept {
         case RecordType::kTxnBegin:
         case RecordType::kTxnCommit:
         case RecordType::kTxnAbort:
+        // TXN_PREPARE is a transaction boundary like the three above it
+        // (R6-3): it names no page, changes none, and says only that this
+        // stream's own records for the transaction are durable. Its reader
+        // is analysis, at R6-4.
+        case RecordType::kTxnPrepare:
         case RecordType::kCheckpointBegin:
         case RecordType::kCheckpointEnd:
         case RecordType::kPad:

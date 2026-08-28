@@ -4,6 +4,7 @@
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
 #include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
+#include "kds/server/txn_2pc_service.hpp"  // R6-3: the coordinator's two phases
 
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
@@ -226,6 +227,115 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         *out = FinishShippedStatement(shipped);
     }
 
+    if (out->pending_cross_owner_commit.has_value() && txn_2pc_ != nullptr) {
+        // **D4's two phases, from the coordinator's side** (R6-3). The whole
+        // protocol lives in this block because every step of it is a park,
+        // and a coroutine is the only place in this class that can take one.
+        //
+        // The order is the protocol's and every line of it is load-bearing:
+        // prepare everyone, decide, make the decision durable, and only then
+        // tell the participants. Moving the decide message before the
+        // durability wait would let a crash lose a decision participants had
+        // already applied.
+        const PendingCrossOwnerCommit pending = std::move(*out->pending_cross_owner_commit);
+        out->pending_cross_owner_commit.reset();
+        Session& active = session != nullptr ? *session : autocommit_session_;
+
+        // Phase 1. The predicate re-finds the waiter each poll and reads the
+        // clock, so the deadline ends the park with nothing having to wake
+        // it - `pending_shipped`'s shape, over N respondents instead of one.
+        const std::function<bool()> prepared = [this, id = pending.prepare_request_id] {
+            return txn_2pc_->Settled(id);
+        };
+        co_await sched::WaitUntil{&prepared};
+
+        const TxnPhaseOutcome* phase = txn_2pc_->Find(pending.prepare_request_id);
+        bool commit = phase != nullptr && phase->AllPrepared();
+        // Built before the close, which frees what it reads.
+        const Status refusal = commit ? Status::OK() : DescribePrepareFailure(phase);
+        txn_2pc_->Close(pending.prepare_request_id);
+
+        // Phase 2, first half: **the decision, and it is this core's own
+        // COMMIT record** (D4). It lives in exactly one stream, so what
+        // follows is the ordinary local commit - the same `CommitLocal` a
+        // one-owner transaction takes, because a second commit path is how
+        // two commits stop meaning the same thing.
+        wal::Lsn decision_lsn = wal::kNoLsn;
+        if (commit) {
+            *out = CommitLocal(active, &decision_lsn);
+            if (out->response.rfind("ERR ", 0) == 0) {
+                // The coordinator's own half refused, and `CommitLocal` has
+                // already rolled it back. The decision is therefore ABORT,
+                // and the participants must hear that one rather than the
+                // one this branch set out to make.
+                commit = false;
+                decision_lsn = wal::kNoLsn;
+            }
+        } else {
+            *out = RollbackLocal(active);
+            // The client's answer is the refusal, not "ROLLBACK": it asked
+            // to commit and the transaction did not.
+            out->response = ErrorReply(refusal);
+        }
+
+        if (commit && decision_lsn != wal::kNoLsn && wal_ != nullptr) {
+            // **The decision is made durable before anyone is told**, and
+            // whatever the durability class: `relaxed`'s window is a promise
+            // about this stream's own recent commits, not about a record
+            // another core is about to act on. This is the ordinary commit
+            // wait taken early rather than an extra one - `pending_lsn`
+            // below would otherwise take it after the participants had
+            // already committed.
+            wal_->RequestDurable(decision_lsn);
+            const std::function<bool()> durable = [this, decision_lsn] {
+                return wal_->IsDurable(decision_lsn);
+            };
+            co_await sched::WaitUntil{&durable};
+            // Taken here, so the tail stage does not take it again.
+            out->pending_lsn = wal::kNoLsn;
+            pending_commit_lsn_ = wal::kNoLsn;
+        }
+
+        // Phase 2, second half: telling the participants. **This message
+        // carries the decision; it is not the decision** - a lost one costs
+        // a resend (R6-5's resolution ask), never an outcome.
+        const TxnDecision decision = commit ? TxnDecision::kCommit : TxnDecision::kAbort;
+        if (Status sent = txn_2pc_->Decide(pending.decide_request_id, pending.session_id,
+                                           pending.transaction_id, decision,
+                                           pending.participants);
+            !sent.ok()) {
+            // Nothing left to do about it here: the outcome is decided and
+            // durable, and the participants that did not hear are in doubt
+            // for D5 to resolve. Logged rather than reported, because the
+            // client's transaction is settled either way.
+            if (logging(LogLevel::kError)) {
+                log_->Error("2pc", "core " + std::to_string(core_id_) +
+                                       " could not send the decision for transaction " +
+                                       std::to_string(pending.transaction_id) + ": " +
+                                       sent.message());
+            }
+        } else {
+            const std::function<bool()> acked = [this, id = pending.decide_request_id] {
+                return txn_2pc_->Settled(id);
+            };
+            co_await sched::WaitUntil{&acked};
+            const TxnPhaseOutcome* acks = txn_2pc_->Find(pending.decide_request_id);
+            if (acks != nullptr && !acks->AllPrepared() && logging(LogLevel::kWarn)) {
+                // **Not an outcome change**, which is why it is a log line
+                // and not a refusal: the decision is durable and the client's
+                // transaction is settled. What an unacknowledged participant
+                // means is that it is holding locks in doubt until D5's ask
+                // or the next mount reaches it.
+                log_->Warn("2pc", "core " + std::to_string(core_id_) + " decided " +
+                                      (commit ? "COMMIT" : "ABORT") + " for transaction " +
+                                      std::to_string(pending.transaction_id) +
+                                      " and not every participant acknowledged; those that did "
+                                      "not are in doubt until they ask");
+            }
+            txn_2pc_->Close(pending.decide_request_id);
+        }
+    }
+
     if (out->pending_remote.has_value() && remote_reads_ != nullptr) {
         // The remote read (workplan P4c). The predicate re-finds the state
         // each poll, so a torn-down read wakes the waiter instead of
@@ -370,6 +480,20 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                     std::to_string(outcome.pending_shipped->owner_core) +
                     " from a path that cannot await its answer; whether it ran cannot be "
                     "established from here")),
+                false};
+    }
+    if (outcome.pending_cross_owner_commit.has_value()) {
+        // Unreachable, and for the same reason: `PrepareAcrossOwners`
+        // refuses without `may_park_`, which only `DispatchAsync` sets.
+        // Written as a refusal rather than left to a null dereference -
+        // but a **retryable** one, unlike the arm above, because the two
+        // are opposite cases: a shipped statement has already left, while
+        // a prepare refused before `may_park_` was never sent, so the
+        // transaction is untouched and still open.
+        return {ErrorReply(Status::TxnConflict(
+                    "a cross-owner transaction's COMMIT reached a path that cannot await its "
+                    "participants; nothing was asked of them and the transaction is still "
+                    "open")),
                 false};
     }
     if (outcome.pending_index_build.has_value()) {
@@ -3485,6 +3609,101 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     return pending;
 }
 
+// ---- R6-3: the coordinator's cross-owner commit ---------------------------
+
+DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
+    // **Every refusal below happens before the first prepare leaves**, so a
+    // client that sees one knows no participant was asked and its
+    // transaction is still whole and still open - it may COMMIT again or
+    // ROLLBACK. After the first prepare, that is no longer true, which is
+    // why these live here and not in the parked half.
+    if (txn_2pc_ == nullptr || !may_park_) {
+        // The no-reactor arm, taken **before** anything is sent, for
+        // `statement_ship_service.hpp`'s rule 1: a protocol opened from a
+        // path that cannot await its answers would leave participants
+        // prepared with nobody to decide for them. Retryable, because
+        // nothing has happened.
+        return {ErrorReply(Status::TxnConflict(
+                    "a cross-owner transaction's COMMIT needs the reactor path; retry on a "
+                    "served connection")),
+                false};
+    }
+    txn::Transaction* txn = session.transaction();
+    if (session.ship_id() == 0) {
+        // A participant is enrolled only by a statement this session
+        // shipped, and shipping mints the id - so this cannot happen
+        // without the two having come apart. Refused rather than prepared
+        // under id 0, which no participant's enrolment is keyed on.
+        return {ErrorReply(Status::InvalidArgument(
+                    "a cross-owner transaction has participants but no shipping identity; its "
+                    "participants cannot be addressed")),
+                false};
+    }
+
+    PendingCrossOwnerCommit pending;
+    pending.prepare_request_id = next_remote_request_++;
+    pending.decide_request_id = next_remote_request_++;
+    pending.session_id = session.ship_id();
+    pending.transaction_id = txn->id();
+    pending.participants = session.participants();
+
+    if (Status s = txn_2pc_->Prepare(pending.prepare_request_id, pending.session_id,
+                                     pending.transaction_id, pending.participants);
+        !s.ok()) {
+        return {ErrorReply(s), false};
+    }
+    if (logging(LogLevel::kDebug)) {
+        log_->Debug("2pc", "core " + std::to_string(core_id_) + " is preparing " +
+                               std::to_string(pending.participants.size()) +
+                               " participant(s) for transaction " +
+                               std::to_string(pending.transaction_id));
+    }
+    DispatchOutcome pending_out;
+    pending_out.pending_cross_owner_commit = std::move(pending);
+    return pending_out;
+}
+
+Status CommandDispatcher::DescribePrepareFailure(const TxnPhaseOutcome* phase) const {
+    if (phase == nullptr) {
+        return Status::TxnConflict(
+            "cross-owner transaction: the prepare phase ended with no record of its "
+            "participants; the transaction was rolled back and may be retried");
+    }
+    for (const TxnParticipantOutcome& participant : phase->participants) {
+        if (!participant.replied) {
+            // A timeout, which is an **abort** and not an unknown outcome:
+            // no decision was written, so nothing committed anywhere, and a
+            // retry is safe. That is the asymmetry between this leg and the
+            // decide leg, and it is why one deadline serves both.
+            return Status::TxnConflict(
+                "cross-owner transaction: core " + std::to_string(participant.core) +
+                " did not answer prepare within " +
+                std::to_string(kTxnPhaseDeadlineNs / 1'000'000'000ull) +
+                " s; the transaction was rolled back and may be retried");
+        }
+        if (!participant.status.ok()) {
+            // **The participant's own code, not a wrapper's.** What the
+            // client's retry loop reads is the `retryable` bit, and the
+            // participant is the only side that knows whether its refusal
+            // will recur - a full enrolment table clears on its own, an
+            // unsupported shape does not. Wrapping every one in
+            // `TxnConflict` would invite a loop on the second kind; the
+            // message says the transaction rolled back either way.
+            return Status::FromWire(
+                static_cast<std::uint32_t>(participant.status.code()),
+                "cross-owner transaction: core " + std::to_string(participant.core) +
+                    " refused to prepare: " + participant.status.message() +
+                    "; the transaction was rolled back");
+        }
+    }
+    // Unreachable: the caller builds this only where `AllPrepared()` is
+    // false, which is one of the two arms above. Answered rather than
+    // asserted, because the cost of being wrong is a client with no reply.
+    return Status::TxnConflict(
+        "cross-owner transaction: the prepare phase did not complete; the transaction was "
+        "rolled back and may be retried");
+}
+
 DispatchOutcome CommandDispatcher::FinishShippedStatement(
     const PendingShippedStatement& shipped) {
     const ShippedStatementOutcome* reply = statement_ship_->Find(shipped.request_id);
@@ -6377,6 +6596,17 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
         return {"ERR current transaction is aborted; ROLLBACK", false};
     }
 
+    // **D1's fast path, and it is the first thing on the commit path.** A
+    // transaction that touched one owner has no participants and takes the
+    // line below unchanged - no prepare, no message, no branch beyond this
+    // one test on a field the session already has in cache. That is what
+    // R6's "the one-owner path pays nothing" means concretely, and it is
+    // asserted from outside by `Txn2pcClient::prepare_messages()` staying 0.
+    if (session.has_participants()) return PrepareAcrossOwners(session);
+    return CommitLocal(session);
+}
+
+DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commit_lsn) {
     txn::Transaction* txn = session.transaction();
     const std::uint64_t id = txn->id();
 
@@ -6435,6 +6665,9 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
         !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();
     }
+    // The record's LSN whatever the class, for the caller that needs the
+    // *decision* durable rather than the acknowledgement honest (R6-3).
+    if (commit_lsn != nullptr) *commit_lsn = committed.value();
     txn_->Release(*txn);
     return {"COMMIT trx_id=" + std::to_string(id), false};
 }
@@ -6443,6 +6676,10 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     if (!session.in_explicit_txn()) {
         return {"ERR no transaction is open", false};
     }
+    return RollbackLocal(session);
+}
+
+DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     txn::Transaction* txn = session.transaction();
     const std::uint64_t id = txn->id();
 

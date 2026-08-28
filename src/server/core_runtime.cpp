@@ -61,6 +61,9 @@ CoreRuntime::~CoreRuntime() {
         // sets them in `AttachTransport` instead.
         dispatcher_->SetStatementShip(nullptr);
         dispatcher_->SetShippedStatements(nullptr);
+        // R6-3's coordinator borrow, withdrawn on the same terms: the
+        // client is declared below the dispatcher too.
+        dispatcher_->SetTxn2pc(nullptr);
     }
     // **`scheduler_.reset()` used to stand here and is deliberately gone.**
     // It inverted declaration order to enforce a contract that declaration
@@ -594,8 +597,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // core receives replies, because a shipped statement crosses in both
     // directions - core 0 to an owner peer, and a peer to core 0. The
     // executor is built first: the server holds its seam.
+    // The WAL goes in with it (R6-3): a participant's prepare record is
+    // written into *this* core's stream, and the executor is what writes
+    // it.
     shipped_executor_.emplace(config_.core_id, *dispatcher_, *scheduler_, scheduler_->clock(),
-                              log_);
+                              log_, &*wal_);
     statement_ship_server_.emplace(config_.core_id, *scheduler_, transport,
                                    shipped_executor_->Seam(), log_);
     if (Status s = scheduler_->RegisterMessageHandler(
@@ -612,6 +618,35 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     dispatcher_->SetStatementShip(&*statement_ship_client_);
     // And the owner's half, for this core's `SHOW META` (D7).
     dispatcher_->SetShippedStatements(&*shipped_executor_);
+
+    // **The cross-owner commit, both halves** (R6-3), on statement
+    // shipping's wiring rule and for its reason: every core is a
+    // participant, because every core owns relations another core's client
+    // may write, and every core is a coordinator, because every core holds
+    // client sessions. A core registered as one and not the other would
+    // cost a phase its whole deadline before saying so.
+    txn_2pc_server_.emplace(config_.core_id, *scheduler_, transport,
+                            shipped_executor_->PrepareSeam(), shipped_executor_->DecideSeam(),
+                            log_);
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kTxnPrepareRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                txn_2pc_server_->OnPrepare(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kTxnDecideRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                txn_2pc_server_->OnDecide(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    txn_2pc_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
+    if (Status s = txn_2pc_client_->RegisterReplyReceivers(); !s.ok()) return s;
+    dispatcher_->SetTxn2pc(&*txn_2pc_client_);
 
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has

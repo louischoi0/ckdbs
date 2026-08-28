@@ -331,6 +331,13 @@ public:
         return statement_ship_client_.has_value() ? &*statement_ship_client_ : nullptr;
     }
 
+    // This core's coordinator half of the cross-owner commit (R6-3),
+    // exposed for the same reason as the two above: a test drives a phase
+    // and reads what came back. Null before AttachTransport.
+    Txn2pcClient* txn_2pc() noexcept {
+        return txn_2pc_client_.has_value() ? &*txn_2pc_client_ : nullptr;
+    }
+
     // This core's transaction-id lease, exposed for the first of those two
     // reasons only: a test drives a grant without a reactor.
     txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
@@ -484,6 +491,11 @@ private:
     std::optional<ShippedStatementExecutor> shipped_executor_;
     std::optional<StatementShipServer> statement_ship_server_;
     std::optional<StatementShipClient> statement_ship_client_;
+    // R6-3's two halves, on the same terms and in the same order: the
+    // participant transport holds the executor's seams, so it is declared
+    // after the executor and destroyed before it.
+    std::optional<Txn2pcServer> txn_2pc_server_;
+    std::optional<Txn2pcClient> txn_2pc_client_;
     // The client listener this core accepts on, when per-core listeners are
     // configured (PW5). It borrows the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so

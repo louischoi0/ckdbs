@@ -163,6 +163,44 @@ StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in) 
     return fields;
 }
 
+// ---- TXN_PREPARE ---------------------------------------------------------
+
+StatusOr<std::size_t> EncodeTxnPrepare(std::span<std::byte> out,
+                                       const TxnPreparePayload& fields) {
+    if (Status s = CheckOutputSize(out, kTxnPreparePayloadSize, "TXN_PREPARE"); !s.ok()) {
+        return s;
+    }
+    Store<std::uint64_t>(out, kTxnPrepareSessionIdOffset, fields.coordinator_session_id);
+    Store<std::uint64_t>(out, kTxnPrepareTxnIdOffset, fields.coordinator_txn_id);
+    Store<std::uint32_t>(out, kTxnPrepareCoreOffset, fields.coordinator_core);
+    return kTxnPreparePayloadSize;
+}
+
+StatusOr<TxnPreparePayload> DecodeTxnPrepare(std::span<const std::byte> in) {
+    // A floor, never an exact size - DecodePageHandoff's paragraph states
+    // why, and it shipped as a defect there once.
+    if (Status s = CheckInputSize(in, kTxnPreparePayloadSize, "TXN_PREPARE"); !s.ok()) {
+        return s;
+    }
+    TxnPreparePayload fields{};
+    fields.coordinator_session_id = Load<std::uint64_t>(in, kTxnPrepareSessionIdOffset);
+    fields.coordinator_txn_id = Load<std::uint64_t>(in, kTxnPrepareTxnIdOffset);
+    fields.coordinator_core = Load<std::uint32_t>(in, kTxnPrepareCoreOffset);
+    // **A prepare that names no coordinator transaction resolves to
+    // nothing.** The lookup R6-4 makes is "the record carrying this id in
+    // that core's stream", and 0 is the id no transaction has - so a zero
+    // here would send recovery looking for a decision that cannot exist
+    // and leave the transaction in doubt for ever. Refused as the
+    // corruption it is, on the same fail-closed reading PAGE_INIT applies
+    // to an unknown page type.
+    if (fields.coordinator_txn_id == 0) {
+        return Status::Corruption(
+            "wal payload: TXN_PREPARE names coordinator transaction 0, which no transaction "
+            "has; a prepared transaction with no coordinator id could never be resolved");
+    }
+    return fields;
+}
+
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 
 StatusOr<std::size_t> EncodeHeapWrite(std::span<std::byte> out, const HeapWritePayload& fields,

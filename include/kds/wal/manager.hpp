@@ -216,6 +216,36 @@ public:
     // claim every acknowledged commit is safe.
     bool HasPendingGroupCommits() const noexcept { return pending_group_commits_ > 0; }
 
+    // **Someone is parked on `lsn` and no commit record covers it** (R6-3).
+    // The next `DrainOnce()` syncs for it, the way it already syncs for a
+    // staged group commit; this call itself does no I/O and never blocks,
+    // which is what lets a reactor-side caller ask for durability and then
+    // park on `IsDurable(lsn)` instead of holding the thread through an
+    // `fdatasync`.
+    //
+    // The reason it has to exist: a record that is not a `Commit` leaves
+    // the drain with nothing to sync *for*, so until D3's loss-window
+    // interval elapses - 10 ms by default - nothing makes it durable. That
+    // is a bounded wait rather than a hang, and it is still the wrong
+    // answer for a cross-owner prepare, whose whole content is "this is on
+    // the platter" and which the coordinator is parked on.
+    //
+    // Monotonic: a request behind one already pending is absorbed, so a
+    // caller may ask without checking. `EnsureDurable`'s blocking sync
+    // stays the answer for a caller with no reactor to park on.
+    //
+    // The flag beside the LSN is not redundant. A record's LSN is the
+    // offset of its first byte and `IsDurable` is strict (durability.hpp),
+    // so "not yet durable" includes `lsn == durable_lsn()` - and with no
+    // flag, the initial state (0, 0) would read as a standing request and
+    // sync every idle tick.
+    void RequestDurable(Lsn lsn) noexcept {
+        if (!durability_requested_ || lsn > requested_durable_lsn_) {
+            requested_durable_lsn_ = lsn;
+            durability_requested_ = true;
+        }
+    }
+
     // One tick of the `system`-group WAL housekeeping task. Syncs when
     // there are group commits waiting (one sync, whole batch) or when the
     // D3 interval has elapsed with bytes unsynced. Cheap and safe to call
@@ -260,6 +290,15 @@ private:
     // of them. One sync past that LSN resolves all of them at once.
     std::uint64_t pending_group_commits_ = 0;
     Lsn highest_group_commit_lsn_ = 0;
+
+    // The highest LSN a caller has parked on that no *commit* record
+    // covers (R6-3's prepare). Distinct from the batch above rather than
+    // folded into it: `pending_group_commits_` is a count of D2 commits
+    // and `stats_.group_batches` reads it as one, so incrementing it for a
+    // record that commits nothing would make the batch statistics say
+    // something untrue about the workload.
+    Lsn requested_durable_lsn_ = 0;
+    bool durability_requested_ = false;
 
     sched::MonoTimeNs last_sync_ns_ = 0;
     Logger* log_ = nullptr;

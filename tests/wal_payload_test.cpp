@@ -537,9 +537,10 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertSnapshot), 24);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPageHandoff), 25);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAnchorUpdate), 26);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kTxnPrepare), 27);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 26);
+    EXPECT_EQ(kMaxAssignedRecordType, 27);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));
@@ -547,6 +548,7 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kIndexInsert)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kPageHandoff)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAnchorUpdate)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kTxnPrepare)));
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
     EXPECT_STREQ(RecordTypeName(RecordType::kUndoWrite), "UNDO_WRITE");
     EXPECT_STREQ(RecordTypeName(RecordType::kFree), "FREE");
@@ -554,6 +556,7 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_STREQ(RecordTypeName(RecordType::kIndexInsert), "INDEX_INSERT");
     EXPECT_STREQ(RecordTypeName(RecordType::kPageHandoff), "PAGE_HANDOFF");
     EXPECT_STREQ(RecordTypeName(RecordType::kAnchorUpdate), "ANCHOR_UPDATE");
+    EXPECT_STREQ(RecordTypeName(RecordType::kTxnPrepare), "TXN_PREPARE");
 }
 
 TEST(WalPayloadTest, AnchorUpdateRoundTripsThroughTheEnvelope) {
@@ -566,6 +569,30 @@ TEST(WalPayloadTest, AnchorUpdateRoundTripsThroughTheEnvelope) {
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
     EXPECT_EQ(decoded.value().index_oid, 9001u);
     EXPECT_EQ(decoded.value().root, 310u);
+}
+
+// ---- TXN_PREPARE ---------------------------------------------------------
+
+TEST(WalPayloadTest, TxnPrepareRoundTripsThroughTheEnvelope) {
+    const auto record = ThroughEnvelope(RecordType::kTxnPrepare, [](std::span<std::byte> out) {
+        return EncodeTxnPrepare(out, TxnPreparePayload{/*session=*/77, /*txn=*/4242, /*core=*/3});
+    });
+    auto decoded = DecodeTxnPrepare(PayloadOf(record));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().coordinator_session_id, 77u);
+    EXPECT_EQ(decoded.value().coordinator_txn_id, 4242u);
+    EXPECT_EQ(decoded.value().coordinator_core, 3u);
+}
+
+TEST(WalPayloadTest, ATxnPrepareNamingNoCoordinatorTransactionIsCorruption) {
+    // 0 is the id no transaction has, so recovery could never find a
+    // decision for it - refused rather than left in doubt for ever.
+    std::array<std::byte, kTxnPreparePayloadSize> buf{};
+    ASSERT_TRUE(EncodeTxnPrepare(buf, TxnPreparePayload{/*session=*/77, /*txn=*/0, /*core=*/3})
+                    .ok());
+    auto decoded = DecodeTxnPrepare(buf);
+    EXPECT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
 // ---- INDEX_INSERT --------------------------------------------------------

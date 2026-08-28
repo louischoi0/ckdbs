@@ -2,11 +2,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <map>
+#include <span>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
+#include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
+#include "kds/sched/clock.hpp"
+#include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
+#include "kds/sched/scheduler.hpp"
 
 // **Cross-owner transactions: the wire** (R6-1 of `instructions/v2.4.0/2pc.md`).
 //
@@ -233,13 +242,13 @@ static_assert(sizeof(TxnParticipantReplyPayload) <= sched::kCoreRingPayloadBytes
               "R6-1/D6: a participant reply must fit one ring slot; if it ever does not, "
               "crosscore.md §9's sizing decision becomes R6's gate - do not shrink a field");
 
-// ---- The decodes --------------------------------------------------------
+// ---- The decodes, and R6-3's encodes ------------------------------------
 //
-// Both bound bytes this core did not compute. There are no matching
-// *encodes* in R6-1: nothing sends these yet, and an encoder owes a
-// UTF-8-safe truncation of the refusal message (`statement_ship_service.cpp`
-// has one, in an anonymous namespace) which is better hoisted once R6-3 is
-// its second caller than duplicated now for no sender.
+// The decodes bound bytes this core did not compute. R6-1 had no matching
+// *encodes* because nothing sent these; R6-3 sends them, and the encoder
+// the header said it owed - a UTF-8-safe truncation of the refusal message -
+// is `utf8_prefix.hpp`, hoisted out of `statement_ship_service.cpp` at this
+// row, on the condition R6-1 named.
 
 // The decision a decide message names, **refused rather than guessed** when
 // the byte names none.
@@ -255,5 +264,238 @@ StatusOr<TxnDecision> TxnDecisionOf(const TxnDecideRequestPayload& decide);
 // than trusted. An empty message is legal - a success carries none - so
 // only a length past the array is a refusal.
 StatusOr<std::string_view> TxnParticipantReplyMessageOf(const TxnParticipantReplyPayload& reply);
+
+// The reply encode (R6-3). A refusal's message is **diagnostic** - what the
+// coordinator acts on is the code, which crosses whole - so an over-long
+// message is truncated at a character boundary and the participant's log
+// keeps all of it. That is `ShippedStatementReplyOf`'s rule for a refusal
+// and it applies here without its asymmetry: a participant reply carries no
+// answer, only an outcome, so there is no success text a cap could silently
+// shorten.
+TxnParticipantReplyPayload TxnParticipantReplyOf(std::uint64_t session_id,
+                                                 std::uint64_t transaction_id,
+                                                 const Status& status);
+
+// ---- R6-3: how long a coordinator waits for one phase --------------------
+//
+// `kShippedStatementDeadlineNs`'s argument, applied to a phase rather than
+// to a statement, and it lands on the same number for the same reason: this
+// is not a latency budget but the point past which a reply is presumed lost
+// rather than slow. A prepare costs a participant one `fdatasync` (~0.9 ms
+// on this host) plus two ring hops (~20 us each), so ten seconds is three
+// orders of magnitude above the work.
+//
+// **The two phases read a timeout differently, and that is the whole reason
+// one constant is enough.** A prepare that times out is an ABORT: nothing
+// was decided, so nothing committed anywhere, and the coordinator is free
+// to take the safe branch. A decide that times out changes no outcome at
+// all - the decision is already durable in the coordinator's stream - so
+// the wait is only for the release, and its expiry leaves a participant in
+// doubt for D5's resolution rather than leaving the transaction undecided.
+// Being generous is therefore cheap on both legs and wrong on neither.
+inline constexpr sched::MonoTimeNs kTxnPhaseDeadlineNs = 10ull * 1'000'000'000ull;
+
+// ---- The participant's half: the transport ------------------------------
+//
+// `StatementShipServer`'s shape, and deliberately the same one: decode,
+// bound, hand to a seam, answer whenever the seam says so. What it does not
+// do is decide anything about transactions - the enrolment it prepares
+// lives in `ShippedStatementExecutor`, which owns the context keyed on
+// `(coordinator core, session id)`, and this class never looks it up.
+//
+// **Every path replies.** The coordinator is parked on one, and a request
+// that produced no reply costs that phase a whole deadline before the
+// coordinator can act. The one exception is a payload whose size is wrong,
+// which names no waiter to answer.
+class Txn2pcServer {
+public:
+    // What the seam calls when the phase is finished **and, for prepare,
+    // durable**. Exactly once, from this core.
+    using ReplyFn = std::function<void(const Status&)>;
+
+    // The coordinator's identity, which is all a phase carries. `retry` is
+    // R6-0's bit with R6-0's meaning on prepare and the narrower one
+    // `TxnDecideRequestPayload` states on decide.
+    struct PrepareAsk {
+        std::uint32_t coordinator = 0;  // MessageHeader::src_core, part of the identity
+        std::uint64_t session_id = 0;
+        std::uint64_t transaction_id = 0;
+        bool retry = false;
+    };
+    struct DecideAsk {
+        std::uint32_t coordinator = 0;
+        std::uint64_t session_id = 0;
+        std::uint64_t transaction_id = 0;
+        TxnDecision decision = TxnDecision::kUnset;
+        bool retry = false;
+    };
+    using PrepareFn = std::function<void(PrepareAsk, ReplyFn)>;
+    using DecideFn = std::function<void(DecideAsk, ReplyFn)>;
+
+    Txn2pcServer(std::uint32_t core_id, sched::Scheduler& scheduler,
+                 sched::RingTransport& transport, PrepareFn prepare, DecideFn decide,
+                 Logger* log = nullptr) noexcept
+        : core_id_(core_id),
+          scheduler_(scheduler),
+          transport_(transport),
+          prepare_(std::move(prepare)),
+          decide_(std::move(decide)),
+          log_(log) {}
+
+    void OnPrepare(const sched::MessageHeader& header, std::span<const std::byte> payload);
+    void OnDecide(const sched::MessageHeader& header, std::span<const std::byte> payload);
+
+    std::uint64_t prepares() const noexcept { return prepares_; }
+    std::uint64_t decides() const noexcept { return decides_; }
+    std::uint64_t replies() const noexcept { return replies_; }
+
+private:
+    void Reply(std::uint32_t coordinator, std::uint64_t request_id,
+               sched::RingMessageKind kind, std::uint64_t session_id,
+               std::uint64_t transaction_id, const Status& status);
+
+    std::uint32_t core_id_;
+    sched::Scheduler& scheduler_;
+    sched::RingTransport& transport_;
+    PrepareFn prepare_;
+    DecideFn decide_;
+    Logger* log_;
+    std::uint64_t prepares_ = 0;
+    std::uint64_t decides_ = 0;
+    std::uint64_t replies_ = 0;
+};
+
+// ---- The coordinator's half ---------------------------------------------
+
+// Which leg a waiter is waiting on. Carried on the waiter rather than
+// inferred from the map it is in, so that a **late reply from the other
+// leg** - a prepare answer that arrives after the phase timed out and the
+// decide phase has opened - is recognised as late instead of being
+// delivered into this phase. The identity check cannot catch that one: both
+// legs of one transaction carry the same session and transaction id.
+enum class TxnPhase : std::uint8_t { kPrepare, kDecide };
+
+// One participant's answer within a phase.
+struct TxnParticipantOutcome {
+    std::uint32_t core = 0;
+    bool replied = false;
+    Status status;  // meaningful once `replied`
+};
+
+// What one phase's waiter holds. `IndexBuildClient`'s shape widened from
+// one respondent to N: the phase settles when every participant has replied
+// or the deadline has passed, and **a phase that settles on the deadline is
+// not a refusal** - what it means is the leg's own, above.
+struct TxnPhaseOutcome {
+    TxnPhase phase = TxnPhase::kPrepare;
+    std::uint64_t session_id = 0;
+    std::uint64_t transaction_id = 0;
+    std::vector<TxnParticipantOutcome> participants;
+    std::size_t outstanding = 0;
+    sched::MonoTimeNs sent_ns = 0;
+    sched::MonoTimeNs deadline_ns = 0;
+
+    // Every participant replied and none refused. The coordinator's commit
+    // branch tests exactly this, so it is written once here rather than at
+    // each call site.
+    bool AllPrepared() const noexcept {
+        if (outstanding != 0) return false;
+        for (const TxnParticipantOutcome& p : participants) {
+            if (!p.replied || !p.status.ok()) return false;
+        }
+        return true;
+    }
+};
+
+// The arrival core's side of the protocol: the waiters, the deadline, the
+// sends and the reply receivers. `StatementShipClient`'s shape, one level
+// up - a map for its stable addresses, a per-phase request id, and an
+// identity check on every reply, because answering one transaction with
+// another's result is the one failure this protocol must not have.
+class Txn2pcClient {
+public:
+    Txn2pcClient(std::uint32_t core_id, sched::Scheduler& scheduler,
+                 sched::RingTransport& transport, const sched::Clock& clock,
+                 Logger* log = nullptr) noexcept
+        : core_id_(core_id),
+          scheduler_(scheduler),
+          transport_(transport),
+          clock_(clock),
+          log_(log) {}
+
+    // Installs both reply receivers. The handlers capture `this` and there
+    // is no unregister, so **the client must outlive every pump of that
+    // scheduler** - `StatementShipClient::RegisterReplyReceiver`'s rule.
+    Status RegisterReplyReceivers();
+
+    // Opens the waiter and sends prepare to every participant. **Every
+    // refusal here happens before anything is sent**, so a caller that gets
+    // one knows no participant was asked: an empty participant list, a core
+    // this instance does not have, a duplicate participant, or a request id
+    // that still has a phase parked on it.
+    Status Prepare(std::uint64_t request_id, std::uint64_t session_id,
+                   std::uint64_t transaction_id, std::span<const std::uint32_t> participants);
+
+    // The decide leg, same discipline. `decision` may not be `kUnset` - a
+    // decide that names no decision is the one thing a participant refuses
+    // into doubt, so it is refused here first, where it costs nothing.
+    Status Decide(std::uint64_t request_id, std::uint64_t session_id,
+                  std::uint64_t transaction_id, TxnDecision decision,
+                  std::span<const std::uint32_t> participants);
+
+    // The parked coordinator's predicate: every participant answered, the
+    // deadline passed, or the waiter is gone. One clock read per turn.
+    bool Settled(std::uint64_t request_id) const;
+    const TxnPhaseOutcome* Find(std::uint64_t request_id) const;
+    void Close(std::uint64_t request_id);
+
+    std::size_t waiting() const noexcept { return waiting_.size(); }
+
+    // ---- What this core reports (D7's counters, one level up) -----------
+
+    // Prepare requests that **left** this core - so `prepare_messages()` is
+    // what §5's "a one-owner commit sends zero prepare messages" assertion
+    // reads, and a refusal from `Prepare` sent none and is not counted.
+    std::uint64_t prepare_messages() const noexcept { return prepare_messages_; }
+    std::uint64_t decide_messages() const noexcept { return decide_messages_; }
+    // Phases that ended with a participant unheard from. Non-zero means a
+    // transaction was aborted (prepare) or a participant left in doubt
+    // (decide) for the ring or a core, not for anything the data said.
+    std::uint64_t phase_timeouts() const noexcept { return phase_timeouts_; }
+    // Participants that answered a prepare with a refusal. The population
+    // that turns a commit into an abort with a reason the client can read.
+    std::uint64_t prepare_refusals() const noexcept { return prepare_refusals_; }
+    // Decide acknowledgements that carried a refusal. **Worse than a
+    // timeout**: the decision is durable and a participant says it did not
+    // apply it, which is the one anomaly on this leg that is not a lost
+    // message.
+    std::uint64_t decide_refusals() const noexcept { return decide_refusals_; }
+    // A reply whose identity is not its waiter's, or whose leg is not.
+    std::uint64_t identity_mismatches() const noexcept { return identity_mismatches_; }
+    // A reply that matched no waiter: its phase had already settled on the
+    // deadline.
+    std::uint64_t late_replies() const noexcept { return late_replies_; }
+
+private:
+    // Both legs' send path, which differ only in the kind and the payload.
+    Status OpenPhase(std::uint64_t request_id, TxnPhase phase, std::uint64_t session_id,
+                     std::uint64_t transaction_id, std::span<const std::uint32_t> participants);
+    void OnReply(TxnPhase phase, const sched::MessageHeader& header,
+                 std::span<const std::byte> payload);
+
+    std::uint32_t core_id_;
+    sched::Scheduler& scheduler_;
+    sched::RingTransport& transport_;
+    const sched::Clock& clock_;
+    Logger* log_;
+    std::map<std::uint64_t, TxnPhaseOutcome> waiting_;
+    std::uint64_t prepare_messages_ = 0;
+    std::uint64_t decide_messages_ = 0;
+    std::uint64_t phase_timeouts_ = 0;
+    std::uint64_t prepare_refusals_ = 0;
+    std::uint64_t decide_refusals_ = 0;
+    std::uint64_t identity_mismatches_ = 0;
+    std::uint64_t late_replies_ = 0;
+};
 
 }  // namespace kds::server

@@ -155,6 +155,11 @@ class IndexBuildClient;
 class AssertionBuildClient;
 class StatementShipClient;
 class ShippedStatementExecutor;
+// Forward-declared rather than included: this header is included nearly
+// everywhere, and what it needs of the 2PC service is one pointer and one
+// pointer-to-const parameter.
+class Txn2pcClient;
+struct TxnPhaseOutcome;
 
 // A peer-owned relation's `CREATE INDEX` between its two phases on core 0
 // (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-3): the definition core 0
@@ -193,6 +198,27 @@ struct PendingShippedStatement {
     std::string relation;
 };
 
+// A `COMMIT` of a transaction whose writes touched more than one owner
+// (R6-3, D4), between the prepare that just left this core and the answer
+// the client gets. **Carried by value across every park**, like every other
+// pending record here: the statement's coroutine frame is the one thing
+// that survives them, and the session's participant list is cleared by
+// `Finish()` in the middle of this sequence.
+//
+// The two request ids are separate on purpose. One waiter per id is the
+// transport's rule (`Txn2pcClient::OpenPhase`), and reusing prepare's id
+// for decide would let a prepare answer that arrived after its phase timed
+// out be delivered into the decide phase - the identity check cannot catch
+// that one, since both legs of one transaction carry the same session and
+// transaction id.
+struct PendingCrossOwnerCommit {
+    std::uint64_t prepare_request_id = 0;
+    std::uint64_t decide_request_id = 0;
+    std::uint64_t session_id = 0;
+    std::uint64_t transaction_id = 0;
+    std::vector<std::uint32_t> participants;
+};
+
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
@@ -229,6 +255,19 @@ struct DispatchOutcome {
     // nowhere to deliver its answer - and the refusal `Dispatch()` would
     // have to invent could not be retryable (D4).
     std::optional<PendingShippedStatement> pending_shipped = std::nullopt;
+
+    // A cross-owner `COMMIT` whose prepare phase is in flight (R6-3). The
+    // reply is not in `response` yet: `DispatchAsync()` runs the rest of
+    // the protocol - the prepare park, the decision, the decide park - and
+    // writes the answer at the end.
+    //
+    // **The synchronous `Dispatch()` never sees one**, for the reason
+    // `pending_shipped` never reaches it: the protocol has to park, and a
+    // path that cannot wait has no honest answer to give a client whose
+    // participants are already asked. `HandleCommit` refuses before the
+    // first prepare leaves rather than after, so that refusal is an
+    // ordinary retryable one and the transaction is still whole.
+    std::optional<PendingCrossOwnerCommit> pending_cross_owner_commit = std::nullopt;
 
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/spec/wal.md
@@ -1049,6 +1088,19 @@ public:
     // `cores = 1` byte-identical.
     void SetStatementShip(StatementShipClient* client) noexcept { statement_ship_ = client; }
 
+    // Arms the **coordinator's half of the cross-owner commit** (R6-3,
+    // txn_2pc_service.hpp): a `COMMIT` of a transaction that enrolled
+    // participants runs D4's two phases instead of committing straight
+    // away. Installed on every core of a multi-core instance beside
+    // `SetStatementShip`; `client` must outlive the dispatcher.
+    //
+    // A dispatcher never told has no participants to prepare either - a
+    // session enrols one only where a statement shipped inside a
+    // transaction - so a single-core instance and every fixture keep the
+    // path they had, byte for byte. That is D1's fast path stated as a
+    // wiring property rather than as a branch.
+    void SetTxn2pc(Txn2pcClient* client) noexcept { txn_2pc_ = client; }
+
     // The **owner's** half, for `SHOW META` only (D7): this core executes
     // other cores' statements, and nothing else in this class would ever
     // read that. A pointer rather than a counters struct because the
@@ -1428,6 +1480,9 @@ private:
     // SS2's client, on every core of a multi-core instance; null wherever
     // the cross-core refusal still stands (see SetStatementShip).
     StatementShipClient* statement_ship_ = nullptr;
+    // R6-3's coordinator half; null on a single-core instance and every
+    // fixture, which is also where no session ever has a participant.
+    Txn2pcClient* txn_2pc_ = nullptr;
     // D7's owner-side reporting; null on a core that answers for nobody.
     const ShippedStatementExecutor* shipped_statements_ = nullptr;
     // Whether the statement running right now can park (set by
@@ -1648,6 +1703,33 @@ private:
     // The parked statement's other end: the owner's answer, its deadline,
     // or a waiter that vanished.
     DispatchOutcome FinishShippedStatement(const PendingShippedStatement& shipped);
+
+    // ---- R6-3: the coordinator's commit --------------------------------
+
+    // This core's own half of the transaction, ended. Both are the bodies
+    // `HandleCommit` and `HandleRollback` have always had, lifted out
+    // unchanged so the cross-owner path ends the local transaction through
+    // exactly the code a one-owner one does - a second commit path is how
+    // two commits stop meaning the same thing.
+    //
+    // `commit_lsn` answers the record's LSN whatever the durability class,
+    // which is what the cross-owner path needs and the local one does not:
+    // the decision must be **durable before participants are told**, and
+    // `pending_commit_lsn_` is only set under `group`.
+    DispatchOutcome CommitLocal(Session& session, wal::Lsn* commit_lsn = nullptr);
+    DispatchOutcome RollbackLocal(Session& session);
+
+    // Opens the prepare phase over the session's participants and returns
+    // the outcome that parks on it. Every refusal here happens **before**
+    // the first prepare leaves, so a client that sees one knows nothing was
+    // asked and the transaction is still whole.
+    DispatchOutcome PrepareAcrossOwners(Session& session);
+
+    // What the client is told when a participant refuses or is unheard
+    // from: one message naming the first participant that did not prepare,
+    // in that participant's own words where it gave any. Built before the
+    // phase is closed, since closing frees what it reads.
+    Status DescribePrepareFailure(const TxnPhaseOutcome* phase) const;
 
     // The one core that owns every relation this chain reads, when there is
     // one and it is not this core. Nothing otherwise: a chain touching this

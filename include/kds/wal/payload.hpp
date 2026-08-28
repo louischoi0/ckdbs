@@ -123,6 +123,49 @@ StatusOr<std::size_t> EncodeAnchorUpdate(std::span<std::byte> out,
                                          const AnchorUpdatePayload& fields);
 StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in);
 
+// ---- TXN_PREPARE ---------------------------------------------------------
+//
+// R6-3, D4's prepare phase. The **coordinator's** identity, and nothing
+// else: what this core prepared is described by every record it already
+// wrote under the envelope's own txn_id, and what it needs from this
+// record is the handle to ask *who decided what*.
+//
+// All three fields are the coordinator's, and all three are load-bearing:
+//
+//   - `core` because a session id is minted per core, so two cores mint
+//     the same one (`statement_ship_service.hpp`'s dedup key, one level
+//     down) - a record keyed on the id alone would resolve one
+//     coordinator's transaction against another's stream;
+//   - `session_id` because that pair is what the participant's enrolment
+//     is keyed on, so it is what a resolution ask can name;
+//   - `transaction_id` because it is what the coordinator's own
+//     TXN_COMMIT carries in its envelope, and finding that record is the
+//     whole of how a prepared transaction learns its outcome. That lookup
+//     is a **read of one stream for one id**, never a comparison of two
+//     streams' LSNs - guideline 3 stands.
+struct TxnPreparePayload {
+    std::uint64_t coordinator_session_id;
+    std::uint64_t coordinator_txn_id;
+    std::uint32_t coordinator_core;
+};
+
+inline constexpr std::size_t kTxnPrepareSessionIdOffset = 0;
+inline constexpr std::size_t kTxnPrepareTxnIdOffset = 8;
+inline constexpr std::size_t kTxnPrepareCoreOffset = 16;
+// 8+8+4 = 20 bytes on disk; a floor, like every size in this file - the
+// envelope hands the decoder its 8-byte-aligned tail, so these twenty
+// arrive as twenty-four.
+inline constexpr std::size_t kTxnPreparePayloadSize = 20;
+
+static_assert(offsetof(TxnPreparePayload, coordinator_session_id) ==
+              kTxnPrepareSessionIdOffset);
+static_assert(offsetof(TxnPreparePayload, coordinator_txn_id) == kTxnPrepareTxnIdOffset);
+static_assert(offsetof(TxnPreparePayload, coordinator_core) == kTxnPrepareCoreOffset);
+
+StatusOr<std::size_t> EncodeTxnPrepare(std::span<std::byte> out,
+                                       const TxnPreparePayload& fields);
+StatusOr<TxnPreparePayload> DecodeTxnPrepare(std::span<const std::byte> in);
+
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 //
 // One shape for both: an insert names a new slot, an overwrite names an

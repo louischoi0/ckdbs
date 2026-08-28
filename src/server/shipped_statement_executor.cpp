@@ -1,8 +1,10 @@
 #include "kds/server/shipped_statement_executor.hpp"
 
+#include <functional>
 #include <utility>
 
 #include "kds/sched/coro.hpp"
+#include "kds/wal/log_txn_prepare.hpp"
 
 namespace kds::server {
 
@@ -260,6 +262,25 @@ void ShippedStatementExecutor::Remember(const DedupKey& key, std::uint64_t seque
 StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor(
     const DedupKey& key, Role role) {
     if (auto it = enrolled_.find(key); it != enrolled_.end()) {
+        // **A prepared transaction takes no more statements** (R6-3, D4).
+        // Prepare is a promise that everything this transaction wrote is
+        // durable; a statement admitted after it would write rows the
+        // PREPARE record does not cover, so a commit decided on that
+        // promise would make a transaction durable in part. Refused
+        // retryably - the coordinator is between its own two phases, and a
+        // client that gets this can run the statement in a new
+        // transaction.
+        //
+        // Unreachable while a coordinator waits for its own COMMIT before
+        // sending another statement, which is what a client does; refused
+        // here rather than trusted to stay unreachable, because the cost of
+        // being wrong is a half-durable transaction.
+        if (it->second->prepared || it->second->phase_running) {
+            return Status::TxnConflict(
+                "statement shipping: core " + std::to_string(core_id_) +
+                " has prepared this session's cross-owner transaction and can take no further "
+                "statement in it; the decision is the coordinator's to make first");
+        }
         // **A context whose transaction is gone is not joinable.** `Finish`
         // drops one it finds closed, so reaching here with a closed session
         // would mean some other path ended it; refusing is the conservative
@@ -354,17 +375,356 @@ void ShippedStatementExecutor::EndEnrolled(
     enrolled_.erase(it);
 }
 
+// ---- R6-3: the participant's two phases -------------------------------------
+
+void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
+                                       Txn2pcServer::ReplyFn reply) {
+    const DedupKey key{ask.coordinator, ask.session_id};
+    auto it = enrolled_.find(key);
+    if (it == enrolled_.end()) {
+        // Nothing here to prepare. The reachable causes are all the same
+        // outcome: the idle ceiling rolled the context back, the enrolment
+        // was refused, or this core restarted. None of them committed
+        // anything, so the coordinator's abort is the correct end and the
+        // refusal is **retryable** - the transaction can be run again from
+        // the top with nothing to undo.
+        ++prepare_refusals_;
+        reply(Status::TxnConflict(
+            "cross-owner transaction: core " + std::to_string(core_id_) +
+            " holds no transaction for core " + std::to_string(ask.coordinator) +
+            "'s session " + std::to_string(ask.session_id) +
+            "; it was rolled back or never opened, so this transaction cannot commit"));
+        return;
+    }
+    Enrolled& context = *it->second;
+
+    if (context.prepared) {
+        // A resend of a prepare this core already answered. Idempotent by
+        // construction - the record is durable and the promise stands - so
+        // it is re-answered rather than re-made, and `prepared_` is not
+        // counted twice. The identity is checked first: a *different*
+        // transaction id on the same context is not a resend, it is two
+        // transactions confused for one.
+        if (context.coordinator_txn_id != ask.transaction_id) {
+            ++prepare_refusals_;
+            reply(Status::InvalidArgument(
+                "cross-owner transaction: core " + std::to_string(core_id_) +
+                " has prepared transaction " + std::to_string(context.coordinator_txn_id) +
+                " for this session and is asked to prepare " +
+                std::to_string(ask.transaction_id) + "; one session, one transaction"));
+            return;
+        }
+        reply(Status::OK());
+        return;
+    }
+    if (context.phase_running || running_.find(key) != running_.end()) {
+        // A statement or a phase is still running on this context. A
+        // client is parked on one statement at a time, so a prepare
+        // arriving mid-statement is a coordinator that did not wait for its
+        // own answer - refused rather than raced, and retryable because
+        // nothing here has moved.
+        ++prepare_refusals_;
+        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
+                                  " is still running this session's previous work; prepare "
+                                  "cannot be answered until it finishes"));
+        return;
+    }
+    if (!context.session.in_explicit_txn()) {
+        // The context outlived its transaction. `Finish` drops one it finds
+        // closed, so this is defence rather than an expected arm - and the
+        // context is dropped here too, so the next statement opens a new
+        // transaction instead of joining a dead one.
+        ++prepare_refusals_;
+        enrolled_.erase(it);
+        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
+                                  " holds a context for this session whose transaction is no "
+                                  "longer open; this transaction cannot commit"));
+        return;
+    }
+    if (context.session.failed()) {
+        // **R6-2's named gap, answered.** A poisoned session is still
+        // "in a transaction" (`state_ != kIdle`), so every later statement
+        // met the failed-txn gate and returned "current transaction is
+        // aborted" - which told the coordinator nothing. Prepare is where
+        // it becomes legible: this participant is doomed, so it refuses,
+        // and the coordinator's answer is ABORT. Rolled back here rather
+        // than left standing, since nothing can commit it.
+        ++prepare_refusals_;
+        EndEnrolled(it, "its transaction was aborted, so it could not prepare");
+        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
+                                  " has an aborted transaction for this session; it cannot "
+                                  "prepare and the transaction must roll back"));
+        return;
+    }
+
+    // D2's pairing, completed: this core's own transaction id is what the
+    // record's envelope carries, and the coordinator's is what its payload
+    // names. Recorded on the context as well, because a decide is checked
+    // against it.
+    context.coordinator_txn_id = ask.transaction_id;
+    const std::uint64_t participant_txn_id = context.session.transaction()->id();
+    auto lsn = wal::LogTxnPrepare(wal_, participant_txn_id, ask.coordinator, ask.session_id,
+                                  ask.transaction_id);
+    if (!lsn.ok()) {
+        // Nothing is prepared and nothing is claimed. The context stays
+        // enrolled and abortable, which is what makes this refusal safe.
+        ++prepare_refusals_;
+        reply(lsn.status());
+        return;
+    }
+    context.prepare_lsn = lsn.value();
+
+    if (wal_ == nullptr) {
+        // The unlogged fixture. There is no record and therefore no sync to
+        // wait for; the promise this reply makes is as durable as anything
+        // else on an unlogged instance, which is to say not at all - and
+        // that is the property of the instance, not of this row. Stated
+        // rather than silently taken, because "prepared" is a durability
+        // claim everywhere else in this file.
+        context.prepared = true;
+        ++in_doubt_;
+        ++prepared_;
+        reply(Status::OK());
+        return;
+    }
+    // The drain has nothing to sync *for* until it is told (`RequestDurable`):
+    // a prepare is not a commit, so without this the record waits out D3's
+    // loss-window interval while a coordinator is parked on it.
+    wal_->RequestDurable(lsn.value());
+    context.phase_running = true;
+    // `kForeground`: this is a client's transaction, and the only thing
+    // that distinguishes it from a local one is which core its client is
+    // on - `Execute`'s argument, one level up.
+    scheduler_.Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        AwaitPrepared(key, lsn.value(), clock_.Now() + kTxnPhaseDeadlineNs, std::move(reply))));
+}
+
+sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
+                                                    sched::MonoTimeNs deadline_ns,
+                                                    Txn2pcServer::ReplyFn reply) {
+    // **Bounded, and the bound is not decoration.** A device that never
+    // answers would otherwise park this coroutine for the life of the
+    // process while the context sat un-expirable behind `phase_running` -
+    // the silent failure HP3 predicts is unreachable. On expiry nothing is
+    // claimed: the context stays unprepared and abortable, and the record
+    // that may yet become durable is resolved the way any prepared-then-
+    // aborted transaction is, by the TXN_ABORT that follows it.
+    const std::function<bool()> durable = [this, lsn, deadline_ns] {
+        return wal_->IsDurable(lsn) || clock_.Now() >= deadline_ns;
+    };
+    co_await sched::WaitUntil{&durable};
+
+    auto it = enrolled_.find(key);
+    if (it == enrolled_.end()) {
+        // Re-found rather than held across the park, the way every other
+        // parked path in this engine re-finds its state. Unreachable while
+        // `phase_running` holds the sweep off, and answered rather than
+        // asserted because the cost of being wrong is a coordinator parked
+        // to its deadline.
+        ++prepare_refusals_;
+        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
+                                  " lost this session's transaction while its prepare was "
+                                  "reaching the device"));
+        co_return Status::OK();
+    }
+    Enrolled& context = *it->second;
+    context.phase_running = false;
+    if (!wal_->IsDurable(lsn)) {
+        ++prepare_refusals_;
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("2pc", "core " + std::to_string(core_id_) +
+                                   " could not make a prepare record durable within the phase "
+                                   "deadline; the transaction is refused rather than promised");
+        }
+        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
+                                  " could not make its prepare durable within the phase "
+                                  "deadline; nothing is prepared here"));
+        co_return Status::OK();
+    }
+
+    // **The promise is made here and nowhere earlier**: from this line the
+    // context may not be aborted by this core (D4), which is what
+    // `ExpireEnrolled` and `RollbackAllEnrolled` both read.
+    context.prepared = true;
+    ++in_doubt_;
+    ++prepared_;
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("2pc", "core " + std::to_string(core_id_) + " prepared core " +
+                               std::to_string(key.first) + "'s session " +
+                               std::to_string(key.second) + " at lsn " + std::to_string(lsn));
+    }
+    reply(Status::OK());
+    co_return Status::OK();
+}
+
+void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
+                                      Txn2pcServer::ReplyFn reply) {
+    const DedupKey key{ask.coordinator, ask.session_id};
+    const bool commit = ask.decision == TxnDecision::kCommit;
+    auto it = enrolled_.find(key);
+
+    if (it == enrolled_.end()) {
+        if (!commit) {
+            // **Benign, and acknowledged as such.** An abort for a context
+            // that is already gone has nothing left to do: the sweep rolled
+            // it back, or a refused prepare did. Counted as an abort
+            // applied, because from the coordinator's side that is exactly
+            // what happened.
+            ++decides_aborted_;
+            reply(Status::OK());
+            return;
+        }
+        // A commit for a transaction this core does not hold. The
+        // coordinator's decision is durable, so this is the shape of a lost
+        // participant - and there is nothing here to apply it to. Refused
+        // and logged at Error rather than acknowledged, because an ack
+        // would tell the coordinator the transaction is whole when part of
+        // it is missing.
+        ++decide_refusals_;
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("2pc", "core " + std::to_string(core_id_) +
+                                   " was told to commit core " + std::to_string(ask.coordinator) +
+                                   "'s session " + std::to_string(ask.session_id) +
+                                   ", which it holds no transaction for; the decision stands "
+                                   "and this core's part of it is lost");
+        }
+        reply(Status::InvalidArgument(
+            "cross-owner transaction: core " + std::to_string(core_id_) +
+            " holds no transaction for this session and cannot commit it"));
+        return;
+    }
+    Enrolled& context = *it->second;
+
+    if (context.phase_running || running_.find(key) != running_.end()) {
+        // A decide that overlaps this context's own previous phase. Refused
+        // rather than queued: a second `COMMIT` dispatched onto a session
+        // already ending one would run against a transaction that is being
+        // torn down under it.
+        ++decide_refusals_;
+        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
+                                  " is still finishing this session's previous phase"));
+        return;
+    }
+    if (context.coordinator_txn_id != 0 &&
+        context.coordinator_txn_id != ask.transaction_id) {
+        // The identity check, in the direction that matters: this core
+        // prepared *a* transaction for this session and is being told about
+        // a different one. Applying it would end the wrong transaction.
+        ++decide_refusals_;
+        reply(Status::InvalidArgument(
+            "cross-owner transaction: core " + std::to_string(core_id_) + " holds transaction " +
+            std::to_string(context.coordinator_txn_id) +
+            " for this session and was told to decide " + std::to_string(ask.transaction_id)));
+        return;
+    }
+    if (commit && !context.prepared) {
+        // **Never commit unprepared work.** By D4 a coordinator commits
+        // only once every participant replied prepared, so this can only be
+        // a decide that overtook its own prepare or a coordinator that did
+        // not wait - and committing here would make this core's half
+        // durable on the strength of a promise it never gave.
+        ++decide_refusals_;
+        reply(Status::InvalidArgument(
+            "cross-owner transaction: core " + std::to_string(core_id_) +
+            " was told to commit a transaction it has not prepared"));
+        return;
+    }
+
+    context.phase_running = true;
+    context.decision_commits = commit;
+    context.decision_reply = std::move(reply);
+    context.decision_out = DispatchOutcome{};
+    // A literal, so the text outlives every park `DispatchAsync` takes -
+    // and the *ordinary* verbs, because a participant's transaction is an
+    // ordinary local transaction (R6-2's whole argument). The async entry
+    // point rather than `Dispatch`, so the commit joins this core's group
+    // commit instead of taking an `fdatasync` on its reactor.
+    static constexpr std::string_view kCommit = "COMMIT";
+    static constexpr std::string_view kRollback = "ROLLBACK";
+    scheduler_.Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_.DispatchAsync(commit ? kCommit : kRollback, &context.session,
+                                  &context.decision_out),
+        [this, key](const Status&) { FinishDecision(key); }));
+}
+
+void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
+    auto it = enrolled_.find(key);
+    if (it == enrolled_.end()) return;  // unreachable: one completion per decide
+    Enrolled& context = *it->second;
+    context.phase_running = false;
+    const bool was_prepared = context.prepared;
+    const bool commit = context.decision_commits;
+    Txn2pcServer::ReplyFn reply = std::move(context.decision_reply);
+
+    // The rendered line back into a code, `Finish`'s rule: an error line
+    // carries its message in the status, and a success's line is the
+    // transaction's own `COMMIT trx_id=...`, which the coordinator has no
+    // use for - what it needs is the code.
+    Status status = StatusFromErrorReply(context.decision_out.response);
+
+    if (status.ok()) {
+        if (commit) {
+            ++decides_committed_;
+        } else {
+            ++decides_aborted_;
+        }
+        if (was_prepared && in_doubt_ > 0) --in_doubt_;
+        enrolled_.erase(it);
+        if (reply) reply(Status::OK());
+        return;
+    }
+
+    // The decided end refused. On the abort arm that is bad and bounded -
+    // the transaction stays open here and the sweep will try again. On the
+    // **commit** arm it is the worst outcome this protocol has: the
+    // coordinator's decision is durable, and this core has not applied it.
+    // `HandleCommit`'s own failure path has already rolled the transaction
+    // back by the time it answers, so nothing is left to retry - all this
+    // can do is say so, in a code the coordinator counts and a line an
+    // operator can find.
+    ++decide_refusals_;
+    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("2pc", "core " + std::to_string(core_id_) + " could not " +
+                               (commit ? "commit" : "roll back") + " core " +
+                               std::to_string(key.first) + "'s session " +
+                               std::to_string(key.second) +
+                               " cross-owner transaction: " + status.message());
+    }
+    if (!context.session.in_explicit_txn()) {
+        // Whatever it answered, the transaction is over: the context must
+        // not be left standing as one, for `Finish`'s reason - the next
+        // statement would run outside any transaction while the coordinator
+        // believed otherwise.
+        if (was_prepared && in_doubt_ > 0) --in_doubt_;
+        enrolled_.erase(it);
+    }
+    if (reply) reply(status);
+}
+
 void ShippedStatementExecutor::ExpireEnrolled() {
     // Before the clock read: on every live path today this map is empty,
     // and this runs on every core's drain tick.
     if (enrolled_.empty()) return;
     const sched::MonoTimeNs now = clock_.Now();
     for (auto it = enrolled_.begin(); it != enrolled_.end();) {
+        // **A prepared context is not the sweep's** (R6-3, D4): this core
+        // promised not to abort it unilaterally, and the ceiling that
+        // applies to it is D5's in-doubt resolution, not this one. The
+        // number of contexts this passes over is `in_doubt()`.
+        if (it->second->prepared) {
+            ++it;
+            continue;
+        }
         // A statement still running on this context keeps it, whatever the
         // clock says: rolling back under a live statement would pull the
         // session out from a coroutine that holds a pointer into it - the
-        // deferral `TcpServer::CloseClient` makes for the same reason.
-        const bool busy = running_.find(it->first) != running_.end();
+        // deferral `TcpServer::CloseClient` makes for the same reason. A
+        // phase in flight (a prepare reaching the device) holds it for the
+        // same reason and is the same hazard.
+        const bool busy =
+            it->second->phase_running || running_.find(it->first) != running_.end();
         if (busy || now - it->second->touched_at_ns < kShippedTxnIdleCeilingNs) {
             ++it;
             continue;
@@ -376,9 +736,28 @@ void ShippedStatementExecutor::ExpireEnrolled() {
 }
 
 void ShippedStatementExecutor::RollbackAllEnrolled() {
-    while (!enrolled_.empty()) {
-        EndEnrolled(enrolled_.begin(),
-                    "this core is stopping and can no longer answer for it");
+    for (auto it = enrolled_.begin(); it != enrolled_.end();) {
+        if (it->second->prepared) {
+            // **D4 outranks the shutdown.** A rollback here would append
+            // TXN_ABORT for a transaction the coordinator may already have
+            // committed in its own stream, and that disagreement is
+            // durable - the one outcome two-phase commit exists to prevent.
+            // Left instead: the PREPARE record stands, the next mount finds
+            // it undecided (R6-4), and the horizon this pins dies with the
+            // process anyway.
+            ++left_in_doubt_at_stop_;
+            if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+                log_->Warn("2pc", "core " + std::to_string(core_id_) +
+                                      " is stopping with core " + std::to_string(it->first.first) +
+                                      "'s session " + std::to_string(it->first.second) +
+                                      " prepared and undecided; it is left in doubt rather "
+                                      "than rolled back, and resolves at the next mount");
+            }
+            ++it;
+            continue;
+        }
+        auto doomed = it++;
+        EndEnrolled(doomed, "this core is stopping and can no longer answer for it");
     }
 }
 

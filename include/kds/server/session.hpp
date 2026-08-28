@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 #include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
@@ -104,8 +105,11 @@ public:
         state_ = State::kIdle;
         // The home core belongs to the transaction, not the connection: the
         // next one is free to write wherever it likes, and carrying the
-        // binding forward would restrict it for no reason.
+        // binding forward would restrict it for no reason. The participant
+        // list is the same fact one level out (R6-3): the cores this
+        // transaction enrolled are not the next one's.
         home_core_ = kUnbound;
+        participants_.clear();
         return ended;
     }
 
@@ -163,6 +167,36 @@ public:
     bool shipped() const noexcept { return shipped_; }
     void mark_shipped() noexcept { shipped_ = true; }
 
+    // ---- Cross-owner participants (R6-3, D1) ---------------------------
+    //
+    // **The cores this transaction has enrolled as participants**, in the
+    // order it discovered them - D1's "participants are relation owners,
+    // discovered as the transaction runs rather than declared up front". A
+    // transaction becomes cross-owner at the moment its second owner is
+    // touched, and this vector is empty until then, which is what makes the
+    // fast path a test on `empty()` rather than a lookup.
+    //
+    // Not the home core, and not a replacement for it: `home_core_` is
+    // where *this* core's half of the transaction lives, and these are the
+    // other cores' halves. A one-owner transaction has a home and no
+    // participants, and takes the single-core path unchanged.
+    //
+    // Cleared by `Finish()` with the transaction, for `home_core_`'s
+    // reason: an enrolment belongs to the transaction that opened it, and a
+    // list carried into the next one would prepare cores that transaction
+    // never touched.
+    const std::vector<std::uint32_t>& participants() const noexcept { return participants_; }
+    bool has_participants() const noexcept { return !participants_.empty(); }
+
+    // Idempotent: a transaction that ships four statements to one owner has
+    // one participant, and prepares it once.
+    void EnrolParticipant(std::uint32_t core_id) {
+        for (std::uint32_t core : participants_) {
+            if (core == core_id) return;
+        }
+        participants_.push_back(core_id);
+    }
+
     // Which commands a poisoned session still answers (section 10-8).
     // Deliberately a whitelist rather than a blacklist: a new statement
     // must be refused inside a failed transaction by default, and admitting
@@ -196,6 +230,11 @@ private:
     std::uint64_t ship_id_ = 0;
     std::uint64_t ship_sequence_ = 0;
     bool shipped_ = false;
+    // R6-3. A vector rather than a set: the count is bounded by the core
+    // count, which is small, and the discovery order is worth keeping - it
+    // is the order the prepare messages go out in and the order a log line
+    // names them in.
+    std::vector<std::uint32_t> participants_;
 };
 
 }  // namespace kds::server

@@ -119,6 +119,14 @@ Status WalManager::Sync() {
                                std::to_string(pending_group_commits_));
     }
 
+    // R6-3's parked non-committer, resolved on the same sync: the request
+    // is cleared once the record it named is on the platter, so an idle
+    // drain goes back to doing nothing.
+    if (durability_requested_ && IsDurable(requested_durable_lsn_)) {
+        durability_requested_ = false;
+        requested_durable_lsn_ = 0;
+    }
+
     // Group commit: one sync past the last staged commit record resolves
     // every commit in the batch, which is the whole mechanism.
     if (pending_group_commits_ > 0 && IsDurable(highest_group_commit_lsn_)) {
@@ -214,9 +222,12 @@ Status WalManager::DrainOnce() {
     if (appended_lsn() == durable_lsn()) {
         return Status::OK();  // nothing to do; a tick must be free
     }
-    if (pending_group_commits_ > 0) {
+    if (pending_group_commits_ > 0 ||
+        (durability_requested_ && !IsDurable(requested_durable_lsn_))) {
         // Someone is parked on this. Performed here, on the reactor, for
-        // the reason Sync() gives: a waiter pays for a hand-off.
+        // the reason Sync() gives: a waiter pays for a hand-off. The
+        // second disjunct is R6-3's prepare - a record nobody committed
+        // and somebody is waiting on (RequestDurable).
         return Sync();
     }
 

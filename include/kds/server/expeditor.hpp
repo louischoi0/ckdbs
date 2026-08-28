@@ -693,6 +693,10 @@ private:
     std::optional<ShippedStatementExecutor> shipped_executor_;
     std::optional<StatementShipServer> statement_ship_server_;
     std::optional<StatementShipClient> statement_ship_client_;
+    // R6-3's two halves, declared and destroyed on the same terms: the
+    // participant transport holds the executor's seams.
+    std::optional<Txn2pcServer> txn_2pc_server_;
+    std::optional<Txn2pcClient> txn_2pc_client_;
 
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 

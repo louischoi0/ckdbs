@@ -4,26 +4,13 @@
 #include <utility>
 
 #include "kds/sched/send_retry.hpp"
+// `Utf8PrefixLen` lived here until R6-3 gave it its second caller (the
+// participant reply's message), which is the condition R6-1's header set
+// for the hoist.
+#include "kds/server/utf8_prefix.hpp"
 
 namespace kds::server {
 namespace {
-
-// The longest prefix of `text` that fits in `cap` bytes **and does not end
-// inside a UTF-8 sequence**. The newline protocol's strings are UTF-8
-// (docs/spec/protocol.md §2) and at least one client decodes them strictly
-// (tools/multicore_benchmark.py, the driver this version is measured with),
-// so a message cut through a multi-byte character - engine messages carry
-// '§' routinely - would reach that client as a decode error rather than as
-// the shortened diagnostic it is meant to be.
-std::size_t Utf8PrefixLen(std::string_view text, std::size_t cap) noexcept {
-    if (text.size() <= cap) return text.size();
-    // `cap` is the first *dropped* byte. While that byte is a continuation
-    // (10xxxxxx) the cut lands mid-character, so step back until the byte
-    // after the cut starts one.
-    std::size_t len = cap;
-    while (len > 0 && (static_cast<unsigned char>(text[len]) & 0xC0) == 0x80) --len;
-    return len;
-}
 
 // The one refusal that means "the statement ran and its answer cannot be
 // carried" - written once because it is produced twice, from the encode and
