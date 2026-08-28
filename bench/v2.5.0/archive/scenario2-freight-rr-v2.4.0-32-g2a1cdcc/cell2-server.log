@@ -1,0 +1,92 @@
+1787913527 INFO [expeditor] opening database '/home/ubuntu/kds-rr-s2/cell2/s2.db', wal dir '/home/ubuntu/kds-rr-s2/cell2/s2.db.wal'
+1787913527 INFO [bootstrap] no superblock found; creating a fresh database (version 16, inline_cell_width 64, cores 4)
+1787913527 INFO [catalog] bootstrapped 12 system tables and 13 types on the fixed catalog pages
+1787913527 INFO [wal] writer thread started; syncs leave the reactor from here on
+1787913527 INFO [recovery] core 0: stream holds no records, nothing to recover
+1787913527 INFO [recovery] post-recovery catalog audit: 0 relation(s) checked, all openable
+1787913527 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4360 segment=0
+1787913527 INFO [recovery] core 0: completion checkpoint at lsn 4096, the next recovery starts at 4096 (15 page(s) flushed)
+1787913527 INFO [expeditor] INSERT durability group, isolation read committed
+1787913527 INFO [expeditor] database ready: 16 pages, superblock version 16
+1787913527 INFO [recovery] core 1: stream holds no records, nothing to recover
+1787913527 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0
+1787913527 INFO [recovery] core 1: completion checkpoint at lsn 4096, the next recovery starts at 4096 (0 page(s) flushed)
+1787913528 INFO [recovery] core 2: stream holds no records, nothing to recover
+1787913528 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0
+1787913528 INFO [recovery] core 2: completion checkpoint at lsn 4096, the next recovery starts at 4096 (0 page(s) flushed)
+1787913528 INFO [recovery] core 3: stream holds no records, nothing to recover
+1787913528 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0
+1787913528 INFO [recovery] core 3: completion checkpoint at lsn 4096, the next recovery starts at 4096 (0 page(s) flushed)
+1787913528 INFO [expeditor] running 4 cores; core 0 serves every statement until the per-core catalog cache exists (workplan P6)
+1787913528 INFO [expeditor] checkpoint cadence 5000ms
+1787913528 INFO [expeditor] cabin optimizer cadence 10000ms, switch off
+1787913528 INFO [expeditor] listening on 127.0.0.1:23301
+1787913528 INFO [core] core 2 reactor running
+1787913528 INFO [core] core 1 reactor running
+1787913528 INFO [core] core 3 reactor running
+1787913533 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4176 redo_start=4176 durable_lsn=4256 segment=0
+1787913533 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=4176 redo_start=4176 durable_lsn=4256 segment=0
+1787913533 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4176 redo_start=4176 durable_lsn=4256 segment=0
+1787913533 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4360 redo_start=4360 durable_lsn=4440 segment=0
+1787913535 INFO [ddl] created table 'organizations_103855' oid=4000 columns=11
+1787913535 INFO [ddl] created table 'ships_103855' oid=4012 columns=11
+1787913535 INFO [ddl] created table 'operations_103855' oid=4024 columns=9
+1787913535 INFO [ddl] created table 'cargos_103855' oid=4034 columns=10
+1787913535 INFO [ddl] created table 'fees_103855' oid=4045 columns=7
+1787913535 INFO [ddl] created table 'recipes_103855' oid=4053 columns=7
+1787913535 INFO [ddl] created table 'freights_103855' oid=4061 columns=8
+1787913535 INFO [ddl] created table 'charges_103855' oid=4070 columns=5
+1787913535 WARN [query] "INSERT INTO organizations_103855 VALUES ('ORG000000', 'org000000', 1, 2, 21750000, 0, 0, 'ops000000@example.test', 18425, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4000 is spent; retry after the refill grant lands in 117us
+1787913535 WARN [query] "INSERT INTO ships_103855 VALUES ('IMO9000000', 'vessel00000', 5, 4483143, 144348, 2020, 'JP', 0, 16, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4012 is spent; retry after the refill grant lands in 77us
+1787913535 WARN [query] "INSERT INTO operations_103855 VALUES (2, 20, 2, 20594, 20634, 0, 0, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4024 is spent; retry after the refill grant lands in 77us
+1787913535 WARN [query] "INSERT INTO fees_103855 VALUES ('terminal-handling', 101, 1, 1450, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4045 is spent; retry after the refill grant lands in 47us
+1787913535 WARN [query] "INSERT INTO fees_103855 VALUES ('bunker-adjustment', 102, 1, 900, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4045 is spent; retry after the refill grant lands in 14us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, -1, 2, 2, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 43us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, -1, 8, 3, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 3us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, 36, 1, 4, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 3us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, 155, 1, 5, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 3us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, 78, 1, 6, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, 453, 1, 7, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, 330, 1, 8, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (0, 159, 1, 9, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (1, -1, 2, 2, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (1, -1, 8, 3, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (1, -1, 3, 4, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (1, -1, 10, 5, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (1, 36, 1, 6, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (1, 155, 1, 7, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 2us
+1787913535 WARN [query] "INSERT INTO recipes_103855 VALUES (1, 78, 1, 8, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 3us
+1787913535 WARN [query] "INSERT INTO cargos_103855 VALUES (4, 6, 21821, 156000, 0, 136320291, 15, 16, 20610)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 52us
+1787913536 INFO [btree] table oid 4034 grew a level; root is now page 132
+1787913536 WARN [query] "INSERT INTO freights_103855 VALUES (13, 4, 16, 137000, 2826, 20454, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4061 is spent; retry after the refill grant lands in 9us
+1787913536 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 3, transaction 12632)
+1787913536 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 3, transaction 12632)
+1787913536 WARN [query] "INSERT INTO freights_103855 VALUES (1, 2, 16, 137000, 2221, 20454, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4061 is spent; retry after the refill grant lands in 4us
+1787913536 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 4, transaction 12633)
+1787913536 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 4, transaction 12633)
+1787913536 WARN [query] "INSERT INTO charges_103855 VALUES (1, 2, 4500, 20454)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4070 is spent; retry after the refill grant lands in 28us
+1787913536 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 5, transaction 12634)
+1787913536 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 5, transaction 12634)
+1787913536 WARN [2pc] a participant's answer from core 2 arrived after its phase settled (session 5, transaction 12634)
+1787913536 WARN [query] "INSERT INTO charges_103855 VALUES (2, 2, 4500, 20454)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4070 is spent; retry after the refill grant lands in 11us
+1787913536 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 6, transaction 12635)
+1787913536 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 6, transaction 12635)
+1787913536 WARN [2pc] a participant's answer from core 2 arrived after its phase settled (session 6, transaction 12635)
+1787913536 WARN [query] "INSERT INTO charges_103855 VALUES (3, 2, 4500, 20454)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4070 is spent; retry after the refill grant lands in 5us
+1787913536 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 7, transaction 12636)
+1787913536 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 7, transaction 12636)
+1787913536 WARN [2pc] a participant's answer from core 2 arrived after its phase settled (session 7, transaction 12636)
+1787913538 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=172896 redo_start=4632 durable_lsn=173072 segment=0
+1787913538 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=60168 redo_start=4512 durable_lsn=60296 segment=0
+1787913538 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=82000 redo_start=4672 durable_lsn=82168 segment=0
+1787913538 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=64424 redo_start=35112 durable_lsn=64520 segment=0
+1787913542 INFO [client] STOP from fd=19; shutting the server down
+1787913542 INFO [expeditor] stopping
+1787913542 INFO [core] core 1 reactor stopped
+1787913542 INFO [core] core 3 reactor stopped
+1787913542 INFO [core] core 2 reactor stopped
+1787913543 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=173072 redo_start=173072 durable_lsn=173152 segment=0
+1787913543 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=82168 redo_start=82168 durable_lsn=82248 segment=0
+1787913543 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=60296 redo_start=60296 durable_lsn=60376 segment=0
+1787913543 INFO [expeditor] stopped cleanly; 229 pages persisted
+1787913543 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=64520 redo_start=64520 durable_lsn=64600 segment=0

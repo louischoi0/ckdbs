@@ -156,8 +156,8 @@ this workplan means the v2.4.0 path.
 | **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured |
 | **RR0** | **The watermark (D3), and the join rule** | **Built 2026-08-28**, `acbd6b5` |
 | **RR1** | **The read half of enrolment** | **Built 2026-08-28**, `acbd6b5`, same commit as RR0 |
-| RR2 | The ceiling sweep, and CR3 | — |
-| RR3 | B5 re-run, and CR4 | — |
+| RR2 | The ceiling sweep, and CR3 | **Run 2026-08-28**, `2a1cdcc`. `bench/v2.5.0/results-rr-read-half-v2.4.0-32-g2a1cdcc.md`. HR4 holds; **CR3's second axis does not bind**, and that is the finding |
+| RR3 | B5 re-run, and CR4 | **Run 2026-08-28**, `2a1cdcc`, same file. **CR4 = 100%**, from RP8's zero. HR1's falsifier fires; HR5 is neither confirmed nor ruled out |
 | RR4 | R6-9 — the spec | **Written 2026-08-28**, `acbd6b5`: `docs/spec/cross-owner-txn.md` is new; `crosscore.md`, `wal.md` §3/§11-3/§15 and `client-manual.md` amended. The ceiling paragraph is owed RR2's number |
 | RR5 | The two RP8 debts | **Paid 2026-08-28**, `acbd6b5`: `bench/docs/README.md`'s cross-owner entry, and the per-leg timer gap recorded at `observability.md` §8a beside M3's |
 | RP8 | R6-B cells B1-B5 | **Run 2026-08-28**, `53f6aae`. `bench/v2.5.0/results-r6b-cross-owner-cost-v2.4.0-28-g53f6aae.md`. D7's ~2x holds, HP1 holds, HP2's falsifier does not fire; B5 structurally blocked |
@@ -2565,6 +2565,126 @@ vector parallel to `participants_` to drop a duplicated key column.
 Rejected: parallel vectors are the smell this codebase avoids, and the
 saving is a linear scan over a list whose length is the participant count.
 
+## RR2 and RR3 — the cells, and the three conclusions they settle
+
+Measured on `v2.5.0-crosscore-protocol-3` at `2a1cdcc`
+(`v2.4.0-32-g2a1cdcc`), `build-release`, interleaved, one sitting. Every
+number, its per-rep spread, its host and its caveats live in
+`bench/v2.5.0/results-rr-read-half-v2.4.0-32-g2a1cdcc.md`; this is the
+rows' summary and the four conclusions the order named. **Overhead A/B not
+run** (operator suspension, 2026-08-24), and **RP7's matrix is not this
+row's** — it is re-run by the developer at head, below.
+
+### CR4 — the line's product metric, and it is 100%
+
+**RP8's B5 was zero because a read was refused. It is now 100/100.** The
+same driver, the same parameters, the same deployment shape RP8 documented:
+`scenario2_freight` with `--txn`, whose booking transaction opens with a
+foreign `cargo-lookup` read that used to refuse every attempt. 100 bookings
+committed at 244-265 TPS, 82 invariant checks and 0 failures, and every
+committed booking is a genuine multi-participant cross-owner transaction —
+confirmed from the server's own `[2pc]` log naming two and three distinct
+participant cores per booking, not inferred from the absence of a refusal.
+**Under this deployment shape the two-phase fraction of a committed booking
+workload is 100%.**
+
+**RP8's §9 caveat holds unchanged and is restated rather than re-derived**:
+`peer_listeners=off` puts the client on core 0 and `rotate` never assigns
+core 0, so the client is foreign to *every* relation. That is the
+**maximal** cross-owner shape and therefore the ceiling of what a
+deployment would see, not its floor. What no run yet measures is a shape
+between the two extremes.
+
+One new cost the number came with: **5% of read attempts retried**, and
+every conflict in both cells was on the *read* rather than on either of the
+booking's two writes — one booker hammering a 200-cargo pool, so most
+likely ordinary MVCC contention rather than anything the read half
+introduced, but it is new and it is the read half's own contribution.
+
+### CR1 — HR1's falsifier fires, and it fires on the route
+
+The order asked for the RC read's cost *"named at the site"*, and said that
+if the answer is more than one branch, that is a finding. It is more, and
+the finding is the one this row's own CR1 section predicted before the
+cells ran: **RR1 did not add a branch to the cheap path, it routed an
+enrolled read onto the expensive one.**
+
+An autocommit foreign read costs ~44-47 µs p50, flat from 200 to 10,000
+rows — the purpose-built single-hop pipeline reader. The identical read
+inside `BEGIN` costs **2.25x-9.08x** that on its `select_us` leg, because
+it falls through both pipeline gates and reaches `ShipStatement`: the same
+function, ring messaging, session mint, sequence number, dedup record and
+full round trip in each direction that a shipped *write* takes.
+
+**HR1's falsifier therefore fires, and the hypothesis was wrong for the
+right reason.** What buys the cost is the only thing that can answer the
+transaction's own uncommitted write on that owner — the participant's own
+transaction, which only the ship path can join.
+
+**And the read's own cost is the smaller half.** `rc.commit_us` p50 runs
+2,007-3,290 µs against `rc.select_us`'s 109-304 µs: a read-only participant
+pays a **full cross-owner decide** at `COMMIT`, 7-30x what the read itself
+cost. The read-only-participant reply is what would remove it, and it is
+out of scope by §1 — but this is the number that says what it would be
+worth, which is what the R1/R2 cells existed to produce.
+
+### CR3 — the ceiling is chosen on one axis, because only one binds
+
+RP2's review made the in-doubt ceiling bound two things, and the order said
+a ceiling chosen on latency alone is chosen on half the evidence. **Swept,
+both axes, and the second does not move with the knob at all.**
+
+- **R3, the writer stall**: p0 tracks the configured ceiling closely (1.04-1.09
+  ms at 1 ms, 5.4-5.7 ms at 5 ms), p50/p99 run 2-6x higher under load — most
+  likely reactor queueing on the shared core, and **unconfirmed, because no
+  per-leg timer exists** (`observability.md` §8a, the third instance).
+  At 20 ms and 200 ms the refusal essentially never fires: one stray event
+  in ~60,000 attempts, none in ~43,000. **HR4 holds; 200 ms stands,
+  unforced.**
+- **R4, the log retained**: peak WAL bytes held per checkpoint tick is
+  99K-160K across *every* live ceiling and **103K-105K in the control where
+  no participant ever prepared**. Statistically indistinguishable. Ordinary
+  dirty-page checkpoint lag dominates completely.
+
+**So CR3's answer is not "the tighter of two bounds" but "one of the two is
+not a bound here".** The checkpoint floor is real in source and does hold
+the log back; what it is *not* is sensitive to `in_doubt_ceiling_ms`. What
+actually bounds a prepared transaction's duration, and so the log it can
+pin, is `kTxnPhaseDeadlineNs` (10 s — the coordinator's own prepare-phase
+deadline, ten times the ceiling and independent of it) where the
+coordinator is alive but slow, and **the next mount** where it is not.
+Neither is the knob RP2's review pointed at. A smaller
+`in_doubt_ceiling_ms` would not shrink the log-retention exposure, which
+means the second axis sharpens the reason for 200 ms rather than arguing
+against it.
+
+### HR5 — neither confirmed nor ruled out, and said so
+
+The one-owner fast path against a same-sitting build of the pre-R6 tag
+reads **[1.063, 1.259]** across percentiles, against RP8's stated
+[0.929, 1.031]. That band was RP8's sitting's own noise floor rather than a
+constant, and **this sitting's floor is wider** — `now`'s own repeated cell
+spreads 83.8% at p50 (31.9% excluding one anomalous round), above the
+6.3-25.9% delta the table reports. Read against this run's floor the ratio
+is inside the noise; read against `pre`'s narrower floor (18.3%) it is
+outside at three of five percentiles.
+
+Both readings are recorded because the honest answer is between them:
+excluding the anomalous round, `now` was at or above `pre` on **every one
+of the remaining six rounds** at p50, never below 1.0 — a consistent
+direction across independent samples, none of which clears its own noise
+band alone. **A plausible small cost, not ruled out and not confirmed**,
+and the first row in six where the fast path's freedom is not cleanly
+demonstrated. A cleaner answer needs more rounds or the anomalous round's
+cause understood, and neither was in this order.
+
+What the numbers do not contradict is the structural argument: RR0 and RR1
+touch no line a one-owner transaction reaches — `MayEnrolShip` is false
+without a 2PC client, the two pipeline gates ask it **last** so a local
+read never does, and `ShipStatement`, `FinishShippedStatement` and the
+watermark are all on the shipped path. That is an argument, not a
+measurement, and it is offered as the former.
+
 ## Open, carried from the work order
 
 - **D1–D7 are ratified** (2026-08-28) and so are both `[OPEN]`s
@@ -2574,7 +2694,8 @@ saving is a linear scan over a list whose length is the participant count.
   its non-`UnknownOutcome` refusal, R6-5's sizing of the in-doubt ask,
   R6-9's two doc sentences, and B1's p50-and-p99 reporting.
 - ~~**The two-phase path is unreachable from any scenario in this tree, and
-  the blocker is a *read***~~ (RP8's B5) — **closed by RR1**, `acbd6b5`.
+  the blocker is a *read***~~ (RP8's B5) — **closed by RR1**, `acbd6b5`,
+  and **measured at 100/100 committed** by RR3 at `2a1cdcc`.
   The refusal was narrower than "unconditional": the read site tested
   `MayShip` alone, which requires `!in_explicit_txn()`, so a foreign read
   *inside* a transaction fell through to `CheckReadAffinity` while the
@@ -2590,10 +2711,21 @@ saving is a linear scan over a list whose length is the participant count.
   until it is lifted the honest reading of "reads cross" is *reads of
   bounded answers cross*.
 - **A read-only participant is prepared like any other** — a `TXN_PREPARE`
-  and an `fdatasync` on a core that only read. The standard remedy is a
-  read-only reply on the existing prepare leg, which is a new *answer*
+  and an `fdatasync` on a core that only read — and RR3 priced it: the
+  decide costs **7-30x the read that enrolled it**, which makes this the
+  largest single number the read half leaves on the table. The standard
+  remedy is a read-only reply on the existing prepare leg, a new *answer*
   rather than a fourth phase, but it changes `AllPrepared()` and what
   recovery expects. Out of this order's scope by §1, handed on named.
+- **HR5 is not cleanly answered**, and it is the first row in six where the
+  one-owner fast path's freedom is not demonstrated: [1.063, 1.259] against
+  RP8's [0.929, 1.031], inside this sitting's own wider noise floor but
+  consistently in one direction across six of seven rounds. Neither
+  confirmed nor ruled out, and it wants either more rounds or the
+  anomalous round's cause before it is called either way.
+- **No per-leg server-side timer**, for the third time (`observability.md`
+  §8a). It blocked RP8's attribution of the three sequential syncs, and it
+  blocks RR2's attribution of why R3's p50/p99 run 2-6x its p0.
 - **`wal.md` §3's second `[OPEN]` is answered** (CP1, R6-4's section above):
   a core-count change is already refused at the door by the superblock's
   pinned `core_count`, so recovery never meets a prepare from a stream it

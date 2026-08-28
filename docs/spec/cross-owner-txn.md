@@ -77,10 +77,18 @@ workload, because a booking or ordering transaction reads before it writes.
 **A read enrols, and it must.** A transaction that wrote a row on a peer
 and then reads that relation has to see its own uncommitted write; only
 that peer's own transaction can show it, and nothing the coordinator holds
-can supply it. The consequence is stated rather than hidden: a core that
-only *read* becomes a full participant and is prepared with a durable
-record at commit. The read-only-participant reply that would avoid it is a
-new answer on an existing leg, not built.
+can supply it.
+
+**What that costs, measured** (2026-08-28,
+`bench/v2.5.0/results-rr-read-half-*.md` §5): the read itself costs
+2.25x-9.08x an autocommit foreign read, because an enrolling session falls
+through both remote-read fast paths and takes the general shipping route
+rather than the purpose-built single-hop reader — a change of route, not a
+branch added to a path. And the larger half is not the read: a core that
+only *read* becomes a full participant and pays a **full cross-owner
+decide** at commit, 7-30x what the read cost. The read-only-participant
+reply that would remove it is a new answer on an existing leg, not built,
+and that ratio is what says what it would be worth.
 
 **What still does not ship**, each a scope statement:
 
@@ -298,7 +306,7 @@ has no such bound.
 
 | name | where | what bounds it |
 |---|---|---|
-| `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` | **Two axes**: how long a writer of an in-doubt row stalls, and **how much log cannot be truncated**, since a prepared transaction floors the checkpoint's redo start (§2c). Chosen against whichever binds first |
+| `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` = 200 ms | **The writer's stall, and only that.** Swept 2026-08-28 against both axes it was proposed to answer to (`bench/v2.5.0/results-rr-read-half-*.md` §7-§9). Stall tracks the knob — p0 within a few percent of the configured value — and at 200 ms the refusal fired once in ~60,000 attempts. **Log retention does not track it at all**: peak WAL held per checkpoint tick was indistinguishable from a control where nothing ever prepared. The floor in §2c is real and does hold the log back; what bounds *how long* is `kTxnPhaseDeadlineNs` where the coordinator is alive but slow, and the next mount where it is not — neither of which this knob moves |
 | `kShippedTxnIdleCeilingNs` | `shipped_statement_executor.hpp`, 300 s | How long an abandoned participant context is held before it is rolled back. Deliberately far above the statement deadline: nothing on a healthy path reaches it |
 | `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is one of `txn::kMaxTrackedLiveTxns`, which local clients share — so without it a coordinator storm would refuse an unrelated connection's `BEGIN` with nothing naming the cause |
 | wire sizing | `txn_2pc_service.hpp` | 24 bytes per request leg, 256 for the participant reply, against a 1,024-byte ring slot — asserted against `kCoreRingPayloadBytes`, never the literal (D6) |

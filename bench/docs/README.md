@@ -900,6 +900,77 @@ instrument gap blocked an attribution — `shipped_statement_us` was the
 first, at M3 — and both belong to the observability subsystem rather than
 to either driver.
 
+### The R6-R read-half probes (RR2, 2026-08-28)
+
+Two more drivers, added when RR1 widened the read site (`HandleSelect`) to
+enrol and ship a foreign read inside an explicit transaction instead of
+refusing it — the change that made a read-then-write booking transaction
+reach the two-phase path at all (RP8's B5 blocker, closed here).
+
+`bench/txn_shipped_read_probe.py` — **what a cross-owner read costs.**
+Three arms, one point-lookup shape (`SELECT * FROM rt WHERE id = <i>` on a
+BTREE relation owned by a peer): `autocommit` (no `BEGIN` — `MayEnrolShip`
+is false, so the old single-step remote-read pipeline answers it), `rc`
+(`BEGIN`; `SELECT`; `COMMIT` at the session's default READ COMMITTED — the
+read now ships and enrols, and the `COMMIT` pays a cross-owner decide even
+though nothing was written), and `rr` (identical with `BEGIN ISOLATION
+LEVEL RR`, so D3's per-participant watermark rides the reply). Every leg is
+timed separately (`begin_us`/`select_us`/`commit_us`/`total_us`), because
+`select_us` alone is what answers "what does the read statement itself
+cost" without the 2PC commit folded in. Every reply is content-checked
+against what was seeded, not merely absence-of-`ERR` — `rows_match` in the
+JSON is the fraction that returned the exact seeded row. `--rows` sweeps
+rule 9's three sizes (a point lookup is not expected to scale with it, and
+the sweep is the evidence for that rather than an assumption of it).
+
+```bash
+python3 bench/txn_shipped_read_probe.py --arm rc --rows 1000 \
+    --reps 5 --txns 200 --server build-release/kds_server --json out.json
+```
+
+`bench/run_read_probe.sh <outdir> [reps] [txns] [rowsizes...]` interleaves
+the three arms at every row size, one process per arm per size, for the
+same drift-attribution reason `run_2pc_cost.sh` gives.
+
+`bench/txn_indoubt_ceiling_probe.py` — **`in_doubt_ceiling_ms` swept
+against both axes a prepared transaction's floor touches: a writer's stall
+(D5's bounded wait, `command_dispatcher.cpp`'s `in_doubt_block` loop) and
+how many bytes of WAL a checkpoint cannot truncate
+(`Checkpointer::Start`'s `OldestPreparedLsn()` floor).** Two modes: `live`
+loops a genuine N-owner cross-owner transaction against one fixed row per
+table while a `racer` connection **seated on the first table's owner core**
+repeats a plain local `UPDATE` against that same row, timed and classified
+per attempt (succeeded / refused by D5's ceiling / refused for an ordinary
+write-write conflict); `control` does the same duration with the holder
+writing **locally**, never `BEGIN`, so no participant is ever prepared —
+the baseline for "what would redo_start be with nothing prepared". Every
+server runs `log_level = debug` and a short `checkpoint_interval_ms`, so
+every tick publishes a core-tagged anchor line
+(`anchor published: core=<N> checkpoint_lsn=... redo_start=... durable_lsn=...`);
+an LSN is a byte offset (`wal/record.hpp`), so `durable_lsn - redo_start`
+is bytes retained with no conversion, and the driver reports the **peak**
+over every tick during the run, not just the last one (the last tick
+undercounts systematically — every prepared transaction has long since
+decided by the time the holder and racer stop).
+
+```bash
+python3 bench/txn_indoubt_ceiling_probe.py --mode live --ceiling-ms 5 \
+    --participants 4 --duration 4 --server build-release/kds_server --json out.json
+python3 bench/txn_indoubt_ceiling_probe.py --mode control --duration 4 \
+    --server build-release/kds_server --json control.json
+```
+
+**Why this cannot be a kill −9 probe, unlike `txn_2pc_kill_matrix_probe.py`
+above.** A participant's own recovery reads its coordinator's
+already-durable stream at mount, before the instance serves a connection —
+so a transaction killed prepared resolves during the restart that would
+otherwise let a driver observe it live, and never sits in-doubt afterward.
+The only live window this engine ever produces is the ordinary one — the
+gap between a participant's own prepare-durability and its coordinator's
+decide — and this driver races a writer against exactly that natural
+window, at swept ceiling values that bracket it, rather than manufacturing
+a longer one.
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers

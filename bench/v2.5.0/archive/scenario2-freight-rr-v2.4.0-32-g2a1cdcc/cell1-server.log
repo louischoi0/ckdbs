@@ -1,0 +1,120 @@
+1787913451 INFO [expeditor] opening database '/home/ubuntu/kds-rr-s2/cell1/s2.db', wal dir '/home/ubuntu/kds-rr-s2/cell1/s2.db.wal'
+1787913451 INFO [bootstrap] no superblock found; creating a fresh database (version 16, inline_cell_width 64, cores 4)
+1787913451 INFO [catalog] bootstrapped 12 system tables and 13 types on the fixed catalog pages
+1787913452 INFO [wal] writer thread started; syncs leave the reactor from here on
+1787913452 INFO [recovery] core 0: stream holds no records, nothing to recover
+1787913452 INFO [recovery] post-recovery catalog audit: 0 relation(s) checked, all openable
+1787913452 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4360 segment=0
+1787913452 INFO [recovery] core 0: completion checkpoint at lsn 4096, the next recovery starts at 4096 (15 page(s) flushed)
+1787913452 INFO [expeditor] INSERT durability group, isolation read committed
+1787913452 INFO [expeditor] database ready: 16 pages, superblock version 16
+1787913452 INFO [recovery] core 1: stream holds no records, nothing to recover
+1787913452 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0
+1787913452 INFO [recovery] core 1: completion checkpoint at lsn 4096, the next recovery starts at 4096 (0 page(s) flushed)
+1787913452 INFO [recovery] core 2: stream holds no records, nothing to recover
+1787913452 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0
+1787913452 INFO [recovery] core 2: completion checkpoint at lsn 4096, the next recovery starts at 4096 (0 page(s) flushed)
+1787913453 INFO [recovery] core 3: stream holds no records, nothing to recover
+1787913453 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0
+1787913453 INFO [recovery] core 3: completion checkpoint at lsn 4096, the next recovery starts at 4096 (0 page(s) flushed)
+1787913453 INFO [core] core 1 reactor running
+1787913453 INFO [expeditor] running 4 cores; core 0 serves every statement until the per-core catalog cache exists (workplan P6)
+1787913453 INFO [expeditor] checkpoint cadence 5000ms
+1787913453 INFO [expeditor] cabin optimizer cadence 10000ms, switch off
+1787913453 INFO [expeditor] listening on 127.0.0.1:23300
+1787913453 INFO [core] core 2 reactor running
+1787913453 INFO [core] core 3 reactor running
+1787913458 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=4176 redo_start=4176 durable_lsn=4256 segment=0
+1787913458 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4176 redo_start=4176 durable_lsn=4256 segment=0
+1787913458 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4176 redo_start=4176 durable_lsn=4256 segment=0
+1787913458 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4360 redo_start=4360 durable_lsn=4440 segment=0
+1787913461 INFO [ddl] created table 'organizations_103741' oid=4000 columns=11
+1787913461 INFO [ddl] created table 'ships_103741' oid=4012 columns=11
+1787913461 INFO [ddl] created table 'operations_103741' oid=4024 columns=9
+1787913461 INFO [ddl] created table 'cargos_103741' oid=4034 columns=10
+1787913461 INFO [ddl] created table 'fees_103741' oid=4045 columns=7
+1787913461 INFO [ddl] created table 'recipes_103741' oid=4053 columns=7
+1787913461 INFO [ddl] created table 'freights_103741' oid=4061 columns=8
+1787913461 INFO [ddl] created table 'charges_103741' oid=4070 columns=5
+1787913461 WARN [query] "INSERT INTO organizations_103741 VALUES ('ORG000000', 'org000000', 1, 2, 21750000, 0, 0, 'ops000000@example.test', 18425, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4000 is spent; retry after the refill grant lands in 182us
+1787913461 WARN [query] "INSERT INTO organizations_103741 VALUES ('ORG000001', 'org000001', 7, 3, 21750000, 0, 1, 'ops000001@example.test', 20070, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4000 is spent; retry after the refill grant lands in 5us
+1787913461 WARN [query] "INSERT INTO ships_103741 VALUES ('IMO9000000', 'vessel00000', 5, 4483143, 144348, 2020, 'JP', 0, 16, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4012 is spent; retry after the refill grant lands in 84us
+1787913461 WARN [query] "INSERT INTO operations_103741 VALUES (2, 20, 2, 20594, 20634, 0, 0, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4024 is spent; retry after the refill grant lands in 68us
+1787913461 WARN [query] "INSERT INTO fees_103741 VALUES ('terminal-handling', 101, 1, 1450, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4045 is spent; retry after the refill grant lands in 47us
+1787913461 WARN [query] "INSERT INTO recipes_103741 VALUES (0, -1, 1, 1, 16804, 24104)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4053 is spent; retry after the refill grant lands in 65us
+1787913461 WARN [query] "INSERT INTO cargos_103741 VALUES (4, 6, 21821, 156000, 0, 136320291, 15, 16, 20610)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 41us
+1787913461 WARN [query] "INSERT INTO cargos_103741 VALUES (13, 4, 37419, 14000, 0, 43135051, 6, 17, 20488)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 5us
+1787913461 WARN [query] "INSERT INTO cargos_103741 VALUES (11, 6, 25353, 114000, 0, 72547564, 21, 1, 20594)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 2us
+1787913461 WARN [query] "INSERT INTO cargos_103741 VALUES (12, 7, 3147, 398000, 0, 143947360, 7, 10, 20475)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 2us
+1787913461 WARN [query] "INSERT INTO cargos_103741 VALUES (5, 2, 22273, 90000, 1, 145474308, 6, 15, 20607)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 2us
+1787913461 WARN [query] "INSERT INTO cargos_103741 VALUES (17, 4, 19585, 193000, 0, 91959779, 10, 14, 20514)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 2us
+1787913461 WARN [query] "INSERT INTO cargos_103741 VALUES (16, 2, 3064, 301000, 1, 148953697, 3, 14, 20558)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4034 is spent; retry after the refill grant lands in 3us
+1787913461 INFO [btree] table oid 4034 grew a level; root is now page 132
+1787913461 WARN [query] "INSERT INTO freights_103741 VALUES (9, 3, 16, 245000, 2117, 20454, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4061 is spent; retry after the refill grant lands in 11us
+1787913461 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 3, transaction 12640)
+1787913461 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 3, transaction 12640)
+1787913461 WARN [query] "INSERT INTO freights_103741 VALUES (9, 3, 16, 245000, 2499, 20454, 0)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4061 is spent; retry after the refill grant lands in 7us
+1787913461 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 4, transaction 12641)
+1787913461 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 4, transaction 12641)
+1787913461 WARN [query] "INSERT INTO charges_103741 VALUES (1, 1, 220500, 20454)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4070 is spent; retry after the refill grant lands in 33us
+1787913461 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 5, transaction 12642)
+1787913461 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 5, transaction 12642)
+1787913461 WARN [2pc] a participant's answer from core 2 arrived after its phase settled (session 5, transaction 12642)
+1787913461 WARN [query] "INSERT INTO charges_103741 VALUES (2, 1, 220500, 20454)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4070 is spent; retry after the refill grant lands in 11us
+1787913461 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 6, transaction 12643)
+1787913461 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 6, transaction 12643)
+1787913461 WARN [2pc] a participant's answer from core 2 arrived after its phase settled (session 6, transaction 12643)
+1787913461 WARN [query] "INSERT INTO charges_103741 VALUES (3, 1, 220500, 20454)" -> ERR TXN_CONFLICT retryable=1 row-id lease for relation oid 4070 is spent; retry after the refill grant lands in 3us
+1787913461 WARN [2pc] a participant's answer from core 1 arrived after its phase settled (session 7, transaction 12644)
+1787913461 WARN [2pc] a participant's answer from core 3 arrived after its phase settled (session 7, transaction 12644)
+1787913461 WARN [2pc] a participant's answer from core 2 arrived after its phase settled (session 7, transaction 12644)
+1787913463 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64376 redo_start=4512 durable_lsn=64504 segment=0
+1787913463 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=171376 redo_start=4696 durable_lsn=171552 segment=0
+1787913463 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124000 redo_start=4672 durable_lsn=124176 segment=0
+1787913463 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=64936 redo_start=35176 durable_lsn=65032 segment=0
+1787913468 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=171552 redo_start=171552 durable_lsn=171632 segment=0
+1787913468 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64504 redo_start=64504 durable_lsn=64584 segment=0
+1787913468 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124176 redo_start=124176 durable_lsn=124256 segment=0
+1787913468 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65032 redo_start=65032 durable_lsn=65112 segment=0
+1787913473 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=171632 redo_start=171632 durable_lsn=171712 segment=0
+1787913473 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64584 redo_start=64584 durable_lsn=64664 segment=0
+1787913473 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124256 redo_start=124256 durable_lsn=124336 segment=0
+1787913473 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65112 redo_start=65112 durable_lsn=65192 segment=0
+1787913478 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64664 redo_start=64664 durable_lsn=64744 segment=0
+1787913478 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=171712 redo_start=171712 durable_lsn=171792 segment=0
+1787913478 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124336 redo_start=124336 durable_lsn=124416 segment=0
+1787913478 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65192 redo_start=65192 durable_lsn=65272 segment=0
+1787913483 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64744 redo_start=64744 durable_lsn=64824 segment=0
+1787913483 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=171792 redo_start=171792 durable_lsn=171872 segment=0
+1787913483 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124416 redo_start=124416 durable_lsn=124496 segment=0
+1787913483 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65272 redo_start=65272 durable_lsn=65352 segment=0
+1787913488 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=171872 redo_start=171872 durable_lsn=171952 segment=0
+1787913488 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64824 redo_start=64824 durable_lsn=64904 segment=0
+1787913488 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124496 redo_start=124496 durable_lsn=124576 segment=0
+1787913488 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65352 redo_start=65352 durable_lsn=65432 segment=0
+1787913493 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64904 redo_start=64904 durable_lsn=64984 segment=0
+1787913493 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124576 redo_start=124576 durable_lsn=124656 segment=0
+1787913493 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=171952 redo_start=171952 durable_lsn=172032 segment=0
+1787913493 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65432 redo_start=65432 durable_lsn=65512 segment=0
+1787913498 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=64984 redo_start=64984 durable_lsn=65064 segment=0
+1787913498 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=172032 redo_start=172032 durable_lsn=172112 segment=0
+1787913498 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124656 redo_start=124656 durable_lsn=124736 segment=0
+1787913498 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65512 redo_start=65512 durable_lsn=65592 segment=0
+1787913503 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=65064 redo_start=65064 durable_lsn=65144 segment=0
+1787913503 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=172112 redo_start=172112 durable_lsn=172192 segment=0
+1787913503 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124736 redo_start=124736 durable_lsn=124816 segment=0
+1787913503 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65592 redo_start=65592 durable_lsn=65672 segment=0
+1787913508 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124816 redo_start=124816 durable_lsn=124896 segment=0
+1787913508 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=172192 redo_start=172192 durable_lsn=172272 segment=0
+1787913508 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=65144 redo_start=65144 durable_lsn=65224 segment=0
+1787913508 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65672 redo_start=65672 durable_lsn=65752 segment=0
+1787913509 INFO [client] STOP from fd=19; shutting the server down
+1787913509 INFO [expeditor] stopping
+1787913509 INFO [core] core 2 reactor stopped
+1787913509 INFO [core] core 1 reactor stopped
+1787913509 INFO [core] core 3 reactor stopped
+1787913511 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=172272 redo_start=172272 durable_lsn=172352 segment=0
+1787913511 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=124896 redo_start=124896 durable_lsn=124976 segment=0
+1787913511 INFO [checkpoint] anchor published: core=3 checkpoint_lsn=65224 redo_start=65224 durable_lsn=65304 segment=0
+1787913511 INFO [expeditor] stopped cleanly; 229 pages persisted
+1787913511 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=65752 redo_start=65752 durable_lsn=65832 segment=0
