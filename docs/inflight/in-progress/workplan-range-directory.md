@@ -537,7 +537,16 @@ RD2 wants D2, RD7 wants D4, and **D1 removes the btree half entirely** —
 it is `crosscore.md` §9's, not this plan's. D6 blocks nothing: once RD5
 is built, choosing it is a config value, not a rewrite.
 
----
+**The decision session happened, and the build is open again as of
+2026-08-28.** `instructions/v2.5.0/range-directory.md` is the work order
+that resumes this plan at RD2 — R3-B, drafted against `main` at `cefb0ef`,
+after the cross-owner line closed. It numbers the remaining rows **RB0-RB6**
+against this file's RD2-RD9, whose substance it leaves unchanged, and adds
+the layer this table does not carry: what the build must **conclude**
+(CD1-CD4), what it **predicts** (HD1-HD5), and what it **measures**.
+**D2, D4 and D6's starting value are taken there** and are §11 below;
+**D1 and D3 are not**, and D1 leaves the order's own measurement subject
+unrepresentative on purpose rather than by omission (its §7).
 
 ## 9. RD4 — the hypotheses, the C2 enumeration, the fifth gate, and C3's decision
 
@@ -1008,3 +1017,55 @@ RD5 as one swept constant either way (§2a).
   and `scenario2-freight-stale-ceiling-comment` is the fact noticed again
   during the census: `scenario2_freight.py:83-84` still says "~7,800"
   where M2 derived 7,616. Both stay open in cws, not here.
+
+---
+
+## 11. D2, D4 and D6 — taken 2026-08-28, and the reason each turns on
+
+Recorded here rather than in the order, because §4 is where this plan says
+what it does not decide and a reader who finds three of them decided needs
+the reasoning at the same place. The order
+(`instructions/v2.5.0/range-directory.md` §2) is the authority; this is the
+pointer with each decision's load-bearing sentence.
+
+**D2 — the directory row, not the anchor page.** Taken on **capacity**,
+which is a correction to the reason this plan carried. §10a priced the
+anchor's `index_oid == 0` collision at zero — `lo = 0` dissolves by
+identification and `lo > 0` costs one tagged constant — so **the collision
+cannot carry the decision**, and RD2's row above says "the collision is
+recorded as its reason", which is now wrong and is superseded here. What
+carries it: the anchor holds 679 `{u64 key, u32 root}` entries
+(`anchor_page.hpp:36-42`) **shared with index roots**, and one 10 M-row
+relation at D6's size needs ~2,441 ranges by itself. The anchor cannot hold
+one large relation's ranges, let alone several relations' plus their
+indexes.
+
+**D6 — `kRowIdLeasePerGrant` (4,096 ids) as the swept starting value.**
+Taken on a **mechanism**, not on §10b's table, which is heap-only and
+therefore silent about the relations that matter most. R4's tail-insert
+spreading is id-block-aligned and the block *is* `kRowIdLeasePerGrant`, so
+range = lease grant keeps a core inserting from its own lease inside one
+range **by construction**. The alternative unit, `kDefaultExtentPages` (64),
+does not divide the lease evenly at any bench width, so a sequential insert
+would periodically straddle a boundary and turn the commonest write in the
+engine into a cross-owner transaction — priced at 1.479x within one
+instance (`a02a666`). **HD2 is that mechanism's falsifier** and RD9(b) is
+the sweep; the final value is the operator's on those numbers.
+
+**D4 — fan-in identity in the pipeline tag.** §5's shape as written: the
+`sibling` field, plural `InputEdge`, grouped `pending_remote`, one
+`downstream_step` across siblings. Decided by the constraint SS1
+established and the cross-owner line reused twice — **a reply must be
+matched, not trusted** — so the tag has to distinguish siblings of one
+fan-in from each other, not merely from other statements.
+
+**Still not taken**: **D1** (the shared-structure access mechanism, and so
+the btree decline), which now has a third candidate recorded in the order's
+§7 — give each range its own tree rooted in the directory row's
+`entry_page`, removing the shared structure rather than accessing it — and
+which needs the operator rather than a bench, because unlike blueprint §8's
+two candidates it has nothing to measure. **D3** (range policy: split
+triggers, merge, migration), which is `physical-optimizer.md` Part III's
+and unwritten.
+
+---
