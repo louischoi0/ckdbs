@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "kds/server/role.hpp"
@@ -135,6 +136,7 @@ public:
         // `kShippedDedupMaxRecords`, whose early eviction is counted.
         if (!participants_.empty()) ship_id_ = 0;
         participants_.clear();
+        watermarks_.clear();
         return ended;
     }
 
@@ -222,10 +224,66 @@ public:
     // Idempotent: a transaction that ships four statements to one owner has
     // one participant, and prepares it once.
     void EnrolParticipant(std::uint32_t core_id) {
+        if (!HasParticipant(core_id)) participants_.push_back(core_id);
+    }
+
+    // **Whether this transaction has already shipped a statement to
+    // `core_id`** (RR0). What the wire's `join` bit is: true means the
+    // participant must already hold a context and may not open a second
+    // one. Read before `EnrolParticipant` records the ship, so the
+    // enrolling statement itself answers false.
+    bool HasParticipant(std::uint32_t core_id) const noexcept {
         for (std::uint32_t core : participants_) {
-            if (core == core_id) return;
+            if (core == core_id) return true;
         }
-        participants_.push_back(core_id);
+        return false;
+    }
+
+    // ---- RR0 / D3: the per-participant watermark ------------------------
+    //
+    // **What the coordinator carries.** One entry per participant that has
+    // reported a watermark, which under D3's ratified `[OPEN]` is the
+    // REPEATABLE READ participants and no others: an RC cross-owner
+    // transaction carries none, so this vector stays empty and the whole
+    // mechanism costs the default level nothing.
+    //
+    // The value is that core's `ReadView::up_to_trx_id`, and it is never
+    // compared with this core's or with another participant's. **The reason
+    // is not that the id spaces differ** - there is one instance-wide
+    // sequence, leased per core (`txn/trx_id_lease.hpp`) - it is that the
+    // quantity is a high-water mark over the ids *that core* has issued,
+    // plus its own in-flight set. Two of them are two cores' answers to
+    // "what had I handed out", so ordering them numerically orders nothing,
+    // and that is why D3's promise is a consistent snapshot *per core*
+    // rather than a global instant. The only comparison it takes part in is
+    // with itself, one reply later.
+    //
+    // Cleared with the transaction by `Finish()` above, for
+    // `participants_`'s reason: a watermark belongs to the transaction that
+    // observed it.
+    //
+    // Answers `true` when `watermark` is the value already held for
+    // `core_id`, or when nothing was held and it is now recorded. `false`
+    // means this participant's snapshot **moved under a transaction that
+    // was promised it would not** - which the caller turns into a refusal,
+    // because the two halves of the transaction have then read different
+    // states of one core and RR was not delivered.
+    bool NoteParticipantWatermark(std::uint32_t core_id, std::uint64_t watermark) {
+        for (auto& [core, held] : watermarks_) {
+            if (core != core_id) continue;
+            return held == watermark;
+        }
+        watermarks_.emplace_back(core_id, watermark);
+        return true;
+    }
+
+    // The watermark held for `core_id`, or 0 where none is - for tests and
+    // for anything that reports the transaction's shape.
+    std::uint64_t ParticipantWatermark(std::uint32_t core_id) const noexcept {
+        for (const auto& [core, held] : watermarks_) {
+            if (core == core_id) return held;
+        }
+        return 0;
     }
 
     // Which commands a poisoned session still answers (section 10-8).
@@ -266,6 +324,7 @@ private:
     // is the order the prepare messages go out in and the order a log line
     // names them in.
     std::vector<std::uint32_t> participants_;
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> watermarks_;
 };
 
 }  // namespace kds::server

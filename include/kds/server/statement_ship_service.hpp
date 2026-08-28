@@ -227,7 +227,31 @@ struct ShippedStatementRequestPayload {
     // level therefore gives a transaction the weaker promise while the
     // client was told the stronger one.
     std::uint8_t isolation;
-    std::uint8_t reserved0[2];
+    // **RR0: this statement may only *join* a transaction, never open one.**
+    //
+    // Set by the coordinator on every enrolled statement after the first it
+    // sent to this owner - which it knows from `Session::participants()`,
+    // the list it already keeps. 0 on the first, which is the enrolment.
+    //
+    // What it closes is a silent partial commit, not a tidiness gap. A
+    // participant's context is keyed on `(coordinator core, session_id)`
+    // and nothing else, and the idle ceiling
+    // (`kShippedTxnIdleCeilingNs`) rolls one back and **erases** it while
+    // the coordinator's transaction is still open. Without this bit the
+    // next statement of that same transaction found no context and opened
+    // a *fresh* one; prepare and commit then made the fresh half durable
+    // and the rolled-back half was gone, with nothing anywhere saying so.
+    // With it, the participant refuses instead, retryably, and the
+    // transaction ends as a whole.
+    //
+    // One byte rather than the coordinator's 8-byte transaction id, which
+    // is what would otherwise be needed to tell "re-enrolment" from "a new
+    // transaction on the same session": `Session::Finish()` already mints
+    // a fresh `ship_id` for every cross-owner transaction, so a key can
+    // only ever mean one transaction, and "have you got it" is all that is
+    // left to ask.
+    std::uint8_t join;
+    std::uint8_t reserved0[1];
     char text[kShippedStatementTextMax];  // not NUL-terminated; text_len bounds it
 };
 static_assert(sizeof(ShippedStatementRequestPayload) == sched::kCoreRingPayloadBytes,
@@ -251,9 +275,32 @@ inline constexpr std::size_t kShippedStatementReplyTextMax =
 struct ShippedStatementReplyPayload {
     std::uint64_t session_id;
     std::uint64_t sequence;
+    // **RR0 / D3: this participant's watermark for this transaction** - the
+    // `up_to_trx_id` of the read view its enrolled transaction pinned.
+    //
+    // Comparable with nothing on any other core, and **not because the id
+    // spaces differ**: there is one instance-wide trx-id sequence, leased
+    // per core. It is because the quantity is a high-water mark over the
+    // ids *this* core has issued plus its own in-flight set, so two of them
+    // are two cores' answers to a question about themselves and ordering
+    // them numerically orders nothing (`crosscore.md` §5's correction).
+    //
+    // Reported on an enrolled **REPEATABLE READ** statement only. D3's
+    // `[OPEN]` is ratified "yes, READ COMMITTED skips the watermark
+    // entirely", so an RC statement and every autocommit one leave this 0 -
+    // which is not a watermark, by the zero-collision rule every enum on
+    // this wire keeps: a real view's `up_to_trx_id` is at least
+    // `kFirstUserTrxId`.
+    //
+    // It rides the reply rather than a leg of its own (the order's HR2):
+    // the coordinator has observed nothing on a participant before that
+    // participant's first answer, so the first reply *is* the first
+    // observation, and every later one re-states a value that must not have
+    // moved.
+    std::uint64_t read_watermark;
     std::uint32_t status_code;
     std::uint16_t text_len;
-    std::uint8_t reserved0[10];
+    std::uint8_t reserved0[2];
     char text[kShippedStatementReplyTextMax];  // not NUL-terminated
 };
 static_assert(sizeof(ShippedStatementReplyPayload) == sched::kCoreRingPayloadBytes,
@@ -279,7 +326,7 @@ inline constexpr sched::MonoTimeNs kShippedStatementDeadlineNs = 10ull * 1'000'0
 StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(
     std::uint64_t session_id, std::uint64_t sequence, std::uint64_t target_oid, Role role,
     std::string_view text, bool retry = false, bool in_txn = false,
-    std::optional<txn::IsolationLevel> isolation = std::nullopt);
+    std::optional<txn::IsolationLevel> isolation = std::nullopt, bool join = false);
 
 // The isolation level a request states, or empty where it states none
 // (R6-8). **Refused rather than defaulted** when the byte names no level
@@ -295,7 +342,8 @@ StatusOr<std::optional<txn::IsolationLevel>> ShippedStatementIsolationOf(
 StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t session_id,
                                                                std::uint64_t sequence,
                                                                const Status& status,
-                                                               std::string_view text);
+                                                               std::string_view text,
+                                                               std::uint64_t read_watermark = 0);
 
 // The statement text a request carries, bounded by `text_len` against the
 // array rather than trusted: these are bytes this core did not compute.
@@ -318,7 +366,13 @@ public:
     // What the executor calls when the statement is finished **and
     // durable**. Exactly once, from this core, with the reply line on a
     // success or the refusal on anything else.
-    using ReplyFn = std::function<void(const Status&, std::string_view)>;
+    // **Three arguments, and the third is RR0's watermark** (D3). Every
+    // refusal passes 0 - a statement that did not run pinned no view - and
+    // so does every answer a participant gives outside an enrolled
+    // REPEATABLE READ transaction. Passed explicitly rather than defaulted,
+    // because `std::function` cannot carry a default and because "no
+    // watermark" is a statement each site is making rather than an omission.
+    using ReplyFn = std::function<void(const Status&, std::string_view, std::uint64_t)>;
 
     // The seam SS3 fills: run `text` under this core's ordinary local
     // implicit transaction, and answer through `reply`.
@@ -377,6 +431,10 @@ public:
         // arrive here as the same thing: the first takes this core's own
         // default, the second is a promise made to a client.
         std::optional<txn::IsolationLevel> isolation;
+        // RR0's wire bit: this statement may join a context but may not
+        // open one. False on the enrolling statement, true on every later
+        // one of the same transaction to this owner.
+        bool join = false;
         std::string text;
     };
     using ExecuteFn = std::function<void(ShippedStatement statement, ReplyFn reply)>;
@@ -405,7 +463,8 @@ private:
     // By value, not by reference into the request payload: the executor may
     // park, and the payload dies with `OnRequest`.
     void Reply(std::uint32_t requester, std::uint64_t request_id, std::uint64_t session_id,
-               std::uint64_t sequence, const Status& status, std::string_view text);
+               std::uint64_t sequence, const Status& status, std::string_view text,
+               std::uint64_t read_watermark);
 
     std::uint32_t core_id_;
     sched::Scheduler& scheduler_;
@@ -432,6 +491,9 @@ struct ShippedStatementOutcome {
     // another's result.
     std::uint64_t session_id = 0;
     std::uint64_t sequence = 0;
+    // RR0 / D3: the watermark the owner reported, or 0 where it reported
+    // none (every READ COMMITTED and every autocommit statement).
+    std::uint64_t read_watermark = 0;
     sched::MonoTimeNs deadline_ns = 0;
     // When the statement left, so the wait can be measured rather than
     // inferred from the deadline (D7's `shipped_wait_us_max`).
@@ -469,7 +531,8 @@ public:
     Status Ship(std::uint32_t owner_core, std::uint64_t request_id, std::uint64_t session_id,
                 std::uint64_t sequence, std::uint64_t target_oid, Role role,
                 std::string_view text, bool retry = false, bool in_txn = false,
-                std::optional<txn::IsolationLevel> isolation = std::nullopt);
+                std::optional<txn::IsolationLevel> isolation = std::nullopt,
+                bool join = false);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.

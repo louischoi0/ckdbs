@@ -178,6 +178,30 @@ trace=41 cmd="SELECT * FROM acct WHERE bal > 10" total=412us
 
 `WalStats` and `CheckpointStats` already exist and already count things. They are **process-lifetime counters**, not per-request attribution — they answer "how many syncs since boot", never "which part of *this* query was slow". Both are wanted; neither substitutes for the other. The rule proposed: counters that an operator would page on live in the subsystem's own `*Stats`; per-request attribution lives here and is off by default.
 
+### 8a. Twice now, a missing instrument has blocked an attribution
+
+Recorded here rather than in either measurement, because the subsystem this
+document proposes is what owns the gap, and because a second instance is
+what turns an anecdote into a requirement.
+
+- **M3** (`bench/v2.4.0/`) could not say where a shipped statement's tail
+  cost went, because no `shipped_statement_us` exists on the server side:
+  the arrival core measures the whole park, and nothing separates the wire
+  from the owner's execution from the owner's group commit.
+- **RP8** (`bench/v2.5.0/results-r6b-cross-owner-cost-*.md` §5c) confirmed
+  by source that a cross-owner commit takes **three** sequential durable
+  waits — the coordinator's prepare wait, its own decide-durability wait,
+  and its wait for participants' post-decide acks — and measured an
+  aggregate under a naive additive model in all seven rounds. It named two
+  candidate explanations and **could confirm neither**, because there is no
+  per-leg server-side timer for prepare, decide and ack. Two different
+  mechanisms produce the same total, and the total is all there is.
+
+Both are per-*request* attribution inside one statement, which §8 above is
+exactly the argument for: a counter that says "how many syncs since boot"
+cannot answer either. A span per protocol leg would have settled RP8's
+question in one run.
+
 ## 9. Open decisions — do not assume
 
 - Whether tracing is compile-time removable or runtime-only (§6).

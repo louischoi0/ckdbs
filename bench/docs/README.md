@@ -850,6 +850,56 @@ answer one pretask question and each carries its own docstring. Their run is
 `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`, whose
 "Reproducing" section has every invocation.
 
+### The cross-owner transaction probes (R6, 2026-08-28)
+
+Two drivers, and the pairing is deliberate: one asks what the protocol
+**costs** and the other asks whether it is **right**. Rule 7's entry for
+both, owed by RP8 and paid here.
+
+`bench/txn_2pc_cost_probe.py` — **what a cross-owner commit costs.** Three
+arms, one per invocation, because an arm sharing a process with another
+shares its page cache, its trx-id lease state and its WAL segment:
+`local` (one transaction on the core owning everything it writes — D1's
+fast path, and the unit of comparison), `xowner-N` (one transaction from a
+core-0 session writing N relations owned by N different peers — both
+phases), and `split-N` (the same N rows written by N separate one-owner
+transactions, each from a session on its own owner core). **Every arm
+writes the same rows**, which is what makes the ratios mean anything, and
+`COUNT(*)` at the end of each checks rows in = rows out. Reports p0/p25/
+p50/p95/p99 — never a single ratio, because M3 found shipping's cost in
+the tail, so a median alone would record a prediction confirmed while an
+unpredicted tail passed unnoticed. `bench/run_2pc_cost.sh` interleaves the
+arms; the driver itself runs one.
+
+```bash
+python3 bench/txn_2pc_cost_probe.py --arm xowner --participants 2 --json out.json
+```
+
+`bench/txn_2pc_kill_matrix_probe.py` — **whether a kill −9 anywhere in the
+protocol can tear a transaction.** Six crash points across both sides of
+the wire (`base::CrashPointHit`, armed by config and inert unless named),
+twelve cells with the ordinal siblings, `--repeat` passes each. Four cells
+expect **0** committed on both relations — a 1 there is a transaction
+nobody decided — and two expect **1**, where a 0 is a decision made
+durable and then not carried out. In all twelve, **unequal counts between
+the two relations are a torn transaction**, which is the failure two-phase
+commit exists to make impossible. Both sides of the wire are threads of one
+process, so a kill takes the coordinator and its participants down
+together; that is why the matrix is six points rather than eight. The
+`fastpath.*` cells are the control: a one-owner transaction and a
+`cores = 1` instance must be untouched.
+
+```bash
+python3 bench/txn_2pc_kill_matrix_probe.py --build-dir build-release --repeat 3 --json m.json
+```
+
+**No per-leg server-side timer exists** for prepare, decide and ack, which
+is why RP8 could not separate its two candidate explanations for why three
+confirmed sequential syncs do not cost 3×. It is the second time an
+instrument gap blocked an attribution — `shipped_statement_us` was the
+first, at M3 — and both belong to the observability subsystem rather than
+to either driver.
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers
