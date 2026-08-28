@@ -153,7 +153,7 @@ this workplan means the v2.4.0 path.
 | R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
 | R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
-| **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured |
+| **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured. **Re-run whole on the tree with the read half in it** (§6's first requirement), `af36f24`: suite **2,929** green, `sim.sh` **171/0**, matrix **36/36**, one sitting; asymmetric participant state reached at three points. `bench/v2.5.0/archive/rr-kill-matrix-36cells.json` |
 | **RR0** | **The watermark (D3), and the join rule** | **Built 2026-08-28**, `acbd6b5` |
 | **RR1** | **The read half of enrolment** | **Built 2026-08-28**, `acbd6b5`, same commit as RR0 |
 | RR2 | The ceiling sweep, and CR3 | **Run 2026-08-28**, `2a1cdcc`. `bench/v2.5.0/results-rr-read-half-v2.4.0-32-g2a1cdcc.md`. HR4 holds; **CR3's second axis does not bind**, and that is the finding |
@@ -2684,6 +2684,44 @@ without a 2PC client, the two pipeline gates ask it **last** so a local
 read never does, and `ShipStatement`, `FinishShippedStatement` and the
 watermark are all on the shipped path. That is an argument, not a
 measurement, and it is offered as the former.
+
+## §6 — the correctness list, bullet by bullet
+
+Run on `v2.5.0-crosscore-protocol-3` at `af36f24`, one sitting, after every
+review finding was applied.
+
+- **RP7's matrix re-run whole**, 12 cells x 3 passes on the tree with the
+  read half in it, because a read that crosses inside a transaction is a
+  new way to become a participant and every crash point is newly reachable
+  by a new path. **36/36**, asymmetric participant state reached at three
+  points. Archived beside the results.
+- **A cross-owner RR transaction sees a per-core consistent snapshot, and
+  the test says what that means** rather than asserting the phrase: the
+  participant commits a row of its own *between* the transaction's two
+  reads, and the second read must not show it
+  (`ARepeatableReadCrossOwnerTransactionCarriesOneWatermarkPerParticipant`).
+  The same test's RC half shows the opposite — RC does see it, which is the
+  level's own contract and the reason a watermark for it would name a view
+  already gone.
+- **CR2's own answer tested, and pinned both ways.**
+  `ACrossOwnerTransactionReadsBackItsOwnUncommittedWriteOnThePeer` holds the
+  positive case and fails without RR1's pipeline gate;
+  `AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsContextIsGone` holds
+  the negative one and, without the join bit, answers `INSERTED` where it
+  now refuses.
+- **`cores = 1` unchanged** — sixth consecutive row asserting it, and the
+  matrix's `fastpath.cores1` cell is what asserts it here. The one caveat
+  is RR3's HR5, above: the *measurement* of the one-owner path is not
+  clean, and that is stated rather than folded into this bullet.
+- **HP3 stays reported, not confirmed.** This order built no new protocol,
+  so nothing lets `sim/` mount a prepared transaction, and RP7's bound
+  carries forward unweakened: `sim.sh` 171/0 means the read half broke
+  nothing the corpus covers, and the corpus does not cover cross-owner
+  recovery (`known-gaps.md`).
+- **Full suite and `scripts/sim.sh`, one sitting, and the sitting named**:
+  2026-08-28 at `af36f24`, 2,929 green and 171/0.
+- **Overhead A/B: not run**, by the operator's 2026-08-24 suspension. Not
+  implied green.
 
 ## Open, carried from the work order
 
