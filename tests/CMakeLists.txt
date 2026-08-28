@@ -88,6 +88,7 @@ add_executable(kds_tests
     cabin_store_test.cpp
     scheduler_test.cpp
     log_test.cpp
+    crash_point_test.cpp
     config_file_test.cpp
     superblock_checkpoint_anchor_test.cpp
     in_memory_page_store_test.cpp

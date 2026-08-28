@@ -3,6 +3,7 @@
 #include <functional>
 #include <utility>
 
+#include "kds/base/crash_point.hpp"  // RP7: the participant's two kill points
 #include "kds/sched/coro.hpp"
 #include "kds/wal/log_txn_prepare.hpp"
 
@@ -507,6 +508,12 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
         reply(Status::OK());
         return;
     }
+    // RP7's second protocol point: the record is written into the stream's
+    // buffer and nothing has asked the device for it. Whether it survives
+    // is the device's business and not the protocol's - and either way the
+    // participant promised nothing, so both readings must end in ABORT.
+    base::CrashPointHit("participant.prepare_logged_predurable");
+
     // The drain has nothing to sync *for* until it is told (`RequestDurable`):
     // a prepare is not a commit, so without this the record waits out D3's
     // loss-window interval while a coordinator is parked on it.
@@ -590,6 +597,12 @@ sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
                                std::to_string(key.first) + "'s session " +
                                std::to_string(key.second) + " at lsn " + std::to_string(lsn));
     }
+    // RP7's protocol point on the *participant's* side of "after prepare,
+    // before decide": the promise is durable and the coordinator has not
+    // heard it, so no decision can exist. The distinction from
+    // `coordinator.prepared_predecide` is who knows - the durable state is
+    // the same shape and must resolve to ABORT from the same read.
+    base::CrashPointHit("participant.prepare_durable_prereply");
     reply(Status::OK());
     // **The decision may already be here**, held by `Decide` because this
     // phase was running when it arrived - a coordinator that another

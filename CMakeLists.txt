@@ -13,6 +13,7 @@ add_compile_options(-Wall -Wextra)
 
 add_library(kds
     src/base/log.cpp
+    src/base/crash_point.cpp
     src/storage/crc32c.cpp
     src/storage/page_header.cpp
     src/storage/anchor_page.cpp

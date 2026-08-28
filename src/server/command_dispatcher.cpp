@@ -1,5 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include "kds/base/crash_point.hpp"  // RP7: the coordinator's three kill points
+
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
@@ -370,6 +372,12 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         const Status refusal = commit ? Status::OK() : DescribePrepareFailure(phase);
         txn_2pc_->Close(pending.prepare_request_id);
 
+        // RP7's third protocol point: every participant has answered and
+        // its prepare is durable in its own stream, and no decision record
+        // exists anywhere. The next mount finds prepared transactions whose
+        // coordinator stream decided nothing, which D4 resolves as ABORT.
+        base::CrashPointHit("coordinator.prepared_predecide");
+
         // Phase 2, first half: **the decision, and it is this core's own
         // COMMIT record** (D4). It lives in exactly one stream, so what
         // follows is the ordinary local commit - the same `CommitLocal` a
@@ -426,6 +434,12 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             out->pending_lsn = wal::kNoLsn;
             pending_commit_lsn_ = wal::kNoLsn;
         }
+
+        // RP7's fourth protocol point, and the one the whole protocol
+        // exists for: the decision is durable in the coordinator's stream
+        // and no participant has heard it. The next mount must publish
+        // every participant's half from a record none of them holds.
+        base::CrashPointHit("coordinator.decided_presend");
 
         // Phase 2, second half: telling the participants. **This message
         // carries the decision; it is not the decision** - a lost one costs
@@ -3884,6 +3898,10 @@ DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
     pending.transaction_id = txn->id();
     pending.participants = session.participants();
 
+    // RP7's first protocol point: the coordinator dies with a transaction
+    // whose participants hold uncommitted writes and have never been asked
+    // for anything. Every participant stream is a loser at the next mount.
+    base::CrashPointHit("coordinator.before_prepare");
     if (Status s = txn_2pc_->Prepare(pending.prepare_request_id, pending.session_id,
                                      pending.transaction_id, pending.participants);
         !s.ok()) {
