@@ -157,9 +157,28 @@ per-core pool structure survives unchanged.
 | R3 | Range directory + read path: `sys.ranges`, engine-internal range allocation behind the §6a gates — no user-facing range DDL, in this phase or any later one (operator direction 2026-08-27) — pipeline over ranges. Placement still static | R1 |
 | R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (`crosscore.md` §6b, per-range chains included) | R3, PW1b |
 | R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | R1, R3; the PL contract built |
-| R6 | Multi-range transactions | 2PC — separate decision |
+| R6 | Multi-range transactions | ~~2PC — separate decision~~ — **the gate is satisfied**: cross-owner transactions are built and specified (`docs/spec/cross-owner-txn.md`, 2026-08-28), so R6 inherits the protocol rather than designing one. Remaining gate: **R3**, for RD3's resolver |
 
 R1+R2 stand on their own merits even if ranges are never built.
+
+**What R6 inherits, recorded here so the next reader does not re-derive
+whether 2PC exists** (`instructions/v2.5.0/cross-owner-protocol-closing.md`'s
+closing clause). The commit protocol is complete **at relation
+granularity** and R6 reuses it **unchanged**: a participant is a *core*,
+never a relation — enrolment is keyed on `(coordinator core, session_id)`
+and nothing in prepare, decide, resolution or recovery names a relation at
+all. So the only row that changes under ranges is **owner discovery**,
+which today reads `sys.tables.owner_core` and under ranges reads RD3's
+resolver. Everything else — the two phases, the decision living in one
+stream, the join rule, the in-doubt ceiling, the per-participant watermark,
+the mount-time resolution — arrives already built and already measured
+(`bench/v2.5.0/results-rr-read-half-*.md`).
+
+Two costs R6 inherits with it, both named rather than discovered later: a
+participant that only **read** is still prepared with a durable record and
+a full decide (7-30x the read that enrolled it), and a read shipped inside
+a cross-owner transaction is bounded by the one-slot reply cap. Both are
+`crosscore.md` §9's, not R6's.
 
 ## 12. Open decisions — do not assume
 
