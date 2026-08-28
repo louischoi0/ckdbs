@@ -258,7 +258,21 @@ the owner's workplan.
   resumes a half-finished checkpoint. One `Error` line early in a run
   therefore costs the whole run's bounded recovery, on core 0 and on every
   peer — and since PW3b it costs the graceful-restart bound as well, which
-  is what makes it worth naming here. The fix is a behaviour decision that
+  is what makes it worth naming here.
+  **Re-read 2026-08-28 under R6 (R6-6), and it stays cost-only.** A prepared
+  cross-owner transaction depends on the checkpoint's redo start staying at
+  or below its `TXN_PREPARE` (R6-4's floor), so the question is whether a
+  disarmed checkpointer can put it above. It cannot: a failed checkpoint
+  publishes **no** anchor, so the redo start stays where the last successful
+  one left it, which is earlier — C4 makes a mount scan more, never less,
+  and no arrangement of it loses a prepare. What R6 adds beside it is a
+  *second* way to lose the same restart bound, by design rather than by
+  defect: a transaction still in doubt pins the redo start at its prepare,
+  so on a core holding one the checkpoints stop shortening recovery with
+  nothing failing. The two are told apart from outside — C4 leaves a
+  checkpoint Error line, the other shows as `SHOW META`'s
+  `txn_in_doubt_unresolved`.
+  The fix is a behaviour decision that
   belongs to `wal.md` §11: reset on failure and lose the snapshot, or keep
   it and give the paced path a resumer.
 - ~~**A clean shutdown publishes no anchor**~~ — **fixed 2026-08-12** for the

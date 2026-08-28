@@ -18,6 +18,10 @@
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
+// R6-6: the stop sequence's checkpoint, and the analysis of the mount that
+// follows it.
+#include "kds/wal/analysis.hpp"
+#include "kds/wal/checkpointer.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
@@ -1518,6 +1522,133 @@ TEST_F(Txn2pcBlockedWriterTest, AnOrdinaryInFlightWriterIsNotWaitedOnAtAll) {
     EXPECT_EQ(StatusFromErrorReply(out.response).code(), StatusCode::kTxnConflict);
     EXPECT_EQ(out.response.find("coordinator"), std::string::npos)
         << "an ordinary conflict must keep its own words: " << out.response;
+}
+
+// ---- R6-6: a prepared transaction across a graceful stop ----------------------
+//
+// R6-3 leaves a prepared context standing at shutdown and R6-4 resolves one at
+// the next mount, and each was tested against its own half. **What was never
+// tested is the joint** — and the joint is where PW3b's shutdown checkpoint
+// meets R6-4's floor, which is the one interaction that can lose the
+// transaction silently.
+//
+// The sequence `Expeditor::Serve`'s tail runs, in its order: the executor
+// leaves prepared contexts alone (`RollbackAllEnrolled`), then the core's
+// pages are flushed and a checkpoint is published
+// (`CoreRuntime::ShutdownCheckpoint`). **A flush before a checkpoint empties
+// the dirty table**, and an empty dirty table would otherwise make the redo
+// start the `CHECKPOINT_BEGIN`'s own LSN — past the `TXN_PREPARE`, so the next
+// mount would scan from after the record that says "do not decide this", read
+// the active-list entry as an ordinary loser, and roll back a transaction the
+// coordinator may have committed. The floor is what stops that, and this is
+// the fixture that models the case exactly: a target whose dirty table is
+// empty *because* the flush already happened.
+
+class Txn2pcShutdownTest : public Txn2pcParticipantTest {
+protected:
+    // The shutdown checkpoint's target: every page already written back, so
+    // the dirty table contributes no recLSN at all. Scripted rather than a
+    // real store's, because what is under test is what the checkpointer does
+    // when the dirty table has nothing to say — which on the shutdown path
+    // is always.
+    class FlushedTarget final : public wal::CheckpointTarget {
+    public:
+        std::vector<wal::CheckpointDirtyPage> DirtyTable() const override { return {}; }
+        Status FlushPages(std::span<const PageId>) override { return Status::OK(); }
+    };
+};
+
+TEST_F(Txn2pcShutdownTest, APreparedTransactionSurvivesTheStopSequenceAndTheMountAfterIt) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    // The prepare's LSN, as the transaction manager reports it — which is
+    // the wiring claim R6-4's unit test could not make: that a real prepare
+    // through the executor reaches `OldestPreparedLsn`, rather than a
+    // scripted `ActiveTransactions` answering a number a test chose.
+    const wal::Lsn prepared_at = txns_->OldestPreparedLsn();
+    ASSERT_NE(prepared_at, 0u) << "the prepare never reached the transaction manager";
+
+    // Step 1 of the stop: the executor leaves it. D4 forbids the unilateral
+    // abort, so this core stops still owing an answer.
+    executor_->RollbackAllEnrolled();
+    ASSERT_EQ(executor_->left_in_doubt_at_stop(), 1u);
+    ASSERT_EQ(executor_->enrolled(), 1u);
+
+    // Step 2: the shutdown checkpoint, over a dirty table the flush emptied.
+    wal::InMemoryCheckpointAnchor anchor;
+    FlushedTarget target;
+    wal::Checkpointer checkpointer(*wal_, target, *txns_, anchor);
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+    ASSERT_EQ(anchor.publishes(), 1u);
+
+    // **The published redo start is at or below the prepare**, which with an
+    // empty dirty table is true only because of the floor.
+    EXPECT_LE(anchor.anchor().redo_start_lsn, prepared_at)
+        << "the shutdown checkpoint outran the record that says this transaction is not "
+           "this core's to decide";
+
+    // Step 3: the mount after the stop, scanning from exactly the anchor the
+    // stop published. The prepare is inside the range and the transaction is
+    // the fourth outcome - not a loser, which is what undo would unwind.
+    auto analysis = wal::Analyze(*log_device_, /*core_id=*/1,
+                                 wal::AnalysisStart{anchor.anchor().redo_start_lsn,
+                                                    anchor.anchor().durable_lsn});
+    ASSERT_TRUE(analysis.ok()) << analysis.status().message();
+    EXPECT_EQ(analysis.value().prepared, 1u)
+        << "the mount after a graceful stop no longer finds the prepared transaction";
+    EXPECT_EQ(analysis.value().losers, 0u) << "a prepared transaction is not a loser";
+    ASSERT_EQ(analysis.value().prepared_txns.size(), 1u);
+    const wal::PreparedTxn& found = analysis.value().prepared_txns.begin()->second;
+    // And it names the coordinator it was prepared for, which is what the
+    // resolution at that mount looks the decision up by (R6-4).
+    EXPECT_EQ(found.coordinator_core, kCoordinator);
+    EXPECT_EQ(found.coordinator_session_id, kSession);
+    EXPECT_EQ(found.coordinator_txn_id, kCoordinatorTxn);
+}
+
+TEST_F(Txn2pcShutdownTest, AStopWithNothingPreparedPublishesTheAnchorItAlwaysDid) {
+    // The other half, and the one every existing stream is: with nothing
+    // prepared the floor contributes nothing, so a shutdown checkpoint over
+    // an empty dirty table publishes the `CHECKPOINT_BEGIN` LSN exactly as
+    // it did before R6-4 - the property that keeps PW3b's measured
+    // "2 records, redo 0" restart bound intact.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    executor_->RollbackAllEnrolled();
+    ASSERT_EQ(executor_->left_in_doubt_at_stop(), 0u) << "nothing was prepared";
+    ASSERT_EQ(txns_->OldestPreparedLsn(), 0u);
+
+    wal::InMemoryCheckpointAnchor anchor;
+    FlushedTarget target;
+    wal::Checkpointer checkpointer(*wal_, target, *txns_, anchor);
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+    EXPECT_EQ(anchor.anchor().redo_start_lsn, checkpointer.last_checkpoint_lsn())
+        << "with nothing prepared the redo start is the checkpoint's own LSN";
+}
+
+TEST_F(Txn2pcShutdownTest, TheFloorHoldsAcrossASecondCheckpointWhilstStillInDoubt) {
+    // A cadence checkpoint fires, then the stop's. The floor is per
+    // checkpoint and reads the *live* prepare each time, so a transaction
+    // still in doubt pins every one of them - which is the price R6-4 named
+    // (an in-doubt transaction pins the log's redo start) and the thing that
+    // would break if the floor were computed once and remembered.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+    const wal::Lsn prepared_at = txns_->OldestPreparedLsn();
+    ASSERT_NE(prepared_at, 0u);
+
+    wal::InMemoryCheckpointAnchor anchor;
+    FlushedTarget target;
+    wal::Checkpointer checkpointer(*wal_, target, *txns_, anchor);
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+    EXPECT_LE(anchor.anchor().redo_start_lsn, prepared_at);
+
+    ASSERT_EQ(Local("INSERT INTO t VALUES (9, 1)").rfind("INSERTED", 0), 0u);
+    executor_->RollbackAllEnrolled();
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+    EXPECT_EQ(anchor.publishes(), 2u);
+    EXPECT_LE(anchor.anchor().redo_start_lsn, prepared_at)
+        << "the second checkpoint dropped the floor the first one held";
 }
 
 }  // namespace

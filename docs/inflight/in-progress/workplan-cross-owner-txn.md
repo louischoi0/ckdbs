@@ -149,7 +149,7 @@ this workplan means the v2.4.0 path.
 | R6-3 | Prepare and decide (D4) | **Built 2026-08-28**, `63a0f43` |
 | R6-4 | Recovery (D4) | **Built 2026-08-28**, this worktree |
 | R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b`; review at `ad0aa2f` |
-| R6-6 | PW3b extension | — |
+| R6-6 | PW3b extension | **Built 2026-08-28** (tests and prose; no engine change) |
 | R6-7 | PL-A revisit | — |
 | R6-8 | Dispatch | — |
 | R6-9 | Docs | — |
@@ -1296,6 +1296,101 @@ The review adds two more, one per bug, each failing without its fix:
 
 Full suite green at `ad0aa2f`: **2,855 tests, 18 new**. Overhead not
 measured — the v2-stage A/B suspension of 2026-08-24 stands.
+
+## R6-6 — the graceful stop, and PW3b's open item re-read
+
+Built on `v2.5.0-cross-core-owner-protocol-2`. **No engine change**: the
+mechanism this row is about already exists — R6-3 leaves a prepared context
+standing at shutdown, R6-4 floors the checkpoint's redo start at the oldest
+live prepare, and analysis carries the fourth outcome. What did not exist is
+proof that the three meet correctly, and the meeting point is the one place
+the transaction could be lost without anything refusing.
+
+### The joint nobody had tested
+
+`Expeditor::Serve`'s tail runs, per peer: the executor's
+`RollbackAllEnrolled` (which passes over a prepared context), then
+`CoreRuntime::ShutdownCheckpoint`, which **flushes the core's pages first
+and then checkpoints** — PW3b's order, and its own comment gives the
+reason: *"an empty dirty table makes the redo start the `CHECKPOINT_BEGIN`
+LSN itself."*
+
+That sentence is exactly the hazard. A redo start at the `CHECKPOINT_BEGIN`
+LSN is **past the `TXN_PREPARE`**, so the next mount would scan from after
+the record that says "this transaction is not this core's to decide", find
+the active-list entry the checkpoint carried, read it as an ordinary loser,
+and roll back a transaction the coordinator may have committed and
+acknowledged to a client. R6-4's floor is what prevents it, and until this
+row the floor was tested only against a **scripted** `ActiveTransactions`
+answering a number the test chose.
+
+`Txn2pcShutdownTest` closes that: a real statement shipped, a real prepare
+through the executor's seam, and then the stop sequence in `Serve`'s own
+order over a target whose dirty table is empty *because the flush already
+happened*. Three properties, and **the first two fail if the floor is
+removed** — verified by removing it and watching them fail, then restoring:
+
+- the published redo start is at or below the LSN
+  `TransactionManager::OldestPreparedLsn()` reports, which is the wiring
+  claim the unit test could not make;
+- the mount that scans from exactly that anchor still finds the prepare —
+  `analysis.prepared == 1`, `losers == 0`, and the `PreparedTxn` naming the
+  coordinator the resolution will look the decision up in;
+- a **second** checkpoint while still in doubt holds the floor too, since it
+  is computed per checkpoint from the live transaction rather than
+  remembered.
+
+The third fixture pins the other half: with nothing prepared, a shutdown
+checkpoint publishes the `CHECKPOINT_BEGIN` LSN exactly as it did before
+R6-4 — which is what keeps PW3b's measured restart bound (*"2 records,
+redo 0"*) intact on every stream that is not a participant.
+
+### PW3b's open review item, re-read in R6's light
+
+`known-gaps.md`'s C4: one failed checkpoint disarms every later checkpoint
+on that core — `in_progress_` clears only on `Complete()`'s success path
+(`src/wal/checkpointer.cpp:265`) while `Start()` refuses whenever it is set
+(`:100`), and nothing resumes a half-finished checkpoint.
+
+**The re-read's answer: R6 does not make it a correctness bug, and the
+direction of the failure is why.** A disarmed checkpointer publishes *no*
+anchor, so the redo start stays where the last successful checkpoint left it
+— which is **earlier**, so a `TXN_PREPARE` written after it is inside the
+replay range by construction. C4 can only make a mount scan more, never
+less, and there is no arrangement of it that puts a prepare outside the
+range. The failure mode R6-4 guards against needs a checkpoint that
+*succeeds* and advances too far; C4 is the opposite.
+
+Two consequences worth stating rather than leaving implied:
+
+- **C4's cost under R6 is smaller than it was, not larger.** While anything
+  on the core is in doubt the floor already pins the redo start at the
+  prepare, so a checkpoint that would have been disarmed was going to buy
+  little. The graceful-restart bound PW3b measured is lost either way, and
+  that was already C4's charge.
+- **But R6 adds a *second*, by-design way to lose that bound**, and an
+  operator should not confuse the two. A transaction whose coordinator
+  answered `UnknownOutcome` (R6-5) stays in doubt until the next mount, and
+  the floor therefore pins the redo start at its prepare for the whole life
+  of the process — so checkpoints stop shortening recovery on that core,
+  with nothing failing and nothing to see in a log. `SHOW META`'s
+  `txn_in_doubt_unresolved` is what separates this case from C4's; C4 shows
+  as a checkpoint Error line and this shows as a counter. The repair for one
+  is a `wal.md` §11 behaviour decision, and for the other it is R6-8's live
+  path plus a mount.
+
+C4 stays where it is — `known-gaps.md`, unfixed, owned by `wal.md` §11 —
+with the re-read recorded there.
+
+### What this row does not prove
+
+**Nothing here drives a real `Expeditor` with `cores > 1`.** PW3b's own S6
+finding says so of its own call site — *"`Serve`'s per-peer call site has no
+test at all, since nothing builds an `Expeditor` with `cores > 1`"* — and
+R6-6 inherits that gap rather than closing it: the sequence is pinned at the
+level below, exactly as PW3b pinned its own. What is untested in both cases
+is the same wiring, and RP7's kill −9 matrix against a real two-core server
+is where it is exercised.
 
 ## Open, carried from the work order
 
