@@ -75,6 +75,21 @@ public:
     // writes are only findable in the WAL inside the replay range, which
     // does not always contain them.
     virtual std::vector<CheckpointActiveTxn> Snapshot() const = 0;
+
+    // **The oldest live prepare's LSN, or 0 when nothing is prepared**
+    // (R6-4). What it exists for is stated at `txn::Transaction::prepare_lsn`
+    // and reduces to this: the active table above cannot say that a
+    // transaction is prepared, so a checkpoint that advanced the redo start
+    // past a `TXN_PREPARE` would leave the next mount reading that
+    // transaction as an ordinary loser and rolling back a half the
+    // coordinator may have committed. `Checkpointer::Start` floors its redo
+    // start here.
+    //
+    // Defaulted to 0 rather than pure, because it is a no-op for every
+    // implementation that has no cross-owner transactions - which is the
+    // replay-only stub below and every fixture - and because 0 is exactly
+    // "nothing to pin" rather than a sentinel anyone has to test for.
+    virtual Lsn OldestPreparedLsn() const { return 0; }
 };
 
 // No transactions, for a core that is only replaying or only doing

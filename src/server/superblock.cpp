@@ -1,5 +1,7 @@
 #include "kds/server/superblock.hpp"
 
+#include <algorithm>
+
 #include <cstring>
 #include <string>
 
@@ -156,6 +158,19 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
         std::memcpy(entry + kWalAnchorDurableLsnOffset, &a.durable_lsn, sizeof(a.durable_lsn));
         std::memcpy(entry + kWalAnchorSegmentNoOffset, &a.segment_no, sizeof(a.segment_no));
     }
+}
+
+std::vector<WalAnchorFields> SuperBlock::wal_anchors() const {
+    // Sized by the pinned core count rather than by `wal_anchor_count`,
+    // which is only the highest core that ever *published*: a core that has
+    // not checkpointed yet still exists, and its all-zero anchor is the
+    // right answer for it ("no checkpoint yet", so nothing to fall short
+    // of). Bounded by the array, so a corrupt count cannot read past it.
+    const std::uint32_t cores = std::min(fields_.core_count, kMaxWalCores);
+    std::vector<WalAnchorFields> out;
+    out.reserve(cores);
+    for (std::uint32_t core = 0; core < cores; ++core) out.push_back(wal_anchors_[core]);
+    return out;
 }
 
 WalAnchorFields SuperBlock::wal_anchor(std::uint32_t core_id) const noexcept {

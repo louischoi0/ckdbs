@@ -138,6 +138,31 @@ public:
     // thing that advances either.
     std::uint64_t last_undo_ptr() const noexcept { return last_undo_ptr_; }
 
+    // ---- The cross-owner prepare this transaction is holding (R6-4) -----
+    //
+    // The LSN of the `TXN_PREPARE` record this core wrote for it, or 0 when
+    // it is an ordinary local transaction - which is every transaction on
+    // every core that is not a participant in a two-phase commit.
+    //
+    // **What it is for is the checkpoint, not the transaction.** A prepared
+    // participant is still live, so it appears in every `CHECKPOINT_BEGIN`'s
+    // active table as an ordinary `{id, undo head}` pair - and that table
+    // says nothing about preparedness. Once the transaction's pages have
+    // been written back, its recLSNs leave the dirty table and the
+    // checkpoint's redo start can advance **past the prepare record**; the
+    // next mount then scans from the checkpoint, never sees the prepare,
+    // reads the active-list entry as a loser, and rolls back a transaction
+    // the coordinator may have committed. That is D4's exact prohibition,
+    // reached with no message and no refusal anywhere.
+    //
+    // So the checkpointer floors its redo start at the oldest of these
+    // (`Checkpointer::Start`, `ActiveTransactions::OldestPreparedLsn`), and
+    // the record stays inside every future replay range until the
+    // transaction is decided. The price is the standard one: an in-doubt
+    // transaction pins the log, and D5's bounded wait is what bounds it.
+    wal::Lsn prepare_lsn() const noexcept { return prepare_lsn_; }
+    void set_prepare_lsn(wal::Lsn lsn) noexcept { prepare_lsn_ = lsn; }
+
 private:
     friend class TransactionManager;
 
@@ -146,6 +171,7 @@ private:
     ReadView view_;
     std::vector<TrailEntry> trail_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
+    wal::Lsn prepare_lsn_ = 0;
     bool active_ = false;
 };
 
@@ -375,6 +401,12 @@ public:
     // wal::ActiveTransactions. The ids in flight *right now*, for a
     // checkpoint's CHECKPOINT_BEGIN table (wal.md sections 11, 12).
     std::vector<wal::CheckpointActiveTxn> Snapshot() const override;
+
+    // wal::ActiveTransactions. The oldest live `TXN_PREPARE`'s LSN, which
+    // the checkpointer floors its redo start at (R6-4) - see
+    // `Transaction::prepare_lsn` for why that is a correctness rule and not
+    // a tuning one. 0 when nothing on this core is prepared.
+    wal::Lsn OldestPreparedLsn() const override;
 
     UndoLog& undo() noexcept { return undo_; }
 

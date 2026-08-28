@@ -66,14 +66,24 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                 "core promised not to decide them, so it may neither roll them back nor "
                 "publish them (instructions/v2.4.0/2pc.md D4)");
         }
+        auto verdicts = resolver->ResolveAll(out.analysis.prepared_txns);
+        if (!verdicts.ok()) {
+            // A refusal to mount, never a default. The message the resolver
+            // wrote says which core it could not ask and why.
+            return verdicts.status().WithContext("recovery of core " + std::to_string(core_id) +
+                                                 ": resolving prepared transaction(s)");
+        }
         for (const auto& [participant_txn_id, prepared] : out.analysis.prepared_txns) {
-            auto verdict = resolver->Resolve(participant_txn_id, prepared);
-            if (!verdict.ok()) {
-                // A refusal to mount, never a default. The message the
-                // resolver wrote says which core it could not ask and why.
-                return verdict.status().WithContext(
+            (void)prepared;
+            auto verdict = verdicts.value().find(participant_txn_id);
+            if (verdict == verdicts.value().end()) {
+                // A resolver that answered some and not others. Refused
+                // rather than defaulted: an unanswered prepare is exactly
+                // the state this phase exists to end.
+                return Status::InvalidArgument(
                     "recovery of core " + std::to_string(core_id) +
-                    ": resolving prepared transaction " + std::to_string(participant_txn_id));
+                    ": the resolver returned no verdict for prepared transaction " +
+                    std::to_string(participant_txn_id));
             }
             auto state = out.analysis.transactions.find(participant_txn_id);
             if (state == out.analysis.transactions.end()) {
@@ -86,7 +96,7 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                     "recovery of core " + std::to_string(core_id) + ": prepared transaction " +
                     std::to_string(participant_txn_id) + " has no analysis state");
             }
-            switch (verdict.value()) {
+            switch (verdict->second) {
                 case TxnOutcome::kWinner:
                     state->second.outcome = TxnOutcome::kWinner;
                     ++out.analysis.winners;
@@ -97,15 +107,18 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                     ++out.analysis.losers;
                     ++out.prepared_aborted;
                     break;
-                default:
-                    // `kAborted` would say "already compensated in this
-                    // stream", which a prepared participant never is, and
-                    // `kPrepared` would be the resolver answering the
-                    // question with itself.
+                // Spelled out rather than defaulted, so that a fifth
+                // outcome would be a compile warning here rather than a
+                // runtime refusal: `kAborted` would say "already
+                // compensated in this stream", which a prepared participant
+                // never is, and `kPrepared` would be the resolver answering
+                // the question with itself.
+                case TxnOutcome::kAborted:
+                case TxnOutcome::kPrepared:
                     return Status::InvalidArgument(
                         "recovery of core " + std::to_string(core_id) + ": the resolver of " +
                         std::to_string(participant_txn_id) + " answered " +
-                        TxnOutcomeName(verdict.value()) +
+                        TxnOutcomeName(verdict->second) +
                         ", which is not a verdict a prepared transaction can take");
             }
             --out.analysis.prepared;

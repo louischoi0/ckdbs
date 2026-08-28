@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
@@ -148,6 +149,21 @@ public:
         // names segment 15`, and a mount that refuses because of a
         // caller's stack contents.
         WalAnchorFields anchor{};
+
+        // **Every core's anchor, this one included** (R6-4). Copied from
+        // core 0's superblock on the startup thread beside `anchor` above,
+        // and used for one thing: resolving a transaction this core
+        // prepared means reading its *coordinator's* stream, and a scan of
+        // another core's stream owes the same honesty check `Analyze`
+        // applies to its own - that it reached the durable point that
+        // core's anchor was published with. Without it a coordinator stream
+        // whose tail the crash took reads as "no decision", which is an
+        // abort, which durably contradicts a coordinator that committed.
+        //
+        // Empty means no resolver is installed (every fixture), and a
+        // stream that then holds a prepared transaction refuses the mount
+        // rather than guessing. Indexed by core id.
+        std::vector<WalAnchorFields> anchors;
 
         // Core 0's durable transaction-id ceiling, copied on the startup
         // thread for the reason the anchor above is: this core's

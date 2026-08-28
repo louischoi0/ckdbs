@@ -6,8 +6,8 @@
 #include <vector>
 
 #include "kds/exec/assertion_catalog.hpp"
-#include "kds/server/prepared_resolver.hpp"
 #include "kds/exec/assertion_recover.hpp"
+#include "kds/server/prepared_resolver.hpp"
 #include "kds/txn/recovery_undo.hpp"
 #include "kds/wal/recovery.hpp"
 
@@ -17,7 +17,8 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
                                           Logger* log, const sched::Clock* clock,
-                                          const std::string& wal_dir) {
+                                          const std::string& wal_dir,
+                                          const std::vector<WalAnchorFields>& anchors) {
     // A zeroed slot means no checkpoint was ever published: scan from the
     // head of the stream, and disable the durable-point check because there
     // is no published point to hold the scan to (`analysis.hpp`).
@@ -32,8 +33,8 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     // then holds a prepared transaction refuses the mount rather than
     // guessing at its outcome (`prepared_resolver.hpp`).
     std::optional<CoordinatorStreamResolver> resolver;
-    if (!wal_dir.empty()) {
-        resolver.emplace(wal_dir, device.segment_size(), core_id, log);
+    if (!wal_dir.empty() && !anchors.empty()) {
+        resolver.emplace(wal_dir, device.segment_size(), core_id, anchors, log);
     }
     auto report = wal::RecoverCore(device, core_id, store, start, &undo, clock,
                                    resolver.has_value() ? &*resolver : nullptr);

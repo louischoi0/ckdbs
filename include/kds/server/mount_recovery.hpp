@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "kds/base/common.hpp"
 #include "kds/base/log.hpp"
@@ -183,18 +184,23 @@ struct MountRecovery {
 // (`txn/recovery_undo.hpp`).
 // `clock`, when given, times the phases into `MountRecovery::timings` (RC09).
 //
-// `wal_dir` is where this instance's streams live, and it is what lets a
-// **prepared** transaction be resolved (R6-4): the verdict is in the
-// coordinator's stream, which is another file in that directory
-// (`prepared_resolver.hpp`). Empty means no resolver is installed, and a
-// stream that holds a prepared transaction then **refuses the mount** rather
-// than guessing - which is the right answer for the fixtures that pass
-// nothing here, since they have no other core's stream to read.
+// `wal_dir` and `anchors` are what let a **prepared** transaction be
+// resolved (R6-4): the verdict is in the coordinator's stream, which is
+// another file in that directory, and that core's anchor is what says how
+// far the scan of it must reach before an absent decision may be read as
+// one (`prepared_resolver.hpp`). `anchors` is indexed by core id and holds
+// every core's, this one's included.
+//
+// Either empty means no resolver is installed, and a stream that holds a
+// prepared transaction then **refuses the mount** rather than guessing -
+// which is the right answer for the fixtures that pass nothing here, since
+// they have no other core's stream to read.
 StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
                                           Logger* log, const sched::Clock* clock = nullptr,
-                                          const std::string& wal_dir = {});
+                                          const std::string& wal_dir = {},
+                                          const std::vector<WalAnchorFields>& anchors = {});
 
 // RV3's honest counter - **the half of it that can be computed**.
 //

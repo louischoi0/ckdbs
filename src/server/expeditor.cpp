@@ -779,7 +779,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                         *expeditor->log_device_, *expeditor->store_,
                                         *expeditor->undo_log_, &*expeditor->wal_,
                                         &*expeditor->logger_, &expeditor->clock_,
-                                        expeditor->config_.wal_dir);
+                                        expeditor->config_.wal_dir,
+                                        expeditor->database_->superblock.wal_anchors());
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
 
@@ -1328,6 +1329,10 @@ Status Expeditor::Serve() {
             // without this copy every peer would recover from the head of its
             // stream while core 0 recovered from its checkpoint.
             core_config.anchor = database_->superblock.wal_anchor(core_id);
+            // Every core's, for R6-4: resolving a transaction this peer
+            // prepared means scanning its coordinator's stream, and that
+            // core's anchor is what says how far the scan must reach.
+            core_config.anchors = database_->superblock.wal_anchors();
             // And the ceiling this peer's recovery must not sit above (PW1).
             // Same copy, same thread, same reason as the anchor.
             core_config.next_trx_id = database_->superblock.next_trx_id();

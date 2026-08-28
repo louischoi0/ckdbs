@@ -27,6 +27,10 @@ constexpr std::uint64_t kSegmentSize = 1024 * 1024;
 class ScriptedTxns final : public ActiveTransactions {
 public:
     std::vector<CheckpointActiveTxn> Snapshot() const override { return live_; }
+    // R6-4: the oldest live `TXN_PREPARE`'s LSN, 0 when nothing is
+    // prepared - which is what every test here but one wants.
+    Lsn OldestPreparedLsn() const override { return oldest_prepared_; }
+    void SetOldestPrepared(Lsn lsn) { oldest_prepared_ = lsn; }
     // Ids alone, with a kNoUndoPtr head each - these tests are about the
     // checkpoint's ordering and its tables' shape, not about undo chains.
     void SetLive(const std::vector<std::uint64_t>& ids) {
@@ -38,6 +42,7 @@ public:
 
 private:
     std::vector<CheckpointActiveTxn> live_;
+    Lsn oldest_prepared_ = 0;
 };
 
 // A checkpoint target that records what it was asked to flush and can
@@ -162,6 +167,47 @@ TEST_F(CheckpointerTest, TheRedoStartIsTheOldestPageStillNeedingReplay) {
     // Logged as well as anchored, so a stream is self-describing without
     // a superblock (wal.md section 11-3).
     EXPECT_EQ(end.value().redo_start_lsn, 400u);
+}
+
+TEST_F(CheckpointerTest, APreparedTransactionPinsTheRedoStartBelowItsPrepareRecord) {
+    // **R6-4's correctness rule, and it is not a tuning one.** A prepared
+    // participant is live, so it lands in the active table below as an
+    // ordinary `{id, undo head}` pair - which cannot say it is prepared.
+    // Once its pages have been written back, nothing else holds the redo
+    // start below its `TXN_PREPARE`, and the next mount would scan from the
+    // checkpoint, see only the active-list entry, call it a loser and roll
+    // back a transaction whose coordinator may have committed. That is D4's
+    // exact prohibition, reached with no message and no refusal.
+    txns_.SetLive(std::vector<std::uint64_t>{42});
+    txns_.SetOldestPrepared(500);
+    target_.SetDirty({{7, 900}});
+    auto checkpointer = MakeCheckpointer();
+    ASSERT_TRUE(checkpointer->RunToCompletion().ok());
+
+    EXPECT_EQ(checkpointer->redo_start_lsn(), 500u)
+        << "the prepare record must stay inside the next mount's replay range";
+    EXPECT_EQ(anchor_.anchor().redo_start_lsn, 500u);
+}
+
+TEST_F(CheckpointerTest, NothingPreparedLeavesTheRedoStartExactlyWhereItWas) {
+    // The other half, and the one that matters for every existing stream:
+    // `OldestPreparedLsn()` answers 0 where no cross-owner transaction is
+    // in doubt, and 0 changes the published number by nothing at all.
+    target_.SetDirty({{7, 900}, {9, 400}});
+    txns_.SetOldestPrepared(0);
+    auto checkpointer = MakeCheckpointer();
+    ASSERT_TRUE(checkpointer->RunToCompletion().ok());
+    EXPECT_EQ(checkpointer->redo_start_lsn(), 400u);
+}
+
+TEST_F(CheckpointerTest, APreparePastTheOldestDirtyPageDoesNotRaiseTheRedoStart) {
+    // The floor only ever lowers: a prepare above the oldest recLSN leaves
+    // the number the dirty table produced.
+    target_.SetDirty({{7, 400}});
+    txns_.SetOldestPrepared(900);
+    auto checkpointer = MakeCheckpointer();
+    ASSERT_TRUE(checkpointer->RunToCompletion().ok());
+    EXPECT_EQ(checkpointer->redo_start_lsn(), 400u);
 }
 
 TEST_F(CheckpointerTest, PagesWithNothingToReplayDoNotPinTheRedoStart) {

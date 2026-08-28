@@ -157,7 +157,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // stream, which is another file in that same directory.
     auto recovered = RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
                                         *runtime->store_, *runtime->undo_log_, &*runtime->wal_,
-                                        log, &clock, config.wal_dir);
+                                        log, &clock, config.wal_dir, config.anchors);
     if (!recovered.ok()) return recovered.status();
     // Kept, not discarded: the dispatcher's `SHOW META` prints it and a test
     // reads it (PW3b) - the one field that says whether the last stop

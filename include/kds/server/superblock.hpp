@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
@@ -448,6 +449,14 @@ public:
     // database has no record of, and it makes recovery replay the whole
     // stream, which is safe.
     WalAnchorFields wal_anchor(std::uint32_t core_id) const noexcept;
+
+    // Every core's anchor, indexed by core id, for the one caller that
+    // needs somebody else's: resolving a transaction a peer prepared means
+    // scanning its coordinator's stream, and that core's anchor is what
+    // says how far the scan must reach before an absent decision may be
+    // read as one (R6-4, `prepared_resolver.hpp`). Sized by `core_count`,
+    // so the table also bounds which cores this database has.
+    std::vector<WalAnchorFields> wal_anchors() const;
 
     // Records a completed checkpoint's anchor. In-memory only - it is
     // durable once the superblock page has been encoded and the store

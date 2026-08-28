@@ -133,6 +133,22 @@ Status Checkpointer::Start() {
     // chances to lose the skip, and losing it drags the redo start to zero
     // and replays the whole stream.
     pending_redo_start_ = RedoStartFrom(begin_lsn_, dirty);
+    // **And by the oldest live prepare** (R6-4, an amendment to §11-3 that
+    // R6-9 owes `wal.md`). A prepared participant is live, so it is in the
+    // active table above - which cannot say it is *prepared*. If its pages
+    // have been written back, nothing else in this computation holds the
+    // redo start below its `TXN_PREPARE` record, and the next mount would
+    // scan from here, see only an active-list entry, and roll back a
+    // transaction its coordinator may have committed (D4's prohibition,
+    // reached with no message and no refusal). Flooring here keeps the
+    // record inside every replay range until the transaction is decided.
+    //
+    // Zero on every stream with nothing prepared, which is every stream
+    // until a cross-owner transaction reaches one - so this line changes no
+    // existing checkpoint's redo start by a byte.
+    if (const Lsn prepared = txns_.OldestPreparedLsn(); prepared != 0) {
+        pending_redo_start_ = std::min(pending_redo_start_, prepared);
+    }
     pending_pages_.clear();
     pending_pages_.reserve(dirty.size());
     for (const CheckpointDirtyPage& page : dirty) {

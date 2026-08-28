@@ -173,10 +173,6 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                 // coordinator's stream; a TXN_COMMIT or TXN_ABORT later in
                 // *this* scan overrides it, which is the participant's own
                 // decided end and needs no resolution at all.
-                auto decoded = DecodeTxnPrepare(record.payload);
-                if (!decoded.ok()) {
-                    return decoded.status();
-                }
                 if (record.header.txn_id == kNoTxnId) {
                     // The envelope's id is the participant's own local
                     // transaction (D2) and is what everything downstream
@@ -187,6 +183,10 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                         std::to_string(record.header.lsn) +
                         " belongs to no transaction; a prepare is a promise about a "
                         "transaction this stream holds");
+                }
+                auto decoded = DecodeTxnPrepare(record.payload);
+                if (!decoded.ok()) {
+                    return decoded.status();
                 }
                 note_txn(record.header.txn_id, TxnOutcome::kPrepared);
                 PreparedTxn& prepared = out.prepared_txns[record.header.txn_id];

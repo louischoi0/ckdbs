@@ -480,6 +480,9 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
         // that is the property of the instance, not of this row. Stated
         // rather than silently taken, because "prepared" is a durability
         // claim everywhere else in this file.
+        // No `set_prepare_lsn` on this arm: there is no record for a
+        // checkpoint's redo start to be held below, because there is no
+        // record.
         context.prepared = true;
         ++in_doubt_;
         ++prepared_;
@@ -549,6 +552,15 @@ sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
     context.prepared = true;
     ++in_doubt_;
     ++prepared_;
+    // **The checkpoint must not outrun this record** (R6-4): a prepared
+    // participant is live, so it lands in every `CHECKPOINT_BEGIN`'s active
+    // table as an ordinary transaction, and a redo start that advanced past
+    // the prepare would leave the next mount reading it as a loser. The
+    // transaction carries the LSN and `OldestPreparedLsn` is what the
+    // checkpointer floors at.
+    if (txn::Transaction* txn = context.session.transaction(); txn != nullptr) {
+        txn->set_prepare_lsn(lsn);
+    }
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("2pc", "core " + std::to_string(core_id_) + " prepared core " +
                                std::to_string(key.first) + "'s session " +

@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -187,8 +188,29 @@ protected:
         return out;
     }
 
-    CoordinatorStreamResolver Resolver() {
-        return CoordinatorStreamResolver(dir_, kSegment, kParticipantCore);
+    // Two cores' anchors, both zeroed - "no checkpoint yet", which
+    // disables the durable-point check the way it is disabled for a fresh
+    // stream. The test that needs a real one sets it.
+    std::vector<WalAnchorFields> Anchors() const { return std::vector<WalAnchorFields>(2); }
+
+    CoordinatorStreamResolver Resolver(std::vector<WalAnchorFields> anchors = {}) {
+        return CoordinatorStreamResolver(dir_, kSegment, kParticipantCore,
+                                         anchors.empty() ? Anchors() : std::move(anchors));
+    }
+
+    // One prepared transaction, resolved. The batch shape wrapped for the
+    // tests that are about the verdict rather than about the batching.
+    StatusOr<wal::TxnOutcome> ResolveOne(CoordinatorStreamResolver& resolver,
+                                         const wal::PreparedTxn& prepared,
+                                         std::uint64_t participant_txn = kParticipantTxn) {
+        std::map<std::uint64_t, wal::PreparedTxn> input{{participant_txn, prepared}};
+        auto out = resolver.ResolveAll(input);
+        if (!out.ok()) return out.status();
+        auto found = out.value().find(participant_txn);
+        if (found == out.value().end()) {
+            return Status::InvalidArgument("the resolver answered no verdict");
+        }
+        return found->second;
     }
 
     sched::ManualClock clock_;
@@ -199,17 +221,18 @@ TEST_F(PreparedResolutionTest, ACoordinatorThatCommittedMakesThePreparedTransact
     WriteCoordinatorStream(/*commit=*/true);
     CoordinatorStreamResolver resolver = Resolver();
 
-    auto verdict = resolver.Resolve(kParticipantTxn, Prepared());
+    auto verdict = ResolveOne(resolver, Prepared());
     ASSERT_TRUE(verdict.ok()) << verdict.status().message();
     EXPECT_EQ(verdict.value(), wal::TxnOutcome::kWinner);
     EXPECT_EQ(resolver.streams_read(), 1u);
+    EXPECT_GT(resolver.records_scanned(), 0u);
 }
 
 TEST_F(PreparedResolutionTest, ACoordinatorThatAbortedMakesItALoser) {
     WriteCoordinatorStream(/*commit=*/false);
     CoordinatorStreamResolver resolver = Resolver();
 
-    auto verdict = resolver.Resolve(kParticipantTxn, Prepared());
+    auto verdict = ResolveOne(resolver, Prepared());
     ASSERT_TRUE(verdict.ok()) << verdict.status().message();
     // A loser, not `kAborted`: this stream wrote no compensations, so undo
     // owes the rollback rather than redo having already replayed it.
@@ -225,9 +248,55 @@ TEST_F(PreparedResolutionTest, ACoordinatorThatDecidedNothingAbortsIt) {
     WriteCoordinatorStream(/*commit=*/false, /*decide=*/false);
     CoordinatorStreamResolver resolver = Resolver();
 
-    auto verdict = resolver.Resolve(kParticipantTxn, Prepared());
+    auto verdict = ResolveOne(resolver, Prepared());
     ASSERT_TRUE(verdict.ok()) << verdict.status().message();
     EXPECT_EQ(verdict.value(), wal::TxnOutcome::kLoser);
+}
+
+TEST_F(PreparedResolutionTest, ACoordinatorStreamShortOfItsAnchorRefusesRatherThanAborting) {
+    // The shape that would otherwise read as "no decision" and abort a
+    // transaction its coordinator may have committed: the stream is intact
+    // as far as it goes, but its anchor was published past where it now
+    // ends, so the records the anchor depends on are gone. `Analyze`
+    // refuses this on its own stream (analysis.hpp); a scan of somebody
+    // else's owes the same check, and for a sharper reason.
+    WriteCoordinatorStream(/*commit=*/false, /*decide=*/false);
+    std::vector<WalAnchorFields> anchors(2);
+    anchors[kCoordinatorCore].durable_lsn = 1ull << 40;  // far past the file
+    CoordinatorStreamResolver resolver = Resolver(anchors);
+
+    auto verdict = ResolveOne(resolver, Prepared());
+    ASSERT_FALSE(verdict.ok());
+    EXPECT_EQ(verdict.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(verdict.status().message().find("before the durable point"), std::string::npos)
+        << verdict.status().message();
+}
+
+TEST_F(PreparedResolutionTest, OneCoordinatorsStreamIsScannedOnceForEveryTransactionOnIt) {
+    // The batch's whole point: three of this core's transactions decided by
+    // one coordinator cost one scan, not three.
+    WriteCoordinatorStream(/*commit=*/true);
+    CoordinatorStreamResolver resolver = Resolver();
+
+    std::map<std::uint64_t, wal::PreparedTxn> input;
+    for (std::uint64_t i = 0; i < 3; ++i) input.emplace(kParticipantTxn + i, Prepared());
+    auto out = resolver.ResolveAll(input);
+    ASSERT_TRUE(out.ok()) << out.status().message();
+    EXPECT_EQ(out.value().size(), 3u);
+    EXPECT_EQ(resolver.streams_read(), 1u) << "one stream, one scan";
+    for (const auto& [txn_id, verdict] : out.value()) {
+        (void)txn_id;
+        EXPECT_EQ(verdict, wal::TxnOutcome::kWinner);
+    }
+}
+
+TEST_F(PreparedResolutionTest, APrepareNamingACoreThisDatabaseDoesNotHaveIsCorruption) {
+    CoordinatorStreamResolver resolver = Resolver();
+    auto verdict = ResolveOne(resolver, Prepared(/*coordinator_core=*/9));
+    ASSERT_FALSE(verdict.ok());
+    EXPECT_EQ(verdict.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(verdict.status().message().find("this database has 2 core(s)"), std::string::npos)
+        << verdict.status().message();
 }
 
 TEST_F(PreparedResolutionTest, AnAbsentCoordinatorStreamRefusesRatherThanAborting) {
@@ -237,7 +306,7 @@ TEST_F(PreparedResolutionTest, AnAbsentCoordinatorStreamRefusesRatherThanAbortin
     // transaction its coordinator committed and told a client about.
     CoordinatorStreamResolver resolver = Resolver();
 
-    auto verdict = resolver.Resolve(kParticipantTxn, Prepared());
+    auto verdict = ResolveOne(resolver, Prepared());
     ASSERT_FALSE(verdict.ok());
     EXPECT_EQ(verdict.status().code(), StatusCode::kCorruption);
     EXPECT_NE(verdict.status().message().find("will not guess"), std::string::npos)
@@ -247,7 +316,7 @@ TEST_F(PreparedResolutionTest, AnAbsentCoordinatorStreamRefusesRatherThanAbortin
 TEST_F(PreparedResolutionTest, APrepareNamingThisCoreAsItsOwnCoordinatorIsCorruption) {
     // A coordinator never writes TXN_PREPARE; only a participant does.
     CoordinatorStreamResolver resolver = Resolver();
-    auto verdict = resolver.Resolve(kParticipantTxn, Prepared(/*coordinator_core=*/kParticipantCore));
+    auto verdict = ResolveOne(resolver, Prepared(/*coordinator_core=*/kParticipantCore));
     ASSERT_FALSE(verdict.ok());
     EXPECT_EQ(verdict.status().code(), StatusCode::kCorruption);
 }
@@ -324,7 +393,8 @@ TEST_F(PreparedMountTest, APreparedTransactionWithNoResolverRefusesTheMount) {
 
 TEST_F(PreparedMountTest, ACommittedVerdictLeavesTheTransactionStandingAndUndoUntouched) {
     WriteCoordinatorDecision(/*commit=*/true);
-    CoordinatorStreamResolver resolver(dir_, kSegment, kParticipantCore);
+    CoordinatorStreamResolver resolver(dir_, kSegment, kParticipantCore,
+                                      std::vector<WalAnchorFields>(2));
 
     auto report = Recover(&resolver);
     ASSERT_TRUE(report.ok()) << report.status().message();
@@ -340,7 +410,8 @@ TEST_F(PreparedMountTest, ACommittedVerdictLeavesTheTransactionStandingAndUndoUn
 
 TEST_F(PreparedMountTest, AnAbortedVerdictHandsTheTransactionToUndo) {
     WriteCoordinatorDecision(/*commit=*/false);
-    CoordinatorStreamResolver resolver(dir_, kSegment, kParticipantCore);
+    CoordinatorStreamResolver resolver(dir_, kSegment, kParticipantCore,
+                                      std::vector<WalAnchorFields>(2));
 
     auto report = Recover(&resolver);
     ASSERT_TRUE(report.ok()) << report.status().message();
@@ -357,7 +428,8 @@ TEST_F(PreparedMountTest, AnAbortedVerdictHandsTheTransactionToUndo) {
 TEST_F(PreparedMountTest, ARefusedResolutionRefusesTheMountRatherThanDefaulting) {
     // The coordinator's stream is absent; the resolver refuses, and the
     // refusal is the mount's answer rather than a verdict.
-    CoordinatorStreamResolver resolver(dir_, kSegment, kParticipantCore);
+    CoordinatorStreamResolver resolver(dir_, kSegment, kParticipantCore,
+                                      std::vector<WalAnchorFields>(2));
     auto report = Recover(&resolver);
     ASSERT_FALSE(report.ok());
     EXPECT_EQ(report.status().code(), StatusCode::kCorruption);

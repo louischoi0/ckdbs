@@ -1220,6 +1220,15 @@ still waits on its own gate, so:
   Reachable only from a test either way until R6-8: `MayShip` still refuses
   inside an explicit transaction, so nothing enrols a participant on a live
   path.
+  **Two paths the R6-4 review caught on the way**, both now closed: a
+  `CHECKPOINT_BEGIN` whose active table listed a live prepared transaction
+  let the redo start advance past its TXN_PREPARE, after which the next
+  mount read it as an ordinary loser and rolled it back (fixed by flooring
+  the checkpoint's redo start at the oldest live prepare - **an amendment to
+  `wal.md` §11-3 that R6-9 owes the spec**); and the resolver read a
+  coordinator stream whose tail the crash took as "no decision", which is an
+  abort (fixed by applying `Analyze`'s anchor-honesty check to the
+  coordinator's stream too).
 - **Nothing reclaims a shipped statement's waiter if its coroutine is
   destroyed rather than completed** (Part A, 2026-08-26).
   `StatementShipClient::Close` is reached only from

@@ -844,10 +844,109 @@ The `[OPEN]` itself is R6-9's to close in `wal.md`, with this as its answer.
   repeat costs one scan of the coordinator's stream and is idempotent; a
   writer for it would be a new recovery-time append path, and this row does
   not need one.
+  **Read this only about a transaction that is already resolved.** For one
+  that is still *in doubt*, the same movement of the scan start would have
+  discarded the only record saying "do not decide this" - the review's bug 1
+  below, and why the checkpoint is now floored at the oldest live prepare.
 - **It caches nothing.** Two prepared transactions on one coordinator open
   that stream twice. The population is bounded by `kShippedMaxEnrolled` per
   core and a mount is not a hot path; a cache here would be invalidated by
   nothing at all.
+
+### The `critics-developer` pass, and what it moved
+
+Run against `e06c117`; the fixes landed on top of it. **Two correctness
+bugs, both of which let a prepared transaction be decided without its
+coordinator** - the row's one prohibition - plus three cuts taken and three
+declined.
+
+**Bug 1, reproduced by the review: a checkpoint re-seeded a live prepared
+transaction as a loser.** A prepared participant is still `active_`, so
+`TransactionManager::Snapshot()` lists it in every `CHECKPOINT_BEGIN`'s
+active table - as an ordinary `{id, undo head}` pair, which cannot say it is
+prepared. Once its pages had been written back, its recLSNs left the dirty
+table and `RedoStartFrom` published a redo start **above** the
+`TXN_PREPARE`. The next mount then scanned from the checkpoint, never saw
+the prepare, read the active-list entry as a loser, and rolled the
+transaction back - durably, with `TXN_ABORT`, and unrecoverably, since the
+mount after that reads `kAborted` and asks nobody.
+
+Fixed by the floor: `ActiveTransactions::OldestPreparedLsn()` (defaulted to
+0, so every existing implementation is unchanged), `txn::Transaction`
+carries the prepare LSN, and `Checkpointer::Start` lowers its redo start to
+it. **This is an amendment to `wal.md` §11-3** - the redo start is now the
+checkpoint's LSN lowered by every nonzero recLSN *and by the oldest live
+prepare* - which R6-9 owes the spec and which the operator should see named:
+the price is that an in-doubt transaction pins the log's redo start until it
+is decided, which is the standard ARIES price and what D5's bounded wait
+bounds. Zero on every stream with nothing prepared, so no existing
+checkpoint's number moves by a byte.
+
+**The field this restores was dropped one row ago, correctly.** R6-3's
+review called `Enrolled::prepare_lsn` write-only and I deleted it. This is
+its reader, and it lives on `txn::Transaction` now rather than on the
+enrolment - which is the right home, because the checkpointer asks the
+transaction manager, not the shipping executor.
+
+**Bug 2: the resolver dropped the anchor-honesty check `Analyze` applies to
+its own stream.** A coordinator stream whose last segment is gone reads as a
+complete stream with no decision in it - `FileLogDevice::Open` catches a
+numbering *gap* but not a missing tail - and a torn tail reads the same way.
+Both produced "abort", which durably contradicts a coordinator that
+committed and told a client so. The resolver now takes every core's anchor
+and refuses when the scan ends before the durable point that core's anchor
+was published with, which is exactly `analysis.hpp`'s argument applied to
+somebody else's stream. The plumbing is `SuperBlock::wal_anchors()` →
+`CoreRuntime::Config::anchors` → `RecoverCoreAtMount`.
+
+That check also gives the "absent decision is an abort" rule the
+completeness it claimed: the header said *"a fact about every byte that core
+ever made durable"*, and without the anchor it was a fact about every byte
+still present. The two are the same only once something says how many there
+should be.
+
+**Bug 3, taken though the review left it optional:** two terminal records
+disagreeing about one id now refuse instead of resolving last-one-wins. It
+is impossible by construction (no id reuse), and this file's whole posture
+is that a wrong answer is worse than no answer.
+
+**Cuts taken.** The resolution is now **one scan per coordinator, not per
+transaction** (`ResolveAll` groups first) - up to `kShippedMaxEnrolled` full
+scans of a possibly-huge stream collapsed to one, at a mount that is already
+the worst this engine has, and `streams_read()` now means what its name
+says. `MountRecovery`'s three counters were write-only and are now printed
+by `SHOW META` when a mount actually resolved something, absent rather than
+zeroed. The `default:` arm over `TxnOutcome` became explicit cases so a
+fifth outcome is a compile warning rather than a runtime refusal; the
+`kNoTxnId` check moved ahead of the decode it used to follow.
+
+**Declined, with reasons.**
+
+- **A `Warn` on every torn-tail-and-no-decision resolution** was the
+  review's minimum; it is there, but the case it describes is no longer the
+  weakest evidence this function acts on - the anchor check is what makes it
+  sound, so the line records the shape rather than apologising for it.
+- **`records_scanned()` deleted as unread.** Kept and asserted instead: it
+  is the number that makes the one-scan-per-coordinator claim checkable
+  from outside, which is the whole point of the batching cut above it.
+- **Carrying preparedness in `CHECKPOINT_BEGIN`'s active table** (the
+  review's alternative fix for bug 1). It is self-describing and the entry
+  has grown before, but it is a payload-format change with a compatibility
+  rule attached, against a floor that is fifteen lines and changes no
+  existing number. If the log-pinning cost ever bites, that is the trade to
+  revisit and the reason to revisit it will be measurable.
+
+### Two notes the review left for later rows
+
+- **The sim harness cannot resolve a cross-owner prepare.** `sim/instance.cpp`
+  passes no `wal_dir`, and the sim's devices are in-memory with no log
+  *directory* at all - so a simulated mount that met a prepared transaction
+  would refuse. Harmless today (single core, nothing prepares), and RP7 runs
+  `scripts/sim.sh`, so it is stated here rather than discovered there.
+- **The resolver opens another core's log device**, which `file_log_device.hpp`
+  calls core-local. Sound because every mount runs on the startup thread
+  before any reactor worker exists, and that dependency is now a stated
+  precondition in `prepared_resolver.hpp` rather than a coincidence.
 
 ### Tests
 

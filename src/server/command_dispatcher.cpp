@@ -1077,6 +1077,16 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " recovery_redo_applied=" << recovery_->redo_applied
            << " recovery_pages_healed=" << recovery_->pages_healed
            << " recovery_torn_tail=" << (recovery_->torn_tail ? 1 : 0);
+        // R6-4's three, printed only when this mount actually resolved a
+        // cross-owner transaction. **Absent rather than zeroed**, the rule
+        // the shipping block already keeps: every mount before R6-8 opens
+        // that path resolves none, and three structural zeroes would say
+        // nothing while looking like a measurement.
+        if (recovery_->prepared != 0) {
+            os << " recovery_prepared=" << recovery_->prepared
+               << " recovery_prepared_committed=" << recovery_->prepared_committed
+               << " recovery_prepared_aborted=" << recovery_->prepared_aborted;
+        }
         if (recovery_->timings.timed) {
             os << " recovery_analysis_us=" << recovery_->timings.analysis_ns / 1000
                << " recovery_redo_us=" << recovery_->timings.redo_ns / 1000

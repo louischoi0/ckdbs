@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
@@ -109,7 +110,8 @@ class PreparedResolver {
 public:
     virtual ~PreparedResolver() = default;
 
-    // The verdict for one prepared transaction, which may only be:
+    // The verdict for **every** prepared transaction analysis found, keyed
+    // by the same participant-side transaction id. A verdict may only be:
     //
     //   - `kWinner`  - the coordinator's stream holds the COMMIT that
     //                  decided it. This half stands; redo has already
@@ -123,12 +125,18 @@ public:
     // records in this stream", and a prepared participant wrote no
     // compensations - it was waiting.
     //
+    // **All of them at once, rather than one call each**, because the
+    // implementation reads a whole stream per coordinator and several of
+    // this core's transactions can share one: a per-transaction interface
+    // would make the cost of a resolution the number of transactions rather
+    // than the number of coordinators.
+    //
     // A failure is a **refusal to mount**, not a default. Guessing either
     // way is the one thing this protocol forbids: guessing commit publishes
     // a transaction that may have aborted, guessing abort discards one the
     // coordinator may have committed and told a client about.
-    virtual StatusOr<TxnOutcome> Resolve(std::uint64_t participant_txn_id,
-                                         const PreparedTxn& prepared) = 0;
+    virtual StatusOr<std::map<std::uint64_t, TxnOutcome>> ResolveAll(
+        const std::map<std::uint64_t, PreparedTxn>& prepared) = 0;
 };
 
 // How long each phase took (`docs/spec/wal.md` §13's "recovery phase timings",
