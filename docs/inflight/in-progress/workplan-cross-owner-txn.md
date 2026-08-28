@@ -146,7 +146,7 @@ this workplan means the v2.4.0 path.
 | R6-0 | The retry bit (§2) | **Built 2026-08-27**, `40e9220` |
 | R6-1 | Wire and sizing (D6) | **Built 2026-08-27**, this worktree |
 | R6-2 | Participant transaction context (D2) | **Built 2026-08-27**, this worktree |
-| R6-3 | Prepare and decide (D4) | — |
+| R6-3 | Prepare and decide (D4) | **Built 2026-08-28**, `63a0f43` |
 | R6-4 | Recovery (D4) | — |
 | R6-5 | In-doubt handling (D5) | — |
 | R6-6 | PW3b extension | — |
@@ -434,6 +434,206 @@ local and this core's own manager knows it), but the note's stated premise
 expires somewhere in this series, and R6-8 is where the refusal actually
 lifts. Recorded so it is found then rather than assumed still true.
 
+## R6-3 — prepare and decide
+
+Built on `v2.5.0-cross-core-owner-protocol-1` at `63a0f43`, the first row
+behind RP0's gate. D4's two phases, and the row where "prepared" stops being
+a word and becomes a durability claim.
+
+### The record: TXN_PREPARE, type 27
+
+`wal::RecordType::kTxnPrepare`, appended to the enum with
+`kMaxAssignedRecordType` moved to match — the pinning rule `record.hpp`
+states, since a hand-typed maximum is what once left type 23 unwritable. The
+payload (`TxnPreparePayload`, 20 bytes) carries the coordinator's **core,
+session id and transaction id**; the envelope carries the **participant's
+own** trx id and `kInvalidPageId`.
+
+Three facts about that split, each load-bearing:
+
+- **The envelope's id is local, and that is D2 enforced from the writing
+  side.** `CoreRuntime::Open` refuses a mount whose stream names a trx id
+  above the superblock's ceiling, so a foreign id in this stream is a stream
+  that will not mount. The coordinator's id is *recorded*, never *used as*
+  this stream's id.
+- **The coordinator's core is in the payload**, unlike the ring message's,
+  where it is `MessageHeader::src_core`. A record has no header to read it
+  from, and a session id is minted per core — two cores mint the same one, so
+  a record keyed on the id alone would resolve one coordinator's transaction
+  against another's stream.
+- **A payload naming coordinator transaction 0 is `Corruption`.** 0 is the id
+  no transaction has, so recovery could never find a decision for it and the
+  transaction would stay in doubt for ever. Fail-closed, the reading
+  `DecodePageInit` gives an unknown page type.
+
+Redo classifies it with the transaction boundaries (`TouchesNoPage`): it
+names no page and changes none. **Analysis is its consumer and that consumer
+is R6-4's**, which is the series' one genuinely open hole — see "What R6-3
+leaves for R6-4" below.
+
+### `WalManager::RequestDurable`, and why a new primitive
+
+A prepare is not a commit, and the drain only syncs for a staged group commit
+or for D3's loss-window interval. Without a way to say *someone is parked on
+this record*, a prepare would wait out `relaxed_flush_interval_ns` (10 ms by
+default) with a coordinator parked on it — a bounded wait, and still the
+wrong answer for a record whose whole content is "this is on the platter".
+
+`RequestDurable(lsn)` is that primitive: it does no I/O, never blocks, and
+makes the next `DrainOnce()` sync. It is **not** folded into
+`pending_group_commits_`, deliberately: that counter is a count of D2 commits
+and `stats_.group_batches` reads it as one, so bumping it for a record that
+commits nothing would make the batch statistics say something untrue about
+the workload. The flag beside the LSN is not redundant either — `IsDurable`
+is strict (`durability.hpp`), so "not yet durable" includes
+`lsn == durable_lsn()`, and with no flag the initial `(0, 0)` state would
+read as a standing request and sync every idle tick.
+
+`EnsureDurable`'s blocking sync stays what a caller with no reactor uses.
+
+### The participant: what "prepared" now forbids
+
+`ShippedStatementExecutor` gained the two seams (`PrepareSeam`, `DecideSeam`)
+because it owns the enrolment `(coordinator core, session id)` keys on;
+`Txn2pcServer` is the transport and looks nothing up — `StatementShipServer`'s
+split, one level over.
+
+**The promise is made after the sync, never at the append.** `Prepare` logs,
+calls `RequestDurable`, and parks in `AwaitPrepared`; only when
+`IsDurable(lsn)` answers true does `prepared` go true and the reply go out. A
+reply sent at the append would promise a durability the device has not given,
+which is the one thing prepare means.
+
+From that flag, three paths change and each would otherwise be a durable
+disagreement:
+
+- **`ExpireEnrolled` passes over a prepared context.** The idle ceiling
+  (`kShippedTxnIdleCeilingNs`) stops applying — D4 forbids the unilateral
+  abort, and the ceiling that does apply is D5's, which is R6-5's.
+- **`RollbackAllEnrolled` leaves it standing** and counts
+  `left_in_doubt_at_stop()`. A rollback at shutdown appends TXN_ABORT for a
+  transaction the coordinator may already have committed in its own stream —
+  the exact durable contradiction two-phase commit exists to prevent. The
+  horizon it pins dies with the process, so leaving it costs nothing.
+- **`EnrolFor` refuses a statement on a prepared context**, retryably. Prepare
+  is a promise about what is *already* durable, so a statement admitted after
+  it would write rows the PREPARE record does not cover and a commit decided
+  on that promise would make the transaction durable in part.
+
+**R6-2's named gap is answered here.** A poisoned session (`kFailedTxn`) was
+still "in a transaction", so every later statement met the failed-txn gate and
+answered "current transaction is aborted", which told the coordinator nothing.
+Prepare is where it becomes legible: the participant refuses, rolls its own
+half back, and the coordinator's answer is ABORT.
+
+Every prepare refusal is **retryable** (`TxnConflict`), and that is a
+statement about the protocol rather than a choice of code: a refused prepare
+aborts the whole transaction, so nothing committed anywhere and a retry is
+safe. The decide leg's refusals are `InvalidArgument` instead — a decide for a
+transaction this core never prepared is a protocol anomaly, not a load
+condition, and it is logged at Error because the commit arm of it is this
+protocol's worst reachable outcome (the decision is durable and one
+participant's half is missing).
+
+The decided end runs through the **ordinary** `COMMIT`/`ROLLBACK`, on
+`DispatchAsync`, so it joins this core's group commit rather than taking an
+`fdatasync` on its reactor — the trap `EndEnrolled`'s header already named.
+
+### The coordinator: one field, then the path it always took
+
+`HandleCommit`'s first act is `session.has_participants()`. Empty — every
+single-core instance, every fixture, and every transaction that touched one
+owner — and it calls `CommitLocal`, which is the body `HandleCommit` has
+always had, lifted out unchanged. **That is D1's fast path as a wiring
+property**: no participant is enrolled unless a statement shipped inside a
+transaction, so a dispatcher never told about a 2PC client cannot have one.
+`Txn2pcClient::prepare_messages()` staying 0 is how the work order's §5 asks
+for it to be asserted, and the test asserts exactly that.
+
+With participants, the sequence is in `DispatchAsync` because every step of it
+is a park:
+
+1. `PrepareAcrossOwners` opens the phase and sends. **Every refusal it can
+   produce happens before the first prepare leaves** — no reactor, no shipping
+   identity, a bad participant list — so a client that sees one knows nothing
+   was asked and its transaction is still open.
+2. Park on the prepare phase. It settles when every participant has answered
+   or the deadline passes, and **a prepare timeout is an ABORT**: no decision
+   was written, so nothing committed anywhere.
+3. All prepared → `CommitLocal`, whose COMMIT record **is** the decision (D4).
+   Its own failure flips the branch to abort, since `CommitLocal` has already
+   rolled back by the time it answers ERR.
+4. **The decision is made durable before anyone is told**, whatever the
+   durability class — `relaxed`'s window is a promise about this stream's own
+   recent commits, not about a record another core is about to act on. This is
+   the ordinary commit wait taken early, not an extra one.
+5. Send the decision, park on the acknowledgements, answer the client. An
+   unacknowledged participant is a **log line, not an outcome**: the decision
+   is durable and the client's transaction is settled either way.
+
+A refused prepare reaches the client in the **participant's own code and
+words**. Wrapping every one in `TxnConflict` would invite a retry loop on a
+refusal that will recur; the participant is the only side that knows which
+kind its refusal is.
+
+### Named costs and debts this row creates
+
+- **A silent participant costs the client two deadlines, not one**
+  (`2 × kTxnPhaseDeadlineNs` = 20 s). The prepare phase times out and decides
+  ABORT; the decide phase then tells the same silent core and waits out its
+  own ceiling for an acknowledgement that changes no outcome. Bounded and
+  never silent (HP3), and left as it is because **R6-5 owns the ceiling this
+  would be shortened by** — the alternative, waiting only on participants that
+  answered the prepare, splits "who is told" from "who is waited on" and is a
+  decision that belongs with D5's constant. `phase_timeouts()` reads 2 for one
+  such transaction, which is how it is visible from outside.
+- **`kTxnPhaseDeadlineNs` is not D5's ceiling.** It is the coordinator's
+  per-phase presumed-lost point, sized by `kShippedStatementDeadlineNs`'s
+  argument. D5's in-doubt ceiling — a named constant reached through one
+  function, config-swept, ending in a named retryable refusal that is not
+  `UnknownOutcome` — is R6-5's to propose and measure, per §2's obligations.
+- **The ack wait is on the client's commit path**, which matches D7's cost
+  model ("two syncs deep, plus two ring round trips"). B1 measures it.
+- **Nothing enrols a participant on a live path yet.** `MayShip` still refuses
+  inside an explicit transaction and `CheckWriteAffinity` still refuses the
+  cross-owner write, so `Session::EnrolParticipant` has no caller outside the
+  tests — R6-8's row, which is also where `in_txn` starts being set on a
+  shipped statement. R6-0's retry bit landed the same way and for the same
+  reason.
+- **The three `UnknownOutcome` arms in `Execute` are still three.** R6-0
+  deferred the collapse to "where the fourth caller appears", and R6-3 adds no
+  fourth arm — the decide leg's refusals are deliberately not `UnknownOutcome`.
+  R6-5's resolution ask is the fourth, and the collapse belongs there.
+- **A participant whose decided COMMIT fails locally has no repair path.**
+  It is counted (`decide_refusals()`), logged at Error, and reported to the
+  coordinator; `HandleCommit`'s failure arm has already rolled its half back,
+  so nothing at runtime can put it right. R6-4 is what makes such a
+  transaction resolvable at all.
+
+### What R6-3 leaves for R6-4, stated rather than implied
+
+**A prepared-but-undecided transaction is still rolled back at the next
+mount.** Analysis reads a TXN_PREPARE the way it reads every record whose
+envelope names a transaction — as evidence the transaction existed, hence a
+loser — and undo unwinds it. So a participant that crashes while prepared
+loses its half even if the coordinator committed. That is R6-4's subject and
+the reason the work order gates the whole series behind RP7 rather than
+shipping rows one at a time; it is recorded here because a durable prepare
+that recovery does not honour is exactly the kind of half-built state that
+reads as finished from the outside.
+
+### Tests
+
+`tests/txn_2pc_protocol_test.cpp`, three fixtures for three failure shapes:
+the participant driven through its seams over a real WAL (the record's
+contents, the sweep and shutdown exclusions, the statement refusal, both
+decide arms, every refusal path), the coordinator over a real three-core ring
+(N participants, a refusal, a deadline, the leg check, the shapes refused
+before a send), and the dispatcher's `COMMIT` end to end against a stub
+participant (the fast path's zero prepare messages, commit, a refused prepare,
+a silent participant, and the no-reactor refusal). `tests/wal_payload_test.cpp`
+gained TXN_PREPARE's round trip and its zero-id corruption.
+
 ## Open, carried from the work order
 
 - **D1–D7 are ratified** (2026-08-28) and so are both `[OPEN]`s
@@ -444,3 +644,8 @@ lifts. Recorded so it is found then rather than assumed still true.
   R6-9's two doc sentences, and B1's p50-and-p99 reporting.
 - **R6-4 must answer `wal.md` §3's second `[OPEN]`** — recovery across a
   core-count change. A refusal to mount is an answer, and is recorded as one.
+  **R6-3 made it the next row rather than a later one**: a prepared
+  participant now leaves a durable TXN_PREPARE that analysis still reads as a
+  loser, so the state R6-4 exists to resolve is on disk from `63a0f43`
+  onward. Nothing ships out of this series before RP7's gate, which is what
+  keeps that a sequenced gap rather than a shipped one.
