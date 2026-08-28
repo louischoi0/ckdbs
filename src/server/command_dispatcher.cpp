@@ -6104,12 +6104,18 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // exactly the sessions that can *reach* the ship path are diverted from
     // this one: a dispatcher with no 2PC client, or a path that cannot
     // park, keeps the pipeline it had and the behaviour it had with it.
-    const bool enrolling = MayEnrolShip(session);
-    if (remote_reads_ != nullptr && !analyze && !enrolling &&
-        chain.value().steps.size() == 1 &&
+    //
+    // **Last in the chain, not first**, which is the same ordering argument
+    // the paragraph above makes about `InitTableAccess`: the shape tests
+    // are free and this one is a call, so a local read - which is every
+    // read on a single-core instance and most reads on any other - reaches
+    // its answer without ever asking. CP2's "free at the instruction level"
+    // is a claim about that path and this row does not spend it.
+    if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 1 &&
         chain.value().hoisted.empty() && chain.value().star() &&
         !chain.value().aggregated() && !chain.value().sorted() &&
-        !chain.value().limit.has_value() && chain.value().offset == 0) {
+        !chain.value().limit.has_value() && chain.value().offset == 0 &&
+        !MayEnrolShip(session)) {
         const exec::Step& step = chain.value().steps[0];
         auto owner_access = catalog_.InitTableAccess(step.rel_oid);
         if (owner_access.ok() && owner_access.value()->owner_core != core_id_ &&
@@ -6145,8 +6151,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // this after a revision that had it the other way round). A plan or
     // an open the machinery refuses falls through to the honest affinity
     // refusal below, never a worse error.
-    if (remote_reads_ != nullptr && !analyze && !enrolling &&
-        TwoStepPipelineEligible(chain.value()).ok()) {
+    if (remote_reads_ != nullptr && !analyze &&
+        TwoStepPipelineEligible(chain.value()).ok() && !MayEnrolShip(session)) {
         auto outer_access = catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
         auto inner_access = catalog_.InitTableAccess(chain.value().steps[1].rel_oid);
         if (outer_access.ok() && inner_access.ok() &&

@@ -1071,6 +1071,14 @@ still waits on its own gate, so:
   correctly by the P4d pipeline** when the session lands on core 0, and
   `overlong_read` answers 100% `UNKNOWN_OUTCOME` (the entry below). The R6
   entry stays **open** and now points here rather than at a total.
+  **Amended 2026-08-28** (`acbd6b5`, RR1, `docs/spec/cross-owner-txn.md`):
+  `in_explicit_txn` is no longer part of the residue for either half — the
+  write population converted at R6-8 and the read population at RR1 — so
+  what this distribution measures is the pre-RR1 era. What still refuses is
+  `two_owner_read`'s remainder and `subquery_write`. `overlong_read`'s
+  entry below **widens**: a read inside a cross-owner transaction now ships,
+  so it is bounded by the same 992-byte reply cap, and is refused past it
+  rather than pipelined.
 - **A shipped write's abandoned transaction costs WAL, not the lease**
   (measured 2026-08-26, B6, refining the entry below). Six extra trx-id
   refills per 25,000 statements — 2.3 µs/statement amortised — and **no
@@ -1164,14 +1172,16 @@ still waits on its own gate, so:
   pipeline's. `step_pipeline.hpp` carries the retraction beside the
   constant.
 - **What shipping deliberately does not carry, and where the residue is
-  read** (2026-08-26). Refused, by scope and not by omission: a statement
-  **inside an explicit transaction** (nothing crosses transaction state), a
-  statement **spanning two owners** (R6, which is the 2PC question), and
-  any statement on a path that cannot park. The first two keep their exact
-  CC3 spelling and their retryable bit, and they are what
+  read** (2026-08-26; **third era 2026-08-28**). Refused, by scope and not
+  by omission: ~~a statement **inside an explicit transaction**~~ —
+  converted, writes at R6-8 and reads at RR1 (`acbd6b5`,
+  `docs/spec/cross-owner-txn.md`) — a statement **spanning two owners**
+  (a multi-owner *statement*, which the commit protocol does not address),
+  and any statement on a path that cannot park. Both survivors keep their
+  exact CC3 spelling and their retryable bit, and they are what
   `cross_core_write_refusals` counts from now on — its meaning is
-  unchanged, so the series spans both eras and the residue is directly
-  readable as the 2PC evidence base (`docs/spec/crosscore.md` §6).
+  **unchanged across all three eras**, which is what lets the series be
+  read end to end (`docs/spec/crosscore.md` §6).
 - **A shipped write opens a transaction on the arrival core and abandons
   it** (SS2, 2026-08-26). The dispatch fork sits where the relation is
   resolved, which is after `HandleInsert`/`HandleUpdate`/`HandleDelete` have
