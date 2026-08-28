@@ -472,7 +472,6 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
         reply(lsn.status());
         return;
     }
-    context.prepare_lsn = lsn.value();
 
     if (wal_ == nullptr) {
         // The unlogged fixture. There is no record and therefore no sync to
@@ -540,6 +539,7 @@ sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
         reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
                                   " could not make its prepare durable within the phase "
                                   "deadline; nothing is prepared here"));
+        ApplyHeldDecision(it);
         co_return Status::OK();
     }
 
@@ -555,7 +555,22 @@ sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
                                std::to_string(key.second) + " at lsn " + std::to_string(lsn));
     }
     reply(Status::OK());
+    // **The decision may already be here**, held by `Decide` because this
+    // phase was running when it arrived - a coordinator that another
+    // participant's refusal made decide while this core was still reaching
+    // the device. Applied now, in the order it arrived, on the arm above as
+    // well as this one: an ABORT for a prepare that failed is exactly what
+    // that context needs.
+    ApplyHeldDecision(it);
     co_return Status::OK();
+}
+
+void ShippedStatementExecutor::ApplyHeldDecision(
+    std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it) {
+    Enrolled& context = *it->second;
+    if (!context.decision_pending) return;
+    context.decision_pending = false;
+    StartDecision(it, context.decision_commits, std::move(context.decision_reply));
 }
 
 void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
@@ -572,6 +587,26 @@ void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
             // applied, because from the coordinator's side that is exactly
             // what happened.
             ++decides_aborted_;
+            reply(Status::OK());
+            return;
+        }
+        if (ask.retry) {
+            // **R6-0's bit, read where R6-1 said it would be**: on this leg
+            // it separates a benign resend from a decide for a transaction
+            // this core never prepared. A marked resend meeting no context
+            // is the first of those - the participant applied the decision
+            // and dropped the context, and the acknowledgement was lost -
+            // so it is acknowledged again rather than counted as the
+            // anomaly below. No counter of its own: nothing resends a
+            // decide until R6-5, so a field for it would read structurally
+            // 0, against the "absent rather than zeroed" rule.
+            if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+                log_->Debug("2pc", "core " + std::to_string(core_id_) +
+                                       " acknowledged a resent decision for core " +
+                                       std::to_string(ask.coordinator) + "'s session " +
+                                       std::to_string(ask.session_id) +
+                                       ", which it has already applied and released");
+            }
             reply(Status::OK());
             return;
         }
@@ -596,16 +631,6 @@ void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
     }
     Enrolled& context = *it->second;
 
-    if (context.phase_running || running_.find(key) != running_.end()) {
-        // A decide that overlaps this context's own previous phase. Refused
-        // rather than queued: a second `COMMIT` dispatched onto a session
-        // already ending one would run against a transaction that is being
-        // torn down under it.
-        ++decide_refusals_;
-        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
-                                  " is still finishing this session's previous phase"));
-        return;
-    }
     if (context.coordinator_txn_id != 0 &&
         context.coordinator_txn_id != ask.transaction_id) {
         // The identity check, in the direction that matters: this core
@@ -618,16 +643,69 @@ void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
             " for this session and was told to decide " + std::to_string(ask.transaction_id)));
         return;
     }
+
+    // **A decide that meets a phase still running is held, not refused.**
+    // The reachable case is not a race at the ceiling: one participant
+    // refuses instantly, the coordinator decides ABORT and sends it while
+    // *this* core's prepare is still reaching the device. Refusing that
+    // decide would leave a participant that goes on to become prepared with
+    // no decision ever coming - the sweep skips it, shutdown skips it, and
+    // this row has no resolution ask - so the answer is to remember it and
+    // apply it the moment the prepare wakes.
+    //
+    // A statement running on the context is the other overlap and is not
+    // held: it is `Finish` that would tear the session down under a
+    // dispatch, and a decide arriving mid-statement means a coordinator
+    // that did not wait for its own answer.
+    if (running_.find(key) != running_.end()) {
+        ++decide_refusals_;
+        reply(Status::TxnConflict("cross-owner transaction: core " + std::to_string(core_id_) +
+                                  " is still running this session's statement; the decision "
+                                  "cannot be applied under it"));
+        return;
+    }
+    if (context.phase_running) {
+        if (context.decision_pending) {
+            // Two decisions for one transaction. The first is the one this
+            // core was told to keep, and D4 gives a transaction exactly one.
+            ++decide_refusals_;
+            reply(Status::InvalidArgument(
+                "cross-owner transaction: core " + std::to_string(core_id_) +
+                " already holds an undelivered decision for this session"));
+            return;
+        }
+        context.decision_pending = true;
+        context.decision_commits = commit;
+        context.decision_reply = std::move(reply);
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("2pc", "core " + std::to_string(core_id_) + " holds a " +
+                                   (commit ? "COMMIT" : "ABORT") + " for core " +
+                                   std::to_string(key.first) + "'s session " +
+                                   std::to_string(key.second) +
+                                   " until its prepare reaches the device");
+        }
+        return;
+    }
+
+    StartDecision(it, commit, std::move(reply));
+}
+
+void ShippedStatementExecutor::StartDecision(
+    std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it, bool commit,
+    Txn2pcServer::ReplyFn reply) {
+    Enrolled& context = *it->second;
     if (commit && !context.prepared) {
         // **Never commit unprepared work.** By D4 a coordinator commits
         // only once every participant replied prepared, so this can only be
-        // a decide that overtook its own prepare or a coordinator that did
-        // not wait - and committing here would make this core's half
-        // durable on the strength of a promise it never gave.
+        // a coordinator that did not wait, or a prepare that failed after
+        // the decision was made - and committing here would make this
+        // core's half durable on the strength of a promise it never gave.
         ++decide_refusals_;
-        reply(Status::InvalidArgument(
-            "cross-owner transaction: core " + std::to_string(core_id_) +
-            " was told to commit a transaction it has not prepared"));
+        if (reply) {
+            reply(Status::InvalidArgument(
+                "cross-owner transaction: core " + std::to_string(core_id_) +
+                " was told to commit a transaction it has not prepared"));
+        }
         return;
     }
 
@@ -642,6 +720,7 @@ void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
     // commit instead of taking an `fdatasync` on its reactor.
     static constexpr std::string_view kCommit = "COMMIT";
     static constexpr std::string_view kRollback = "ROLLBACK";
+    const DedupKey key = it->first;
     scheduler_.Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground,
         dispatcher_.DispatchAsync(commit ? kCommit : kRollback, &context.session,
@@ -676,14 +755,25 @@ void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
         return;
     }
 
-    // The decided end refused. On the abort arm that is bad and bounded -
-    // the transaction stays open here and the sweep will try again. On the
-    // **commit** arm it is the worst outcome this protocol has: the
-    // coordinator's decision is durable, and this core has not applied it.
-    // `HandleCommit`'s own failure path has already rolled the transaction
-    // back by the time it answers, so nothing is left to retry - all this
-    // can do is say so, in a code the coordinator counts and a line an
-    // operator can find.
+    // The decided end refused, and what that leaves behind depends on
+    // whether this core had prepared.
+    //
+    // **Unprepared** (an abort of a context that never promised anything):
+    // bad and bounded - `RollbackLocal`'s only arm that leaves the
+    // transaction open is the assertion enforcer's, and `ExpireEnrolled`
+    // sweeps an unprepared context, so the ceiling retries it.
+    //
+    // **Prepared**: the sweep passes over it (D4), so nothing here retries
+    // it and the context stands until the process stops - one live
+    // transaction, one enrolment slot, and the read horizon it pins. On the
+    // *commit* arm that is correct and is the worst outcome this protocol
+    // has: the coordinator's decision is durable and this core has not
+    // applied it, which is exactly the in-doubt population R6-5 resolves.
+    // On the *abort* arm the standing context is residue rather than doubt -
+    // the decision is known and it is ABORT - and retrying it is R6-5's to
+    // build, because D4's prohibition is on a **unilateral** abort and this
+    // one would not be. Either way all this path can do is say so, in a code
+    // the coordinator counts and a line an operator can find.
     ++decide_refusals_;
     if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
         log_->Error("2pc", "core " + std::to_string(core_id_) + " could not " +

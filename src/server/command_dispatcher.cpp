@@ -264,12 +264,28 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         if (commit) {
             *out = CommitLocal(active, &decision_lsn);
             if (out->response.rfind("ERR ", 0) == 0) {
-                // The coordinator's own half refused, and `CommitLocal` has
-                // already rolled it back. The decision is therefore ABORT,
-                // and the participants must hear that one rather than the
-                // one this branch set out to make.
+                // The coordinator's own half refused. The decision is
+                // therefore ABORT, and the participants must hear that one
+                // rather than the one this branch set out to make.
                 commit = false;
                 decision_lsn = wal::kNoLsn;
+                // **And this core's half has to be aborted with them.**
+                // `CommitLocal` unwinds on its *second* failure arm (a
+                // failed `Commit`) and deliberately does not on its first
+                // (the assertion enforcer), which leaves the transaction
+                // open so a **local** caller may retry `COMMIT`. A
+                // cross-owner one may not: the ABORT below reaches every
+                // participant, so an open half here would leave the
+                // transaction aborted everywhere but on its coordinator,
+                // and the retry that open state invites cannot succeed -
+                // its participants are already rolled back. The commit's
+                // own error stays the client's answer; only the state
+                // behind it is made to match the decision.
+                if (active.in_explicit_txn()) {
+                    const std::string refused = out->response;
+                    *out = RollbackLocal(active);
+                    out->response = refused;
+                }
             }
         } else {
             *out = RollbackLocal(active);

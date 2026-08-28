@@ -392,7 +392,6 @@ struct TxnPhaseOutcome {
     std::uint64_t transaction_id = 0;
     std::vector<TxnParticipantOutcome> participants;
     std::size_t outstanding = 0;
-    sched::MonoTimeNs sent_ns = 0;
     sched::MonoTimeNs deadline_ns = 0;
 
     // Every participant replied and none refused. The coordinator's commit

@@ -311,6 +311,13 @@ public:
     // them back. D4 forbids the rollback; R6-6 owns what the next mount
     // does with them, and this is the number that says whether that path
     // was reached.
+    //
+    // **The protection this counts is not yet end to end** (R6-3, stated
+    // here because the counter would otherwise read as one that is):
+    // `wal/analysis.cpp` has no `TXN_PREPARE` arm, so the transaction this
+    // path carefully declined to abort is still a loser at the next mount
+    // and undo unwinds it. R6-4 is what closes that, and the series ships
+    // as one at RP7's gate.
     std::uint64_t left_in_doubt_at_stop() const noexcept { return left_in_doubt_at_stop_; }
 
     // Rolls back every enrolled transaction idle past
@@ -423,10 +430,6 @@ private:
         // ground from a live coroutine. `running_` cannot serve here
         // because a phase is not a statement and takes no entry in it.
         bool phase_running = false;
-        // The prepare record's LSN, which is what "durable" is tested
-        // against. Kept after the fact because it is what a resolution ask
-        // (R6-5) and a log line both want to name.
-        wal::Lsn prepare_lsn = wal::kNoLsn;
         // The decide leg's state, held here because this context is what
         // owns the transaction being ended and there is at most one
         // decision per context. `DispatchAsync` writes `decision_out`
@@ -436,6 +439,14 @@ private:
         DispatchOutcome decision_out;
         Txn2pcServer::ReplyFn decision_reply;
         bool decision_commits = false;
+        // **A decision that arrived while the prepare was still reaching
+        // the device**, held rather than refused. Its reachable cause is
+        // another participant refusing, which lets the coordinator decide
+        // before this core has answered at all; refusing it would strand a
+        // participant that goes on to become prepared with no decision
+        // coming, since nothing in this row resolves one. `AwaitPrepared`
+        // applies it on wake.
+        bool decision_pending = false;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
             : session(isolation), touched_at_ns(now) {
@@ -486,6 +497,16 @@ private:
     // statement.
     sched::Coro AwaitPrepared(DedupKey key, wal::Lsn lsn, sched::MonoTimeNs deadline_ns,
                               Txn2pcServer::ReplyFn reply);
+    // Runs the decided end - `COMMIT` or `ROLLBACK` - on the context's own
+    // session. One entry point for both callers, `Decide` and the prepare
+    // that woke holding a decision, so the "never commit unprepared work"
+    // rule is asked once rather than at each.
+    void StartDecision(std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it, bool commit,
+                       Txn2pcServer::ReplyFn reply);
+    // The decision `Decide` held because a phase was running, applied now
+    // that it is not. A no-op where none is held, which is every ordinary
+    // prepare.
+    void ApplyHeldDecision(std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it);
     // The decided end of the transaction, once the dispatcher's `COMMIT` or
     // `ROLLBACK` has finished: read what it answered, drop the context, and
     // acknowledge. The completion of a `DispatchAsync` task rather than a

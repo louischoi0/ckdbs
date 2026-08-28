@@ -586,7 +586,13 @@ kind its refusal is.
   would be shortened by** — the alternative, waiting only on participants that
   answered the prepare, splits "who is told" from "who is waited on" and is a
   decision that belongs with D5's constant. `phase_timeouts()` reads 2 for one
-  such transaction, which is how it is visible from outside.
+  such transaction, which is how it is visible from outside. **The review
+  found a second consequence the first draft did not price**: a statement's
+  connection cannot be torn down while it is in flight
+  (`TcpServer::CloseClient` defers behind `in_flight`), so a dropped client
+  whose participant is silent holds its connection for those 20 s too.
+  Exposure is zero until R6-8 opens the path, and RP3 lands before RP6, so
+  the owner of the ceiling reaches it first.
 - **`kTxnPhaseDeadlineNs` is not D5's ceiling.** It is the coordinator's
   per-phase presumed-lost point, sized by `kShippedStatementDeadlineNs`'s
   argument. D5's in-doubt ceiling — a named constant reached through one
@@ -621,6 +627,91 @@ the reason the work order gates the whole series behind RP7 rather than
 shipping rows one at a time; it is recorded here because a durable prepare
 that recovery does not honour is exactly the kind of half-built state that
 reads as finished from the outside.
+
+### The `critics-developer` pass, and what it moved
+
+Run against `63a0f43`; the fixes landed on top of it. One real bug, one
+reachable protocol hole, three cuts taken and two declined — listed because
+a review whose findings are all silently accepted was not read.
+
+**Fixed in the review itself — the coordinator broadcast ABORT while
+leaving its own half open.** The first draft's comment claimed
+*"`CommitLocal` has already rolled it back"*, which is true of its second
+failure arm (a failed `Commit`, which aborts and finishes) and **false of
+its first**: `enforcer_.CommitTxn` returns with the transaction deliberately
+still open, so a *local* caller may retry `COMMIT`. A cross-owner one may
+not — the ABORT that follows reaches every participant, so the transaction
+would be aborted everywhere except on the core that decided it, and the
+retry that open state invites could no longer succeed. The coordinator's
+half is now rolled back to match the decision it is about to broadcast, with
+the commit's own error text kept verbatim as the client's answer (no wire
+change; HP4 intact).
+
+**Applied after the review — a decide that meets a prepare still reaching
+the device.** The first cut refused it, and the review found the reachable
+cause: not a race at the ceiling, but **another participant refusing
+instantly**, which lets the coordinator decide ABORT while this core is
+still syncing. A refused decide there strands a participant that goes on to
+become prepared with no decision ever coming — the sweep skips it, shutdown
+skips it, and this row has no resolution ask. The decision is now **held on
+the context and applied when the prepare wakes** (`decision_pending`,
+`ApplyHeldDecision`, `StartDecision`), which is exact rather than
+timing-dependent: the alternative the review offered — a participant
+durability ceiling strictly under the coordinator's — closes only the
+deadline race and not this one.
+
+**Applied — the decide leg's retry bit is read.** R6-1 put it there to
+separate a benign resend from a decide for a transaction this core never
+prepared, and leaving it unread made the first of those arrive as the
+second: a resent commit whose ack was lost was answered `InvalidArgument`
+and counted in `decide_refusals()`, the counter whose own header calls it
+"the one anomaly on this leg that is not a lost message". A marked resend
+meeting no context is now acknowledged. **The prepare leg's bit stays
+unread, and that is not an omission**: a prepared context is never swept, so
+a resent prepare meeting no context means the same thing a first one does,
+and the refusal is already right.
+
+**Recorded, not fixed:**
+
+- **The decision-durability park has no ceiling** (`DispatchAsync`, between
+  the durable COMMIT and telling the participants). HP3's literal falsifier
+  — except that the group-commit park two stages below it is equally
+  unbounded and has been since D2, so this is an **inherited class rather
+  than a new one**, and picking a ceiling for one commit wait and not the
+  other would be arbitrary. **RP7 must report it as inherited-or-fixed**
+  rather than let HP3 read as confirmed on a wait that was never bounded.
+- **`FinishDecision`'s failure path leaves a prepared context standing**,
+  and the sweep passes over it — so a decided end that refuses costs one
+  live transaction, one enrolment slot and the read horizon it pins, for the
+  life of the process. On the commit arm that is genuine doubt and R6-5's;
+  on the abort arm it is residue, and retrying it is **not** the unilateral
+  abort D4 forbids, so R6-5 can. The comment that claimed "the sweep will
+  try again" is corrected — it was true only of an unprepared context.
+
+**Cuts taken:** the no-seam refusal was a verbatim duplicated string
+literal and is now one function; `OnPrepare`/`OnDecide`'s size-check-and-copy
+preamble is one template; `Enrolled::prepare_lsn` and
+`TxnPhaseOutcome::sent_ns` were write-only and are gone (R6-5 can re-add the
+LSN with a reader); the fast-path test's stray `BEGIN` on the dispatcher's
+autocommit session — in the one test whose subject is that the fast path
+does nothing extra — is gone.
+
+**Cuts declined, with reasons:**
+
+- **A shared ring-waiter across the four services** (`StatementShipClient`,
+  `IndexBuildClient`, `AssertionBuildClient`, `Txn2pcClient` are one
+  `map<request_id, Outcome>` + `Settled`/`Find`/`Close` + a deadline + an
+  identity check, ~180 lines of near-copy). The review is right, and it is
+  **not this row's**: R6-3 should not be where three settled wire contracts
+  move. It should be its own row, because the fifth copy is already
+  predictable — R6-5's in-doubt ask.
+- **Collapsing `Prepare`/`Decide`'s send loops into one template.** Five
+  lines each, differing in payload type and counter; the template would be
+  about as long as what it removes.
+- **`Txn2pcServer::prepares()/decides()/replies()` as dead weight.** Kept
+  and now asserted in the coordinator fixture, which is what
+  `StatementShipServer::requests()` does — a counter with a reader is
+  observability, and the sibling service sets that precedent.
 
 ### Tests
 

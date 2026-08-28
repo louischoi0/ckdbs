@@ -56,23 +56,50 @@ TxnParticipantReplyPayload TxnParticipantReplyOf(std::uint64_t session_id,
 
 // ---- The participant's half -----------------------------------------------
 
+namespace {
+
+// The refusal a core with no seam gives, written once because it is given
+// twice and two copies of a message that must mean one thing are how they
+// stop meaning it. The wire working and nothing executing on it must not
+// look alike (SS1's rule): without this a mis-wired core would cost the
+// coordinator a whole deadline per phase, which on the prepare leg reads as
+// an abort and says nothing about why.
+Status NoParticipantSeam() {
+    return Status::Unsupported(
+        "cross-owner transaction: this core has no participant seam installed; the wire is "
+        "built and the participant is not");
+}
+
+// The bytes into the POD, bounded rather than trusted. **The one case that
+// gets no reply**: nothing in a mis-sized payload names the waiter parked on
+// the other side, so there is no address to answer, and the coordinator's
+// deadline is the backstop.
+template <class Payload>
+bool CopyRequest(const sched::MessageHeader& header, std::span<const std::byte> payload,
+                 const char* leg, Logger* log, Payload& out) {
+    if (payload.size() != sizeof(out)) {
+        if (log != nullptr && log->enabled(LogLevel::kError)) {
+            log->Error("2pc", std::string(leg) + " from core " +
+                                  std::to_string(header.src_core) + " has " +
+                                  std::to_string(payload.size()) + " bytes, not " +
+                                  std::to_string(sizeof(out)) + "; dropped");
+        }
+        return false;
+    }
+    std::memcpy(&out, payload.data(), sizeof(out));
+    return true;
+}
+
+}  // namespace
+
 void Txn2pcServer::OnPrepare(const sched::MessageHeader& header,
                              std::span<const std::byte> payload) {
     ++prepares_;
     TxnPrepareRequestPayload request{};
-    if (payload.size() != sizeof(request)) {
-        // The one case that gets no reply: nothing here names the waiter
-        // parked on the other side. The coordinator's deadline is the
-        // backstop, and on this leg a deadline is an abort - which is safe,
-        // because a request this core could not read prepared nothing.
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("2pc", "prepare from core " + std::to_string(header.src_core) +
-                                   " has " + std::to_string(payload.size()) + " bytes, not " +
-                                   std::to_string(sizeof(request)) + "; dropped");
-        }
-        return;
-    }
-    std::memcpy(&request, payload.data(), sizeof(request));
+    // A dropped prepare costs the coordinator a deadline, which on this leg
+    // is an abort - safe, because a request this core could not read
+    // prepared nothing.
+    if (!CopyRequest(header, payload, "prepare", log_, request)) return;
 
     // Copied out before the payload can die: the seam parks on a device
     // sync, and `request` lives only as long as this call.
@@ -97,13 +124,8 @@ void Txn2pcServer::OnPrepare(const sched::MessageHeader& header,
         return;
     }
     if (!prepare_) {
-        // The wire working and nothing executing on it must not look alike
-        // (SS1's rule): a core with no seam refuses by name rather than
-        // costing the coordinator a deadline it would read as an abort.
         Reply(ask.coordinator, request_id, sched::RingMessageKind::kTxnPrepareReply,
-              ask.session_id, ask.transaction_id,
-              Status::Unsupported("cross-owner transaction: this core has no participant seam "
-                                  "installed; the wire is built and the participant is not"));
+              ask.session_id, ask.transaction_id, NoParticipantSeam());
         return;
     }
     prepare_(ask, [this, coordinator = ask.coordinator, request_id, session_id = ask.session_id,
@@ -117,16 +139,9 @@ void Txn2pcServer::OnDecide(const sched::MessageHeader& header,
                             std::span<const std::byte> payload) {
     ++decides_;
     TxnDecideRequestPayload request{};
-    if (payload.size() != sizeof(request)) {
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("2pc", "decide from core " + std::to_string(header.src_core) + " has " +
-                                   std::to_string(payload.size()) + " bytes, not " +
-                                   std::to_string(sizeof(request)) +
-                                   "; dropped, and this core stays in doubt");
-        }
-        return;
-    }
-    std::memcpy(&request, payload.data(), sizeof(request));
+    // A dropped decide is worse than a dropped prepare and the same code
+    // handles both: this core stays in doubt until the decision is resent.
+    if (!CopyRequest(header, payload, "decide", log_, request)) return;
 
     DecideAsk ask;
     ask.coordinator = header.src_core;
@@ -148,9 +163,7 @@ void Txn2pcServer::OnDecide(const sched::MessageHeader& header,
 
     if (!decide_) {
         Reply(ask.coordinator, request_id, sched::RingMessageKind::kTxnDecideReply,
-              ask.session_id, ask.transaction_id,
-              Status::Unsupported("cross-owner transaction: this core has no participant seam "
-                                  "installed; the wire is built and the participant is not"));
+              ask.session_id, ask.transaction_id, NoParticipantSeam());
         return;
     }
     decide_(ask, [this, coordinator = ask.coordinator, request_id, session_id = ask.session_id,
@@ -259,8 +272,7 @@ Status Txn2pcClient::OpenPhase(std::uint64_t request_id, TxnPhase phase,
         outcome.participants.push_back(TxnParticipantOutcome{core, false, Status::OK()});
     }
     outcome.outstanding = participants.size();
-    outcome.sent_ns = clock_.Now();
-    outcome.deadline_ns = outcome.sent_ns + kTxnPhaseDeadlineNs;
+    outcome.deadline_ns = clock_.Now() + kTxnPhaseDeadlineNs;
     return Status::OK();
 }
 

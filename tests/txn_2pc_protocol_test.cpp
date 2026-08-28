@@ -146,12 +146,13 @@ protected:
     }
 
     Answer Decide(TxnDecision decision, std::uint64_t transaction_id = kCoordinatorTxn,
-                  std::uint64_t session_id = kSession) {
+                  std::uint64_t session_id = kSession, bool retry = false) {
         Txn2pcServer::DecideAsk ask;
         ask.coordinator = kCoordinator;
         ask.session_id = session_id;
         ask.transaction_id = transaction_id;
         ask.decision = decision;
+        ask.retry = retry;
         auto answer = std::make_shared<Answer>();
         executor_->DecideSeam()(ask, [answer](const Status& status) {
             answer->answered = true;
@@ -371,6 +372,79 @@ TEST_F(Txn2pcParticipantTest, AResentPrepareIsAnsweredAgainAndADifferentTransact
     EXPECT_EQ(executor_->prepare_refusals(), 1u);
 }
 
+TEST_F(Txn2pcParticipantTest, ADecisionThatArrivesDuringPrepareIsHeldAndAppliedOnWake) {
+    // **The reachable case is not a race at a ceiling**: another
+    // participant refuses instantly, so the coordinator decides ABORT and
+    // sends it while this core's prepare is still reaching the device.
+    // Refusing that decide would leave a core that goes on to become
+    // prepared with no decision ever coming - the sweep skips it, shutdown
+    // skips it, and this row has no resolution ask.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+
+    auto prepare_answer = std::make_shared<Answer>();
+    Txn2pcServer::PrepareAsk ask;
+    ask.coordinator = kCoordinator;
+    ask.session_id = kSession;
+    ask.transaction_id = kCoordinatorTxn;
+    executor_->PrepareSeam()(ask, [prepare_answer](const Status& status) {
+        prepare_answer->answered = true;
+        prepare_answer->status = status;
+    });
+    // One reactor turn and **no drain**: the coroutine reaches its park and
+    // the record is not durable, which is the state a decide can meet.
+    scheduler_->RunOnce();
+    ASSERT_FALSE(prepare_answer->answered);
+    ASSERT_EQ(executor_->prepared(), 0u);
+
+    auto ack = std::make_shared<Answer>();
+    Txn2pcServer::DecideAsk decide;
+    decide.coordinator = kCoordinator;
+    decide.session_id = kSession;
+    decide.transaction_id = kCoordinatorTxn;
+    decide.decision = TxnDecision::kAbort;
+    executor_->DecideSeam()(decide, [ack](const Status& status) {
+        ack->answered = true;
+        ack->status = status;
+    });
+    EXPECT_FALSE(ack->answered) << "the decision is held until the prepare wakes";
+    EXPECT_EQ(executor_->decide_refusals(), 0u);
+
+    for (int i = 0; i < 64 && !ack->answered; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    EXPECT_TRUE(prepare_answer->answered);
+    EXPECT_TRUE(prepare_answer->status.ok()) << prepare_answer->status.message();
+    ASSERT_TRUE(ack->answered) << "the held decision was never applied";
+    EXPECT_TRUE(ack->status.ok()) << ack->status.message();
+    EXPECT_EQ(executor_->decides_aborted(), 1u);
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_EQ(executor_->in_doubt(), 0u);
+    EXPECT_EQ(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+TEST_F(Txn2pcParticipantTest, AResentDecisionForAReleasedTransactionIsAcknowledged) {
+    // R6-1 put the bit on the decide leg to separate exactly these two: a
+    // benign resend after the ack was lost, and a decide for a transaction
+    // this core never prepared. Reading it is what keeps `decide_refusals()`
+    // - whose header calls it the anomaly that is not a lost message -
+    // readable on its first live day.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+    ASSERT_TRUE(Decide(TxnDecision::kCommit).status.ok());
+    ASSERT_EQ(executor_->enrolled(), 0u);
+
+    const Answer resent =
+        Decide(TxnDecision::kCommit, kCoordinatorTxn, kSession, /*retry=*/true);
+    EXPECT_TRUE(resent.status.ok()) << resent.status.message();
+    EXPECT_EQ(executor_->decide_refusals(), 0u);
+    // And an *unmarked* commit for the same absent context stays the
+    // anomaly it was.
+    const Answer unmarked = Decide(TxnDecision::kCommit);
+    EXPECT_FALSE(unmarked.status.ok());
+    EXPECT_EQ(executor_->decide_refusals(), 1u);
+}
+
 TEST_F(Txn2pcParticipantTest, APreparedTransactionTakesNoFurtherStatement) {
     // The promise prepare makes is about what is *already* durable. A
     // statement admitted after it would write rows the PREPARE record does
@@ -498,6 +572,15 @@ TEST_F(Txn2pcCoordinatorTest, EveryParticipantAnswersAndThePhaseSettlesPrepared)
     EXPECT_EQ(prepared_[2].transaction_id, kTxn);
     client_->Close(1);
     EXPECT_EQ(client_->phase_timeouts(), 0u);
+
+    // The participants' own side of the same round trip: one request in,
+    // one reply out, per core.
+    ASSERT_EQ(servers_.size(), 2u);
+    for (const std::unique_ptr<Txn2pcServer>& server : servers_) {
+        EXPECT_EQ(server->prepares(), 1u);
+        EXPECT_EQ(server->decides(), 0u);
+        EXPECT_EQ(server->replies(), 1u);
+    }
 }
 
 TEST_F(Txn2pcCoordinatorTest, AParticipantsRefusalCrossesWithItsOwnCodeAndWords) {
@@ -750,10 +833,6 @@ protected:
 TEST_F(Txn2pcCommitTest, AOneOwnerCommitSendsNoPrepareAndTakesThePathItAlwaysTook) {
     // D1's fast path, asserted the way the work order's §5 asks for it: by
     // counting prepare messages, which is zero.
-    Session session;
-    ASSERT_EQ(Local("BEGIN").rfind("BEGIN", 0), 0u);
-    // The local statements run on this dispatcher's own session, so drive
-    // the transaction through one session throughout.
     Session client_session;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &client_session).response.rfind("BEGIN", 0), 0u);
     ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO t VALUES (7)", &client_session)
