@@ -2,102 +2,142 @@
 
 The task rows, findings and retractions of `instructions/v2.4.0/2pc.md`.
 The work order is the operator's input and is not edited here; this file is
-what building it produces. **D1–D7 are not ratified** — confirmed are
-Finding 1's option (`instructions/v2.4.0/2pc.md` §2, 2026-08-27) and the two
-`[OPEN]`s *inside* D3 and D5, which are items in those rows and not the rows
-themselves ("§2 — the ratification record" below) — so nothing below may be
-quoted as a settled design decision except where it says the operator
-confirmed it.
+what building it produces. **D1–D7 are ratified** — by the operator's
+"follow CLA proposal" on 2026-08-28, together with the two `[OPEN]`s inside
+D3 and D5 (2026-08-27) and Finding 1's option
+(`instructions/v2.4.0/2pc.md` §2, 2026-08-27). "§2 — the ratification
+record" below holds all of it with the operator's wording, and is what a
+claim of settledness cites; a row not appearing there is not settled by this
+file.
 
-The deliverable §7 names a spec under `docs/spec/` as the end state. It does
-not exist yet and must not be written until the decisions it would state are
-ratified; a spec is what is confirmed and implemented (`CLAUDE.md`'s rule for
-that directory), and D1–D7 are today proposals with reasoning.
+The deliverable §7 names a spec under `docs/spec/` as the end state. It
+still does not exist, and now for the other of its two reasons: a spec is
+what is confirmed **and implemented** (`CLAUDE.md`'s rule for that
+directory), and R6-3 onward is not built yet. R6-9 writes it once RP7's gate
+passes.
 
 ## §2 — the ratification record
 
-The work order's RP0 row (`instructions/v2.5.0/cross-owner-protocol.md` §5)
-makes this record the milestone's first row and its own gate: *"If any is
-unratified, this order stops here and reports."* This section is that
-report. It is titled §2 because that is where RP0 points; this file has
-never numbered its sections, and the order's own §2 — "The gate this
-milestone opens on" — names exactly D1–D7 and the two `[OPEN]`s.
+Where the work order's RP0 row (`instructions/v2.5.0/cross-owner-protocol.md`
+§5) points; this file has never numbered its sections, so the title is that
+pointer rather than an ordinal. RP0 reported an unratified gate on
+2026-08-27 and the operator opened it on 2026-08-28. Both halves are kept
+below, in that order, because a record that erases its own gate cannot be
+audited.
 
-### Ratified — the two `[OPEN]`s, in the operator's own words
+### Ratified 2026-08-28 — D1–D7, by the operator's "follow CLA proposal"
 
-`instructions/v2.5.0/cross-owner-protocol-operator-input.md` holds the two
-messages as they came, on 2026-08-27, and is the source of the quotations;
-it and the work order are operator input and are not edited here.
+The operator supplied the ratification packet — *"Ratification packet — R6
+design decisions D1–D7"*, prepared against `main` at `ec5f993` — and ratified
+it with the words **"follow CLA proposal"**. That settles every row at the
+packet's own summary table, CLA's reading being the ratified wording in each
+ case. The source is
+`instructions/v2.5.0/cross-owner-protocol-operator-input.md`.
+
+| # | ratified as |
+|---|---|
+| **D1** | As written. The **arrival core coordinates**; participants are relation owners **discovered as the transaction runs**; a one-owner transaction takes the single-core path unchanged. Forecloses data-chosen coordinators |
+| **D2** | As written **with its rejection reason amended**. Per-participant local trx ids from each core's own lease, the coordinator's `(session_id, transaction_id)` recorded beside them. The shared-id alternative is rejected **on mount validation** — `CoreRuntime::Open` refuses a mount whose peer stream names an id above the superblock's ceiling (`include/kds/txn/trx_id.hpp:110-113`), so a shared id puts foreign ids in every participant's stream — and **not** on the parent order's "global atomic counter or cross-stream ordering" grounds, which are **false at the source**: the trx-id domain is already global (`trx_id.hpp:92-93`, `trx_id_lease.hpp:11-18`). The outcome is unchanged; the reason is corrected so a later reader does not find it false and reopen a settled decision |
+| **D3** | As written. A per-participant **watermark**, giving a cross-owner RR transaction a **consistent-per-core** snapshot and not a globally consistent one — a weakening that is a product property for `client-manual.md`, not only a spec line |
+| **D3's `[OPEN]`** | **Yes — READ COMMITTED skips the watermark entirely**; watermarks are carried for REPEATABLE READ only |
+| **D4** | As written. Two phases over the existing ring; a participant that replied prepared may not unilaterally abort; **the `COMMIT` in the coordinator's own stream is the decision, and it lives in exactly one stream**. Forecloses one-phase commit and presumed-commit/presumed-abort |
+| **D5** | As written. An in-doubt participant may neither abort nor commit, holds its locks and waits; resolution is a retry in Finding 1's sense, so a coordinator that no longer holds the record answers `UnknownOutcome`; after `UNKNOWN_OUTCOME` the remedy is to **read the data**, never to retry, in the words shipped statements already use |
+| **D5's `[OPEN]`** | **Block**, with a **bounded ceiling ending in a named refusal** |
+| **D5's ceiling value** | **CLA's to propose and measure** — the packet offered that branch and "follow CLA proposal" takes it |
+| **D6** | **Confirmed discharged** by R6-1 at `c97f5ca`: 24 bytes per request leg and 256 for the participant reply against a 1,024-byte slot, asserted against `kCoreRingPayloadBytes` rather than the literal. **R6-5's in-doubt ask is still owed its own sizing** |
+| **D7** | Ratified **as a pre-registered prediction, not a decision**: two syncs deep, up to four participants wide |
+
+**CLA note on D2's amended reason — not a re-opening.** The mount check is
+real and the outcome stands, but it does not reach every shape of the
+rejected alternative. `CoreRuntime::Open` refuses a stream whose high-water
+id exceeds the **superblock's** ceiling
+(`src/server/core_runtime.cpp:177-186`), and a shared id *carved from the
+coordinator's lease* is below that ceiling by construction — `Carve` persists
+the raise before returning the range (`trx_id.hpp:104-113`). So the check
+fires on the unpersisted-global-counter variant and **not** on the carved
+one; what rejects the carved variant is D2's own positive reason, each
+stream's ids coming from its own core's lease. Written here because the
+amendment exists precisely so a later reader does not find the reason false
+and reopen a settled decision, and this is the one case where reading it
+literally would.
+
+### What the ratifications oblige — inherited by the row that owns each
+
+Written here so RP1, RP3 and RP8 collect these rather than rediscovering
+them. Three are the packet's own text, lifted out of its D3-`[OPEN]`,
+D5-`[OPEN]` and D7 rows so the table above stays a table; the
+isolation-level crossing and the `crosscore.md` §5 correction are CLA's,
+derived from rows the packet ratified. None is optional and none is a
+default CLA may pick:
+
+- **R6-3 (RP1) — the coordinator's isolation level has to cross.** R6-2's
+  note below, "What D2 does and does not give D3", records the gap:
+  `EnrolFor` opens the participant's transaction at the *participant's* own
+  `default_isolation()`. Ratification changes that gap's weight — the level
+  now **selects the branch**, watermark or none, so a participant that
+  mistakes it carries no watermark for a transaction that was promised one.
+- **R6-5 (RP3) — three obligations ride on D5's `[OPEN]`.** The ceiling is a
+  **named constant reached through one function**, and config-swept. The
+  refusal at the ceiling is **retryable and named, and is not
+  `UnknownOutcome`** — that code stays D5's answer to a coordinator record
+  that is gone, and conflating the two would tell a *blocked writer* to read
+  the data when its own statement plainly did nothing and may be retried.
+  **Retryable has one spelling in this engine**: `IsRetryable` admits
+  `kTxnConflict` alone (`include/kds/base/status.hpp:129`, and R6-2's note
+  below calls it the code the wire's retryable bit follows), so RP3 either
+  names the refusal by *message* under that code or widens `IsRetryable`
+  engine-wide — a wire-contract change, and the choice is RP3's to make
+  explicitly rather than by accident. And **R6-5 declares and sizes the
+  in-doubt ask's wire form**, the leg the D6 row above says is still owed
+  one.
+- **R6-5's ceiling value is CLA's to propose and measure**, from the sync
+  cost M3 measured and `bench/v2.1.0` §3a's four-stream overlap curve, then
+  swept. It is ratified as an obligation, **not as a number**, and must not
+  be invented as one.
+- **R6-9 (docs) — two sentences the ratifications create.** One in
+  `client-manual.md` distinguishing RR's consistent-per-core snapshot from
+  RC's absent cross-core promise, since RC is the default and a reader of
+  D3's RR wording would otherwise assume it covers RC. One correcting
+  `docs/spec/crosscore.md` §5, whose *"the trx-id domain is global, so ids
+  compare cleanly"* (lines 205-206) is a claim about **one core's own
+  visibility test** — `ReadView::Visible`'s `trx_id >= up_to_trx_id` — and
+  must not be read as ordering a cross-owner transaction's several ids
+  against one another: that is the global instant D3's consistent-per-core
+  weakening refuses, and guideline 3 (`workplan-crosscore.md` §3, which the
+  parent order cites as `wal.md`'s) is the rule under it.
+- **B1 (RP8) — report p50 and p99, never a single ratio.** M3 found
+  shipping's cost in the tail (+11% p50 against +76% p99), so a 2× median
+  alone would record D7 as confirmed while an unpredicted tail passed
+  unnoticed.
+
+### Ratified 2026-08-27 — the two `[OPEN]`s, in the operator's own words
+
+These arrived in session a day before the packet, each restating its
+question and naming its proposal.
 
 | item | the operator's words | recorded as |
 |---|---|---|
 | **D3's `[OPEN]`** — the watermark under READ COMMITTED | *"READ COMMITTED cross-owner 트랜잭션이 watermark를 건너뛰는가. 제안은 「그렇다」."* | **Ratified as proposed.** A READ COMMITTED cross-owner transaction **skips the watermark entirely**; watermarks are carried for REPEATABLE READ only |
 | **D5's `[OPEN]`** — an in-doubt participant against a writer of the same rows | *"in-doubt participant가 같은 행 writer를 막는가, retryable하게 거절하는가. 제안은 「막되 상한을 두고 named refusal로 끝낸다」."* | **Ratified as proposed.** The participant **blocks**, with a bounded ceiling ending in a **named refusal** — not a retryable refusal up front |
 
-**The reading is CLA's, and it is the one thing in this section that could
-be wrong.** Each message restates its question and names its proposal
-without a verdict word; they are read as ratifications because the operator
-sent them unprompted against an order that gates on exactly these two. If
-either reading is wrong, this section is where it is corrected, and the
-correction costs nothing until R6-3 builds on it.
+Reading a message that states its question and its proposal without a
+verdict word as a ratification was CLA's inference, and RP0 recorded it as
+the one thing here that could be wrong. **The 2026-08-28 packet settles it**
+by restating both rows unchanged, so the inference is confirmed by a later
+independent statement rather than merely left uncontradicted.
 
-Two consequences these answers now have, stated here because they were
-conditional before and are not any more:
-
-- **D3's answer makes the isolation level's travel load-bearing.** R6-2's
-  note below, "What D2 does and does not give D3", records the gap:
-  `EnrolFor` opens the participant's transaction at the *participant's* own
-  `default_isolation()`. What ratification changes is that gap's weight —
-  the level now selects between carrying a watermark and not carrying one,
-  so a participant that mistakes it takes the **wrong branch** rather than
-  merely a weaker view. R6-3 owes the crossing; `reserved0[3]` has room.
-- **D5's answer fixes R6-5's shape**: the participant blocks a writer of the
-  same rows and the wait ends, at a ceiling, in a named refusal — a wait and
-  a refusal to build, not a retryable decline. Whether that refusal is the
-  fourth `UnknownOutcome` arm R6-0 deferred its collapse for ("R6-5 adds
-  that fourth arm") is *not* settled by it: those three arms answer a
-  duplicate *shipped statement* in `ShippedStatementExecutor::Execute`,
-  where this one answers a *different* transaction meeting an in-doubt
-  one's rows. The ceiling's value and the refusal's spelling are **not**
-  ratified with the shape and are R6-5's to propose.
-
-### Not ratified — D1–D7, and this is where the order stops
-
-The two items above are `[OPEN]`s *inside* D3 and D5, not the D-rows
-themselves. The D-rows remain what this file's header has said since it was
-opened: proposals with reasoning, in `instructions/v2.4.0/2pc.md` §3.
-
-| row | subject | status | what waits on it |
-|---|---|---|---|
-| **D1** | the arrival core coordinates; participants discovered as the transaction runs; a one-owner transaction takes the single-core path unchanged, paying nothing | **awaiting ratification** | R6-3's short-circuit and R6-8's participant discovery, and B3/HP1, which are D1's gate expressed as a measurement |
-| **D2** | a participant runs a local transaction with its own trx id, keyed by the coordinator's `(session_id, transaction_id)` | **awaiting ratification** | R6-3's `PREPARE` record, which is where the coordinator's pair is actually written (R6-2 carries none — it finds the transaction by `(src_core, session_id)`). R6-2 was buildable regardless: an enrolment keyed on a pair of ids survives any D-choice (the v2.5.0 order's §2) |
-| **D3** | the per-participant watermark; consistent-per-core, never a global instant | **awaiting ratification** (its `[OPEN]` is ratified above) | R6-3's read path |
-| **D4** | two phases; the decision lives in exactly one stream, the coordinator's | **awaiting ratification** | R6-3 and R6-4 in full |
-| **D5** | in-doubt handling and the client-facing `UNKNOWN_OUTCOME` contract | **awaiting ratification** (its `[OPEN]` is ratified above) | R6-5, and through it R6-8 (the parent gates that row on R6-3 and R6-5); R6-9 owes the read-the-data contract to `client-manual.md` |
-| **D6** | prepare and decide fit the ring slot with no resize | **awaiting ratification** | nothing further for the two legs — R6-1 *confirmed* their fit by `static_assert` (24/24/256 bytes), which is evidence and not a decision. D5's third exchange is outside that answer and R6-5 sizes it (R6-1's note below) |
-| **D7** | two durable syncs deep, participants wide up to the device's four | **awaiting ratification** | R6-B's B1 and B2, which exist to confirm or refute it |
-
-**No default is taken for any of the seven, and none may be.** R6-3
-implements D4 directly and reads D3's watermark rule and D5's in-doubt rule,
-so building it against unratified proposals means writing the protocol
-twice — the v2.5.0 order's §2 says so and this row does not soften it.
-R6-0, R6-1 and R6-2 were buildable under the same gate only because a wire
-bit, a sizing `static_assert` and an enrolment keyed on a pair of ids
-survive any D-choice; nothing from R6-3 on does. **So every RP row after
-RP0 stays pending behind this gate**, and the order stops here and reports —
-which is RP0's stated function rather than a failure of it.
-
-### Finding — the work order's citation of its parent does not resolve
+### Finding — the parent citation, inverted in both directions
 
 `instructions/v2.5.0/cross-owner-protocol.md` opens — line 5, in its
-preamble above §0 — *"The second half of `instructions/v2.5.0/2pc.md`."*
-No such file exists: `instructions/v2.5.0/` holds `cross-owner-protocol.md`
-and `cross-owner-protocol-operator-input.md` only, and the parent order —
-the one that owns R6 whole, carries D1–D7 in its §3 and the §5 correctness
-gate RP7 runs — is `instructions/v2.4.0/2pc.md`, which this file's own first
-line has cited since it was opened. Recorded rather than corrected: the work
-order is operator input and is not edited here. Every citation of the parent
-in this workplan means the v2.4.0 path.
+preamble above §0 — *"The second half of `instructions/v2.5.0/2pc.md`."* No
+such file exists on any branch; the parent order, which owns R6 whole and
+carries D1–D7 in its §3, is `instructions/v2.4.0/2pc.md`. The ratification
+packet inverts the same confusion, citing the order itself as
+`instructions/v2.4.0/cross-owner-protocol.md` when it is at
+`instructions/v2.5.0/`. Both are recorded rather than corrected — operator
+input is not edited here — and tracked as cws issue
+`cross-owner-protocol-parent-cite` (id 10). Every citation of the parent in
+this workplan means the v2.4.0 path.
 
 ## Status
 
@@ -153,7 +193,9 @@ correctness signal and becomes an availability one.
 - The three `UnknownOutcome` arms in `Execute` are one shape written three
   times. Collapsing them into a helper would make `++unanswerable_`
   impossible for a fourth arm to forget — which matters, because **R6-5 adds
-  that fourth arm**. Not done at R6-0: the messages reach clients verbatim
+  that fourth arm**: the *resolution ask* meeting a coordinator record that is
+  gone, never D5's ceiling refusal, which §2's obligations keep off
+  `UnknownOutcome` entirely. Not done at R6-0: the messages reach clients verbatim
   through `Status::FromWire`, so the collapse must preserve bytes exactly,
   and it belongs where the fourth caller appears.
 - A dedicated counter for the new refusal was folded into `unanswerable_`
@@ -372,15 +414,15 @@ So, precisely:
 
 That is an argument **for** D3's own proposed answer to its `[OPEN]`: carry
 watermarks only for RR. The two halves agree, and R6-2 is the evidence.
-(That `[OPEN]` was ratified as proposed on 2026-08-27 — "§2 — the
-ratification record" above. D3 itself is still unratified.)
+(That `[OPEN]` was ratified as proposed on 2026-08-27, and D3 itself as
+written on 2026-08-28 — "§2 — the ratification record" above.)
 
 **And a gap the same reading exposes**: the coordinator's isolation level
 never crosses. `EnrolFor` opens with the *participant's* `default_isolation()`
 — its own server config — so a client that writes `BEGIN ISOLATION LEVEL
 REPEATABLE READ` gets an RC participant transaction and does not learn it.
-Whichever way D3 is ratified, the level has to travel or the answer above is
-about a level nobody selected. `reserved0[3]` still has room.
+With D3 ratified, the level has to travel or the answer above is about a
+level nobody selected — §2's R6-3 obligation. `reserved0[3]` still has room.
 
 ### An unrelated soundness note R6 invalidates
 
@@ -394,16 +436,11 @@ lifts. Recorded so it is found then rather than assumed still true.
 
 ## Open, carried from the work order
 
-- **D1–D7 await ratification**, and that is where R6-P stops: RP0 reports
-  the gate and every later RP row stays pending behind it. R6-0's §2 option
-  is confirmed; the rest are proposals. Per-row status is in "§2 — the
-  ratification record" above.
-- **D3's `[OPEN]` is closed** — ratified as proposed 2026-08-27: a READ
-  COMMITTED cross-owner transaction skips the watermark entirely. What it
-  leaves open is the coordinator's isolation level crossing to the
-  participant, which R6-3 owes.
-- **D5's `[OPEN]` is closed** — ratified as proposed 2026-08-27: block, with
-  a bounded ceiling ending in a named refusal. The ceiling's value and the
-  refusal's spelling are not ratified with it and are R6-5's to propose.
+- **D1–D7 are ratified** (2026-08-28) and so are both `[OPEN]`s
+  (2026-08-27); §2 above is the record. What they leave open is not a
+  decision but a set of obligations, listed there against the row that owns
+  each — R6-3's isolation-level crossing, R6-5's named ceiling constant and
+  its non-`UnknownOutcome` refusal, R6-5's sizing of the in-doubt ask,
+  R6-9's two doc sentences, and B1's p50-and-p99 reporting.
 - **R6-4 must answer `wal.md` §3's second `[OPEN]`** — recovery across a
   core-count change. A refusal to mount is an answer, and is recorded as one.
