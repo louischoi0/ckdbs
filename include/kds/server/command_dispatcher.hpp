@@ -1140,10 +1140,14 @@ public:
     // before it is refused by name. `kTxnInDoubtCeilingNs` is the default
     // and carries the derivation; `in_doubt_ceiling_ms` is the config key
     // that sweeps it, per the ratification's "a named constant reached
-    // through one function, and config-swept". Every reader of the value -
-    // the block below, the participant's ask cadence when a fixture sets it
-    // - goes through here rather than at the constant, so a swept value is
-    // swept everywhere.
+    // through one function, and config-swept". **The writer's block is
+    // what this sweeps, and only that**: the participant's *ask cadence*
+    // (`ShippedStatementExecutor::ExpireEnrolled`) reads
+    // `kTxnInDoubtCeilingNs` at the constant and is not swept with it, on
+    // purpose - the two are the same number by derivation but not the same
+    // quantity, and a sweep to 0 that means "refuse a writer at once" would
+    // mean "ask the coordinator every reactor tick" on the other. Sweeping
+    // the ask cadence is its own knob and nothing needs one yet.
     //
     // 0 is not an off-switch and is not special: it means a writer waits no
     // time at all and is refused immediately, which is the *other* branch of

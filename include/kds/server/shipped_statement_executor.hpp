@@ -314,8 +314,16 @@ public:
     std::uint64_t decides_aborted() const noexcept { return decides_aborted_; }
     // Decides this core could not apply, or would not: a decide for a
     // transaction it never prepared, a commit whose local commit failed, an
-    // identity that is not the one it prepared under. **Non-zero is a
-    // protocol anomaly**, not a workload property.
+    // identity that is not the one it prepared under, and (R6-5) an
+    // in-doubt answer naming a different transaction than the context
+    // asked about. **Non-zero is a protocol anomaly**, not a workload
+    // property - with one benign exception R6-5 introduces and cannot
+    // distinguish here: a decide that outran D5's ceiling, so that the
+    // participant resolved by asking and the original decide arrived behind
+    // its own answer. That case is counted here and logged, and its outcome
+    // is already correct; separating it needs a decided-window on this side
+    // or a bit the coordinator has no way to set, which is R6-8's to weigh
+    // when the path goes live.
     std::uint64_t decide_refusals() const noexcept { return decide_refusals_; }
     // Prepared transactions this core stopped with, rather than rolling
     // them back. D4 forbids the rollback; R6-6 owns what the next mount
@@ -488,6 +496,16 @@ private:
         // context takes no statements: folding them would make the ask
         // cadence depend on work that can no longer happen.
         sched::MonoTimeNs asked_at_ns = 0;
+        // **The ask is over** (R6-5, D5). Raised by an `UnknownOutcome`
+        // answer, which is the one terminal answer the leg has: the
+        // coordinator holds no record, may not re-decide, and the only
+        // thing left that can resolve this transaction is the next mount
+        // reading that coordinator's stream (R6-4). Without it the sweep
+        // re-asks every ceiling for the life of the process - a question
+        // whose answer cannot change, a Warn line per ceiling per stuck
+        // transaction, and an `in_doubt_resolved_unknown_` that counts asks
+        // instead of the transactions its accessor documents.
+        bool resolve_terminal = false;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
             : session(isolation), touched_at_ns(now) {

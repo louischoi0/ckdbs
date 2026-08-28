@@ -417,6 +417,12 @@ static_assert(kTxnDecisionRetentionNs > kTxnPhaseDeadlineNs + 2 * kTxnInDoubtCei
 // not acknowledge, which is a failure population, so a cap this size is a
 // ceiling on a storm and not on a workload. Past it the oldest record is
 // dropped early and counted (`Txn2pcClient::decisions_evicted()`).
+//
+// Trimming happens **before** a record is opened rather than after, so that
+// the record being opened can never be the one dropped - which would answer
+// `UnknownOutcome` about a transaction whose prepare is going out in the
+// next line. The map therefore holds at most this many plus the one just
+// opened, which is the bound stated exactly rather than rounded.
 inline constexpr std::size_t kTxnDecisionMaxRecords = 1024;
 
 // ---- The participant's half: the transport ------------------------------
@@ -505,11 +511,14 @@ public:
     std::uint64_t prepares() const noexcept { return prepares_; }
     std::uint64_t decides() const noexcept { return decides_; }
     std::uint64_t replies() const noexcept { return replies_; }
-    // Asks this core sent, and answers it received. The two differ by the
-    // asks still on the ring and the answers the coordinator's own ring
-    // refused; on a healthy path both read 0, because no decide is lost.
-    std::uint64_t asks() const noexcept { return asks_; }
-    std::uint64_t resolve_replies() const noexcept { return resolve_replies_; }
+    // **The ask leg deliberately has no counters here.** The three above
+    // each have a reader (the coordinator fixture asserts them), which is
+    // the test R6-3's review set for keeping one; a pair counting the asks
+    // this core sends would fail it, because the same sends are already
+    // counted where they are *read* -
+    // `ShippedStatementExecutor::in_doubt_asks()`, which `SHOW META` prints
+    // beside the population it is about. Two names for one number is what
+    // the review that removed them called it.
 
 private:
     void Reply(std::uint32_t coordinator, std::uint64_t request_id,
@@ -526,8 +535,6 @@ private:
     std::uint64_t prepares_ = 0;
     std::uint64_t decides_ = 0;
     std::uint64_t replies_ = 0;
-    std::uint64_t asks_ = 0;
-    std::uint64_t resolve_replies_ = 0;
     // An ask's request id, minted here since no statement owns one. Not a
     // waiter key - nothing parks on an ask - but the header needs one and a
     // captured header should say which ask an answer was to.
@@ -706,11 +713,26 @@ private:
     };
     using DecisionKey = std::pair<std::uint64_t, std::uint64_t>;
 
-    // Drops records past `kTxnDecisionRetentionNs`. Lazy, at the two
-    // moments a record matters - an ask, and a new record's insertion -
-    // rather than on a timer: a record nobody asks about costs 40 bytes and
-    // a map node, and a timer to reclaim that would cost more than it
-    // reclaims.
+    // Opens or refreshes this transaction's record, expiring first. The one
+    // way a record is created, so `Prepare` and `Decide` cannot come to
+    // disagree about when the retention starts or whether the cap applies -
+    // which they did in the first cut, where only `Prepare` expired.
+    DecisionRecord& OpenDecisionRecord(std::uint64_t session_id, std::uint64_t transaction_id,
+                                       sched::MonoTimeNs now);
+
+    // Drops records past `kTxnDecisionRetentionNs`, then, while over
+    // `kTxnDecisionMaxRecords`, drops the oldest. **One ordering, which is
+    // time**: the first cut had the retention drop by age and the cap drop
+    // by map key, so which record a storm discarded depended on a
+    // `(session, transaction)` ordering that means nothing across sessions.
+    // Two counters still, because the two mean different things - a
+    // forgotten record is a participant that never asked, an evicted one is
+    // a storm - but one rule decides which record goes.
+    //
+    // Lazy, at the two moments a record matters - an ask, and a new
+    // record's insertion - rather than on a timer: a record nobody asks
+    // about costs a map node, and a timer to reclaim that would cost more
+    // than it reclaims.
     void ExpireDecisions(sched::MonoTimeNs now);
 
     std::uint32_t core_id_;

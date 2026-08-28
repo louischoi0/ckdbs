@@ -185,7 +185,6 @@ Status Txn2pcServer::RegisterResolveReplyReceiver() {
 
 void Txn2pcServer::Ask(std::uint32_t coordinator, std::uint64_t session_id,
                        std::uint64_t transaction_id) {
-    ++asks_;
     TxnResolveRequestPayload request{};
     request.session_id = session_id;
     request.transaction_id = transaction_id;
@@ -201,7 +200,6 @@ void Txn2pcServer::Ask(std::uint32_t coordinator, std::uint64_t session_id,
 
 void Txn2pcServer::OnResolveReply(const sched::MessageHeader& header,
                                   std::span<const std::byte> payload) {
-    ++resolve_replies_;
     TxnResolveReplyPayload reply{};
     // Dropped rather than answered: this is a reply, so there is nobody to
     // answer, and the participant's own ceiling asks again.
@@ -378,35 +376,7 @@ Status Txn2pcClient::Prepare(std::uint64_t request_id, std::uint64_t session_id,
     // decision instead would answer `UnknownOutcome` for the whole width of
     // the prepare phase, and D5 makes that answer terminal: the participant
     // stops asking and waits for the next mount.
-    const sched::MonoTimeNs now = clock_.Now();
-    ExpireDecisions(now);
-    DecisionRecord& record = decisions_[DecisionKey{session_id, transaction_id}];
-    if (record.opened_at_ns == 0) record.opened_at_ns = now;
-    while (decisions_.size() > kTxnDecisionMaxRecords) {
-        // The memory bound under the time bound, `Remember`'s shape. The
-        // map is ordered by `(session, transaction)` and not by time, so
-        // this drops the lowest key rather than the oldest record - which
-        // is the *older* transaction on any one session, since ids
-        // ascend, and across sessions is arbitrary. Acceptable because
-        // this population is a failure population: reaching the cap means
-        // a thousand undecided or unacknowledged transactions at once, and
-        // an ask that then finds no record is answered `UnknownOutcome`,
-        // which is D5's own honest answer and resolves at the next mount.
-        auto oldest = decisions_.begin();
-        if (oldest->first == DecisionKey{session_id, transaction_id}) ++oldest;
-        if (oldest == decisions_.end()) break;
-        ++decisions_evicted_;
-        if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
-            log_->Warn("2pc", "core " + std::to_string(core_id_) +
-                                  " holds the maximum " + std::to_string(kTxnDecisionMaxRecords) +
-                                  " cross-owner decision records; session " +
-                                  std::to_string(oldest->first.first) + " transaction " +
-                                  std::to_string(oldest->first.second) +
-                                  " was dropped, and a participant asking about it will be "
-                                  "told UNKNOWN_OUTCOME");
-        }
-        decisions_.erase(oldest);
-    }
+    OpenDecisionRecord(session_id, transaction_id, clock_.Now());
 
     TxnPrepareRequestPayload request{};
     request.session_id = session_id;
@@ -446,8 +416,7 @@ Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
     // after the loop would leave the one window where an ask provoked by a
     // *lost* decide could arrive before the record existed.
     const sched::MonoTimeNs now = clock_.Now();
-    DecisionRecord& record = decisions_[DecisionKey{session_id, transaction_id}];
-    if (record.opened_at_ns == 0) record.opened_at_ns = now;
+    DecisionRecord& record = OpenDecisionRecord(session_id, transaction_id, now);
     record.decision = decision;
     record.decided_at_ns = now;
 
@@ -596,21 +565,65 @@ void Txn2pcClient::Close(std::uint64_t request_id) {
 
 // ---- R6-5: answering an in-doubt participant --------------------------------
 
+namespace {
+
+// When a record's retention starts: from its decision where it has one,
+// from its opening where it does not - a record that never reached a
+// decision is a coordinator that died between its phases, and the only time
+// it has is the one it was opened at.
+sched::MonoTimeNs DecisionAge(const auto& record) noexcept {
+    return record.decided_at_ns != 0 ? record.decided_at_ns : record.opened_at_ns;
+}
+
+}  // namespace
+
 void Txn2pcClient::ExpireDecisions(sched::MonoTimeNs now) {
     for (auto it = decisions_.begin(); it != decisions_.end();) {
-        // From the decision where there is one, from the opening where
-        // there is not - a record that never reached a decision is a
-        // coordinator that died between its phases, and the retention on it
-        // runs from the only time it has.
-        const sched::MonoTimeNs since =
-            it->second.decided_at_ns != 0 ? it->second.decided_at_ns : it->second.opened_at_ns;
-        if (now - since < kTxnDecisionRetentionNs) {
+        if (now - DecisionAge(it->second) < kTxnDecisionRetentionNs) {
             ++it;
             continue;
         }
         ++decisions_forgotten_;
         it = decisions_.erase(it);
     }
+
+    // The memory bound under the time bound, on the **same ordering**. A
+    // record only reaches this while something is wrong - a decide phase
+    // whose participant never acknowledged holds its record for the whole
+    // retention - so the cap is a ceiling on a storm rather than on a
+    // workload, and the record it drops is the one whose participant has
+    // had longest to ask. An ask that then finds nothing is answered
+    // `UnknownOutcome`, which is D5's own honest answer and resolves at the
+    // next mount.
+    while (decisions_.size() > kTxnDecisionMaxRecords) {
+        auto oldest = decisions_.begin();
+        for (auto it = std::next(decisions_.begin()); it != decisions_.end(); ++it) {
+            if (DecisionAge(it->second) < DecisionAge(oldest->second)) oldest = it;
+        }
+        ++decisions_evicted_;
+        if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+            log_->Warn("2pc", "core " + std::to_string(core_id_) + " holds the maximum " +
+                                  std::to_string(kTxnDecisionMaxRecords) +
+                                  " cross-owner decision records; session " +
+                                  std::to_string(oldest->first.first) + " transaction " +
+                                  std::to_string(oldest->first.second) +
+                                  " was dropped, and a participant asking about it will be "
+                                  "told UNKNOWN_OUTCOME");
+        }
+        decisions_.erase(oldest);
+    }
+}
+
+Txn2pcClient::DecisionRecord& Txn2pcClient::OpenDecisionRecord(std::uint64_t session_id,
+                                                               std::uint64_t transaction_id,
+                                                               sched::MonoTimeNs now) {
+    // Expire **before** the insert, so the new record is never the one the
+    // cap drops - and so a caller cannot open a record into a map that is
+    // already over its bound.
+    ExpireDecisions(now);
+    DecisionRecord& record = decisions_[DecisionKey{session_id, transaction_id}];
+    if (record.opened_at_ns == 0) record.opened_at_ns = now;
+    return record;
 }
 
 void Txn2pcClient::OnResolveAsk(const sched::MessageHeader& header,

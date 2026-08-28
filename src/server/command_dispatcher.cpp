@@ -237,12 +237,14 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // reachable" true of a shape that would otherwise be a loop with a
     // bounded body.
     //
-    // **A dispatcher with no clock does not wait**, and that is a guard
-    // rather than a nicety: `NowNs()` answers 0 without one, so a deadline
-    // built from it is never reached and the bounded wait would be an
-    // unbounded one. Such a dispatcher keeps the conflict it produced,
-    // which is the retryable refusal this whole block exists to improve on
-    // and is the correct answer where nothing can measure a ceiling.
+    // **The discriminator is at the recording site, not here.**
+    // `CheckWriteConflictBlocking` notes a blocker only under `may_park_`
+    // and a live clock, which is exactly this path - so a blocker reaching
+    // here is one something can act on. The two tests below are the second
+    // line of that same rule rather than the thing that enforces it, and
+    // they are kept because what they guard is a dereference and a
+    // never-reached deadline (`NowNs()` answers 0 with no clock, so a
+    // deadline built from it would make the bounded wait unbounded).
     if (out->in_doubt_block.has_value() && txn_ != nullptr && clock_ != nullptr) {
         const sched::MonoTimeNs deadline_ns = NowNs() + in_doubt_ceiling_ns_;
         while (out->in_doubt_block.has_value()) {
@@ -1113,9 +1115,16 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " txn_in_doubt_unresolved=" << shipped_statements_->in_doubt_resolved_unknown();
         }
     }
-    if (txn_2pc_ != nullptr && (txn_2pc_->decisions_held() != 0 ||
-                                txn_2pc_->resolutions_answered() != 0 ||
-                                txn_2pc_->resolutions_unknown() != 0)) {
+    if (txn_2pc_ != nullptr &&
+        (txn_2pc_->decisions_held() != 0 || txn_2pc_->resolutions_answered() != 0 ||
+         txn_2pc_->resolutions_unknown() != 0 || txn_2pc_->resolve_refusals() != 0 ||
+         txn_2pc_->decisions_forgotten() != 0 || txn_2pc_->decisions_evicted() != 0)) {
+        // **Every counter in the block is in the gate**, including the three
+        // that fire on their own. An ask with R6-0's bit clear returns
+        // before touching a decision record, so gating on the record
+        // counters alone would hide `txn_resolve_refusals` - the field whose
+        // own documentation calls it a protocol anomaly and never a workload
+        // property - on exactly the run that produced one.
         // The same question from the coordinator's side (R6-5): what this
         // core has been asked about transactions it decided.
         // `txn_decisions_unknown` counts participants this core could not
@@ -6952,7 +6961,18 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     // callback, which is no place to park. `DispatchAsync` is where the
     // wait happens, on the statement, once it is known that nothing was
     // written.
-    if (txn_->IsInDoubt(cur)) {
+    //
+    // **Noted only where something will act on it**, which is the same
+    // pair of conditions `DispatchAsync`'s block tests: a path that can
+    // park, and a clock to measure the ceiling with. The blocker is not a
+    // diagnostic - it is the one thing that tells `EndWrite` to withhold
+    // the poison a failed statement owes an explicit transaction - so
+    // recording it where nothing will re-run the statement would leave a
+    // client told `ERR` and a transaction still committable, which is the
+    // failure atomicity §6 states. `Dispatch()` and a clockless dispatcher
+    // therefore keep the pre-R6-5 behaviour whole, poison included, which
+    // is what the `InDoubtBlock` declaration says of them.
+    if (may_park_ && clock_ != nullptr && txn_->IsInDoubt(cur)) {
         in_doubt_blocker_ = cur;
         in_doubt_blocked_pk_ = pk;
     }
@@ -6979,9 +6999,9 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     // did write would be a second increment - so the blocker is dropped and
     // the client gets the conflict now. Only a statement that wrote nothing
     // reaches `DispatchAsync`'s wait.
+    // (`scope.txn` is non-null here: the no-manager arm returned above.)
     if (in_doubt_blocker_ != 0 &&
-        (result.ok() || scope.txn == nullptr ||
-         scope.txn->trail().size() != statement_trail_mark_)) {
+        (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
         in_doubt_blocker_ = 0;
         in_doubt_blocked_pk_ = 0;
     }

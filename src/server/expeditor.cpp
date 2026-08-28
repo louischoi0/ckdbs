@@ -1210,9 +1210,10 @@ Status Expeditor::Serve() {
             dispatcher->SetIndexBuilds(nullptr);
             dispatcher->SetAssertionBuilds(nullptr);
             // R6-5's borrow runs the other way - the executor asks through
-            // the 2PC server - and the server is one of the objects this
-            // function's `scheduler` outlives. Withdrawn here so the two
-            // directions are undone in one place.
+            // the 2PC server, and that server is a *member*, so it outlives
+            // this function's `scheduler` while holding it by reference.
+            // Withdrawn here so the two directions are undone in one place
+            // and nothing asks through a destroyed reactor.
             if (executor->has_value()) (*executor)->SetTxn2pcServer(nullptr);
         }
     } clear_reactor_borrows{&*dispatcher_, &shipped_executor_};

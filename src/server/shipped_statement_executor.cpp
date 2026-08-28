@@ -637,19 +637,28 @@ void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
             reply(Status::OK());
             return;
         }
-        // A commit for a transaction this core does not hold. The
-        // coordinator's decision is durable, so this is the shape of a lost
-        // participant - and there is nothing here to apply it to. Refused
-        // and logged at Error rather than acknowledged, because an ack
-        // would tell the coordinator the transaction is whole when part of
-        // it is missing.
+        // A commit for a transaction this core does not hold, and the retry
+        // bit is clear so it is not a resend the sender knows about.
+        //
+        // **Two causes reach here and this path cannot tell them apart**,
+        // which is why the line no longer asserts the worse one. Either
+        // this core never prepared the transaction - the anomaly, and the
+        // decision's own half really is missing - or (since R6-5) this core
+        // *did* prepare it, asked when the decide outran its ceiling,
+        // applied the answer and released, and the original decide has now
+        // arrived behind its own resolution. In the second case nothing is
+        // lost and the outcome is already right. Refused rather than
+        // acknowledged either way, because an ack would tell the
+        // coordinator a transaction is whole that this core may hold no
+        // part of.
         ++decide_refusals_;
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
             log_->Error("2pc", "core " + std::to_string(core_id_) +
                                    " was told to commit core " + std::to_string(ask.coordinator) +
                                    "'s session " + std::to_string(ask.session_id) +
-                                   ", which it holds no transaction for; the decision stands "
-                                   "and this core's part of it is lost");
+                                   ", which it holds no transaction for; the decision stands, "
+                                   "and this core either never prepared it or has already "
+                                   "applied it through an in-doubt resolution");
         }
         reply(Status::InvalidArgument(
             "cross-owner transaction: core " + std::to_string(core_id_) +
@@ -873,8 +882,14 @@ void ShippedStatementExecutor::Resolve(const Txn2pcServer::ResolveAnswer& answer
                                       "this core stays in doubt until the next mount resolves "
                                       "it against that core's stream");
             }
-            // Not asked again: the answer is terminal. The stamp still
-            // moves so the sweep does not re-ask every tick.
+            // **Not asked again: the answer is terminal.** The record is
+            // gone and a coordinator may not re-decide, so every later ask
+            // would draw the same answer - and would re-count it, which
+            // would make `in_doubt_resolved_unknown()` a count of asks
+            // rather than of the transactions it says it counts. The stamp
+            // moves too, so a flag that is ever cleared still costs a
+            // ceiling before the next ask.
+            context.resolve_terminal = true;
             context.asked_at_ns = clock_.Now();
             return;
         }
@@ -914,17 +929,19 @@ void ShippedStatementExecutor::ExpireEnrolled() {
         // contexts this passes over is `in_doubt()`.
         if (it->second->prepared) {
             // **D5's bounded wait, from the participant's side** (R6-5).
-            // One ask per ceiling, for as long as it takes: the alternative
-            // - a cap on asks - would leave a participant holding locks
-            // with nothing left that could free it before the next mount,
-            // and asking costs two ring messages against a transaction that
-            // is already blocking writers. The stamp moves before the send,
-            // so a ring that refuses the send still costs one ceiling
+            // One ask per ceiling, and no cap on the *count*: a cap would
+            // leave a participant holding locks with nothing left that
+            // could free it before the next mount, and asking costs two
+            // ring messages against a transaction that is already blocking
+            // writers. What ends the asking is an *answer* - the decision,
+            // or `UnknownOutcome`, which is terminal and raises
+            // `resolve_terminal` (`Resolve`). The stamp moves before the
+            // send, so a ring that refuses the send still costs one ceiling
             // rather than one tick.
             Enrolled& context = *it->second;
             const bool busy =
                 context.phase_running || running_.find(it->first) != running_.end();
-            if (!busy && txn_2pc_server_ != nullptr &&
+            if (!busy && !context.resolve_terminal && txn_2pc_server_ != nullptr &&
                 now - context.asked_at_ns >= kTxnInDoubtCeilingNs) {
                 context.asked_at_ns = now;
                 ++in_doubt_asks_;

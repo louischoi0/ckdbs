@@ -1281,6 +1281,37 @@ TEST_F(Txn2pcInDoubtTest, AnUnknownAnswerLeavesTheTransactionInDoubtRatherThanGu
     EXPECT_EQ(Rows().find(",7"), std::string::npos) << Rows();
 }
 
+TEST_F(Txn2pcInDoubtTest, AnUnknownAnswerEndsTheAskingRatherThanRepeatingItForEver) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    clock_.Advance(kTxnInDoubtCeilingNs + 1);
+    executor_->ExpireEnrolled();
+    PumpBoth(64);
+    ASSERT_EQ(executor_->in_doubt_asks(), 1u);
+    ASSERT_EQ(executor_->in_doubt_resolved_unknown(), 1u);
+
+    // **`UnknownOutcome` is terminal** (D5), and terminal has to mean the
+    // asking stops. The coordinator holds no record and may not re-decide,
+    // so every later ask draws the same answer - two ring messages and a
+    // Warn line per ceiling for the life of the process, against a
+    // transaction only the next mount can finish (R6-4). It would also
+    // make `in_doubt_resolved_unknown()` a count of *asks* rather than of
+    // the transactions its accessor documents, which is the number
+    // `SHOW META`'s `txn_in_doubt_unresolved` is read as.
+    for (int i = 0; i < 4; ++i) {
+        clock_.Advance(kTxnInDoubtCeilingNs + 1);
+        executor_->ExpireEnrolled();
+        PumpBoth(16);
+    }
+    EXPECT_EQ(executor_->in_doubt_asks(), 1u);
+    EXPECT_EQ(executor_->in_doubt_resolved_unknown(), 1u);
+    // Stopping the asks hides nothing: the transaction is still prepared,
+    // still in doubt, and still holding its rows.
+    EXPECT_EQ(executor_->in_doubt(), 1u);
+    EXPECT_EQ(executor_->enrolled(), 1u);
+}
+
 TEST_F(Txn2pcInDoubtTest, AnAbortAnswerUnwindsTheParticipantsHalf) {
     ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
     ASSERT_TRUE(Prepare().status.ok());
@@ -1443,6 +1474,32 @@ TEST_F(Txn2pcBlockedWriterTest, AWriterInsideATransactionIsNotPoisonedWhileItIsS
     EXPECT_EQ(out->response.rfind("UPDATED", 0), 0u) << out->response;
     EXPECT_FALSE(local.failed());
     EXPECT_EQ(dispatcher_->Dispatch("COMMIT", &local).response.rfind("COMMIT", 0), 0u);
+}
+
+TEST_F(Txn2pcBlockedWriterTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid) {
+    // **The poison is withheld for the wait, so where there is no wait it
+    // must stand.** `Dispatch()` has no reactor to park on and answers the
+    // conflict itself; a failed statement inside an explicit transaction
+    // poisons the session whatever refused it (txn.md section 6 -
+    // failure atomicity is per transaction), and a session left unpoisoned
+    // here would tell the client `ERR` and then let its COMMIT succeed
+    // without the statement. The same holds for a dispatcher with no clock,
+    // which is the other arm the block cannot be taken on.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    Session local;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &local).response.rfind("BEGIN", 0), 0u);
+    const DispatchOutcome out = dispatcher_->Dispatch("UPDATE t SET v = 3 WHERE id = 7", &local);
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_EQ(StatusFromErrorReply(out.response).code(), StatusCode::kTxnConflict);
+    // Its own words, not the block's: nothing waited, so nothing may claim
+    // to have waited (HP4 - a pre-existing refusal keeps its spelling).
+    EXPECT_EQ(out.response.find("coordinator"), std::string::npos) << out.response;
+    EXPECT_TRUE(local.failed()) << "the failed statement left the transaction committable";
+    EXPECT_NE(dispatcher_->Dispatch("COMMIT", &local).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &local).response.rfind("ROLLBACK", 0), 0u);
 }
 
 TEST_F(Txn2pcBlockedWriterTest, AnOrdinaryInFlightWriterIsNotWaitedOnAtAll) {
