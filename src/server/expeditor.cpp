@@ -69,6 +69,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_max_entries_per_value", "cores", "placement",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
             "join_build_max_rows",   "in_doubt_ceiling_ms",
+            "range_size_ids",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -346,6 +347,16 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // is entitled to. The semantics have one home, at
         // `kTxnInDoubtCeilingNs` (server/txn_2pc_service.hpp).
         in_doubt_ceiling_ns = v.value() * 1'000'000ULL;
+    }
+    if (file.Has("range_size_ids")) {
+        auto v = file.GetUint("range_size_ids");
+        if (!v.ok()) return v.status();
+        // No zero check: 0 is `kRangeSizeOff`, the default and the only
+        // value that is correct until RD6 makes a range its own chain.
+        // One key sizes the range and the row-id lease grant because D6
+        // makes them one quantity; the semantics have one home, at
+        // `kDefaultRangeSizeIds` (server/range_alloc.hpp).
+        range_size_ids = v.value();
     }
     if (file.Has("physical_optimizer")) {
         auto v = file.GetString("physical_optimizer");
@@ -1340,6 +1351,7 @@ Status Expeditor::Serve() {
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
             core_config.in_doubt_ceiling_ns = config_.in_doubt_ceiling_ns;
+            core_config.range_size_ids = config_.range_size_ids;
             core_config.buffer_pool_frames =
                 FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
             core_config.lease = lease.value();
@@ -1556,8 +1568,15 @@ Status Expeditor::Serve() {
         // the bulk-INSERT primitive, already ceiling-checked. Core 0 is the
         // one core that may write the sequence page, which is the whole
         // reason this service exists.
+        // The WAL and the enforcer are RD5's: a request that also asks for
+        // a range needs the head page's handoff record and the
+        // eligibility re-check §9b's admission windows call for. Core 0's
+        // enforcer is deliberately not the fifth gate's authority here -
+        // `OpenRangeOnSystemCore` asks `sys.assertions` for that, because
+        // this registry is silent about a peer-owned relation.
         if (Status s = RegisterRowIdGrantHandler(scheduler, *transport_, database_->catalog,
-                                                 &*logger_);
+                                                 &*logger_, store_.get(), wal_.get(),
+                                                 &dispatcher_->assertions());
             !s.ok()) {
             return s;
         }

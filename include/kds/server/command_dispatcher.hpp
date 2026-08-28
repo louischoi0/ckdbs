@@ -31,6 +31,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/server/core_affinity.hpp"
+#include "kds/server/range_alloc.hpp"
 #include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
@@ -1251,6 +1252,11 @@ public:
     // why this is the only accessor and why it is not const.
     exec::AssertionEnforcer& assertions() noexcept { return enforcer_; }
 
+    // RD5's decline counters, written on the drain tick (CoreRuntime) and
+    // printed by `SHOW META`. Non-const because the one writer is not a
+    // statement, so it cannot go through a statement path.
+    RangeSplitDeclineCounters& range_split_declines() noexcept { return range_split_declines_; }
+
     // The view's two sources (workplan PHY06), a setter for
     // `set_optimizer_signals`'s reason. Both null - every construction
     // site without the controller - and `SHOW CABIN_OPTIMIZER` then
@@ -1780,6 +1786,13 @@ private:
     const stats::CabinOptimizer* cabin_controller_ = nullptr;
     const exec::CabinOptimizerExecutor* cabin_executor_ = nullptr;
     CrossCoreWriteCounters cross_core_writes_;
+    // C3 (workplan-range-directory.md §9e): declined range openings, per
+    // relation and gate. Written by the *runtime's* drain tick rather than
+    // by any statement - RD5's allocator is the one caller - and it lives
+    // here because this is where `SHOW META` reads its counters from, and
+    // because it is `cross_core_writes_`'s neighbour in form and purpose:
+    // per core, aggregate, the evidence a placement decision is made from.
+    RangeSplitDeclineCounters range_split_declines_;
     // This core's reactor, set_scheduler_view(); null off a reactor.
     const sched::Scheduler* scheduler_view_ = nullptr;
 

@@ -743,6 +743,29 @@ void CoreRuntime::GrantRelationFault(storage::Extent extent) {
 }
 
 void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
+    if (!AdmitWritePages(pages)) return;
+    // Whatever asked for these is answered (PW1c-7's latch); a demand that
+    // waited behind it goes out on the next tick. **Only the relation
+    // grant clears it** - RD5's range entry page is admitted through
+    // `AdmitWritePages` directly, because clearing this latch for a grant
+    // nobody asked for would let a still-outstanding relation request be
+    // sent twice.
+    grant_request_in_flight_ = false;
+    // A fill that ran before these rights landed cached the CREATE-time
+    // row as its root (the pre-grant fall-back in InitTableAccess); drop
+    // it so the next fill resolves the anchor now that it is faultable -
+    // the f5686f8 review's C1 window, closed where the rights arrive.
+    // InvalidateFromPeer, not BumpVersion: this instance's rows did not
+    // change, and nothing should broadcast.
+    catalog_->InvalidateFromPeer();
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("core", "core " + std::to_string(config_.core_id) + " write-granted " +
+                                std::to_string(pages.size()) +
+                                " page(s), acquisition-restamped");
+    }
+}
+
+bool CoreRuntime::AdmitWritePages(std::span<const PageId> pages) {
     // Rule 6's ordering, restamp-durable before writable, and the whole
     // body runs inside one task so no statement interleaves it. The fault
     // is GetForRead - read rights suffice, and the frame must be resident
@@ -764,7 +787,7 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
         if (log_ != nullptr) {
             log_->Error("core", "free-map refresh at write grant failed: " + s.message());
         }
-        return;
+        return false;
     }
     // Rule 6's precondition made true by construction, not by "nothing
     // below exists": the acquisition record's erase declares everything
@@ -776,7 +799,7 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
         if (log_ != nullptr) {
             log_->Error("core", "pre-acquisition flush failed: " + s.message());
         }
-        return;
+        return false;
     }
     for (PageId id : pages) {
         // C2: the write grant implies fault rights over its exact pages,
@@ -791,7 +814,7 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
                                         " could not fault write-granted page " +
                                         std::to_string(id) + ": " + page.status().message());
             }
-            return;
+            return false;
         }
         // Idempotent re-grant (the review's C3): a page this core already
         // holds write rights over gets no second acquisition record - the
@@ -812,14 +835,14 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
                 log_->Error("core", "acquisition record for page " + std::to_string(id) +
                                         " failed: " + acquired.status().message());
             }
-            return;
+            return false;
         }
         if (Status s = store_->StampPageLsn(id, acquired.value()); !s.ok()) {
             if (log_ != nullptr) {
                 log_->Error("core", "acquisition restamp of page " + std::to_string(id) +
                                         " failed: " + s.message());
             }
-            return;
+            return false;
         }
     }
     if (Status s = store_->FlushPages(pages); !s.ok()) {
@@ -827,24 +850,10 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
             log_->Error("core", "core " + std::to_string(config_.core_id) +
                                     " could not flush its acquisition restamps: " + s.message());
         }
-        return;  // unwritable is refused-retryably, never served wrong
+        return false;  // unwritable is refused-retryably, never served wrong
     }
     store_->GrantWritePages(pages);
-    // Whatever asked for these is answered (PW1c-7's latch); a demand that
-    // waited behind it goes out on the next tick.
-    grant_request_in_flight_ = false;
-    // A fill that ran before these rights landed cached the CREATE-time
-    // row as its root (the pre-grant fall-back in InitTableAccess); drop
-    // it so the next fill resolves the anchor now that it is faultable -
-    // the f5686f8 review's C1 window, closed where the rights arrive.
-    // InvalidateFromPeer, not BumpVersion: this instance's rows did not
-    // change, and nothing should broadcast.
-    catalog_->InvalidateFromPeer();
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("core", "core " + std::to_string(config_.core_id) + " write-granted " +
-                                std::to_string(pages.size()) +
-                                " page(s), acquisition-restamped");
-    }
+    return true;
 }
 
 StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
@@ -1088,15 +1097,67 @@ void CoreRuntime::MaybeRefillRowIds() {
     const auto neediest = row_id_leases_.NeediestRelation();
     if (!neediest.has_value()) return;
 
+    // RD5, and **this is the one core that may ask it** (workplan §9c):
+    // the fifth gate's fact lives in this core's own assertion registry,
+    // so core 0 asking on our behalf would answer "eligible" for exactly
+    // the relation an assertion should decline. Core 0 re-checks what its
+    // catalog can see and may still decline; the ids arrive either way.
+    //
+    // Off by default (`range_size_ids`, range_alloc.hpp): RD6 is what
+    // makes a range its own chain, and a directory row before that would
+    // describe a partition no insert or read honours.
+    const bool ranges_on = config_.range_size_ids != kRangeSizeOff;
+    bool open_range = false;
+    if (ranges_on && dispatcher_.has_value()) {
+        auto access = catalog_->InitTableAccess(*neediest);
+        if (access.ok()) {
+            const exec::RangeGate gate =
+                exec::RangeEligible(*access.value(), dispatcher_->assertions());
+            open_range = gate == exec::RangeGate::kNone;
+            // C3 (§9e): the counter carries the per-ask volume, and the
+            // line rides the *transition* - a permanently gated relation
+            // is every indexed one, and a line per refill would pay
+            // log.hpp's synchronous write once per lease block forever.
+            if (!open_range && dispatcher_->range_split_declines().Record(*neediest, gate) &&
+                log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+                log_->Info("range", "core " + std::to_string(config_.core_id) +
+                                        " will not open a range on relation oid " +
+                                        std::to_string(*neediest) + ": " +
+                                        std::string(exec::RangeGateName(gate)));
+            }
+        }
+    }
+    // D6: the range **is** the lease grant, so one number sizes both and
+    // a core inserting from its own block stays inside one range by
+    // construction (range_alloc.hpp).
+    const std::uint64_t count = ranges_on ? config_.range_size_ids : kRowIdLeasePerGrant;
+
     row_id_refill_in_flight_ = true;
     row_id_refill_.stats.NoteSubmit(scheduler_->clock().Now(), scheduler_->iterations());
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
-        RequestRowIdLease(*transport_, row_id_refill_, *neediest, kRowIdLeasePerGrant,
-                          config_.core_id, /*system_core=*/0, log_, &*scheduler_),
+        RequestRowIdLease(*transport_, row_id_refill_, *neediest, count, config_.core_id,
+                          /*system_core=*/0, log_, &*scheduler_, open_range),
         [this](const Status& s) {
             row_id_refill_in_flight_ = false;
             row_id_refill_.stats.Complete(scheduler_->clock().Now(), scheduler_->iterations());
+            // CC10 step 4's other half: core 0 formatted the range's head
+            // page and logged the handoff before replying, so admitting it
+            // here is what makes this core able to write its own range.
+            // Not through `GrantRelationWrite`: nothing asked for this
+            // page, and clearing that path's latch would let an
+            // outstanding relation request be sent twice.
+            if (row_id_refill_.entry_page != kInvalidPageId) {
+                const PageId head = row_id_refill_.entry_page;
+                if (AdmitWritePages(std::span<const PageId>(&head, 1))) {
+                    // The boundary core 0 just published. The broadcast is
+                    // coming anyway (BumpVersion's hook); dropping the
+                    // cache here means the very next statement resolves
+                    // against the directory rather than the tick after.
+                    catalog_->InvalidateFromPeer();
+                }
+                row_id_refill_.entry_page = kInvalidPageId;
+            }
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 // Nothing to return it to - a background task - and the
                 // consequence is bounded: INSERTs into that relation keep

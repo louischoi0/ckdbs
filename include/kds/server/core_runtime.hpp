@@ -23,6 +23,7 @@
 #include "kds/server/statement_ship_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/remote_step_service.hpp"
+#include "kds/server/range_alloc.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
@@ -137,6 +138,17 @@ public:
         // The default is `kTxnInDoubtCeilingNs`, spelled at
         // `Expeditor::Config` where the key is parsed.
         sched::MonoTimeNs in_doubt_ceiling_ns = 0;
+
+        // RD5's `range_size_ids`, copied from core 0 like every other
+        // shared setting. **One number for two things on purpose** (D6):
+        // it is both how many ids a row-id lease grant carries and how
+        // wide a range is, because range = lease grant is the mechanism
+        // D6 was taken on - a second key would let them disagree at the
+        // one boundary the mechanism exists to keep them agreeing at.
+        // `kRangeSizeOff` (0, the default) means no range is ever opened
+        // and the lease asks for `kRowIdLeasePerGrant` as it always has;
+        // range_alloc.hpp says why the default is off until RD6.
+        std::uint64_t range_size_ids = kRangeSizeOff;
 
         // This core's page-id lease, carved by core 0's ExtentAllocator
         // before the worker starts.
@@ -320,6 +332,16 @@ public:
     // publish hook's own stance. What the `kRelationWriteGrant` handler
     // calls; exposed for the reason GrantRelationFault is.
     void GrantRelationWrite(std::span<const PageId> pages);
+
+    // `GrantRelationWrite`'s body without the relation-grant latch and the
+    // cache drop around it: fault, acquisition-record, restamp, flush,
+    // make writable. False means the grant was abandoned mid-way and this
+    // core holds no new rights - one failure policy for every step, the
+    // 25059bf review's C-2/C-5. RD5 admits a range's head page through
+    // this rather than through its caller, because nothing asked for that
+    // page and clearing the latch would let an outstanding relation
+    // request be sent twice.
+    bool AdmitWritePages(std::span<const PageId> pages);
 
     // This core's row-id leases and refill state (P5's shape). Exposed for
     // the same reason GrantRelationFault is: a test drives the grant

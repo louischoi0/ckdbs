@@ -23,6 +23,7 @@
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/mount_recovery.hpp"
+#include "kds/server/range_alloc.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/stop_signal.hpp"
@@ -409,6 +410,12 @@ public:
         // one home, at `kTxnInDoubtCeilingNs` (server/txn_2pc_service.hpp),
         // which also carries the derivation of the default.
         sched::MonoTimeNs in_doubt_ceiling_ns = kTxnInDoubtCeilingNs;
+
+        // RD5's `range_size_ids` - one number for the range width and the
+        // row-id lease grant, because D6 makes them one quantity. Off by
+        // default until RD6 gives a range its own chain
+        // (server/range_alloc.hpp).
+        std::uint64_t range_size_ids = kRangeSizeOff;
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a

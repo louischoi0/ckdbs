@@ -468,6 +468,16 @@ StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
     if (!oid.ok()) return oid.status();
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();
+    // §6a's converse (`catalog::RefuseAuxiliaryOnSplitRelation`,
+    // workplan-range-directory.md §9b). Before the column resolution
+    // rather than after, on `PrepareAssertionDef`'s own stated rule that
+    // the cheap refusals come before the scan: an assertion's Bound Cabin
+    // is one chain held by one core, which is the fifth gate exactly, and
+    // a boundary is the thing it cannot cross.
+    if (Status s = catalog::RefuseAuxiliaryOnSplitRelation(*access.value(), "an assertion");
+        !s.ok()) {
+        return s;
+    }
 
     auto columns = ResolveAssertionColumns(*access.value(), stmt);
     if (!columns.ok()) return columns.status();

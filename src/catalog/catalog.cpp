@@ -1177,6 +1177,79 @@ Status Catalog::InsertRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRow
     return s;
 }
 
+Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary) {
+    if (access.ranges.empty()) return Status::OK();
+    return Status::Unsupported(
+        "relation oid " + std::to_string(access.oid) + " is split across " +
+        std::to_string(access.ranges.size()) + " ranges, and " + std::string(auxiliary) +
+        " on a split relation is declined until where it lives under a boundary is decided "
+        "(docs/spec/crosscore.md §6a, §9)");
+}
+
+StatusOr<PageId> Catalog::OpenRange(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core) {
+    if (lo == 0) {
+        return Status::InvalidArgument(
+            "sys.ranges: relation " + std::to_string(rel_oid) +
+            " cannot open a range at lo = 0 - that boundary is the relation as it already is, "
+            "written here as the opening row, and asking for it as a split would describe the "
+            "whole id space twice");
+    }
+    // The relation's own facts, and the failure is the caller's answer:
+    // a relation with no sys.tables row has nothing to partition.
+    auto access = InitTableAccess(rel_oid);
+    if (!access.ok()) return access.status();
+    // Copied out, not held: the first `InsertRangeRow` below ends in
+    // `BumpVersion`, which frees the entry this pointer names. Two fields
+    // taken before any write is the whole of what this call needs from it.
+    const std::uint32_t relation_owner = access.value()->owner_core;
+    const PageId relation_head = access.value()->desc_page_id;
+
+    // The opening row first, and only if the directory is empty. Read
+    // through `RangesOf` rather than `access->ranges` so the check is
+    // against the page rather than against a cache entry this call is
+    // about to invalidate.
+    auto existing = RangesOf(rel_oid);
+    if (!existing.ok()) return existing.status();
+
+    // The head page, allocated and formatted before either row, because
+    // the row that names it must not become durable first: redo refuses a
+    // record naming a page nothing creates (RC03's class).
+    PageId entry_page = kInvalidPageId;
+    {
+        auto created = store_.CreateNew();
+        if (!created.ok()) return created.status();
+        entry_page = created.value().first;
+        auto page = heap::PageView::CreateEmpty(created.value().second.bytes(), lo, rel_oid);
+        if (!page.ok()) return page.status();
+    }
+    // `wal::LogPageInit` directly and not `LogCatPageInit`: that helper
+    // pins `min_key = 0`, which is right for a catalog page and wrong for
+    // this one. A range head replayed with `min_key = 0` would accept ids
+    // below its boundary after a recovery and only after one, which is
+    // invariant 3 lost in the one place nothing would look.
+    if (auto rec = wal::LogPageInit(wal_, wal::kNoTxnId, entry_page, PageType::kHeap, lo, rel_oid);
+        !rec.ok()) {
+        return rec.status();
+    }
+
+    if (existing.value().empty()) {
+        SysRangeRow opening{};
+        opening.rel_oid = rel_oid;
+        opening.lo = 0;
+        opening.owner_core = relation_owner;
+        opening.entry_page = relation_head;
+        if (Status s = InsertRangeRow(opening); !s.ok()) return s;
+    }
+
+    SysRangeRow split{};
+    split.rel_oid = rel_oid;
+    split.lo = lo;
+    split.owner_core = owner_core;
+    split.entry_page = entry_page;
+    if (Status s = InsertRangeRow(split); !s.ok()) return s;
+    return entry_page;
+}
+
 Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
                                         std::uint64_t index_oid) {
     // A relation whose anchor predates PW2 has none, and there is then no
@@ -2773,6 +2846,13 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // nothing and be invisible until someone read the catalog by hand.
     auto access = InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
+    // §6a's converse, and the **auto** path comes through here too - which
+    // is the one that would otherwise open a Cabin on a split relation
+    // with nobody having asked (physical-optimizer.md Part II's
+    // controller).
+    if (Status s = RefuseAuxiliaryOnSplitRelation(*access.value(), "a Cabin"); !s.ok()) {
+        return s;
+    }
     if (col_pos >= access.value()->schema.columns.size()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(rel_oid) +
                                        " has no column at position " + std::to_string(col_pos));
@@ -2873,6 +2953,19 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     if (!child.ok()) return child.status();
     auto parent = InitTableAccess(parent_rel_oid);
     if (!parent.ok()) return parent.status();
+
+    // §6a's converse, at **both** ends: an FK's validation reads the
+    // linked relation, so a boundary on either side is the same undecided
+    // placement question. §6a gates the split on `fkeys_out` and
+    // `fkeys_in` alike, and this is that gate read backwards.
+    if (Status s = RefuseAuxiliaryOnSplitRelation(*child.value(), "a foreign key"); !s.ok()) {
+        return s;
+    }
+    if (Status s = RefuseAuxiliaryOnSplitRelation(*parent.value(),
+                                                  "a foreign key referencing it");
+        !s.ok()) {
+        return s;
+    }
 
     if (child_column_no >= child.value()->schema.columns.size()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(child_rel_oid) +
@@ -2985,6 +3078,14 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
 
     auto access = InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
+    // §6a's converse (`RefuseAuxiliaryOnSplitRelation`): whether an index
+    // under a boundary is per-range or global is `index.md` §13's, and
+    // until that is answered a split relation takes none. Here rather than
+    // only at the dispatcher, this file's own doctrine - this is the door
+    // every non-DDL caller comes through.
+    if (Status s = RefuseAuxiliaryOnSplitRelation(*access.value(), "an index"); !s.ok()) {
+        return s;
+    }
     const Schema& schema = access.value()->schema;
 
     // The owner refusal lives here, not only in the dispatcher (the

@@ -1100,6 +1100,35 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         }
     }
 
+    // **Declined range openings** (RD5's C3, workplan-range-directory.md
+    // §9e), in the triple above's exact form and for the same reason: the
+    // reading is aggregate, and *which gate declines how often on which
+    // relation* is the evidence for which owning decision to lift first -
+    // the index (index.md §13), the Cabin (cabin.md §11), the var-heap
+    // partition, FK or assertion placement. The per-event log line beside
+    // it is bounded to transitions, so this is where the volume is.
+    //
+    // Absent rather than zeroed, this block's rule throughout: a core
+    // whose relations have never been asked prints nothing, which is the
+    // honest reading of "no range was ever declined here" - and with
+    // `range_size_ids` at its default nothing asks at all.
+    if (range_split_declines_.total() != 0) {
+        os << " range_split_declines=" << range_split_declines_.total()
+           << " range_split_decline_keys=" << range_split_declines_.counts().size();
+        constexpr std::size_t kMaxDetailKeys = 16;
+        os << " range_split_decline_detail=";
+        std::size_t printed = 0;
+        for (const auto& [key, count] : range_split_declines_.counts()) {
+            if (printed == kMaxDetailKeys) {
+                os << ",+" << (range_split_declines_.counts().size() - printed) << "more";
+                break;
+            }
+            if (printed != 0) os << ',';
+            os << key.rel_oid << ':' << exec::RangeGateName(key.gate) << '=' << count;
+            ++printed;
+        }
+    }
+
     // **Statement shipping** (D7 of the statement-shipping work order).
     // Two halves, because a core is both an arrival core and an owner and
     // the two say different things: the first four are what this core
