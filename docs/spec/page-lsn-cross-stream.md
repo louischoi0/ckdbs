@@ -334,6 +334,30 @@ Consequences that bind other work:
 - **Revisit clause**: if cross-core commit (2PC) is ever ratified, PL-A is
   re-opened *by that decision* — one global LSN may then pay for both.
   Until then it is declined, not deferred.
+  **Fired 2026-08-28**, when the operator ratified 2PC's D1–D7, and
+  **executed the same day** by R6-7
+  (`docs/inflight/in-progress/workplan-cross-owner-txn.md`, "R6-7 — PL-A's
+  revisit, and CP4"). The finding: **2PC as ratified and built changes
+  nothing here.** The decision lives in exactly one stream (D4), so nothing
+  is assembled across streams and nothing is ordered; the protocol's five
+  wire payloads carry no LSN at all; per-participant trx ids stay
+  stream-local by D2 — by construction on the write path, since the
+  envelope carries the participant's own id and the coordinator's ids ride
+  in the payload; and the recovery-time resolution is a lookup of one id in
+  one file, **never a cross-stream comparison**. (It makes exactly one
+  comparison, and both its numbers belong to the coordinator: the scan of
+  that stream must reach the durable point *that* stream's own anchor was
+  published with, `prepared_resolver.cpp:125`. A within-stream completeness
+  check another core happens to run is not a crossing.) The one
+  interaction that does exist runs the safe way — a prepared transaction
+  lowers its core's redo start, so a scan meets *more* handoff records in
+  order, which rule 3's forward scan and rule 6's restamp already handle;
+  nothing in 2PC raises a redo start past a handoff. **CLA's verdict is to
+  decline PL-A again**, since the second decision it would have paid for
+  turned out not to exist, while its append-path cost is unchanged. That
+  verdict is a **proposal awaiting the operator**, not a closure: this
+  clause re-opened a ratified decision rather than delegating it, and R6-9
+  writes the ruling in here.
 
 ## 10. Explicitly not in scope
 

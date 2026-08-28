@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -15,6 +16,9 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/role.hpp"
+// R6-8: the coordinator's isolation level crosses on the request, so the
+// wire needs the enum the engine spells it with rather than a second one.
+#include "kds/txn/manager.hpp"
 
 // **Statement shipping, the wire and the waiter** (SS1 of the
 // statement-shipping work order): a single-statement transaction that
@@ -202,7 +206,28 @@ struct ShippedStatementRequestPayload {
     // statement already arrives under, and records the coordinator's id when
     // prepare brings it (D2, `txn_2pc_service.hpp`).
     std::uint8_t in_txn;
-    std::uint8_t reserved0[3];
+    // **R6-8: the coordinator's isolation level, for an enrolled statement.**
+    //
+    // A `txn::IsolationLevel` (1 = READ COMMITTED, 2 = REPEATABLE READ),
+    // and **0 means "not stated" and is not a level** - the zero-collision
+    // rule every enum on this wire keeps, so a zeroed buffer cannot decode
+    // as a real one. A request with `in_txn = 0` leaves it 0: an autocommit
+    // statement is a whole transaction, and under either level the view is
+    // minted at the same instant, so carrying it there would change a
+    // measured path to no observable end.
+    //
+    // **Why it has to cross at all** (§2's ratification of D3, which lists
+    // this against R6-3 and which R6-8 is where it becomes reachable): the
+    // participant opens its transaction with `Dispatch("BEGIN")` on its own
+    // dispatcher, whose `default_isolation()` is *that server's config key*,
+    // not the client's session. So `BEGIN ISOLATION LEVEL REPEATABLE READ`
+    // on the coordinator produced a READ COMMITTED participant, silently -
+    // and D3 ratified makes the level *select a branch*: watermarks are
+    // carried for REPEATABLE READ only. A participant that mistakes the
+    // level therefore gives a transaction the weaker promise while the
+    // client was told the stronger one.
+    std::uint8_t isolation;
+    std::uint8_t reserved0[2];
     char text[kShippedStatementTextMax];  // not NUL-terminated; text_len bounds it
 };
 static_assert(sizeof(ShippedStatementRequestPayload) == sched::kCoreRingPayloadBytes,
@@ -251,13 +276,20 @@ inline constexpr sched::MonoTimeNs kShippedStatementDeadlineNs = 10ull * 1'000'0
 // The encode. **Refuses rather than truncates** - both because a shortened
 // statement is a different statement, and because the bound is the ring's
 // and a caller cannot be expected to know it.
-StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t session_id,
-                                                                   std::uint64_t sequence,
-                                                                   std::uint64_t target_oid,
-                                                                   Role role,
-                                                                   std::string_view text,
-                                                                   bool retry = false,
-                                                                   bool in_txn = false);
+StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(
+    std::uint64_t session_id, std::uint64_t sequence, std::uint64_t target_oid, Role role,
+    std::string_view text, bool retry = false, bool in_txn = false,
+    std::optional<txn::IsolationLevel> isolation = std::nullopt);
+
+// The isolation level a request states, or empty where it states none
+// (R6-8). **Refused rather than defaulted** when the byte names no level
+// this build knows: an unreadable level on an enrolled statement would run
+// a transaction at a level nobody chose, and the engine's standing posture
+// is `Corruption`-over-interpretation for bytes this core did not compute.
+// A `nullopt` answer is the legal "not stated", which is what every
+// autocommit request carries.
+StatusOr<std::optional<txn::IsolationLevel>> ShippedStatementIsolationOf(
+    const ShippedStatementRequestPayload& request);
 // The reply encode, same discipline: a reply too long to carry is turned
 // into a refusal that says so, never a truncated answer presented as one.
 StatusOr<ShippedStatementReplyPayload> ShippedStatementReplyOf(std::uint64_t session_id,
@@ -338,6 +370,13 @@ public:
         // `(requester, session_id)`, opening one if this is the first
         // statement, and leave it open when the statement finishes.
         bool in_txn = false;
+        // R6-8: the coordinator's level for an enrolled statement, empty
+        // where the request stated none - which is every autocommit one.
+        // An optional rather than a defaulted level, because "the client
+        // did not say" and "the client said READ COMMITTED" must not
+        // arrive here as the same thing: the first takes this core's own
+        // default, the second is a promise made to a client.
+        std::optional<txn::IsolationLevel> isolation;
         std::string text;
     };
     using ExecuteFn = std::function<void(ShippedStatement statement, ReplyFn reply)>;
@@ -429,7 +468,8 @@ public:
     // reply wake it.
     Status Ship(std::uint32_t owner_core, std::uint64_t request_id, std::uint64_t session_id,
                 std::uint64_t sequence, std::uint64_t target_oid, Role role,
-                std::string_view text, bool retry = false, bool in_txn = false);
+                std::string_view text, bool retry = false, bool in_txn = false,
+                std::optional<txn::IsolationLevel> isolation = std::nullopt);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.

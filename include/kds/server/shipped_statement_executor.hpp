@@ -240,6 +240,16 @@ public:
             Decide(ask, std::move(reply));
         };
     }
+    // R6-5's third seam: the coordinator's answer to an ask this core sent.
+    Txn2pcServer::ResolveFn ResolveSeam() {
+        return [this](Txn2pcServer::ResolveAnswer answer) { Resolve(answer); };
+    }
+    // The transport this core asks its coordinators through (R6-5). Set by
+    // the wiring after both objects exist - the server holds this
+    // executor's seams, so the executor cannot hold the server by
+    // construction - and null on every fixture that drives the seams
+    // directly, where an in-doubt context simply waits with nothing to ask.
+    void SetTxn2pcServer(Txn2pcServer* server) noexcept { txn_2pc_server_ = server; }
 
     // Statements this core ran on another core's behalf, and finished.
     std::uint64_t executed() const noexcept { return executed_; }
@@ -304,8 +314,16 @@ public:
     std::uint64_t decides_aborted() const noexcept { return decides_aborted_; }
     // Decides this core could not apply, or would not: a decide for a
     // transaction it never prepared, a commit whose local commit failed, an
-    // identity that is not the one it prepared under. **Non-zero is a
-    // protocol anomaly**, not a workload property.
+    // identity that is not the one it prepared under, and (R6-5) an
+    // in-doubt answer naming a different transaction than the context
+    // asked about. **Non-zero is a protocol anomaly**, not a workload
+    // property - with one benign exception R6-5 introduces and cannot
+    // distinguish here: a decide that outran D5's ceiling, so that the
+    // participant resolved by asking and the original decide arrived behind
+    // its own answer. That case is counted here and logged, and its outcome
+    // is already correct; separating it needs a decided-window on this side
+    // or a bit the coordinator has no way to set, which is R6-8's to weigh
+    // when the path goes live.
     std::uint64_t decide_refusals() const noexcept { return decide_refusals_; }
     // Prepared transactions this core stopped with, rather than rolling
     // them back. D4 forbids the rollback; R6-6 owns what the next mount
@@ -320,16 +338,56 @@ public:
     // as one at RP7's gate.
     std::uint64_t left_in_doubt_at_stop() const noexcept { return left_in_doubt_at_stop_; }
 
-    // Rolls back every enrolled transaction idle past
-    // `kShippedTxnIdleCeilingNs`. Driven from the reactor's periodic tick,
-    // the way `PendingIndexBuilds::Expire` is - a lazy sweep would never run
-    // for an abandoned context, since nothing arrives for it by definition.
+    // The isolation level a cross-owner transaction was opened at here
+    // (R6-8), or empty where this core holds no context for that
+    // coordinator session.
     //
-    // **A prepared context is excluded** (R6-3, D4): a participant that has
-    // replied prepared may not unilaterally abort, so the ceiling stops
-    // applying to it and the wait becomes D5's in-doubt resolution instead.
-    // The exclusion is the sweep's, not the constant's - `in_doubt()` is
-    // what says how many contexts it is passing over.
+    // **A reader for a promise, and it has no other one.** The level is the
+    // client's choice and it crosses on the request; that it *arrived* is
+    // otherwise checkable only by inference - two statements and a
+    // concurrent commit, to see whether the participant's view moved - and
+    // an inference is a poor test of a contract. `SHOW META` deliberately
+    // does not print it: it is a property of one transaction, not a rate.
+    std::optional<txn::IsolationLevel> enrolled_isolation(std::uint32_t coordinator,
+                                                          std::uint64_t session_id) const {
+        auto it = enrolled_.find(DedupKey{coordinator, session_id});
+        if (it == enrolled_.end()) return std::nullopt;
+        return it->second->session.isolation();
+    }
+
+    // Prepares this core has asked a coordinator about, ever (R6-5). One
+    // per ceiling per in-doubt transaction, so a rising number against a
+    // flat `in_doubt()` is a coordinator that is not answering.
+    std::uint64_t in_doubt_asks() const noexcept { return in_doubt_asks_; }
+    // In-doubt transactions a coordinator's answer resolved, split by what
+    // it said. **`in_doubt_resolved_unknown()` is the one that matters**:
+    // it counts transactions whose coordinator no longer holds the record,
+    // which stay prepared here until the next mount reads that
+    // coordinator's stream (R6-4) - and which go on holding their locks and
+    // blocking writers of their rows until then.
+    std::uint64_t in_doubt_resolved_committed() const noexcept {
+        return in_doubt_resolved_committed_;
+    }
+    std::uint64_t in_doubt_resolved_aborted() const noexcept {
+        return in_doubt_resolved_aborted_;
+    }
+    std::uint64_t in_doubt_resolved_unknown() const noexcept {
+        return in_doubt_resolved_unknown_;
+    }
+
+    // Rolls back every enrolled transaction idle past
+    // `kShippedTxnIdleCeilingNs`, and (R6-5) asks about every prepared one
+    // that has been in doubt for `kTxnInDoubtCeilingNs`. Driven from the
+    // reactor's periodic tick, the way `PendingIndexBuilds::Expire` is - a
+    // lazy sweep would never run for an abandoned context, since nothing
+    // arrives for it by definition.
+    //
+    // **A prepared context is not the ceiling's** (R6-3, D4): a participant
+    // that has replied prepared may not unilaterally abort, so
+    // `kShippedTxnIdleCeilingNs` stops applying to it and D5's ask applies
+    // instead. That is the whole difference between the two halves of this
+    // sweep - one ends transactions, the other asks about them and ends
+    // nothing.
     void ExpireEnrolled();
 
     // Rolls back every enrolled transaction, whatever its age - **except a
@@ -447,6 +505,24 @@ private:
         // coming, since nothing in this row resolves one. `AwaitPrepared`
         // applies it on wake.
         bool decision_pending = false;
+        // R6-5. When the last in-doubt ask went out, or when the promise
+        // was made if none has - the ceiling runs from whichever, so the
+        // first ask waits one ceiling after prepare and each later one a
+        // ceiling after the last. Separate from `touched_at_ns` because
+        // that one moves when a *statement* finishes, and a prepared
+        // context takes no statements: folding them would make the ask
+        // cadence depend on work that can no longer happen.
+        sched::MonoTimeNs asked_at_ns = 0;
+        // **The ask is over** (R6-5, D5). Raised by an `UnknownOutcome`
+        // answer, which is the one terminal answer the leg has: the
+        // coordinator holds no record, may not re-decide, and the only
+        // thing left that can resolve this transaction is the next mount
+        // reading that coordinator's stream (R6-4). Without it the sweep
+        // re-asks every ceiling for the life of the process - a question
+        // whose answer cannot change, a Warn line per ceiling per stuck
+        // transaction, and an `in_doubt_resolved_unknown_` that counts asks
+        // instead of the transactions its accessor documents.
+        bool resolve_terminal = false;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
             : session(isolation), touched_at_ns(now) {
@@ -476,7 +552,14 @@ private:
     // session to run on. Refuses without leaving a half-open context - a
     // spent transaction-id lease refuses `TxnConflict` here, and that is a
     // retryable refusal the coordinator may act on.
-    StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role);
+    //
+    // `isolation` is the **coordinator's** (R6-8): the level is the
+    // client's choice, and this core's own default is what it fell back to
+    // before the level crossed - which under D3 handed a transaction the
+    // wrong promise. Used only when the context is opened; a statement
+    // joining an existing one runs at the level that one was opened with,
+    // since a transaction has one level for its life.
+    StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role, txn::IsolationLevel isolation);
     // Rolls `it`'s transaction back and drops the context. **Rollback
     // only**, still: R6-3's commit arm is not here but in `Decide`, and for
     // the reason this comment already gave - `Dispatch("COMMIT")` finishes
@@ -489,6 +572,14 @@ private:
     // ---- R6-3: the two phases, as this core sees them --------------------
     void Prepare(const Txn2pcServer::PrepareAsk& ask, Txn2pcServer::ReplyFn reply);
     void Decide(const Txn2pcServer::DecideAsk& ask, Txn2pcServer::ReplyFn reply);
+    // ---- R6-5: the coordinator's answer to an ask this core sent ---------
+    //
+    // Applied through the same `StartDecision` a decide message takes, with
+    // no reply to send: nobody is parked on this, and the coordinator
+    // already knows what it decided. An `UnknownOutcome` answer applies
+    // nothing - the context stays prepared and in doubt, which is the only
+    // honest state, and the next mount resolves it (R6-4).
+    void Resolve(const Txn2pcServer::ResolveAnswer& answer);
     // Parks until the prepare record is durable, then answers. A coroutine
     // rather than an inline `EnsureDurable` because this runs on the
     // participant's reactor, which serves every other connection on this
@@ -523,6 +614,8 @@ private:
     // This core's own stream, R6-3's prepare record's destination. Null on
     // an unlogged instance, which is the fixture case.
     wal::WalManager* wal_;
+    // R6-5's ask transport, borrowed. Null where nothing can ask.
+    Txn2pcServer* txn_2pc_server_ = nullptr;
 
     // **Keyed by the shipping identity**, which is what makes the record
     // reach the in-flight half of the window: a duplicate is recognised
@@ -560,6 +653,12 @@ private:
     std::uint64_t decides_aborted_ = 0;
     std::uint64_t decide_refusals_ = 0;
     std::uint64_t left_in_doubt_at_stop_ = 0;
+
+    // R6-5.
+    std::uint64_t in_doubt_asks_ = 0;
+    std::uint64_t in_doubt_resolved_committed_ = 0;
+    std::uint64_t in_doubt_resolved_aborted_ = 0;
+    std::uint64_t in_doubt_resolved_unknown_ = 0;
 };
 
 }  // namespace kds::server

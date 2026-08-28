@@ -65,6 +65,12 @@ CoreRuntime::~CoreRuntime() {
         // client is declared below the dispatcher too.
         dispatcher_->SetTxn2pc(nullptr);
     }
+    // R6-5's borrow in the other direction - the executor asks *through*
+    // the 2PC server, which is declared below it, so reverse-order
+    // destruction takes the server first. Nothing asks after this point
+    // (the sweep is a timer on a reactor that has stopped), so this is the
+    // contract rather than a live fix, on `SetStatementShip`'s terms.
+    if (shipped_executor_.has_value()) shipped_executor_->SetTxn2pcServer(nullptr);
     // **`scheduler_.reset()` used to stand here and is deliberately gone.**
     // It inverted declaration order to enforce a contract that declaration
     // order already keeps: `scheduler_` is declared above every borrower,
@@ -267,6 +273,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.
     runtime->dispatcher_->set_recovery(&runtime->recovery_);
+    // D5's in-doubt ceiling, copied from core 0's config (R6-5). Set here
+    // and not at `AttachTransport`, because a writer blocked on an in-doubt
+    // row is blocked whether or not this core has a transport - the
+    // transaction that holds the row is this core's own.
+    runtime->dispatcher_->set_in_doubt_ceiling_ns(config.in_doubt_ceiling_ns);
     // `SHOW META`'s group-accounting block on this core (sched.md §4). Set
     // on every core, peer or not: the accounting question is about a
     // reactor, and every core runs one. Set on the startup thread, before
@@ -630,7 +641,12 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // cost a phase its whole deadline before saying so.
     txn_2pc_server_.emplace(config_.core_id, *scheduler_, transport,
                             shipped_executor_->PrepareSeam(), shipped_executor_->DecideSeam(),
-                            log_);
+                            shipped_executor_->ResolveSeam(), log_);
+    // R6-5: the ask leg, both directions. The receiver, then the pointer
+    // the executor's sweep asks through - in that order, so an answer
+    // cannot arrive before there is anything to deliver it to.
+    if (Status s = txn_2pc_server_->RegisterResolveReplyReceiver(); !s.ok()) return s;
+    shipped_executor_->SetTxn2pcServer(&*txn_2pc_server_);
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kTxnPrepareRequest,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

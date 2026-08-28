@@ -94,6 +94,7 @@ out-of-range values, each naming the file and line.
 | `cabin_max_values` / `cabin_max_entries_per_value` | `4096` / `4096` | Cabin caps. A cap refuses to observe, never truncates. |
 | `aggregate_max_groups` / `aggregate_max_distinct` | `65536` / `1048576` | Aggregation caps. A cap fails the statement, never truncates. |
 | `sort_max_rows` | `1048576` | How many rows one `ORDER BY` may hold. Fails the statement naming the key; never truncates, never spills. A `LIMIT` caps what is held at `offset + limit`, so this binds only an unlimited sort — and `ORDER BY <pk>` ascending is elided rather than sorted, so it is never bound at all. |
+| `in_doubt_ceiling_ms` | `200` | How long a write waits for a row held by a transaction this core has prepared for a cross-owner commit and is waiting for the coordinator to decide. At the ceiling the statement is refused `TXN_CONFLICT` with `retryable=1`, naming the wait — never `UNKNOWN_OUTCOME`, since the statement did nothing. `0` refuses immediately instead of waiting. Only a multi-owner transaction can put a row in this state. |
 | `log_dir` / `log_file` / `log_level` | — / `kdb.log` / `info` | Log destination and level (`trace`..`off`). Empty `log_file` disables file logging. |
 
 The two superblock-pinned keys (`cores`, `inline_cell_width`) are the ones

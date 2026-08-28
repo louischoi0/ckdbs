@@ -68,7 +68,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "indexes",
             "cabin_max_entries_per_value", "cores", "placement",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
-            "join_build_max_rows",
+            "join_build_max_rows",   "in_doubt_ceiling_ms",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -337,6 +337,15 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // this knob at any value. The semantics have one home, at
         // `kDefaultJoinBuildMaxRows` (exec/budget.hpp).
         join_build_max_rows = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("in_doubt_ceiling_ms")) {
+        auto v = file.GetUint("in_doubt_ceiling_ms");
+        if (!v.ok()) return v.status();
+        // No zero check: 0 is D5's other branch - a writer refused at once
+        // rather than blocked - and is a value someone sweeping this knob
+        // is entitled to. The semantics have one home, at
+        // `kTxnInDoubtCeilingNs` (server/txn_2pc_service.hpp).
+        in_doubt_ceiling_ns = v.value() * 1'000'000ULL;
     }
     if (file.Has("physical_optimizer")) {
         auto v = file.GetString("physical_optimizer");
@@ -854,6 +863,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                               expeditor->config_.aggregate_max_distinct});
     expeditor->dispatcher_->set_sort_max_rows(expeditor->config_.sort_max_rows);
     expeditor->dispatcher_->set_join_build_max_rows(expeditor->config_.join_build_max_rows);
+    // D5's ceiling (R6-5). Core 0 is a participant like any other - a
+    // peer's client writes core-0-owned relations - so its writers block on
+    // an in-doubt row exactly as a peer's do, and both read the same key.
+    expeditor->dispatcher_->set_in_doubt_ceiling_ns(expeditor->config_.in_doubt_ceiling_ns);
     // SHOW META's recovery block (RC09). A pointer into the member rather than
     // a copy, so the block reports the mount's own report and cannot drift from
     // it; `recovery_` is declared above the dispatcher and so outlives it.
@@ -1188,6 +1201,7 @@ Status Expeditor::Serve() {
     // withdrawing all three together is what makes this struct's name true.
     struct ClearReactorBorrows {
         CommandDispatcher* dispatcher;
+        std::optional<ShippedStatementExecutor>* executor;
         ~ClearReactorBorrows() {
             dispatcher->set_scheduler_view(nullptr);
             dispatcher->SetStatementShip(nullptr);
@@ -1195,8 +1209,14 @@ Status Expeditor::Serve() {
             dispatcher->SetTxn2pc(nullptr);
             dispatcher->SetIndexBuilds(nullptr);
             dispatcher->SetAssertionBuilds(nullptr);
+            // R6-5's borrow runs the other way - the executor asks through
+            // the 2PC server, and that server is a *member*, so it outlives
+            // this function's `scheduler` while holding it by reference.
+            // Withdrawn here so the two directions are undone in one place
+            // and nothing asks through a destroyed reactor.
+            if (executor->has_value()) (*executor)->SetTxn2pcServer(nullptr);
         }
-    } clear_reactor_borrows{&*dispatcher_};
+    } clear_reactor_borrows{&*dispatcher_, &shipped_executor_};
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,
@@ -1319,6 +1339,7 @@ Status Expeditor::Serve() {
             core_config.durability = config_.durability;
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
+            core_config.in_doubt_ceiling_ns = config_.in_doubt_ceiling_ns;
             core_config.buffer_pool_frames =
                 FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
             core_config.lease = lease.value();
@@ -1504,7 +1525,12 @@ Status Expeditor::Serve() {
         // cannot beat its receiver.
         txn_2pc_server_.emplace(/*core_id=*/0, scheduler, *transport_,
                                 shipped_executor_->PrepareSeam(),
-                                shipped_executor_->DecideSeam(), &*logger_);
+                                shipped_executor_->DecideSeam(),
+                                shipped_executor_->ResolveSeam(), &*logger_);
+        // R6-5's ask leg, receiver first (`CoreRuntime::AttachTransport`'s
+        // order, and its reason).
+        if (Status s = txn_2pc_server_->RegisterResolveReplyReceiver(); !s.ok()) return s;
+        shipped_executor_->SetTxn2pcServer(&*txn_2pc_server_);
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kTxnPrepareRequest,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

@@ -128,6 +128,16 @@ public:
         txn::IsolationLevel isolation = txn::IsolationLevel::kReadCommitted;
         exec::Budget budget;
 
+        // D5's in-doubt ceiling, from core 0's `in_doubt_ceiling_ms`
+        // (R6-5). Copied like every other shared setting, because a peer is
+        // as likely to be a participant as core 0 is - a writer blocked by
+        // an in-doubt row is blocked on whichever core owns the row - and a
+        // peer that used a different ceiling would make the stall a
+        // property of which core a client's relation happened to land on.
+        // The default is `kTxnInDoubtCeilingNs`, spelled at
+        // `Expeditor::Config` where the key is parsed.
+        sched::MonoTimeNs in_doubt_ceiling_ns = 0;
+
         // This core's page-id lease, carved by core 0's ExtentAllocator
         // before the worker starts.
         storage::Extent lease;

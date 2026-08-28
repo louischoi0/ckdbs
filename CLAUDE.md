@@ -295,10 +295,23 @@ interface that keeps every listed option viable.
   and sampling; whether invariant 9 is ever amended.
 - **Transactions & WAL** (`docs/spec/txn.md` §9, `docs/spec/wal.md` §15): trx-id
   wraparound; `kTrxIdBlockSize`; cross-core commit and recovery under a
-  changed core count. (Page redo identity across streams was **ratified
+  changed core count — the last of which **narrowed 2026-08-28** by operator
+  direction: the count may change in both directions and the reorganisation
+  is a **mount-time** operation (online change is out of scope, and not
+  architecturally excluded), so *when* is settled and *how* is open.
+  `wal.md` §3, `superblock.hpp`'s pin and `blueprint-range-ownership.md` §12
+  carry it with the three constraints it rides with. (Page redo identity across streams was **ratified
   2026-08-24**: PL-B logged handoff with the PL-C stream stamp,
   `docs/spec/page-lsn-cross-stream.md` §9 — no longer open; PL-A reopens
-  only if 2PC is ratified, by that decision.) (Undo retention was ratified and built 2026-08-19,
+  only if 2PC is ratified, by that decision. **That trigger fired
+  2026-08-28** when D1–D7 were ratified, so **PL-A is open and awaiting the
+  operator**: R6-7 executed the revisit and found 2PC changes nothing about
+  page identity across streams — the decision lives in one stream, no wire
+  payload carries an LSN, and the recovery-time resolution is a lookup
+  rather than a cross-stream comparison — so CLA's proposal is to decline
+  PL-A again.
+  The verdict is the operator's to rule on; `page-lsn-cross-stream.md` §9
+  and `workplan-cross-owner-txn.md`'s R6-7 carry the argument.) (Undo retention was ratified and built 2026-08-19,
   `docs/inflight/in-progress/workplan-undo-purge.md` — `SnapshotTooOld` surfacing reopens only
   with the declined byte-cap policy; UP4's mount-time reclaim of a
   previous run's pages stays open there.)

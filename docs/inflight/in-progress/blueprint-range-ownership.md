@@ -163,6 +163,27 @@ R1+R2 stand on their own merits even if ranges are never built.
 
 ## 12. Open decisions — do not assume
 
+**Core-count change: narrowed 2026-08-28 by operator direction.** The
+count may change **in both directions**, and the reorganisation is a
+**mount-time operation**, in the window RV1 establishes — after the
+superblock is read, before the listener binds. **Online change is not
+supported and is not a goal**: a scope decision, not an architectural
+exclusion, and it forecloses nothing an online path would later need,
+since revocation and quiesce would layer onto the same reassignment
+logic rather than replace it (at mount there is no fault grant to
+revoke — the store is built fresh). Three constraints ride with it and
+are not negotiable: prepared transactions **resolve before** anything is
+reorganised, and an unresolved prepare refuses the mount, because
+reassigning a coordinator's stream destroys the evidence R6-4 resolves
+against; the superblock's `core_count` is written **last**, so a crash
+mid-reorganisation reads as the old count and the work reruns —
+reassignment is therefore **idempotent**; and **modulo is not required**,
+because placement policy is this blueprint's mover's (§7) and
+correctness needs only that relations whose owner core no longer exists
+move. *When* is settled; *how* stays open here and in `wal.md` §3 and
+`superblock.hpp`'s pin.
+
+
 Per-range local vs global secondary indexes
 (reading on record: local per range, broadcast probes cut by Cabin/Waystone
 — **not ratified**; owner: `index.md` §13); split/migrate policy and

@@ -46,6 +46,8 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kTxnPrepareReply: return "TXN_PREPARE_REPLY";
         case RingMessageKind::kTxnDecideRequest: return "TXN_DECIDE_REQUEST";
         case RingMessageKind::kTxnDecideReply: return "TXN_DECIDE_REPLY";
+        case RingMessageKind::kTxnResolveRequest: return "TXN_RESOLVE_REQUEST";
+        case RingMessageKind::kTxnResolveReply: return "TXN_RESOLVE_REPLY";
     }
     return "unknown";
 }

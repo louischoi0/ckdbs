@@ -148,10 +148,10 @@ this workplan means the v2.4.0 path.
 | R6-2 | Participant transaction context (D2) | **Built 2026-08-27**, this worktree |
 | R6-3 | Prepare and decide (D4) | **Built 2026-08-28**, `63a0f43` |
 | R6-4 | Recovery (D4) | **Built 2026-08-28**, this worktree |
-| R6-5 | In-doubt handling (D5) | — |
-| R6-6 | PW3b extension | — |
-| R6-7 | PL-A revisit | — |
-| R6-8 | Dispatch | — |
+| R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b`; review at `ad0aa2f` |
+| R6-6 | PW3b extension | **Built 2026-08-28** (tests and prose; no engine change) |
+| R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
+| R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
 
 ## R6-0 — the retry bit
@@ -833,6 +833,59 @@ Two things worth stating beyond the table, because they are what the
 
 The `[OPEN]` itself is R6-9's to close in `wal.md`, with this as its answer.
 
+#### CP1 amended 2026-08-28 — the operator narrows the `[OPEN]` rather than accepting the refusal as the end state
+
+The direction arrived after R6-4 landed and changes what CP1 may claim.
+**The table above stays true of the engine as built** — a differing `cores`
+is refused at the door and recovery never meets a prepare from a stream it
+cannot place — but the sentence *"the question is already closed by a
+refusal this engine has had since M6"* was CLA reading a scope gap as a
+settled decision. It is not: the refusal is the current behaviour, not the
+end state.
+
+The operator's direction, recorded in the terms it arrived in:
+
+- **The count may change in both directions**, increase and decrease.
+- **The reorganisation is a mount-time operation**, inside the window RV1
+  already establishes — after the superblock is read, before the listener
+  binds. **Online change is not supported and is not a goal.**
+- That is **a scope decision, not an architectural exclusion**, and it
+  forecloses nothing an online path would need: revocation and quiesce would
+  layer onto the same reassignment logic rather than replace it. At mount
+  there is no fault grant to revoke, because the store is built fresh —
+  which is what `device_page_store.hpp`'s "nothing revokes a fault grant"
+  would otherwise make expensive.
+
+Three constraints ride with it and are **not negotiable**:
+
+1. **Prepared transactions resolve before anything is reorganised.**
+   Reassigning or discarding a coordinator's stream destroys the evidence
+   R6-4 resolves a prepare against, so the resolver runs first and **an
+   unresolved prepare refuses the mount**. R6-4 already refuses a mount it
+   cannot resolve (no resolver, absent coordinator stream, a self-named
+   coordinator); what this adds is an ordering requirement on a phase that
+   does not exist yet, and it is the reason the constraint is written down
+   *now* rather than when that phase is built.
+2. **`core_count` is written last**, so a crash mid-reorganisation reads as
+   the old count and the work reruns. **Reassignment must be idempotent** —
+   a requirement on the mechanism, not a property to hope for.
+3. **Modulo is not required.** Placement policy is open and belongs with
+   R5's mover; correctness requires only that relations whose owner core no
+   longer exists are moved.
+
+**What this leaves R6-9.** `wal.md` §3's `[OPEN]` is *narrowed*, not closed:
+**when** is settled, **how** is not. The three sites that carried it —
+`wal.md` §3, `superblock.hpp`'s pin, `blueprint-range-ownership.md` §12 —
+each carry the narrowing as of `056cf9b`, so R6-9's remaining work there is
+to cite this section rather than to decide anything.
+
+**One consequence for this milestone, stated because it is easy to miss.**
+Constraint 1 makes R6-5's `txn_in_doubt_unresolved` an operational number
+rather than a diagnostic one: a transaction whose coordinator answered
+`UnknownOutcome` stays prepared until a mount resolves it, and under the
+direction that same prepare would **refuse** a mount that was asked to
+change the core count. The two features meet at exactly one field.
+
 ### What the row deliberately does not do
 
 - **It writes no terminal record for a resolved commit.** A resolved *abort*
@@ -961,6 +1014,816 @@ mount). The coordinator's stream is written independently of the
 participant's in every case, so neither knows the other's LSNs - which is
 the arrangement that makes "no cross-stream comparison" visible rather than
 merely claimed.
+
+## R6-5 — in-doubt, and D5's two bounded waits
+
+Built on `v2.5.0-cross-core-owner-protocol-2` at `056cf9b`. The row that
+turns "in doubt" from a state the participant sits in into one it acts on,
+and the row that answers D5's `[OPEN]` in the operator's ratified direction.
+
+### The third exchange, and the first live sender of R6-0's bit
+
+`kTxnResolveRequest`/`kTxnResolveReply` (37, 38), 24 bytes each — the
+smallest messages in the protocol, and the sizing the D6 row of §2 above
+said this leg was still owed. A participant that replied prepared and has
+heard no decide for `kTxnInDoubtCeilingNs` asks its coordinator what was
+decided; the answer is a code and a decision byte, no words, because a
+participant is not a client and nothing it is told here is rendered for
+anyone.
+
+**The ask carries R6-0's retry bit set, always, and that is not a
+formality.** It is what makes answering from a record instead of by
+re-deciding safe: a coordinator that no longer holds the record must answer
+`UnknownOutcome` (D5), and the bit is what says the sender knows that. An
+ask that arrives with the bit **clear** is refused `InvalidArgument` rather
+than served — the contract `known-gaps.md` states ("every retry path built
+from R6-3 on has to set it") is a promise about senders, and this is the one
+leg where a violation could otherwise be silent. R6-0 has had no live sender
+since it landed; it has one now, which is the correction that entry was
+carrying.
+
+### The coordinator's memory, and the two ways it can be honest
+
+A `DecisionRecord` per `(session_id, transaction_id)`, opened **at the first
+prepare** and written **before the decide messages go out**. Both moments
+are load-bearing and neither is where a first draft would have put it:
+
+- **Opened at prepare**, because an ask that lands while the prepare phase
+  is still open must be answered *"not yet, ask again"* and not
+  *"unknown"* — the second is terminal by D5, so a participant told it stops
+  asking about a transaction whose decision is milliseconds away and waits
+  for the next mount instead.
+- **Written before the sends**, because the decision is already durable in
+  this core's stream by then (`DispatchAsync`'s order, D4's reason), so a
+  decide message the ring drops is still answerable with the real decision.
+  Recording after the loop would leave exactly the window that produces the
+  ask.
+
+`Close` drops the record when every participant acknowledged — nobody is
+left to ask, and keeping it would hold a map node for the retention on the
+**healthy** path, which is every cross-owner transaction. A phase that timed
+out keeps it, because the participant that did not acknowledge is precisely
+the one that will ask. Past `kTxnDecisionRetentionNs` (10 × the phase
+deadline) it is dropped and the answer becomes `UnknownOutcome`, which is
+not a correctness bound but a bound on how long a rare failure may keep
+asking: the durable record the retention does **not** touch is this core's
+stream, which R6-4 reads at the next mount.
+
+### D5's `[OPEN]`, built as ratified: the writer blocks
+
+**The wait is on the statement, not on the row, and that is forced.** A
+first-updater-wins conflict is found inside a row callback under a page
+span, which is no place to park — so the statement is refused having written
+nothing, `DispatchAsync` parks until the doubt clears, and the statement
+runs again from the top. What the client sees is one statement that took a
+while, which is what "blocks" means to it.
+
+**"Having written nothing" is what makes the re-run a repeat rather than a
+second application**, and it is checked rather than assumed: `BeginWrite`
+marks the transaction's trail length and `EndWrite` compares — a statement
+that wrote rows before it hit the conflict (`SET v = v + 1` over four rows,
+conflicting on the fifth) is **not** re-runnable at any price and is
+answered with the conflict it produced, unwaited. Only the clean case
+reaches the park.
+
+**The poison is withheld while the wait is still possible.** Inside an
+explicit transaction a failed statement poisons the session (`txn.md`
+§10-8), and a poisoned session cannot run the statement again — a wait whose
+end is a forced `ROLLBACK` is not a wait. So `EndWrite` skips the poison for
+exactly this refusal, and `DispatchAsync` applies it at the ceiling, where
+the statement has genuinely failed.
+
+**One deadline covers every blocker.** The bound is taken before the first
+wait and shared by every later one, so a statement blocked, freed, and
+blocked again by a *second* in-doubt transaction still ends within one
+ceiling — which is what keeps HP3 true of a shape that is otherwise a loop
+with a bounded body.
+
+**The refusal at the ceiling**, per §2's three obligations: `TxnConflict`,
+because `IsRetryable` admits that code alone and a client's retry loop reads
+the bit it sets — so RP3 takes the "name it by message under that code"
+branch and does **not** widen `IsRetryable`, which would have been a
+wire-contract change; **not** `UnknownOutcome`, which would tell a client to
+go and read data its statement never touched; and named, so the message says
+a coordinator has not decided rather than only that a row is busy.
+
+### The ceiling, proposed and derived — `kTxnInDoubtCeilingNs` = 200 ms
+
+CLA's to propose and measure (§2). **The derivation is the healthy decision
+window on this host**, not a round number: a coordinator's decision sync
+(~0.94 ms single-stream, `bench/v2.1.0/results-multicore-writers-v2.1.0.md`
+§3's 1,066/s and `results-shipping-pretasks-v2.1.0-10-g82a2749.md` §3a's
+1,118/s), plus a sibling participant's prepare sync still in flight (the
+same ~0.94 ms; four streams overlap at 3.371× on this volume, §3a, so a
+four-wide prepare costs each participant ~1.1 ms rather than 4 × 0.94), plus
+two ring hops at ~21 µs (§3a). About **2 ms at the median**. 200 ms is ~100×
+that and ~18× the largest unattributed latency this host has (the ~11 ms
+periodic stall, `results-knob-sweep-cell2` §5): a writer never meets the
+refusal on a healthy path, and one that meets a genuinely lost decision is
+refused inside a fifth of a second rather than after the coordinator's ten.
+
+**It sits deliberately *under* `kTxnPhaseDeadlineNs`**, and that is a choice.
+A coordinator may legitimately take up to that deadline to decide when
+another participant is silent, so an ask inside that window is answered "not
+yet" at the cost of one round trip, and a writer refused inside it is
+refused for a transaction that is slow rather than lost. Sizing the ceiling
+to the coordinator's worst case instead would make every blocked writer pay
+a failure's price on a healthy day; the ratified rule bounds the *stall*, and
+the stall is the writer's.
+
+**Reached through one function** — `CommandDispatcher::InDoubtCeilingNs()` —
+and swept as `in_doubt_ceiling_ms`. **What the knob moves is the writer's
+block, and only that**: the participant's *ask cadence* reads
+`kTxnInDoubtCeilingNs` at the constant. The two are the same number by
+derivation and not the same quantity, and sweeping them together would make
+`0` mean "refuse a writer at once" on one and "ask the coordinator every
+reactor tick" on the other. §2's obligation is about D5's `[OPEN]`, which is
+the writer's block; the cadence is a second quantity and nothing needs a
+knob for it yet. Stated because the first cut's comment claimed both went
+through the function, and the review found that false. **The measured sweep is not this row's**:
+it needs a live cross-owner path, which `MayShip` and `CheckWriteAffinity`
+still refuse until R6-8, so the number above is the proposal and its
+derivation, and RP8 is where a measurement can replace it. Stated rather
+than left implied, because §2 ratified the obligation and not the number.
+
+**`in_doubt_ceiling_ms = 0` is not an off-switch**: it is D5's *other*
+branch — refuse retryably up front — reachable by configuration so the two
+can be measured against each other. It is also what an unconfigured
+dispatcher holds, which is every fixture, so a test that has no cross-owner
+transaction to be in doubt about behaves exactly as it did before this row.
+
+### What this row closes that R6-3 left open
+
+**`FinishDecision`'s prepared residue retries itself now**, and by the path
+R6-3 predicted rather than by a new one. That review recorded a decided end
+that fails leaving a prepared context standing with nothing to retry it —
+residue on the abort arm, genuine doubt on the commit arm. Both are now
+reached by the in-doubt sweep: the context is still prepared, so it asks on
+the next ceiling, the coordinator answers from a record it kept (the
+participant's refusal means the phase did not settle `AllPrepared`, so
+`Close` kept it), and `Resolve` runs `StartDecision` again. Retrying an
+**abort** this way is not the unilateral abort D4 forbids — the decision is
+the coordinator's and it is being re-applied, not re-made.
+
+### Named costs and debts this row creates
+
+- **An in-doubt participant asks for ever, by decision.** There is no cap on
+  asks: a capped participant would hold locks with nothing left that could
+  free it before the next mount, and an ask is two ring messages against a
+  transaction that is already blocking writers. What ends the asking is an
+  answer — including `UnknownOutcome`, which is terminal and stops it.
+- **An `UnknownOutcome` answer leaves a transaction nothing at runtime can
+  finish.** It holds its rows, blocks their writers for a ceiling each, and
+  pins the log's redo start (R6-4's floor) until the next mount resolves it
+  against the coordinator's stream. `txn_in_doubt_unresolved` in `SHOW META`
+  is the number that says this has happened, and it is the one field in the
+  new block worth alerting on.
+- **The block is row-granular in its trigger and statement-granular in its
+  wait.** A statement that already wrote rows is refused rather than waited
+  on, which is a stricter answer than "blocks writers of the same rows"
+  literally promises. Recorded rather than hidden: the alternative is
+  re-applying a partially applied statement, and that is a wrong answer
+  rather than a slow one.
+- **Nothing reaches any of this on a live path yet.** `MayShip` still refuses
+  inside an explicit transaction and `CheckWriteAffinity` still refuses the
+  cross-owner write, so R6-8 is the row that makes an in-doubt participant
+  reachable outside a test — which is also when B-cell measurement of the
+  ceiling becomes possible.
+
+### The `critics-developer` pass, and what it moved
+
+Run against `056cf9b`; the fixes landed at `ad0aa2f`. **Two correctness
+bugs, both of which the row's own prose already claimed were not there** —
+which is the reason to record them at length rather than as a line.
+
+**Bug 1 — a refused write left an explicit transaction committable, and it
+was silent.** `EndWrite` withholds the poison whenever a blocker is
+recorded, but **only `DispatchAsync` consumes one**. The synchronous
+`Dispatch()` handles every other pending field and never looks at
+`in_doubt_block`; nor does a `DispatchAsync` on a dispatcher with no clock.
+On those paths a client was handed `ERR TXN_CONFLICT` for a statement that
+failed inside `BEGIN`, and the session stayed `kInTxn` — so `BEGIN` →
+blocked `UPDATE` → `ERR` → **`COMMIT` returned `COMMIT`**. The transaction
+committed without the statement. `txn.md` §6's failure atomicity is per
+transaction and `HandleCommit`'s `session.failed()` gate is the only thing
+enforcing it; this disarmed that gate. Fixed at the *source*: the blocker
+is recorded only under `may_park_ && clock_ != nullptr`, the same pair the
+wait tests, so one condition keeps `EndWrite`, the export and the wait
+consistent — and it makes true the two claims that were false, the
+`InDoubtBlock` declaration's *"a fixture sees the pre-R6-5 behaviour"* and
+this file's *"the poison is withheld while the wait is still possible"*.
+
+**Bug 2 — `UnknownOutcome` was documented terminal and was not.** The
+unknown arm of `Resolve` moved the stamp and nothing else, and the sweep's
+only guard is the ceiling — so a participant re-asked every 200 ms for the
+life of the process, two ring messages and two Warn lines each, and
+`++in_doubt_resolved_unknown_` every time. That last is the concrete wrong
+answer: `txn_in_doubt_unresolved` is documented as a count of
+*transactions* and became a count of asks, climbing at ~5/s per stuck
+transaction. **Four independent statements said terminal** — D5's
+ratification, the reply payload's header, the accessor's own doc, and this
+file's *"what ends the asking is an answer — including `UnknownOutcome`,
+which is terminal and stops it"* — and none of them was code.
+`Enrolled::resolve_terminal` is the flag they all assumed.
+
+**Cuts taken.** `Txn2pcServer::asks_`/`resolve_replies_` had **no reader**
+anywhere and counted a number `SHOW META` already prints from the executor
+(`in_doubt_asks`) — two names for one quantity, which is what R6-3's review
+kept `prepares()/decides()/replies()` on the opposite test for. Gone. The
+decision map had **two removal policies** — retention by age, cap by map
+key, an ordering the comment itself conceded was arbitrary across sessions
+— now one ordering (time) and one `OpenDecisionRecord` that `Prepare` and
+`Decide` share, which also closes the asymmetry where only `Prepare`
+expired. `SHOW META`'s coordinator gate now includes the three counters
+that can fire on their own, so a refused ask is not invisible on exactly
+the run that produced one.
+
+**Recorded, not fixed — a slow decide that loses the race to its own ask.**
+R6-5 creates an arrival order R6-3 could not: the ask resolves the
+transaction and releases the context, and the original decide — merely
+slow, not lost — arrives behind it. `Decide` finds no context, the
+coordinator's decide leg never sets the retry bit, so the benign-resend arm
+is unreachable and it lands on the anomaly arm: `decide_refusals_`, an
+Error line, and a refusal that keeps the coordinator's record for the full
+retention. **The outcome is correct and every report about it was wrong.**
+The Error no longer asserts the loss it cannot know — it names both
+reachable causes — and `decide_refusals()` says it now covers this benign
+case. The exact fix needs either a decided-window on the participant (a
+second dedup mechanism on the row that is already the fifth wire leg) or a
+bit the coordinator has no way to set at send time, and it is only
+reachable when a decide takes longer than 200 ms to cross a ring whose hop
+is ~21 µs. **R6-8 owns it**, and RP7 should not read a non-zero
+`txn_decide_refusals` as proof of a lost half without checking this.
+
+**HP3, restated honestly by the review.** Every *statement* wait is
+bounded: the in-doubt park takes its deadline once and shares it across
+re-runs, and the reactor's 10 ms idle cap means the deadline is observed
+promptly. Two waits are not bounded and neither is new — the two
+commit-durability parks, the class R6-3's review already recorded as
+inherited — and the **ask loop is unbounded by decision**, which bug 2's
+fix narrows to the unanswered case. **RP7 must report HP3 as "holds for
+every statement wait; the ask loop and the two commit parks are unbounded,
+one by decision and two as inherited"**, not as confirmed.
+
+**And one prediction of R6-3's that did not come true**, worth correcting
+because a later reader would otherwise act on it: that review declined the
+shared-ring-waiter cut on the ground that *"the fifth copy is already
+predictable — R6-5's in-doubt ask."* It is not. `Ask` opens no waiter and
+nothing parks on it; the participant's own sweep is the retry. The
+consolidation row is still worth doing for the existing four, but its
+stated trigger did not fire.
+
+### Tests
+
+`tests/txn_2pc_protocol_test.cpp` gains three fixtures for D5's three sides:
+the coordinator's memory (a decision answered, a still-open phase told to
+ask again, an absent record answered `UnknownOutcome` and never guessed, the
+retention forgetting one, the record's lifetime across an acknowledged and
+an unacknowledged decide phase, and a clear retry bit refused), the
+participant's wait (one ask per ceiling and not before, a commit and an
+abort applied from the answer, and an `UnknownOutcome` leaving the
+transaction in doubt rather than guessing), and the blocked writer (a wait
+that ends in the statement running, a ceiling that ends in the named
+retryable non-`UnknownOutcome` refusal, `0` as D5's other branch, a
+transaction not poisoned while it waits, and an **ordinary** in-flight
+writer not waited on at all — the narrowness that keeps a client's think
+time out of this). `tests/txn_2pc_wire_test.cpp` gains the ask's sizing and
+the ceiling's two ordering assertions.
+
+The review adds two more, one per bug, each failing without its fix:
+`ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid` and
+`AnUnknownAnswerEndsTheAskingRatherThanRepeatingItForEver`.
+
+Full suite green at `ad0aa2f`: **2,855 tests, 18 new**. Overhead not
+measured — the v2-stage A/B suspension of 2026-08-24 stands.
+
+## R6-6 — the graceful stop, and PW3b's open item re-read
+
+Built on `v2.5.0-cross-core-owner-protocol-2`. **No engine change**: the
+mechanism this row is about already exists — R6-3 leaves a prepared context
+standing at shutdown, R6-4 floors the checkpoint's redo start at the oldest
+live prepare, and analysis carries the fourth outcome. What did not exist is
+proof that the three meet correctly, and the meeting point is the one place
+the transaction could be lost without anything refusing.
+
+### The joint nobody had tested
+
+The stop sequence ends, on every core, in `CoreRuntime::ShutdownCheckpoint`
+— which **flushes the core's pages first and then checkpoints**, PW3b's
+order, and `core_runtime.hpp` gives the reason: *"with the table empty the
+redo start is the BEGIN LSN itself and the next mount reads this
+checkpoint's own two records rather than everything since the oldest dirty
+page."*
+
+**Where `RollbackAllEnrolled` sits relative to it differs by core, and the
+review of this row is what established that** — the row's first prose said
+"per peer, the rollback then the checkpoint", and that is core 0's order,
+not a peer's:
+
+- **core 0**: `Serve` calls its own executor's `RollbackAllEnrolled`
+  (`expeditor.cpp:1827`) as soon as the reactor stops, and its final
+  `Sync()` + `Checkpoint()` are the last two statements of the function —
+  rollback, *then* checkpoint;
+- **a peer**: `Serve` syncs and calls `core->ShutdownCheckpoint()`
+  (`expeditor.cpp:1861`) inside the per-core loop, and the peer's
+  `RollbackAllEnrolled` runs later still, in `~CoreRuntime`
+  (`core_runtime.cpp:46`) when `cores_.clear()` destroys it — checkpoint,
+  *then* rollback.
+
+**The floor's property is the same under either order, and that is why the
+fixture models one of them.** `RollbackAllEnrolled` never touches a
+prepared context (D4, and R6-3's own test pins it), so the set
+`OldestPreparedLsn()` reports is byte-identical before and after it: the
+checkpoint reads the same number whichever side of the rollback it runs on.
+What the peer's inverted order does cost is stated in "What this row does
+not prove" below.
+
+**PW3b's own sentence, quoted above, is exactly the hazard.** A redo start
+at the `CHECKPOINT_BEGIN` LSN is **past the `TXN_PREPARE`**, so the next
+mount would scan from after the record that says "this transaction is not this core's to decide", find
+the active-list entry the checkpoint carried, read it as an ordinary loser,
+and roll back a transaction the coordinator may have committed and
+acknowledged to a client. R6-4's floor is what prevents it, and until this
+row the floor was tested only against a **scripted** `ActiveTransactions`
+answering a number the test chose.
+
+`Txn2pcShutdownTest` closes that: a real statement shipped, a real prepare
+through the executor's seam, and then the stop sequence in core 0's order
+(rollback, then checkpoint) over a target whose dirty table is empty
+*because the flush already happened*. Three properties, and **all three
+fail if the floor is removed** — verified by removing the two lines in
+`checkpointer.cpp:149-151`, watching every one of them fail alongside the
+R6-4 unit test, and restoring:
+
+- the published redo start is at or below the LSN
+  `TransactionManager::OldestPreparedLsn()` reports, which is the wiring
+  claim the unit test could not make;
+- the mount that scans from exactly that anchor still finds the prepare —
+  `analysis.prepared == 1`, `losers == 0`, and the `PreparedTxn` naming the
+  coordinator the resolution will look the decision up in;
+- a **second** checkpoint while still in doubt holds the floor too, because
+  the floor is applied to every checkpoint from the live transaction rather
+  than only to the one that first saw the prepare. (It does not
+  discriminate a floor computed once and cached — that would answer the
+  same LSN. And its first assertion is the same property the fixture above
+  asserts, so it is an `ASSERT`: with the floor gone this fixture must stop
+  at the shared precondition rather than report the second checkpoint as
+  the thing that broke.)
+
+The third fixture pins the other half: with nothing prepared, a shutdown
+checkpoint publishes the `CHECKPOINT_BEGIN` LSN exactly as it did before
+R6-4 — which is what keeps PW3b's measured restart bound (*"2 records,
+redo 0"*) intact on every stream that is not a participant.
+
+### PW3b's open review item, re-read in R6's light
+
+`known-gaps.md`'s C4: one failed checkpoint disarms every later checkpoint
+on that core — `in_progress_` clears only on `Complete()`'s success path
+(`src/wal/checkpointer.cpp:265`) while `Start()` refuses whenever it is set
+(`:100`), and nothing resumes a half-finished checkpoint.
+
+**The re-read's answer: R6 does not make it a correctness bug, and the
+direction of the failure is why.** A disarmed checkpointer publishes *no*
+anchor, so the redo start stays where the last successful checkpoint left it
+— which is **earlier**, so a `TXN_PREPARE` written after it is inside the
+replay range by construction. C4 can only make a mount scan more, never
+less, and there is no arrangement of it that puts a prepare outside the
+range. The failure mode R6-4 guards against needs a checkpoint that
+*succeeds* and advances too far; C4 is the opposite.
+
+Two consequences worth stating rather than leaving implied:
+
+- **C4's cost under R6 is smaller than it was, not larger.** While anything
+  on the core is in doubt the floor already pins the redo start at the
+  prepare, so a checkpoint that would have been disarmed was going to buy
+  little. The graceful-restart bound PW3b measured is lost either way, and
+  that was already C4's charge.
+- **But R6 adds a *second*, by-design way to lose that bound**, and an
+  operator should not confuse the two. A transaction whose coordinator
+  answered `UnknownOutcome` (R6-5) stays in doubt until the next mount, and
+  the floor therefore pins the redo start at its prepare for the whole life
+  of the process — so checkpoints stop shortening recovery on that core,
+  with nothing failing and nothing to see in a log. `SHOW META`'s in-doubt
+  block is what separates this case from C4's: C4 shows as a checkpoint
+  Error line, and this shows as a counter — `txn_in_doubt` while anything
+  is pinning the redo start, `txn_in_doubt_unresolved` for the subset no
+  runtime path can finish. The repair for one is a `wal.md` §11 behaviour
+  decision, and for the other it is R6-8's live path plus a mount.
+
+C4 stays where it is — `known-gaps.md`, unfixed, owned by `wal.md` §11 —
+with the re-read recorded there.
+
+### What this row does not prove
+
+**Nothing here drives a real `Expeditor` with `cores > 1`.** PW3b's own S6
+finding says so of its own call site — *"`Serve`'s per-peer call site has no
+test at all, since nothing builds an `Expeditor` with `cores > 1`"* — and
+R6-6 inherits that gap rather than closing it: the sequence is pinned at the
+level below, exactly as PW3b pinned its own. What is untested in both cases
+is the same wiring, and RP7's kill −9 matrix against a real two-core server
+is where it is exercised. **The peer's inverted order above is what that
+gap costs**: nothing exercised it, so the row's first prose asserted core
+0's order of a peer and no test could contradict it.
+
+**And one thing the peer's order costs that is not R6-6's to fix**, named
+here because this row is the one that read the sequence: a peer's
+`RollbackAllEnrolled` runs *after* its final `Sync()` and after its
+`ShutdownCheckpoint`, so the compensations it writes and the pages it
+dirties are both dropped — nothing drains that core's WAL or flushes its
+store again, and neither destructor does. The two are lost *together*, so
+the next mount finds the transaction in the checkpoint's active list, calls
+it a loser and rolls it back from a durable image that never saw the
+partial undo: **correct, and correct only because both halves are lost at
+once.** The cost is that a graceful stop leaves a peer's abandoned
+cross-owner transactions to be rolled back at the next mount rather than
+at the stop — and a prepared one is untouched either way (D4). It belongs
+to PW3b's call site, beside S6.
+
+## R6-7 — PL-A's revisit, and CP4
+
+Built on `v2.5.0-cross-core-owner-protocol-2`. **No engine code**, which the
+work order named as the expected outcome and as the finding if it were
+otherwise: nothing in R6-3 … R6-6 touches page identity across streams, and
+§ below says how that was checked rather than assumed.
+
+### The clause, and that it has fired
+
+`docs/spec/page-lsn-cross-stream.md` §9 reserved one: *"if cross-core commit
+(2PC) is ever ratified, PL-A is re-opened **by that decision** — one global
+LSN may then pay for both. Until then it is declined, not deferred."*
+D1–D7 were ratified on 2026-08-28, so **the clause has fired and PL-A is
+open.** `CLAUDE.md`'s Open Decisions index carries the same trigger in the
+Transactions & WAL line and now reads one event behind.
+
+### CP4 — what 2PC changes about cross-stream page handoff: nothing, and here is why
+
+The order asks for the argument rather than the assertion, so it is made
+from the built protocol and not from the design intent.
+
+**What PL-A would have bought 2PC.** One global LSN makes comparisons
+meaningful everywhere, so a decision could be *assembled* from several
+streams and recovery could order two streams' records against each other.
+That is the second decision the clause hoped PL-A would pay for.
+
+**The ratified protocol asks for neither, by construction.**
+
+- **D4 puts the decision in exactly one stream.** The coordinator's `COMMIT`
+  record *is* the decision; nothing is assembled, so nothing is ordered.
+- **The wire carries no LSN at all.** All five payloads in
+  `server/txn_2pc_service.hpp` — prepare, decide, the participant reply, and
+  R6-5's ask and answer — hold ids, a status, a decision byte, a retry bit
+  and, on the reply, the refusal's own message bytes. The type `wal::Lsn`
+  does not appear in that header once.
+- **D2 keeps every stream's ids stream-local, by construction on the write
+  path.** The participant runs its own local transaction and its envelope
+  carries *that* id; the coordinator's `(session, transaction)` ride in the
+  `TXN_PREPARE` payload, where nothing keys a stream's own recovery on
+  them. **This one is a construction and not a refusal, and the correction
+  is the review's** (RP4/RP5 review): the row first cited
+  `CoreRuntime::Open`'s mount check — "a stream naming a trx id above the
+  superblock's ceiling does not open" — as the enforcement, and it is not.
+  Every core draws its ids from **one** counter, the superblock's
+  `next_trx_id`, in blocks core 0 grants (`txn/trx_id.hpp`, PW1), so a
+  coordinator's id is an ordinary id *below* the ceiling and that check
+  passes over it. What the check enforces is a stream naming ids that were
+  never granted; foreign-versus-own is not a distinction it can make. The
+  claim below does not rest on it: what matters for PL-A is that the ids
+  are not LSNs and are never ordered against each other, which the
+  resolver's `std::map::find` is.
+- **R6-4's resolution is two independent reads**, which HP5 predicted and
+  the row confirmed with its site: `prepared_resolver.cpp`'s scan reads
+  `record.header.txn_id` and `record.type()` and touches no LSN.
+
+**The one comparison that looks cross-stream and is not.** R6-4's review
+added an anchor-honesty check to the resolver: core A, resolving its own
+prepare, reads core B's stream and refuses if the scan ends before the
+durable point **B's own anchor** was published with
+(`prepared_resolver.cpp:124-129`, `scan.end_lsn < anchor_durable_lsn`). Both
+numbers are B's, so this is a within-stream completeness check that A
+happens to perform — the same argument `analysis.hpp` makes about a stream's
+own scan, applied to somebody else's. It is worth naming precisely because
+it is the one place a reader would go looking for a violation of guideline 3
+and find something that superficially resembles one.
+
+**And the direction R6 *does* move a page-LSN fact — safely, by PL-B's own
+rule.** R6-4 floors a checkpoint's redo start at the oldest live prepare, so
+a participant holding one makes every later scan on that core **start
+earlier** than it otherwise would. PL-B rule 3 removes a handed-off page
+from the dirty table when the forward scan meets its `PAGE_HANDOFF`, and
+rule 6 restamps a returning page at re-acquisition — so a scan that starts
+earlier meets *more* handoff records, in order, and reaches the same state.
+Lowering a redo start is safe for the handoff contract; raising one past a
+handoff would not be, and nothing in R6 raises one. This is the only
+interaction between the two mechanisms and it runs in the harmless
+direction.
+
+**Verdict, and it is a proposal rather than a closure.** PL-A is re-opened
+by the clause and CLA's reading is to **decline it again**: the second
+decision it would have paid for does not exist, because the ratified 2PC was
+designed to need no cross-stream comparison and the built one demonstrably
+makes none. Its cost is unchanged — an atomic on the engine's hottest path,
+retracting `wal.md` §3's "no shared tail pointer, no lock, no atomic
+contention on the append path" and `workplan-crosscore.md` guideline 1. The
+comparison §7 said would change if 2PC arrived did change: it got *worse*
+for PL-A, because 2PC turned out to be free of the thing PL-A was going to
+subsidise.
+
+**This is not CLA's to close.** Storage and WAL decisions are the operator's
+(`CLAUDE.md` Open Decisions), and the clause re-opened a ratified decision
+rather than delegating it. R6-9 carries the proposal into
+`page-lsn-cross-stream.md` §9 once it is ruled on; until then that file
+records the revisit as executed with this verdict pending, and `CLAUDE.md`'s
+Transactions & WAL line needs the same correction.
+
+## R6-8 — dispatch, and CP3
+
+Built on `v2.5.0-cross-core-owner-protocol-2`. **The row that makes every
+row before it reachable.** Until this one, `MayShip` refused inside an
+explicit transaction, so nothing enrolled a participant on a live path and
+R6-3 … R6-6 were exercised only by tests calling the seams by hand.
+
+### The gate, and why it is a second one rather than a widened first
+
+`MayEnrolShip` asks everything `MayShip` asks, with the
+explicit-transaction test inverted and `txn_2pc_ != nullptr` in its place —
+a core that cannot run D4's two phases must not make a transaction
+cross-owner, or the transaction reaches `COMMIT` with a participant and no
+protocol. The three write paths test `MayShip(...) || MayEnrolShip(...)`.
+
+Two gates rather than one widened gate, because they admit different shapes
+for different reasons and one of the differences is a **scope boundary**:
+`MayEnrolShip` is asked only by the write paths. A cross-core **read**
+inside a transaction keeps exactly the behaviour it had, since shipping one
+would enrol a participant to give a snapshot D3's watermark is what makes
+meaningful — and the watermark is not built. Reads are R6-9's
+`crosscore.md` question.
+
+### Three things the row had to get right, each of which would have been silent
+
+- **The local scope must not be ended.** `AbandonWriteForShipping` ends an
+  autocommit scope through `EndWrite`'s *failure* arm, which inside an
+  explicit transaction **poisons the session** — so a cross-owner
+  transaction would have been aborted by its own first shipped statement,
+  and the client told to `ROLLBACK` a transaction that is intact. An
+  enrolled ship now ends nothing: the scope is the client's open
+  transaction, this half wrote nothing, and nothing failed.
+- **The enrolment is recorded after the send, never before.** Every refusal
+  `Ship` makes happens before the request leaves, so enrolling first would
+  put a core into the prepare phase that was never asked anything — turning
+  a refusal the client could retry into an aborted transaction.
+- **The home core is untouched.** `BindHomeCore` runs at the end of
+  `CheckWriteAffinity`, which a shipped statement never reaches, so a
+  coordinator's `home_core_` still binds only on its *own* local writes.
+  CC3's one-stream rule therefore keeps governing this core's half exactly
+  as it did, which is what makes "the coordinator's half is the local one"
+  true rather than aspirational.
+
+### §2's obligation on D3, found unmet and paid here
+
+The ratification lists it against R6-3: *"the coordinator's isolation level
+has to cross"*. **R6-3 landed without it**, and this row is where that
+stopped being harmless — a participant opened its transaction with
+`Dispatch("BEGIN")` on its own dispatcher, whose `default_isolation()` is
+that server's config key, so `BEGIN ISOLATION LEVEL REPEATABLE READ` on the
+coordinator produced a READ COMMITTED participant and told nobody. Under D3
+the level *selects the branch*, so the client was promised one thing and a
+participant gave another.
+
+One byte out of `ShippedStatementRequestPayload::reserved0`, carried on the
+enrolled path only. **0 means "not stated" and is not a level** — the
+zero-collision rule, so a zeroed buffer decodes as an absence — and a byte
+outside the enum is **refused before anything runs**, `ShippedStatementRoleOf`'s
+rule for exactly its reason. Autocommit requests state none and are
+byte-identical to what SS2 sent: a single-statement transaction mints its
+view at the same instant under either level, so carrying it there would
+change a measured path to no observable end.
+
+### CP3 — the refusal counter's third era, and it is short
+
+`cross_core_write_refusals` is recorded at two sites, both inside
+`CheckWriteAffinity`, and R6-8 changes **which statements reach them**
+rather than what they say. What still counts:
+
+**Site 1, the foreign-owner arm** — reached only where the ship fork
+declined, which after this row is:
+
+| what still refuses | why it is not shippable |
+|---|---|
+| no shipping client (`statement_ship_ == nullptr`) | every single-core instance and every fixture — which is what keeps `cores = 1` byte-identical |
+| a path that cannot park (`may_park_` false) | the synchronous `Dispatch()`: a send from there has nowhere to deliver its answer, so `UnknownOutcome` would be the only honest refusal left after it (SS2's rule 1) |
+| no coordinator armed, inside a transaction (`txn_2pc_ == nullptr`) | single-core and fixtures again; a transaction cannot be made cross-owner by a core that cannot decide it |
+| a session that already arrived shipped | the hop limit — what arrived shipped does not ship on |
+| an `UPDATE`/`DELETE` whose `WHERE` carries a subquery | the fork resolves nothing about a second relation, so the affinity answer is the honest one |
+| a KWP **load chunk** (`ExecuteInsert`, `line.empty()`) | there is no statement text to ship — a load chunk arrives already parsed, so the fork has nothing to send and the relation's owner cannot be reached (`kwp_load_server.cpp:443`) |
+| a poisoned session inside a transaction | defence: the failed-txn gate refuses the statement earlier |
+
+**Site 2, the CC3 home-core arm — unreachable on any path this engine
+has**, and CP3 is where that was established rather than assumed.
+`BindHomeCore` has exactly one call site, at the end of
+`CheckWriteAffinity`, after the foreign-owner arm has returned for every
+relation this core does not own — so a bound `home_core_` is always
+`core_id_`, and this arm needs it to be something else. It was equally
+unreachable before R6-8. The guard stays (one comparison against a
+transaction's writes splitting across two streams) with the fact recorded
+at the site.
+
+**So on a production multi-core instance with shipping and 2PC armed, the
+third era is four classes**: the synchronous path, the hop limit, the
+subquery shape, and the KWP load chunk. That is the roadmap's remaining
+cross-core write debt stated exactly, and it is what B4 measures. (The
+review of this row corrected the count: the first writing of it said three
+and left the load chunk out, which is a live path — `KwpLoadServer` calls
+`ExecuteInsert` with no text, and `command_dispatcher.hpp`'s note on `line`
+already said what that costs.)
+
+**Refusals that are not this counter's and are untouched**: `PeerDdlRefused`
+(DDL on a peer, which also carries §5d's purge-gate argument),
+`CrossCoreReadUnsupported`, `RelationWriteRightsPending` and
+`IndexBuildPending` (owner-side, about rights rather than ownership), and
+the shape gate's tail — FK-linked, cabined, and a relation under an
+assertion this core cannot enforce.
+
+### HP4, reported honestly
+
+**Exactly one existing refusal test needed editing, and it is the class this
+row converts.** `AStatementInsideATransactionIsNotShippedAndKeepsItsRefusal`
+asserted `TXN_CONFLICT` for the cross-owner explicit-transaction shape, on
+SS2's ground that *"nothing crosses transaction state"* — which D4
+supersedes. It is renamed rather than deleted, and now asserts the
+conversion at the site that used to assert its opposite, so the change is
+legible in the tree and not only in this file.
+
+HP4's falsifier says an edited refusal test *stops the row*. Read literally
+that would stop R6-8 on the one refusal R6-8 exists to convert, which is
+not what the hypothesis means: its subject is *"every **other** refusal"*.
+Every other refusal test in the suite passes unedited — 2,862 green — and
+that is HP4's real claim, confirmed.
+
+### The `critics-developer` pass, and what it moved
+
+Run against `7eaa14a`. **Two client-visible transaction-contract bugs, both
+on the path this row makes live, and one of them a durable wrong answer** —
+which is the argument for reviewing a row that opens a gate rather than one
+that adds a mechanism.
+
+**Bug 1 — a rolled-back cross-owner write committed with the *next*
+transaction.** A participant's context is keyed on `(coordinator core,
+session_id)` and nothing else, because the statement leg carries no
+transaction id; `Session::ship_id()` was minted once and kept for the
+connection's life. So two consecutive transactions of one session were
+indistinguishable to a participant — and since nothing tells a participant
+about a transaction that never reached prepare, a `ROLLBACK` left its
+context standing for the *next* transaction's first shipped statement to
+join. The review reproduced it on the two-core rig: `BEGIN; INSERT 91;
+ROLLBACK; BEGIN; INSERT 92; COMMIT;` leaves **both** 91 and 92 durable on
+the peer. Fixed at `Session::Finish()`, which drops the shipping id where
+the transaction enrolled anyone — conditioned on `participants_`, so an
+autocommit session's id is still minted once and the measured path is
+untouched.
+
+**Bug 2 — an owner's refusal left the transaction committable.** A failed
+statement inside `BEGIN` poisons the session (`txn.md` §6, §10-8); the
+local path takes that in `EndWrite`, which an enrolled ship deliberately
+skips, and nothing took it where the owner's verdict arrives. A client told
+`ERR` could `COMMIT` — and because failure atomicity is per transaction on
+the participant too, a ten-row `INSERT` failing on the seventh leaves six
+rows in the participant's open transaction for that `COMMIT` to make
+durable. The `UnknownOutcome` at the shipped deadline was the same hole and
+worse. Fixed in `DispatchAsync`, immediately after `FinishShippedStatement`.
+
+**Bug 3, low** — `AbandonWriteForShipping`'s new early return also swallowed
+the *no-manager* scope, whose end settles assertion reservations under
+`kBootstrapXid`. Its comment claimed every scope reaching it before R6-8 was
+owned; a dispatcher with no transaction manager also yields `owned ==
+false`. Guarded on `scope.txn != nullptr` now — unreachable in production
+wiring, and exactly the byte-identical claim HP4 makes.
+
+**And a gap the review found and left, closed here** — the row's real
+omission. `HandleCommit` forked on `has_participants()` and
+`HandleRollback` did not, so a client's `ROLLBACK`, a poisoned
+transaction's forced one, and the one `TcpServer::CloseClient` sends on a
+dropped connection all ended this core's half and **told nobody**: each
+participant went on holding its rows, pinning that core's read horizon and
+one of its sixteen enrolment slots, until the five-minute idle ceiling — on
+a loop any client can run. D4 already requires the telling (*"either way it
+then tells the participants"*), so this is D4 built rather than a decision
+taken. `Txn2pcClient::AbortAndForget` sends the abort with **no waiter
+opened at all**, which is the shape a rollback wants rather than a
+compromise: the outcome is abort whatever a participant answers, and the
+caller that most needs it — the connection-close rollback — runs through
+the synchronous `Dispatch()` and could not park for an acknowledgement.
+Counted apart as `aborts_forgotten()`, since those acknowledgements are
+*expected* to find no waiter and would otherwise read as a deadline problem.
+
+**One false claim in this row's own prose, corrected**: the rollback test
+said the owner's half was unwound "by the idle sweep at worst, and by the
+decide leg's abort on the ordinary path". Neither happened — the test
+passed because the participant's transaction was still *open*. It now
+asserts the release.
+
+**Cuts proposed and not taken**, with reasons: `(MayShip || MayEnrolShip)`
+appears at three sites and could be one `MayShipWrite` — worth doing, and
+worth doing where a fourth write path is added rather than as a rename in
+the row that introduced the second predicate; `ShipStatement`'s
+`session.transaction() != nullptr` is unreachable (`Adopt` never stores
+null) and reads as a possibility that does not exist; and
+`statement_ship_service.hpp` includes `txn/manager.hpp` for one enum a
+forward declaration would cover. Taken: none of the three changes
+behaviour, and the first is the only one that would prevent a defect.
+
+### Tests
+
+`tests/core_runtime_test.cpp`'s two-core rig gains core 0's coordinator
+half, so the whole protocol runs over a real ring with the peer's
+participant half wired by `AttachTransport` as production wires it: a write
+inside a transaction ships, enrols its owner and is invisible until the
+`COMMIT` runs both phases; a `ROLLBACK` sends no prepare and leaves the
+owner's rows unseen (**not unwound** — the review below corrected that
+claim, and the test now says which); the coordinator's level reaches the
+participant's enrolled transaction while the peer's own default stays READ
+COMMITTED, so the two are distinguishable; and a core with no coordinator
+armed keeps the old refusal, counted where `crosscore.md` §6 says it is.
+
+The review adds two regression tests, one per correctness bug, and the
+abort leg adds two more: the participant *releases* on a `ROLLBACK` rather
+than merely staying uncommitted, and a dropped connection's synchronous
+rollback reaches its participants too.
+
+Full suite green: **2,865 tests**. Overhead not measured — the v2-stage A/B
+suspension of 2026-08-24 stands.
+
+### The `critics-developer` pass, and what it moved
+
+Run against `7eaa14a`. **Two correctness bugs on the path this row makes
+reachable, one of them a wrong answer a client can produce in three
+statements**, plus one guard narrowed and three prose claims corrected.
+
+**Bug 1 — a rolled-back cross-owner write committed with the next
+transaction.** A participant's context is keyed on
+`(coordinator core, session_id)` and nothing else: the statement leg
+carries no transaction id, so two consecutive transactions of one session
+are indistinguishable there — while `Session::ship_id()` was minted once
+and kept for the connection's life. Nothing tells a participant about a
+transaction that never reached prepare (`RollbackLocal` sends no message),
+so the context outlived its transaction and the *next* transaction's first
+shipped statement joined it. Reproduced end to end on the two-core rig:
+`BEGIN; INSERT peer(91); ROLLBACK; BEGIN; INSERT peer(92); COMMIT` left
+**both** rows on the owner. Fixed in `Session::Finish()` — a transaction
+that enrolled anyone drops the shipping id, so the next one addresses a
+fresh context. Conditioned on `participants_`, so the autocommit path's id
+is still minted once and kept, and only a cross-owner transaction pays the
+extra dedup record. Regression test:
+`ARolledBackCrossOwnerTransactionsWritesDoNotCommitWithTheNext`.
+
+**Bug 2 — an owner's refusal left the transaction committable.** Failure
+atomicity is per transaction (`txn.md` §6, §10-8): a statement that fails
+inside `BEGIN` poisons the session and the client must `ROLLBACK`. The
+local path takes that poison in `EndWrite`, which an enrolled ship
+deliberately skips — and nothing took it where the *owner's* verdict
+arrives, which is the only place it can be taken, since at ship time the
+statement had not run. So a client told `ERR` could `COMMIT`, and an
+owner-side statement that failed part-way (its rows stay in the
+participant's open transaction, per-transaction atomicity again) made those
+rows durable. The deadline's `UnknownOutcome` was the same hole and the
+sharper case. Fixed in `DispatchAsync`, one test either side:
+`AShippedStatementTheOwnerRefusesPoisonsTheTransactionThatSentIt`.
+
+**A guard narrowed.** `AbandonWriteForShipping`'s new early return tested
+`!scope.owned`, whose comment claimed every scope reaching it before R6-8
+was owned. A dispatcher with **no transaction manager** also produces an
+unowned scope, and its end is `EndWrite`'s no-manager arm settling the
+statement's assertion reservations under `kBootstrapXid` — the autocommit
+ship's path on such a configuration, which HP4 calls byte-identical. Now
+`scope.txn != nullptr && !scope.owned`, which is the shape the row means.
+
+**Left open, and named because R6-8 is what makes it reachable: a
+`ROLLBACK` never reaches its participants.** `HandleCommit` forks on
+`has_participants()`; `HandleRollback` does not, so a client's `ROLLBACK` —
+and a poisoned transaction's, and the one `TcpServer::CloseClient` sends
+for a dropped connection — ends the coordinator's half and tells nobody.
+Each abandoned participant holds its rows uncommitted, pins that core's
+`ReadHorizon()`, and holds one of `kShippedMaxEnrolled` (16) and one of
+`kMaxTrackedLiveTxns` (64) until `kShippedTxnIdleCeilingNs` — **five
+minutes**, on a loop any client can run. Not fixed here because the fix is
+a decision, not an edit: the abort decide is a park, so it either makes
+`ROLLBACK` wait a ring round trip (a client-visible latency change on a
+path that never had one) or needs a fire-and-forget lane whose waiter
+nothing closes; and `TcpServer`'s close path calls the **synchronous**
+`Dispatch`, which cannot park at all. `StartDecision` already accepts an
+abort for an unprepared context, so the participant side needs nothing.
+Recorded in `known-gaps.md`.
+
+**Prose corrected at the source**, three claims: the rollback test's *"the
+owner's half is unwound before this returns"* (nothing unwinds it — the row
+is unseen because the participant's transaction is still open, and the test
+now asserts the open context rather than implying it away); CP3's class
+list, which omitted the KWP load chunk and so counted three classes where
+there are four; and `AbandonWriteForShipping`'s *"every scope that reached
+here was owned"*.
+
+Suite after the fixes: **2,864 green** — the 2,862 above plus one
+regression test per bug. Overhead not measured, the v2-stage suspension
+standing.
 
 ## Open, carried from the work order
 

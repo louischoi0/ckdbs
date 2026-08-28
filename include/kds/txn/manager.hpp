@@ -166,7 +166,26 @@ public:
     // transaction is decided. The price is the standard one: an in-doubt
     // transaction pins the log, and D5's bounded wait is what bounds it.
     wal::Lsn prepare_lsn() const noexcept { return prepare_lsn_; }
-    void set_prepare_lsn(wal::Lsn lsn) noexcept { prepare_lsn_ = lsn; }
+
+    // **This transaction has replied prepared and is in doubt until its
+    // coordinator decides** (R6-5, D5). Set by the participant executor at
+    // the moment the promise is made - after the PREPARE record is durable,
+    // never at the append - and never cleared: a prepared transaction ends
+    // only by the decided COMMIT or ROLLBACK, which ends it whole.
+    //
+    // Two readers, and they want different things. The checkpointer wants
+    // the LSN (`prepare_lsn` above), which is 0 on an unlogged instance
+    // because there is no record. A **writer of the same rows** wants the
+    // flag: `CheckWriteConflict` refuses it as it refuses any in-flight
+    // writer, and the dispatcher then reads `TransactionManager::IsInDoubt`
+    // to decide whether that refusal is one to answer or one to wait out
+    // (`command_dispatcher.hpp`'s `InDoubtBlock`). The flag rather than the
+    // LSN, so the unlogged fixture blocks the way a logged core does.
+    bool prepared() const noexcept { return prepared_; }
+    void MarkPrepared(wal::Lsn lsn) noexcept {
+        prepared_ = true;
+        prepare_lsn_ = lsn;
+    }
 
 private:
     friend class TransactionManager;
@@ -177,6 +196,7 @@ private:
     std::vector<TrailEntry> trail_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     wal::Lsn prepare_lsn_ = 0;
+    bool prepared_ = false;
     bool active_ = false;
 };
 
@@ -449,6 +469,20 @@ public:
     // core answers false. Sound for its one user only while CC3 refuses
     // cross-core writes.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
+
+    // Whether `trx_id` is a transaction **this core prepared and has not
+    // yet been told the outcome of** (R6-5, D5): running here, and marked
+    // by `Transaction::MarkPrepared`. The question a writer asks about the
+    // transaction `CheckWriteConflict` just refused it for - an in-flight
+    // writer that will end on its own is a conflict to report, while one
+    // that is waiting on another core's decision is a conflict to wait out.
+    // False for a transaction that has ended, however it ended, which is
+    // what lets a parked writer's predicate read "decided" off this one bit.
+    //
+    // Per-core, like `IsInFlight`: a participant's transaction is a local
+    // transaction on the core that prepared it, so the writer asking is on
+    // that core too.
+    bool IsInDoubt(std::uint64_t trx_id) const noexcept;
 
     // The lowest id among transactions still running here, or `UINT64_MAX`
     // when none is. **Everything below it is settled**, which is the whole
