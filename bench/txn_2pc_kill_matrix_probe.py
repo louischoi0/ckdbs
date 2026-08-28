@@ -18,17 +18,33 @@ all-or-nothing - and which value they take is a property of the point:
     coordinator.decided_presend           1 - the decision is durable and
                                               no participant heard it; the
                                               mount must publish both halves
+    participant.decide_applied_preack     1 - one half committed, the other
+                                              still prepared: the mount must
+                                              reach the same answer twice,
+                                              by redo and by resolution
 
-The last row is the one the protocol exists for, and it is the only one in
-which a count of 0 would be lost data rather than a rolled-back
-transaction. The first four are the ones in which a count of 1 would be a
-published transaction nobody committed.
+The split is what makes the matrix a test rather than a sweep. In the four
+expecting **0**, a count of 1 would be a transaction published that nobody
+decided. In the two expecting **1**, a count of 0 would be lost data - a
+decision the engine made durable and then failed to carry out. And in every
+one of the six, unequal counts are a **torn** transaction, which is the
+failure two-phase commit exists to make impossible.
 
 **Both sides of the wire are threads of one process**, so a kill takes the
 coordinator and its participants down together - `shipped_kill_recovery_probe.py`
 made the same observation about the shipping path. That is why the matrix
-is five points and not eight: "on each side" is a statement about which
-core's code was executing, and the five names above cover both.
+is six points and not eight: "on each side" is a statement about which
+core's code was executing, and the six names above cover both.
+
+**The ordinal is per process, not per participant.** `name:2` fires on the
+second *hit of that name in this process*, which is the second participant
+only when the first attempt reached the point - and `cross_owner_txn`
+retries the whole transaction up to forty times, so an attempt refused
+before the protocol leaves the counter untouched and shifts which attempt
+fires. Every ordinal cell expects the same count as its ordinal-1 sibling
+for exactly that reason: no cell's verdict may depend on which attempt the
+kill landed in. `txn_reply` records what the client last saw, which is what
+tells the two apart after the fact.
 
 The kill is deterministic, and it has to be: these windows are
 microseconds wide, so an external killer racing them lands in one
@@ -37,8 +53,8 @@ essentially never. The process kills itself at the line, armed by
 and by nothing else. A restart is never armed, so recovery runs on an
 instance that cannot crash on purpose.
 
-Three more cells ride the same harness, because each is a §5 bullet and
-each is answered by the same instrument:
+Three more kinds of cell ride the same harness, because each is a §5
+bullet and each is answered by the same instrument:
 
   **fastpath.***  - D1's one-owner path, asserted by a kill that does not
   happen. The instance is armed at `coordinator.before_prepare` and given a
@@ -63,7 +79,11 @@ each is answered by the same instrument:
 
 Exit 0 when every cell holds. A cell whose restart does not come back
 inside `--mount-timeout` is reported as a **HANG**, which §5 calls a
-blocking finding, and is never retried into a pass.
+blocking finding, and is never retried into a pass. `--repeat N` runs the
+whole plan N times; every pass must hold, and the summary names any point
+that reached the **asymmetric** state - the two participants dying in
+different durable states, which no crash point can pin because they run on
+separate cores and reach the line concurrently. It is sought, not assumed.
 """
 import argparse
 import json
@@ -86,6 +106,17 @@ MATRIX = [
     ('participant.prepare_durable_prereply:2', 0),
     ('coordinator.prepared_predecide', 0),
     ('coordinator.decided_presend', 1),
+    # The two points that can leave the transaction **partly published**,
+    # which is the state in-doubt resolution exists to repair and the only
+    # one in which a wrong recovery tears a transaction instead of rolling
+    # it back. When it lands asymmetrically, one participant's half is
+    # durably committed in its own stream while the other is still merely
+    # prepared, and the restart must reach 1 by two different routes - redo
+    # for the committed half, resolution against the coordinator's stream
+    # for the prepared one. Whether it lands that way is the race `mixed`
+    # records; the expected count is 1 either way, which is the point.
+    ('participant.decide_applied_preack', 1),
+    ('participant.decide_applied_preack:2', 1),
 ]
 
 TAG = 'kill'
@@ -111,6 +142,20 @@ def write_conf(workdir, port, cores, placement='rotate'):
                 # mechanism produced them.
                 f"log_file = s.log\nlog_dir = {workdir}\nlog_level = info\n")
     return conf
+
+
+def stop_proc(proc):
+    """Leave no server holding the port. Every cell in this probe binds the
+    *same* port, so an instance a cell abandoned would be met by the next
+    cell's `wait_up` - and it is an **armed** instance, so the cell after it
+    would be reading a verdict off the wrong process."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
 
 
 def start(conf, workdir, server, arm=None):
@@ -237,6 +282,11 @@ def arm_and_kill(arm, args, out):
     finally:
         for c in spare:
             c.close()
+        # Every `return None` above records its finding first, and each one
+        # leaves an armed instance still listening: without this the next
+        # cell binds a port this one still holds, or worse connects to it.
+        if 'error' in out or 'vacuous' in out:
+            stop_proc(proc)
 
     try:
         proc.wait(timeout=args.mount_timeout)
@@ -298,6 +348,21 @@ def run_cell(arm, expected, args):
                                   for ln in log.splitlines() if 'resolves to' in ln]
         except OSError:
             out['resolutions'] = []
+        # **Did the two participants die in *different* durable states?**
+        # Exactly one resolution line means one core had a prepare to
+        # resolve and the other did not: at `decide_applied_preack` that is
+        # one half redone from its own commit record and one resolved
+        # against the coordinator's stream; at the prepare points it is one
+        # promise durable and one not. Either way it is the asymmetric case,
+        # and it is where a wrong recovery *tears* a transaction rather than
+        # rolling it back - the two counts must still agree.
+        #
+        # **No crash point can pin it.** The participants run on separate
+        # cores and reach these lines concurrently, so "A past it and B not"
+        # is a race, not a position. Recorded rather than required: the
+        # cell's verdict is the count either way, and `--repeat` is how the
+        # state is sought rather than assumed.
+        out['mixed'] = 0 < len(out['resolutions']) < 2
 
         # Nothing left half-held: a relation whose owner is still holding an
         # in-doubt transaction's rows would refuse this under D5's ceiling.
@@ -317,16 +382,16 @@ def run_cell(arm, expected, args):
             out['hang'] = 'STOP did not settle'
             proc.kill()
             proc.wait(timeout=10)
+    except (ConnectionError, OSError) as e:
+        # A restarted instance that dies while being counted is **this
+        # cell's** finding, not the run's. Without this the exception left
+        # `run_cell` and took the other nine cells with it, which is the one
+        # way a matrix can report less than it knows.
+        out['error'] = f'the restarted instance died under the count: {type(e).__name__}: {e}'
     finally:
         for c in spare:
             c.close()
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+        stop_proc(proc)
     return out
 
 
@@ -382,13 +447,7 @@ def run_fastpath_cell(name, cores, args):
     finally:
         for c in spare:
             c.close()
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+        stop_proc(proc)
     stderr = open(os.path.join(workdir, 's.stderr')).read()
     out['crash_line'] = "crash point 'coordinator.before_prepare' fired" in stderr
     return out
@@ -419,13 +478,7 @@ def run_stream_gone_cell(args):
         out['mounted'] = up
         out['why'] = why
     finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+        stop_proc(proc)
     stderr = open(os.path.join(workdir, 's.stderr')).read()
     # **Which layer refused is the finding, not a detail.** Deleting the
     # stream whole is caught by core 0's own analysis - its stream now ends
@@ -447,14 +500,19 @@ def run_stream_gone_cell(args):
 
 
 def verdict(cell):
+    # The three that mean the same thing whatever the cell was asking, taken
+    # once above the fork: a cell that could not pose its question, one that
+    # never came back, and one that broke. Hoisted rather than repeated -
+    # the resolution arm had no HANG check while it carried its own copy of
+    # the other two, so a mount that hung there reported UNNAMED.
+    if 'vacuous' in cell:
+        return 'VACUOUS'
+    if 'hang' in cell:
+        return 'HANG'
+    if 'error' in cell:
+        return 'ERROR'
     kind = cell.get('kind')
     if kind == 'fastpath':
-        if 'vacuous' in cell:
-            return 'VACUOUS'
-        if 'hang' in cell:
-            return 'HANG'
-        if 'error' in cell:
-            return 'ERROR'
         if cell.get('crash_line') or not cell.get('alive'):
             # The armed point fired, so the one-owner commit entered the
             # protocol: D1's gate, failing.
@@ -465,10 +523,6 @@ def verdict(cell):
             return 'WRONG'
         return 'PASS'
     if kind == 'resolution':
-        if 'vacuous' in cell:
-            return 'VACUOUS'
-        if 'error' in cell:
-            return 'ERROR'
         if cell.get('mounted'):
             # It came up, which means it resolved a decision it could not
             # read - the guess §5 forbids.
@@ -481,12 +535,6 @@ def verdict(cell):
 
 
 def kill_verdict(cell):
-    if 'vacuous' in cell:
-        return 'VACUOUS'
-    if 'hang' in cell:
-        return 'HANG'
-    if 'error' in cell:
-        return 'ERROR'
     counts = cell.get('counts') or {}
     if None in counts.values() or len(counts) != 2:
         return 'ERROR'
@@ -495,7 +543,12 @@ def kill_verdict(cell):
         return 'TORN'          # the atomicity failure this probe exists for
     if a != cell['expected_rows']:
         return 'WRONG'         # atomic, but the wrong outcome for the point
-    if (cell.get('seed_counts') or {}).get('t0') != 1:
+    # **Both relations**, because the counts above cannot tell a rolled-back
+    # transaction from a relation lost whole: a `t1` that came back empty
+    # reads as the expected 0 on every point but the last. The seed row is
+    # what separates them, so it is asserted on each side.
+    seed = cell.get('seed_counts') or {}
+    if any(seed.get(t) != 1 for t in ('t0', 't1')):
         return 'ERROR'
     if not all(ok for ok, _ in (cell.get('writable_after') or {}).values()):
         return 'STUCK'
@@ -511,6 +564,10 @@ def main():
     ap.add_argument('--workdir', default='/tmp/kds-2pc-kill-matrix')
     ap.add_argument('--json', default=None)
     ap.add_argument('--only', default=None, help='run one point by name')
+    ap.add_argument('--repeat', type=int, default=1,
+                    help='run the plan N times; every pass must hold, and a '
+                         'state that is a race (see `mixed`) is sought rather '
+                         'than assumed')
     args = ap.parse_args()
 
     plan = [(arm, lambda a=arm, e=exp: run_cell(a, e, args)) for arm, exp in MATRIX]
@@ -520,25 +577,40 @@ def main():
              ('fastpath.cores1', lambda: run_fastpath_cell('fastpath.cores1', 1, args))]
     if args.only is not None:
         plan = [(n, f) for n, f in plan if n.startswith(args.only)]
+        if not plan:
+            # A mistyped `--only` selected nothing, and "0 of 0 cells" must
+            # not exit 0: an empty gate is not a passed one.
+            print(f'--only {args.only!r} matched no cell')
+            return 1
     results = []
     failed = 0
-    for name, run in plan:
-        cell = run()
-        cell['verdict'] = verdict(cell)
-        results.append(cell)
-        print(f"{cell['verdict']:8s} {name}")
-        for key in ('owners', 'txn_reply', 'killed_rc', 'counts', 'seed_counts',
-                    'mount_s', 'resolutions', 'writable_after', 'alive', 'crash_line', 'removed',
-                    'mounted', 'why', 'refused_by', 'error', 'hang', 'vacuous'):
-            if key in cell:
-                print(f'    {key} = {cell[key]}')
-        if cell['verdict'] != 'PASS':
-            failed += 1
+    for attempt in range(max(1, args.repeat)):
+        for name, run in plan:
+            cell = run()
+            cell['verdict'] = verdict(cell)
+            cell['pass_no'] = attempt + 1
+            results.append(cell)
+            label = name if args.repeat == 1 else f'{name}  (pass {attempt + 1})'
+            print(f"{cell['verdict']:8s} {label}")
+            for key in ('owners', 'txn_reply', 'killed_rc', 'counts', 'seed_counts',
+                        'mount_s', 'resolutions', 'mixed', 'writable_after', 'alive',
+                        'crash_line', 'removed', 'mounted', 'why', 'refused_by',
+                        'error', 'hang', 'vacuous'):
+                if key in cell:
+                    print(f'    {key} = {cell[key]}')
+            if cell['verdict'] != 'PASS':
+                failed += 1
     if args.json:
         with open(args.json, 'w') as f:
             json.dump(results, f, indent=2)
     print()
-    print(f'{len(plan) - failed}/{len(plan)} cells PASS')
+    mixed = sorted({c['point'] for c in results if c.get('mixed')})
+    if mixed:
+        # Named, because a pass that reached it tested what a symmetric
+        # one cannot: two participants in different durable states, which
+        # is where a wrong recovery tears rather than rolls back.
+        print(f'asymmetric participant states reached at: {", ".join(mixed)}')
+    print(f'{len(results) - failed}/{len(results)} cells PASS')
     return 0 if failed == 0 else 1
 
 

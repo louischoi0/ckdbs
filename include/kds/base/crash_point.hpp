@@ -28,10 +28,13 @@
 // environment cannot reach a kill. There is no config key, no `SHOW META`
 // field and no wire surface, so nothing a client can send arms one.
 //
-// Cost when unarmed - which is every production process - is one load of a
-// cached pointer and a null test, and every call site is on the cross-owner
-// commit path. **No crash point sits on the one-owner path**, which is what
-// keeps D1's fast path free of this facility as well as of the protocol.
+// Cost when unarmed - which is every production process - is an
+// out-of-line call, the once-guard's acquire load, and an `empty()` test.
+// Stated exactly rather than as "one cached load", because every call site
+// is on the cross-owner commit path and none is hot enough for the
+// difference to matter. **No crash point sits on the one-owner path**,
+// which is what keeps D1's fast path free of this facility as well as of
+// the protocol.
 //
 // Syntax: `KDS_CRASH_POINT=<name>` fires at the first hit of `<name>`;
 // `KDS_CRASH_POINT=<name>:<n>` fires at the n-th (1-based). The ordinal is

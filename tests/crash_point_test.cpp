@@ -65,6 +65,7 @@ TEST(CrashPointHitTest, TheTestBinaryIsUnarmedAndEveryHitReturns) {
     CrashPointHit("participant.prepare_durable_prereply");
     CrashPointHit("coordinator.prepared_predecide");
     CrashPointHit("coordinator.decided_presend");
+    CrashPointHit("participant.decide_applied_preack");
     SUCCEED();
 }
 

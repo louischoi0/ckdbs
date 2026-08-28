@@ -153,6 +153,8 @@ this workplan means the v2.4.0 path.
 | R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
 | R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
+| **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. CP2 concluded. Overhead not measured |
+| RP8 | R6-B cells B1-B5 | — |
 
 ## R6-0 — the retry bit
 
@@ -1824,6 +1826,408 @@ here was owned"*.
 Suite after the fixes: **2,864 green** — the 2,862 above plus one
 regression test per bug. Overhead not measured, the v2-stage suspension
 standing.
+
+## RP7 — the correctness gate
+
+The parent order's §5 in full (`instructions/v2.4.0/2pc.md` 232-249), run on
+`worktree-v2.5.0-crosscore-protocol-2` at `5f08c0d` for the instrument and
+re-run whole after the review's sixth point landed. One sitting,
+2026-08-28. What the row adds to the tree is one facility and one probe,
+and the facility is the reason §5's first bullet is answerable at all.
+
+### The instrument, and why it is in the engine rather than in the harness
+
+§5 does not ask for a crash somewhere in the protocol. It names four
+positions — *"before prepare, between prepare and its durability, after
+prepare before decide, after decide before participants learn"* — and asks
+what a restart makes of each. Those windows are microseconds wide. The
+existing precedent, `bench/shipped_kill_recovery_probe.py`, kills *"wherever
+it lands"* and says so in its header, which answers a different question:
+that the shipping path survives an arbitrary crash, not that a named
+position does.
+
+There are two ways to stop a process at a named source line. A debugger is
+one, and this host has no `gdb`. The other is the process killing itself,
+which is what `include/kds/base/crash_point.hpp` is: `KDS_CRASH_POINT` read
+from the environment **once**, compared against the name at each call site,
+and on a match `kill(getpid(), SIGKILL)`.
+
+Three properties, each load-bearing and each stated because a weaker one
+would have been easier to write:
+
+- **It is `SIGKILL`, not `exit` or `abort`.** No destructor runs, no buffer
+  drains, no `atexit` fires; the WAL and the data file hold exactly the bytes
+  the device had already taken. `std::exit` unwinds statics and all three of
+  the alternatives let a libc-buffered stream flush, which would make the
+  durable state a property of the exit rather than of the protocol position.
+- **It is armed by the environment and by nothing else.** No config key, no
+  `SHOW META` field, no wire surface, so nothing a client can send arms one.
+  `ParseCrashPointArm` is exposed and tested because it is the only branch in
+  the file, and the failure it forbids is a spec that silently loses its
+  tail: `a:b` read as name `a` would arm a point that does not exist, and
+  every cell would then report a survival as a property of the protocol.
+  `CrashPointHit`'s empty-name test is the same guard one level down —
+  `KDS_CRASH_POINT=:5` parses to an empty name, and that line is what keeps
+  it inert.
+- **No call site is on the one-owner path.** All six sit inside blocks a
+  transaction with no participants never enters. Asserted behaviourally
+  below rather than by inspection.
+
+The six points, with the position each occupies:
+
+| point | site | durable state it leaves |
+|---|---|---|
+| `coordinator.before_prepare` | `command_dispatcher.cpp:3907`, before `txn_2pc_->Prepare` | participants hold uncommitted writes and were never asked |
+| `participant.prepare_logged_predurable` | `shipped_statement_executor.cpp:515`, after `LogTxnPrepare`, before `RequestDurable` | a record nothing has asked the device for |
+| `participant.prepare_durable_prereply` | same file, `:605`, after `MarkPrepared`, before `reply(OK)` | a durable promise the coordinator has not heard |
+| `coordinator.prepared_predecide` | `command_dispatcher.cpp:380`, after the phase settles, before `CommitLocal` | every promise made, no decision written anywhere |
+| `coordinator.decided_presend` | `command_dispatcher.cpp:445`, after the `IsDurable` park, before `txn_2pc_->Decide` | the decision durable in one stream, no participant holding it |
+| `participant.decide_applied_preack` | `shipped_statement_executor.cpp:822`, after `enrolled_.erase`, before `reply(OK)` | **this half committed, the coordinator unacknowledged** |
+
+The sixth is the review's, and §5 is not met without it — see the review
+section below.
+
+### The matrix
+
+**Both sides of the wire are threads of one process**, so a kill takes the
+coordinator and its participants down together — the observation
+`shipped_kill_recovery_probe.py` already made about shipping. §5's "on each
+side" is therefore a statement about *which core's code was executing*, not
+about two processes, and the six names cover both sides.
+
+The shape: `cores = 3`, `placement = rotate`, a client session on core 0.
+Rotation never places on core 0 (`catalog/core_placement.hpp`'s
+`AssignOwnerCore`), so the two relations land on cores 1 and 2 and the
+client's core is a coordinator with two participants and no local data
+write of its own. One row per relation is written before the transaction, so
+a relation reading 0 because it was lost *whole* is distinguishable from one
+that rolled back — and the seed is checked on **both** relations, which the
+review had to correct.
+
+Twelve cells, run three times over (`--repeat 3`): **36/36 PASS**.
+
+| cell | rows in each relation | why that value |
+|---|---|---|
+| `coordinator.before_prepare` | 0 = 0 | nobody was asked |
+| `participant.prepare_logged_predurable` (and `:2`) | 0 = 0 | a record nothing asked the device for promises nothing |
+| `participant.prepare_durable_prereply` (and `:2`) | 0 = 0 | a promise the coordinator never heard cannot be decided |
+| `coordinator.prepared_predecide` | 0 = 0 | every promise made, no decision anywhere |
+| `coordinator.decided_presend` | **1 = 1** | the decision was durable; the mount must carry it out |
+| `participant.decide_applied_preack` (and `:2`) | **1 = 1** | one half already applied; the mount must reach the same answer for the other |
+| `resolution.coordinator_stream_gone` | mount refused | the decision cannot be read, so it is not guessed |
+| `fastpath.local_only`, `fastpath.cores1` | 1 = 1, process alive | D1: no prepare was ever sent |
+
+Every killed cell confirms `rc = -9` and finds its own point's line on the
+dead process's stderr, so no cell counts rows after a death it did not
+cause. **Unequal counts would be a `TORN` verdict on any of them**, which is
+the failure two-phase commit exists to make impossible and the one this
+matrix is shaped to catch.
+
+### The mechanism is read, not inferred
+
+Counting rows says a transaction is whole; it does not say *what made it
+whole*. The probe therefore runs at `log_level = info` and reads the
+resolver's own verdict line out of the restarted instance's log:
+
+    coordinator.prepared_predecide
+      core 1: transaction 4100, prepared for core 0's session 1 transaction 8,
+        resolves to ABORT (its coordinator's stream holds no decision, so
+        nothing committed anywhere)
+      core 2: transaction 8196, ... resolves to ABORT (...)
+
+    coordinator.decided_presend
+      core 1: transaction 8196, prepared for core 0's session 1 transaction 8,
+        resolves to COMMIT (its coordinator's decision)
+      core 2: transaction 4100, ... resolves to COMMIT (its coordinator's decision)
+
+`coordinator.before_prepare` logs no resolution at all, which is the third
+reading: nothing was prepared, so nothing needed resolving. Those three are
+the protocol end to end on a real instance — a decision that lived in
+exactly one stream reaching two participants that never heard it, and the
+same machinery declining to publish when the decision is absent.
+
+### The asymmetric state, and the honest limit on pinning it
+
+The state a wrong recovery would **tear** rather than roll back is the one
+where the two participants die in *different* durable states — one half
+already committed in its own stream, the other still merely prepared. The
+restart then has to reach the same answer by two different routes: redo for
+the first, resolution against the coordinator's stream for the second.
+
+**No crash point can pin it.** The participants run on separate cores and
+reach these lines concurrently, so "A past it and B not" is a race, not a
+position. The probe therefore *records* it — `mixed` is true when exactly
+one resolution line appears — rather than requiring it, and `--repeat` is
+how it is sought. Over the three passes it was reached at four points,
+`participant.decide_applied_preack` among them; a hand sweep of six runs of
+that cell alone reached it once, so the rate is real but low. In every case
+the two counts agreed and took the expected value.
+
+That is the honest position: the asymmetric case **is** exercised and the
+engine is right in it, but it is exercised by sampling rather than pinned by
+construction, and a run in which `mixed` is false has tested the symmetric
+case only.
+
+### §5 bullet by bullet
+
+**Atomicity, adversarially** — the table above; all-or-nothing by count at
+every cell, three passes.
+
+**In-doubt resolution, including the coordinator's record gone** — split
+across two levels, and the split is worth stating rather than blurring. At
+the *mount*, `resolution.coordinator_stream_gone` kills at
+`coordinator.decided_presend`, deletes core 0's WAL stream, and the mount
+**refuses**. What it refuses with is the finding: analysis's own anchor
+check fires first — *"core 0's stream ends at lsn 4096, before the durable
+point 4360 its checkpoint anchor was published with"* — so
+`CoordinatorStreamResolver`'s absent-stream arm is **unreachable by this
+route** and stays proved where it is provable, in
+`prepared_recovery_test.cpp`'s `AnAbsentCoordinatorStreamRefusesRatherThanAborting`.
+Either way §5's property holds: the decision cannot be read and the instance
+says so instead of picking one. At *runtime*, the `UnknownOutcome` answer to
+an ask whose coordinator no longer holds the record is
+`Txn2pcResolveTest.ATransactionThisCoreHasNoRecordOfIsUnknownAndNeverGuessed`
+and `Txn2pcInDoubtTest.AnUnknownAnswerLeavesTheTransactionInDoubtRatherThanGuessing`;
+reaching it end to end would need the decide message dropped on a working
+ring, which nothing in the tree can inject. **Stated as a limit of the gate,
+not as coverage.**
+
+**The one-owner fast path sends no prepare** — two readings, and the second
+is new. At unit level
+`Txn2pcCommitTest.AOneOwnerCommitSendsNoPrepareAndTakesThePathItAlwaysTook`
+asserts `Txn2pcClient::prepare_messages() == 0`. At process level the
+`fastpath.*` cells assert it by **a kill that does not happen**: the instance
+runs with `coordinator.before_prepare` armed for its whole life and a
+transaction every one of whose relations its own core owns, and it survives
+and answers `COMMIT` with both rows present. A single prepare would have
+killed it.
+
+**`cores = 1` unchanged** — `fastpath.cores1` is that shape and passes, and
+the suite is green at one core as at three. The *measured* half of this
+bullet is not run: the interleaved A/B overhead measurement is suspended for
+v2-stage development (operator amendment 2026-08-24), so **overhead is not
+measured** and is reported as such rather than implied.
+
+**A hang is a blocking finding** — none was produced, and **HP3 is reported
+as the R6-5 review restated it, not as confirmed**: it *holds for every
+statement wait*; the ask loop and the two commit-durability parks are
+unbounded, one by decision and two as inherited. What RP7 adds is the
+measurement on the side the reviews could not reach: every restart in the
+matrix came back in **0.10-0.15 s** against a 90 s ceiling the probe would
+have called `HANG`, no cell needed a timeout to finish, and no cell was
+retried into a pass. So the *mount* half of HP3 is now measured; the two
+unbounded parks are unchanged and are re-stated below rather than allowed to
+read as bounded because a probe did not hit them.
+
+### The four obligations earlier rows handed to RP7 by name
+
+Each row above named RP7 as the place its item would be answered. Answered
+here, and none of the four is closed by this row — three are reported as
+they were asked to be, and the fourth bounds a result RP7 itself produced.
+
+**1. The decision-durability park: reported as inherited, not fixed.** R6-3's
+review recorded that `DispatchAsync`'s wait between the durable COMMIT and
+telling the participants has no ceiling, and asked RP7 to *"report it as
+inherited-or-fixed rather than let HP3 read as confirmed on a wait that was
+never bounded."* It is **inherited**: the group-commit park two stages below
+it has been equally unbounded since D2, and bounding one commit wait and not
+the other would be arbitrary. RP7 did not fix it and does not claim it away
+— the matrix cannot reach it, because a crash point kills the process rather
+than stalling a device.
+
+**2. HP3 is restated, not confirmed** — above, in the R6-5 review's own
+words.
+
+**3. The sim corpus does not cover cross-owner recovery, so its green does
+not extend to R6.** R6-4's review left this for RP7 because RP7 runs
+`scripts/sim.sh`: `sim/instance.cpp:67` mounts **core 0 alone** through
+`RecoverCoreAtMount` with no resolver and no log *directory*, so a simulated
+mount can never meet a prepared transaction. Confirmed by reading at this
+commit. The 171/0 on both arms therefore says R6 broke nothing the corpus
+covers — which is what it was run for — and says **nothing** about
+cross-owner prepare resolution. That property is covered by
+`prepared_recovery_test.cpp` and by this row's matrix, and by nothing in
+`sim/`.
+
+**4. `txn_decide_refusals` is not read here, and the R6-8 note says why it
+must not be.** R6-8 recorded a benign refusal that can raise the counter
+when a decide takes longer than 200 ms to cross a ring whose hop is ~21 µs,
+and asked RP7 not to read a non-zero value as proof of a lost half. RP7
+makes no claim from that field: the probe's evidence is the row counts and
+the resolver's own log lines, and it never reads `txn_decide_refusals` at
+all. Stated so a later reader does not mistake the silence for a zero.
+
+### CP2 — the fast path is free at the instruction level, and here is every site
+
+The work order asks for this conclusion in a specific form: *"name what a
+single-owner commit executes that it did not before, and if the answer is
+'one predictable branch on a field already in cache', say so with the
+site."* M3's standard — sha256-identical binaries — cannot be met, because
+R6 does change the binary. The enumeration can be, and it is short. Four
+sites, read at `5f08c0d`:
+
+1. **The commit path: one branch.** `src/server/command_dispatcher.cpp:6903`
+   — `if (session.has_participants()) return PrepareAcrossOwners(session);`.
+   `has_participants()` is `!participants_.empty()` on a `std::vector` member
+   of the `Session` the caller already holds
+   (`include/kds/server/session.hpp:220`). One test, always false on a
+   one-owner transaction, on a field already in cache. **That is the whole of
+   D1's cost on the commit path.**
+2. **The rollback path: the same branch again**, at
+   `src/server/command_dispatcher.cpp:6995`, the leg the R6-8 review added.
+3. **The write path: nothing.** `CheckWriteConflictBlocking`
+   (`command_dispatcher.cpp:7130`) returns on `verdict.ok()` before reaching
+   anything R6 added; `IsInDoubt`'s scan over `live_` is reached only by a
+   write that has **already lost a conflict**, a pre-existing error path. A
+   one-owner instance with no conflicts executes zero added instructions
+   here.
+4. **The checkpoint path: one extra pass over an already-hot vector.**
+   `src/wal/checkpointer.cpp:149` calls
+   `ActiveTransactions::OldestPreparedLsn()`, which walks `live_` — the same
+   vector the active table above it was just built from — and returns 0 on
+   any core that is not a participant right now, leaving
+   `pending_redo_start_` byte-identical. This is the one item that is not a
+   single branch, and it is **per checkpoint, not per commit and not per
+   statement**.
+
+RP7's own instrument adds nothing to any of the four: all six crash points
+sit inside blocks a one-owner commit never enters, which the `fastpath.*`
+cells assert from outside by surviving a full armed run.
+
+**HP1 is not falsified.** Its falsifier was *"CP2 finds work on the
+single-owner path that is not one cached-field branch"*; item 4 is the only
+candidate, it is off the commit path entirely, and its measured half belongs
+to B3, which RP8 owns and which the A/B suspension governs.
+
+### The suite and the corpus, both arms, one sitting
+
+| arm | commit | `ctest` | `scripts/sim.sh` |
+|---|---|---|---|
+| pre-R6 | `ec5f993` (the `v2.4.0` tag) | **2,789 passed, 0 failed** | **171 runs, 0 failures** |
+| R6 + RP7 | this worktree | **2,872 passed, 0 failed** | **171 runs, 0 failures** |
+
+Both Debug, both on 2026-08-28, the pre-R6 arm a `git archive` export of
+`ec5f993` built in a scratch tree — never a subtraction from a stored file.
+The two sweeps are the same 171 cells because the committed seed file is
+byte-identical across the trees and `sim.sh`'s four fresh seeds are derived
+from the date: nine seeds × (3 modes × 2 fault settings × 3 value profiles +
+1 advisory pair) = 171 either side. **R6 adds 83 tests and no regression**,
+in the suite or in the corpus.
+
+One correction to an earlier row while the number was in hand: the R6-8
+review section records **2,864** green, and `dae5ce2` measures **2,865**. A
+one-test discrepancy in the prose, not in the tree.
+
+And one thing 171/0 does *not* say: `known-gaps.md`'s open heap-chain
+finding (seed 20260826003, `--faults io`) is a **2026-08-26** date-derived
+seed that was deliberately not added to the committed corpus, so neither
+arm ran it. A green sweep means no regression against what the corpus
+covers, not that the corpus has nothing to find.
+
+### §6's three additions
+
+**No diff outside §1's in-list.** The changed-file set is eight files:
+`include/kds/base/crash_point.hpp`, `src/base/crash_point.cpp`,
+`tests/crash_point_test.cpp` and `bench/txn_2pc_kill_matrix_probe.py` (new);
+`CMakeLists.txt` and `tests/CMakeLists.txt` (one source line each); and the
+two protocol files that host the points,
+`src/server/command_dispatcher.cpp` and
+`src/server/shipped_statement_executor.cpp`. None of §1's
+explicitly-not-touched four is among them: `RangeEligible` and its three
+files, `sys.ranges`, the free map and the reactor wake path are all
+untouched, and no file outside the two protocol ones was edited even where a
+review finding pointed at one (see L2 below).
+
+**HP4 holds by construction here.** Its falsifier is *"any existing refusal
+test needs its expected text or status edited"*, and RP7 edited no existing
+test at all — the only test change is a new file.
+
+**The sitting.** Everything above ran on **2026-08-28**, one sitting, both
+arms.
+
+### The `critics-developer` pass, and what it moved
+
+Run against `5f08c0d`. The reviewer verified (a) that the facility cannot
+fire unarmed — by exercising it against `libkds.a` with four specs including
+the `:5` empty-name case — (b) that all six points sit where their names
+claim, and (c) that the one-owner path pays literally nothing. It then found
+**three correctness bugs in the probe and one gap in the matrix**, all
+applied.
+
+**The gap, and it is the one that mattered.** *"The decide leg has no crash
+point on either side, so the matrix never produces a partially-applied
+decision."* Correct, and §5's "on each side" was not met without it: every
+cell restarted from a state where zero halves were published, so the state
+in-doubt resolution actually exists to repair was untested. The sixth point
+is that finding, at the site the review named
+(the `status.ok()` arm of `FinishDecision`, after `enrolled_.erase`;
+`shipped_statement_executor.cpp:822` once the comment above it landed), with two cells expecting 1. **What building it then
+showed is that the review's framing was one step optimistic**: the point
+guarantees *this* participant is done, not that the other is behind, and the
+two apply concurrently — so the asymmetric state is a race the point samples
+rather than a position it pins. That is the `mixed` field and the `--repeat`
+flag, and the section above states it as a limit.
+
+**Three probe bugs, fixed.**
+
+- **A leaked *armed* server on four error paths.** `arm_and_kill`'s early
+  returns closed client sockets and abandoned the `Popen` still listening.
+  Every cell binds the same port, so the next cell's `wait_up` could connect
+  to the **previous cell's armed instance, holding the previous cell's data
+  file** — a verdict read off the wrong process. `stop_proc()` now runs on
+  every exit, and the three verbatim copies of that teardown elsewhere in
+  the file collapse into it.
+- **The seed row was asserted on `t0` only.** The seed exists to separate
+  "the transaction rolled back" from "the relation came back empty", and for
+  the five expected-0 points a `t1` lost whole reads as `{0, 0}` — equal, and
+  equal to the expectation. A vacuous PASS on the exact failure the seed
+  guards. Now checked on both.
+- **`--only` matching nothing exited 0.** An empty gate is not a passed gate.
+
+**Two more, applied.** `verdict`'s resolution arm could not report `HANG`
+(the three shared guards are now hoisted above the `kind` fork, which also
+deletes the duplicated copies); and `run_cell` had no
+`except (ConnectionError, OSError)` around its post-restart block, so one
+dying instance would have aborted the whole run instead of failing one cell.
+
+**Two prose corrections at the source**, both found by reading the arms
+rather than the comments: `coordinator.prepared_predecide` fires on the
+refusal arm as well as the commit arm, and `coordinator.decided_presend`'s
+decision is durable *by absence* on the ABORT arm rather than by the park.
+Also the header's cost claim, which said "one load of a cached pointer" where
+it is an out-of-line call, a once-guard acquire load and an `empty()` test.
+
+**One finding rejected, by name.** L2 proposed lifting `tagged_rows` and
+`session_on_core` into `tools/multicore_benchmark.py`, since
+`shipped_kill_recovery_probe.py` carries near-identical copies. The
+duplication is real and the destination is right — but the edit would put a
+diff in two files outside §1's in-list, and §6 asks RP7 to assert the
+changed-file set rather than to intend it. **Handed to whoever next touches
+either probe**, with the note that `wait_up` is *not* part of it: it returns
+`(ok, why)` and polls `proc.poll()` so a hang becomes a verdict rather than
+an exception, which `wait_for_port` cannot do.
+
+### What this row does not prove
+
+- **The runtime `UnknownOutcome` leg is unit-tested only.** Nothing in the
+  tree can drop a decide message on a working ring, so the end-to-end shape
+  where a participant asks and its coordinator has forgotten is unreachable
+  from a probe.
+- **`CoordinatorStreamResolver`'s own absent-stream refusal is unreachable
+  from a deleted file**, because analysis's anchor check refuses first. The
+  refusal is real and tested; what is not established is a route to it from
+  outside the process.
+- **The asymmetric participant state is sampled, not pinned** (above).
+- **Overhead is not measured.** The v2-stage A/B suspension stands. The fast
+  path is asserted structurally (CP2) and behaviourally (`fastpath.*`), never
+  as a number.
+- **The kill is deterministic, so it is not a fuzz.** Six named positions is
+  what §5 asked for. A crash at an unnamed instruction between them would be
+  the sim corpus's job — except that the corpus cannot mount a prepared
+  transaction at all (obligation 3 above), so **nothing in this tree
+  fuzz-tests cross-owner recovery**. That is the largest single gap RP7
+  leaves, and closing it means giving `sim/` more than one core and a log
+  directory, which is a workplan of its own.
 
 ## Open, carried from the work order
 

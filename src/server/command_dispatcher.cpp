@@ -372,10 +372,11 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         const Status refusal = commit ? Status::OK() : DescribePrepareFailure(phase);
         txn_2pc_->Close(pending.prepare_request_id);
 
-        // RP7's third protocol point: every participant has answered and
-        // its prepare is durable in its own stream, and no decision record
-        // exists anywhere. The next mount finds prepared transactions whose
-        // coordinator stream decided nothing, which D4 resolves as ABORT.
+        // RP7's third protocol point: every participant has answered - on
+        // this arm as on the refusal arm, since the point fires whatever
+        // `commit` holds - and no decision record exists anywhere. The next
+        // mount finds prepared transactions whose coordinator stream
+        // decided nothing, which D4 resolves as ABORT.
         base::CrashPointHit("coordinator.prepared_predecide");
 
         // Phase 2, first half: **the decision, and it is this core's own
@@ -436,9 +437,11 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         }
 
         // RP7's fourth protocol point, and the one the whole protocol
-        // exists for: the decision is durable in the coordinator's stream
-        // and no participant has heard it. The next mount must publish
-        // every participant's half from a record none of them holds.
+        // exists for: on the COMMIT arm the decision is durable in this
+        // stream (the park above took the wait); on the ABORT arm it is
+        // durable by absence. Either way no participant has heard it, so
+        // the next mount must settle every participant's half from a record
+        // none of them holds.
         base::CrashPointHit("coordinator.decided_presend");
 
         // Phase 2, second half: telling the participants. **This message

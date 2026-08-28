@@ -542,6 +542,23 @@ the owner's workplan.
   runs on every build, so a seed joins it when the engine fix lands, not
   when the failure is found. Whoever fixes this adds it there.
 
+- **The simulation corpus cannot mount a prepared transaction, so its green
+  says nothing about cross-owner recovery** — confirmed 2026-08-28 by RP7
+  (`docs/inflight/in-progress/workplan-cross-owner-txn.md`, "The four
+  obligations earlier rows handed to RP7"), and first noted as a review
+  item by R6-4. `sim/instance.cpp:67` mounts **core 0 alone** through
+  `RecoverCoreAtMount`, with no resolver and no log *directory*; a
+  `TXN_PREPARE` naming another core as its coordinator therefore cannot
+  arise, and if one did the mount would refuse. `scripts/sim.sh` running
+  171/0 means R6 broke nothing the corpus covers — it does **not** mean the
+  two-phase protocol survives fault injection.
+
+  What does cover it: `tests/prepared_recovery_test.cpp` for the resolution
+  itself, and `bench/txn_2pc_kill_matrix_probe.py` for six named crash
+  points end to end. What covers it *randomly*: nothing. Closing this means
+  giving `sim/` more than one core and a log directory, which is a workplan
+  of its own and is not R6's.
+
 ## What a restart loses (without a crash)
 
 - ~~**A peer's page ownership.** Extent leases and relation grants are

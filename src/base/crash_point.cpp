@@ -1,7 +1,6 @@
 #include "kds/base/crash_point.hpp"
 
 #include <signal.h>
-#include <string.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -61,6 +60,10 @@ std::string_view ArmedCrashPoint() noexcept { return ArmOnce().name; }
 
 void CrashPointHit(std::string_view name) noexcept {
     const CrashPointArm& arm = ArmOnce();
+    // **The empty-name test is what makes a malformed spec fail safe**, not
+    // defensive padding: `KDS_CRASH_POINT=:5` parses to an empty name with
+    // ordinal 5, and without this line it would arm an unnamed point that
+    // no call site can match but that a future empty `name` argument could.
     if (arm.name.empty() || arm.name != name) return;
     if (hits.fetch_add(1, std::memory_order_relaxed) + 1 != arm.ordinal) return;
 

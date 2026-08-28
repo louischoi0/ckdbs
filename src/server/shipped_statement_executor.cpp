@@ -809,6 +809,17 @@ void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
         }
         if (was_prepared && in_doubt_ > 0) --in_doubt_;
         enrolled_.erase(it);
+        // RP7's sixth protocol point, and the only one that leaves the
+        // transaction **partly published**: this participant's half is
+        // durably committed (`DispatchAsync` parked on `IsDurable` before
+        // this callback ran) and the coordinator has not been acknowledged.
+        // At ordinal 1 the *other* participant is still merely prepared, so
+        // a restart has to reach the same answer by two different routes -
+        // redo for this half, resolution against the coordinator's stream
+        // for the other. That is the state in-doubt resolution exists for,
+        // and the only one in which a wrong recovery tears a transaction
+        // rather than rolling it back.
+        base::CrashPointHit("participant.decide_applied_preack");
         if (reply) reply(Status::OK());
         return;
     }
