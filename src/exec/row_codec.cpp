@@ -172,9 +172,28 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                 return Status::InvalidArgument("column '" + NameOf() + "' expects a string");
             }
             if (val.str_val.size() > cell.size()) {
-                return Status::InvalidArgument("value too long for column '" + NameOf() +
-                                                "' (max " + std::to_string(cell.size()) +
-                                                " bytes)");
+                return Status::InvalidArgument("value of " +
+                                                std::to_string(val.str_val.size()) +
+                                                " byte(s) is too long for column '" + NameOf() +
+                                                "', declared char(" +
+                                                std::to_string(cell.size()) + ")");
+            }
+            // **A NUL cannot round-trip through this type, so it is refused
+            // rather than stored.** The decoder below reads back to the
+            // first zero byte, which is what makes a short value in a
+            // fixed cell readable at all; a value carrying its own NUL
+            // would come back truncated, silently. Refusing here is the
+            // truthfulness rule (CLAUDE.md): never accept a spelling and
+            // store something other than what was written. A caller that
+            // needs arbitrary bytes wants `varchar`, which carries a
+            // length and does not interpret them.
+            if (val.str_val.find('\0') != std::string::npos) {
+                return Status::InvalidArgument(
+                    "column '" + NameOf() +
+                    "' is char, whose values are read back to the first NUL byte, and this "
+                    "value contains one at offset " +
+                    std::to_string(val.str_val.find('\0')) +
+                    "; use varchar for values with embedded NULs");
             }
             // Zero the whole cell before writing, for the reason
             // EncodeInlineCell() does: an overwrite must not leave the tail

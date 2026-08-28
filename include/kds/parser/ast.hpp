@@ -261,8 +261,22 @@ struct ColumnDef {
     std::uint32_t precision = 0;
     std::uint32_t scale = 0;
 
+    // `CHAR(n)` / `VARCHAR(n)`'s single argument, as written
+    // (docs/spec/types.md §2b). **A separate pair from `precision`/`scale`
+    // above, deliberately**: one number in one field means one thing, so a
+    // reader of this AST never has to know the type name to know what it is
+    // looking at. Left unresolved and unbounded like `type_name`, for the
+    // reason the decimal pair is.
+    bool has_width = false;
+    std::uint32_t width = 0;
+
     // Where the type name was written, for a refusal that can point at it.
     std::uint32_t type_byte_offset = 0;
+
+    // Where the type's argument list opened, for a refusal that has to
+    // point at the argument rather than at the name - a width outside the
+    // legal range is wrong *there*, not where the type was spelled.
+    std::uint32_t type_arg_byte_offset = 0;
 
     // Nullability, D1 of `docs/workplan-null.md`: NOT NULL unless the
     // column says `NULL` - so a statement that says nothing means exactly

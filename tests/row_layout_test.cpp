@@ -81,6 +81,52 @@ TEST(RowLayoutTest, AVarcharCostsTheSameWhateverTheWidthIsSetTo) {
     }
 }
 
+TEST(RowLayoutTest, AVarcharWithADeclaredWidthCostsThatWidth) {
+    // varchar(N): N *is* this column's kds.inline_cell_width, so the cell
+    // costs N wherever the instance sits.
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "s", kTypeValVarchar, 128)});
+
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok()) << layout.status().message();
+    EXPECT_EQ(layout.value().row_size, kKeystoneWordSize + 128);
+}
+
+TEST(RowLayoutTest, ALegacyVarcharColumnReadsAtTheInstanceWidth) {
+    // **The compatibility claim, in one assertion.** A column carrying
+    // `len = 0` - which is every varchar written before varchar(N) existed -
+    // and one declaring exactly the instance width produce byte-identical
+    // layouts. That is what lets an existing file mount unchanged with no
+    // format bump.
+    Schema legacy = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "s", kTypeValVarchar, 0)});
+    Schema declared = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "s", kTypeValVarchar, kW)});
+
+    auto a = RowLayout::Build(legacy, kW);
+    auto b = RowLayout::Build(declared, kW);
+    ASSERT_TRUE(a.ok() && b.ok());
+    EXPECT_EQ(a.value().row_size, b.value().row_size);
+    EXPECT_EQ(a.value().offsets, b.value().offsets);
+    EXPECT_EQ(a.value().row_size, kKeystoneWordSize + kW);
+}
+
+TEST(RowLayoutTest, TwoVarcharsOfDifferentWidthsSitAtTheirOwnOffsets) {
+    // The whole point of a per-column width: two tagged cells in one row
+    // that are not the same size, with the null bitmap still landing after
+    // the last of them.
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "narrow", kTypeValVarchar, 16),
+                              Col(2, "wide", kTypeValVarchar, 256),
+                              Col(3, "bare", kTypeValVarchar, 0)});
+    schema.columns[3].notnull = false;  // one nullable column: one bitmap byte
+
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok()) << layout.status().message();
+    const RowLayout& l = layout.value();
+    EXPECT_EQ(l.offsets[1], kKeystoneWordSize);
+    EXPECT_EQ(l.offsets[2], kKeystoneWordSize + 16);
+    EXPECT_EQ(l.offsets[3], kKeystoneWordSize + 16 + 256);
+    EXPECT_EQ(l.null_bitmap_bytes, 1u);
+    EXPECT_EQ(l.row_size, kKeystoneWordSize + 16 + 256 + kW + 1);
+}
+
 TEST(RowLayoutTest, ACharColumnKeepsItsDeclaredWidth) {
     // `char` was already fixed-width by declaration - the one variable
     // type that never needed a tagged cell.
@@ -187,6 +233,47 @@ TEST(RowLayoutTest, AnOutOfRangeCellWidthIsRefused) {
     EXPECT_FALSE(RowLayout::Build(schema, 0).ok());
     EXPECT_FALSE(RowLayout::Build(schema, storage::kMinInlineCellWidth - 1).ok());
     EXPECT_FALSE(RowLayout::Build(schema, storage::kMaxInlineCellWidth + 1).ok());
+}
+
+// ---- The catalog's own door (VC-A2) --------------------------------------
+
+TEST(CheckDeclarableColumnTypesTest, ADeclaredVarcharWidthOutsideTheBoundsIsRefused) {
+    // **The one thing `RowLayout::Build` does not catch.** Build accepts an
+    // 8-byte varchar cell happily - it is a width, and a positive one - and
+    // the relation then refuses every INSERT, because the tagged cell needs
+    // 13 bytes for a spilled descriptor. So a schema arriving by a door the
+    // dispatcher does not guard has to be refused here or not at all.
+    for (std::uint32_t bad : {std::uint32_t{1}, storage::kMinInlineCellWidth - 1,
+                              storage::kMaxInlineCellWidth + 1}) {
+        Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "s", kTypeValVarchar, bad)});
+        Status checked = CheckDeclarableColumnTypes(schema);
+        EXPECT_FALSE(checked.ok()) << "width " << bad << " was accepted";
+        EXPECT_EQ(checked.code(), StatusCode::kInvalidArgument);
+        // Build is not the backstop, which is why this check exists.
+        EXPECT_TRUE(RowLayout::Build(schema, kW).ok()) << "width " << bad;
+    }
+}
+
+TEST(CheckDeclarableColumnTypesTest, ABareVarcharAndALegalDeclaredWidthBothPass) {
+    // `len = 0` is not an unset width to be validated - it is the
+    // instance's, which every pre-2026-08-28 column carries. Checking it
+    // against the bounds would refuse every existing relation.
+    for (std::uint32_t len : {std::uint32_t{0}, storage::kMinInlineCellWidth,
+                              storage::kDefaultInlineCellWidth,
+                              storage::kMaxInlineCellWidth}) {
+        Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "s", kTypeValVarchar, len)});
+        EXPECT_TRUE(CheckDeclarableColumnTypes(schema).ok()) << "len " << len;
+    }
+}
+
+TEST(CheckDeclarableColumnTypesTest, AZeroWidthCharIsLeftToTheLayout) {
+    // Deliberately *not* refused here: `Build` runs on the same schema seven
+    // lines later in CreateTable and already refuses it, so a second arm
+    // would be a third wording of one condition. This test exists to record
+    // the division, so removing Build's refusal cannot silently open a hole.
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "c", kTypeValChar, 0)});
+    EXPECT_TRUE(CheckDeclarableColumnTypes(schema).ok());
+    EXPECT_FALSE(RowLayout::Build(schema, kW).ok());
 }
 
 // ---- The null bitmap (null.md §2, §6) --------------------------------

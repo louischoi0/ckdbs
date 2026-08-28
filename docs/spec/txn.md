@@ -140,7 +140,7 @@ chain instead.
 |---|---|---|
 | 0 | 8 | `prior_trx_id` — writer of the version being superseded |
 | 8 | 8 | `prior_undo_ptr` — its own predecessor; `kNoUndoPtr` ends the chain |
-| 16 | 4 | `target_page_id` — the heap page holding the tuple |
+| 16 | 4 | `target_page_id` — the heap page holding the tuple, or the **kVarHeap** page holding the value, for `kVarHeapAppend` |
 | 20 | 2 | `target_slot` |
 | 22 | 2 | `image_len` |
 | 24 | 1 | `type` — `UndoRecordType` |
@@ -157,8 +157,35 @@ exactly `kUndoRecordHeaderSize + image_len`.
 UndoRecordType: kInvalid = 0
                 kOverwrite = 1    image = the full prior tuple payload
                 kDeleteMark = 2   image empty - a delete-mark changes no bytes
-                kInsert = 3       image empty - DEFINED, NOT WRITTEN (§3.6)
+                kInsert = 3       image empty - written since RV10 (§3.6)
+                kVarHeapAppend = 4  image empty - a spilled value this
+                                    transaction wrote; compensated by
+                                    releasing its slot (2026-08-28)
 ```
+
+**`kVarHeapAppend`'s target is a value, not a row**, and that is the one
+thing separating it from its three siblings: `target_page_id` names a
+`kVarHeap` page, so the pk identity check §4a requires of every other
+compensation neither applies nor could run — a `heap::PageView` over
+var-heap bytes reads a slot directory that is not there. Both compensation
+paths, `TransactionManager::Compensate` and `txn::RecoveryUndo`, therefore
+handle it **before** the page is opened as a heap page. `pk` is still
+carried, for the diagnostic, and is never checked.
+
+It exists for RV10's reason verbatim: an undo record is a link in the
+writing transaction's chain, so a write that produced none would break the
+chain and orphan everything the transaction did before it. What it closes
+in addition is older — `rule-fixed-length-tuple.md` §5 used to hand a crash
+*between* a `VARHEAP_APPEND` and its tuple write to "purge's reclamation
+sweep", which never existed; the append is in the loser's own chain now, so
+undo reaches it like any other write.
+
+**The type list is a whitelist in code, in one place.** `IsWritableUndoRecordType`
+(`undo_page.hpp`) is consulted by both the appender and the decoder. They
+carried separate lists until 2026-08-28, and the cost of that was
+immediate: `kVarHeapAppend` was admitted by one and refused by the other, so
+recovery failed on a record the engine had just written — `wal::kMaxAssignedRecordType`'s
+failure one layer down, found by `ckdbs-sim` at seed 4.
 
 **Known ceiling.** Undo overhead is 32 + 24 + 28 = 84 bytes against the heap
 page's 32 + 16 + 5 + 20 + 4 = 77, so a tuple within ~7 bytes of the maximum heap
@@ -464,10 +491,16 @@ recovery-driven rollback later reuses this code path verbatim:
 | insert | `RetireSlot` + clear the Waystone entry | `SLOT_RETIRE` |
 | overwrite | `OverwriteTuple(slot, image, prior_trx_id, prior_undo_ptr)` | `HEAP_OVERWRITE` |
 | delete-mark | `ClearDeleteMark(slot, prior_trx_id, prior_undo_ptr)` | `HEAP_DELETE_MARK` |
+| var-heap append | `varheap::PageRelease(slot)` — the value dies with the version that wrote it | `VARHEAP_RELEASE` |
 
 Then `TXN_ABORT`, with no durability wait — a transaction whose abort record did
 not survive is a transaction with no commit record, which recovery rolls back
 anyway. Undo pages are not freed; purge is a non-goal (§9).
+
+**`VARHEAP_RELEASE` splits its envelope's `txn_id` exactly as `SLOT_RETIRE`
+does**, and for the same reason: a rollback compensation carries the
+aborting transaction's id, because analysis must see the rollback; a purge
+drain carries `kNoTxnId`, because no transaction owns it.
 
 **Amendment to `SLOT_RETIRE`'s `txn_id` semantics.** `payload.hpp` currently
 states that no transaction owns a `SLOT_RETIRE`, so its envelope carries

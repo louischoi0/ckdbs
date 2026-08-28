@@ -295,6 +295,24 @@ StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in
     return decoded;
 }
 
+StatusOr<std::size_t> EncodeVarHeapRelease(std::span<std::byte> out,
+                                           const VarHeapReleasePayload& fields) {
+    if (Status s = CheckOutputSize(out, kVarHeapReleasePayloadSize, "VARHEAP_RELEASE"); !s.ok()) {
+        return s;
+    }
+    Store<std::uint16_t>(out, kVarHeapReleaseSlotOffset, fields.slot);
+    return kVarHeapReleasePayloadSize;
+}
+
+StatusOr<VarHeapReleasePayload> DecodeVarHeapRelease(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kVarHeapReleasePayloadSize, "VARHEAP_RELEASE"); !s.ok()) {
+        return s;
+    }
+    VarHeapReleasePayload fields{};
+    fields.slot = Load<std::uint16_t>(in, kVarHeapReleaseSlotOffset);
+    return fields;
+}
+
 // ---- INDEX_INSERT --------------------------------------------------------
 
 StatusOr<std::size_t> EncodeIndexInsert(std::span<std::byte> out,

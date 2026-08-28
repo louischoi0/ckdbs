@@ -538,9 +538,10 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPageHandoff), 25);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAnchorUpdate), 26);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kTxnPrepare), 27);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kVarHeapRelease), 28);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 27);
+    EXPECT_EQ(kMaxAssignedRecordType, 28);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));
@@ -549,6 +550,7 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kPageHandoff)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAnchorUpdate)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kTxnPrepare)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kVarHeapRelease)));
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
     EXPECT_STREQ(RecordTypeName(RecordType::kUndoWrite), "UNDO_WRITE");
     EXPECT_STREQ(RecordTypeName(RecordType::kFree), "FREE");
@@ -557,6 +559,31 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_STREQ(RecordTypeName(RecordType::kPageHandoff), "PAGE_HANDOFF");
     EXPECT_STREQ(RecordTypeName(RecordType::kAnchorUpdate), "ANCHOR_UPDATE");
     EXPECT_STREQ(RecordTypeName(RecordType::kTxnPrepare), "TXN_PREPARE");
+    EXPECT_STREQ(RecordTypeName(RecordType::kVarHeapRelease), "VARHEAP_RELEASE");
+}
+
+// ---- VARHEAP_RELEASE (VC-B1) ---------------------------------------------
+
+TEST(WalPayloadTest, VarHeapReleaseRoundTripsThroughTheEnvelope) {
+    // **Through the envelope, not only through the payload codec.** That is
+    // the whole point of this shape here: `EncodeRecord` refuses any type
+    // above `kMaxAssignedRecordType`, and a payload-only test would pass
+    // for a type nothing can actually write - which is exactly how
+    // HEAP_DELETE_UNMARK shipped unwritable (record.hpp).
+    const VarHeapReleasePayload fields{4242};
+
+    const auto record = ThroughEnvelope(RecordType::kVarHeapRelease, [&](std::span<std::byte> out) {
+        return EncodeVarHeapRelease(out, fields);
+    });
+    auto decoded = DecodeVarHeapRelease(PayloadOf(record));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().slot, fields.slot);
+}
+
+TEST(WalPayloadTest, VarHeapReleaseRefusesAShortBuffer) {
+    std::array<std::byte, kVarHeapReleasePayloadSize - 1> tight{};
+    EXPECT_FALSE(EncodeVarHeapRelease(tight, VarHeapReleasePayload{1}).ok());
+    EXPECT_FALSE(DecodeVarHeapRelease(tight).ok());
 }
 
 TEST(WalPayloadTest, AnchorUpdateRoundTripsThroughTheEnvelope) {

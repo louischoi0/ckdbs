@@ -817,6 +817,27 @@ off is a catalog act: `DROP INDEX`.
 - **The index-only scan**, gated entirely on a visibility witness (§7). Do not
   attempt a partial one; the same instruction `txn.md` §8 gives about
   recovery, and for the same reason.
+
+  **A second gate joined it 2026-08-28, and it is not about visibility.** A
+  covered `varchar` column's entry carries the `kSpilled` **pointer**
+  verbatim (`index_maintain.hpp`, `index_ddl.cpp` — deliberately, so a
+  spilled covered value resolves from the base row exactly as it would
+  have). Since the var-heap gained a release, that pointer can now name a
+  **released** slot: index entries are never compensated on rollback (no
+  `TrailAction` names one — IX1's superset rule, and entry reclamation is
+  the open item above), so a rolled-back INSERT leaves an entry pointing at
+  a dead value.
+
+  It is harmless *today*, and only because `CoveredRowSurvives`
+  (`step_vm.cpp`) refuses to resolve a spilled covered value and the base
+  read filters the retired row — measured: `index_scanned=1
+  index_resolved=1 examined=0 matched=0`, answers correct. **An index-only
+  scan is exactly the change that would follow that pointer**, and following
+  it would read a value the engine let go. So the witness is not the only
+  thing an index-only scan needs: it also needs covered spilled values to be
+  either excluded, re-resolved through the base row, or kept alive by
+  something that knows an entry references them. Recorded here rather than
+  discovered there.
 - **`UNIQUE`** (IX11), and with it whether a unique index probe could ever be
   **lookup-class** for Waystone (§8) — which would be the first amendment to
   invariant 9's trust table since it was written, and wants the argument in

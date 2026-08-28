@@ -197,6 +197,17 @@ Status ApplyVarHeapAppend(std::span<std::byte, kPageSize> page, const DecodedRec
     return varheap::PageWriteAt(page, decoded.value().fields.slot, decoded.value().value);
 }
 
+Status ApplyVarHeapRelease(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    auto decoded = DecodeVarHeapRelease(record.payload);
+    if (!decoded.ok()) {
+        return decoded.status();
+    }
+    // No re-application test, because the applier *is* one (PageRelease is
+    // idempotent). Every other applier here needs one because it writes
+    // bytes that differ from what a second application would write.
+    return varheap::PageRelease(page, decoded.value().slot);
+}
+
 Status ApplyIndexInsert(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
     auto decoded = DecodeIndexInsert(record.payload);
     if (!decoded.ok()) {
@@ -403,6 +414,9 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                 break;
             case RecordType::kVarHeapAppend:
                 applied = ApplyVarHeapAppend(page, record);
+                break;
+            case RecordType::kVarHeapRelease:
+                applied = ApplyVarHeapRelease(page, record);
                 break;
             case RecordType::kIndexInsert:
                 applied = ApplyIndexInsert(page, record);

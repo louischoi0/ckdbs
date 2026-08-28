@@ -134,6 +134,16 @@ Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
                                     " bytes exceeds the " + std::to_string(kMaxValueSize) +
                                     " a page can hold");
     }
+    // The same guard `PageRelease` carries, and for the same reason: a heap
+    // page holds `nr_slots` at the body offset this file reads, so a
+    // mis-addressed redo would pass every bound below and write a value
+    // into a heap page's header. Redo's input is a log record, which a
+    // crash can leave naming whatever it likes.
+    if (storage::RawPageType(page) != static_cast<std::uint8_t>(PageType::kVarHeap)) {
+        return Status::Corruption("var-heap write names page type " +
+                                  std::to_string(storage::RawPageType(page)) +
+                                  ", not a kVarHeap page; this record is not this page's");
+    }
 
     VarHeapPageHeaderFields h = ReadHeader(page);
 
@@ -148,6 +158,21 @@ Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
     // this a verified no-op rather than a rewrite.
     if (slot < h.nr_slots) {
         auto existing = PageRead(page, slot);
+        // **Already released**, which is a no-op: the value this record
+        // would restore is one a later record killed.
+        //
+        // Not reachable today - for redo to apply an append at L1 the page
+        // must be older than L1, and a tombstone in that image would mean a
+        // release at L2 > L1 was applied and stamped, so the page cannot be
+        // older than L1 after all. The one crack is a release whose
+        // `StampPageLsn` failed after the tombstone went in, and the answer
+        // there is this same no-op.
+        //
+        // It is kept as **forward protection**, not as dead weight: page
+        // recycling is exactly what stops a slot number from identifying
+        // one value across a page's lifetime, and this is where a stale
+        // append would land if it did.
+        if (existing.status().code() == StatusCode::kNotFound) return Status::OK();
         if (!existing.ok()) {
             return existing.status();
         }
@@ -189,6 +214,17 @@ StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSi
     }
 
     VarHeapSlotFields s = ReadSlot(page, slot);
+    // Released, and that is **NotFound rather than Corruption** - the one
+    // distinction this whole status choice exists for. Under the lifetime
+    // model no live traversal can reach a tombstone: a slot is released only
+    // when the version owning it is dead, and a dead version is unreachable
+    // by every live and future read. So arriving here is not damage, and a
+    // checker walking a delete-marked row must be able to say "released, as
+    // expected" instead of reporting a corruption it invented.
+    if (s.offset == kReleasedSlotOffset) {
+        return Status::NotFound("var-heap slot " + std::to_string(slot) +
+                                 " was released; its value is dead");
+    }
     // Never size a read from an extent the page disagrees with. A value is
     // committed data, so a slot pointing outside the page is corruption to
     // report, not a range to clamp.
@@ -198,6 +234,53 @@ StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSi
                                    ") outside the page's value area");
     }
     return page.subspan(s.offset, s.length);
+}
+
+Status PageRelease(std::span<std::byte, kPageSize> page, std::uint16_t slot) {
+    // **The page must be the record's** (redo's ANCHOR_UPDATE arm's stance,
+    // src/wal/redo.cpp): a record that is not this page's is refused, never
+    // applied. Not defensive politeness - a heap page carries `nr_slots` at
+    // the *same* body offset this file reads (heap_page.hpp
+    // kHeaderNrSlotsOffset == 2), so a mis-addressed release passes the
+    // bound below and writes two zero bytes over `min_key` or a slot
+    // pointer, breaking invariant 2 silently. The input is untrusted where
+    // it matters most: `RecoveryUndo::Compensate` takes `target_page_id`
+    // off an undo page a crash may have torn, and every other undo type is
+    // saved from that by the pk identity check this one skips.
+    if (storage::RawPageType(page) != static_cast<std::uint8_t>(PageType::kVarHeap)) {
+        return Status::Corruption("var-heap release names page type " +
+                                  std::to_string(storage::RawPageType(page)) +
+                                  ", not a kVarHeap page; this record is not this page's");
+    }
+
+    VarHeapPageHeaderFields h = ReadHeader(page);
+    if (slot >= h.nr_slots) {
+        // A record naming a slot this page does not have is not this page's
+        // record - the same reading PageWriteAt gives, and the same refusal.
+        return Status::Corruption("var-heap release names slot " + std::to_string(slot) +
+                                  " on a page holding " + std::to_string(h.nr_slots) +
+                                  "; slots are dense, so this record is not this page's");
+    }
+
+    VarHeapSlotFields s = ReadSlot(page, slot);
+    // Already released: silently OK, because a crash-restarted rollback
+    // replays this and a compensation that failed the second time would
+    // turn a recoverable crash into a refused mount.
+    if (s.offset == kReleasedSlotOffset) return Status::OK();
+
+    // The slot dies; the bytes do not move and are not overwritten.
+    s.offset = kReleasedSlotOffset;
+    WriteSlot(page, slot, s);
+    return Status::OK();
+}
+
+std::uint16_t PageLiveSlots(std::span<const std::byte, kPageSize> page) {
+    VarHeapPageHeaderFields h = ReadHeader(page);
+    std::uint16_t live = 0;
+    for (std::uint16_t i = 0; i < h.nr_slots; ++i) {
+        if (ReadSlot(page, i).offset != kReleasedSlotOffset) ++live;
+    }
+    return live;
 }
 
 // ---- Chain ---------------------------------------------------------------

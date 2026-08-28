@@ -53,6 +53,7 @@ const char* RecordTypeName(RecordType type) noexcept {
         case RecordType::kUndoWrite: return "UNDO_WRITE";
         case RecordType::kFree: return "FREE";
         case RecordType::kVarHeapAppend: return "VARHEAP_APPEND";
+        case RecordType::kVarHeapRelease: return "VARHEAP_RELEASE";
         case RecordType::kIndexInsert: return "INDEX_INSERT";
         case RecordType::kAssertReserve: return "ASSERT_RESERVE";
         case RecordType::kAssertCommit: return "ASSERT_COMMIT";

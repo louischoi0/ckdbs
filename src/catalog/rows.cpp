@@ -351,8 +351,12 @@ std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name) 
         return std::string(base_name) + "(" + std::to_string(DecimalPrecisionOf(col.len)) + "," +
                std::to_string(DecimalScaleOf(col.len)) + ")";
     }
-    // `char` is the other type whose declared width is part of its name.
-    if (col.type_val == kTypeValChar) {
+    // `char`, and a varchar that declared a width, are the other two types
+    // whose width is part of the name. A varchar's `len` of 0 renders bare:
+    // it means the instance's kds.inline_cell_width (row_layout.cpp), and
+    // printing that number here would report as a *column* property
+    // something the column does not have.
+    if (col.type_val == kTypeValChar || (col.type_val == kTypeValVarchar && col.len != 0)) {
         return std::string(base_name) + "(" + std::to_string(col.len) + ")";
     }
     // Every other type's width comes from its type_val, so `len` says

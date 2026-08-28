@@ -8,6 +8,7 @@
 
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/txn/varheap_release.hpp"  // a rolled-back spill is released, not retired
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
@@ -177,6 +178,32 @@ void TransactionManager::NoteOverwrite(Transaction& txn, std::uint32_t rel_oid, 
     txn.trail_.push_back(std::move(entry));
 }
 
+Status TransactionManager::NoteVarHeapAppend(Transaction& txn, std::uint32_t rel_oid,
+                                             PageId page_id, std::uint16_t slot,
+                                             std::uint64_t pk) {
+    // No prior version and no image: an append supersedes nothing, and
+    // there is nothing to restore - releasing the slot is the whole
+    // compensation. The record exists to be a link in the transaction's
+    // chain, which is RV10's argument for kInsert verbatim
+    // (undo_page.hpp).
+    UndoRecordFields rec{};
+    rec.prior_trx_id = kNoTrxId;
+    rec.prior_undo_ptr = kNoUndoPtr;
+    rec.target_page_id = page_id;  // a kVarHeap page, not a heap one
+    rec.target_slot = slot;
+    rec.type = static_cast<std::uint8_t>(UndoRecordType::kVarHeapAppend);
+    if (auto ptr = AppendUndo(txn, rec, pk, {}); !ptr.ok()) return ptr.status();
+
+    TrailEntry entry;
+    entry.action = TrailAction::kVarHeapAppend;
+    entry.rel_oid = rel_oid;
+    entry.page_id = page_id;
+    entry.slot = slot;
+    entry.pk = pk;
+    txn.trail_.push_back(std::move(entry));
+    return Status::OK();
+}
+
 void TransactionManager::NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
                                         std::uint16_t slot, std::uint64_t pk,
                                         std::uint64_t prior_trx_id,
@@ -219,6 +246,38 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
 
 Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                                       const RowLocator& locate_row) {
+    // ---- The var-heap arm, before everything else ------------------------
+    //
+    // A spilled value is compensated by releasing its slot, and **nothing
+    // below applies to it**: the address names a kVarHeap page, so there is
+    // no Keystone word to probe, no row that could have moved, and no
+    // `heap::PageView` that may legally be built over those bytes. Handled
+    // here rather than as a fourth case in the switch, because the switch
+    // is already past two things this action must not do.
+    //
+    // Idempotent, like every compensation: `PageRelease` answers OK on a
+    // slot already released, so a crash mid-rollback replays this safely
+    // (recovery_undo.hpp - no CLR).
+    if (entry.action == TrailAction::kVarHeapAppend) {
+        // `trx_id`, not kNoTxnId, on SLOT_RETIRE's argument (txn.md §6): a
+        // rollback compensation is owned by the aborting transaction and
+        // must be visible to recovery's analysis phase.
+        auto released = ReleaseVarHeapSlot(store_, wal_, trx_id, entry.page_id, entry.slot);
+        if (!released.ok()) return released.status();
+        // **A live rollback cannot legitimately find the slot missing.**
+        // This process appended it moments ago, so its absence is a defect
+        // here and not, as it is under recovery, a redo that never ran.
+        // Reported rather than skipped, for the reason the no-locator
+        // branch below reports: a compensation that silently does nothing
+        // is indistinguishable from one that worked.
+        if (released.value() == ReleaseOutcome::kNothingToRelease) {
+            return Status::Corruption("rollback: var-heap slot " + std::to_string(entry.slot) +
+                                      " on page " + std::to_string(entry.page_id) +
+                                      " is not there to release");
+        }
+        return Status::OK();
+    }
+
     // ---- Where the row is *now* -----------------------------------------
     //
     // The trail recorded an address, and a btree leaf division can have

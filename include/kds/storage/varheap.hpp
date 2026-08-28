@@ -20,8 +20,8 @@
 //
 // **Values are immutable per version.** An append writes `{len, bytes}` and
 // returns a pointer; nothing is ever rewritten and nothing is ever moved.
-// There is deliberately no Update() and no Free(). Four things fall out of
-// that one rule, and they are the rationale rather than side effects:
+// There is deliberately no Update(). Four things fall out of that one rule,
+// and they are the rationale rather than side effects:
 //
 //   - MVCC correctness is free. An old-version reader follows an old
 //     pointer to bytes that *cannot* have changed, so there is nothing to
@@ -32,12 +32,30 @@
 //   - The class is relayout-exempt by construction. The physical optimizer
 //     has no reason to touch a kVarHeap page, so it never will.
 //   - Reclamation is not new machinery: it rides on purge. When a version
-//     dies its values die with it. (Nothing purges yet, so nothing is
-//     reclaimed yet - see the status note below.)
+//     dies its values die with it.
+//
+// ---- The one operation that ends a value: Release() ----------------------
+//
+// This file said "no Update() and no **Free()**" until 2026-08-28, and
+// nothing reclaimed. `PageRelease` is that gap closed, and it weakens no
+// line above it - its contract is stated once, on its own declaration
+// below.
+//
+// **Who may release, and when, is not this layer's decision.** A version's
+// slots die when the version does: at rollback, or when the writer that
+// superseded or deleted it falls below `ReadHorizon()`. This file only
+// performs it, exactly as it performs an append without deciding what
+// spills. `docs/spec/txn.md` §3.3 and §6 own the lifetime.
+//
+// A page whose every slot is a tombstone holds nothing reachable and is
+// **reformatted in place** to become an append target again - which is why
+// there is no free list here and no call into the free map: the chain stops
+// growing without either.
 //
 // The accepted cost, recorded rather than hidden: churn-heavy string
-// updates consume space until purge catches up, which makes purge cadence a
-// capacity input rather than a background detail.
+// updates consume space until the release drains, which makes drain cadence
+// a capacity input rather than a background detail. And a crash forgets the
+// pending-release set, leaking those slots until a mount-time sweep exists.
 //
 // ---- Authoritative, not advisory -----------------------------------------
 //
@@ -110,15 +128,27 @@ inline constexpr std::uint16_t kHeaderFlagInitialized = 0x1;
 
 // ---- Slot directory ------------------------------------------------------
 //
-// Two fields, and no flags: there is no dead slot and no delete-mark here,
-// because a value is never individually removed. Whatever this file would
-// have used a flags byte for is a lifetime question, and a value has no
-// lifetime of its own.
+// Two fields, and no flags - including for the lifetime a slot gained in
+// 2026-08-28, which needed no flags byte because a released slot is
+// expressible in the field the format already had (see `offset` below). A
+// value still has no lifetime of its own; it has its owner's.
 
 struct VarHeapSlotFields {
-    std::uint16_t offset;  // absolute page offset of the value bytes
-    std::uint16_t length;  // value length in bytes
+    // Absolute page offset of the value bytes, or **0 for a released
+    // slot**. Zero is an unambiguous tombstone rather than a chosen
+    // sentinel: a live value's offset is never below the page header, so no
+    // legal value can carry it. That is what let a lifetime arrive here
+    // without a format change or a flags byte.
+    std::uint16_t offset;
+    // Value length in bytes. Kept across a release, so a tombstone still
+    // says how much it held.
+    std::uint16_t length;
 };
+
+// The offset value that marks a released slot. Named rather than spelled
+// `0` at each site, because "the slot is dead" and "the offset happens to
+// be zero" must not be two readings of one literal.
+inline constexpr std::uint16_t kReleasedSlotOffset = 0;
 
 inline constexpr std::size_t kSlotOffsetOffset = 0;
 inline constexpr std::size_t kSlotLengthOffset = 2;
@@ -214,6 +244,32 @@ Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
 // is out of range or whose extent does not lie inside the page.
 StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSize> page,
                                                std::uint16_t slot);
+
+// Tombstones `slot`: its value is dead and its bytes are no longer
+// reachable.
+//
+// **Writes a slot, never a value.** The value's bytes stay exactly where
+// they are, so invariant 14 holds to the letter - a released value is
+// *dead*, not moved and not rewritten.
+//
+// **Idempotent.** Releasing a released slot writes the same zero, which is
+// what makes it legal both as a rollback compensation replayed after a
+// crash (`recovery_undo.hpp` - no CLR) and as a redo application.
+//
+// **Frees no space.** Slots are dense and values are packed from the tail,
+// so one dead value in a live page is a hole nothing can use. Space comes
+// back a whole page at a time, when every slot is a tombstone and the page
+// is reformatted - which is what `PageLiveSlots` is for.
+//
+// Fails with Corruption for a page that is not a kVarHeap page, and for a
+// slot past this page's directory - both meaning "this record is not this
+// page's". Never for a slot already released.
+Status PageRelease(std::span<std::byte, kPageSize> page, std::uint16_t slot);
+
+// How many of the page's slots still hold a value. `0` on a page whose
+// `PageSlotCount` is non-zero means every value it ever held is dead, and
+// the page can be reformatted in place and re-used.
+std::uint16_t PageLiveSlots(std::span<const std::byte, kPageSize> page);
 
 std::uint16_t PageSlotCount(std::span<const std::byte, kPageSize> page);
 std::uint16_t PageFreeSpace(std::span<const std::byte, kPageSize> page);

@@ -8,6 +8,7 @@
 
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/txn/varheap_release.hpp"  // a loser's spill is released, not retired
 #include "kds/wal/payload.hpp"
 
 namespace kds::txn {
@@ -30,6 +31,41 @@ std::optional<std::uint64_t> PkAt(heap::PageView& view, std::uint16_t slot) {
 
 Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
                                 const UndoVersion& rec) {
+    // ---- The var-heap arm, before the page is read as a heap page --------
+    //
+    // A loser's spill: the record names a kVarHeap slot, not a row, so
+    // there is no pk at the address and the identity check below neither
+    // applies nor could run - `heap::PageView` over var-heap bytes reads a
+    // slot directory that is not there. Releasing it is the whole
+    // compensation.
+    //
+    // **This is what closes the orphan `rule-fixed-length-tuple.md` §5 used
+    // to hand to a sweep**: a crash between VARHEAP_APPEND and the tuple
+    // write leaves a value nothing points at, and the append is now a link
+    // in the loser's own chain, so undo reaches it like any other write.
+    if (rec.type == UndoRecordType::kVarHeapAppend) {
+        auto released =
+            ReleaseVarHeapSlot(store, wal_, txn_id, rec.target_page_id, rec.target_slot);
+        if (!released.ok()) {
+            return released.status().WithContext("undo: var-heap page " +
+                                                 std::to_string(rec.target_page_id));
+        }
+        // **The redo that never ran.** This ordering is phase B's own:
+        // the UNDO_WRITE is written before the PAGE_INIT/VARHEAP_APPEND
+        // that fill the slot, so a log whose readable prefix ends between
+        // them leaves this chain naming a slot redo never created. An
+        // append that was not redone has nothing to undo, and refusing the
+        // mount over it would fail a recovery the WAL is behaving
+        // correctly in - which is the same reading kInsert's branch below
+        // gives to a slot that reads back nothing.
+        if (released.value() == ReleaseOutcome::kNothingToRelease) {
+            ++already_done_;
+            return Status::OK();
+        }
+        ++compensations_;
+        return Status::OK();
+    }
+
     auto bytes = store.Get(rec.target_page_id);
     if (!bytes.ok()) {
         return bytes.status().WithContext("undo: page " + std::to_string(rec.target_page_id) +

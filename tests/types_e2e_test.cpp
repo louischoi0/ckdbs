@@ -414,6 +414,52 @@ TEST(TypesEndToEnd, AnOutOfRangeInsertIsRefusedAndWritesNothing) {
 // all anything consumes, so everything below runs with no subsystem taught
 // the type exists beyond those four.
 
+// ---- char(N) and varchar(N), end to end (VC-A5, VC-A6) -------------------
+
+TEST(TypesEndToEnd, TheCharacterTypesRenderTheWidthTheyWereDeclaredWith) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE decl (id int64, code char(8), sym varchar(32), "
+                     "note varchar, flag char, price decimal(10, 2))")
+                  .substr(0, 7),
+              "CREATED");
+    const std::string described = db.Run("DESCRIBE decl");
+
+    EXPECT_NE(described.find("name=code type=char(8)"), std::string::npos) << described;
+    EXPECT_NE(described.find("name=sym type=varchar(32)"), std::string::npos) << described;
+    EXPECT_NE(described.find("name=price type=decimal(10,2)"), std::string::npos) << described;
+    // `char` is char(1), so it renders the width it actually got - the
+    // standard's default, and what this engine has always stored.
+    EXPECT_NE(described.find("name=flag type=char(1)"), std::string::npos) << described;
+    // A bare varchar renders **no** width: its cell is the instance's
+    // kds.inline_cell_width, which is not a property of this column and
+    // must not be reported as one.
+    EXPECT_NE(described.find("name=note type=varchar "), std::string::npos) << described;
+}
+
+TEST(TypesEndToEnd, ADeclaredWidthIsInvisibleToAValueThatFitsEitherWay) {
+    // The invisibility rule: storage is not on the wire. The same logical
+    // value written into a narrow column (where it spills) and a wide one
+    // (where it inlines) reads back identically.
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE inv (id int64, narrow varchar(16), wide varchar(512))")
+                  .substr(0, 7),
+              "CREATED");
+    const std::string value(200, 'q');
+    ASSERT_EQ(db.Run("INSERT INTO inv VALUES ('" + value + "', '" + value + "')").substr(0, 8),
+              "INSERTED");
+
+    const std::string rows = db.Run("SELECT narrow, wide FROM inv");
+    EXPECT_NE(rows.find(value + "," + value), std::string::npos)
+        << "expected the same value on both sides of the row: " << rows;
+
+    // And a predicate over the spilled side still matches, which is the
+    // half a cell width could quietly break.
+    // `\\n` and not a newline: the wire protocol is newline-delimited, so a
+    // reply's row separator is the two-character escape, as every other
+    // assertion in this file spells it.
+    EXPECT_EQ(db.Run("SELECT id FROM inv WHERE narrow = '" + value + "'"), "id\\n1");
+}
+
 TEST(TypesEndToEnd, AWideDecimalDeclaresByPrecisionAndReadsBackExactly) {
     Instance db;
     // p = 24 selects the 16-byte type from the one fact the client

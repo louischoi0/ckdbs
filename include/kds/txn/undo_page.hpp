@@ -139,7 +139,50 @@ enum class UndoRecordType : std::uint8_t {
     // wrote none would break that chain and orphan everything the
     // transaction did before it.
     kInsert = 3,
+    // Image empty. A **var-heap append**: this transaction spilled a value
+    // into `(target_page_id, target_slot)`, and rolling back releases that
+    // slot (`instructions/v2.5.0/varchar-char-architecture.md` §4.3).
+    //
+    // **The target is a value, not a row**, which is the one thing that
+    // makes this type unlike its three siblings: `target_page_id` names a
+    // kVarHeap page, so the pk identity check every other type is
+    // compensated under does not apply and must be skipped rather than
+    // failed. `pk` is still carried - it says which row's spill this was,
+    // which is what a diagnostic needs and costs nothing.
+    //
+    // It exists for the same reason kInsert does, and the argument is
+    // RV10's verbatim: an undo record is a link in the writing
+    // transaction's chain, so a write that produced none would break the
+    // chain and orphan everything the transaction did before it. Before
+    // this type, a crash between a spill and its tuple write left a value
+    // no rollback could reach, and `rule-fixed-length-tuple.md` §5 handed
+    // that orphan to a "purge reclamation sweep" that did not exist.
+    kVarHeapAppend = 4,
 };
+
+// Whether `raw` names a type this build writes and reads.
+//
+// **One predicate, two callers**, and that is the point rather than tidiness.
+// The append path and the decode path each carried their own list of
+// accepted types, so a type appended to the enum could be admitted by one
+// and refused by the other - which is precisely what happened when
+// kVarHeapAppend arrived: writes were refused with "not a writable type",
+// and after that was fixed in isolation, recovery refused the record it had
+// just written. `wal::kMaxAssignedRecordType` exists for the same failure
+// one layer up (record.hpp), and it was hand-maintained once too.
+//
+// Extend the list here when appending to the enum, and both sides move
+// together.
+constexpr bool IsWritableUndoRecordType(std::uint8_t raw) noexcept {
+    switch (static_cast<UndoRecordType>(raw)) {
+        case UndoRecordType::kOverwrite:
+        case UndoRecordType::kDeleteMark:
+        case UndoRecordType::kInsert:
+        case UndoRecordType::kVarHeapAppend: return true;
+        case UndoRecordType::kInvalid: return false;
+    }
+    return false;
+}
 
 struct UndoRecordFields {
     std::uint64_t prior_trx_id;    // writer of the version being superseded

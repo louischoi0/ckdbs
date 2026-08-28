@@ -21,8 +21,12 @@ StatusOr<std::uint32_t> RowLayout::ColumnWidth(const SysColumnRow& col,
         // Already fixed-width by declaration - the one variable-width type
         // that never needed a tagged cell.
         case kTypeValChar: return col.len;
-        // The tagged cell: one width for every value, whatever it holds.
-        case kTypeValVarchar: return inline_cell_width;
+        // The tagged cell: one width for every value, whatever it holds -
+        // and since 2026-08-28 that width is the column's when it declared
+        // one. **`len == 0` is not a missing width, it is the instance's**,
+        // which is what every varchar column written before `varchar(N)`
+        // has always carried (docs/spec/types.md §2b).
+        case kTypeValVarchar: return col.len != 0 ? col.len : inline_cell_width;
         // docs/spec/types.md TY1/TY2/TY4. All three are fixed-width by
         // construction, which is why they are expressible at all: a
         // relation's row size is a schema constant (invariant 13), so a

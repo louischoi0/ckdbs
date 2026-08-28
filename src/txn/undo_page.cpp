@@ -67,15 +67,15 @@ Status CheckRecord(const UndoRecordFields& fields, std::span<const std::byte> im
         if (Status s = UndoPtrIsPlausible(fields.prior_undo_ptr); !s.ok()) return s;
     }
     const auto type = static_cast<UndoRecordType>(fields.type);
-    if (type != UndoRecordType::kOverwrite && type != UndoRecordType::kDeleteMark &&
-        type != UndoRecordType::kInsert) {
+    if (!IsWritableUndoRecordType(fields.type)) {
         return Status::InvalidArgument("undo record type " + std::to_string(fields.type) +
                                        " is not a writable type");
     }
-    // A delete-mark changes no tuple bytes and an insert has no prior
-    // version, so neither has an image to carry. Refused rather than
-    // ignored: an image nobody will read is a disagreement between the
-    // writer and txn.md section 3.3, and the reader would never notice.
+    // A delete-mark changes no tuple bytes, an insert has no prior version,
+    // and a var-heap append supersedes nothing - none has an image to
+    // carry. Refused rather than ignored: an image nobody will read is a
+    // disagreement between the writer and txn.md section 3.3, and the
+    // reader would never notice.
     if (type != UndoRecordType::kOverwrite && !image.empty()) {
         return Status::InvalidArgument("an undo record of type " + std::to_string(fields.type) +
                                        " carries no before-image");
@@ -317,9 +317,7 @@ StatusOr<DecodedUndoRecord> UndoPageRead(std::span<const std::byte, kPageSize> p
     DecodedUndoRecord out;
     out.fields = ReadRecordHeader(page, offset);
 
-    const auto type = static_cast<UndoRecordType>(out.fields.type);
-    if (type != UndoRecordType::kOverwrite && type != UndoRecordType::kDeleteMark &&
-        type != UndoRecordType::kInsert) {
+    if (!IsWritableUndoRecordType(out.fields.type)) {
         return Status::Corruption("undo record at " + std::to_string(offset) + " has type " +
                                   std::to_string(out.fields.type));
     }

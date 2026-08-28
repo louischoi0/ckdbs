@@ -320,6 +320,109 @@ TEST(TypeDdlTest, ATypeThatTakesNoArgumentsRefusesThem) {
         << parsed.status().message();
 }
 
+// ---- char(N) and varchar(N) (VC-A1) --------------------------------------
+//
+// One argument each, and it lands in `width` rather than in `precision`:
+// one number in one field means one thing, so a reader of the AST never has
+// to know the type name to know what it is looking at.
+
+TEST(TypeDdlTest, ACharacterTypeCarriesItsWidth) {
+    auto parsed = Parse("CREATE TABLE t (id int64, code char(8), sym varchar(32))");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+
+    const ColumnDef& chr = ColumnOf(parsed, 1);
+    EXPECT_EQ(chr.type_name, "char");
+    EXPECT_TRUE(chr.has_width);
+    EXPECT_EQ(chr.width, 8u);
+    EXPECT_FALSE(chr.has_precision);
+
+    const ColumnDef& var = ColumnOf(parsed, 2);
+    EXPECT_EQ(var.type_name, "varchar");
+    EXPECT_TRUE(var.has_width);
+    EXPECT_EQ(var.width, 32u);
+}
+
+TEST(TypeDdlTest, ABareCharacterTypeSaysSoRatherThanDefaulting) {
+    // Unlike a bare `decimal`, a bare `char` or `varchar` is legal - but the
+    // parser still records that nothing was written, because the *meaning*
+    // of silence differs by type and only the catalog knows it: `char` is
+    // char(1), `varchar` is the instance's kds.inline_cell_width.
+    auto parsed = Parse("CREATE TABLE t (id int64, c char, v varchar)");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    EXPECT_FALSE(ColumnOf(parsed, 1).has_width);
+    EXPECT_EQ(ColumnOf(parsed, 1).width, 0u);
+    EXPECT_FALSE(ColumnOf(parsed, 2).has_width);
+}
+
+TEST(TypeDdlTest, ACharacterTypeTakesExactlyOneArgument) {
+    // **Each refusal carries the byte of the offending token**, which is the
+    // engine-wide rule and was the phase-A review's C-1: the arity errors
+    // route through `ExpectToken`, which used to drop the position. So this
+    // asserts the byte and not merely `!ok()` - a test that checks only
+    // failure cannot tell a good refusal from a useless one.
+    struct Case {
+        const char* sql;
+        const char* offender;  // the token the message must point at
+    };
+    // The offender is searched for **after the type's own '('**, because
+    // every statement here has an earlier comma and an earlier paren from
+    // the column list, and a test that matched those would pass on a
+    // message pointing at the wrong half of the statement.
+    for (const Case& c : {Case{"CREATE TABLE t (id int64, c char())", ")"},
+                          Case{"CREATE TABLE t (id int64, c char(8, 1))", ","},
+                          Case{"CREATE TABLE t (id int64, v varchar(32, 2))", ","},
+                          Case{"CREATE TABLE t (id int64, v varchar(32,))", ","},
+                          Case{"CREATE TABLE t (id int64, v varchar(-8))", "-"},
+                          Case{"CREATE TABLE t (id int64, v varchar('x'))", "'x'"}}) {
+        const std::string sql = c.sql;
+        auto parsed = Parse(sql);
+        ASSERT_FALSE(parsed.ok()) << sql;
+        const std::size_t at = sql.find(c.offender, sql.find("char(") + 5);
+        ASSERT_NE(at, std::string::npos) << sql;
+        const std::string want = "byte " + std::to_string(at);
+        EXPECT_NE(parsed.status().message().find(want), std::string::npos)
+            << sql << " -> " << parsed.status().message() << " (wanted " << want << ")";
+    }
+    // Unterminated: the offending token is end-of-input, so there is no
+    // offset to name and the refusal says what it found instead.
+    EXPECT_FALSE(Parse("CREATE TABLE t (id int64, v varchar(32)").ok());
+}
+
+TEST(TypeDdlTest, ADecimalsArityRefusalCarriesItsByteToo) {
+    // Same fix, a production this feature did not touch: `ExpectToken` is
+    // shared, so correcting it there fixed the decimal spelling for free.
+    // Pinned so a future call-site-local "fix" cannot regress it.
+    const std::string sql = "CREATE TABLE t (id int64, p decimal(10))";
+    auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    // The first ')' - the one closing the type's argument list, where the
+    // missing ", scale" should have been.
+    EXPECT_NE(parsed.status().message().find("byte " + std::to_string(sql.find(')'))),
+              std::string::npos)
+        << parsed.status().message();
+}
+
+TEST(TypeDdlTest, ACharacterTypesArgumentIsNotBoundedByTheParser) {
+    // The bounds are the type registry's business, exactly as the decimal
+    // pair's are: a syntax layer says the digits fit, and the catalog says
+    // whether the number is legal. So `varchar(1)` parses and is refused
+    // later, which is what keeps the refusal able to name the real rule.
+    auto parsed = Parse("CREATE TABLE t (id int64, v varchar(1))");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    EXPECT_EQ(ColumnOf(parsed, 1).width, 1u);
+}
+
+TEST(TypeDdlTest, ACharacterTypesArgumentCarriesItsOwnByte) {
+    // The argument's byte, not the type name's: a width outside the legal
+    // range is wrong where the number was written.
+    //                    0123456789...
+    const std::string sql = "CREATE TABLE t (id int64, code char(8))";
+    auto parsed = Parse(sql);
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    EXPECT_EQ(ColumnOf(parsed, 1).type_byte_offset, sql.find("char"));
+    EXPECT_EQ(ColumnOf(parsed, 1).type_arg_byte_offset, sql.find('8'));
+}
+
 TEST(TypeDdlTest, AColumnMayStillBeNamedDate) {
     // The type names are unreserved, like every keyword this parser matches
     // by text - so `date` stays available as a column name everywhere it

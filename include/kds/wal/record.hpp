@@ -211,6 +211,18 @@ enum class RecordType : std::uint8_t {
     // still rolled back at mount, which is a **known gap of this row and
     // not of the record's shape**.
     kTxnPrepare = 27,
+    // A spilled value released: the slot it occupied is tombstoned, and its
+    // bytes are dead (`varheap::PageRelease`). The var-heap's counterpart
+    // to SLOT_RETIRE, and logged for the reason VARHEAP_APPEND is - a
+    // var-heap value is authoritative data, so losing a release means a
+    // recovered database still pointing at a value the live one let go.
+    //
+    // Written from two places with two envelope conventions, exactly the
+    // split `txn.md` §6 states for SLOT_RETIRE: a **rollback** compensation
+    // carries the aborting transaction's id, because analysis must see the
+    // rollback; a **purge drain** carries `kNoTxnId`, because no
+    // transaction owns it.
+    kVarHeapRelease = 28,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A
@@ -234,7 +246,7 @@ enum class RecordType : std::uint8_t {
 // Keep this pinned to the last enumerator when appending a type; the test that
 // every named type encodes is what proves it stayed pinned.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kTxnPrepare);
+    static_cast<std::uint8_t>(RecordType::kVarHeapRelease);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

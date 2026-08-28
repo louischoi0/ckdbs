@@ -10,6 +10,7 @@
 
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
+#include "kds/storage/tagged_cell.hpp"  // varchar(N)'s bounds are the cell width's
 #include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
 #include "kds/sched/scheduler.hpp"       // SHOW META's group accounting (sched.md 4)
 
@@ -3394,6 +3395,26 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             row.notnull = col.notnull;  // D1: NOT NULL unless declared NULL
             row.cabin_policy = col.cabin_policy;
 
+            // ---- The arity refusals, both above the type arms ---------------
+            //
+            // A type that takes no arguments refuses the ones it was given,
+            // rather than dropping them: silently ignoring an argument leaves
+            // an operator believing they said something. Both are unreachable
+            // through the parser, which decides arity by the type name - so
+            // this is the catalog's own defense against a statement that
+            // arrived by another door, and the two live together because a
+            // third argument-taking type must find one place to extend, not
+            // two (the phase-A review's shape note).
+            const bool takes_precision = row.type_val == catalog::kTypeValDecimal ||
+                                          row.type_val == catalog::kTypeValDecimalWide;
+            const bool takes_width = row.type_val == catalog::kTypeValChar ||
+                                      row.type_val == catalog::kTypeValVarchar;
+            if ((col.has_precision && !takes_precision) || (col.has_width && !takes_width)) {
+                return {"ERR type '" + col.type_name + "' takes no arguments (byte " +
+                            std::to_string(col.type_arg_byte_offset) + ")",
+                        false};
+            }
+
             // ---- decimal(p, s) (docs/spec/types.md TY2, TY9) ----------------
             //
             // The pair replaces the type's default `len`, which for a decimal
@@ -3433,13 +3454,47 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 }
                 row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
                                                   static_cast<std::uint8_t>(col.scale));
-            } else if (col.has_precision) {
-                // Unreachable through the parser too, and refused rather than
-                // ignored: silently dropping the arguments would leave an
-                // operator believing they had said something.
-                return {"ERR type '" + col.type_name + "' takes no precision or scale (byte " +
-                            std::to_string(col.type_byte_offset) + ")",
-                        false};
+            } else if (row.type_val == catalog::kTypeValChar) {
+                // ---- char(N) / varchar(N) --------------------------------
+                //
+                // **The two say different things with one number**, and the
+                // difference is the whole design:
+                //
+                //   char(N)     N is the cell. The value lives in exactly
+                //               those bytes or is refused.
+                //   varchar(N)  N is *this column's* kds.inline_cell_width -
+                //               a width, not a cap. It is therefore
+                //               validated by the instance setting's own
+                //               validator and never by a second one, which
+                //               is the operator's rule and the reason no
+                //               `max_inline_char_size` exists.
+                if (col.has_width) {
+                    if (col.width == 0) {
+                        return {"ERR column '" + col.name +
+                                    "' cannot be char(0) - every column must occupy bytes (byte " +
+                                    std::to_string(col.type_arg_byte_offset) + ")",
+                                false};
+                    }
+                    row.len = col.width;
+                }
+                // Nothing said: `char` is `char(1)`, which is the sys.types
+                // default already in `row.len` and what the standard means
+                // by a bare `char`. Not refused the way a bare `decimal` is
+                // - that refusal guards a silent decision about what a
+                // stored value *means*, and char(1) decides nothing.
+            } else if (row.type_val == catalog::kTypeValVarchar) {
+                if (col.has_width) {
+                    if (Status s = storage::CheckInlineCellWidth(col.width); !s.ok()) {
+                        return {"ERR column '" + col.name + "': " + s.message() + " (byte " +
+                                    std::to_string(col.type_arg_byte_offset) + ")",
+                                false};
+                    }
+                    row.len = col.width;
+                }
+                // Nothing said: `len` stays 0, which is what every varchar
+                // column written before this version carries and what it has
+                // always meant - the instance's pinned width. That is the
+                // whole compatibility story; no file changes, no bump.
             }
 
             schema.columns.push_back(row);
@@ -3651,6 +3706,20 @@ Status CommandDispatcher::AwaitDdlDurability() {
     return wal_->SyncAll();
 }
 
+
+Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_oid,
+                                     std::uint64_t pk,
+                                     const std::vector<exec::AppendedSpill>& spills) {
+    if (scope.txn == nullptr) return Status::OK();
+    for (const exec::AppendedSpill& spill : spills) {
+        if (Status s = txn_->NoteVarHeapAppend(*scope.txn, rel_oid, spill.ptr.page_id,
+                                                spill.ptr.slot, pk);
+            !s.ok()) {
+            return s;
+        }
+    }
+    return Status::OK();
+}
 
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
@@ -4608,12 +4677,11 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // spillable schemas, so the sink is never reached.
     std::vector<std::vector<std::byte>> payloads;
     payloads.reserve(stmt.rows.size());
-    std::vector<exec::AppendedSpill> no_spills;
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         auto encoded =
             exec::EncodeRow(ta.schema, ta.layout, first.value() + k, stmt.rows[k],
-                            exec::VarHeapSink{&page_store_, ta.varheap_page_id, &no_spills,
-                                              ta.oid});
+                            exec::VarHeapSink{&page_store_, ta.varheap_page_id,
+                                              /*appended=*/nullptr, ta.oid});
         if (!encoded.ok()) {
             return {"ERR " + encoded.status().message() + " (row " + std::to_string(k + 1) + ")",
                     false};
@@ -4908,6 +4976,15 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
     }
+
+    // The spills, **after** the row's own record and not before it. The
+    // only ordering this owes is "before `LogInsert` writes the
+    // VARHEAP_APPENDs"; putting it here shortens the window in which the
+    // tuple sits in the page with no trail entry naming it, which is a row
+    // a rollback would not undo. `Abort` has no suspension point, so
+    // reversing the trail's order relative to the two writes is
+    // unobservable.
+    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return ErrorReply(s);
 
     // Logged after the page is mutated and before the client is answered -
     // see the ordering note in this class's header for why that is safe
@@ -6633,17 +6710,23 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // an UPDATE that spilled a value wrote the bytes into a var-heap page
         // and told the log nothing, leaving a recovered tuple whose cell
         // points at bytes no record describes (`docs/inflight/known-gaps.md`'s var-heap
-        // entry, hole 3). Collected only when there is a log to write them to,
-        // the same condition the index half above uses.
+        // entry, hole 3).
+        //
+        // Collected when there is a log to write them to **or a transaction
+        // to roll them back** - the second half added with VC-B3, because a
+        // live Abort needs the trail entry whether or not anything is
+        // logged, and an unlogged dispatcher that dropped the collector
+        // would leak every value a rolled-back UPDATE spilled.
         //
         // `appended_spills`, not `spills`: the enclosing scope already has a
         // `PendingSpill` list, which is the opposite direction - values this
         // statement *read* out of the var-heap to evaluate the WHERE clause.
         std::vector<exec::AppendedSpill> appended_spills;
+        const bool collect_spills = wal_ != nullptr || scope.txn != nullptr;
         auto encoded = exec::EncodeRow(
             ta.schema, ta.layout, id.value(), body,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
-                              wal_ != nullptr ? &appended_spills : nullptr, ta.oid});
+                              collect_spills ? &appended_spills : nullptr, ta.oid});
         if (!encoded.ok()) return encoded.status();
 
         // HOT-style in-place overwrite - see PageView::OverwriteTuple's
@@ -6747,6 +6830,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // never reach a pointer that resolves to nothing, and a version no
         // index entry names is a row a probe cannot find
         // (docs/spec/index.md §12.1).
+        // Each spill's rollback, before the records that make the spill
+        // durable: an UNDO_WRITE must precede the VARHEAP_APPEND it can
+        // undo, so redo alone can never resurrect an append the undo phase
+        // has no record to release (RV3's ordering rule, wal.md §11a).
+        // Outside the logging gate below because the trail entry is what a
+        // *live* Abort reads, and that is owed whether or not there is a log.
+        if (Status s = NoteSpills(scope, ta.oid, id.value(), appended_spills); !s.ok()) {
+            return s;
+        }
+
         if (wal_ != nullptr && scope.txn != nullptr) {
             // The var-heap first, for the reason the comment above gives and
             // INSERT already obeyed: the cell in the tuple record below points

@@ -15,6 +15,7 @@
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/tagged_cell.hpp"
 #include "kds/storage/varheap.hpp"
 #include "kds/storage/visit.hpp"
@@ -111,6 +112,26 @@ protected:
         });
         EXPECT_TRUE(walked.ok()) << walked.message();
         return out;
+    }
+
+    // The payload of the relation's first live row. Read off the page
+    // rather than through DecodeRow, because these tests are about the
+    // *cell* a value landed in - its tag and its width - which a decoded
+    // AstValue no longer carries.
+    bool FirstPayload(const catalog::TableAccess& access, std::vector<std::byte>& out) {
+        bool found = false;
+        Status walked = Walk(access, [&](PageId, heap::PageView& page, std::uint16_t slot)
+                                          -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (tuple.ok() && !tuple.value().deleted) {
+                out.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+                found = true;
+                return storage::VisitControl::kStop;
+            }
+            return storage::VisitControl::kContinue;
+        });
+        EXPECT_TRUE(walked.ok()) << walked.message();
+        return found;
     }
 
     std::uint32_t RowSizeOf(const std::string& table) {
@@ -330,6 +351,149 @@ TEST_F(FixedLengthTupleTest, ABareDecimalColumnIsRefusedForWantOfAScale) {
     const std::string reply = Run("CREATE TABLE bad_dec (id int64, x decimal)");
     EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
     EXPECT_NE(reply.find("no default scale"), std::string::npos) << reply;
+}
+
+// ---- char(N) and varchar(N) (VC-A2, VC-A4, VC-A6) ------------------------
+//
+// The declarations, at the catalog's door and through the codec. What binds
+// them together is the operator's rule: `varchar(N)`'s N *is* this column's
+// kds.inline_cell_width, so it is validated by the instance setting's own
+// validator and there is no second threshold anywhere.
+
+TEST_F(FixedLengthTupleTest, ADeclaredWidthReachesTheLayoutForBothCharacterTypes) {
+    ASSERT_EQ(Run("CREATE TABLE decl (id int64, code char(8), sym varchar(128))").substr(0, 7),
+              "CREATED");
+    const catalog::TableAccess* ta = Access("decl");
+    ASSERT_NE(ta, nullptr);
+    EXPECT_EQ(ta->layout.row_size, kKeystoneWordSize + 8 + 128);
+    EXPECT_EQ(ta->schema.columns[1].len, 8u);
+    EXPECT_EQ(ta->schema.columns[2].len, 128u);
+}
+
+TEST_F(FixedLengthTupleTest, ABareVarcharStillCarriesLenZeroAndTheInstanceWidth) {
+    // The compatibility story at the catalog: nothing said means `len = 0`,
+    // which is what every varchar column written before this version holds,
+    // and it reads as the instance's width.
+    ASSERT_EQ(Run("CREATE TABLE bare (id int64, sym varchar, code char)").substr(0, 7),
+              "CREATED");
+    const catalog::TableAccess* ta = Access("bare");
+    ASSERT_NE(ta, nullptr);
+    EXPECT_EQ(ta->schema.columns[1].len, 0u);
+    EXPECT_EQ(ta->schema.columns[2].len, 1u);  // `char` is char(1)
+    EXPECT_EQ(ta->layout.row_size,
+              kKeystoneWordSize + storage::kDefaultInlineCellWidth + 1);
+}
+
+TEST_F(FixedLengthTupleTest, AVarcharWidthOutsideTheInstanceBoundsIsRefusedAtCreateTable) {
+    // D2: the bounds are `CheckInlineCellWidth`'s, not a second set. The
+    // refusal therefore names the same numbers the config file's value gets,
+    // and it points at the argument's byte, not at the type name's.
+    for (const char* sql : {"CREATE TABLE w1 (id int64, s varchar(8))",
+                            "CREATE TABLE w2 (id int64, s varchar(4097))",
+                            "CREATE TABLE w3 (id int64, s varchar(0))"}) {
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.substr(0, 3), "ERR") << sql << " -> " << reply;
+        EXPECT_NE(reply.find("16"), std::string::npos) << reply;
+        EXPECT_NE(reply.find("4096"), std::string::npos) << reply;
+    }
+    // The edges themselves are legal.
+    EXPECT_EQ(Run("CREATE TABLE w4 (id int64, s varchar(16))").substr(0, 7), "CREATED");
+    EXPECT_EQ(Run("CREATE TABLE w5 (id int64, s varchar(4096))").substr(0, 7), "CREATED");
+}
+
+TEST_F(FixedLengthTupleTest, ACharOfZeroWidthIsRefusedAtCreateTable) {
+    const std::string reply = Run("CREATE TABLE c0 (id int64, c char(0))");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("char(0)"), std::string::npos) << reply;
+}
+
+TEST_F(FixedLengthTupleTest, ADeclaredWidthDecidesWhereAValueSpills) {
+    // **The feature, in one test.** Two varchar columns in one row with
+    // different widths: the same 40-byte value inlines in the wide cell and
+    // spills from the narrow one. The cells' *sizes* do not depend on the
+    // values - invariant 13 - only their tags do.
+    ASSERT_EQ(Run("CREATE TABLE sp (id int64, narrow varchar(16), wide varchar(64))").substr(0, 7),
+              "CREATED");
+    const std::string forty(40, 'x');
+    ASSERT_EQ(Run("INSERT INTO sp VALUES ('" + forty + "', '" + forty + "')").substr(0, 8),
+              "INSERTED");
+
+    const catalog::TableAccess* ta = Access("sp");
+    ASSERT_NE(ta, nullptr);
+    std::vector<std::byte> payload;
+    ASSERT_TRUE(FirstPayload(*ta, payload));
+    ASSERT_EQ(payload.size(), ta->layout.row_size);
+
+    auto narrow = storage::DecodeCell(
+        std::span<const std::byte>(payload.data() + ta->layout.offsets[1], 16));
+    ASSERT_TRUE(narrow.ok()) << narrow.status().message();
+    EXPECT_EQ(narrow.value().tag, storage::CellTag::kSpilled);
+
+    auto wide = storage::DecodeCell(
+        std::span<const std::byte>(payload.data() + ta->layout.offsets[2], 64));
+    ASSERT_TRUE(wide.ok()) << wide.status().message();
+    EXPECT_EQ(wide.value().tag, storage::CellTag::kInline);
+
+    // Both read back as the value that was written, whichever side of the
+    // boundary they landed on - the invisibility rule (§6 of the spec).
+    const std::string rows = Run("SELECT narrow, wide FROM sp");
+    EXPECT_NE(rows.find(forty), std::string::npos) << rows;
+}
+
+TEST_F(FixedLengthTupleTest, TheSpillBoundaryIsTheDeclaredWidthLessThree) {
+    // `InlineCapacity(N) = N - 3` at both ends of the legal range, observed
+    // through the catalog rather than asserted against the constant: the
+    // last value that fits inline and the first that does not, for the
+    // narrowest and the widest cell a column may declare.
+    struct Case { const char* table; std::uint32_t width; };
+    for (const Case& c : {Case{"edge_min", storage::kMinInlineCellWidth},
+                          Case{"edge_max", storage::kMaxInlineCellWidth}}) {
+        const std::string table = c.table;
+        ASSERT_EQ(Run("CREATE TABLE " + table + " (id int64, s varchar(" +
+                      std::to_string(c.width) + "))")
+                      .substr(0, 7),
+                  "CREATED")
+            << table;
+        const std::uint32_t capacity = storage::InlineCapacity(c.width);
+
+        ASSERT_EQ(Run("INSERT INTO " + table + " VALUES ('" + std::string(capacity, 'a') + "')")
+                      .substr(0, 8),
+                  "INSERTED");
+        ASSERT_EQ(Run("INSERT INTO " + table + " VALUES ('" + std::string(capacity + 1, 'b') +
+                      "')")
+                      .substr(0, 8),
+                  "INSERTED");
+
+        const catalog::TableAccess* ta = Access(table);
+        ASSERT_NE(ta, nullptr);
+        // Both rows are the relation's constant, whichever side of the
+        // boundary their value landed on - invariant 13, which is the
+        // property the tag exists to preserve.
+        for (std::size_t size : PayloadSizes(table)) {
+            EXPECT_EQ(size, ta->layout.row_size) << table;
+        }
+
+        std::vector<std::byte> payload;
+        ASSERT_TRUE(FirstPayload(*ta, payload));
+        auto at_capacity = storage::DecodeCell(
+            std::span<const std::byte>(payload.data() + ta->layout.offsets[1], c.width));
+        ASSERT_TRUE(at_capacity.ok()) << at_capacity.status().message();
+        EXPECT_EQ(at_capacity.value().tag, storage::CellTag::kInline) << table;
+        EXPECT_EQ(at_capacity.value().len, capacity) << table;
+    }
+    // And both read back as written, which is what "the boundary is
+    // invisible" means at the wire.
+    EXPECT_NE(Run("SELECT s FROM edge_min").find(std::string(
+                  storage::InlineCapacity(storage::kMinInlineCellWidth) + 1, 'b')),
+              std::string::npos);
+}
+
+TEST_F(FixedLengthTupleTest, ACharValueTooLongForItsWidthIsRefusedNamingTheWidth) {
+    ASSERT_EQ(Run("CREATE TABLE cw (id int64, code char(4))").substr(0, 7), "CREATED");
+    EXPECT_EQ(Run("INSERT INTO cw VALUES ('abcd')").substr(0, 8), "INSERTED");
+    const std::string reply = Run("INSERT INTO cw VALUES ('abcde')");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("char(4)"), std::string::npos) << reply;
 }
 
 TEST_F(FixedLengthTupleTest, TheThreeNewTypesRoundTripThroughTheCatalog) {

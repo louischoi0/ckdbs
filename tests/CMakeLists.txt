@@ -63,6 +63,7 @@ add_executable(kds_tests
     tagged_cell_test.cpp
     analyze_test.cpp
     varheap_test.cpp
+    varheap_lifetime_test.cpp
     fixed_length_tuple_test.cpp
     catalog_row_test.cpp
     waystone_page_test.cpp

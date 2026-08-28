@@ -53,8 +53,18 @@ Status Parser::ExpectKeyword(std::string_view keyword) {
 Status Parser::ExpectToken(TokenType type, std::string_view desc) {
     Token tok = lexer_.Next();
     if (tok.type != type) {
+        // **The byte, on every refusal this function produces.** CLAUDE.md's
+        // rule is engine-wide - "every refusal carries the byte position of
+        // the offending token" - and this one function is the shortest path
+        // between a grammar production and a message, so a production that
+        // routes its arity error through it used to lose the position
+        // silently. `char(8, 1)` and `decimal(8)` were both landing here
+        // without one (the phase-A review's C-1); fixing it here rather
+        // than at each call site is what keeps a future production from
+        // inheriting the same gap.
         return Status::InvalidArgument("expected " + std::string(desc) + ", got '" +
-                                        std::string(Describe(tok)) + "'");
+                                        std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
     }
     return Status::OK();
 }
@@ -423,36 +433,56 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         if (!type_name.ok()) return type_name.status();
         col.type_name = std::move(type_name.value());
 
-        // `DECIMAL(p, s)` - the one type whose declaration carries
-        // arguments (docs/spec/types.md §2). Recognized by the paren rather
-        // than by the name, so a type that takes no arguments refuses them
-        // here instead of each type name needing its own production.
+        // The types whose declaration carries arguments: `DECIMAL(p, s)`
+        // takes two (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
+        // (`instructions/v2.5.0/varchar-char-architecture.md` §3).
+        // Recognized by the paren rather than by the name, so a type that
+        // takes no arguments refuses them here instead of each type name
+        // needing its own production - and the arity is decided by the name
+        // *inside* that branch, so `char(8, 1)` fails on the comma with a
+        // byte rather than on a count nobody wrote.
         if (lexer_.Peek().type == TokenType::kLParen) {
             const std::uint32_t paren_at = lexer_.Peek().byte_offset;
-            if (!IEquals(col.type_name, "DECIMAL")) {
+            const bool takes_precision = IEquals(col.type_name, "DECIMAL");
+            const bool takes_width =
+                IEquals(col.type_name, "CHAR") || IEquals(col.type_name, "VARCHAR");
+            if (!takes_precision && !takes_width) {
                 return Status::InvalidArgument("type '" + col.type_name +
                                                 "' takes no arguments (byte " +
                                                 std::to_string(paren_at) + ")");
             }
             lexer_.Next();  // consume '('
+            col.type_arg_byte_offset = lexer_.Peek().byte_offset;
 
-            auto precision = ParseTypeArgument("precision");
-            if (!precision.ok()) return precision.status();
-            if (Status s = ExpectToken(TokenType::kComma,
-                                       "',' between a decimal's precision and scale");
-                !s.ok()) {
-                return s;
-            }
-            auto scale = ParseTypeArgument("scale");
-            if (!scale.ok()) return scale.status();
-            if (Status s = ExpectToken(TokenType::kRParen, "')' after a decimal's scale");
-                !s.ok()) {
-                return s;
-            }
+            if (takes_width) {
+                auto width = ParseTypeArgument("width");
+                if (!width.ok()) return width.status();
+                if (Status s = ExpectToken(TokenType::kRParen,
+                                           "')' after a character type's width");
+                    !s.ok()) {
+                    return s;
+                }
+                col.has_width = true;
+                col.width = width.value();
+            } else {
+                auto precision = ParseTypeArgument("precision");
+                if (!precision.ok()) return precision.status();
+                if (Status s = ExpectToken(TokenType::kComma,
+                                           "',' between a decimal's precision and scale");
+                    !s.ok()) {
+                    return s;
+                }
+                auto scale = ParseTypeArgument("scale");
+                if (!scale.ok()) return scale.status();
+                if (Status s = ExpectToken(TokenType::kRParen, "')' after a decimal's scale");
+                    !s.ok()) {
+                    return s;
+                }
 
-            col.has_precision = true;
-            col.precision = precision.value();
-            col.scale = scale.value();
+                col.has_precision = true;
+                col.precision = precision.value();
+                col.scale = scale.value();
+            }
         } else if (IEquals(col.type_name, "DECIMAL")) {
             // **A bare `decimal` is refused, never defaulted.** A default
             // scale is a silent decision about someone's money, and the

@@ -306,8 +306,17 @@ private:
         for (std::size_t i = 1; i < schema.columns.size(); ++i) {
             if (schema.columns[i].type_val != catalog::kTypeValVarchar) continue;
             const std::uint32_t offset = access.layout.offsets[i];
-            const std::uint32_t width = access.layout.inline_cell_width;
-            auto cell = storage::DecodeCell(payload.subspan(offset, width));
+            // The **column's** cell width, not the instance's: since
+            // varchar(N) a tagged cell is as wide as its column declared,
+            // and reading every cell at the instance width would walk a
+            // narrow column's neighbour and report the corruption it
+            // invented. Cannot fail for a varchar - which is the only type
+            // reaching here - but a checker may not call `.value()` on an
+            // unchecked StatusOr, so the impossible arm skips the column.
+            auto width = catalog::RowLayout::ColumnWidth(schema.columns[i],
+                                                         access.layout.inline_cell_width);
+            if (!width.ok()) continue;
+            auto cell = storage::DecodeCell(payload.subspan(offset, width.value()));
             if (!cell.ok()) {
                 Add(CheckKind::kVarHeap, page_id,
                     "relation '" + name + "' id " + std::to_string(id) + " column '" +

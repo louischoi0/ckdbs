@@ -320,7 +320,9 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 | `uint64` | 8 bytes | full range preserved via the literal's digit text |
 | `bool` | 1 byte | |
 | `varchar` | one tagged cell of `inline_cell_width` (64) bytes | longer values spill to the var-heap; > 8144 bytes is `Unsupported` |
-| `char` | 1 byte | |
+| `varchar(N)` | one tagged cell of **N** bytes | `N` is this column's `inline_cell_width`, `16 ≤ N ≤ 4096`; a value longer than `N − 3` spills — `N` is a width, **not** a length cap |
+| `char` | 1 byte | `char` alone is `char(1)` |
+| `char(N)` | N bytes | zero-padded; a longer value is refused, and a value containing a NUL byte is refused |
 | `date` | int32, days since 1970-01-01 | literal: `'2026-08-09'` |
 | `timestamp` | int64, microseconds since the epoch, UTC | literal: `'2026-08-09 12:00:00'` |
 | `decimal(p,s)`, p ≤ 18 | int64 unscaled + scale | TY01-TY11; both arguments **mandatory** |
@@ -328,7 +330,24 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 
 - **A bare `decimal` is refused, never defaulted** — a default scale is a
   silent decision about someone's money, and only the parser can still tell
-  "said nothing" from "said zero".
+  "said nothing" from "said zero". A bare `char` and a bare `varchar` are
+  *not* refused: `char` is the standard's `char(1)`, and a bare `varchar`
+  takes the instance's `inline_cell_width` — neither decides what a stored
+  value means.
+- **`varchar(N)` declares a cell width, not a maximum length.** This is a
+  deliberate divergence from standard SQL. `N` is the number of bytes the
+  column's cell occupies in every row; a value longer than `N − 3` is stored
+  out of line in the var-heap rather than refused, and reads back
+  identically either way. The only length refusal is 8144 bytes, one
+  var-heap page. Choose `N` to keep your common values inline, not to
+  constrain what may be stored.
+- **`char(N)` pads with zeros, not spaces**, and compares byte-wise over the
+  unpadded value — so `'ab'` and `'ab '` are different values. There is no
+  `PAD SPACE` collation. A `char` value may not contain a NUL byte, because
+  the type reads back to the first one; use `varchar` for arbitrary bytes.
+- **Widening is refused in every spelling.** `ALTER TABLE … TYPE
+  varchar(M)` would rewrite every row of the relation, since a row's size is
+  a schema constant (invariant 13).
 - **`float` is refused at CREATE TABLE.** The fixed-length tuple rule
   (invariant 13) requires every column to have a decided on-disk width, and
   nothing has settled a float encoding. The type is registered in

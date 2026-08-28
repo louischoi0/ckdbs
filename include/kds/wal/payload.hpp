@@ -254,6 +254,32 @@ StatusOr<std::size_t> EncodeVarHeapAppend(std::span<std::byte> out,
                                            std::span<const std::byte> value);
 StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in);
 
+// ---- VARHEAP_RELEASE -----------------------------------------------------
+//
+// One spilled value let go: the slot named here is tombstoned on the
+// envelope's `page_id`, and the value's bytes become dead
+// (`instructions/v2.5.0/varchar-char-architecture.md` §4.5).
+//
+// **The value is not in the payload, and that is the point.** A release
+// destroys information rather than creating it, so unlike VARHEAP_APPEND
+// there is nothing to reconstruct - the slot number is the whole record,
+// which is why this is `SLOT_RETIRE`-shaped and not `VARHEAP_APPEND`-shaped.
+// What a release does and does not touch is stated once, on
+// `varheap::PageRelease`.
+
+struct VarHeapReleasePayload {
+    std::uint16_t slot;
+};
+
+inline constexpr std::size_t kVarHeapReleaseSlotOffset = 0;
+inline constexpr std::size_t kVarHeapReleasePayloadSize = 2;
+
+static_assert(offsetof(VarHeapReleasePayload, slot) == kVarHeapReleaseSlotOffset);
+
+StatusOr<std::size_t> EncodeVarHeapRelease(std::span<std::byte> out,
+                                            const VarHeapReleasePayload& fields);
+StatusOr<VarHeapReleasePayload> DecodeVarHeapRelease(std::span<const std::byte> in);
+
 // ---- INDEX_INSERT --------------------------------------------------------
 //
 // One entry appended to one secondary-index leaf (docs/spec/index.md §12.1).
