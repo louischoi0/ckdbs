@@ -31,6 +31,9 @@
 #include "kds/server/relation_grant_service.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
+// R6-8: the rig arms core 0 as a coordinator, so a write inside a
+// transaction ships and enrols instead of being refused.
+#include "kds/server/txn_2pc_service.hpp"
 #include "kds/server/session_step_client.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/catalog/well_known.hpp"
@@ -2580,6 +2583,10 @@ struct ForeignIndexRig {
     // for its reason: the dispatcher holds a pointer to it, so it must
     // outlive the dispatcher.
     std::optional<StatementShipClient> ship;
+    // Core 0's coordinator half of the cross-owner commit (R6-3/R6-8),
+    // declared with `ship` and for its reason - the dispatcher holds a
+    // pointer to it and must die first.
+    std::optional<Txn2pcClient> txn2pc;
     std::optional<CommandDispatcher> dispatcher;
     std::unique_ptr<CoreRuntime> peer;
     catalog::Oid oid = 0;
@@ -2688,6 +2695,15 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.ship.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.clock);
     ASSERT_TRUE(rig.ship->RegisterReplyReceiver().ok());
     rig.dispatcher->SetStatementShip(&*rig.ship);
+
+    // **And core 0's coordinator half** (R6-8): without it `MayEnrolShip`
+    // refuses and a write inside a transaction keeps the refusal it had,
+    // which is the single-core instance's behaviour rather than this rig's.
+    // The peer's participant half was wired by `AttachTransport` above,
+    // production's own wiring.
+    rig.txn2pc.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.clock);
+    ASSERT_TRUE(rig.txn2pc->RegisterReplyReceivers().ok());
+    rig.dispatcher->SetTxn2pc(&*rig.txn2pc);
 
     // **The owner's group-commit drain**, which `CoreRuntime::Run()`
     // installs and this rig has to install itself, because it pumps
@@ -3123,6 +3139,169 @@ TEST_F(CoreRuntimeTest, AWriteToAPeerOwnedRelationIsShippedAndTheOwnerExecutesIt
     EXPECT_NE(meta.find(" cross_core_write_refusals=0 "), std::string::npos) << meta;
 }
 
+// ---- R6-8: the cross-owner transaction, on a live path -----------------------
+//
+// Every row before this one was reachable only from a test that called the
+// seams by hand, because `MayShip` refused inside an explicit transaction and
+// so nothing ever enrolled a participant. These are the first tests in which
+// a **client statement** makes a transaction cross-owner and the protocol runs
+// end to end over a real ring, with the peer's participant half wired by
+// `AttachTransport` exactly as production wires it.
+
+TEST_F(CoreRuntimeTest, AWriteInsideATransactionEnrolsItsOwnerAndTheCommitRunsBothPhases) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cross_owner");
+
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    ASSERT_FALSE(session.has_participants()) << "a transaction is one-owner until it is not";
+
+    // The write the engine refused before this row. It ships, and shipping
+    // inside a transaction is what enrols the owner as a participant.
+    DispatchOutcome out;
+    auto write = rig.Start("INSERT INTO cross_owner VALUES (41)", out, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << out.response;
+    EXPECT_EQ(out.response.rfind("INSERTED", 0), 0u) << out.response;
+    ASSERT_TRUE(session.has_participants());
+    ASSERT_EQ(session.participants().size(), 1u);
+    EXPECT_EQ(session.participants()[0], 1u);
+    // The transaction is still open and unpoisoned: the statement went to
+    // another owner and this core's half is untouched.
+    EXPECT_TRUE(session.in_explicit_txn());
+    EXPECT_FALSE(session.failed());
+
+    // The owner holds it open rather than committing per statement (R6-2),
+    // so nothing outside the transaction can see the row yet.
+    ASSERT_NE(rig.peer->shipped_statements(), nullptr);
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolled(), 1u);
+    const std::string before =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM cross_owner").response;
+    EXPECT_EQ(before.find(",41"), std::string::npos) << before;
+
+    // **The COMMIT, which is D4's two phases** - and no local statement in
+    // this transaction wrote anything, so what proves it committed is the
+    // owner's rows.
+    DispatchOutcome commit_out;
+    auto commit = rig.Start("COMMIT", commit_out, &session);
+    ASSERT_TRUE(rig.Drive(*commit)) << commit_out.response;
+    EXPECT_EQ(commit_out.response.rfind("COMMIT trx_id=", 0), 0u) << commit_out.response;
+
+    EXPECT_EQ(rig.txn2pc->prepare_messages(), 1u);
+    EXPECT_EQ(rig.txn2pc->decide_messages(), 1u);
+    EXPECT_EQ(rig.txn2pc->phase_timeouts(), 0u);
+    EXPECT_EQ(rig.txn2pc->prepare_refusals(), 0u);
+    EXPECT_EQ(rig.txn2pc->decide_refusals(), 0u);
+    EXPECT_EQ(rig.txn2pc->waiting(), 0u) << "both phases closed behind them";
+    EXPECT_EQ(rig.peer->shipped_statements()->prepared(), 1u);
+    EXPECT_EQ(rig.peer->shipped_statements()->decides_committed(), 1u);
+    EXPECT_EQ(rig.peer->shipped_statements()->in_doubt(), 0u);
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolled(), 0u);
+
+    const std::string rows =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM cross_owner").response;
+    EXPECT_NE(rows.find(",41"), std::string::npos) << rows;
+    // And the session is clean for the next transaction: the participant
+    // list belongs to the transaction that enrolled it.
+    EXPECT_FALSE(session.in_explicit_txn());
+    EXPECT_FALSE(session.has_participants());
+}
+
+TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone) {
+    // The other end of the same path, and the one that would be silent if
+    // it were wrong: a client's ROLLBACK must unwind the *participant's*
+    // half too, which it does through the decide leg's abort.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cross_owner_rb");
+
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome out;
+    auto write = rig.Start("INSERT INTO cross_owner_rb VALUES (42)", out, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << out.response;
+    ASSERT_TRUE(session.has_participants());
+
+    DispatchOutcome rb_out;
+    auto rollback = rig.Start("ROLLBACK", rb_out, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb_out.response;
+    EXPECT_EQ(rb_out.response.rfind("ROLLBACK", 0), 0u) << rb_out.response;
+
+    // **Nothing was prepared**: a rollback is not a two-phase commit, and
+    // asking a participant to prepare a transaction that is about to be
+    // aborted would cost a sync for nothing.
+    EXPECT_EQ(rig.txn2pc->prepare_messages(), 0u);
+    // The owner's half is unwound before this returns - by the idle sweep
+    // at worst, and by the decide leg's abort on the ordinary path.
+    for (int i = 0; i < 32; ++i) rig.Pump();
+    const std::string rows =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM cross_owner_rb").response;
+    EXPECT_EQ(rows.find(",42"), std::string::npos) << rows;
+    EXPECT_FALSE(session.has_participants());
+}
+
+TEST_F(CoreRuntimeTest, TheCoordinatorsIsolationLevelCrossesToTheParticipant) {
+    // §2's obligation on D3, which R6-3 was named for and landed without:
+    // the participant opens its transaction with its *own* dispatcher's
+    // default, so a client that asked for REPEATABLE READ got a READ
+    // COMMITTED participant and was never told. Under D3 ratified the level
+    // selects a branch, so the promise and the participant have to agree.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cross_owner_iso");
+
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ", &session)
+                  .response.rfind("BEGIN", 0),
+              0u);
+    DispatchOutcome out;
+    auto write = rig.Start("INSERT INTO cross_owner_iso VALUES (43)", out, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << out.response;
+    EXPECT_EQ(out.response.rfind("INSERTED", 0), 0u) << out.response;
+
+    // The participant's transaction runs at the level the client chose, not
+    // at the peer's configured default - which this rig leaves at READ
+    // COMMITTED, so the two are distinguishable.
+    ASSERT_NE(rig.peer->shipped_statements(), nullptr);
+    ASSERT_EQ(rig.peer->shipped_statements()->enrolled(), 1u);
+    EXPECT_EQ(rig.peer->dispatcher().default_isolation(), txn::IsolationLevel::kReadCommitted)
+        << "the fixture no longer distinguishes the two levels";
+    const auto level = rig.peer->shipped_statements()->enrolled_isolation(
+        /*coordinator=*/0, session.ship_id());
+    ASSERT_TRUE(level.has_value()) << "the peer holds no context for this session";
+    EXPECT_EQ(*level, txn::IsolationLevel::kRepeatableRead);
+
+    DispatchOutcome rb_out;
+    auto rollback = rig.Start("ROLLBACK", rb_out, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb_out.response;
+}
+
+TEST_F(CoreRuntimeTest, AWriteInsideATransactionOnACoreWithNoCoordinatorKeepsItsOldRefusal) {
+    // HP4, at the one site R6-8 changes: with no coordinator armed - every
+    // single-core instance, every fixture - `MayEnrolShip` is false and the
+    // statement falls through to the affinity check it always reached, with
+    // the refusal spelled exactly as it was and counted where it was.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "no_coordinator");
+    rig.dispatcher->SetTxn2pc(nullptr);
+
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome out;
+    auto write = rig.Start("INSERT INTO no_coordinator VALUES (44)", out, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << out.response;
+
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_TRUE(StatusFromErrorReply(out.response).retryable()) << out.response;
+    EXPECT_EQ(rig.txn2pc->prepare_messages(), 0u);
+    EXPECT_FALSE(session.has_participants());
+    // And it is still counted where `crosscore.md` §6 says it is - the
+    // refusal counter's population is what R6-8 narrows, not what it
+    // renames.
+    const std::string meta = rig.dispatcher->Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find(" cross_core_write_refusals=1 "), std::string::npos) << meta;
+
+    // Restored so the rig unwinds the way every other test leaves it.
+    rig.dispatcher->SetTxn2pc(&*rig.txn2pc);
+}
+
 TEST_F(CoreRuntimeTest, AReadOfAPeerOwnedRelationShipsAndAnswersWithTheOwnersRows) {
     // D1's read half. This rig installs no pipeline (`SetRemoteReads` is
     // never called), which is the peer's own situation as the pretasks
@@ -3298,10 +3477,22 @@ TEST_F(CoreRuntimeTest, TheOwnersRefusalReachesTheClientAsTheOwnerSpelledIt) {
     EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
 }
 
-TEST_F(CoreRuntimeTest, AStatementInsideATransactionIsNotShippedAndKeepsItsRefusal) {
-    // D1: nothing crosses transaction state, so an explicit transaction
-    // keeps the CC3 refusal it has always had - the retryable spelling
-    // included, because that is what a client's retry loop reads.
+TEST_F(CoreRuntimeTest, AStatementInsideATransactionShipsAndEnrolsSinceR68) {
+    // **This is the one refusal class R6-8 converts, asserted at the site
+    // that used to assert its opposite.** Until 2026-08-28 this test read
+    // `AStatementInsideATransactionIsNotShippedAndKeepsItsRefusal` and
+    // expected `TXN_CONFLICT`, on the ground SS2 gave - *"D1: nothing
+    // crosses transaction state, so an explicit transaction keeps the CC3
+    // refusal it has always had"*. D4 is what supersedes that: the
+    // transaction state now crosses as one wire bit, the owner holds a
+    // transaction open for it (R6-2), and the coordinator's COMMIT runs
+    // two phases over it.
+    //
+    // Kept as a renamed test rather than deleted, because HP4's falsifier
+    // is "any existing refusal test needs its expected text or status
+    // edited" - and the honest report is that exactly one did, this one,
+    // for the class the row exists to convert. Every other refusal test in
+    // this file passes unedited, which is what HP4 actually claims.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_txn");
 
@@ -3313,9 +3504,18 @@ TEST_F(CoreRuntimeTest, AStatementInsideATransactionIsNotShippedAndKeepsItsRefus
     DispatchOutcome out;
     auto statement = rig.Start("INSERT INTO shipped_txn VALUES (40)", out, &session);
     ASSERT_TRUE(rig.Drive(*statement)) << out.response;
-    EXPECT_NE(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
-    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 0u);
+    EXPECT_EQ(out.response.rfind("INSERTED", 0), 0u) << out.response;
+    EXPECT_EQ(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
+    EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
+    EXPECT_TRUE(session.has_participants());
+    // The waiter closed behind the statement, as it does for an autocommit
+    // ship: what R6-8 changes is which shapes reach the wire, not how one
+    // is carried.
     EXPECT_EQ(rig.ship->waiting(), 0u);
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
 }
 
 TEST_F(CoreRuntimeTest, ASynchronousDispatchDoesNotShipBecauseItCannotAwaitTheAnswer) {

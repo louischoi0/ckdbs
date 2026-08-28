@@ -31,7 +31,8 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
                                                                    std::uint64_t target_oid,
                                                                    Role role,
                                                                    std::string_view text,
-                                                                   bool retry, bool in_txn) {
+                                                                   bool retry, bool in_txn,
+                                                                   std::optional<txn::IsolationLevel> isolation) {
     if (text.empty()) {
         return Status::InvalidArgument("statement shipping: an empty statement is not a statement");
     }
@@ -53,6 +54,10 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
     out.role = static_cast<std::uint8_t>(role);
     out.retry = retry ? 1 : 0;
     out.in_txn = in_txn ? 1 : 0;
+    // 0 stays 0 where nothing was stated, which is every autocommit
+    // statement: the level is a promise about a transaction that spans
+    // statements, and an autocommit one is not that.
+    out.isolation = isolation.has_value() ? static_cast<std::uint8_t>(*isolation) : 0;
     out.text_len = static_cast<std::uint16_t>(text.size());
     std::memcpy(out.text, text.data(), text.size());
     return out;
@@ -105,6 +110,27 @@ StatusOr<std::string_view> ShippedStatementTextOf(const ShippedStatementRequestP
                                        " bytes, which is not a length this payload can hold");
     }
     return std::string_view(request.text, request.text_len);
+}
+
+StatusOr<std::optional<txn::IsolationLevel>> ShippedStatementIsolationOf(
+    const ShippedStatementRequestPayload& request) {
+    // 0 is "not stated", which is legal and is what every autocommit
+    // request carries - the zero-collision rule, so a zeroed buffer decodes
+    // as an absence rather than as a level.
+    if (request.isolation == 0) return std::optional<txn::IsolationLevel>{};
+    switch (static_cast<txn::IsolationLevel>(request.isolation)) {
+        case txn::IsolationLevel::kReadCommitted:
+            return std::optional{txn::IsolationLevel::kReadCommitted};
+        case txn::IsolationLevel::kRepeatableRead:
+            return std::optional{txn::IsolationLevel::kRepeatableRead};
+    }
+    // `ShippedStatementRoleOf`'s rule, for the same reason: a byte outside
+    // the enum means the two ends disagree about what a level is, and a
+    // transaction opened at a guessed level is one whose visibility promise
+    // nobody made.
+    return Status::InvalidArgument("statement shipping: request names isolation level " +
+                                   std::to_string(request.isolation) +
+                                   ", which is not a level this build knows");
 }
 
 StatusOr<Role> ShippedStatementRoleOf(const ShippedStatementRequestPayload& request) {
@@ -163,6 +189,14 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
         Reply(requester, request_id, session_id, sequence, role.status(), {});
         return;
     }
+    // R6-8's level, on the same terms and for the same reason: a byte this
+    // core cannot read is a refusal before anything runs, never a level
+    // guessed for a transaction a client was promised something about.
+    auto isolation = ShippedStatementIsolationOf(request);
+    if (!isolation.ok()) {
+        Reply(requester, request_id, session_id, sequence, isolation.status(), {});
+        return;
+    }
     if (!execute_) {
         // SS1 ships the wire and nothing else. Stated as a refusal rather
         // than left to a null call, because a handler that crashes and a
@@ -186,6 +220,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     statement.role = role.value();
     statement.retry = request.retry != 0;
     statement.in_txn = request.in_txn != 0;
+    statement.isolation = isolation.value();
     statement.text.assign(text.value());
     execute_(std::move(statement),
              [this, requester, request_id, session_id, sequence](const Status& status,
@@ -349,7 +384,8 @@ Status StatementShipClient::RegisterReplyReceiver() {
 Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request_id,
                                  std::uint64_t session_id, std::uint64_t sequence,
                                  std::uint64_t target_oid, Role role, std::string_view text,
-                                 bool retry, bool in_txn) {
+                                 bool retry, bool in_txn,
+                                 std::optional<txn::IsolationLevel> isolation) {
     // **One live waiter per request id.** Reusing an id that still has a
     // statement parked on it would replace that statement's waiter with
     // this one's, and the identity check on the reply path cannot catch it -
@@ -376,7 +412,8 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
             std::to_string(transport_.core_count()));
     }
     auto request =
-        ShippedStatementRequestOf(session_id, sequence, target_oid, role, text, retry, in_txn);
+        ShippedStatementRequestOf(session_id, sequence, target_oid, role, text, retry, in_txn,
+                                  isolation);
     // A statement the wire refuses opens no waiter: nothing was sent, so
     // nothing will answer, and a waiter would only cost the statement a
     // deadline before saying what is already known.

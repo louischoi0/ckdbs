@@ -100,7 +100,17 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
     // exactly as SS3 built it.
     std::unique_ptr<Running> running;
     if (statement.in_txn) {
-        auto enrolled = EnrolFor(key, statement.role);
+        // **R6-8: the coordinator's level, where it stated one.** A
+        // participant's transaction is a local transaction, but *which*
+        // level it runs at is the client's choice and not this server's
+        // config: under D3 the level selects the branch, so a participant
+        // that fell back to its own default would give a transaction the
+        // weaker promise while its client was told the stronger one. Where
+        // the request states none - which no enrolled statement does, and
+        // every autocommit one does - the fallback is this core's default,
+        // exactly as before.
+        auto enrolled = EnrolFor(key, statement.role,
+                                 statement.isolation.value_or(dispatcher_.default_isolation()));
         if (!enrolled.ok()) {
             // No context was left half-open: `EnrolFor` refuses before it
             // records anything. A spent transaction-id lease and a full
@@ -260,7 +270,7 @@ void ShippedStatementExecutor::Remember(const DedupKey& key, std::uint64_t seque
 }
 
 StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor(
-    const DedupKey& key, Role role) {
+    const DedupKey& key, Role role, txn::IsolationLevel isolation) {
     if (auto it = enrolled_.find(key); it != enrolled_.end()) {
         // **A prepared transaction takes no more statements** (R6-3, D4).
         // Prepare is a promise that everything this transaction wrote is
@@ -315,8 +325,7 @@ StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor
     // participant's transaction is a local transaction and nothing about it
     // is special (the `KwpLoadServer` argument, and SS3's for the statement
     // itself).
-    auto context =
-        std::make_unique<Enrolled>(dispatcher_.default_isolation(), role, clock_.Now());
+    auto context = std::make_unique<Enrolled>(isolation, role, clock_.Now());
     context->session.mark_shipped();
     const DispatchOutcome begun = dispatcher_.Dispatch("BEGIN", &context->session);
     if (!context->session.in_explicit_txn()) {

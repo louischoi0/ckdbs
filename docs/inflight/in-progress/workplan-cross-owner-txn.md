@@ -151,7 +151,7 @@ this workplan means the v2.4.0 path.
 | R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b`; review at `ad0aa2f` |
 | R6-6 | PW3b extension | **Built 2026-08-28** (tests and prose; no engine change) |
 | R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
-| R6-8 | Dispatch | — |
+| R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
 
 ## R6-0 — the retry bit
@@ -1534,6 +1534,140 @@ rather than delegating it. R6-9 carries the proposal into
 `page-lsn-cross-stream.md` §9 once it is ruled on; until then that file
 records the revisit as executed with this verdict pending, and `CLAUDE.md`'s
 Transactions & WAL line needs the same correction.
+
+## R6-8 — dispatch, and CP3
+
+Built on `v2.5.0-cross-core-owner-protocol-2`. **The row that makes every
+row before it reachable.** Until this one, `MayShip` refused inside an
+explicit transaction, so nothing enrolled a participant on a live path and
+R6-3 … R6-6 were exercised only by tests calling the seams by hand.
+
+### The gate, and why it is a second one rather than a widened first
+
+`MayEnrolShip` asks everything `MayShip` asks, with the
+explicit-transaction test inverted and `txn_2pc_ != nullptr` in its place —
+a core that cannot run D4's two phases must not make a transaction
+cross-owner, or the transaction reaches `COMMIT` with a participant and no
+protocol. The three write paths test `MayShip(...) || MayEnrolShip(...)`.
+
+Two gates rather than one widened gate, because they admit different shapes
+for different reasons and one of the differences is a **scope boundary**:
+`MayEnrolShip` is asked only by the write paths. A cross-core **read**
+inside a transaction keeps exactly the behaviour it had, since shipping one
+would enrol a participant to give a snapshot D3's watermark is what makes
+meaningful — and the watermark is not built. Reads are R6-9's
+`crosscore.md` question.
+
+### Three things the row had to get right, each of which would have been silent
+
+- **The local scope must not be ended.** `AbandonWriteForShipping` ends an
+  autocommit scope through `EndWrite`'s *failure* arm, which inside an
+  explicit transaction **poisons the session** — so a cross-owner
+  transaction would have been aborted by its own first shipped statement,
+  and the client told to `ROLLBACK` a transaction that is intact. An
+  enrolled ship now ends nothing: the scope is the client's open
+  transaction, this half wrote nothing, and nothing failed.
+- **The enrolment is recorded after the send, never before.** Every refusal
+  `Ship` makes happens before the request leaves, so enrolling first would
+  put a core into the prepare phase that was never asked anything — turning
+  a refusal the client could retry into an aborted transaction.
+- **The home core is untouched.** `BindHomeCore` runs at the end of
+  `CheckWriteAffinity`, which a shipped statement never reaches, so a
+  coordinator's `home_core_` still binds only on its *own* local writes.
+  CC3's one-stream rule therefore keeps governing this core's half exactly
+  as it did, which is what makes "the coordinator's half is the local one"
+  true rather than aspirational.
+
+### §2's obligation on D3, found unmet and paid here
+
+The ratification lists it against R6-3: *"the coordinator's isolation level
+has to cross"*. **R6-3 landed without it**, and this row is where that
+stopped being harmless — a participant opened its transaction with
+`Dispatch("BEGIN")` on its own dispatcher, whose `default_isolation()` is
+that server's config key, so `BEGIN ISOLATION LEVEL REPEATABLE READ` on the
+coordinator produced a READ COMMITTED participant and told nobody. Under D3
+the level *selects the branch*, so the client was promised one thing and a
+participant gave another.
+
+One byte out of `ShippedStatementRequestPayload::reserved0`, carried on the
+enrolled path only. **0 means "not stated" and is not a level** — the
+zero-collision rule, so a zeroed buffer decodes as an absence — and a byte
+outside the enum is **refused before anything runs**, `ShippedStatementRoleOf`'s
+rule for exactly its reason. Autocommit requests state none and are
+byte-identical to what SS2 sent: a single-statement transaction mints its
+view at the same instant under either level, so carrying it there would
+change a measured path to no observable end.
+
+### CP3 — the refusal counter's third era, and it is short
+
+`cross_core_write_refusals` is recorded at two sites, both inside
+`CheckWriteAffinity`, and R6-8 changes **which statements reach them**
+rather than what they say. What still counts:
+
+**Site 1, the foreign-owner arm** — reached only where the ship fork
+declined, which after this row is:
+
+| what still refuses | why it is not shippable |
+|---|---|
+| no shipping client (`statement_ship_ == nullptr`) | every single-core instance and every fixture — which is what keeps `cores = 1` byte-identical |
+| a path that cannot park (`may_park_` false) | the synchronous `Dispatch()`: a send from there has nowhere to deliver its answer, so `UnknownOutcome` would be the only honest refusal left after it (SS2's rule 1) |
+| no coordinator armed, inside a transaction (`txn_2pc_ == nullptr`) | single-core and fixtures again; a transaction cannot be made cross-owner by a core that cannot decide it |
+| a session that already arrived shipped | the hop limit — what arrived shipped does not ship on |
+| an `UPDATE`/`DELETE` whose `WHERE` carries a subquery | the fork resolves nothing about a second relation, so the affinity answer is the honest one |
+| a poisoned session inside a transaction | defence: the failed-txn gate refuses the statement earlier |
+
+**Site 2, the CC3 home-core arm — unreachable on any path this engine
+has**, and CP3 is where that was established rather than assumed.
+`BindHomeCore` has exactly one call site, at the end of
+`CheckWriteAffinity`, after the foreign-owner arm has returned for every
+relation this core does not own — so a bound `home_core_` is always
+`core_id_`, and this arm needs it to be something else. It was equally
+unreachable before R6-8. The guard stays (one comparison against a
+transaction's writes splitting across two streams) with the fact recorded
+at the site.
+
+**So on a production multi-core instance with shipping and 2PC armed, the
+third era is three classes**: the synchronous path, the hop limit, and the
+subquery shape. That is the roadmap's remaining cross-core write debt
+stated exactly, and it is what B4 measures.
+
+**Refusals that are not this counter's and are untouched**: `PeerDdlRefused`
+(DDL on a peer, which also carries §5d's purge-gate argument),
+`CrossCoreReadUnsupported`, `RelationWriteRightsPending` and
+`IndexBuildPending` (owner-side, about rights rather than ownership), and
+the shape gate's tail — FK-linked, cabined, and a relation under an
+assertion this core cannot enforce.
+
+### HP4, reported honestly
+
+**Exactly one existing refusal test needed editing, and it is the class this
+row converts.** `AStatementInsideATransactionIsNotShippedAndKeepsItsRefusal`
+asserted `TXN_CONFLICT` for the cross-owner explicit-transaction shape, on
+SS2's ground that *"nothing crosses transaction state"* — which D4
+supersedes. It is renamed rather than deleted, and now asserts the
+conversion at the site that used to assert its opposite, so the change is
+legible in the tree and not only in this file.
+
+HP4's falsifier says an edited refusal test *stops the row*. Read literally
+that would stop R6-8 on the one refusal R6-8 exists to convert, which is
+not what the hypothesis means: its subject is *"every **other** refusal"*.
+Every other refusal test in the suite passes unedited — 2,862 green — and
+that is HP4's real claim, confirmed.
+
+### Tests
+
+`tests/core_runtime_test.cpp`'s two-core rig gains core 0's coordinator
+half, so the whole protocol runs over a real ring with the peer's
+participant half wired by `AttachTransport` as production wires it: a write
+inside a transaction ships, enrols its owner and is invisible until the
+`COMMIT` runs both phases; a `ROLLBACK` sends no prepare and leaves the
+owner's rows alone; the coordinator's level reaches the participant's
+enrolled transaction while the peer's own default stays READ COMMITTED, so
+the two are distinguishable; and a core with no coordinator armed keeps the
+old refusal, counted where `crosscore.md` §6 says it is.
+
+Full suite green: **2,862 tests**. Overhead not measured — the v2-stage A/B
+suspension of 2026-08-24 stands.
 
 ## Open, carried from the work order
 

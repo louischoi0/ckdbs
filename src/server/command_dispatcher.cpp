@@ -3746,6 +3746,19 @@ bool CommandDispatcher::MayShip(const Session& session) const noexcept {
            !session.shipped();
 }
 
+bool CommandDispatcher::MayEnrolShip(const Session& session) const noexcept {
+    // Everything `MayShip` asks, with the explicit-transaction test
+    // inverted and one more condition in its place: this core must be able
+    // to run D4's two phases, or the transaction it is about to make
+    // cross-owner would reach `COMMIT` with a participant and no protocol.
+    // `SetTxn2pc` is what arms that, on every core of a multi-core
+    // instance and on none of a single-core one - so a dispatcher never
+    // told keeps the refusal it had, which is what makes `cores = 1`
+    // byte-identical here as everywhere else in the series.
+    return statement_ship_ != nullptr && txn_2pc_ != nullptr && may_park_ &&
+           session.in_explicit_txn() && !session.failed() && !session.shipped();
+}
+
 DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog::Oid oid,
                                                  std::uint32_t owner_core,
                                                  std::string_view relation, Session& session) {
@@ -3756,15 +3769,44 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     const std::uint64_t sequence = session.NextShipSequence();
     const std::uint64_t request_id = next_remote_request_++;
 
+    // **R6-8: whether this statement belongs to a transaction**, and if so
+    // at which level. Both are read from the session rather than passed in,
+    // because they are properties of the client's connection and not of the
+    // routing decision - and `MayEnrolShip` is what decided the shape is
+    // admissible at all. An autocommit ship carries `in_txn = 0` and no
+    // level, byte-identical to what SS2 sent.
+    const bool in_txn = session.in_explicit_txn();
+    const std::optional<txn::IsolationLevel> isolation =
+        in_txn && session.transaction() != nullptr
+            ? std::optional{session.transaction()->isolation()}
+            : std::nullopt;
+
     // `Ship` refuses before it sends - an over-long statement, a core this
     // instance does not have - so this refusal means the statement did not
     // run, and may say so in an ordinary spelling. After it returns OK the
     // only refusal left is `UnknownOutcome`.
     if (Status s = statement_ship_->Ship(owner_core, request_id, session.ship_id(), sequence,
-                                         oid, session.role(), line);
+                                         oid, session.role(), line, /*retry=*/false, in_txn,
+                                         isolation);
         !s.ok()) {
         return {ErrorReply(s), false};
     }
+
+    // **The enrolment, and it is recorded only once the request is on its
+    // way** (R6-8, D1's "participants are relation owners discovered as the
+    // transaction runs"). After `Ship` returns OK, because every refusal it
+    // makes happens before the send: recording a participant this core
+    // never asked anything of would put a core into the prepare phase that
+    // holds no transaction, and turn a refusal the client can retry into an
+    // aborted transaction.
+    //
+    // Idempotent, so four statements to one owner enrol it once and prepare
+    // it once. What makes the *transaction* cross-owner is the second
+    // distinct owner; a transaction that ships every statement to one peer
+    // has one participant and still runs the full protocol, which is
+    // correct - its writes are in that peer's stream and this core's COMMIT
+    // is the decision for them.
+    if (in_txn) session.EnrolParticipant(owner_core);
     if (logging(LogLevel::kDebug)) {
         log_->Debug("ship", "core " + std::to_string(core_id_) + " shipped a statement on '" +
                                 std::string(relation) + "' to core " +
@@ -3980,6 +4022,21 @@ std::optional<std::uint32_t> CommandDispatcher::SoleForeignOwner(const exec::Ste
 }
 
 Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& scope) {
+    if (!scope.owned) {
+        // **R6-8: an enrolled ship, and there is nothing here to end.** The
+        // scope is the client's own open transaction, which this core goes
+        // on running - the statement went to another owner, this half wrote
+        // nothing, and nothing failed. Ending it the way an autocommit
+        // scope is ended would take `EndWrite`'s failure arm, which
+        // **poisons the session**: a cross-owner transaction would be
+        // aborted by its own first shipped statement, and the client would
+        // be told to ROLLBACK a transaction that is intact.
+        //
+        // Unreachable before R6-8, and not defensively written: `MayShip`
+        // admitted only an autocommit session, so every scope that reached
+        // here was owned.
+        return Status::OK();
+    }
     return EndWrite(session, scope,
                     Status::Unsupported("the statement was shipped to the core that owns its "
                                         "relation; this core wrote nothing"));
@@ -3998,6 +4055,18 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     // Owned here, but the transaction may already be committed to another
     // core. That is the CC3 restriction proper, and it survives the
     // pipeline: it is what keeps one transaction's writes in one WAL stream.
+    //
+    // **Unreachable on any path this engine has, and R6-8's CP3 is where
+    // that was established rather than assumed.** `BindHomeCore` is called
+    // from exactly one site - the end of this function, after the arm above
+    // has returned for every relation this core does not own - so a bound
+    // `home_core_` is always `core_id_`, and reaching this line needs it to
+    // be something else. It was equally unreachable before R6-8: what that
+    // row changes is which writes get *here* at all, not what this arm
+    // tests. Kept as the guard it reads as, because the cost is one
+    // comparison and the thing it would catch is a transaction's writes
+    // splitting across two streams; recorded so a later reader does not
+    // take its existence as evidence that the case occurs.
     if (!session.MayWriteOn(access.owner_core)) {
         cross_core_writes_.Record(session.home_core(), access.owner_core, access.oid);
         return CrossCoreWriteRefused(session.home_core(), access.owner_core, relation);
@@ -4329,7 +4398,14 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // after the shape resolution and before the affinity check, so every
     // refusal that is not about ownership keeps its exact spelling and its
     // exact wire bit.
-    if (!line.empty() && ta->owner_core != core_id_ && MayShip(*scope.session)) {
+    // **R6-8 adds the second gate**, and it is a second gate rather than a
+    // widened first one because the two admit different shapes for
+    // different reasons: `MayShip` is SS2's autocommit routing,
+    // `MayEnrolShip` is D4's cross-owner transaction. A statement that
+    // satisfies neither falls through to the affinity check exactly as it
+    // did, with its refusal's spelling and wire bit untouched (HP4).
+    if (!line.empty() && ta->owner_core != core_id_ &&
+        (MayShip(*scope.session) || MayEnrolShip(*scope.session))) {
         return ShipStatement(line, ta->oid, ta->owner_core, stmt.table_name, *scope.session);
     }
 
@@ -6305,7 +6381,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // them, since this fork resolves nothing about it
     // (`AnySubqueryPredicate` says why).
     if (ta.owner_core != core_id_ && !AnySubqueryPredicate(stmt.where) &&
-        MayShip(*scope.session)) {
+        (MayShip(*scope.session) || MayEnrolShip(*scope.session))) {
         return ShipStatement(line, ta.oid, ta.owner_core, stmt.table_name, *scope.session);
     }
 
@@ -7128,7 +7204,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // them, since this fork resolves nothing about it
     // (`AnySubqueryPredicate` says why).
     if (ta.owner_core != core_id_ && !AnySubqueryPredicate(stmt.where) &&
-        MayShip(*scope.session)) {
+        (MayShip(*scope.session) || MayEnrolShip(*scope.session))) {
         return ShipStatement(line, ta.oid, ta.owner_core, stmt.table_name, *scope.session);
     }
 

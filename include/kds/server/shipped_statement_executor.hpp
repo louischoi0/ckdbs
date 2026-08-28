@@ -338,6 +338,23 @@ public:
     // as one at RP7's gate.
     std::uint64_t left_in_doubt_at_stop() const noexcept { return left_in_doubt_at_stop_; }
 
+    // The isolation level a cross-owner transaction was opened at here
+    // (R6-8), or empty where this core holds no context for that
+    // coordinator session.
+    //
+    // **A reader for a promise, and it has no other one.** The level is the
+    // client's choice and it crosses on the request; that it *arrived* is
+    // otherwise checkable only by inference - two statements and a
+    // concurrent commit, to see whether the participant's view moved - and
+    // an inference is a poor test of a contract. `SHOW META` deliberately
+    // does not print it: it is a property of one transaction, not a rate.
+    std::optional<txn::IsolationLevel> enrolled_isolation(std::uint32_t coordinator,
+                                                          std::uint64_t session_id) const {
+        auto it = enrolled_.find(DedupKey{coordinator, session_id});
+        if (it == enrolled_.end()) return std::nullopt;
+        return it->second->session.isolation();
+    }
+
     // Prepares this core has asked a coordinator about, ever (R6-5). One
     // per ceiling per in-doubt transaction, so a rising number against a
     // flat `in_doubt()` is a coordinator that is not answering.
@@ -535,7 +552,14 @@ private:
     // session to run on. Refuses without leaving a half-open context - a
     // spent transaction-id lease refuses `TxnConflict` here, and that is a
     // retryable refusal the coordinator may act on.
-    StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role);
+    //
+    // `isolation` is the **coordinator's** (R6-8): the level is the
+    // client's choice, and this core's own default is what it fell back to
+    // before the level crossed - which under D3 handed a transaction the
+    // wrong promise. Used only when the context is opened; a statement
+    // joining an existing one runs at the level that one was opened with,
+    // since a transaction has one level for its life.
+    StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role, txn::IsolationLevel isolation);
     // Rolls `it`'s transaction back and drops the context. **Rollback
     // only**, still: R6-3's commit arm is not here but in `Decide`, and for
     // the reason this comment already gave - `Dispatch("COMMIT")` finishes

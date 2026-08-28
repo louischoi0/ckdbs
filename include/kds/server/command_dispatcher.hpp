@@ -1831,6 +1831,21 @@ private:
     // client-visible - the answer is the owner's.
     Status AbandonWriteForShipping(Session& session, WriteScope& scope);
 
+    // **R6-8: the write shape `MayShip` refuses and D4 now admits.** A
+    // statement inside an explicit transaction whose relation another core
+    // owns: shipped to that owner, which runs it under a transaction it
+    // holds open (R6-2), and the owner is recorded as a **participant** so
+    // this session's `COMMIT` runs the two phases over it.
+    //
+    // Separate from `MayShip` rather than folded into it, and the reason is
+    // scope rather than tidiness: this admits *writes* only, and its three
+    // callers are the three write paths. A cross-core **read** inside a
+    // transaction keeps the behaviour it had, because shipping one would
+    // enrol a participant to give a snapshot D3's watermark is what makes
+    // meaningful - and the watermark is not built. Reads are R6-9's
+    // `crosscore.md` question, not this row's.
+    bool MayEnrolShip(const Session& session) const noexcept;
+
     Status CheckWriteAffinity(const catalog::TableAccess& access, std::string_view relation,
                               Session& session);
 
