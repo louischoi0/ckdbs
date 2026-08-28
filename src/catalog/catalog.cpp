@@ -1070,6 +1070,100 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     return s;
 }
 
+StatusOr<std::vector<SysRangeRow>> Catalog::RangesOf(Oid rel_oid) {
+    auto all = ScanAll<SysRangeRow>(store_, kCatalogPageRanges, nullptr, txn_);
+    if (!all.ok()) return all.status();
+
+    std::vector<SysRangeRow> mine;
+    for (const SysRangeRow& row : all.value()) {
+        if (row.rel_oid == rel_oid) mine.push_back(row);
+    }
+    // The ordinary answer, and not an error: every relation is one range
+    // owned by `sys.tables.owner_core` until something allocates a second.
+    if (mine.empty()) return mine;
+
+    // Page order is insertion order, and neither is `lo` order.
+    std::sort(mine.begin(), mine.end(),
+              [](const SysRangeRow& a, const SysRangeRow& b) { return a.lo < b.lo; });
+
+    // CC9's rule 1 (stated at `SysRangeRow`).
+    if (mine.front().lo != 0) {
+        return Status::Corruption(
+            "sys.ranges: relation " + std::to_string(rel_oid) + " has " +
+            std::to_string(mine.size()) + " range row(s) but none at lo = 0, so the rows do "
+            "not partition the id space and the ids below " +
+            std::to_string(mine.front().lo) + " are owned by nothing");
+    }
+    // Rule 2. Two rows at one `lo` are two ranges claiming one boundary,
+    // and nothing anywhere says which of them owns it.
+    for (std::size_t i = 1; i < mine.size(); ++i) {
+        if (mine[i].lo == mine[i - 1].lo) {
+            return Status::Corruption(
+                "sys.ranges: relation " + std::to_string(rel_oid) +
+                " has two range rows at lo = " + std::to_string(mine[i].lo) +
+                "; a boundary belongs to one range");
+        }
+    }
+    return mine;
+}
+
+Status Catalog::InsertRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where) {
+    // A boundary no id could ever fall in is not a boundary. `lo` is a
+    // Keystone id (invariant 7) and the ceiling is the type's.
+    if (row.lo > kMaxKeystoneId) {
+        return Status::InvalidArgument(
+            "sys.ranges: range boundary " + std::to_string(row.lo) + " for relation " +
+            std::to_string(row.rel_oid) + " is above the 40-bit Keystone id ceiling (" +
+            std::to_string(kMaxKeystoneId) + "), so no id could ever fall in it");
+    }
+
+    // Read through the same door the reader uses, so the directory this row
+    // is validated against is one that already validates. A Corruption here
+    // is the existing rows' and crosses unchanged rather than being
+    // reported as a bad argument.
+    auto existing = RangesOf(row.rel_oid);
+    if (!existing.ok()) return existing.status();
+
+    if (existing.value().empty()) {
+        if (row.lo != 0) {
+            return Status::InvalidArgument(
+                "sys.ranges: the first range row for relation " + std::to_string(row.rel_oid) +
+                " must be at lo = 0 - a directory describes the whole id space or it is not a "
+                "partition - and this one is at lo = " + std::to_string(row.lo));
+        }
+    } else {
+        for (const SysRangeRow& have : existing.value()) {
+            if (have.lo == row.lo) {
+                return Status::InvalidArgument(
+                    "sys.ranges: relation " + std::to_string(row.rel_oid) +
+                    " already has a range at lo = " + std::to_string(row.lo) +
+                    "; a boundary belongs to one range");
+            }
+        }
+    }
+
+    // Issued after every refusal above, so a rejected insert spends no id.
+    auto range_id = AllocateRowId(kSysRangesTable);
+    if (!range_id.ok()) return range_id.status();
+    row.range_id = range_id.value();
+
+    Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageRanges, row, trx_id, where);
+    if (where != nullptr) where->rel_oid = kSysRangesTable;
+    // A new range row changes which core a resolver would name for part of
+    // this relation's id space, so every cached routing answer is stale.
+    //
+    // **This is `kCatalogInvalidate`, and it is not all of CC10.** The
+    // version bump reaches peers through `Expeditor`'s hook, so the cache
+    // half of step 5 is here - but the hook is installed on one catalog, so
+    // an insert on a peer invalidates locally and broadcasts nothing, and
+    // the bump fires before the transaction commits, so a peer can re-read
+    // a split that later rolls back. CC10's ordering - durable row before
+    // any grant, broadcast after - is the mover's (RB2), and this call is
+    // one of its steps rather than a substitute for them.
+    if (s.ok()) BumpVersion("sys.ranges insert");
+    return s;
+}
+
 Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
                                         std::uint64_t index_oid) {
     // A relation whose anchor predates PW2 has none, and there is then no
@@ -1711,22 +1805,17 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
         }
     };
 
-    // sys.ranges (RD1): the sweep's place, held before the row exists. The
-    // relation is empty and codec-less until RD2 (gated on D2,
-    // workplan-range-directory.md §4), so a tuple on this chain is
-    // corruption, not a row; RD2 replaces this with SysRangeRow and
-    // `r.rel_oid == table_oid`. First in the chain on purpose: this is the
-    // one sweep guaranteed to fail on its trigger, so it probes before the
-    // destructive sweeps below have retired anything.
-    struct RangeRowNotYetDefined {
-        static StatusOr<RangeRowNotYetDefined> Decode(std::span<const std::byte>) {
-            return Status::Corruption(
-                "sys.ranges holds a tuple before RD2 defined its row format; "
-                "nothing may write this relation yet");
-        }
-    };
-    if (Status s = sweep(RangeRowNotYetDefined{}, kCatalogPageRanges,
-                         [](const RangeRowNotYetDefined&) { return false; });
+    // sys.ranges (RD2): a dropped relation's ranges go with it.
+    //
+    // **Order among the sweeps is no longer load-bearing**, and saying so is
+    // the honest replacement for what stood here. RD1 put this first because
+    // the placeholder it held refused *every* tuple, which made it a probe
+    // that ran before the destructive sweeps had retired anything; the real
+    // codec refuses only a wrong length, exactly like its siblings, so
+    // there is nothing left to probe. It stays first because moving it would
+    // be a diff with no reason.
+    if (Status s = sweep(SysRangeRow{}, kCatalogPageRanges,
+                         [&](const SysRangeRow& r) { return r.rel_oid == table_oid; });
         !s.ok()) {
         return s;
     }

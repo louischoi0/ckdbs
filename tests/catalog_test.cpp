@@ -14,6 +14,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -102,6 +103,273 @@ TEST_F(CatalogTest, SysRangesExistsAndIsEmptyAtBootstrap) {
     heap::PageView page(bytes.value().bytes());
     EXPECT_EQ(page.slot_count(), 0u);
     EXPECT_EQ(page.next_page_id(), kInvalidPageId);
+}
+
+// ---- RD2: the directory row, and the door its two rules live at --------
+
+TEST_F(CatalogTest, ARangeRowRoundTripsThroughItsCodec) {
+    SysRangeRow row{};
+    row.range_id = 77;
+    row.lo = 0x00FF'FFFF'FFFFull;  // a 40-bit Keystone id at its ceiling
+    row.rel_oid = 4000;
+    row.owner_core = 3;
+    row.entry_page = 987;
+
+    const auto bytes = row.Encode();
+    auto back = SysRangeRow::Decode(bytes);
+    ASSERT_TRUE(back.ok()) << back.status().message();
+    EXPECT_EQ(back.value().range_id, row.range_id);
+    EXPECT_EQ(back.value().lo, row.lo);
+    EXPECT_EQ(back.value().rel_oid, row.rel_oid);
+    EXPECT_EQ(back.value().owner_core, row.owner_core);
+    EXPECT_EQ(back.value().entry_page, row.entry_page);
+
+    // Short bytes are refused rather than read past, like every other row.
+    EXPECT_FALSE(SysRangeRow::Decode(std::span(bytes).first(bytes.size() - 1)).ok());
+}
+
+TEST_F(CatalogTest, AnUnsplitRelationHasNoRangeRowsAndThatIsNotAnError) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // The ordinary answer for every relation in this engine today: empty,
+    // ok. A relation with no rows here is one range owned by
+    // `sys.tables.owner_core`, and an empty *error* would make the unsplit
+    // path handle a failure that never happens.
+    auto ranges = catalog_.RangesOf(4000);
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    EXPECT_TRUE(ranges.value().empty());
+}
+
+TEST_F(CatalogTest, TheFirstRangeRowMustDescribeTheWholeIdSpace) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // CC9's rule 1, refused at the door. Opening a directory at a boundary
+    // above 0 publishes a partition with a hole below it, and every later
+    // insert inherits the hole.
+    SysRangeRow above{};
+    above.rel_oid = 4000;
+    above.lo = 4096;
+    above.owner_core = 1;
+    above.entry_page = 500;
+    Status refused = catalog_.InsertRangeRow(above);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(refused.message().find("lo = 0"), std::string::npos) << refused.message();
+
+    // And nothing landed - a refused insert is not a partial one.
+    auto after = catalog_.RangesOf(4000);
+    ASSERT_TRUE(after.ok());
+    EXPECT_TRUE(after.value().empty());
+
+    SysRangeRow first{};
+    first.rel_oid = 4000;
+    first.lo = 0;
+    first.owner_core = 0;
+    first.entry_page = 400;
+    ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
+    ASSERT_TRUE(catalog_.InsertRangeRow(above).ok()) << "the second row was refused";
+}
+
+TEST_F(CatalogTest, RangeRowsComeBackInLoOrderWhateverOrderTheyWereWritten) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // Page order is insertion order and neither is `lo` order, which is
+    // what RD7 concatenates in and what makes `hi` derivable.
+    const std::uint64_t los[] = {0, 8192, 4096, 12288};
+    for (std::size_t i = 0; i < 4; ++i) {
+        SysRangeRow row{};
+        row.rel_oid = 4000;
+        row.lo = los[i];
+        row.owner_core = static_cast<std::uint32_t>(i);
+        row.entry_page = static_cast<PageId>(400 + i);
+        ASSERT_TRUE(catalog_.InsertRangeRow(row).ok()) << "row " << i;
+    }
+    // A second relation's rows share the heap and must not appear.
+    SysRangeRow other{};
+    other.rel_oid = 4001;
+    other.lo = 0;
+    other.owner_core = 2;
+    other.entry_page = 600;
+    ASSERT_TRUE(catalog_.InsertRangeRow(other).ok());
+
+    auto ranges = catalog_.RangesOf(4000);
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 4u);
+    EXPECT_EQ(ranges.value()[0].lo, 0u);
+    EXPECT_EQ(ranges.value()[1].lo, 4096u);
+    EXPECT_EQ(ranges.value()[2].lo, 8192u);
+    EXPECT_EQ(ranges.value()[3].lo, 12288u);
+
+    auto theirs = catalog_.RangesOf(4001);
+    ASSERT_TRUE(theirs.ok());
+    ASSERT_EQ(theirs.value().size(), 1u);
+    EXPECT_EQ(theirs.value()[0].owner_core, 2u);
+}
+
+TEST_F(CatalogTest, TwoRangesMayNotClaimOneBoundary) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    SysRangeRow first{};
+    first.rel_oid = 4000;
+    first.lo = 0;
+    first.owner_core = 0;
+    first.entry_page = 400;
+    ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
+
+    SysRangeRow dup = first;
+    dup.owner_core = 1;
+    dup.entry_page = 401;
+    Status refused = catalog_.InsertRangeRow(dup);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
+
+    // The same boundary on *another* relation is a different range and is
+    // admitted - the rule is per relation, not per id.
+    SysRangeRow elsewhere = first;
+    elsewhere.rel_oid = 4001;
+    EXPECT_TRUE(catalog_.InsertRangeRow(elsewhere).ok());
+}
+
+TEST_F(CatalogTest, ADirectoryWithNoLoZeroRowIsCorruptionAndNotAnAnswer) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // **The set the door refuses on the read side, reached the only way it
+    // can be**: past `InsertRangeRow`, which refuses to create it. It is
+    // not hypothetical - a directory whose `lo = 0` row and whose later
+    // boundaries were written by different transactions can be left in
+    // exactly this shape by a mount that undoes only some of them, which is
+    // the residue RB2 owns (`Catalog::InsertRangeRow`'s note).
+    //
+    // The bytes go straight onto page 15, which is what makes this a test
+    // of the reader rather than of the writer.
+    SysRangeRow orphan{};
+    orphan.range_id = 1;
+    orphan.rel_oid = 4000;
+    orphan.lo = 4096;
+    orphan.owner_core = 1;
+    orphan.entry_page = 500;
+    {
+        auto bytes = store_.Get(kCatalogPageRanges);
+        ASSERT_TRUE(bytes.ok());
+        heap::PageView page(bytes.value().bytes());
+        const auto encoded = orphan.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, kBootstrapXid).ok());
+    }
+
+    auto refused = catalog_.RangesOf(4000);
+    EXPECT_FALSE(refused.ok()) << "a directory with a hole under it was served";
+    EXPECT_EQ(refused.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(refused.status().message().find("lo = 0"), std::string::npos)
+        << refused.status().message();
+
+    // And it is that relation's directory that is refused, not the page:
+    // another relation's rows on the same heap still resolve.
+    SysRangeRow ok_row{};
+    ok_row.rel_oid = 4001;
+    ok_row.lo = 0;
+    ok_row.owner_core = 0;
+    ok_row.entry_page = 600;
+    ASSERT_TRUE(catalog_.InsertRangeRow(ok_row).ok());
+    auto healthy = catalog_.RangesOf(4001);
+    ASSERT_TRUE(healthy.ok()) << healthy.status().message();
+    EXPECT_EQ(healthy.value().size(), 1u);
+}
+
+TEST_F(CatalogTest, ARangeBoundaryAboveTheKeystoneCeilingIsRefused) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // `lo` is a Keystone id (invariant 7). A boundary above the 40-bit
+    // ceiling is one no id could ever fall in, so the range it opens could
+    // never hold a row.
+    SysRangeRow first{};
+    first.rel_oid = 4000;
+    first.lo = 0;
+    first.owner_core = 0;
+    first.entry_page = 400;
+    ASSERT_TRUE(catalog_.InsertRangeRow(first).ok());
+
+    SysRangeRow beyond{};
+    beyond.rel_oid = 4000;
+    beyond.lo = kMaxKeystoneId + 1;
+    beyond.owner_core = 1;
+    beyond.entry_page = 401;
+    Status refused = catalog_.InsertRangeRow(beyond);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
+
+    // The ceiling itself is a legal boundary, so the refusal is off-by-one
+    // free.
+    beyond.lo = kMaxKeystoneId;
+    EXPECT_TRUE(catalog_.InsertRangeRow(beyond).ok());
+}
+
+TEST_F(CatalogTest, EveryRangeRowCarriesAnIdOfItsOwnInTheIdentitySlot) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // `CatalogRowRef`'s contract: every catalog row carries its oid in the
+    // first eight bytes, which is where `Compensate` re-reads it. `lo` was
+    // in that slot in this row's first draft and is **not unique** - every
+    // split relation's opening row is at 0 - so the ids are what keep two
+    // relations' opening rows distinguishable there.
+    SysRangeRow a{};
+    a.rel_oid = 4000;
+    a.lo = 0;
+    a.owner_core = 0;
+    a.entry_page = 400;
+    ASSERT_TRUE(catalog_.InsertRangeRow(a).ok());
+
+    SysRangeRow b = a;
+    b.rel_oid = 4001;
+    b.entry_page = 401;
+    ASSERT_TRUE(catalog_.InsertRangeRow(b).ok());
+
+    auto first = catalog_.RangesOf(4000);
+    auto second = catalog_.RangesOf(4001);
+    ASSERT_TRUE(first.ok());
+    ASSERT_TRUE(second.ok());
+    ASSERT_EQ(first.value().size(), 1u);
+    ASSERT_EQ(second.value().size(), 1u);
+    EXPECT_NE(first.value()[0].range_id, 0u) << "the row was written with no id";
+    EXPECT_NE(first.value()[0].range_id, second.value()[0].range_id)
+        << "two rows at lo = 0 share an identity";
+}
+
+TEST_F(CatalogTest, DroppingARelationRetiresItsRangeRowsAndNoOthers) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto doomed =
+        catalog_.CreateTable(kNamespacePublic, "doomed", MinimalPkSchema(), ClusteredType::kHeap);
+    ASSERT_TRUE(doomed.ok()) << doomed.status().message();
+
+    SysRangeRow mine{};
+    mine.rel_oid = doomed.value();
+    mine.lo = 0;
+    mine.owner_core = 0;
+    mine.entry_page = 400;
+    ASSERT_TRUE(catalog_.InsertRangeRow(mine).ok());
+    SysRangeRow second = mine;
+    second.lo = 4096;
+    second.owner_core = 1;
+    second.entry_page = 401;
+    ASSERT_TRUE(catalog_.InsertRangeRow(second).ok());
+
+    SysRangeRow survivor{};
+    survivor.rel_oid = doomed.value() + 1;
+    survivor.lo = 0;
+    survivor.owner_core = 2;
+    survivor.entry_page = 500;
+    ASSERT_TRUE(catalog_.InsertRangeRow(survivor).ok());
+
+    std::vector<std::uint64_t> dropped_cabins;
+    ASSERT_TRUE(catalog_.DropTable(doomed.value(), dropped_cabins).ok());
+
+    auto gone = catalog_.RangesOf(doomed.value());
+    ASSERT_TRUE(gone.ok()) << gone.status().message();
+    EXPECT_TRUE(gone.value().empty()) << "a dropped relation kept its ranges";
+
+    auto kept = catalog_.RangesOf(survivor.rel_oid);
+    ASSERT_TRUE(kept.ok());
+    EXPECT_EQ(kept.value().size(), 1u) << "the sweep took another relation's range";
 }
 
 TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {

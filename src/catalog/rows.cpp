@@ -346,6 +346,33 @@ StatusOr<SysFkeyRow> SysFkeyRow::Decode(std::span<const std::byte> bytes) {
     return row;
 }
 
+std::array<std::byte, SysRangeRow::kOnDiskSize> SysRangeRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kRangeIdOffset, &range_id, sizeof(range_id));
+    std::memcpy(base + kLoOffset, &lo, sizeof(lo));
+    std::memcpy(base + kRelOidOffset, &rel_oid, sizeof(rel_oid));
+    std::memcpy(base + kOwnerCoreOffset, &owner_core, sizeof(owner_core));
+    std::memcpy(base + kEntryPageOffset, &entry_page, sizeof(entry_page));
+    return buf;
+}
+
+StatusOr<SysRangeRow> SysRangeRow::Decode(std::span<const std::byte> bytes) {
+    if (Status s = CheckSize(bytes, kOnDiskSize); !s.ok()) return s;
+
+    SysRangeRow row{};
+    const std::byte* base = bytes.data();
+    std::memcpy(&row.range_id, base + kRangeIdOffset, sizeof(row.range_id));
+    std::memcpy(&row.lo, base + kLoOffset, sizeof(row.lo));
+    std::memcpy(&row.rel_oid, base + kRelOidOffset, sizeof(row.rel_oid));
+    std::memcpy(&row.owner_core, base + kOwnerCoreOffset, sizeof(row.owner_core));
+    std::memcpy(&row.entry_page, base + kEntryPageOffset, sizeof(row.entry_page));
+    // Pure, like its neighbours: CC9's two rules are properties of a
+    // relation's whole row set (stated at `SysRangeRow`), and a decoder
+    // holding one row can see neither.
+    return row;
+}
+
 std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name) {
     if (col.type_val == kTypeValDecimal || col.type_val == kTypeValDecimalWide) {
         return std::string(base_name) + "(" + std::to_string(DecimalPrecisionOf(col.len)) + "," +

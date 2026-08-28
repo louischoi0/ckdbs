@@ -873,6 +873,50 @@ public:
     // instead of calling this per row (catalog_cache.hpp's absence rule).
     StatusOr<SysFkeyRow> FindForeignKeyOnColumn(Oid child_rel_oid, std::uint16_t child_column_no);
 
+    // ---- sys.ranges — the range directory (CC9, RD2) -------------------
+    //
+    // **The door CC9's two rules are enforced at.** The rules themselves are
+    // stated once, at `SysRangeRow` (`rows.hpp`), because they are
+    // properties of the row *format*'s meaning; what is local here is that
+    // a reader and a writer refuse them under **different codes**, and why.
+    //
+    // `RangesOf` returns one relation's rows in ascending `lo` order — the
+    // order a range scan concatenates in (RD7) and the order `hi` derives
+    // along. A set that breaks either rule is **Corruption**: no writer
+    // produces one, so reaching it means the bytes are not what this
+    // catalog wrote, and no caller can handle it.
+    //
+    // **An empty answer is the ordinary answer** and is not an error: a
+    // relation with no rows here is one range owned by
+    // `sys.tables.owner_core`, which is every relation until RD5 allocates
+    // a second one. Callers on the unsplit path must not reach this at all
+    // — RD3's zero-cost invariant is that they read the cached field and
+    // stop — so this is the allocation and inspection surface, never the
+    // resolver.
+    StatusOr<std::vector<SysRangeRow>> RangesOf(Oid rel_oid);
+
+    // Writes one range row, refusing anything that would break the
+    // partition before it lands rather than leaving it for the next reader.
+    // **`InvalidArgument`, not Corruption**: a caller asking for an
+    // overlapping or gap-leaving boundary is wrong, not corrupt, and RD5's
+    // allocator is the caller that has to be told so. The first row for a
+    // relation must carry `lo = 0` — opening a directory means describing
+    // the range that already exists, and only then splitting it.
+    //
+    // `range_id` is issued here, not by the caller: it is this relation's
+    // own Keystone sequence and the caller has no way to draw from it.
+    //
+    // **What this cannot yet promise, and RB2 owns** (RD5): `where` records
+    // the row so a `ROLLBACK` can compensate it, but a directory whose
+    // `lo = 0` row and whose later boundaries were written by *different*
+    // transactions can be left, by a mount that undoes only some of them,
+    // with rows and no `lo = 0` row — which `RangesOf` then refuses as
+    // Corruption for that relation's life. Nothing here can prevent that;
+    // the allocator has to write a relation's opening row and its first
+    // split in one transaction, and that is a sequencing rule, not a check.
+    Status InsertRangeRow(SysRangeRow row, std::uint64_t trx_id = kBootstrapXid,
+                          CatalogRowRef* where = nullptr);
+
     // The `trx_id` on these three is the row's MVCC stamp (DT2). It
     // defaults to `kBootstrapXid` because every caller that does not pass
     // one is bootstrap, and a bootstrap row must be visible to every read

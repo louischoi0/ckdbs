@@ -180,16 +180,16 @@ inline constexpr Oid kSysFkeysTable = 132;
 // next row's lo. A relation with no rows here is one range owned by
 // sys.tables.owner_core, which is every relation today.
 //
-// **Created empty at bootstrap (RD1) and codec-less on purpose.** The row
-// format is RD2's, gated on D2 (where the entry page is recorded -
-// docs/inflight/in-progress/workplan-range-directory.md §4), and nothing
-// writes a row before RD5's allocator exists. It bootstraps anyway - root
-// page fixed, oid fixed - because a peer can only fault pages below
-// kFirstUserPageId and the pre-invalidate flush walks a compile-time span,
-// so a directory every routing core reads must live on a fixed low page
-// (workplan-range-directory.md §3a's C1). Fixed-offset typed rows once RD2
-// defines them: everything CC9 names is fixed-width, so none of
-// sys.pattern_defs' reasons for the user-tuple format apply.
+// **Created empty at bootstrap (RD1); its row is `SysRangeRow` (RD2,
+// 2026-08-28).** Fixed-offset and typed, as RD1 predicted it would be:
+// everything CC9 names is fixed-width, so none of sys.pattern_defs' reasons
+// for the user-tuple format apply. **Still empty on every existing file** -
+// nothing writes a row until RD5's allocator exists, which is what made
+// defining the format free of a version bump. It bootstraps at a fixed low
+// page because a peer can only fault pages below kFirstUserPageId and the
+// pre-invalidate flush walks a compile-time span, so a directory every
+// routing core reads cannot come from the general supply
+// (workplan-range-directory.md §3a's C1).
 inline constexpr Oid kSysRangesTable = 133;
 
 // The **floor** for user-created object oids, not a counter.

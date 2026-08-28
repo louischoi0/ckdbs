@@ -851,6 +851,102 @@ static_assert(offsetof(SysFkeyRow, child_column_no) == SysFkeyRow::kChildColumnN
 static_assert(offsetof(SysFkeyRow, flags) == SysFkeyRow::kFlagsOffset);
 static_assert(SysFkeyRow::kOnDiskSize == 28);
 
+// ---- sys.ranges -------------------------------------------------------
+//
+// One row per range of a **split** relation (`docs/spec/crosscore.md` CC9,
+// RD2). A relation with no rows here is one range owned by
+// `sys.tables.owner_core`, which is every relation today - so the common
+// case is the *absence* of rows, and that is what keeps the unsplit path
+// free (RD3's zero-cost invariant).
+//
+// **D2, taken 2026-08-28 on capacity** (`workplan-range-directory.md` §11).
+// The alternative was the relation's anchor page, and the reason it lost is
+// not the `index_oid == 0` collision the plan first recorded - RA5 priced
+// that at zero. It is that the anchor holds 679 `{u64 key, u32 root}`
+// entries (`anchor_page.hpp`) **shared with index roots**, while one
+// 10 M-row relation at the range size RD5 starts from needs ~2,441 ranges
+// by itself. The anchor cannot hold one large relation's ranges, let alone
+// several relations' plus their indexes.
+//
+// **The two rules CC9 states, and they are the reason this row has a
+// door.** Both are properties of a relation's whole row *set*, so neither
+// a decoder nor a single row can hold them, and `Catalog::RangesOf` /
+// `Catalog::InsertRangeRow` are where they live:
+//
+//   1. a relation with any row here has one at **`lo = 0`**. The rows
+//      partition the whole id space or they are not a partition, and a
+//      first range starting above 0 would leave the ids below it owned by
+//      nothing - while a *non-empty* directory has already contradicted
+//      the "one range owned by `sys.tables.owner_core`" answer that would
+//      otherwise cover them;
+//   2. the `lo`s of one relation are **distinct and ascending**, which is
+//      what lets `hi` be *derived* as the next row's `lo` rather than
+//      stored. Storing `hi` would let two rows disagree about one
+//      boundary; deriving it makes them partition by construction. The
+//      last row's `hi` is unbounded.
+//
+// Field order by descending alignment, so the on-disk offsets and the
+// struct's coincide and every field carries an offsetof assert.
+struct SysRangeRow {
+    // From AllocateRowId(kSysRangesTable) - the persistent sequence in
+    // sys.ranges' own sys.tables row, which is why RD1 gave this relation
+    // that row and not merely a page. `SysCabinRow::cabin_id` and
+    // `SysFkeyRow::fk_id` are the same field for the same reason.
+    //
+    // **First, because the catalog's rollback contract requires it**
+    // (`catalog.hpp`'s `CatalogRowRef`): *"every catalog row carries its
+    // oid in the first eight bytes, which is exactly where a Keystone id
+    // would be"*, and `Compensate` re-reads exactly those bytes to confirm
+    // it is retiring the row it recorded. `lo` sat here in this row's first
+    // draft, which put a **non-unique** value in the identity slot - every
+    // split relation's opening row carries `lo = 0` - and made the same
+    // eight bytes mean a boundary to `RangesOf` and a row identity to the
+    // undo trail. Giving the row an id of its own is what removes the
+    // second reading rather than guarding it.
+    std::uint64_t range_id;
+
+    // The range's inclusive lower bound, a Keystone id zero-extended to 64
+    // bits (invariant 7), and never above `kMaxKeystoneId` - a boundary no
+    // id could fall in is one `InsertRangeRow` refuses.
+    std::uint64_t lo;
+
+    // The relation this range belongs to. Rows of different relations share
+    // the heap, so every read filters on it and `DropTable`'s sweep retires
+    // on it.
+    Oid rel_oid;
+
+    // The core that owns `[lo, hi)`. Not a duplicate of
+    // `sys.tables.owner_core`: that field is the whole relation's owner and
+    // stays the answer for a relation with no rows here, which is what lets
+    // the unsplit path read one cached field and stop.
+    std::uint32_t owner_core;
+
+    // Where this range's own sub-structure starts (CC8): the chain head for
+    // a heap range, that range's subtree entry for a btree one. **The field
+    // that makes a range a sub-structure rather than a span** - RD6's
+    // per-range chains take the insert head from here, which is what closes
+    // the defect where `sys.tables.desc_page_id` headed the lower range for
+    // every insert and a row belonging above landed in it with no refusal.
+    PageId entry_page;
+
+    static constexpr std::size_t kRangeIdOffset = 0;
+    static constexpr std::size_t kLoOffset = 8;
+    static constexpr std::size_t kRelOidOffset = 16;
+    static constexpr std::size_t kOwnerCoreOffset = 24;
+    static constexpr std::size_t kEntryPageOffset = 28;
+    static constexpr std::size_t kOnDiskSize = kEntryPageOffset + sizeof(PageId);
+
+    std::array<std::byte, kOnDiskSize> Encode() const;
+    static StatusOr<SysRangeRow> Decode(std::span<const std::byte> bytes);
+};
+
+static_assert(offsetof(SysRangeRow, range_id) == SysRangeRow::kRangeIdOffset);
+static_assert(offsetof(SysRangeRow, lo) == SysRangeRow::kLoOffset);
+static_assert(offsetof(SysRangeRow, rel_oid) == SysRangeRow::kRelOidOffset);
+static_assert(offsetof(SysRangeRow, owner_core) == SysRangeRow::kOwnerCoreOffset);
+static_assert(offsetof(SysRangeRow, entry_page) == SysRangeRow::kEntryPageOffset);
+static_assert(SysRangeRow::kOnDiskSize == 32);
+
 // MATCH SIMPLE: a NULL fk value skips the check (§2).
 //
 // Written by `Catalog::CreateForeignKey` from the child column's declared
