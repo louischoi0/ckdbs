@@ -148,7 +148,7 @@ this workplan means the v2.4.0 path.
 | R6-2 | Participant transaction context (D2) | **Built 2026-08-27**, this worktree |
 | R6-3 | Prepare and decide (D4) | **Built 2026-08-28**, `63a0f43` |
 | R6-4 | Recovery (D4) | **Built 2026-08-28**, this worktree |
-| R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b` |
+| R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b`; review at `ad0aa2f` |
 | R6-6 | PW3b extension | — |
 | R6-7 | PL-A revisit | — |
 | R6-8 | Dispatch | — |
@@ -1132,7 +1132,15 @@ a failure's price on a healthy day; the ratified rule bounds the *stall*, and
 the stall is the writer's.
 
 **Reached through one function** — `CommandDispatcher::InDoubtCeilingNs()` —
-and swept as `in_doubt_ceiling_ms`. **The measured sweep is not this row's**:
+and swept as `in_doubt_ceiling_ms`. **What the knob moves is the writer's
+block, and only that**: the participant's *ask cadence* reads
+`kTxnInDoubtCeilingNs` at the constant. The two are the same number by
+derivation and not the same quantity, and sweeping them together would make
+`0` mean "refuse a writer at once" on one and "ask the coordinator every
+reactor tick" on the other. §2's obligation is about D5's `[OPEN]`, which is
+the writer's block; the cadence is a second quantity and nothing needs a
+knob for it yet. Stated because the first cut's comment claimed both went
+through the function, and the review found that false. **The measured sweep is not this row's**:
 it needs a live cross-owner path, which `MayShip` and `CheckWriteAffinity`
 still refuse until R6-8, so the number above is the proposal and its
 derivation, and RP8 is where a measurement can replace it. Stated rather
@@ -1182,6 +1190,89 @@ the coordinator's and it is being re-applied, not re-made.
   reachable outside a test — which is also when B-cell measurement of the
   ceiling becomes possible.
 
+### The `critics-developer` pass, and what it moved
+
+Run against `056cf9b`; the fixes landed at `ad0aa2f`. **Two correctness
+bugs, both of which the row's own prose already claimed were not there** —
+which is the reason to record them at length rather than as a line.
+
+**Bug 1 — a refused write left an explicit transaction committable, and it
+was silent.** `EndWrite` withholds the poison whenever a blocker is
+recorded, but **only `DispatchAsync` consumes one**. The synchronous
+`Dispatch()` handles every other pending field and never looks at
+`in_doubt_block`; nor does a `DispatchAsync` on a dispatcher with no clock.
+On those paths a client was handed `ERR TXN_CONFLICT` for a statement that
+failed inside `BEGIN`, and the session stayed `kInTxn` — so `BEGIN` →
+blocked `UPDATE` → `ERR` → **`COMMIT` returned `COMMIT`**. The transaction
+committed without the statement. `txn.md` §6's failure atomicity is per
+transaction and `HandleCommit`'s `session.failed()` gate is the only thing
+enforcing it; this disarmed that gate. Fixed at the *source*: the blocker
+is recorded only under `may_park_ && clock_ != nullptr`, the same pair the
+wait tests, so one condition keeps `EndWrite`, the export and the wait
+consistent — and it makes true the two claims that were false, the
+`InDoubtBlock` declaration's *"a fixture sees the pre-R6-5 behaviour"* and
+this file's *"the poison is withheld while the wait is still possible"*.
+
+**Bug 2 — `UnknownOutcome` was documented terminal and was not.** The
+unknown arm of `Resolve` moved the stamp and nothing else, and the sweep's
+only guard is the ceiling — so a participant re-asked every 200 ms for the
+life of the process, two ring messages and two Warn lines each, and
+`++in_doubt_resolved_unknown_` every time. That last is the concrete wrong
+answer: `txn_in_doubt_unresolved` is documented as a count of
+*transactions* and became a count of asks, climbing at ~5/s per stuck
+transaction. **Four independent statements said terminal** — D5's
+ratification, the reply payload's header, the accessor's own doc, and this
+file's *"what ends the asking is an answer — including `UnknownOutcome`,
+which is terminal and stops it"* — and none of them was code.
+`Enrolled::resolve_terminal` is the flag they all assumed.
+
+**Cuts taken.** `Txn2pcServer::asks_`/`resolve_replies_` had **no reader**
+anywhere and counted a number `SHOW META` already prints from the executor
+(`in_doubt_asks`) — two names for one quantity, which is what R6-3's review
+kept `prepares()/decides()/replies()` on the opposite test for. Gone. The
+decision map had **two removal policies** — retention by age, cap by map
+key, an ordering the comment itself conceded was arbitrary across sessions
+— now one ordering (time) and one `OpenDecisionRecord` that `Prepare` and
+`Decide` share, which also closes the asymmetry where only `Prepare`
+expired. `SHOW META`'s coordinator gate now includes the three counters
+that can fire on their own, so a refused ask is not invisible on exactly
+the run that produced one.
+
+**Recorded, not fixed — a slow decide that loses the race to its own ask.**
+R6-5 creates an arrival order R6-3 could not: the ask resolves the
+transaction and releases the context, and the original decide — merely
+slow, not lost — arrives behind it. `Decide` finds no context, the
+coordinator's decide leg never sets the retry bit, so the benign-resend arm
+is unreachable and it lands on the anomaly arm: `decide_refusals_`, an
+Error line, and a refusal that keeps the coordinator's record for the full
+retention. **The outcome is correct and every report about it was wrong.**
+The Error no longer asserts the loss it cannot know — it names both
+reachable causes — and `decide_refusals()` says it now covers this benign
+case. The exact fix needs either a decided-window on the participant (a
+second dedup mechanism on the row that is already the fifth wire leg) or a
+bit the coordinator has no way to set at send time, and it is only
+reachable when a decide takes longer than 200 ms to cross a ring whose hop
+is ~21 µs. **R6-8 owns it**, and RP7 should not read a non-zero
+`txn_decide_refusals` as proof of a lost half without checking this.
+
+**HP3, restated honestly by the review.** Every *statement* wait is
+bounded: the in-doubt park takes its deadline once and shares it across
+re-runs, and the reactor's 10 ms idle cap means the deadline is observed
+promptly. Two waits are not bounded and neither is new — the two
+commit-durability parks, the class R6-3's review already recorded as
+inherited — and the **ask loop is unbounded by decision**, which bug 2's
+fix narrows to the unanswered case. **RP7 must report HP3 as "holds for
+every statement wait; the ask loop and the two commit parks are unbounded,
+one by decision and two as inherited"**, not as confirmed.
+
+**And one prediction of R6-3's that did not come true**, worth correcting
+because a later reader would otherwise act on it: that review declined the
+shared-ring-waiter cut on the ground that *"the fifth copy is already
+predictable — R6-5's in-doubt ask."* It is not. `Ask` opens no waiter and
+nothing parks on it; the participant's own sweep is the retry. The
+consolidation row is still worth doing for the existing four, but its
+stated trigger did not fire.
+
 ### Tests
 
 `tests/txn_2pc_protocol_test.cpp` gains three fixtures for D5's three sides:
@@ -1199,7 +1290,11 @@ writer not waited on at all — the narrowness that keeps a client's think
 time out of this). `tests/txn_2pc_wire_test.cpp` gains the ask's sizing and
 the ceiling's two ordering assertions.
 
-Full suite green at `056cf9b`: **2,853 tests, 16 new**. Overhead not
+The review adds two more, one per bug, each failing without its fix:
+`ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid` and
+`AnUnknownAnswerEndsTheAskingRatherThanRepeatingItForEver`.
+
+Full suite green at `ad0aa2f`: **2,855 tests, 18 new**. Overhead not
 measured — the v2-stage A/B suspension of 2026-08-24 stands.
 
 ## Open, carried from the work order
