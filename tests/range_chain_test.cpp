@@ -281,5 +281,138 @@ TEST_F(RangeChainTest, AMultiRowInsertCrossingTheBoundaryIsRefusedRatherThanStra
     EXPECT_TRUE(IdsInChain(RangesOfTable()[1].entry_page).empty());
 }
 
+// ---- RD8 / §8 test 9: range equivalence -----------------------------
+//
+// **The split as the only variable.** Two relations, identical rows,
+// identical statements; one relation cut at a boundary the matching rows
+// straddle. Every reply must be byte-identical - not "the same rows", the
+// same bytes, which is what the spec asks for and what catches an
+// ordering difference a set comparison would forgive.
+//
+// The straddle is required rather than incidental (§8 test 9 says so): a
+// boundary no predicate crosses is a boundary nothing checks, and every
+// defect this milestone found - the insert head, the range-blind walk,
+// the resumed prefix, the fan-in's grouping - produced a right answer for
+// data that stayed on one side.
+class RangeEquivalenceTest : public RangeChainTest {
+protected:
+    void SetUp() override {
+        RangeChainTest::SetUp();
+        Run("CREATE TABLE u (id int64, v int64)");
+        // `t` is cut at the boundary; `u` is not. Rows are placed by name
+        // in **ascending** id order into both, so the two differ in one
+        // thing only.
+        auto oid = boot_->catalog.FindTableOidByName("t");
+        ASSERT_TRUE(oid.ok());
+        auto head = boot_->catalog.CreateRangeEntryPage(oid.value(), kBoundary);
+        ASSERT_TRUE(head.ok()) << head.status().message();
+        ASSERT_TRUE(
+            boot_->catalog.OpenRangeRows(oid.value(), kBoundary, 0, head.value()).ok());
+
+        for (std::uint64_t id : Ids()) {
+            const std::string v = std::to_string(id * 2);
+            Run("INSERT INTO t VALUES (" + std::to_string(id) + ", " + v + ")");
+            Run("INSERT INTO u VALUES (" + std::to_string(id) + ", " + v + ")");
+        }
+
+        // **Without this the whole suite is vacuous.** Every test below
+        // compares `t` against `u`; if the cut had not happened, or if
+        // the rows had all landed on one side of it, they would compare a
+        // relation against a relation and pass however broken ranges
+        // were. So: two ranges, and rows in both chains.
+        const std::vector<catalog::SysRangeRow> rows = RangesOfTable();
+        ASSERT_EQ(rows.size(), 2u) << "the fixture did not split t";
+        ASSERT_FALSE(IdsInChain(rows[0].entry_page).empty()) << "the lower range is empty";
+        ASSERT_FALSE(IdsInChain(rows[1].entry_page).empty()) << "the upper range is empty";
+    }
+
+    // Ids on **both sides** of the boundary, and adjacent to it: the
+    // boundary belongs to the range above, so `kBoundary - 1` and
+    // `kBoundary` are the pair that catches an off-by-one in either the
+    // resolver or the walk.
+    static std::vector<std::uint64_t> Ids() {
+        return {1, 2, kBoundary - 1, kBoundary, kBoundary + 1, kBoundary + 2};
+    }
+
+    // The reply for `sql` against `t` (split) and against `u` (whole),
+    // with the relation name the only textual difference.
+    void ExpectSame(const std::string& sql) {
+        std::string split_sql = sql;
+        std::string whole_sql = sql;
+        const std::size_t at = whole_sql.find(" t");
+        ASSERT_NE(at, std::string::npos) << sql;
+        whole_sql.replace(at, 2, " u");
+        const std::string split = Run(split_sql);
+        const std::string whole = Run(whole_sql);
+        EXPECT_EQ(split, whole) << "the split changed the answer for: " << sql;
+        EXPECT_EQ(split.rfind("ERR", 0), std::string::npos)
+            << "both sides refused, which proves nothing: " << split;
+    }
+};
+
+TEST_F(RangeEquivalenceTest, AWholeScanIsByteIdentical) { ExpectSame("SELECT * FROM t"); }
+
+TEST_F(RangeEquivalenceTest, APkEqualityIsByteIdenticalOnBothSidesOfTheBoundary) {
+    for (std::uint64_t id : Ids()) {
+        ExpectSame("SELECT * FROM t WHERE id = " + std::to_string(id));
+    }
+}
+
+TEST_F(RangeEquivalenceTest, APkRangeStraddlingTheBoundaryIsByteIdentical) {
+    // The case §8 test 9 names: matching rows on both sides of the cut.
+    ExpectSame("SELECT * FROM t WHERE id BETWEEN " + std::to_string(kBoundary - 1) + " AND " +
+               std::to_string(kBoundary + 1));
+    ExpectSame("SELECT * FROM t WHERE id BETWEEN 1 AND " + std::to_string(kBoundary + 2));
+}
+
+TEST_F(RangeEquivalenceTest, ANonPkPredicateIsByteIdentical) {
+    // Names no range, so the default is every range - the fan-out §2a
+    // says the gating discipline makes unavoidable.
+    ExpectSame("SELECT * FROM t WHERE v = " + std::to_string(kBoundary * 2));
+    ExpectSame("SELECT * FROM t WHERE v > 2");
+}
+
+TEST_F(RangeEquivalenceTest, AnAggregateOverASplitRelationIsByteIdentical) {
+    ExpectSame("SELECT COUNT(*) FROM t");
+    ExpectSame("SELECT SUM(v) FROM t");
+    ExpectSame("SELECT MIN(id) FROM t");
+    ExpectSame("SELECT MAX(id) FROM t");
+}
+
+TEST_F(RangeEquivalenceTest, AnOrderedReadIsByteIdenticalAcrossTheBoundary) {
+    // `ORDER BY` sorts, so it is the one shape whose answer cannot depend
+    // on walk order at all - which makes it the control: if this differed,
+    // the split would have changed the *rows*, not their order.
+    ExpectSame("SELECT * FROM t ORDER BY id DESC");
+    ExpectSame("SELECT * FROM t ORDER BY v ASC");
+}
+
+TEST_F(RangeEquivalenceTest, ADeleteAndAnUpdateAcrossTheBoundaryAgree) {
+    // The write half of equivalence, and the one that exercises
+    // `VisitRelation`'s per-range walk rather than the step VM's.
+    ExpectSame("UPDATE t SET v = 999 WHERE id = " + std::to_string(kBoundary));
+    ExpectSame("SELECT * FROM t WHERE v = 999");
+    ExpectSame("DELETE FROM t WHERE id = " + std::to_string(kBoundary + 1));
+    ExpectSame("SELECT * FROM t");
+}
+
+TEST_F(RangeEquivalenceTest, TheEquivalenceRestsOnInsertionOrderMatchingRangeOrder) {
+    // **Stated because it bounds the claim above.** A heap relation's rows
+    // come back in *chain* order, which is insertion order; a split
+    // relation's come back per range, concatenated in `lo` order. The two
+    // coincide only while rows were inserted ascending - which the fixture
+    // does, and which is what an engine-issued pk produces.
+    //
+    // Insert one row out of order into both and the *sets* still agree
+    // while the byte-identity does not. That is a property of the heap's
+    // unordered rows (invariant 4), not of ranges, and a reader who takes
+    // "byte-identical" as unconditional would be surprised by it later.
+    Run("INSERT INTO u VALUES (3, 6)");
+    Run("INSERT INTO t VALUES (3, 6)");
+    const std::string split = Run("SELECT * FROM t ORDER BY id ASC");
+    const std::string whole = Run("SELECT * FROM u ORDER BY id ASC");
+    EXPECT_EQ(split, whole) << "ordered, the two must still agree exactly";
+}
+
 }  // namespace
 }  // namespace kds::server

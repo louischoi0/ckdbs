@@ -302,6 +302,118 @@ TEST_F(RangeAllocTest, AnUnsplitRelationIsRefusedNothing) {
     EXPECT_TRUE(catalog::RefuseAuxiliaryOnSplitRelation(*access.value(), "an index").ok());
 }
 
+// ---- RD8 / §8 test 13: the split gates, each by name ----------------
+//
+// "The allocator's admission check declines an indexed, cabined,
+// spilling, or FK-linked relation, **names the gate**, and the relation
+// stays one range." The naming half is `RangeGateName`, which is what the
+// decline's log line and `SHOW META`'s `range_split_decline_detail` both
+// print; the staying-one-range half is that `sys.ranges` is untouched.
+//
+// **Two of §8's four cannot be reached through the allocator at all, and
+// saying so is part of the test.** An index is btree-only (IX3) and D1
+// declines every btree relation first, so `kIndex` is a gate for the day
+// D1 lifts - `ABtreeRelationIsDeclinedAndNothingIsWritten` above covers
+// what actually fires. The other three are reachable on a heap relation
+// and are here.
+
+TEST_F(RangeAllocTest, ACabinedRelationDeclinesNamingItsGate) {
+    // `PkSchema` already carries the second column a Cabin needs -
+    // `CreateCabin` refuses column 0 for its own reason.
+    auto oid = catalog_.CreateTable(kNamespacePublic, "cabined", PkSchema(),
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(catalog_.CreateCabin(oid.value(), 1, catalog::kCabinOriginUser).ok());
+
+    auto access = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    EXPECT_EQ(exec::RangeEligible(*access.value(), enforcer_), exec::RangeGate::kCabin);
+    EXPECT_EQ(exec::RangeGateName(exec::RangeGate::kCabin), "cabined");
+
+    EXPECT_EQ(Open(oid.value(), 4096, 1).value(), kInvalidPageId);
+    auto ranges = catalog_.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok());
+    EXPECT_TRUE(ranges.value().empty()) << "a cabined relation was split";
+}
+
+TEST_F(RangeAllocTest, ASpillingRelationDeclinesNamingItsGate) {
+    Schema schema = PkSchema();
+    catalog::SetName(schema.columns[1].name, "note");
+    schema.columns[1].type_val = catalog::kTypeValVarchar;
+    schema.columns[1].len = 0;  // the instance width; a bare varchar can spill
+    auto oid = catalog_.CreateTable(kNamespacePublic, "spilling", schema, ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    auto access = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    EXPECT_EQ(exec::RangeEligible(*access.value(), enforcer_), exec::RangeGate::kSpill);
+    EXPECT_EQ(exec::RangeGateName(exec::RangeGate::kSpill), "spilling-schema");
+
+    EXPECT_EQ(Open(oid.value(), 4096, 1).value(), kInvalidPageId);
+    auto ranges = catalog_.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok());
+    EXPECT_TRUE(ranges.value().empty()) << "a spilling relation was split";
+}
+
+TEST_F(RangeAllocTest, AnFkChildDeclinesNamingItsGate) {
+    // **The parent must be BTREE**, which the catalog refuses to do
+    // without: a heap parent has no pk index, so every FK check would scan
+    // it (`CreateForeignKey`'s own refusal). That has a consequence for
+    // §8 test 13 worth stating rather than discovering: the FK gate's
+    // *parent* half is unreachable through the allocator, because D1
+    // declines every btree relation before `RangeEligible` looks at
+    // `fkeys_in` - the same shape `kIndex` is in. What is reachable, and
+    // is here, is the **child**: a heap relation carrying `fkeys_out`.
+    Schema parent_schema = PkSchema();
+    auto parent = catalog_.CreateTable(kNamespacePublic, "fk_parent", parent_schema,
+                                       ClusteredType::kBtree);
+    ASSERT_TRUE(parent.ok()) << parent.status().message();
+
+    Schema child_schema = PkSchema();
+    catalog::SetName(child_schema.columns[1].name, "parent_id");
+    auto child = catalog_.CreateTable(kNamespacePublic, "fk_child", child_schema,
+                                      ClusteredType::kHeap);
+    ASSERT_TRUE(child.ok()) << child.status().message();
+    auto fk = catalog_.CreateForeignKey(child.value(), 1, parent.value(), 0);
+    ASSERT_TRUE(fk.ok()) << fk.status().message();
+
+    auto access = catalog_.InitTableAccess(child.value());
+    ASSERT_TRUE(access.ok());
+    EXPECT_EQ(exec::RangeEligible(*access.value(), enforcer_), exec::RangeGate::kForeignKey);
+    EXPECT_EQ(exec::RangeGateName(exec::RangeGate::kForeignKey), "fk-linked");
+
+    EXPECT_EQ(Open(child.value(), 4096, 1).value(), kInvalidPageId);
+    auto ranges = catalog_.RangesOf(child.value());
+    ASSERT_TRUE(ranges.ok());
+    EXPECT_TRUE(ranges.value().empty()) << "an FK-linked relation was split";
+
+    // And the parent declines too, on D1 rather than on the FK gate -
+    // pinned so the ordering is deliberate rather than incidental.
+    auto parent_access = catalog_.InitTableAccess(parent.value());
+    ASSERT_TRUE(parent_access.ok());
+    EXPECT_EQ(exec::RangeEligible(*parent_access.value(), enforcer_), exec::RangeGate::kBtree);
+}
+
+TEST_F(RangeAllocTest, EveryGateHasADistinctNameForTheCounterToKeyOn) {
+    // `range_split_decline_detail` prints `oid:gate=count`, so two gates
+    // sharing a token would merge two decisions into one number - and the
+    // reading the counter exists for is *which* gate declines how often.
+    // Neither may carry ':' or ',' either, or the detail string stops
+    // parsing.
+    const exec::RangeGate gates[] = {
+        exec::RangeGate::kNone,   exec::RangeGate::kBtree, exec::RangeGate::kIndex,
+        exec::RangeGate::kCabin,  exec::RangeGate::kSpill, exec::RangeGate::kForeignKey,
+        exec::RangeGate::kAssertion};
+    std::set<std::string_view> seen;
+    for (exec::RangeGate gate : gates) {
+        const std::string_view name = exec::RangeGateName(gate);
+        EXPECT_FALSE(name.empty());
+        EXPECT_EQ(name.find(':'), std::string_view::npos) << name;
+        EXPECT_EQ(name.find(','), std::string_view::npos) << name;
+        EXPECT_TRUE(seen.insert(name).second) << "two gates share the token " << name;
+    }
+}
+
 // ---- C3's counters (§9e) --------------------------------------------
 
 TEST(RangeSplitDeclineCountersTest, TheFirstDeclineAndAChangeOfGateAreTransitions) {
