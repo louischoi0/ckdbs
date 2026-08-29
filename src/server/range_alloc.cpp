@@ -7,8 +7,17 @@
 
 namespace kds::server {
 
-StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog, storage::PageStore& store,
-                                       wal::WalManager* wal,
+void LogRangeDecline(Logger* log, std::uint32_t core_id, catalog::Oid rel_oid,
+                     exec::RangeGate gate, std::string_view why) {
+    if (log == nullptr || !log->enabled(LogLevel::kInfo)) return;
+    log->Info("range", "core " + std::to_string(core_id) +
+                           " will not open a range on relation oid " + std::to_string(rel_oid) +
+                           ": " + std::string(exec::RangeGateName(gate)) + " (" +
+                           std::string(why) + ")");
+}
+
+StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
+                                       storage::DevicePageStore& store, wal::WalManager* wal,
                                        const exec::AssertionEnforcer& enforcer,
                                        catalog::Oid rel_oid, std::uint64_t lo,
                                        std::uint32_t owner_core, Logger* log) {
@@ -27,13 +36,14 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog, storage::PageS
     // one a later change cannot remove by making the fill succeed.
     auto row = catalog.GetSysTableRow(rel_oid);
     if (!row.ok()) return row.status();
-    if (row.value().namespace_oid == catalog::kNamespaceSys) {
-        if (log != nullptr && log->enabled(LogLevel::kInfo)) {
-            log->Info("range", "core 0 declined a range for catalog relation oid " +
-                                   std::to_string(rel_oid) +
-                                   ": a catalog relation's pages and chain head are core 0's by "
-                                   "construction");
-        }
+    // `!= kNamespacePublic`, which is the engine's idiom for the question
+    // (AL7, DT3, `range_eligible.hpp`'s own scope note) and not `==
+    // kNamespaceSys`: the two agree only while `sys` and `public` are the
+    // only namespaces, and the difference between them is which way a
+    // third one fails. A gate must fail closed.
+    if (row.value().namespace_oid != catalog::kNamespacePublic) {
+        LogRangeDecline(log, catalog::kSystemCore, rel_oid, exec::RangeGate::kNone,
+                        "a catalog relation's pages and chain head are core 0's by construction");
         return kInvalidPageId;
     }
 
@@ -43,12 +53,7 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog, storage::PageS
     {
         const exec::RangeGate gate = exec::RangeEligible(*access.value(), enforcer);
         if (gate != exec::RangeGate::kNone) {
-            if (log != nullptr && log->enabled(LogLevel::kInfo)) {
-                log->Info("range", "core 0 declined a range for relation oid " +
-                                       std::to_string(rel_oid) + " at lo " + std::to_string(lo) +
-                                       ": " + std::string(exec::RangeGateName(gate)) +
-                                       " (re-checked at the durable row)");
-            }
+            LogRangeDecline(log, catalog::kSystemCore, rel_oid, gate, "re-checked at the durable row");
             return kInvalidPageId;
         }
         // The fifth gate against the durable rows, for the reason the
@@ -69,25 +74,45 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog, storage::PageS
             }
         }
         if (asserted) {
-            if (log != nullptr && log->enabled(LogLevel::kInfo)) {
-                log->Info("range", "core 0 declined a range for relation oid " +
-                                       std::to_string(rel_oid) + " at lo " + std::to_string(lo) +
-                                       ": " +
-                                       std::string(exec::RangeGateName(exec::RangeGate::kAssertion)) +
-                                       " (durable sys.assertions row)");
-            }
+            LogRangeDecline(log, catalog::kSystemCore, rel_oid, exec::RangeGate::kAssertion,
+                            "durable sys.assertions row, which this core's registry cannot see");
             return kInvalidPageId;
         }
     }
 
-    auto entry_page = catalog.OpenRange(rel_oid, lo, owner_core);
+    // ---- CC10's steps, in CC10's order ------------------------------
+    //
+    // The ordering below is a correctness statement in the spec, not a
+    // sequence that happened to work: **the head page is durable and
+    // handed off before any row names it, and the boundary is published
+    // last.** The first draft of this row wrote the rows first and
+    // published inside `InsertRangeRow`, which broadcast a partition
+    // before the page it partitions into existed on the device.
+    auto entry_page = catalog.CreateRangeEntryPage(rel_oid, lo);
     if (!entry_page.ok()) return entry_page.status();
+    const PageId head[] = {entry_page.value()};
 
-    // CC10 step 2's record, logged **after** the rows so one EnsureDurable
-    // covers both: LSNs are monotonic within core 0's stream, so waiting
-    // on this one waits on everything logged before it. PL §9 rule 1 -
-    // durable before any grant leaves - is what that wait is for, and the
-    // grant is the caller's reply.
+    // Step 1. **Flush, and it is CC7's own sequence rather than a
+    // precaution** (PW1c-4, the relation publish hook's `FlushPages` →
+    // handoff → grant → `EvictClean`). `CreateRangeEntryPage` formatted
+    // the head in *this* core's frame and nothing wrote it to the device;
+    // every core has its own `DevicePageStore`, so the owner's admission
+    // faults these bytes from the device and would read the id back as
+    // "allocated but was never written" (`ResidentBytes`' all-zero arm) -
+    // the grant would fail on arrival and the range would have a head no
+    // core could write. `FlushPages` carries the free map out with the
+    // page, which the owner's `RefreshFreeMapFromDevice` then needs to see
+    // the id allocated at all.
+    if (Status s = store.FlushPages(head); !s.ok()) {
+        return s.WithContext("flushing range entry page " + std::to_string(entry_page.value()) +
+                             " before its handoff");
+    }
+
+    // Step 2, and PL §9 rule 1's durability wait. A failure here leaves an
+    // orphaned formatted page and **no boundary**, which is the direction
+    // to fail in: a leaked page is the class DROP TABLE already accepts,
+    // where a published boundary whose head was never handed off would be
+    // a range its owner cannot write.
     auto handoff = wal::LogPageHandoff(wal, entry_page.value(), owner_core);
     if (!handoff.ok()) {
         return handoff.status().WithContext("handoff record for range entry page " +
@@ -97,8 +122,32 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog, storage::PageS
     // nothing to recover - which is what a fixture is.
     if (handoff.value() != wal::kNoLsn) {
         if (Status s = wal->EnsureDurable(handoff.value()); !s.ok()) {
-            return s.WithContext("range directory row and handoff record not durable");
+            return s.WithContext("handoff record for the range entry page not durable");
         }
+    }
+
+    // Step 3, and step 5 inside it: the rows, then one publication. The
+    // reply the caller sends is step 4, so the broadcast still precedes
+    // the grant by the width of this return - stated rather than claimed
+    // closed. Closing it needs publication deferred past a message send,
+    // which is the mover's shape (CC10's migration) and RB3's to build;
+    // what is closed here is the half that mattered, the announcement of a
+    // boundary whose page was neither durable nor handed off.
+    if (Status s = catalog.OpenRangeRows(rel_oid, lo, owner_core, entry_page.value()); !s.ok()) {
+        return s;
+    }
+
+    // The departure completed on this side (the 95b45e8 review's C4, and
+    // the publish hook's closing step): core 0 would otherwise keep a
+    // frame of a page another core now owns, which is a stale-read window
+    // and - because core 0 has no lease and so `MayWrite`s everything - a
+    // later flush of that frame writing the empty image back over the
+    // owner's rows. Best-effort and logged: a dirty-frame refusal here
+    // would mean the flush above lied, and the range is already open.
+    if (Status s = store.EvictClean(head); !s.ok() && log != nullptr &&
+                                            log->enabled(LogLevel::kError)) {
+        log->Error("range", "core 0 could not evict handed-off range entry page " +
+                                std::to_string(entry_page.value()) + ": " + s.message());
     }
     return entry_page.value();
 }

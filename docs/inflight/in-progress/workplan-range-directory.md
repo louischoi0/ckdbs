@@ -554,8 +554,12 @@ unrepresentative on purpose rather than by omission (its §7).
 are. **RD3** as RB1 on top of it — `TableAccess::ranges` filled at the
 catalog fill, `ResolveRanges` over it, and **CD1 in §12**, which is where
 the zero-cost invariant is stated as the two numbers it actually is. §12a
-carries the two debts RB1 hands to RB2 and RB3. **The build resumes at
-RD5** (RB2), whose §2b answer — CD2 — is the next conclusion owed.
+carries the two debts RB1 hands to RB2 and RB3. **RD5** as RB2 —
+allocation, the converse gates, C3's counters, and **CD2 in §13**, where
+§2b's answer turns out to be forced twice rather than chosen. §13a records
+what its review caught; §13b the two limits it states. **The build resumes
+at RD6** (RB3), which is also what raises `range_size_ids` off its default:
+a range only becomes honourable when it is its own chain.
 
 ## 9. RD4 — the hypotheses, the C2 enumeration, the fifth gate, and C3's decision
 
@@ -1164,3 +1168,110 @@ to be rediscovered at the symptom.
   value that struct says cannot exist, and RB3 reads `entry_page` off
   exactly such a range.
 
+
+## 13. CD2 — where allocation runs, and what the choice forced
+
+Built as RB2 in worktree `v2.5.0-ragne-directory`, landed at `69ea147` and
+corrected at its review in the commit after; `include/kds/server/range_alloc.hpp`
+carries the argument beside the code and this section records the decision.
+
+**The site is the drain tick, and §2b's own framing — "the choice is forced
+by where RD5 allocates" — turned out to be right twice over.** Neither
+half is a preference:
+
+1. **Only core 0 may write a catalog page** (M5), and `sys.ranges` is one.
+   The core that discovers the demand is the relation's owner, which is a
+   peer; it cannot write the row, and `RowIdLeaseTable::Next` is inside a
+   running INSERT that cannot await a round trip. The point of demand is
+   not merely undesirable, it is **unavailable**.
+2. **Publication is a version bump.** `InsertRangeRow` ends in
+   `BumpVersion`, which drops the cache entry that since RD3 owns
+   `TableAccess::ranges` — the storage a resolved range set spans. At the
+   point of demand the running INSERT holds that borrow; on the tick
+   nothing does. That is `key_order`'s first form exactly, and it produced
+   a wrong answer rather than a crash.
+
+So CC10's steps land across the two cores that can perform them: the owner
+asks `RangeEligible` on its tick (§9c — the only core where the fifth gate
+is authoritative), core 0 re-checks what its own catalog can see, carves,
+formats the head page, flushes it, logs the handoff, writes the rows and
+publishes, and the owner admits the page off the reply.
+
+**The failure mode is a refusal, which is what §3 asked the choice to be
+made on.** A declined gate or a failed write means *no range opens and the
+grant still goes out*: the relation stays one range and inserts run
+unchanged. A carve that cannot be made already answers a zero-count grant,
+which the lease reports as a non-retryable refusal.
+
+**The fifth gate changes form between the two cores, and that is §9b's
+permissive failure made concrete.** Core 0's `AssertionEnforcer` holds
+nothing for a peer-owned relation, so `RangeEligible`'s assertion arm
+answers *eligible* for exactly the relation an assertion must decline.
+Core 0 therefore asks `sys.assertions` through `ListAssertionTargets` —
+the durable half, authoritative there by construction, and the form that
+reads only the pages the walk already holds.
+
+**§9b's catalog-relation scope is taken here**, off the `sys.tables` row
+and before the access fill: a bootstrap catalog relation has no
+`sys.columns` rows, so the fill would refuse it *accidentally*, and a
+scope stated in code is one a later change cannot remove by making the
+fill succeed. `!= kNamespacePublic`, the engine's idiom, so a third
+namespace fails closed.
+
+**D6's one-key rule is enforced on the wire, not only at the caller.**
+`range_size_ids` sizes the grant and the range because they are one
+quantity; a request asking for a range with no block size is refused
+rather than given the default, since the substitution would open a range
+of `kRowIdLeasePerGrant` for a core that believed it asked for something
+else.
+
+**The default is off, and that too is forced.** RD6 makes a range its own
+chain; until then a directory row would describe a partition no insert or
+read honours. `range_size_ids = 0` is the shipped value, RD6 raises it,
+RD9(b) sweeps it.
+
+### 13a. What the RB2 review caught, because it was not caught by design
+
+Two of these were wrong in the pushed commit `69ea147` and are corrected in
+the commit after it. Recorded rather than quietly fixed, because both are
+classes rather than instances.
+
+- **The head page never reached the device.** `CreateNew()` inserts a
+  dirty in-memory frame and writes nothing; every core has its own
+  `DevicePageStore` over one shared device, so the owner's admission
+  faulted an id the device did not have and the grant failed on arrival —
+  a range with a head no core could write, and a dirty core-0 frame of a
+  page another core now owned. CC7's own sequence is *flush → durable
+  handoff record → grant → `EvictClean`* and the relation publish hook
+  already ran it; RD5 had skipped both ends. Now pinned by a test that
+  fails when the flush is removed.
+- **CC10's publication ran before its own steps 1, 2 and 4.**
+  `InsertRangeRow` bumps the version synchronously, so the boundary was
+  broadcast twice — once per row — before the page it partitions into was
+  durable or handed off. `OpenRange` is therefore split in two,
+  `CreateRangeEntryPage` and `OpenRangeRows`, **because CC10's ordering
+  requires the caller to interpose**, and publication happens once, last.
+  What remains inverted is only steps 4 and 5: the reply follows the
+  broadcast by the width of a return, and closing that needs publication
+  deferred past a message send, which is the mover's shape and RB3's.
+- **The assertion converse gate was at the pre-scan, not at the door.**
+  `PrepareAssertionDef` had it; `InsertAssertion` — the guard its own
+  comment calls unreachable-past — did not, and the peer path parks
+  between them, which is a window the owner's tick can open a range in.
+  The index half was closed only because `CreateIndex` re-runs
+  `CheckIndexDef`.
+- **The scope test was fail-open** (`== kNamespaceSys` rather than
+  `!= kNamespacePublic`), and **the split test was fail-closed on a
+  one-range directory**, which a crash between `OpenRangeRows`' two writes
+  can leave and which would then refuse every auxiliary forever with a
+  message reading "split across 1 ranges".
+
+### 13b. Two limits RB2 states rather than leaves to be found
+
+- **`RangeGate::kIndex` is unreachable today.** IX3 makes an index
+  btree-only and D1 declines every btree relation first, so the index gate
+  is for the day D1 lifts. What fires today is `kBtree`.
+- **A core-0-owned relation can never open a range**, because core 0 does
+  not lease row ids — it bumps `next_id` directly. RD9's subject must
+  therefore be a *peer-owned heap* relation, which narrows the order's §7
+  subject problem further than §7 states it.

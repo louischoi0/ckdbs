@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <map>
+
+#include "kds/server/refusal_counters.hpp"
 #include <optional>
 #include <string>
 #include <vector>
@@ -94,27 +96,23 @@ public:
     };
 
     void Record(std::uint32_t home_core, std::uint32_t target_core, catalog::Oid rel_oid) {
-        ++counts_[Key{home_core, target_core, rel_oid}];
+        counts_.Add(Key{home_core, target_core, rel_oid});
     }
 
     std::uint64_t CountFor(std::uint32_t home_core, std::uint32_t target_core,
                             catalog::Oid rel_oid) const {
-        auto it = counts_.find(Key{home_core, target_core, rel_oid});
-        return it == counts_.end() ? 0 : it->second;
+        return counts_.CountFor(Key{home_core, target_core, rel_oid});
     }
 
-    std::uint64_t total() const noexcept {
-        std::uint64_t n = 0;
-        for (const auto& [key, count] : counts_) n += count;
-        return n;
-    }
+    std::uint64_t total() const noexcept { return counts_.total(); }
 
-    // Ordered, so a report of these is stable run to run - the same
-    // determinism rule sched.md §8 applies to anything observable.
-    const std::map<Key, std::uint64_t>& counts() const noexcept { return counts_; }
+    const std::map<Key, std::uint64_t>& counts() const noexcept { return counts_.counts(); }
 
 private:
-    std::map<Key, std::uint64_t> counts_;
+    // The tally, ordering and total live in `refusal_counters.hpp`; what
+    // stays here is the key this counter is keyed by and what its numbers
+    // mean. RD5's decline counters are the second instance.
+    RefusalCounters<Key> counts_;
 };
 
 // The refusal a cross-core **write** gets.

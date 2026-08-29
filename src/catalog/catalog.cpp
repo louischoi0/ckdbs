@@ -1121,6 +1121,27 @@ StatusOr<std::vector<SysRangeRow>> Catalog::RangesOf(Oid rel_oid) {
 }
 
 Status Catalog::InsertRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where) {
+    Status s = WriteRangeRow(std::move(row), trx_id, where);
+    // A new range row changes which core a resolver would name for part of
+    // this relation's id space, so every cached routing answer is stale.
+    //
+    // **This is `kCatalogInvalidate`, and it is not all of CC10.** The
+    // version bump reaches peers through `Expeditor`'s hook, so the cache
+    // half of step 5 is here - but the hook is installed on one catalog, so
+    // an insert on a peer invalidates locally and broadcasts nothing, and
+    // the bump fires before the transaction commits, so a peer can re-read
+    // a split that later rolls back.
+    //
+    // **`OpenRangeRows` does not come through here**, and that is CC10's
+    // ordering rather than tidiness: a range's head page must be flushed,
+    // handed off and durable *before* its boundary is announced, and a
+    // publication welded to the row write announces it first. That call
+    // writes through `WriteRangeRow` and publishes once, last.
+    if (s.ok()) BumpVersion("sys.ranges insert");
+    return s;
+}
+
+Status Catalog::WriteRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where) {
     // A boundary no id could ever fall in is not a boundary. `lo` is a
     // Keystone id (invariant 7) and the ceiling is the type's.
     if (row.lo > kMaxKeystoneId) {
@@ -1162,23 +1183,20 @@ Status Catalog::InsertRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRow
 
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageRanges, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysRangesTable;
-    // A new range row changes which core a resolver would name for part of
-    // this relation's id space, so every cached routing answer is stale.
-    //
-    // **This is `kCatalogInvalidate`, and it is not all of CC10.** The
-    // version bump reaches peers through `Expeditor`'s hook, so the cache
-    // half of step 5 is here - but the hook is installed on one catalog, so
-    // an insert on a peer invalidates locally and broadcasts nothing, and
-    // the bump fires before the transaction commits, so a peer can re-read
-    // a split that later rolls back. CC10's ordering - durable row before
-    // any grant, broadcast after - is the mover's (RB2), and this call is
-    // one of its steps rather than a substitute for them.
-    if (s.ok()) BumpVersion("sys.ranges insert");
     return s;
 }
 
 Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary) {
-    if (access.ranges.empty()) return Status::OK();
+    // **`<= 1`, and it is a different question from the router's.**
+    // `range_directory.hpp` branches on `ranges.empty()` because a
+    // one-row directory still has to be *resolved* - CC10's migration
+    // writes one whose owner and entry page differ from `sys.tables`. This
+    // gate asks whether the relation is *partitioned*, and one range is
+    // not. The shape is reachable: a crash between `OpenRangeRows`' two
+    // writes leaves exactly it, and refusing every index, Cabin, assertion
+    // and FK on such a relation forever - with a message reading "split
+    // across 1 ranges" - would be a self-refuting refusal.
+    if (access.ranges.size() <= 1) return Status::OK();
     return Status::Unsupported(
         "relation oid " + std::to_string(access.oid) + " is split across " +
         std::to_string(access.ranges.size()) + " ranges, and " + std::string(auxiliary) +
@@ -1186,21 +1204,58 @@ Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_vie
         "(docs/spec/crosscore.md §6a, §9)");
 }
 
-StatusOr<PageId> Catalog::OpenRange(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core) {
+StatusOr<PageId> Catalog::CreateRangeEntryPage(Oid rel_oid, std::uint64_t lo) {
     if (lo == 0) {
         return Status::InvalidArgument(
             "sys.ranges: relation " + std::to_string(rel_oid) +
             " cannot open a range at lo = 0 - that boundary is the relation as it already is, "
-            "written here as the opening row, and asking for it as a split would describe the "
-            "whole id space twice");
+            "written as the opening row, and asking for it as a split would describe the whole "
+            "id space twice");
     }
-    // The relation's own facts, and the failure is the caller's answer:
-    // a relation with no sys.tables row has nothing to partition.
+    if (lo > kMaxKeystoneId) {
+        return Status::InvalidArgument(
+            "sys.ranges: range boundary " + std::to_string(lo) + " for relation " +
+            std::to_string(rel_oid) + " is above the 40-bit Keystone id ceiling (" +
+            std::to_string(kMaxKeystoneId) + "), so no id could ever fall in it");
+    }
+    auto created = store_.CreateNew();
+    if (!created.ok()) return created.status();
+    const PageId entry_page = created.value().first;
+    auto page = heap::PageView::CreateEmpty(created.value().second.bytes(), lo, rel_oid);
+    if (!page.ok()) return page.status();
+
+    // `wal::LogPageInit` directly and not `LogCatPageInit`: that helper
+    // pins `min_key = 0`, which is right for a catalog page and wrong for
+    // this one. A range head replayed with `min_key = 0` would accept ids
+    // below its boundary after a recovery and only after one, which is
+    // invariant 3 lost in the one place nothing would look.
+    if (auto rec = wal::LogPageInit(wal_, wal::kNoTxnId, entry_page, PageType::kHeap, lo, rel_oid);
+        !rec.ok()) {
+        return rec.status();
+    }
+    return entry_page;
+}
+
+Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core,
+                              PageId entry_page) {
+    if (lo == 0) {
+        return Status::InvalidArgument(
+            "sys.ranges: relation " + std::to_string(rel_oid) +
+            " cannot open a range at lo = 0 - that boundary is the relation as it already is");
+    }
+    if (entry_page == kInvalidPageId) {
+        return Status::InvalidArgument(
+            "sys.ranges: a range of relation " + std::to_string(rel_oid) +
+            " needs an entry page; CC8 makes a range its own sub-structure, and a row naming "
+            "none would describe a partition with nowhere to put a row");
+    }
+    // The relation's own facts, and the failure is the caller's answer: a
+    // relation with no sys.tables row has nothing to partition.
     auto access = InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
-    // Copied out, not held: the first `InsertRangeRow` below ends in
-    // `BumpVersion`, which frees the entry this pointer names. Two fields
-    // taken before any write is the whole of what this call needs from it.
+    // Copied out, not held: the publication below frees the entry this
+    // pointer names. Two fields taken before any write is the whole of
+    // what this call needs from it.
     const std::uint32_t relation_owner = access.value()->owner_core;
     const PageId relation_head = access.value()->desc_page_id;
 
@@ -1211,34 +1266,13 @@ StatusOr<PageId> Catalog::OpenRange(Oid rel_oid, std::uint64_t lo, std::uint32_t
     auto existing = RangesOf(rel_oid);
     if (!existing.ok()) return existing.status();
 
-    // The head page, allocated and formatted before either row, because
-    // the row that names it must not become durable first: redo refuses a
-    // record naming a page nothing creates (RC03's class).
-    PageId entry_page = kInvalidPageId;
-    {
-        auto created = store_.CreateNew();
-        if (!created.ok()) return created.status();
-        entry_page = created.value().first;
-        auto page = heap::PageView::CreateEmpty(created.value().second.bytes(), lo, rel_oid);
-        if (!page.ok()) return page.status();
-    }
-    // `wal::LogPageInit` directly and not `LogCatPageInit`: that helper
-    // pins `min_key = 0`, which is right for a catalog page and wrong for
-    // this one. A range head replayed with `min_key = 0` would accept ids
-    // below its boundary after a recovery and only after one, which is
-    // invariant 3 lost in the one place nothing would look.
-    if (auto rec = wal::LogPageInit(wal_, wal::kNoTxnId, entry_page, PageType::kHeap, lo, rel_oid);
-        !rec.ok()) {
-        return rec.status();
-    }
-
     if (existing.value().empty()) {
         SysRangeRow opening{};
         opening.rel_oid = rel_oid;
         opening.lo = 0;
         opening.owner_core = relation_owner;
         opening.entry_page = relation_head;
-        if (Status s = InsertRangeRow(opening); !s.ok()) return s;
+        if (Status s = WriteRangeRow(opening, kBootstrapXid, nullptr); !s.ok()) return s;
     }
 
     SysRangeRow split{};
@@ -1246,8 +1280,14 @@ StatusOr<PageId> Catalog::OpenRange(Oid rel_oid, std::uint64_t lo, std::uint32_t
     split.lo = lo;
     split.owner_core = owner_core;
     split.entry_page = entry_page;
-    if (Status s = InsertRangeRow(split); !s.ok()) return s;
-    return entry_page;
+    if (Status s = WriteRangeRow(split, kBootstrapXid, nullptr); !s.ok()) return s;
+
+    // **One publication for the pair, and it is the last thing this call
+    // does** (CC10 step 5). Two rows through `InsertRangeRow` would bump
+    // twice, and the first bump would announce a directory whose second
+    // row does not exist yet - a partition a peer could read mid-write.
+    BumpVersion("sys.ranges open");
+    return Status::OK();
 }
 
 Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,

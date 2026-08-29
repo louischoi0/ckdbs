@@ -9,7 +9,9 @@
 #include "kds/catalog/oid.hpp"
 #include "kds/exec/range_eligible.hpp"
 #include "kds/exec/assertion_check.hpp"
+#include "kds/server/refusal_counters.hpp"
 #include "kds/server/row_id_lease_service.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/wal/manager.hpp"
 
 // RD5 — where a second range comes from, and where a refusal to open one
@@ -49,26 +51,14 @@
 // already answers a zero-count grant, which the lease turns into a
 // non-retryable refusal.
 //
-// So the sequence is the one CC10 states, with its steps landing on the
-// two cores that can perform them:
-//
-//   owner core, on the tick   ask `RangeEligible` (authoritative here and
-//                             nowhere else - §9c: the fifth gate's
-//                             registry is core-local), then request a
-//                             lease block *and* a range at its first id
-//   core 0, grant handler     re-check what its own catalog can see
-//                             (§9b's two admission windows), carve the
-//                             block, format the new range's head page,
-//                             log the handoff (CC10 step 2), write the
-//                             directory rows in one transaction (step 3,
-//                             durable before any grant), reply (step 4)
-//   owner core, on the reply  admit the page, apply the lease; the
-//                             version bump's broadcast is step 5
+// The steps themselves are CC10's and are not restated here; what is
+// local is which core performs each, and `OpenRangeOnSystemCore`'s body
+// carries that against the code that does it.
 //
 // ---- The size, which is one quantity and not two --------------------
 //
-// D6 (workplan §11) takes range = **lease grant** on a mechanism rather
-// than on a table: R4's tail-insert spreading is id-block-aligned and the
+// `workplan-range-directory.md`'s **D6** (§11) takes range = **lease
+// grant** on a mechanism rather than on a table: R4's tail-insert spreading is id-block-aligned and the
 // block is the grant, so a core inserting from its own lease stays inside
 // one range by construction. That makes the range size and the grant size
 // the same number, and this file spells it once - `range_size_ids`, the
@@ -82,22 +72,20 @@
 // partition no insert or read honours. So `range_size_ids = 0` means no
 // range ever opens, every relation stays the one range CC8 says it starts
 // as, and the engine behaves exactly as it did - which is what lets this
-// row land without RD6. RD6 raises the default to
-// `kDefaultRangeSizeIds`; RD9(b) sweeps it and the operator takes the
-// final value on those numbers.
+// row land without RD6. RD6 raises the default; RD9(b) sweeps it around
+// `kRowIdLeasePerGrant` and the operator takes the final value on those
+// numbers.
 
 namespace kds::server {
-
-// A range is one row-id lease grant (D6), so the default size is the
-// grant's - `kRowIdLeasePerGrant`, itself the measured K-M2 floor below
-// which the durable `next_id` bump stops amortizing. Derived, not chosen:
-// naming a separate number here is what §2a's "never a literal at a call
-// site" forbids, one level up.
-inline constexpr std::uint64_t kDefaultRangeSizeIds = kRowIdLeasePerGrant;
 
 // `range_size_ids = 0`: no range is ever opened, and the row-id lease
 // asks for `kRowIdLeasePerGrant` as it always has. The off-switch and the
 // size are one key for the reason the header gives.
+//
+// The *on* value has no constant here on purpose. RD9(b) sweeps it around
+// `kRowIdLeasePerGrant`, and a named default with no reader is the same
+// structurally-0 surface C3's counters were held back from landing as -
+// RD6 introduces it with the caller that raises the default.
 inline constexpr std::uint64_t kRangeSizeOff = 0;
 
 // Counts declined range openings by `(relation, gate)` — C3's decision
@@ -116,7 +104,7 @@ inline constexpr std::uint64_t kRangeSizeOff = 0;
 // first** — the index (`index.md` §13), the Cabin (`cabin.md` §11), the
 // var-heap partition, FK placement, or assertion placement. An
 // unaggregated log line cannot be that input, which is why the per-event
-// line beside it is bounded to transitions and this carries the volume.
+// line beside it fires once per pair and this carries the volume.
 //
 // Written on the **owner core**, which is the only core whose answer is
 // authoritative (§9c), and read per core through `SHOW META`.
@@ -132,47 +120,40 @@ public:
         }
     };
 
-    // Returns whether this is a **transition** - the first decline for the
-    // relation, or a change of the gate that declines it. The per-event log
-    // line rides that answer rather than the call, because a permanently
-    // gated relation (any indexed one) would otherwise pay `log.hpp`'s
-    // synchronous `write()` once per lease refill, forever, on the
-    // insert-adjacent path. The counter carries the per-ask volume.
+    // Returns whether this `(relation, gate)` pair is being seen for the
+    // **first time**, which is what the per-event log line rides. A
+    // permanently gated relation is every indexed one, so a line per lease
+    // refill would be `log.hpp`'s synchronous `write()` once per block,
+    // forever, on the insert-adjacent path; the counter carries the
+    // volume. First-seen and not "the gate changed": it bounds the lines
+    // at relations × gates for the life of the process, where a
+    // change-based rule is unbounded under an index created and dropped in
+    // a loop.
     bool Record(catalog::Oid rel_oid, exec::RangeGate gate) {
-        ++counts_[Key{rel_oid, gate}];
-        auto it = last_gate_.find(rel_oid);
-        if (it == last_gate_.end()) {
-            last_gate_.emplace(rel_oid, gate);
-            return true;
-        }
-        if (it->second == gate) return false;
-        it->second = gate;
-        return true;
+        const Key key{rel_oid, gate};
+        const bool first = counts_.CountFor(key) == 0;
+        counts_.Add(key);
+        return first;
     }
 
     std::uint64_t CountFor(catalog::Oid rel_oid, exec::RangeGate gate) const {
-        auto it = counts_.find(Key{rel_oid, gate});
-        return it == counts_.end() ? 0 : it->second;
+        return counts_.CountFor(Key{rel_oid, gate});
     }
 
-    std::uint64_t total() const noexcept {
-        std::uint64_t n = 0;
-        for (const auto& [key, count] : counts_) n += count;
-        return n;
-    }
+    std::uint64_t total() const noexcept { return counts_.total(); }
 
-    // Ordered, so a report of these is stable run to run - sched.md §8's
-    // determinism rule for anything observable.
-    const std::map<Key, std::uint64_t>& counts() const noexcept { return counts_; }
+    const std::map<Key, std::uint64_t>& counts() const noexcept { return counts_.counts(); }
 
 private:
-    std::map<Key, std::uint64_t> counts_;
-    // The last gate named for a relation, for `Record`'s transition
-    // answer. Separate from the key above because the question is "what
-    // does this relation decline on *now*", which the per-gate counts
-    // cannot answer without knowing which was most recent.
-    std::map<catalog::Oid, exec::RangeGate> last_gate_;
+    RefusalCounters<Key> counts_;
 };
+
+// The decline's per-event line, in one place because it was written four
+// times with the same shape. `why` distinguishes the sites the gate name
+// cannot: which core asked, and whether the answer came from the cached
+// catalog, the durable `sys.assertions` row, or the namespace.
+void LogRangeDecline(Logger* log, std::uint32_t core_id, catalog::Oid rel_oid,
+                     exec::RangeGate gate, std::string_view why);
 
 // Core 0's half: the re-check `crosscore.md` CC10 step 3 requires, then
 // `Catalog::OpenRange`, then the durable handoff of the new head page to
@@ -201,8 +182,13 @@ private:
 // asking it would answer "eligible" for exactly the relation whose
 // assertion should decline it. `sys.assertions` is authoritative on core
 // 0 by construction.
-StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog, storage::PageStore& store,
-                                       wal::WalManager* wal,
+// The store is the **concrete** one, not the `PageStore` seam, and that is
+// the flush: core 0 formats the head in its own frame and every core has
+// its own store over the shared device, so `FlushPages`/`EvictClean` -
+// which live only here - are what make the granted page readable by its
+// new owner and unwritable by its old one (CC7's flush-then-grant).
+StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
+                                       storage::DevicePageStore& store, wal::WalManager* wal,
                                        const exec::AssertionEnforcer& enforcer,
                                        catalog::Oid rel_oid, std::uint64_t lo,
                                        std::uint32_t owner_core, Logger* log);

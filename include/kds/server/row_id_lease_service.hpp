@@ -11,6 +11,7 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/lease_refill_stats.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/wal/manager.hpp"
 
 // The row-id lease over the ring (`RingMessageKind::kRowIdLease`): how a
@@ -66,12 +67,13 @@ static_assert(sizeof(RowIdLeaseGrantPayload) == 32);
 // it can read as "none" is what lets it fail a statement honestly.
 // `store`, `wal` and `enforcer` are RD5's: a request that asks for a range needs
 // the handoff record and the eligibility re-check, and **a handler given
-// none of them simply grants the ids and opens nothing** - which is what every
+// no store or enforcer simply grants the ids and opens nothing** - which is what every
 // fixture is, and what makes the range half additive rather than a new
 // precondition on the lease.
 Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, catalog::Catalog& catalog,
-                                 Logger* log = nullptr, storage::PageStore* store = nullptr,
+                                 Logger* log = nullptr,
+                                 storage::DevicePageStore* store = nullptr,
                                  wal::WalManager* wal = nullptr,
                                  const exec::AssertionEnforcer* enforcer = nullptr);
 

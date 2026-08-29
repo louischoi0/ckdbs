@@ -1078,56 +1078,29 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // PW1c-5, so at this commit a peer's foreign write is refused by
     // `CheckWriteAffinity` and *is* counted. The list above is the
     // undercount that is real now.
-    os << " cross_core_write_refusals=" << cross_core_writes_.total()
-       << " cross_core_write_refusal_keys=" << cross_core_writes_.counts().size();
-    if (!cross_core_writes_.counts().empty()) {
-        // `home>target:oid=count`, comma-separated, in the map's order
-        // (stable run to run - sched.md §8's rule for anything observable).
-        // Capped, and the cap **says** it truncated: a silent cut would
-        // read as "these were all of them".
-        constexpr std::size_t kMaxDetailKeys = 16;
-        os << " cross_core_write_refusal_detail=";
-        std::size_t printed = 0;
-        for (const auto& [key, count] : cross_core_writes_.counts()) {
-            if (printed == kMaxDetailKeys) {
-                os << ",+" << (cross_core_writes_.counts().size() - printed) << "more";
-                break;
-            }
-            if (printed != 0) os << ',';
-            os << key.home_core << '>' << key.target_core << ':' << key.rel_oid
-               << '=' << count;
-            ++printed;
-        }
-    }
+    PrintRefusalCounters(os, "cross_core_write_refusal", cross_core_writes_.counts(),
+                         [](std::ostream& out, const CrossCoreWriteCounters::Key& key) {
+                             out << key.home_core << '>' << key.target_core << ':' << key.rel_oid;
+                         },
+                         /*even_when_zero=*/true);
 
-    // **Declined range openings** (RD5's C3, workplan-range-directory.md
-    // §9e), in the triple above's exact form and for the same reason: the
-    // reading is aggregate, and *which gate declines how often on which
-    // relation* is the evidence for which owning decision to lift first -
-    // the index (index.md §13), the Cabin (cabin.md §11), the var-heap
-    // partition, FK or assertion placement. The per-event log line beside
-    // it is bounded to transitions, so this is where the volume is.
+    // **Declined range openings** (RD5's C3,
+    // `workplan-range-directory.md` §9e), in the triple above's form with
+    // one deliberate difference: the whole block is absent at zero rather
+    // than printing `=0`, which is this section's absent-rather-than-
+    // zeroed rule. The cross-core triple predates that rule and keeps its
+    // unconditional print so its series does not break.
     //
-    // Absent rather than zeroed, this block's rule throughout: a core
-    // whose relations have never been asked prints nothing, which is the
-    // honest reading of "no range was ever declined here" - and with
-    // `range_size_ids` at its default nothing asks at all.
-    if (range_split_declines_.total() != 0) {
-        os << " range_split_declines=" << range_split_declines_.total()
-           << " range_split_decline_keys=" << range_split_declines_.counts().size();
-        constexpr std::size_t kMaxDetailKeys = 16;
-        os << " range_split_decline_detail=";
-        std::size_t printed = 0;
-        for (const auto& [key, count] : range_split_declines_.counts()) {
-            if (printed == kMaxDetailKeys) {
-                os << ",+" << (range_split_declines_.counts().size() - printed) << "more";
-                break;
-            }
-            if (printed != 0) os << ',';
-            os << key.rel_oid << ':' << exec::RangeGateName(key.gate) << '=' << count;
-            ++printed;
-        }
-    }
+    // The reading is aggregate: **which gate declines how often on which
+    // relation is the evidence for which owning decision to lift first** -
+    // the index (`index.md` §13), the Cabin (`cabin.md` §11), the var-heap
+    // partition, FK or assertion placement. The per-event log line beside
+    // it is bounded to first sightings, so this is where the volume is.
+    PrintRefusalCounters(os, "range_split_decline", range_split_declines_.counts(),
+                         [](std::ostream& out, const RangeSplitDeclineCounters::Key& key) {
+                             out << key.rel_oid << ':' << exec::RangeGateName(key.gate);
+                         },
+                         /*even_when_zero=*/false);
 
     // **Statement shipping** (D7 of the statement-shipping work order).
     // Two halves, because a core is both an arrival core and an owner and

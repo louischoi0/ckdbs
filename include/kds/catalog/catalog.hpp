@@ -80,25 +80,6 @@ namespace kds::catalog {
 // `TransactionManager::NoteInsert` so a rollback can retire the slots:
 // the engine undoes aborted work by compensation, and a row nobody
 // recorded is a row nobody can take back.
-// The **converse** of `crosscore.md` §6a's gates, and the half that turns
-// them from a check into a closed race (workplan-range-directory.md §9b).
-//
-// §6a decides what may *split*; nothing decided what may be **created on a
-// relation already split** — an index, a Cabin (the optimizer's auto path
-// included), an assertion, or a foreign key naming it. Both orders reach
-// the same unsound state, so both doors need a refusal, and both run on
-// core 0's single catalog stream: whichever of the two writes lands second
-// is the one that is refused. `crosscore.md` §9's "auxiliary placement
-// under a split relation" owns lifting each of these; until it is taken
-// per auxiliary, the conservative answer is the only sound one.
-//
-// `Unsupported`, not retryable and carrying no byte position: the
-// statement is well formed and what it asks for is understood and
-// declined, and there is no offending token — ranges are an engine
-// decision no statement asked for (§0's direction), so nothing in the text
-// the user wrote is at fault.
-Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary);
-
 struct CatalogRowRef {
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;
@@ -114,6 +95,32 @@ struct CatalogRowRef {
     // the caller would have to guess, which is why it is set here.
     Oid rel_oid = 0;
 };
+
+
+// The **converse** of `crosscore.md` §6a's gates, and the half that turns
+// them from a check into a closed race (`workplan-range-directory.md`
+// §9b).
+//
+// §6a decides what may *split*; nothing decided what may be **created on a
+// relation already split** — an index, a Cabin (the optimizer's auto path
+// included), an assertion, or a foreign key naming it. Both orders reach
+// the same unsound state, so both doors need a refusal, and both run on
+// core 0's single catalog stream: whichever of the two writes lands second
+// is the one that is refused. `crosscore.md` §9's "auxiliary placement
+// under a split relation" owns lifting each of these; until it is taken
+// per auxiliary, the conservative answer is the only sound one.
+//
+// **More than one range**, not "has a directory": a one-row directory is
+// one range, and `range_directory.hpp` branches the other way because it
+// asks a different question - whether routing must be *resolved*, which a
+// migration's single row also requires.
+//
+// `Unsupported`, not retryable and carrying no byte position: the
+// statement is well formed and what it asks for is understood and
+// declined, and there is no offending token — ranges are an engine
+// decision no statement asked for (§0's direction), so nothing in the text
+// the user wrote is at fault.
+Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_view auxiliary);
 
 // One catalog row a DROP changed, and enough to undo it
 // (workplan-ddl-transactional.md DT5). Two shapes: a delete-mark, which a
@@ -936,15 +943,23 @@ public:
     Status InsertRangeRow(SysRangeRow row, std::uint64_t trx_id = kBootstrapXid,
                           CatalogRowRef* where = nullptr);
 
-    // Opens a range of `rel_oid` at `lo`, owned by `owner_core`, and
-    // returns its **entry page** — a fresh, formatted, empty heap page
-    // whose `min_key` is `lo` (RD5, CC8, CC10).
+    // Opening a range is **two calls, and the split is CC10's ordering
+    // rather than decomposition for its own sake** (RD5, CC8, CC10). The
+    // caller has to interpose between them: step 1 flushes the head page,
+    // step 2 logs its `PAGE_HANDOFF` and waits for durability, and only
+    // step 3 may write the boundary that names it. A single call would
+    // have to publish before the page it names is durable or handed off,
+    // and `server/range_alloc.hpp` is where the interposed half lives.
     //
-    // `min_key = lo` is what makes CC10's page-boundary rule vacuous here
+    // The head page is fresh, formatted, empty and carries **`min_key =
+    // lo`**, which is what makes CC10's page-boundary rule vacuous here
     // rather than checked: the new range starts as its own empty
     // sub-structure, no existing page straddles the boundary, and
     // invariant 3 holds by construction because the page refuses any id
     // below its own `min_key`.
+    StatusOr<PageId> CreateRangeEntryPage(Oid rel_oid, std::uint64_t lo);
+
+    // The boundary itself, published once and last (CC10 steps 3 and 5).
     //
     // **Writes the relation's opening row too, when there is none.** A
     // directory describes the whole id space or it is not a partition, so
@@ -952,11 +967,10 @@ public:
     // `{lo = 0, sys.tables.owner_core, desc_page_id}` — and only then the
     // split. `InsertRangeRow`'s note names the shape that would otherwise
     // be reachable: rows and no `lo = 0` row, permanent Corruption for
-    // that relation. Both rows here are `kBootstrapXid`, which is what
-    // closes it rather than a transaction would: **nothing undoes them**,
-    // so no partial rollback can leave the torn shape, and a boundary is
-    // visible to every read view at once — two readers resolving one
-    // relation to different owners would be the alternative.
+    // that relation. Both rows are `kBootstrapXid` and the `lo = 0` row is
+    // written **first**, which is what closes it: a crash between the two
+    // leaves a one-row directory, which is a legal partition, and nothing
+    // undoes either row so no rollback can invert the pair.
     //
     // **This call does not gate.** Whether the relation may take a second
     // range is `exec::RangeEligible`'s question and is authoritative only
@@ -964,7 +978,8 @@ public:
     // caller asks there, and `server/range_alloc.hpp` re-checks what core
     // 0's own catalog can see before reaching this. Core 0 only, like
     // every catalog write.
-    StatusOr<PageId> OpenRange(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core);
+    Status OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core,
+                         PageId entry_page);
 
     // The `trx_id` on these three is the row's MVCC stamp (DT2). It
     // defaults to `kBootstrapXid` because every caller that does not pass
@@ -1205,6 +1220,12 @@ private:
     // Debug line. Call it *after* the page write succeeds - a failed
     // mutation staled nothing.
     void BumpVersion(std::string_view what);
+
+    // `InsertRangeRow` without the publication, so `OpenRangeRows` can
+    // write a pair of rows and announce them once, after the head page
+    // they name is durable (CC10). Every refusal `InsertRangeRow` makes is
+    // this function's; publication is the only difference.
+    Status WriteRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where);
 
     storage::PageStore& store_;
 

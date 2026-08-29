@@ -2,13 +2,16 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/assertion_catalog.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_page.hpp"
-#include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 
 // RD5 — the allocator's half that can be tested without a reactor: the
 // gate re-check core 0 runs, `Catalog::OpenRange`'s two-row opening, and
@@ -29,12 +32,27 @@ using catalog::SysColumnRow;
 
 class RangeAllocTest : public ::testing::Test {
 protected:
-    storage::InMemoryPageStore store_{128};
+    // A **device** store, not the in-memory one, and it is the flush that
+    // forces it: `OpenRangeOnSystemCore` writes the head page out before
+    // the handoff record because every core has its own store over one
+    // shared device, and a fixture that cannot tell a written page from an
+    // unwritten one would pass with that flush deleted.
+    std::unique_ptr<storage::MemoryPageDevice> device_ =
+        std::move(storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0)
+                      .value());
+    std::unique_ptr<storage::DevicePageStore> store_holder_ =
+        std::move(storage::DevicePageStore::Open(*device_, /*first_new_page_id=*/128).value());
+    storage::DevicePageStore& store_ = *store_holder_;
     catalog::Catalog catalog_{store_};
     exec::AssertionEnforcer enforcer_;
 
     void SetUp() override { ASSERT_TRUE(catalog_.Bootstrap().ok()); }
 
+    // Two columns, and the second is load-bearing: `CreateCabin` refuses
+    // column 0 for its own reason (the pk's cabin is the clustered tree),
+    // so a one-column relation cannot reach the range gate at that door at
+    // all - which is what made the Cabin third of the converse test assert
+    // nothing.
     Schema PkSchema() {
         Schema schema;
         SysColumnRow col{};
@@ -44,6 +62,13 @@ protected:
         col.len = 8;
         col.notnull = true;
         schema.columns.push_back(col);
+        SysColumnRow val{};
+        val.pos = 1;
+        catalog::SetName(val.name, "v");
+        val.type_val = catalog::kTypeValInt64;
+        val.len = 8;
+        val.notnull = true;
+        schema.columns.push_back(val);
         return schema;
     }
 
@@ -103,6 +128,28 @@ TEST_F(RangeAllocTest, TheHeadPageOfARangeCarriesTheBoundaryAsItsMinKey) {
     EXPECT_EQ(view.min_key(), 8192u);
 }
 
+TEST_F(RangeAllocTest, TheHeadPageIsOnTheDeviceBeforeTheGrantLeaves) {
+    const catalog::Oid oid = MakeHeap("granted");
+    auto entry = Open(oid, 4096, /*owner=*/1);
+    ASSERT_TRUE(entry.ok()) << entry.status().message();
+    ASSERT_NE(entry.value(), kInvalidPageId);
+
+    // CC7's flush-then-grant, from the receiving side. Core 0 formats the
+    // head in **its own** frame; the owner has its own store over this one
+    // device and faults the page from there. A second store over the same
+    // device is that owner's view, and without the flush it reads the id
+    // back as "allocated but was never written" - a granted head no core
+    // can write.
+    auto owner_view = storage::DevicePageStore::Open(*device_, /*first_new_page_id=*/128);
+    ASSERT_TRUE(owner_view.ok()) << owner_view.status().message();
+    EXPECT_TRUE(owner_view.value()->IsAllocated(entry.value()))
+        << "the free map reached the device without the page it describes";
+    auto faulted = owner_view.value()->GetForRead(entry.value());
+    ASSERT_TRUE(faulted.ok()) << faulted.status().message();
+    heap::PageView view(faulted.value().bytes());
+    EXPECT_EQ(view.min_key(), 4096u);
+}
+
 TEST_F(RangeAllocTest, ASecondRangeJoinsTheDirectoryWithoutASecondOpeningRow) {
     const catalog::Oid oid = MakeHeap("twice");
     ASSERT_TRUE(Open(oid, 4096, 1).ok());
@@ -116,13 +163,28 @@ TEST_F(RangeAllocTest, ASecondRangeJoinsTheDirectoryWithoutASecondOpeningRow) {
     EXPECT_EQ(ranges.value()[2].lo, 8192u);
 }
 
-TEST_F(RangeAllocTest, ARangeAtLoZeroIsRefused) {
+TEST_F(RangeAllocTest, ARangeAtLoZeroIsRefusedByBothHalves) {
     const catalog::Oid oid = MakeHeap("zero");
     // `lo = 0` is the relation as it already is - the opening row - so
     // asking for it as a *split* would describe the whole space twice.
-    auto refused = catalog_.OpenRange(oid, 0, 1);
-    ASSERT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
+    // Refused at both halves, because either one reached alone would leave
+    // the other's work orphaned: a head page with no boundary, or a
+    // boundary with no head.
+    auto page = catalog_.CreateRangeEntryPage(oid, 0);
+    ASSERT_FALSE(page.ok());
+    EXPECT_EQ(page.status().code(), StatusCode::kInvalidArgument);
+
+    Status rows = catalog_.OpenRangeRows(oid, 0, 1, /*entry_page=*/500);
+    EXPECT_EQ(rows.code(), StatusCode::kInvalidArgument) << rows.message();
+}
+
+TEST_F(RangeAllocTest, ABoundaryRowNeedsAnEntryPage) {
+    const catalog::Oid oid = MakeHeap("headless");
+    // CC8 makes a range its own sub-structure, so a row naming no entry
+    // page would describe a partition with nowhere to put a row - and RD6
+    // would read `kInvalidPageId` as the insert head.
+    Status refused = catalog_.OpenRangeRows(oid, 4096, 1, kInvalidPageId);
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument) << refused.message();
 }
 
 TEST_F(RangeAllocTest, ABtreeRelationIsDeclinedAndNothingIsWritten) {
@@ -193,11 +255,14 @@ TEST_F(RangeAllocTest, ASplitRelationTakesNoIndexCabinOrForeignKey) {
     EXPECT_EQ(ix.code(), StatusCode::kUnsupported) << ix.message();
     EXPECT_NE(ix.message().find("split across"), std::string::npos) << ix.message();
 
-    Status cabin = catalog_.CreateCabin(oid, 0, catalog::kCabinOriginUser).status();
-    // Column 0 is refused for its own reason before the range gate; the
-    // range gate is what column 1 would meet, and this relation has none.
-    // Asserted on the *parent* end below instead, which needs no column.
-    (void)cabin;
+    // Column **1**, not 0: the pk column is refused for its own reason
+    // before the range gate is ever reached, so asking on it would assert
+    // nothing about this row's change. The optimizer's auto path comes
+    // through this same door, which is the one that would otherwise cabin a
+    // split relation with nobody having asked.
+    Status cabin = catalog_.CreateCabin(oid, 1, catalog::kCabinOriginUser).status();
+    EXPECT_EQ(cabin.code(), StatusCode::kUnsupported) << cabin.message();
+    EXPECT_NE(cabin.message().find("split across"), std::string::npos) << cabin.message();
 
     const catalog::Oid child = MakeHeap("child");
     Status fk = catalog_.CreateForeignKey(child, 0, oid, 0).status();
@@ -209,11 +274,23 @@ TEST_F(RangeAllocTest, ASplitRelationTakesNoAssertion) {
     const catalog::Oid oid = MakeHeap("split_assert");
     ASSERT_TRUE(Open(oid, 4096, 1).ok());
 
-    auto access = catalog_.InitTableAccess(oid);
-    ASSERT_TRUE(access.ok());
-    Status refused = catalog::RefuseAuxiliaryOnSplitRelation(*access.value(), "an assertion");
+    // Through `InsertAssertion` - the row's own door, the one the **peer**
+    // path reaches after its park - rather than through the helper
+    // directly: `PrepareAssertionDef`'s copy of this gate runs before the
+    // build, so a range opened while that build was running meets only this
+    // one. Asserting on the helper would pass with both doors unwired.
+    Status refused = exec::InsertAssertion(catalog_, store_, /*wal=*/nullptr, /*id=*/11, oid,
+                                           "a_split", "CREATE ASSERTION a_split ...",
+                                           kInvalidPageId);
     EXPECT_EQ(refused.code(), StatusCode::kUnsupported) << refused.message();
     EXPECT_NE(refused.message().find("split across"), std::string::npos) << refused.message();
+
+    // And the row really is absent, not merely reported so.
+    auto targets = exec::ListAssertionTargets(catalog_, store_);
+    ASSERT_TRUE(targets.ok()) << targets.status().message();
+    for (const exec::AssertionDef& def : targets.value()) {
+        EXPECT_NE(def.target_oid, oid) << "a split relation took an assertion row anyway";
+    }
 }
 
 TEST_F(RangeAllocTest, AnUnsplitRelationIsRefusedNothing) {
@@ -246,13 +323,17 @@ TEST(RangeSplitDeclineCountersTest, TheFirstDeclineAndAChangeOfGateAreTransition
     EXPECT_EQ(counters.counts().size(), 3u);
 }
 
-TEST(RangeSplitDeclineCountersTest, AGateThatComesBackIsATransitionAgain) {
+TEST(RangeSplitDeclineCountersTest, AGateThatComesBackIsNotLoggedTwice) {
     RangeSplitDeclineCounters counters;
     ASSERT_TRUE(counters.Record(4000, exec::RangeGate::kIndex));
     ASSERT_TRUE(counters.Record(4000, exec::RangeGate::kAssertion));
     // Back to the first gate - a dropped assertion leaves the index gate
-    // declining again, and that is a change worth one line.
-    EXPECT_TRUE(counters.Record(4000, exec::RangeGate::kIndex));
+    // declining again - and this is deliberately **not** a second line.
+    // The bound is what the rule is for: first-seen caps the lines at
+    // relations x gates for the process's life, where "the gate changed"
+    // is unbounded under an index created and dropped in a loop. The
+    // count still moves, which is where that volume is read.
+    EXPECT_FALSE(counters.Record(4000, exec::RangeGate::kIndex));
     EXPECT_EQ(counters.CountFor(4000, exec::RangeGate::kIndex), 2u);
 }
 

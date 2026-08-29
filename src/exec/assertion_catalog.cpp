@@ -233,6 +233,25 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
                                    "-byte limit on a single stored value");
     }
 
+    // §6a's converse at the **door**, not only at `PrepareAssertionDef`
+    // (workplan-range-directory.md §9b), and the difference is a race
+    // rather than a duplicate. The peer path parks between the two: core 0
+    // prepares, the owner builds and adopts, core 0 lands the row here -
+    // and the owner's drain tick can open a range for that relation inside
+    // that window. §9b's rule is that core 0's single catalog stream
+    // serializes the pair and whichever write lands second is refused;
+    // `Catalog::CreateIndex` re-checks `CheckIndexDef` for exactly this
+    // reason, and without the same re-check here the assertion window the
+    // enumeration named stays open in the one direction RD5 cannot see.
+    {
+        auto target = catalog.InitTableAccess(target_oid);
+        if (!target.ok()) return target.status();
+        if (Status s = catalog::RefuseAuxiliaryOnSplitRelation(*target.value(), "an assertion");
+            !s.ok()) {
+            return s;
+        }
+    }
+
     // §3.1's duplicate-name check. Made here rather than at the parser
     // because it is the catalog's question and this is the door every caller
     // comes through. `CreateAssertion` also checks it *before* the build,

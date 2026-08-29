@@ -140,14 +140,9 @@ public:
         sched::MonoTimeNs in_doubt_ceiling_ns = 0;
 
         // RD5's `range_size_ids`, copied from core 0 like every other
-        // shared setting. **One number for two things on purpose** (D6):
-        // it is both how many ids a row-id lease grant carries and how
-        // wide a range is, because range = lease grant is the mechanism
-        // D6 was taken on - a second key would let them disagree at the
-        // one boundary the mechanism exists to keep them agreeing at.
-        // `kRangeSizeOff` (0, the default) means no range is ever opened
-        // and the lease asks for `kRowIdLeasePerGrant` as it always has;
-        // range_alloc.hpp says why the default is off until RD6.
+        // shared setting. One number sizes both the row-id lease grant and
+        // the range, and `kRangeSizeOff` (0) is the default; the argument
+        // for both is `server/range_alloc.hpp`'s.
         std::uint64_t range_size_ids = kRangeSizeOff;
 
         // This core's page-id lease, carved by core 0's ExtentAllocator

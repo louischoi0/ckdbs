@@ -411,10 +411,8 @@ public:
         // which also carries the derivation of the default.
         sched::MonoTimeNs in_doubt_ceiling_ns = kTxnInDoubtCeilingNs;
 
-        // RD5's `range_size_ids` - one number for the range width and the
-        // row-id lease grant, because D6 makes them one quantity. Off by
-        // default until RD6 gives a range its own chain
-        // (server/range_alloc.hpp).
+        // RD5's `range_size_ids`; `server/range_alloc.hpp` owns what it
+        // means and why it is off by default.
         std::uint64_t range_size_ids = kRangeSizeOff;
 
         // How often the `system`-group WAL drain runs. It is what makes a

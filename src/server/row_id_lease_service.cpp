@@ -10,7 +10,8 @@ namespace kds::server {
 
 Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, catalog::Catalog& catalog,
-                                 Logger* log, storage::PageStore* store, wal::WalManager* wal,
+                                 Logger* log, storage::DevicePageStore* store,
+                                 wal::WalManager* wal,
                                  const exec::AssertionEnforcer* enforcer) {
     return system_scheduler.RegisterMessageHandler(
         sched::RingMessageKind::kRowIdLease,
@@ -31,6 +32,25 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
             RowIdLeaseGrantPayload grant{};
             grant.table_oid = request.table_oid;
             grant.entry_page = kInvalidPageId;
+            // **`count == 0` and `open_range` are incompatible, and the
+            // refusal is D6's one-key rule enforced on the wire.** The
+            // substitution below is a courtesy for a requester that does
+            // not care how many ids it gets; a requester asking for a
+            // *range* does care, because the range's width is this carve's
+            // width, and letting the substitution stand would open a range
+            // of `kRowIdLeasePerGrant` for a core that believes it asked
+            // for `range_size_ids`. Unreachable from `MaybeRefillRowIds`,
+            // which is exactly why it is checked here rather than assumed
+            // there.
+            if (request.open_range != 0 && request.count == 0) {
+                if (log != nullptr && log->enabled(LogLevel::kError)) {
+                    log->Error("range", "core " + std::to_string(header.src_core) +
+                                            " asked for a range with no block size for oid " +
+                                            std::to_string(request.table_oid) +
+                                            "; a range is its grant, so the two cannot differ");
+                }
+                request.open_range = 0;
+            }
             const std::uint64_t count =
                 request.count == 0 ? kRowIdLeasePerGrant : request.count;
             auto first = catalog.AllocateRowIdRange(
@@ -51,8 +71,16 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                 // directory at the second grant. Left as the arithmetic
                 // rather than special-cased: a first block that is also the
                 // whole relation has nothing to partition yet.
-                if (request.open_range != 0 && store != nullptr && wal != nullptr &&
-                    enforcer != nullptr && grant.first_id != 0) {
+                //
+                // `wal` is deliberately **not** required: a null one is an
+                // unlogged store, `LogPageHandoff` answers `kNoLsn`, and an
+                // unlogged store recovers nothing - so there is no handoff
+                // to protect and nothing for the requirement to buy. The
+                // store and the enforcer are required, because without
+                // either the page could not be handed over or the gate not
+                // asked.
+                if (request.open_range != 0 && store != nullptr && enforcer != nullptr &&
+                    grant.first_id != 0) {
                     auto opened = OpenRangeOnSystemCore(
                         catalog, *store, wal, *enforcer,
                         static_cast<catalog::Oid>(request.table_oid), grant.first_id,

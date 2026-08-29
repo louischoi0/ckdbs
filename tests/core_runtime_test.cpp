@@ -1064,6 +1064,133 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
         << "core 0's next id sits inside the block it granted the peer";
 }
 
+// RD5's ring half, which nothing else exercises: the owner core asks on
+// its own tick, core 0 opens the range and hands its head page over, and
+// the owner ends up able to write it (work order
+// `instructions/v2.5.0/range-directory.md` RB2; `crosscore.md` CC10).
+//
+// This is HD5's demonstration as well - `RangeEligible` gets its first
+// caller on a real relation here, and the gate that fires is the one the
+// counter records.
+TEST_F(CoreRuntimeTest, APeersLeaseBlockBecomesARangeItCanWrite) {
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "spread",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
+    // The store and the enforcer are what turn the range half on at core
+    // 0; without them the handler grants ids and opens nothing, which is
+    // the arm every other test in this file takes.
+    exec::AssertionEnforcer core0_enforcer;
+    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
+                                          core0_store_.get(), nullptr, &core0_enforcer)
+                    .ok());
+
+    // The owner core, with ranges armed. One key sizes the grant and the
+    // range, so the boundary below is this number.
+    CoreRuntime::Config cfg = ConfigFor(1);
+    cfg.range_size_ids = 4096;
+    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+
+    // A statement names the relation, which is what records the demand.
+    auto dry = peer.value()->catalog().AllocateRowId(oid.value());
+    ASSERT_FALSE(dry.ok());
+    ASSERT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value());
+
+    peer.value()->MaybeRefillRowIds();
+    for (int i = 0; i < 40; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    ASSERT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
+
+    // The directory core 0 wrote: the opening row plus the boundary at the
+    // granted block's first id, owned by the core that asked.
+    auto ranges = core0_->catalog.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u) << "the lease block did not become a range";
+    EXPECT_EQ(ranges.value()[0].lo, 0u);
+    EXPECT_EQ(ranges.value()[1].lo, peer.value()->row_id_refill().first_id);
+    EXPECT_EQ(ranges.value()[1].owner_core, 1u);
+
+    // **And the owner can write the head**, which is the half that was
+    // wrong the first time this row was built: core 0 formatted the page in
+    // its own frame and never flushed it, so the admission faulted an
+    // unwritten id and the range had a head no core could touch.
+    const PageId head = ranges.value()[1].entry_page;
+    ASSERT_NE(head, kInvalidPageId);
+    EXPECT_TRUE(peer.value()->store().MayWrite(head))
+        << "the owner holds no write rights over its own range's head page";
+    auto faulted = peer.value()->store().GetForRead(head);
+    ASSERT_TRUE(faulted.ok()) << faulted.status().message();
+    heap::PageView view(faulted.value().bytes());
+    // Invariant 3 made structural: nothing below the boundary can land in
+    // this page even by mistake.
+    EXPECT_EQ(view.min_key(), ranges.value()[1].lo);
+}
+
+// The other arm, and the one every existing relation takes: a gated
+// relation is declined, the ids arrive anyway, and the decline is readable
+// from outside the process (C3, workplan §9e).
+TEST_F(CoreRuntimeTest, AGatedRelationIsDeclinedAndTheDeclineIsCounted) {
+    // A btree relation - D1's decline, the gate that actually fires today.
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "tree", TwoColumnSchema(),
+                                           catalog::ClusteredType::kBtree);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
+    exec::AssertionEnforcer core0_enforcer;
+    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
+                                          core0_store_.get(), nullptr, &core0_enforcer)
+                    .ok());
+
+    CoreRuntime::Config cfg = ConfigFor(1);
+    cfg.range_size_ids = 4096;
+    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+
+    ASSERT_FALSE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
+    peer.value()->MaybeRefillRowIds();
+    for (int i = 0; i < 40; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+
+    // The ids arrived: a decline must not cost the statements waiting on
+    // them, which is what makes it a refusal rather than a failure.
+    EXPECT_EQ(peer.value()->row_id_refill().stats.grants, 1u);
+    EXPECT_TRUE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
+
+    // And nothing was written: the relation is still the one range CC8
+    // says it starts as.
+    auto ranges = core0_->catalog.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok());
+    EXPECT_TRUE(ranges.value().empty()) << "a gated relation got a directory";
+
+    // C3's surface, from outside the process. Absent-rather-than-zeroed is
+    // why the assertion is on the presence of the field, not on a `=0`.
+    const auto meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find("range_split_declines=1"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("range_split_decline_detail=" + std::to_string(oid.value()) + ":btree-clustered=1"),
+              std::string::npos)
+        << meta;
+}
+
 TEST(RowIdLeaseTableTest, AContiguousTopUpKeepsTheWindowAtTheRunInHand) {
     // PW1b review. `window` is what `low_water()` takes its quarter of, so
     // it must be the run in hand and not the sum of every run ever granted.

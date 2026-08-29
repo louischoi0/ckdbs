@@ -353,9 +353,24 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         if (!v.ok()) return v.status();
         // No zero check: 0 is `kRangeSizeOff`, the default and the only
         // value that is correct until RD6 makes a range its own chain.
-        // One key sizes the range and the row-id lease grant because D6
-        // makes them one quantity; the semantics have one home, at
-        // `kDefaultRangeSizeIds` (server/range_alloc.hpp).
+        // One key sizes the range and the row-id lease grant, because
+        // `workplan-range-directory.md`'s D6 makes them one quantity; the
+        // semantics have one home, in `server/range_alloc.hpp`.
+        //
+        // **A ceiling, though, and it buys an honest error message.** A
+        // value at or above the 40-bit id space makes every carve fail the
+        // exhaustion check, which answers a zero-count grant, which the
+        // lease reports as "the relation has no sys.tables row, or its
+        // 40-bit id space is exhausted" - true of neither, and pointing at
+        // the relation instead of at this key.
+        if (v.value() > kMaxKeystoneId) {
+            return Status::InvalidArgument(
+                "range_size_ids = " + std::to_string(v.value()) +
+                " is at or above the 40-bit Keystone id space (" +
+                std::to_string(kMaxKeystoneId) +
+                "); no relation could carve one block that size, and every insert would be "
+                "refused as an exhausted relation");
+        }
         range_size_ids = v.value();
     }
     if (file.Has("physical_optimizer")) {

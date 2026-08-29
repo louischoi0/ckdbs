@@ -1118,18 +1118,14 @@ void CoreRuntime::MaybeRefillRowIds() {
             // line rides the *transition* - a permanently gated relation
             // is every indexed one, and a line per refill would pay
             // log.hpp's synchronous write once per lease block forever.
-            if (!open_range && dispatcher_->range_split_declines().Record(*neediest, gate) &&
-                log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-                log_->Info("range", "core " + std::to_string(config_.core_id) +
-                                        " will not open a range on relation oid " +
-                                        std::to_string(*neediest) + ": " +
-                                        std::string(exec::RangeGateName(gate)));
+            if (!open_range && dispatcher_->range_split_declines().Record(*neediest, gate)) {
+                LogRangeDecline(log_, config_.core_id, *neediest, gate,
+                                "the owner core's own registry, which is the authority");
             }
         }
     }
-    // D6: the range **is** the lease grant, so one number sizes both and
-    // a core inserting from its own block stays inside one range by
-    // construction (range_alloc.hpp).
+    // The range **is** the lease grant, so one number sizes both
+    // (`server/range_alloc.hpp`).
     const std::uint64_t count = ranges_on ? config_.range_size_ids : kRowIdLeasePerGrant;
 
     row_id_refill_in_flight_ = true;
