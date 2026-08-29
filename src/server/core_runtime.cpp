@@ -285,6 +285,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The view is dropped in `~CoreRuntime`, which destroys the scheduler
     // *ahead* of the dispatcher - declaration order alone would not do it.
     runtime->dispatcher_->set_scheduler_view(&*runtime->scheduler_);
+    // RD5's size, which is also the arming bit (`server/range_alloc.hpp`:
+    // one key, because a range **is** its grant). On every core and not
+    // only a peer: core 0 owns most relations but not all of them under a
+    // rotating placement, so it too can hold a foreign INSERT that R4/IS1
+    // wants to leave a demand behind.
+    runtime->dispatcher_->SetRangeSizeIds(config.range_size_ids);
     // Asymmetry 1 made enforceable at dispatch (PW4) - the argument is at
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {
@@ -1147,10 +1153,22 @@ void CoreRuntime::MaybeRefillRowIds() {
                 const PageId head = row_id_refill_.entry_page;
                 if (AdmitWritePages(std::span<const PageId>(&head, 1))) {
                     // The boundary core 0 just published. The broadcast is
-                    // coming anyway (BumpVersion's hook); dropping the
-                    // cache here means the very next statement resolves
-                    // against the directory rather than the tick after.
-                    catalog_->InvalidateFromPeer();
+                    // coming anyway (BumpVersion's hook); doing it here
+                    // means the very next statement resolves against the
+                    // directory rather than the tick after - which is what
+                    // R4/IS3's routing needs, since until this core sees
+                    // its own range it keeps shipping the INSERT away.
+                    //
+                    // **`InvalidateCatalog` and not `InvalidateFromPeer`**,
+                    // which was this line and was a no-op for its stated
+                    // purpose: the cache is the memo and the resident
+                    // catalog frames are the authority, so dropping the
+                    // first without evicting the second re-reads the same
+                    // stale bytes and concludes the same nothing
+                    // (`InvalidateCatalog`'s own comment states it). Found
+                    // by IS3's end-to-end test, which never saw the range
+                    // it had just been granted.
+                    InvalidateCatalog();
                 }
                 row_id_refill_.entry_page = kInvalidPageId;
             }

@@ -64,11 +64,11 @@ protected:
 
     // The cut: CC10's two halves with nothing between them, because on one
     // core there is no page to hand off and no peer to tell.
-    void SplitAt(std::uint64_t lo) {
+    void SplitAt(std::uint64_t lo, std::uint32_t owner_core = 0) {
         const catalog::Oid oid = TableOid();
         auto head = boot_->catalog.CreateRangeEntryPage(oid, lo);
         ASSERT_TRUE(head.ok()) << head.status().message();
-        ASSERT_TRUE(boot_->catalog.OpenRangeRows(oid, lo, /*owner_core=*/0, head.value()).ok());
+        ASSERT_TRUE(boot_->catalog.OpenRangeRows(oid, lo, owner_core, head.value()).ok());
     }
 
     std::vector<catalog::SysRangeRow> RangesOfTable() {
@@ -129,6 +129,43 @@ TEST_F(RangeChainTest, APostSplitInsertLandsInTheRangeItsIdNames) {
 
     const std::vector<std::uint64_t> lower_ids = IdsInChain(lower);
     EXPECT_EQ(lower_ids.size(), 2u) << "a row belonging above the boundary landed below it";
+}
+
+// ---- R4/IS2: the range's owner is who may write it ----------------------
+//
+// A **named** pk is the one route that reaches a range without this core's
+// lease naming it (the omitted-pk route is routed by id before anything is
+// written, R4/IS3), so it is where the placement check is reachable and
+// where it is pinned. The refusal is by name, at the id, and not the
+// store's `MayWrite` naming a page number after the fact.
+TEST_F(RangeChainTest, AnInsertWhoseIdFallsInAnotherCoresRangeIsRefusedByName) {
+    Run("INSERT INTO t VALUES (1)");
+    Run("INSERT INTO t VALUES (2)");
+    SplitAt(kBoundary, /*owner_core=*/2);
+
+    const std::string refused =
+        Run("INSERT INTO t VALUES (" + std::to_string(kBoundary) + ", 7)");
+    EXPECT_EQ(refused.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << refused;
+    EXPECT_NE(refused.find("owned by core 2"), std::string::npos) << refused;
+
+    auto ranges = RangesOfTable();
+    ASSERT_EQ(ranges.size(), 2u);
+    // Nothing was written into the range core 2 owns, and the lower range
+    // still holds exactly the rows it held before the refusal.
+    EXPECT_TRUE(IdsInChain(ranges[1].entry_page).empty())
+        << "a row was placed in a chain this core does not own";
+    EXPECT_EQ(IdsInChain(ranges[0].entry_page).size(), 2u);
+
+    // **And the refusal cost the mark**, which is worth pinning rather than
+    // discovering: `AdmitExplicitRowId` moved `next_id` past the named key
+    // before the placement check ran, so the next *omitted* key is above
+    // the boundary too and meets the same refusal. K3 calls a burnt id
+    // free, so this is a burn and not a leak - but it means a heap
+    // relation whose upper range is another core's has no further ids to
+    // issue **on this core**, which is precisely the state R4/IS3's
+    // routing exists to keep a statement out of.
+    const std::string after = Run("INSERT INTO t VALUES (3)");
+    EXPECT_NE(after.find("owned by core 2"), std::string::npos) << after;
 }
 
 TEST_F(RangeChainTest, AScanOverASplitRelationReturnsEveryRangesRows) {

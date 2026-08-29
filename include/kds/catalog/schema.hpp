@@ -285,6 +285,19 @@ struct TableAccess {
         return true;
     }
 
+    // Whether **any** range is `core_id`'s - the question the write path
+    // asks, and a different one from `WhollyOwnedBy` (R4/IS1). Under
+    // insert spreading a core owns some of a relation's ranges and none of
+    // the rest, which is the state the whole phase exists to produce: a
+    // reader needs every range, a writer needs the one its row lands in.
+    bool OwnsAnyRange(std::uint32_t core_id) const noexcept {
+        if (ranges.empty()) return owner_core == core_id;
+        for (const RangeTarget& range : ranges) {
+            if (range.owner_core == core_id) return true;
+        }
+        return false;
+    }
+
     // The chain a row with `id` belongs in. Heap relations only; a btree
     // relation descends and has no chain.
     //
@@ -294,6 +307,22 @@ struct TableAccess {
     // resolves through `ResolveRanges`, whose refusals cross unchanged -
     // an id outside the 40-bit space is a caller that computed one.
     StatusOr<HeapChain> HeapChainFor(std::uint64_t id) const;
+
+    // The core that owns the range a row with `id` falls in - the question
+    // the write path asks once spreading exists (R4/IS2), where it used to
+    // read `owner_core` and be right only because every range had one
+    // owner. Unsplit, it *is* `owner_core`, off the same branch
+    // `HeapChainFor` takes.
+    StatusOr<std::uint32_t> RangeOwnerFor(std::uint64_t id) const;
+
+    // The directory row an `id` falls in, or **null on an unsplit
+    // relation**, where there is no row and the answer is `sys.tables`'s
+    // own two fields. One resolution behind both questions above - which
+    // chain, and whose core - because two resolutions are two chances for
+    // a row to be placed in a chain whose owner refused it. Not private
+    // only because this struct is an aggregate and an access specifier
+    // would stop it being one.
+    StatusOr<const RangeTarget*> RangeFor(std::uint64_t id) const;
 
     // Whether an id has ever landed on this relation out of order
     // (well_known.hpp's KeyOrder, docs/spec/heap-and-tuple.md section 4.1), from

@@ -129,6 +129,41 @@ public:
         return std::nullopt;
     }
 
+    // **Demand without an issue** (R4/IS1,
+    // `docs/inflight/in-progress/workplan-insert-spreading.md` §2).
+    // `Next()` records demand as a side effect of failing, which is the
+    // only way a relation ever became needy - and it is unreachable for a
+    // relation this core does not own, because the write is refused or
+    // shipped before any id is asked for. That is the loop R4 breaks: a
+    // core about to give a foreign INSERT away says so here, and the drain
+    // tick's request turns it into a range of this core's own.
+    //
+    // A fresh entry is spent with a zero window, which is `low_water()` and
+    // therefore `NeediestRelation()`. An entry that already exists is left
+    // exactly as it is - a live lease is not demand, and a `denied` one has
+    // been answered, so re-arming it here would restore the per-tick asking
+    // `RowIdLease::denied` exists to stop.
+    void NoteDemand(Oid table_oid) { (void)leases_[table_oid]; }
+
+    // The id `Next()` would hand out, without handing it out - none when
+    // the lease is absent or spent (R4/IS2).
+    //
+    // **Why the write path may ask before it allocates.** A range is a
+    // lease grant (`server/range_alloc.hpp`), so the id this core is about
+    // to issue names the range this core is about to write, and routing
+    // has to happen *before* the row is encoded. Sound because a core is
+    // one reactor: nothing else issues from this table between the peek
+    // and the `Next()` that follows it in the same statement.
+    //
+    // Const and non-inserting, which is the difference from `NoteDemand`:
+    // a question about an absent lease is not demand for one, and making
+    // it so would record demand from every routing decision.
+    std::optional<std::uint64_t> Peek(Oid table_oid) const {
+        auto it = leases_.find(table_oid);
+        if (it == leases_.end() || it->second.spent()) return std::nullopt;
+        return it->second.next;
+    }
+
     // Records core 0's "none" for a relation this core asked about. Only an
     // entry that already exists: the oid arrives off the ring, and creating
     // one here would let a malformed reply grow this map.

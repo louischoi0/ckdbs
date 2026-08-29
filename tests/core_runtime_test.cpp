@@ -1137,6 +1137,183 @@ TEST_F(CoreRuntimeTest, APeersLeaseBlockBecomesARangeItCanWrite) {
     EXPECT_EQ(view.min_key(), ranges.value()[1].lo);
 }
 
+// ---- R4/IS1: the pump ---------------------------------------------------
+//
+// The test above reaches around the dispatcher and calls `AllocateRowId`
+// directly, which is what let RD5 land with no producer: through a
+// statement, a peer never asks for a foreign relation's ids at all,
+// because the write is shipped or refused first. This is that same
+// arrangement driven the way a client drives it - and the assertion is on
+// the *demand*, because demand is the whole of what IS1 adds.
+TEST_F(CoreRuntimeTest, AForeignInsertLeavesTheDemandThatBecomesThisCoresRange) {
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "spread",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    // No transport, so nothing ships: the statement takes the affinity
+    // refusal, which is the arm IS1 must leave byte-identical.
+    CoreRuntime::Config cfg = ConfigFor(1);
+    cfg.range_size_ids = 4096;
+    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    ASSERT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value())
+        << "the fixture started with demand already recorded";
+
+    // The transaction-id block, without which `BeginWrite` refuses before
+    // the statement is ever parsed - the refusal would look identical from
+    // the wire and prove nothing about ownership.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    const auto out = peer.value()->dispatcher().Dispatch("INSERT INTO spread VALUES (7)");
+    EXPECT_EQ(out.response.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u)
+        << "IS1 changed the refusal a foreign write already answered: " << out.response;
+    EXPECT_NE(out.response.find("core 1"), std::string::npos)
+        << "the refusal was not the cross-core one: " << out.response;
+
+    // And the half that is new: the relation is now needy on **this** core,
+    // so the drain tick asks core 0, and core 0 opens the range owned by
+    // whoever asked. Nothing was written to reach this state.
+    ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value())
+        << "a foreign INSERT left no demand behind it, so this relation stays single-writer";
+    EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value());
+}
+
+// The off-switch, which is one key with the size (`range_alloc.hpp`): with
+// no range to open, a lease block for a statement that runs on another
+// core is ids burnt for nothing, so the demand is not recorded either.
+TEST_F(CoreRuntimeTest, AForeignInsertLeavesNoDemandWhenRangesAreOff) {
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "unspread",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    CoreRuntime::Config cfg = ConfigFor(1);  // range_size_ids defaults to kRangeSizeOff
+    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    const auto out = peer.value()->dispatcher().Dispatch("INSERT INTO unspread VALUES (7)");
+    EXPECT_EQ(out.response.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << out.response;
+    EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value())
+        << "an unarmed instance leased a block for a statement it does not run";
+}
+
+// A row that names its own pk draws from no lease at all - it writes the
+// relation's high-water mark, which is core 0's page - so leaving a demand
+// for it would lease a block nothing issues from.
+TEST_F(CoreRuntimeTest, AForeignInsertThatNamesItsKeyLeavesNoDemand) {
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "named", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    CoreRuntime::Config cfg = ConfigFor(1);
+    cfg.range_size_ids = 4096;
+    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    const auto out = peer.value()->dispatcher().Dispatch("INSERT INTO named VALUES (1, 7)");
+    EXPECT_EQ(out.response.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << out.response;
+    EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value());
+}
+
+// ---- R4/IS2 + IS3: the spreading itself ---------------------------------
+//
+// §8 test 12's core, at two cores: the same statement that was refused
+// runs **here** once this core has a range, its rows land in that range's
+// own chain, and nothing was shipped to do it. The whole route is
+// exercised through `Dispatch`, because the class R4 closes is a statement
+// going to the wrong core rather than a function answering wrongly.
+TEST_F(CoreRuntimeTest, APeerInsertsIntoItsOwnRangeInsteadOfShippingToTheOwner) {
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "spread",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
+    exec::AssertionEnforcer core0_enforcer;
+    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
+                                          core0_store_.get(), nullptr, &core0_enforcer)
+                    .ok());
+
+    CoreRuntime::Config cfg = ConfigFor(1);
+    cfg.range_size_ids = 4096;
+    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(64);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    // The relation is core 0's, so this is refused - and leaves the demand.
+    const auto before =
+        peer.value()->dispatcher().Dispatch("INSERT INTO spread VALUES (7)").response;
+    ASSERT_EQ(before.rfind("ERR ", 0), 0u) << before;
+
+    peer.value()->MaybeRefillRowIds();
+    for (int i = 0; i < 40; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    // What `Catalog::BumpVersion`'s hook does in a running instance and
+    // nothing does in a fixture: flush the rows core 0 just wrote, and
+    // broadcast the invalidation the peer answers by **evicting** its own
+    // frames of those pages. `InvalidateFromPeer` alone is not enough and
+    // that is not a fixture artefact - it drops the catalog cache but
+    // leaves the peer's resident catalog page, so the re-read finds the
+    // same stale bytes (`CoreRuntime::InvalidateCatalog` is the half that
+    // evicts).
+    FlushCatalog();
+    peer.value()->InvalidateCatalog();
+
+    auto ranges = core0_->catalog.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u) << "the pump did not turn the demand into a range";
+    ASSERT_EQ(ranges.value()[1].owner_core, 1u);
+    const std::uint64_t boundary = ranges.value()[1].lo;
+
+    // **The same statement, and now it runs here.** The id is the range's
+    // first, which is what "the block is the range" means from outside.
+    const auto after =
+        peer.value()->dispatcher().Dispatch("INSERT INTO spread VALUES (7)").response;
+    ASSERT_EQ(after.rfind("INSERTED", 0), 0u) << after;
+    EXPECT_NE(after.find("id=" + std::to_string(boundary)), std::string::npos) << after;
+
+    // In the range's **own** chain, not the relation's - the page it named
+    // is the entry page core 0 handed over, or one this core grew from it.
+    const PageId head = ranges.value()[1].entry_page;
+    auto walked = peer.value()->store().GetForRead(head);
+    ASSERT_TRUE(walked.ok()) << walked.status().message();
+    heap::PageView view(walked.value().bytes());
+    EXPECT_EQ(view.min_key(), boundary) << "invariant 3 does not hold on this range's head";
+    EXPECT_GT(view.slot_count(), 0u) << "the row did not land in this core's own range";
+
+    // And the ids stay disjoint from core 0's, which is K1 across cores:
+    // core 0's next issue sits above the block it granted.
+    auto on_core0 = core0_->catalog.AllocateRowId(oid.value());
+    ASSERT_TRUE(on_core0.ok()) << on_core0.status().message();
+    EXPECT_GE(on_core0.value(), boundary + cfg.range_size_ids)
+        << "core 0 issued an id inside the block it leased to core 1";
+}
+
+
 // The other arm, and the one every existing relation takes: a gated
 // relation is declined, the ids arrive anyway, and the decline is readable
 // from outside the process (C3, workplan §9e).

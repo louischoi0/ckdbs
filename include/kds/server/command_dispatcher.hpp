@@ -1104,6 +1104,15 @@ public:
     // must outlive this.
     void SetRelationGrantDemand(RelationGrantDemand* demand) noexcept { grant_demand_ = demand; }
 
+    // RD5's `range_size_ids`, which is the same key as "are ranges armed"
+    // because a range **is** a lease grant (`server/range_alloc.hpp` says
+    // why one key sizes both, and why a second name for it is forbidden).
+    // The dispatcher reads it for one question only - whether a foreign
+    // INSERT should leave a demand behind it (R4/IS1) - and an instance
+    // that never sets it keeps `kRangeSizeOff`, which is every dispatcher
+    // built outside `CoreRuntime::Open`.
+    void SetRangeSizeIds(std::uint64_t ids) noexcept { range_size_ids_ = ids; }
+
     // Where CheckWriteAffinity reads that an index of a relation this core
     // owns is being built here (PW1c-6b-2, core_affinity.hpp). Installed
     // beside the demand sink, on the same cores; a dispatcher never told
@@ -1408,10 +1417,18 @@ private:
     // (exec/catalog_view.hpp).
     DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt);
 
+    // `span` is the pk window the statement can possibly touch (R4/IS4),
+    // and it narrows *which ranges are walked* - never which rows match,
+    // which stays `fn`'s. The default is the whole relation, which is what
+    // every caller meant before ranges existed and what a predicate naming
+    // no pk still means. A `WHERE pk = k` write passes `PkSpan::Equality`,
+    // and on a spread relation that is the difference between walking one
+    // range and meeting the ownership refusal on somebody else's.
     Status VisitRelation(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
-                                                            std::uint16_t)>& fn);
+                                                            std::uint16_t)>& fn,
+        catalog::PkSpan span = catalog::PkSpan::Whole());
 
     // Appends the record set above for one placed tuple, stamps page_lsn
     // on every page it touched, and applies the durability class. A no-op
@@ -1806,6 +1823,9 @@ private:
     // because it is `cross_core_writes_`'s neighbour in form and purpose:
     // per core, aggregate, the evidence a placement decision is made from.
     RangeSplitDeclineCounters range_split_declines_;
+    // `SetRangeSizeIds`; `kRangeSizeOff` means no range ever opens and this
+    // dispatcher's write path is the one it always was.
+    std::uint64_t range_size_ids_ = kRangeSizeOff;
     // This core's reactor, set_scheduler_view(); null off a reactor.
     const sched::Scheduler* scheduler_view_ = nullptr;
 
@@ -1906,8 +1926,39 @@ private:
     // `crosscore.md` question, not this row's.
     bool MayEnrolShip(const Session& session) const noexcept;
 
+    // `target_id`, when present, is the pk of the row this statement is
+    // about to place, and it makes the check ask the **range's** owner
+    // rather than the relation's (R4/IS2). Absent - every caller but the
+    // INSERT path - the two are the same question, and on an unsplit
+    // relation they are the same question either way, off `ranges.empty()`.
+    //
+    // Only the INSERT path passes one because only it knows the id before
+    // the row is written: it comes from this core's own lease, and a range
+    // **is** a lease grant, which is the whole of why an insert can be
+    // routed to a core that does not own the relation.
     Status CheckWriteAffinity(const catalog::TableAccess& access, std::string_view relation,
-                              Session& session);
+                              Session& session,
+                              std::optional<std::uint64_t> target_id = std::nullopt);
+
+    // **Which core a predicate-shaped write belongs on** (R4/IS4), for the
+    // two verbs that name their rows by WHERE rather than by the row they
+    // are about to place. Sets `*target_id` when the predicate is a bare pk
+    // equality, which is what lets the affinity check and the walk narrow
+    // to that one range.
+    //
+    // Three answers, and the third is a refusal rather than a core:
+    //   - no directory: `owner_core`, off `ranges.empty()`, which is the
+    //     field this was before ranges existed and costs one branch;
+    //   - a pk equality, or a relation whose every range has one owner:
+    //     that owner, and the statement ships there or runs here;
+    //   - anything else over a **multi-owner** relation: `Unsupported`,
+    //     naming R6. That is the cost of arming spreading and it is stated
+    //     rather than discovered - a non-pk-predicate UPDATE or DELETE on a
+    //     spread relation stops working until multi-range writes exist.
+    //     Refused before a single page is written, never half-applied.
+    StatusOr<std::uint32_t> WriteTargetCore(const catalog::TableAccess& access,
+                                            const std::vector<parser::Condition>& where,
+                                            std::optional<std::uint64_t>* target_id) const;
 
     // Refuses a read whose chain touches a relation owned by another core.
     // Temporary in a way the write check is not: this is what the step

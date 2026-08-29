@@ -271,6 +271,25 @@ public:
     // existed. `leases` must outlive the catalog.
     void SetRowIdLeases(RowIdLeaseTable* leases) noexcept { row_id_leases_ = leases; }
 
+    // R4/IS1: this core wants ids for `table_oid` and is not going to ask
+    // for one now. `RowIdLeaseTable::NoteDemand` states what that is for;
+    // here because the lease table is this object's, and the dispatcher
+    // reaches leases through no other route. A no-op on core 0, which has
+    // no lease table and needs none - it bumps the mark directly.
+    void NoteRowIdDemand(Oid table_oid) {
+        if (row_id_leases_ != nullptr) row_id_leases_->NoteDemand(table_oid);
+    }
+
+    // R4/IS2: the id `AllocateRowId` would issue next, without issuing it -
+    // which is the id whose *range* decides where the row may be written.
+    // None on a core with no lease table, which is core 0, where the
+    // question does not arise: it bumps the mark itself and the relation's
+    // ranges are resolved from the row it just read.
+    std::optional<std::uint64_t> PeekRowId(Oid table_oid) const {
+        if (row_id_leases_ == nullptr) return std::nullopt;
+        return row_id_leases_->Peek(table_oid);
+    }
+
     // Drops every cached fact without bumping the version. What a **peer**
     // does on receiving `kCatalogInvalidate`: the version counter is
     // per-instance and means nothing across cores, but the cache contents

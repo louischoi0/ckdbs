@@ -106,13 +106,11 @@ std::vector<PageId> TableAccess::WalkHeadsFor(std::uint32_t core_id, PkSpan span
     return heads;
 }
 
-StatusOr<TableAccess::HeapChain> TableAccess::HeapChainFor(std::uint64_t id) const {
+StatusOr<const RangeTarget*> TableAccess::RangeFor(std::uint64_t id) const {
     // RD3's zero-cost invariant, reaching the write path: one load from an
     // entry the caller is already holding, one predictable branch, and the
     // two fields every insert used before ranges existed.
-    if (ranges.empty()) {
-        return HeapChain{desc_page_id, &heap_tail_hint};
-    }
+    if (ranges.empty()) return nullptr;
     auto resolved = ResolveRanges(ranges, PkSpan::Equality(id));
     if (!resolved.ok()) return resolved.status();
     // Exactly one range holds an id: the rows partition the space, so an
@@ -126,8 +124,20 @@ StatusOr<TableAccess::HeapChain> TableAccess::HeapChainFor(std::uint64_t id) con
             " resolved to " + std::to_string(resolved.value().size()) +
             " ranges; a single id belongs to exactly one");
     }
-    const RangeTarget& range = resolved.value().front();
-    return HeapChain{range.entry_page, &range.tail_hint};
+    return &resolved.value().front();
+}
+
+StatusOr<TableAccess::HeapChain> TableAccess::HeapChainFor(std::uint64_t id) const {
+    auto range = RangeFor(id);
+    if (!range.ok()) return range.status();
+    if (range.value() == nullptr) return HeapChain{desc_page_id, &heap_tail_hint};
+    return HeapChain{range.value()->entry_page, &range.value()->tail_hint};
+}
+
+StatusOr<std::uint32_t> TableAccess::RangeOwnerFor(std::uint64_t id) const {
+    auto range = RangeFor(id);
+    if (!range.ok()) return range.status();
+    return range.value() == nullptr ? owner_core : range.value()->owner_core;
 }
 
 }  // namespace kds::catalog
