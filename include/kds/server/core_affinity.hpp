@@ -124,7 +124,10 @@ private:
 Status CrossCoreWriteRefused(std::uint32_t home_core, std::uint32_t target_core,
                              std::string_view relation);
 
-// The refusal a **read** spanning cores gets, until the pipeline exists.
+// The refusal a **read** spanning cores gets when the step pipeline cannot
+// take it (R4-R/RS0). The pipeline itself is built and lives on every core
+// since RR2 - what this refusal reports is a *shape* outside the class
+// `HandleSelect`'s fan-in route serves, which the message spells out.
 //
 // `Unsupported`, deliberately not retryable: retrying changes nothing, and
 // telling a client to retry a statement that can never run here would be a

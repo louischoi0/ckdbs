@@ -652,7 +652,11 @@ real optimisation and it is **not this order's**, because it would replace
 a protocol path with a second one and RB4's whole lesson was that two
 spellings of one thing is two chances to forget one of them.
 
-### 10c. The predicate has to be written as a disjunction, not as `WhollyOwnedBy`
+### 10c. The predicate has to be written as a conjunction, not as `WhollyOwnedBy`
+
+*(Headed "disjunction" until RS; the formula below and `ServableBy` in
+`schema.hpp` are both conjunctions, and the argument was always about
+the second conjunct.)*
 
 The probe above is not the shipping form, and the difference is a
 correctness one. `WhollyOwnedBy(me)` is `owner_core == me` when the range
@@ -754,10 +758,25 @@ A results file is never edited; the two changed files are drivers.
 
 **The question R4-R did not ask.** Since RR2 every core holds a client, and
 `WireStepEndpoints` hands it every `kStepBatch` and `kStepEof` the core
-receives — *including the ones its own server half is producing for someone
-else's fan-in*, which is the entire step traffic of a peer that has opened
-nothing. Core 0 has always paid this; the order's question is whether a
-peer should pay it too, or skip.
+receives. Core 0 has always paid the discard; the order's question is
+whether a peer should pay it too, or skip.
+
+**And the first answer to *which* traffic was wrong** — RS's own
+`critics-developer` pass caught it, and it is recorded because the
+correction is the interesting part. This section first said the guard pays
+for *"the ones its own server half is producing for someone else's fan-in,
+the whole traffic of a peer that has opened nothing."* **A peer that only
+serves a fan-in receives no `kStepBatch` at all.** A batch is sent to
+`pipe.downstream` (`remote_step_service.cpp`), which is
+`StepOpenHead::downstream_core`, which `SessionStepClient::Open` sets to the
+**session's** core — and the ring is point-to-point. A serving core's
+inbound kinds are `kStepOpen`/`kStepCredit`/`kStepCancel`, all the server's,
+none of them touched by these guards. The cases where the guards actually
+fire are two: a **chained** pipeline's inner edge (P4d-4b-3), where this
+core hosts the consuming stage while the session is a third core, and a
+reply landing after `Close`. So the guard is smaller than first claimed —
+which is a reason to state its benefit accurately, not a reason to drop a
+correct early return.
 
 **It skips.** `SessionStepClient::OnStepBatch`/`OnStepEof`/`OnStepError`
 each return immediately when `reads_` is empty. This is behaviour-identical
@@ -832,3 +851,100 @@ Four readings, and the fourth is the one worth stating:
 `AFanInOverInterleavedOwnershipStillAnswersInRangeOrder` caught none of the
 four: its reading core owns no run of the relation, so it exercises the
 all-remote fan-in and nothing this order touches.
+
+### 11e. CS1 answered with a number, and it supports §10b rather than reopening it
+
+**`bench/v2.6.0/results-self-directed-stage-and-read-surface-v2.2.1-135-g9eae44a.md`**,
+cell S-a, measured in worktree `spread-relation` at `9eae44a` on a **2-CPU**
+host — a quarter of the 8-logical/4-physical machine R4-M used, and the
+reason four of §7's cells are reported as not run below.
+
+§10b decided a self-directed run gets no message-free path, on the argument
+that a second spelling of one protocol is what RB4's lesson forbids. It had
+no number. Four arms over two 600-row relations, 300 reps, rep-interleaved,
+all replies byte-identical across routes:
+
+| | p50 (µs) |
+|---|---:|
+| `B` — `twin` from core 0, **0 stages** (local walk) | 128.8 |
+| `A` — `twin` from core 1, **1 remote stage** | 309.3 |
+| `C` — `spread` from core 1, **remote + self-directed** | 221.7 |
+| `D` — `spread` from core 0, **the same two, roles swapped** | 317.7 |
+
+**`A − B` = 180.5 µs** is what one remote stage costs over no stage at all.
+**`C − A` = −87.6 µs** — *negative*: adding a self-directed stage does not
+cost what a second remote hop would.
+
+**And the cause is measured, not inferred.** A companion probe on
+`sched_wakes_sent`/`_received` per core: a **remote** stage costs ~**32
+wake events per query** on each side of the hop whatever it walks; a
+**self-directed** stage costs exactly **2** — one to open, one at EOF —
+whatever it walks; a plain local walk costs **0**. So a self-send is not
+"about as expensive as a real hop": what a remote hop costs is
+overwhelmingly the cross-reactor wake, and a self-directed run never
+crosses reactors. §10b is therefore **better supported than its source
+argument alone made it look** — the message-free path would save the
+STEP_OPEN/EOF pair, 2 wakes against 32, which is not a fraction worth a
+second protocol spelling.
+
+**Two engine facts fell out of the rig and are worth carrying.**
+
+- **The split is 1 / 599, not balanced.** Core 1's first foreign write is
+  refused exactly once (`cross_core_write_refusal_detail=0>1:4000=1` for
+  the whole 600-row load); the demand it records is granted, and **every
+  later grant is a contiguous top-up of the same range row**, so the
+  relation reads `4000:2@2` after the first round and never grows a third
+  range. Core 0's anchor holds **one** row and core 1's range holds the
+  other 599. This is IS5's suppression at a scale small enough to watch,
+  and it is why §11's S-b cell is unreachable here for a *structural*
+  reason as well as a CPU one.
+- **Which stage is remote matters more than the row split.** `C` and `D`
+  are the same two stages with the roles swapped, and they differ by 96 µs:
+  `D`'s total tracks `A`'s remote cost almost exactly because `D`'s
+  599-row leg is the remote one.
+
+### 11f. What §7 could not run on this host, and why each is a refusal rather than noise
+
+**The engine refuses to start when `cores > nproc`**
+(`expeditor.cpp`: *"reactors are pinned one per core and never block, so
+overcommitting them serializes whole workloads behind each other"*). This
+host reports **2**. That is not a tolerable-noise condition; it is a
+startup refusal, and it takes three cells and one gate with it:
+
+- **S-b** (the ceiling at k = 4 and k = 8) — blocked twice over. The host
+  refuses `cores > 2`; and at `cores = 2` there is exactly one contending
+  peer, so IS5's top-owner suppression settles the relation at two ranges
+  forever and the 64-stage ceiling is structurally unreachable (§9's CK3
+  measured the same thing at two million rows). Needs a host with ≥ 3 CPUs.
+- **The kill −9 matrix** — run and confirmed blocked: every cell but
+  `fastpath.cores1` fails at the `cores 3 exceeds the 2` refusal. Reported
+  as **not run**, never as a pass rate. And `core_placement.hpp`'s
+  `AssignOwnerCore` shows a third core would be needed even if the count
+  guard were lifted: under `rotate` the owner is
+  `kSystemCore + 1 + (seq % (core_count - 1))`, which at `core_count = 2`
+  is core 1 for *every* relation, so two distinct peer owners never exist.
+- **S-c** (the per-`kStepBatch` cost with no fan-in open) — below this
+  host's resolution; §11c's source-read argument stands in its place, and
+  it is reported as not measured rather than as zero.
+- **S-d** (RD9(a) re-run) — the operator's standing suspension of
+  interleaved A/B overhead measurement (2026-08-24). Recorded with the
+  source reading that nothing in this order's diff is on the unsplit path.
+
+**One cell that did run and is reported as invalid rather than as a
+result**: the read surface under `--placement rotate`. Nothing split
+(`split_relation_detail=(absent)`), for the `AssignOwnerCore` reason above,
+so the grid answers the split relation identically to the unsplit control
+everywhere — which is evidence about the *fixture*, not about placement.
+The `creating` arm did run and **reproduces the 5-reachable / 11-refused
+surface** this order wrote into `known-gaps.md` and `CLAUDE.md`, at
+`4000:2@2`.
+
+**And the reason has a second half, which is the more interesting one.**
+`AssignOwnerCore` explains why both relations land on core 1; what explains
+why core 0's writes to them open no range is that **core 0 has no row-id
+lease table at all**, so its `PeekRowId` never returns `nullopt` and IS1's
+demand-recording branch is structurally unreachable from the system core.
+Under `rotate` at two cores the only core that could contend is the one
+that cannot record demand. So `rotate` needs **two peers** to spread, not
+merely two cores — the same shape as IS5's "two or more contending peers"
+precondition (§9's CK3), reached by a different route.

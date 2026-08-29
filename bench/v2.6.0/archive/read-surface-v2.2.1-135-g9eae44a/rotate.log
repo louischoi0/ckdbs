@@ -1,0 +1,281 @@
+
+placed=600 placement=rotate cores=2 range_size_ids=512
+split_relation_detail=(absent)
+
+shape                spread: c0  c1               whole (control): c0  c1      verdict
+----------------------------------------------------------------------------------------------------
+star                 ok    ok                     ok    ok                     reachable everywhere
+star+where-pk        ok    ok                     ok    ok                     reachable everywhere
+star+where-nonpk     ok    ok                     ok    ok                     reachable everywhere
+star+between         ok    ok                     ok    ok                     reachable everywhere
+star+order-pk-asc    ok    ok                     ok    ok                     reachable everywhere
+star+order-pk-desc   repl  ok                     repl  ok                     reachable on some cores
+star+order-nonpk     repl  ok                     repl  ok                     reachable on some cores
+projection           repl  ok                     repl  ok                     reachable on some cores
+projection-multi     repl  ok                     repl  ok                     reachable on some cores
+limit                ok    ok                     ok    ok                     reachable everywhere
+limit+offset         ok    ok                     ok    ok                     reachable everywhere
+order+limit          ok    ok                     ok    ok                     reachable everywhere
+count                ok    ok                     ok    ok                     reachable everywhere
+sum                  ok    ok                     ok    ok                     reachable everywhere
+count-distinct       ok    ok                     ok    ok                     reachable everywhere
+group-by             repl  ok                     repl  ok                     reachable on some cores
+
+{
+  "star": {
+    "shape": "star",
+    "sql": "SELECT * FROM <rel>",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "star+where-pk": {
+    "shape": "star+where-pk",
+    "sql": "SELECT * FROM <rel> WHERE id = 1",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "star+where-nonpk": {
+    "shape": "star+where-nonpk",
+    "sql": "SELECT * FROM <rel> WHERE v = 1",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "star+between": {
+    "shape": "star+between",
+    "sql": "SELECT * FROM <rel> WHERE id BETWEEN 1 AND 100000",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "star+order-pk-asc": {
+    "shape": "star+order-pk-asc",
+    "sql": "SELECT * FROM <rel> ORDER BY id ASC",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "star+order-pk-desc": {
+    "shape": "star+order-pk-desc",
+    "sql": "SELECT * FROM <rel> ORDER BY id DESC",
+    "cores": {
+      "0": {
+        "spread": "reply-lost",
+        "whole": "reply-lost",
+        "detail": "ERR UNKNOWN_OUTCOME retryable=0 statement shipping: the statement executed on its owner but its reply is 5186 bytes, past the 992 a reply carries; the"
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "star+order-nonpk": {
+    "shape": "star+order-nonpk",
+    "sql": "SELECT * FROM <rel> ORDER BY v ASC",
+    "cores": {
+      "0": {
+        "spread": "reply-lost",
+        "whole": "reply-lost",
+        "detail": "ERR UNKNOWN_OUTCOME retryable=0 statement shipping: the statement executed on its owner but its reply is 5186 bytes, past the 992 a reply carries; the"
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "projection": {
+    "shape": "projection",
+    "sql": "SELECT id FROM <rel>",
+    "cores": {
+      "0": {
+        "spread": "reply-lost",
+        "whole": "reply-lost",
+        "detail": "ERR UNKNOWN_OUTCOME retryable=0 statement shipping: the statement executed on its owner but its reply is 2894 bytes, past the 992 a reply carries; the"
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "projection-multi": {
+    "shape": "projection-multi",
+    "sql": "SELECT v, id FROM <rel>",
+    "cores": {
+      "0": {
+        "spread": "reply-lost",
+        "whole": "reply-lost",
+        "detail": "ERR UNKNOWN_OUTCOME retryable=0 statement shipping: the statement executed on its owner but its reply is 5186 bytes, past the 992 a reply carries; the"
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "limit": {
+    "shape": "limit",
+    "sql": "SELECT * FROM <rel> LIMIT 2",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "limit+offset": {
+    "shape": "limit+offset",
+    "sql": "SELECT * FROM <rel> LIMIT 2 OFFSET 2",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "order+limit": {
+    "shape": "order+limit",
+    "sql": "SELECT * FROM <rel> ORDER BY id ASC LIMIT 3",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "count": {
+    "shape": "count",
+    "sql": "SELECT COUNT(*) FROM <rel>",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "sum": {
+    "shape": "sum",
+    "sql": "SELECT SUM(v) FROM <rel>",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "count-distinct": {
+    "shape": "count-distinct",
+    "sql": "SELECT COUNT(DISTINCT v) FROM <rel>",
+    "cores": {
+      "0": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  },
+  "group-by": {
+    "shape": "group-by",
+    "sql": "SELECT v, COUNT(*) FROM <rel> GROUP BY v",
+    "cores": {
+      "0": {
+        "spread": "reply-lost",
+        "whole": "reply-lost",
+        "detail": "ERR UNKNOWN_OUTCOME retryable=0 statement shipping: the statement executed on its owner but its reply is 4100 bytes, past the 992 a reply carries; the"
+      },
+      "1": {
+        "spread": "ok",
+        "whole": "ok",
+        "detail": ""
+      }
+    }
+  }
+}

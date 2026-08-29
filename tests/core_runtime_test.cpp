@@ -2306,9 +2306,13 @@ TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
 // stages, so it is proof the plan was made. Without RR2's
 // `remote_reads_.emplace(...)` and the `SetRemoteReads` that follows it,
 // the route is skipped entirely and the answer is `CheckReadAffinity`'s
-// `Unsupported` - "has ranges on another core and this shape cannot fan in
-// over them" - which is what every peer answered before RR2. Completing the
-// read is the test above's subject; reaching the route is this one's.
+// `Unsupported` - `CrossCoreReadUnsupported`'s "relation 'spread2' is owned
+// by core 0 and this statement is running on core 1", which is what every
+// peer answered before RR2. **Not** the "cannot fan in over them" arm: that
+// one is reached only when `owner_core == core_id_`, and this fixture reads
+// from a core that owns nothing, so asserting its absence would assert
+// nothing. Completing the read is the test above's subject; reaching the
+// route is this one's.
 TEST_F(CoreRuntimeTest, APeersOwnDispatcherPlansAFanInRatherThanRefusing) {
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/2);
@@ -2335,7 +2339,7 @@ TEST_F(CoreRuntimeTest, APeersOwnDispatcherPlansAFanInRatherThanRefusing) {
     ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
 
     const DispatchOutcome out = peer.value()->dispatcher().Dispatch("SELECT * FROM spread2");
-    EXPECT_EQ(out.response.find("cannot fan in over them"), std::string::npos)
+    EXPECT_EQ(out.response.find("is owned by core 0"), std::string::npos)
         << "the peer took CheckReadAffinity's refusal, so its dispatcher has no fan-in "
            "client: " << out.response;
     EXPECT_NE(out.response.find("remote read needs the reactor path"), std::string::npos)

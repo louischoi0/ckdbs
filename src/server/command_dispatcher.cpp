@@ -6832,18 +6832,22 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             owner_access.ok() && owner_access.value()->ServableBy(core_id_);
         if (owner_access.ok() && !servable_locally && step.sub_chains.empty() &&
             !step.emit_in_key_order) {
-            // **Which cores hold this relation** (RD7). One stage per
-            // owner *core*, never per range: a relation of k ranges is
-            // read by at most `cores` stages, because consecutive ranges
-            // on one core are one stage's walk in `lo` order
-            // (`kMaxFanInUpstreams` says why the distinction is the
-            // difference between a plan and an absurdity).
+            // **One stage per maximal contiguous run of ranges on one
+            // core** (RD7, corrected by this row's review), never one per
+            // owner core: grouping by core emits `A₁, A₃, B₂` where
+            // ownership interleaves, and interleaving is not a corner case
+            // - it is exactly what R4's id-block-aligned insert spreading
+            // produces (`crosscore.md` §6b), which is also why the width
+            // there is the range count rather than the core count
+            // (`kMaxFanInUpstreams`, and `workplan-insert-spreading.md`
+            // §3).
             //
-            // The order is the order of each core's **first** range, so
-            // the concatenation `FinishRemoteReads` performs is range
-            // order - the same order the local walk emits in
-            // (`step_vm.cpp`), which is what makes a split relation read
-            // remotely and read locally one answer rather than two.
+            // The directory is in `lo` order, so the runs are too, and the
+            // concatenation `FinishRemoteReads` performs is range order -
+            // the same order the local walk emits in (`step_vm.cpp`), which
+            // is what makes a split relation read remotely and read locally
+            // one answer rather than two, byte-identical to the unsplit one
+            // (§8 test 9).
             //
             // Unsplit is `owner_core` and one stage, which is every
             // relation on an instance that has not armed `range_size_ids`
@@ -6852,17 +6856,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             // records lease demand, so core 0 opens a range owned by that
             // core and a second *owner* is an ordinary state rather than a
             // hand-written fixture. The ceiling that arrives with it is
-            // `kMaxFanInUpstreams` below, and it is no longer unreachable:
-            // interleaved ownership makes a run one range, so stages equal
-            // ranges (`workplan-insert-spreading.md` §3).
-            // **One stage per maximal contiguous run of ranges on one
-            // core**, not one per core - the correction this row's review
-            // forced. Grouping by core emits `A₁, A₃, B₂` where ownership
-            // interleaves, and interleaving is not a corner case: it is
-            // exactly what R4's id-block-aligned insert spreading produces
-            // (`crosscore.md` §6b). Per run, the concatenation is true
-            // `lo` order, which is what makes a split relation's answer
-            // byte-identical to the unsplit one (§8 test 9).
+            // `kMaxFanInUpstreams` below, and it is no longer unreachable.
             //
             // A run is also why a stage needs its span: two runs on one
             // core would otherwise each walk both, and the reply would

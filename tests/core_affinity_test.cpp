@@ -84,7 +84,8 @@ TEST(CoreAffinityTest, AReadRefusalIsNotRetryable) {
     EXPECT_EQ(s.code(), StatusCode::kUnsupported);
     EXPECT_NE(s.message().find("trades"), std::string::npos) << s.message();
     EXPECT_NE(s.message().find("pipeline"), std::string::npos)
-        << "the message should say what is missing: " << s.message();
+        << "the message should name the route that could not take this "
+           "statement: " << s.message();
 }
 
 // ---- §6's counters -----------------------------------------------------

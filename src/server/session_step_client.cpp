@@ -82,12 +82,20 @@ SessionStepClient::RemoteRead* SessionStepClient::Find(const PipelineTag& tag) {
 void SessionStepClient::OnStepBatch(std::span<const std::byte> payload) {
     // **Absent, not zeroed** (R4-R/RS1, CS3). Since RR2 every core holds a
     // client, and `WireStepEndpoints` hands it every STEP_BATCH and STEP_EOF
-    // the core receives - including the ones its *server* half is producing
-    // for someone else's fan-in, which is the whole traffic of a peer that
-    // has opened nothing. With no read registered, `Find` cannot match any
-    // tag, so the decode below is work whose answer is known: skipped here
-    // rather than discarded after it, which is the discipline this
-    // repository already applies to counters.
+    // the core receives - including the ones addressed to its *server* half.
+    // That is a **chained** pipeline's inner edge (P4d-4b-3): a batch is
+    // sent to `StepOpenHead::downstream_core`, which for a consuming stage
+    // is that stage's core, so a core hosting one while the session that
+    // opened the read is a third core decodes every batch of the edge for a
+    // client that has registered nothing. The other case is a reply landing
+    // after `Close`. A core that only *serves* a fan-in sees none of this:
+    // its batches go to the session, and its own inbound kinds are
+    // OPEN/CREDIT/CANCEL, all the server's.
+    //
+    // With no read registered, `Find` cannot match any tag, so the decode
+    // below is work whose answer is known: skipped here rather than
+    // discarded after it, which is the discipline this repository already
+    // applies to counters.
     if (reads_.empty()) return;
     std::span<const std::byte> rows;
     auto header = DecodeStepBatchHeader(payload, rows);

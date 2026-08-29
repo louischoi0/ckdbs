@@ -141,30 +141,23 @@ struct StepOpenUpstream {
 // for its consumer - and a section owned by the upstream half could
 // never say so. Empty means the whole row.
 // **How wide a fan-in may be: the number of maximal same-owner runs**
-// (RD7, corrected by R4-M/RS0). A relation of k ranges opens one stage per
-// maximal contiguous run of ranges on one core, in `lo` order - so the
-// width equals the **core count** only under *contiguous* ownership, and
-// equals the **range count** under interleaved ownership, where every run
-// is one range.
-//
-// The distinction is not academic and this comment used to get it wrong.
-// It read "the width is the number of distinct owner cores, never the
-// number of boundaries", and priced a 10 M-row relation at
-// "at most `cores` stages". **R4's id-block-aligned insert spreading
-// produces exactly the interleaved case** (`crosscore.md` §6b), and R4-M
-// measured the refusal below firing at **65-72 stages**, with `ids/stage`
-// matching the lease block size to within 4%
+// (RD7, corrected by R4-M/RS0 - `workplan-insert-spreading.md` §11a says
+// what the old wording claimed and why it was wrong). The width equals the
+// **core count** only under *contiguous* ownership; under interleaved
+// ownership every run is one range and it equals the **range count**, which
+// is exactly what R4's id-block-aligned insert spreading produces
+// (`crosscore.md` §6b). R4-M measured the refusal firing at **65-72
+// stages**, so the bound is a real limit on a spread relation's readable
+// size - roughly `64 x range_size_ids` rows
 // (`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`
-// §6). So the bound is a real limit on a spread relation's readable size -
-// roughly `64 x range_size_ids` rows - and not the comfortable headroom
-// the old wording described.
+// §6). A **self-directed** run costs a slot like any other (R4-R §10b).
 //
-// A **self-directed** run costs a slot like any other (R4-R §10b): it is
-// opened, credited and closed through the same protocol, the ring hop
-// being a self-send.
-//
-// 64 stays safe for the one-byte wire count either way; what is gone is
-// the argument that made it comfortable.
+// **One constant, two quantities**, and they are different questions: the
+// dispatcher's independent-stage count (`command_dispatcher.cpp`, not a
+// wire quantity - each stage is its own single-step pipeline with its own
+// `request_id`), and the STEP_OPEN envelope's upstream-edge count, which
+// the wire carries in one byte. 64 is safe for the second and chosen for
+// the first.
 inline constexpr std::size_t kMaxFanInUpstreams = 64;
 
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,

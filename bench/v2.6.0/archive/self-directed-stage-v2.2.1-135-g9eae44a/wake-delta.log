@@ -1,0 +1,9 @@
+split: 4000:2@2
+B (twin@core0, 0 stages) core0 delta: {'sched_wakes_sent': 0, 'sched_wakes_received': 0, 'sched_idle_blocks': 200, 'sched_iterations': 217}
+B (twin@core0, 0 stages) core1 delta: {'sched_wakes_sent': 0, 'sched_wakes_received': 0, 'sched_idle_blocks': 22, 'sched_iterations': 22}
+A (twin@core1, 1 remote stage) core0 delta: {'sched_wakes_sent': 6369, 'sched_wakes_received': 3180, 'sched_idle_blocks': 996, 'sched_iterations': 3002}
+A (twin@core1, 1 remote stage) core1 delta: {'sched_wakes_sent': 6369, 'sched_wakes_received': 3189, 'sched_idle_blocks': 1001, 'sched_iterations': 2833}
+C (spread@core1, self[big]+remote[tiny]) core0 delta: {'sched_wakes_sent': 400, 'sched_wakes_received': 400, 'sched_idle_blocks': 401, 'sched_iterations': 803}
+C (spread@core1, self[big]+remote[tiny]) core1 delta: {'sched_wakes_sent': 400, 'sched_wakes_received': 0, 'sched_idle_blocks': 201, 'sched_iterations': 4402}
+D (spread@core0, self[tiny]+remote[big]) core0 delta: {'sched_wakes_sent': 6339, 'sched_wakes_received': 3181, 'sched_idle_blocks': 1018, 'sched_iterations': 4092}
+D (spread@core0, self[tiny]+remote[big]) core1 delta: {'sched_wakes_sent': 6339, 'sched_wakes_received': 3158, 'sched_idle_blocks': 998, 'sched_iterations': 3015}

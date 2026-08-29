@@ -17,12 +17,14 @@ and the candidates are narrower than they look:
   * a **lease refill** parks a peer's coroutine, but only until the grant
     lands - transient, and not controllable in number;
   * a **cross-core SELECT** would park the reading core for the length of the
-    scan, and does not: from a client the shapes tried here are refused
-    outright (*"the step pipeline is built and serves a whole-row read of one
-    relation outside a transaction, and this statement is not that shape"* -
-    reworded at R4-R/RS0; the run this probe reports met the older spelling,
-    which claimed the pipeline was not built at all), so the P4d pipeline is
-    not reachable this way;
+    scan, and **did not when this probe was written**: every shape it tries
+    was refused outright, so the P4d pipeline was not reachable this way.
+    Stated in the past tense since R4-R/RS0, and it is no longer true in
+    general - an eligible whole-row read of one relation outside a
+    transaction is now served by the fan-in from any core, and does park its
+    reader. The shapes this probe issues stay refused, so its own numbers
+    stand; a rewrite that wants a cross-core SELECT as a *parker* now has
+    one;
   * `CREATE INDEX` on a **peer-owned** relation, which core 0's session ships
     to the owner and then waits for (PW1c-6b). The work happens on the owner
     core rather than on the parked one, which is exactly what makes it a
