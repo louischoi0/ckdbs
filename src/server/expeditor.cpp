@@ -1485,59 +1485,11 @@ Status Expeditor::Serve() {
             // And the same row-touch ceiling every statement on this core
             // runs under (P4d-4c's review).
             exec::Budget(config_.max_rows_touched));
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kStepOpen,
-                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                    remote_steps_->OnStepOpen(header, payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kStepCredit,
-                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                    remote_steps_->OnStepCredit(payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kStepCancel,
-                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                    remote_steps_->OnStepCancel(payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        // The two kinds both consumers hear: a scheduler holds exactly one
-        // handler per kind (the map assigns), so core 0 - the one core
-        // hosting a session client *and* a step server - fans each payload
-        // to both. Safe because the tag is the demultiplexer: each
-        // consumer discards a tag it does not hold, silently (§3).
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kStepBatch,
-                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                    remote_reads_->OnStepBatch(payload);
-                    remote_steps_->OnStepBatch(payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kStepEof,
-                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                    remote_reads_->OnStepEof(payload);
-                    remote_steps_->OnStepEof(payload);
-                });
-            !s.ok()) {
-            return s;
-        }
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kStepError,
-                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                    remote_reads_->OnStepError(payload);
-                });
-            !s.ok()) {
+        // All six kinds, in `remote_step_service.hpp`'s one home. Core 0's
+        // wiring and a peer's became identical when RR2 gave every core a
+        // client, and the fan-out rule the block below used to state twice
+        // now has one place to be got wrong in.
+        if (Status s = WireStepEndpoints(scheduler, *remote_reads_, *remote_steps_); !s.ok()) {
             return s;
         }
         dispatcher_->SetRemoteReads(&*remote_reads_);

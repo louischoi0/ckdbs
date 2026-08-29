@@ -285,6 +285,23 @@ struct TableAccess {
         return true;
     }
 
+    // **Whether a walk on `core_id` alone answers this relation whole** —
+    // the one question the read path asks, named once because it used to be
+    // asked in two places in two different words and they drifted (R4-R
+    // §10c). `HandleSelect`'s fan-in route must be taken exactly when this
+    // is false, and `CheckReadAffinity` must refuse exactly then too.
+    //
+    // **A conjunction, not `WhollyOwnedBy` alone.** That helper answers
+    // `owner_core == core_id` for an empty range list, so a relation owned
+    // elsewhere whose ranges had all become this core's would answer true
+    // and be walked locally — where the affinity check refuses it on
+    // `owner_core`. CC9 makes that state unreachable today (the `lo = 0`
+    // anchor is the owner's and no mover exists); a predicate correct only
+    // because of a neighbouring invariant is what this line refuses to be.
+    bool ServableBy(std::uint32_t core_id) const noexcept {
+        return owner_core == core_id && WhollyOwnedBy(core_id);
+    }
+
     // The chain a row with `id` belongs in. Heap relations only; a btree
     // relation descends and has no chain.
     //

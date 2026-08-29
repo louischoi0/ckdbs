@@ -1180,19 +1180,29 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // unarmed one print nothing here, and this field cannot be read as a
     // behaviour change on either.
     //
-    // Keyed `oid:count@owners` because the count alone does not say what
-    // the ceiling cares about: `stages == ranges` only while consecutive
-    // ranges have *different* owners, so a reader comparing this against
-    // `kMaxFanInUpstreams` needs the owner count beside it.
+    // Keyed `oid:ranges@stages`, and **the second number is stages and not
+    // owners** because stages is the one the ceiling counts: a read opens
+    // one upstream per maximal contiguous run of same-owner ranges, so
+    // `owners <= stages <= ranges` and only the middle term is what
+    // `kMaxFanInUpstreams` is compared against. Reporting owners would have
+    // replaced R4-M's estimate with a different estimate.
+    //
+    // Counting it needs no set and no sort: ranges partition the id space
+    // and `RangesOf` returns them in ascending `lo`, so a run ends exactly
+    // where consecutive owners differ - which is the same walk
+    // `HandleSelect` does to build the stages themselves.
     {
         std::map<catalog::Oid, std::pair<std::size_t, std::size_t>> split;
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& row : tables.value()) {
                 auto ranges = catalog_.RangesOf(row.oid);
                 if (!ranges.ok() || ranges.value().size() < 2) continue;
-                std::set<std::uint32_t> owners;
-                for (const catalog::SysRangeRow& r : ranges.value()) owners.insert(r.owner_core);
-                split.emplace(row.oid, std::make_pair(ranges.value().size(), owners.size()));
+                const std::vector<catalog::SysRangeRow>& rows = ranges.value();
+                std::size_t stages = 1;
+                for (std::size_t i = 1; i < rows.size(); ++i) {
+                    if (rows[i].owner_core != rows[i - 1].owner_core) ++stages;
+                }
+                split.emplace(row.oid, std::make_pair(rows.size(), stages));
             }
         }
         if (!split.empty()) {
@@ -4854,27 +4864,30 @@ Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
             refusal = access.status();
             return false;
         }
+        // **One rule, asked once** (R4-R/RR1): a statement that reaches
+        // here could not take `HandleSelect`'s fan-in route, so it must be
+        // served by a local walk or refused - and `ServableBy` is exactly
+        // the route's own predicate, negated. The two used to be written in
+        // different words in different functions and drifted, which is what
+        // made a spread relation unreadable. The arms below choose only
+        // *which* refusal, never *whether*.
+        if (access.value()->ServableBy(core_id_)) return true;
         if (access.value()->owner_core != core_id_) {
             refusal =
                 CrossCoreReadUnsupported(core_id_, access.value()->owner_core, step.rel_name);
             return false;
         }
-        // **Owned here is not the same as wholly here** (RD7). Since the
-        // walk covers the ranges this core owns and no others
-        // (`TableAccess::WalkHeadsFor`), a relation whose `owner_core` is
-        // this core but one of whose ranges is not would be walked short:
-        // rows silently missing, success reported - the one ending this row
-        // may not leave open. The fan-in in `HandleSelect` is the route
-        // that answers such a read; a statement reaching this line could
-        // not take it, so a refusal is the only honest ending.
-        if (!access.value()->WhollyOwnedBy(core_id_)) {
-            refusal = Status::Unsupported(
-                "relation '" + step.rel_name +
-                "' has ranges on another core and this shape cannot fan in over them; "
-                "reading it here would answer short");
-            return false;
-        }
-        return true;
+        // **Owned here is not the same as wholly here** (RD7). The walk
+        // covers the ranges this core owns and no others
+        // (`TableAccess::WalkHeadsFor`), so a relation whose `owner_core`
+        // is this core but one of whose ranges is not would be walked
+        // short: rows silently missing, success reported - the one ending
+        // this row may not leave open.
+        refusal = Status::Unsupported(
+            "relation '" + step.rel_name +
+            "' has ranges on another core and this shape cannot fan in over them; "
+            "reading it here would answer short");
+        return false;
     });
     return refusal;
 }
@@ -6776,10 +6789,17 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // that may enrol takes the ship path below, where the read joins that
     // transaction and sees them.
     //
-    // The exclusion is `MayEnrolShip` and not `in_explicit_txn()`, so that
-    // exactly the sessions that can *reach* the ship path are diverted from
-    // this one: a dispatcher with no 2PC client, or a path that cannot
-    // park, keeps the pipeline it had and the behaviour it had with it.
+    // **The exclusion is `in_explicit_txn()`, not `MayEnrolShip`**, which
+    // was a proxy for it and stopped being one at R4-R. The proxy held
+    // while a session that could not enrol could not have written to any
+    // relation this route serves; RR1 pointed the route at relations this
+    // core **owns** and RR2 armed it on every core, and the session that
+    // then falls through is the enrolled participant itself - a statement
+    // shipped inside a cross-owner transaction carries `in_explicit_txn()`
+    // *and* `shipped()`, so `MayEnrolShip` is false for exactly the reader
+    // whose own uncommitted writes the pipeline's view cannot show. The
+    // condition the paragraph above states is *inside a transaction*, so
+    // that is what is asked.
     //
     // **Last in the chain, not first**, which is the same ordering argument
     // the paragraph above makes about `InitTableAccess`: the shape tests
@@ -6791,41 +6811,25 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         chain.value().hoisted.empty() && chain.value().star() &&
         !chain.value().aggregated() && !chain.value().sorted() &&
         !chain.value().limit.has_value() && chain.value().offset == 0 &&
-        !MayEnrolShip(session)) {
+        !session.in_explicit_txn()) {
         const exec::Step& step = chain.value().steps[0];
         auto owner_access = catalog_.InitTableAccess(step.rel_oid);
         // **The question is "can a local walk serve this", not "is this
         // relation someone else's"** (R4-R/RR1, the answer
-        // `workplan-range-directory.md` §15d deferred; the reasoning and
-        // the experiment are `workplan-insert-spreading.md` §10).
+        // `workplan-range-directory.md` §15d deferred; the reasoning is
+        // `workplan-insert-spreading.md` §10, the predicate itself is
+        // `TableAccess::ServableBy`).
         //
-        // This predicate was `owner_core != core_id_` from the row that
-        // introduced the route, when it meant *ship this read to the
-        // owner*. RD7 generalised the route to one stage per contiguous run
-        // of same-owner ranges and left the predicate alone, so a relation
-        // this core **owns** but does not wholly **hold** fell through it -
-        // and then met `CheckReadAffinity`'s not-`WhollyOwnedBy` refusal,
-        // which is the honest ending for a statement that could not take
-        // this route and the wrong one for a statement that can.
-        //
-        // Under `placement = creating` every relation is core 0's, which is
-        // exactly the arrangement R4's spreading produces, so before this
-        // line a spread relation was unreadable from every core in every
-        // shape (`bench/v2.6.0/` §6a measured it at 395 rows).
-        //
-        // **A disjunction rather than `!WhollyOwnedBy(core_id_)` alone**,
-        // and the difference is correctness rather than taste: that helper
-        // answers `owner_core == core_id_` for an empty range list and
-        // *every range is mine* for a full one, so a relation owned
-        // elsewhere whose ranges had all become this core's would answer
-        // true, take the local path, and be refused by the very arm this
-        // route exists to avoid. CC9 makes that state unreachable today -
-        // the `lo = 0` anchor is the owner's and no mover exists - but a
-        // route predicate correct only because of a neighbouring invariant
-        // is the shape this milestone has been caught by twice.
+        // It was `owner_core != core_id_` from the row that introduced the
+        // route, when the route meant *ship this read to the owner*. RD7
+        // generalised it to one stage per contiguous run of same-owner
+        // ranges and left the predicate alone, so a relation this core
+        // **owns** but does not wholly **hold** fell through - and under
+        // `placement = creating`, where every relation is core 0's, that is
+        // every spread relation, unreadable from every core in every shape
+        // (`bench/v2.6.0/` §6a measured it at 395 rows).
         const bool servable_locally =
-            owner_access.ok() && owner_access.value()->owner_core == core_id_ &&
-            owner_access.value()->WhollyOwnedBy(core_id_);
+            owner_access.ok() && owner_access.value()->ServableBy(core_id_);
         if (owner_access.ok() && !servable_locally && step.sub_chains.empty() &&
             !step.emit_in_key_order) {
             // **Which cores hold this relation** (RD7). One stage per

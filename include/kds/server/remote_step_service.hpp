@@ -16,6 +16,7 @@
 #include "kds/exec/step_chain.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/ring_message.hpp"
+#include "kds/server/session_step_client.hpp"
 #include "kds/server/step_pipeline.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/visibility.hpp"
@@ -447,5 +448,27 @@ private:
     exec::Budget budget_;
     std::vector<Pipeline> pipelines_;
 };
+
+// **A core's step endpoints, wired once** (R4-R/RR2). Every core runs a
+// client and a server sharing one send seam, and the six ring kinds route
+// to them by a rule that is easy to get wrong in exactly one way:
+//
+//   kStepOpen / kStepCredit / kStepCancel  -> the server, which serves
+//   kStepError                             -> the client, which opened
+//   kStepBatch / kStepEof                  -> **both**, in one lambda
+//
+// The last line is the trap. `Scheduler::RegisterMessageHandler` *assigns*
+// rather than appends, so registering the two claimants separately is a
+// silent replacement — the survivor works and the other's messages vanish
+// with nothing logged. Until RR2 only core 0 had a client, so the rule had
+// one home and the peers' registration named only the server; giving every
+// core a client made the two wirings identical and this is where they
+// live, rather than in two files that must be kept in step by hand.
+//
+// Registration only: the caller owns both endpoints and their lifetimes,
+// and hands the client to its dispatcher **after** this returns, so a
+// reply cannot beat its receiver into existence.
+Status WireStepEndpoints(sched::Scheduler& scheduler, SessionStepClient& client,
+                         RemoteStepServer& server);
 
 }  // namespace kds::server

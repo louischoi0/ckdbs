@@ -64,9 +64,14 @@ CoreRuntime::~CoreRuntime() {
         // R6-3's coordinator borrow, withdrawn on the same terms: the
         // client is declared below the dispatcher too.
         dispatcher_->SetTxn2pc(nullptr);
-        // RR2's fan-in client, on the same terms again - declared above
-        // the dispatcher, so this withdrawal is what keeps the borrow from
-        // outliving what it points at when the order ever changes.
+    }
+    // RR2's fan-in client is declared *above* `dispatcher_`, so reverse
+    // destruction already takes the borrower first and this withdrawal is
+    // a no-op today. Kept, and kept out of the block above whose members
+    // are the other way round: it is what stops the borrow from dangling
+    // if that declaration order is ever changed, which is the one way this
+    // pairing has been got wrong before.
+    if (dispatcher_.has_value()) {
         dispatcher_->SetRemoteReads(nullptr);
     }
     // R6-5's borrow in the other direction - the executor asks *through*
@@ -520,78 +525,15 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         // ignored until P4d-4c's review - a shipped statement was bounded
         // only by whatever a fresh `exec::Budget()` defaulted to.
         config_.budget);
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kStepOpen,
-            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
-                remote_steps_->OnStepOpen(header, payload);
-            });
-        !s.ok()) {
+    // All six kinds, in `remote_step_service.hpp`'s one home - including
+    // the kStepBatch/kStepEof fan-out to both endpoints, which is the rule
+    // that must not be written twice.
+    if (Status s = WireStepEndpoints(*scheduler_, *remote_reads_, *remote_steps_); !s.ok()) {
         return s;
     }
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kStepCredit,
-            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                remote_steps_->OnStepCredit(payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kStepCancel,
-            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                remote_steps_->OnStepCancel(payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    // The input edges of consuming stages (P4d-4b-2): a peer had no
-    // kStepBatch/kStepEof consumer until pipelines grew middles.
-    //
-    // **Both claimants, in one lambda, and that is a correctness
-    // requirement rather than a tidy-up** (R4-R/RR2). The comment this
-    // replaces said so while it was still hypothetical: *"the map holds
-    // one handler per kind and assigns, so two claimants on one scheduler
-    // would be a silent drop, not a fan-out."* RR2 adds the second
-    // claimant - this core's own `SessionStepClient` - so registering it
-    // separately would have **replaced** the server's handler and killed
-    // every consuming stage on this core with nothing logged.
-    //
-    // Safe to give both every message because each discards a tag it does
-    // not hold: `SessionStepClient::OnStepBatch` returns on a null `Find`
-    // (§3's silent discard) and the server's own lookup does the same.
-    // This is `expeditor.cpp`'s pairing on core 0, now on every core.
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kStepBatch,
-            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                remote_reads_->OnStepBatch(payload);
-                remote_steps_->OnStepBatch(payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kStepEof,
-            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                remote_reads_->OnStepEof(payload);
-                remote_steps_->OnStepEof(payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    // The client's alone: a stage that failed reports to whoever opened
-    // it, and only the client opens.
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kStepError,
-            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                remote_reads_->OnStepError(payload);
-            });
-        !s.ok()) {
-        return s;
-    }
-    // **After the three receivers, never before** - `expeditor.cpp`'s rule
-    // for the same object on core 0: the dispatcher learning about the
-    // client is what lets a statement open a stage, and a reply must not
-    // be able to beat its receiver into existence.
+    // **After the receivers, never before**: the dispatcher learning about
+    // the client is what lets a statement open a stage, and a reply must
+    // not be able to beat its receiver into existence.
     dispatcher_->SetRemoteReads(&*remote_reads_);
 
     // The owner's half of a peer-owned relation's CREATE INDEX (PW1c-6b-2,

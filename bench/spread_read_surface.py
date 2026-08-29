@@ -120,16 +120,28 @@ def main():
         # Same rows, so a shape refused on one and not the other is the
         # split doing it.
         placed = 0
+        last_refusal = ""
         for r in range(args.rounds):
             for c in range(args.cores):
                 for _ in range(300):
-                    if not conns[c][0].cmd(
-                            f"INSERT INTO {SPREAD} VALUES ({r * args.cores + c})"
-                    ).startswith("ERR"):
+                    reply = conns[c][0].cmd(
+                        f"INSERT INTO {SPREAD} VALUES ({r * args.cores + c})")
+                    if not reply.startswith("ERR"):
                         placed += 1
                         break
+                    # **Kept, not discarded.** A permanent refusal here
+                    # costs 0.6 s a row and would otherwise show only as a
+                    # lower `placed`, with no cause - in a driver whose
+                    # whole purpose is reporting each refusal's reason.
+                    last_refusal = reply
                     time.sleep(0.002)
+                # The control's reply is ignored on purpose: it is read for
+                # *verdicts* and never row-for-row against `spread`, whose
+                # ids come from per-core leased blocks and cannot match.
                 conns[0][0].cmd(f"INSERT INTO {WHOLE} VALUES ({r * args.cores + c})")
+        if placed != args.rounds * args.cores:
+            print(f"SHORT: placed {placed} of {args.rounds * args.cores}; "
+                  f"last refusal: {last_refusal[:160]}", file=sys.stderr)
         meta = conns[0][0].cmd("SHOW META")
         split_detail = ""
         if "split_relation_detail=" in meta:

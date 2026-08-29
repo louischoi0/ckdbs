@@ -1203,4 +1203,66 @@ void RemoteStepServer::OnStepCancel(std::span<const std::byte> payload) {
     Erase(eof.value().tag);
 }
 
+
+Status WireStepEndpoints(sched::Scheduler& scheduler, SessionStepClient& client,
+                         RemoteStepServer& server) {
+    // The server's three: it is asked to open, credited, and cancelled.
+    if (Status s = scheduler.RegisterMessageHandler(
+            sched::RingMessageKind::kStepOpen,
+            [&server](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                server.OnStepOpen(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler.RegisterMessageHandler(
+            sched::RingMessageKind::kStepCredit,
+            [&server](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                server.OnStepCredit(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler.RegisterMessageHandler(
+            sched::RingMessageKind::kStepCancel,
+            [&server](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                server.OnStepCancel(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    // **Both claimants, one lambda** - the header's trap. Safe to give each
+    // every message because both decode, look the tag up, and return when
+    // it is not theirs, with no side effect before the lookup; and their
+    // tags cannot collide, a client read being registered under the final
+    // stage's tag and a server input edge under an upstream stage's.
+    if (Status s = scheduler.RegisterMessageHandler(
+            sched::RingMessageKind::kStepBatch,
+            [&client, &server](const sched::MessageHeader&,
+                               std::span<const std::byte> payload) {
+                client.OnStepBatch(payload);
+                server.OnStepBatch(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler.RegisterMessageHandler(
+            sched::RingMessageKind::kStepEof,
+            [&client, &server](const sched::MessageHeader&,
+                               std::span<const std::byte> payload) {
+                client.OnStepEof(payload);
+                server.OnStepEof(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    // The client's alone: a stage that failed reports to whoever opened it,
+    // and only the client opens.
+    return scheduler.RegisterMessageHandler(
+        sched::RingMessageKind::kStepError,
+        [&client](const sched::MessageHeader&, std::span<const std::byte> payload) {
+            client.OnStepError(payload);
+        });
+}
+
 }  // namespace kds::server
