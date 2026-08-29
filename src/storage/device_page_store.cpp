@@ -452,15 +452,40 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // Zero cost where it matters: core 0 has no lease, so MayWrite
     // returns at its first test, and this runs on the frame-load path,
     // never per row. Debug builds additionally get the fault check above.
+    //
+    // **The two reasons get two status codes** (H4, 2026-08-29), and until
+    // then both answered `InvalidArgument` while the paragraph above
+    // claimed "refused-retryably". They are not the same kind of refusal:
+    //
+    //   - a **system** page has one writer for the life of the instance, so
+    //     a peer asking for it is wrong now and wrong on every retry -
+    //     `InvalidArgument`, which `IsRetryable` does not admit, and the
+    //     client stops after one round trip.
+    //   - any **other** page is refused because a grant has not arrived
+    //     *yet*: a relation published moments ago, an extent grant still on
+    //     the ring, rights lost to a restart and re-requested by the drain
+    //     tick. `TxnConflict`, which carries `retryable=1` on the wire -
+    //     and it is safe to retry precisely because this refuses **before**
+    //     dirtying anything.
+    //
+    // The second is the one a client meets, roughly once in twenty cells of
+    // a freshly-placed relation's early INSERTs (RB6 found it feeding a
+    // driver), and insert spreading makes that path more frequent rather
+    // than less. Getting the bit right is what lets a driver retry on the
+    // classification instead of on the message - RB6's first attempt
+    // retried on any `ERR` and manufactured real duplicate rows, because a
+    // loop whose INSERT omits its pk cannot tell a pre-write refusal from a
+    // reply lost after the commit.
     if (mark_dirty && !MayWrite(page_id)) {
-        return Status::InvalidArgument(
+        const bool permanent = page_id < system_page_limit_;
+        const std::string message =
             "DevicePageStore: core " + std::to_string(core_id_) + " may not write page " +
             std::to_string(page_id) +
-            (page_id < system_page_limit_
-                 ? "; the system range has one writer, the system core"
-                 : "; it is not from this core's extent lease, carries no write grant, and "
-                   "its stream stamp does not name this core (a relation fault grant "
-                   "conveys read rights only)"));
+            (permanent ? "; the system range has one writer, the system core"
+                       : "; it is not from this core's extent lease, carries no write grant, and "
+                         "its stream stamp does not name this core (a relation fault grant "
+                         "conveys read rights only) - retry once the grant lands");
+        return permanent ? Status::InvalidArgument(message) : Status::TxnConflict(message);
     }
 
     if (auto it = frames_.find(page_id); it != frames_.end()) {

@@ -1,0 +1,495 @@
+
+scenario         relation               clus     rows  grants  spread whole scan after the workload
+------------------------------------------------------------------------------------------------------------
+s0-stockmarket   accounts               BTREE     400       0      no ok
+s0-stockmarket   users                  BTREE     400       0      no ok
+s0-stockmarket   assets                 BTREE     400       0      no ok
+s0-stockmarket   trades                 HEAP      395       9     yes REFUSED: relation 'trades' has ranges on another
+s0-stockmarket   user_periodic_profit   HEAP      396       9     yes REFUSED: relation 'user_periodic_profit' has ran
+s1-backtest      exchanges              BTREE     400       0      no ok
+s1-backtest      symbols                BTREE     400       0      no ok
+s1-backtest      sessions               BTREE     400       0      no ok
+s1-backtest      daily_bars             BTREE     400       0      no ok
+s1-backtest      daily_stats            HEAP      394       9     yes REFUSED: relation 'daily_stats' has ranges on an
+s1-backtest      models                 BTREE     400       0      no ok
+s1-backtest      model_results          HEAP      395       9     yes REFUSED: relation 'model_results' has ranges on 
+s2-freight       organizations          BTREE     400       0      no ok
+s2-freight       ships                  BTREE     400       0      no ok
+s2-freight       operations             BTREE     400       0      no ok
+s2-freight       cargos                 BTREE     400       0      no ok
+s2-freight       fees                   BTREE     400       0      no ok
+s2-freight       recipes                BTREE     400       0      no ok
+s2-freight       freights               HEAP      395       9     yes REFUSED: relation 'freights' has ranges on anoth
+s2-freight       charges                HEAP      395       9     yes REFUSED: relation 'charges' has ranges on anothe
+s3-library       users                  BTREE     400       0      no ok
+s3-library       books                  BTREE     400       0      no ok
+s3-library       reservations           BTREE     400       0      no ok
+s3-library       loans                  BTREE     400       0      no ok
+
+6 of 24 scenario relations spread at all (the rest never asked for a lease, which is the heap-only pump).
+6 of those 6 lost read shapes by spreading:
+  s0-stockmarket.trades: 5 of 5 shapes refused
+  s0-stockmarket.user_periodic_profit: 5 of 5 shapes refused
+  s1-backtest.daily_stats: 5 of 5 shapes refused
+  s1-backtest.model_results: 5 of 5 shapes refused
+  s2-freight.freights: 5 of 5 shapes refused
+  s2-freight.charges: 5 of 5 shapes refused
+
+[
+  {
+    "scenario": "s0-stockmarket",
+    "relation": "accounts",
+    "clustered": "BTREE",
+    "oid": 4000,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s0-stockmarket",
+    "relation": "users",
+    "clustered": "BTREE",
+    "oid": 4007,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s0-stockmarket",
+    "relation": "assets",
+    "clustered": "BTREE",
+    "oid": 4013,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s0-stockmarket",
+    "relation": "trades",
+    "clustered": "HEAP",
+    "oid": 4018,
+    "rows_placed": 395,
+    "write_refusals": 5,
+    "peer_lease_grants": 9,
+    "spread": true,
+    "reads": {
+      "SELECT * FROM <rel>": "REFUSED: relation 'trades' has ranges on another core and this shape cannot fan in ov",
+      "SELECT * FROM <rel> WHERE id = 1": "REFUSED: relation 'trades' has ranges on another core and this shape cannot fan in ov",
+      "SELECT COUNT(*) FROM <rel>": "REFUSED: relation 'trades' has ranges on another core and this shape cannot fan in ov",
+      "SELECT id FROM <rel>": "REFUSED: relation 'trades' has ranges on another core and this shape cannot fan in ov",
+      "SELECT * FROM <rel> LIMIT 10": "REFUSED: relation 'trades' has ranges on another core and this shape cannot fan in ov"
+    },
+    "readable": false,
+    "whole_scan": "REFUSED: relation 'trades' has ranges on another core and this shape cannot fan in ov"
+  },
+  {
+    "scenario": "s0-stockmarket",
+    "relation": "user_periodic_profit",
+    "clustered": "HEAP",
+    "oid": 4026,
+    "rows_placed": 396,
+    "write_refusals": 4,
+    "peer_lease_grants": 9,
+    "spread": true,
+    "reads": {
+      "SELECT * FROM <rel>": "REFUSED: relation 'user_periodic_profit' has ranges on another core and this shape ca",
+      "SELECT * FROM <rel> WHERE id = 1": "REFUSED: relation 'user_periodic_profit' has ranges on another core and this shape ca",
+      "SELECT COUNT(*) FROM <rel>": "REFUSED: relation 'user_periodic_profit' has ranges on another core and this shape ca",
+      "SELECT id FROM <rel>": "REFUSED: relation 'user_periodic_profit' has ranges on another core and this shape ca",
+      "SELECT * FROM <rel> LIMIT 10": "REFUSED: relation 'user_periodic_profit' has ranges on another core and this shape ca"
+    },
+    "readable": false,
+    "whole_scan": "REFUSED: relation 'user_periodic_profit' has ranges on another core and this shape ca"
+  },
+  {
+    "scenario": "s1-backtest",
+    "relation": "exchanges",
+    "clustered": "BTREE",
+    "oid": 4000,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s1-backtest",
+    "relation": "symbols",
+    "clustered": "BTREE",
+    "oid": 4005,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s1-backtest",
+    "relation": "sessions",
+    "clustered": "BTREE",
+    "oid": 4011,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s1-backtest",
+    "relation": "daily_bars",
+    "clustered": "BTREE",
+    "oid": 4017,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s1-backtest",
+    "relation": "daily_stats",
+    "clustered": "HEAP",
+    "oid": 4027,
+    "rows_placed": 394,
+    "write_refusals": 6,
+    "peer_lease_grants": 9,
+    "spread": true,
+    "reads": {
+      "SELECT * FROM <rel>": "REFUSED: relation 'daily_stats' has ranges on another core and this shape cannot fan ",
+      "SELECT * FROM <rel> WHERE id = 1": "REFUSED: relation 'daily_stats' has ranges on another core and this shape cannot fan ",
+      "SELECT COUNT(*) FROM <rel>": "REFUSED: relation 'daily_stats' has ranges on another core and this shape cannot fan ",
+      "SELECT id FROM <rel>": "REFUSED: relation 'daily_stats' has ranges on another core and this shape cannot fan ",
+      "SELECT * FROM <rel> LIMIT 10": "REFUSED: relation 'daily_stats' has ranges on another core and this shape cannot fan "
+    },
+    "readable": false,
+    "whole_scan": "REFUSED: relation 'daily_stats' has ranges on another core and this shape cannot fan "
+  },
+  {
+    "scenario": "s1-backtest",
+    "relation": "models",
+    "clustered": "BTREE",
+    "oid": 4040,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s1-backtest",
+    "relation": "model_results",
+    "clustered": "HEAP",
+    "oid": 4047,
+    "rows_placed": 395,
+    "write_refusals": 5,
+    "peer_lease_grants": 9,
+    "spread": true,
+    "reads": {
+      "SELECT * FROM <rel>": "REFUSED: relation 'model_results' has ranges on another core and this shape cannot fa",
+      "SELECT * FROM <rel> WHERE id = 1": "REFUSED: relation 'model_results' has ranges on another core and this shape cannot fa",
+      "SELECT COUNT(*) FROM <rel>": "REFUSED: relation 'model_results' has ranges on another core and this shape cannot fa",
+      "SELECT id FROM <rel>": "REFUSED: relation 'model_results' has ranges on another core and this shape cannot fa",
+      "SELECT * FROM <rel> LIMIT 10": "REFUSED: relation 'model_results' has ranges on another core and this shape cannot fa"
+    },
+    "readable": false,
+    "whole_scan": "REFUSED: relation 'model_results' has ranges on another core and this shape cannot fa"
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "organizations",
+    "clustered": "BTREE",
+    "oid": 4000,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "ships",
+    "clustered": "BTREE",
+    "oid": 4012,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "operations",
+    "clustered": "BTREE",
+    "oid": 4024,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "cargos",
+    "clustered": "BTREE",
+    "oid": 4034,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "fees",
+    "clustered": "BTREE",
+    "oid": 4045,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "recipes",
+    "clustered": "BTREE",
+    "oid": 4053,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "freights",
+    "clustered": "HEAP",
+    "oid": 4061,
+    "rows_placed": 395,
+    "write_refusals": 5,
+    "peer_lease_grants": 9,
+    "spread": true,
+    "reads": {
+      "SELECT * FROM <rel>": "REFUSED: relation 'freights' has ranges on another core and this shape cannot fan in ",
+      "SELECT * FROM <rel> WHERE id = 1": "REFUSED: relation 'freights' has ranges on another core and this shape cannot fan in ",
+      "SELECT COUNT(*) FROM <rel>": "REFUSED: relation 'freights' has ranges on another core and this shape cannot fan in ",
+      "SELECT id FROM <rel>": "REFUSED: relation 'freights' has ranges on another core and this shape cannot fan in ",
+      "SELECT * FROM <rel> LIMIT 10": "REFUSED: relation 'freights' has ranges on another core and this shape cannot fan in "
+    },
+    "readable": false,
+    "whole_scan": "REFUSED: relation 'freights' has ranges on another core and this shape cannot fan in "
+  },
+  {
+    "scenario": "s2-freight",
+    "relation": "charges",
+    "clustered": "HEAP",
+    "oid": 4070,
+    "rows_placed": 395,
+    "write_refusals": 5,
+    "peer_lease_grants": 9,
+    "spread": true,
+    "reads": {
+      "SELECT * FROM <rel>": "REFUSED: relation 'charges' has ranges on another core and this shape cannot fan in o",
+      "SELECT * FROM <rel> WHERE id = 1": "REFUSED: relation 'charges' has ranges on another core and this shape cannot fan in o",
+      "SELECT COUNT(*) FROM <rel>": "REFUSED: relation 'charges' has ranges on another core and this shape cannot fan in o",
+      "SELECT id FROM <rel>": "REFUSED: relation 'charges' has ranges on another core and this shape cannot fan in o",
+      "SELECT * FROM <rel> LIMIT 10": "REFUSED: relation 'charges' has ranges on another core and this shape cannot fan in o"
+    },
+    "readable": false,
+    "whole_scan": "REFUSED: relation 'charges' has ranges on another core and this shape cannot fan in o"
+  },
+  {
+    "scenario": "s3-library",
+    "relation": "users",
+    "clustered": "BTREE",
+    "oid": 4000,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s3-library",
+    "relation": "books",
+    "clustered": "BTREE",
+    "oid": 4010,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s3-library",
+    "relation": "reservations",
+    "clustered": "BTREE",
+    "oid": 4021,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  },
+  {
+    "scenario": "s3-library",
+    "relation": "loans",
+    "clustered": "BTREE",
+    "oid": 4029,
+    "rows_placed": 400,
+    "write_refusals": 0,
+    "peer_lease_grants": 0,
+    "spread": false,
+    "reads": {
+      "SELECT * FROM <rel>": "ok",
+      "SELECT * FROM <rel> WHERE id = 1": "ok",
+      "SELECT COUNT(*) FROM <rel>": "ok",
+      "SELECT id FROM <rel>": "ok",
+      "SELECT * FROM <rel> LIMIT 10": "ok"
+    },
+    "readable": true,
+    "whole_scan": "ok"
+  }
+]

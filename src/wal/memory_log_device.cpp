@@ -1,6 +1,7 @@
 #include "kds/wal/memory_log_device.hpp"
 
 #include <algorithm>
+#include <vector>
 #include <string>
 
 namespace kds::wal {
@@ -123,6 +124,67 @@ void MemoryLogDevice::Crash() {
     base_.resize(durable_segment_count_);
     pending_.clear();
     pending_.resize(durable_segment_count_);
+}
+
+std::uint64_t MemoryLogDevice::UnsyncedBytes() const noexcept {
+    std::uint64_t total = 0;
+    for (const Segment& segment : pending_) total += segment.size();
+    return total;
+}
+
+void MemoryLogDevice::Crash(std::uint64_t keep_bytes) {
+    // ---- H2: the prefix crash --------------------------------------------
+    //
+    // `Crash()` above drops the whole overlay, which is what a power loss
+    // does to writes the device never started. It is **not** what the loss
+    // does to the write it interrupted: that one had begun, so a prefix of
+    // it reached the platter and the rest did not. `sim/faults.hpp` records
+    // the absence of this primitive as the reason torn injection waits, and
+    // `recovery_undo.cpp`'s H1 case is a state only this can produce -
+    // a log whose readable prefix ends *between* two records of one
+    // statement, which `Crash()` cannot express because it cuts only where
+    // a `Sync()` already was.
+    //
+    // **The order is (segment, offset) ascending, which is append order.**
+    // A log is written sequentially, so the unsynced bytes form one run and
+    // "the first `keep_bytes` of it" is exactly the image an interrupted
+    // flush leaves. Sorting per segment rather than assuming a dense range
+    // because the overlay is a sparse map: a segment written at 0 and at
+    // 4096 with a hole between has two entries, not 4097, and the hole is
+    // not bytes that survived.
+    //
+    // What is deliberately **not** modelled is a hole in the middle - later
+    // records durable while an earlier one is not. `faults.hpp` argues that
+    // case is unrealistic for a power cut and that nothing in `wal.md` is
+    // written against it, and this primitive keeps that scope: the cut is a
+    // suffix truncation, never a scatter.
+    std::uint64_t kept = 0;
+    for (std::size_t seg = 0; seg < pending_.size(); ++seg) {
+        Segment& segment = pending_[seg];
+        if (kept >= keep_bytes) {
+            segment.clear();
+            continue;
+        }
+        if (segment.size() <= keep_bytes - kept) {
+            kept += segment.size();
+            continue;  // this whole segment's unsynced bytes survive
+        }
+        // The segment the cut falls inside: keep its lowest offsets.
+        std::vector<std::uint64_t> offsets;
+        offsets.reserve(segment.size());
+        for (const auto& [offset, value] : segment) offsets.push_back(offset);
+        std::sort(offsets.begin(), offsets.end());
+        const std::size_t survivors = static_cast<std::size_t>(keep_bytes - kept);
+        for (std::size_t i = survivors; i < offsets.size(); ++i) segment.erase(offsets[i]);
+        kept = keep_bytes;
+    }
+    // A segment created since the last sync but left with no surviving
+    // bytes never existed as far as the next mount is concerned - the same
+    // reading `Crash()` gives, applied to the tail this cut produced.
+    while (base_.size() > durable_segment_count_ && pending_.back().empty()) {
+        base_.pop_back();
+        pending_.pop_back();
+    }
 }
 
 }  // namespace kds::wal

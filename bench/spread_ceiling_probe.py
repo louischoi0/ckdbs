@@ -89,23 +89,30 @@ from multicore_benchmark import (  # noqa: E402
 )
 
 TABLE = "spread"
-# The read whose refusal is the measurement. It must be a **whole-relation**
-# read - a pk equality resolves to one range, takes one stage and can never
-# meet the ceiling - and it must be a shape the fan-in route admits, which
-# `COUNT(*)` is not (see the module docstring: aggregated chains are refused
-# before the ceiling is consulted). Bare `SELECT *` is the only shape that
-# is both, so the poll pays a whole reply each time; `--poll-s` is what
-# keeps that off the writers' backs.
+# The read whose refusal is the measurement. It must be a shape the fan-in
+# route admits, which `COUNT(*)`, `SELECT id` and `LIMIT` are not - the
+# route's guard is `steps.size() == 1 && hoisted.empty() && star() &&
+# !aggregated() && !sorted() && !limit && offset == 0`
+# (`command_dispatcher.cpp`), so an aggregated or projected chain never
+# reaches the ceiling test at all and its refusal says something else.
 #
-# **`WHERE v = -1`, which no row satisfies.** The ceiling is checked at
-# stage *planning*, before a stage is opened, so a predicate that matches
-# nothing meets the refusal exactly as a bare scan does - and until it
-# refuses, the reply is a header instead of a megabyte. At
-# `range_size_ids = 4096` the ceiling arrives near 262,144 rows and the
+# **`WHERE v = -1`, which no row satisfies.** Verified against the source
+# rather than assumed: the stage set is built from *every* row of
+# `TableAccess::ranges` with no predicate narrowing whatever, and
+# `stages.size() > kMaxFanInUpstreams` is tested before a single
+# `remote_reads_->Open`. So a residual predicate changes nothing about
+# which refusal arrives - `WHERE v = -1` is `SELECT *`'s twin here, and it
+# is only the *reply* that shrinks to a header instead of a megabyte. (The
+# same reading says a pk equality would meet this ceiling too: nothing on
+# this path resolves `WHERE id = ?` to one range. It is not used, because
+# a shape whose answer is one row is a poor witness for a whole-relation
+# read, not because it would be exempt.)
+#
+# At `range_size_ids = 4096` the ceiling arrives near 262,144 rows and the
 # poll runs a few hundred times; a bare `SELECT *` would have shipped tens
-# of millions of rows over the wire to learn one boolean. The column is
-# non-negative in this workload, so the predicate is vacuous by
-# construction and not by luck.
+# of millions of rows over the wire to learn one boolean. `v` is the
+# INSERT's only value and counts up from 0 in every writer, so the
+# predicate is vacuous by construction and not by luck.
 CEILING_READ = f"SELECT * FROM {TABLE} WHERE v = -1"
 # K-g's read, timed at geometric checkpoints rather than every poll: the
 # whole relation, which is what a client actually pays once a relation is
@@ -120,6 +127,7 @@ def start_server(binary, workdir, tag, cores, port, range_size_ids, durability,
     of a *new* file would measure nothing, which is what the first draft of
     this probe did."""
     conf = os.path.join(workdir, f"{tag}.conf")
+    fresh = data is None
     data = data or os.path.join(workdir, f"{tag}.db")
     stderr_path = os.path.join(workdir, f"{tag}.stderr")
     with open(conf, "w") as f:
@@ -128,6 +136,15 @@ def start_server(binary, workdir, tag, cores, port, range_size_ids, durability,
                 f"range_size_ids = {range_size_ids}\n"
                 f"durability = {durability}\n"
                 f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
+    if fresh:
+        # **Only when this call owns the file.** A tag repeats between runs
+        # over one `--workdir`, and a file left by a crashed run already
+        # carries `sys.ranges` rows - which would start the cell some
+        # unknown number of stages in and make `rows_placed_at_refusal`
+        # fiction. Guarded on `fresh`, because the remount below passes the
+        # first mount's file back in and deleting *that* would erase the
+        # measurement it exists to take.
+        subprocess.run(["rm", "-rf", data, data + ".wal"], check=False)
     with open(stderr_path, "w") as err:
         proc = subprocess.Popen([binary, "--config", conf], stdout=err,
                                 stderr=subprocess.STDOUT)
@@ -298,8 +315,18 @@ def run_cell(binary, workdir, cores, port, range_size_ids, durability, poll_s,
             if w.is_alive():
                 w.terminate()
 
-        placed = sum(r.get("rows", 0) for r in outcomes.values()) or \
-            sum(max(c.value, 0) for c in counters)
+        # **A writer that never reported must not silently vanish from the
+        # total.** The `break` above leaves `outcomes` short, and summing
+        # only what reported gave a `rows_placed` missing that core's whole
+        # contribution - which then went on to *overstate* `ids_burnt` by
+        # exactly the rows it dropped, with `writer_errors` empty and
+        # nothing printed. The exact count is the queue's; the approximate
+        # one is the shared counter, which is what an absent writer leaves
+        # behind. Take each where it exists and name the ones that did not
+        # report, so a cell built on the second kind says so.
+        unreported = [c for c in range(cores) if c not in outcomes]
+        placed = (sum(r.get("rows", 0) for r in outcomes.values())
+                  + sum(max(counters[c].value, 0) for c in unreported))
         # The burn side (CK3's other half): what the 40-bit space has been
         # charged for a relation that placed `placed` rows. `next_id` is
         # the high-water mark, so the difference is the unissued remainder
@@ -321,6 +348,10 @@ def run_cell(binary, workdir, cores, port, range_size_ids, durability, poll_s,
             "rows_placed": placed,
             "per_core": outcomes,
             "writer_errors": {c: r for c, r in outcomes.items() if "error" in r},
+            # Not folded into `writer_errors`: a writer that never reported
+            # has no error to report, and its rows above came off the
+            # lock-free counter rather than off its own tally.
+            "writers_unreported": unreported,
             "next_id": next_id,
             "ids_burnt": (next_id - 1 - placed) if isinstance(next_id, int) else None,
             "refusal": refusal,
@@ -411,6 +442,15 @@ def main():
         print(f"{c['cores']:>3} {c['range_size_ids']:>11} {ok:>14} {at:>11} "
               f"{stages:>7} {64 * c['range_size_ids']:>11} {per_stage:>10} "
               f"{str(c['ids_burnt']):>8} {str(burnt_mount):>12}")
+        # Printed, not left in the JSON: a cell whose row total came partly
+        # off the lock-free counter, or whose writer stopped on a refusal,
+        # is one to read differently - and the table is what gets quoted.
+        if c["writers_unreported"]:
+            print(f"    UNRESOLVED: writers {c['writers_unreported']} never reported; "
+                  f"their rows are the shared counter's reading, not their own")
+        for core, err in c["writer_errors"].items():
+            print(f"    WRITER {core} {err.get('kind', 'error')}: "
+                  f"{str(err.get('error'))[:100]}")
     # K-g: read cost against the range count that produced it. Printed as a
     # short series per cell rather than every poll, because the shape is
     # what the cell is for and the JSON below carries the rest.

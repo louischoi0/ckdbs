@@ -82,6 +82,29 @@ public:
     // Sync(), modelling power loss.
     void Crash();
 
+    // **The prefix crash** (H2): keeps the first `keep_bytes` of the
+    // unsynced region and drops the rest, in (segment, offset) ascending
+    // order - which is append order, so this is a suffix truncation of the
+    // log rather than a scatter.
+    //
+    // `Crash()` models the writes the device never started; this models the
+    // one it *interrupted*. The difference is the only way to produce a log
+    // whose readable prefix ends **between** two records of one statement,
+    // which is the class `sim/faults.hpp` records torn injection as waiting
+    // on and the class H1's `kInsert` case lives in - an `UNDO_WRITE`
+    // durable while the `HEAP_INSERT` it can undo is not.
+    //
+    // A partial record at the cut is not an error the device reports: a
+    // torn write is what CRCs are for, and recovery's job is to stop there.
+    // `keep_bytes` at or above `UnsyncedBytes()` keeps everything, which is
+    // a crash that lost nothing; 0 is `Crash()`.
+    void Crash(std::uint64_t keep_bytes);
+
+    // How many unsynced bytes a `Crash(keep_bytes)` would be cutting into,
+    // so a caller can choose a cut *inside* the run rather than guess past
+    // its end and model nothing.
+    std::uint64_t UnsyncedBytes() const noexcept;
+
     // ---- Instrumentation -------------------------------------------------
 
     const Stats& stats() const noexcept { return stats_; }

@@ -468,6 +468,27 @@ protected:
         return out;
     }
 
+    // A reply's rows, sorted, so two answers can be compared as **sets**
+    // where their sequences are allowed to differ (H5). The header line is
+    // kept and sorts with the rest - it is identical in both replies, so it
+    // cannot mask a difference, and dropping it would need this helper to
+    // know which line it was.
+    static std::vector<std::string> SortedRowsOf(const std::string& reply) {
+        std::vector<std::string> rows;
+        std::size_t at = 0;
+        while (at <= reply.size()) {
+            const std::size_t nl = reply.find("\\n", at);
+            if (nl == std::string::npos) {
+                rows.push_back(reply.substr(at));
+                break;
+            }
+            rows.push_back(reply.substr(at, nl - at));
+            at = nl + 2;  // the wire's two-character "\\n"
+        }
+        std::sort(rows.begin(), rows.end());
+        return rows;
+    }
+
     // The reply for `sql` against `t` (split) and against `u` (whole),
     // with the relation name the only textual difference.
     //
@@ -540,49 +561,160 @@ TEST_F(RangeEquivalenceTest, ADeleteAndAnUpdateAcrossTheBoundaryAgree) {
     ExpectSame("SELECT * FROM t");
 }
 
-// ---- RB5's first review item: the shapes the suite did not cover ------
+// ---- H5: the shapes RB5's review did not get to enumerate ---------------
 //
-// The review asked *"does every shippable shape have an equivalence
-// test"* and the answer was no. Eight shapes were covered - the whole
-// scan, pk equality, a pk range, non-pk predicates, four aggregates,
-// ordered reads and the write half - and the ones below were not. They
-// are not filler: each is a route that reaches the per-range walk
-// differently from the eight, and three of them (LIMIT, GROUP BY, the
-// correlated subquery) are places where a range-blind implementation
-// returns a **plausible short answer** rather than an error, which is the
-// exact defect class every one of this milestone's reviews caught.
-
-TEST_F(RangeEquivalenceTest, AProjectionIsByteIdentical) {
-    // `SELECT *` and a projected list take different emit paths; the
-    // eight shapes only ever asked for the star.
-    ExpectSame("SELECT id FROM t");
-    ExpectSame("SELECT v, id FROM t");
-}
-
-TEST_F(RangeEquivalenceTest, ALimitCrossingTheBoundaryIsByteIdentical) {
-    // **The early-termination shape, and the one most able to lie.** A
-    // walk that satisfies the limit inside the lower range never reaches
-    // the boundary, so a range-blind continuation is invisible until the
-    // limit *exceeds* the lower range's three rows. All three cases:
-    // stopping short of the cut, stopping exactly on it, and crossing it.
+// RB5's first open question was whether every shippable shape has an
+// equivalence test. Answered by enumeration rather than by assertion: the
+// suite above covers the whole scan, a pk equality, a pk range, a non-pk
+// filter, the four aggregates, `ORDER BY`, and the UPDATE/DELETE pair.
+// **Four shapes it did not cover**, each of which reaches the per-range
+// walk by a different route, are below.
+//
+// `LIMIT` is the one worth naming: it *stops* the walk, so on a split
+// relation it stops it inside a range - and a cut that ended the walk at
+// the end of the first chain instead of continuing into the next would
+// return the right number of rows and the wrong ones.
+TEST_F(RangeEquivalenceTest, PaginationAcrossTheBoundaryIsByteIdentical) {
     ExpectSame("SELECT * FROM t LIMIT 2");
+    // A limit that lands exactly on the lower range's last row, which is
+    // where a walk that stopped at the chain's end would still look right.
     ExpectSame("SELECT * FROM t LIMIT 3");
-    ExpectSame("SELECT * FROM t LIMIT 4");
-    ExpectSame("SELECT * FROM t LIMIT 100");
-    // And the offset, which is the other half of `LIMIT n OFFSET m` means
-    // "rows [m, m+n) of the unlimited reply": an offset consumed per
-    // range rather than per relation would skip three rows twice.
-    ExpectSame("SELECT * FROM t LIMIT 2 OFFSET 2");
-    ExpectSame("SELECT * FROM t LIMIT 3 OFFSET 3");
-    ExpectSame("SELECT * FROM t LIMIT 0");
+    ExpectSame("SELECT * FROM t LIMIT 3 OFFSET 2");
+    // Past the boundary: the rows can only come from the upper chain.
+    ExpectSame("SELECT * FROM t LIMIT 2 OFFSET 4");
+    ExpectSame("SELECT * FROM t ORDER BY id ASC LIMIT 3");
 }
 
-TEST_F(RangeEquivalenceTest, AnOrderedLimitIsByteIdentical) {
-    // `ORDER BY` under `LIMIT` is the top-N heap path, not the sort path,
-    // and it is fed by the walk this milestone changed.
-    ExpectSame("SELECT * FROM t ORDER BY id DESC LIMIT 2");
-    ExpectSame("SELECT * FROM t ORDER BY v ASC LIMIT 4");
+TEST_F(RangeEquivalenceTest, AProjectionListAcrossTheBoundaryIsByteIdentical) {
+    // Not `SELECT *`: the projection path renders from the step's column
+    // list rather than the relation's schema, and it is the shape the
+    // remote fan-in refuses - so on a split relation it is served by the
+    // local per-range walk and by nothing else.
+    ExpectSame("SELECT v FROM t");
+    ExpectSame("SELECT id, v FROM t WHERE v > 2");
 }
+
+TEST_F(RangeEquivalenceTest, AGroupedAggregateAcrossTheBoundaryIsByteIdentical) {
+    // `GROUP BY` accumulates across the whole walk, so a missed range is a
+    // missing group rather than a missing row - a difference that a
+    // COUNT(*) alone would show as a smaller number and this shows as an
+    // absent key.
+    ExpectSame("SELECT v, COUNT(*) FROM t GROUP BY v");
+    ExpectSame("SELECT v, SUM(id) FROM t GROUP BY v");
+}
+
+TEST_F(RangeEquivalenceTest, AJoinDrivenByASplitRelationIsByteIdentical) {
+    // Written out rather than through `ExpectSame`, which swaps the
+    // relation name and would turn a join with `u` into a self-join. A
+    // third relation `w` is the other side, so the two statements differ in
+    // exactly the cut relation - and `SELECT *` is ambiguous across two
+    // relations, so the columns are named.
+    Run("CREATE TABLE w (id int64, v int64)");
+    for (std::uint64_t id : Ids()) {
+        Run("INSERT INTO w VALUES (" + std::to_string(id) + ", " + std::to_string(id * 3) + ")");
+    }
+
+    // Compared **below the header line**, which carries the relation name
+    // and therefore differs by construction (`t.id,...` against
+    // `u.id,...`). The rows are the claim.
+    const auto rows_of = [](const std::string& reply) {
+        const std::size_t nl = reply.find("\\n");
+        return nl == std::string::npos ? std::string() : reply.substr(nl + 2);
+    };
+
+    // The split relation as the **driving** side, which walks it once per
+    // statement.
+    const std::string split_drives = Run("SELECT t.id, t.v, w.v FROM t JOIN w ON t.id = w.id");
+    const std::string whole_drives = Run("SELECT u.id, u.v, w.v FROM u JOIN w ON u.id = w.id");
+    ASSERT_EQ(split_drives.rfind("ERR", 0), std::string::npos) << split_drives;
+    ASSERT_FALSE(rows_of(split_drives).empty()) << "the join matched nothing: " << split_drives;
+    EXPECT_EQ(rows_of(split_drives), rows_of(whole_drives))
+        << "the split changed a join it drives";
+
+    // And as the **inner**, which the walked shape may re-walk per outer
+    // row - the resumed-prefix path RB3's review found re-walking every
+    // later range.
+    const std::string split_inner = Run("SELECT w.id, w.v, t.v FROM w JOIN t ON w.id = t.id");
+    const std::string whole_inner = Run("SELECT w.id, w.v, u.v FROM w JOIN u ON w.id = u.id");
+    ASSERT_EQ(split_inner.rfind("ERR", 0), std::string::npos) << split_inner;
+    EXPECT_EQ(rows_of(split_inner), rows_of(whole_inner))
+        << "the split changed a join it is the inner of";
+}
+
+TEST_F(RangeEquivalenceTest, TheEquivalenceRestsOnInsertionOrderMatchingRangeOrder) {
+    // **Stated because it bounds the claim above.** A heap relation's rows
+    // come back in *chain* order, which is insertion order; a split
+    // relation's come back per range, concatenated in `lo` order. The two
+    // coincide only while rows were inserted ascending - which the fixture
+    // does, and which is what an engine-issued pk produces.
+    //
+    // Insert one row out of order into both and the *sets* still agree
+    // while the byte-identity does not. That is a property of the heap's
+    // unordered rows (invariant 4), not of ranges, and a reader who takes
+    // "byte-identical" as unconditional would be surprised by it later.
+    //
+    // ---- H5: the premise this test rests on cannot occur here -----------
+    //
+    // RB5's review asked whether this asserts the interesting half of its
+    // own claim. It did not - and the reason is sharper than "the
+    // assertion was missing" (found 2026-08-29, H5/CH5).
+    //
+    // The setup was `INSERT INTO t VALUES (3, 6)` after ids up to
+    // `kBoundary + 2` had been placed, described as "one row out of order".
+    // **It was refused, on both relations**, and the test then compared two
+    // unchanged relations and found them equal. A heap relation rejects a
+    // caller-named key below its high-water mark - `OutOfRange`,
+    // `heap-and-tuple.md` §4.1 - so an out-of-order insert is not something
+    // this fixture can perform. The test was vacuous twice over: the
+    // divergence never happened, and the only comparison made would have
+    // agreed even if it had.
+    //
+    // **On one core the two orders cannot diverge at all.** The mark forces
+    // ids ascending, a chain grows only at its tail, and ranges concatenate
+    // in `lo` order - so chain order *is* id order *is* range order, and
+    // there is nothing to catch.
+    //
+    // Where the divergence R4 introduces actually lives is **two cores**:
+    // blocks are carved ascending, so a core holding an earlier block holds
+    // lower ids, and if it inserts *later* the row order in time departs
+    // from the row order in the id space. That needs a ring and two
+    // runtimes - `CoreRuntimeTest.TwoPeersEachInsertIntoTheirOwnRangesTail`
+    // is the fixture that has them, and it asserts ids ascend **per range**
+    // rather than per relation for exactly this reason.
+    const std::string refused = Run("INSERT INTO t VALUES (3, 6)");
+    EXPECT_EQ(refused.rfind("ERR ", 0), 0u)
+        << "a below-mark key was admitted on a heap relation, and this test's premise "
+           "would then need rewriting rather than retiring: " << refused;
+
+    // What *is* true and worth keeping: the split and whole relations agree
+    // both ordered and unordered, over the rows the fixture could place.
+    const std::string split_ordered = Run("SELECT * FROM t ORDER BY id ASC");
+    const std::string whole_ordered = Run("SELECT * FROM u ORDER BY id ASC");
+    EXPECT_EQ(split_ordered, whole_ordered) << "ordered, the two must still agree exactly";
+
+    const std::string split_rows = Run("SELECT * FROM t");
+    const std::string whole_rows = Run("SELECT * FROM u");
+    ASSERT_EQ(split_rows.rfind("ERR ", 0), std::string::npos) << split_rows;
+    EXPECT_EQ(SortedRowsOf(split_rows), SortedRowsOf(whole_rows));
+    EXPECT_EQ(SortedRowsOf(split_rows).size(), Ids().size() + 1)
+        << "every row the fixture placed, plus the header";
+}
+
+// ---- R4-M / IM0: the shapes the enumeration above still left out -------
+//
+// **Two lines answered RB5's first review item independently** - H5 above,
+// and R4-M's IM0 - and they reached the same finding about the last test
+// in it, that the out-of-order insert its premise needed is refused. The
+// overlap is collapsed rather than kept twice: everything H5 covers is
+// H5's, and what follows is what neither the eight original shapes nor
+// H5's four reach.
+//
+// The join and subquery shapes are expressible at all only because
+// `ExpectSame`'s substitution became token-level in the same work. H5's
+// join is written out by hand for exactly the reason that fixed -
+// *"`ExpectSame` swaps the relation name and would turn a join with `u`
+// into a self-join"* - and it no longer would; collapsing the two is a
+// follow-up, not a merge's business.
 
 TEST_F(RangeEquivalenceTest, AGroupedAggregateWhoseGroupStraddlesTheBoundaryIsByteIdentical) {
     // **A group with a member in each range**, which is the aggregate
@@ -609,27 +741,6 @@ TEST_F(RangeEquivalenceTest, TheRemainingAggregateFormsAreByteIdentical) {
     // An aggregate under a predicate that straddles: the filter runs per
     // range and the accumulator does not.
     ExpectSame("SELECT COUNT(*) FROM t WHERE id BETWEEN 2 AND " + std::to_string(kBoundary));
-}
-
-TEST_F(RangeEquivalenceTest, AJoinOverTheSplitRelationIsByteIdenticalOnEitherSide) {
-    // The split relation as the **outer** of the join, driving the walk...
-    ExpectSame("SELECT t.id, j.id FROM t JOIN j ON t.v = j.v");
-    // ...and as the **inner**, where it is walked once per outer row and
-    // a range-blind walk answers a subset without saying so.
-    ExpectSame("SELECT j.id, t.id FROM j JOIN t ON j.v = t.v");
-    // A pk-keyed join, which executes as a probe rather than a scan and
-    // so resolves the range per outer row instead of walking every one.
-    //
-    // **`j` needs a key above the cut for this to say anything.** Its two
-    // fixture rows are ids 1 and 2, so every probe resolves to the lower
-    // range and a resolver that answered "range 0" unconditionally would
-    // pass - the vacuity this file's other shapes are built to avoid.
-    // This id is above `j`'s own high-water mark, so `j` admits it -
-    // asserted, because a refusal here would return the shape to being
-    // vacuous and both sides would still agree while it was.
-    ASSERT_EQ(Run("INSERT INTO j VALUES (" + std::to_string(kBoundary) + ", 1)").rfind("ERR", 0),
-              std::string::npos);
-    ExpectSame("SELECT j.id, t.v FROM j JOIN t ON j.id = t.id");
 }
 
 TEST_F(RangeEquivalenceTest, ASubqueryOverTheSplitRelationIsByteIdentical) {
@@ -686,45 +797,6 @@ TEST_F(RangeEquivalenceTest, AnUnpredicatedWriteAcrossTheBoundaryAgrees) {
     ExpectSame("SELECT * FROM t");
     ExpectSame("DELETE FROM t");
     ExpectSame("SELECT COUNT(*) FROM t");
-}
-
-// **The bound on every claim above, asserted rather than described.**
-//
-// Byte-identity holds because a heap relation **refuses** a named key
-// below its high-water mark (`catalog.cpp`'s `AdmitExplicitRowId`,
-// heap-and-tuple.md §3.1b/§4.1): chain order and range order coincide only
-// while rows arrive ascending, and on one core nothing else is admitted.
-// So the out-of-order insert RB5's version described in a comment is not
-// merely untested here, it is unconstructible.
-//
-// The falsifier lives where R4 makes it reachable - each core issues from
-// its **own leased block**, which is never checked against the mark - and
-// is `core_runtime_test.cpp`'s `TwoPeersEachInsertIntoTheirOwnRangesTail`,
-// round 3.
-TEST_F(RangeEquivalenceTest, AnOutOfOrderInsertIsRefusedSoOneCoreCannotBreakTheByteIdentity) {
-    // Id 3 sorts into the *lower* range, whose chain already ends at
-    // `kBoundary - 1`; in a whole relation it would land at the tail,
-    // after `kBoundary + 2`. Both relations refuse it, by the same rule,
-    // and the messages differ only in the oid they name.
-    const std::string into_split = Run("INSERT INTO t VALUES (3, 6)");
-    const std::string into_whole = Run("INSERT INTO u VALUES (3, 6)");
-    for (const std::string& refusal : {into_split, into_whole}) {
-        EXPECT_EQ(refusal.rfind("ERR primary key 3 is below relation ", 0), 0u) << refusal;
-        EXPECT_NE(refusal.find("high-water mark 4099"), std::string::npos) << refusal;
-        EXPECT_NE(refusal.find("ids must ascend"), std::string::npos) << refusal;
-    }
-
-    // So the two still agree, and they agree **because** the ascent holds
-    // rather than because ranges preserve an arbitrary order.
-    EXPECT_EQ(Run("SELECT * FROM t"), Run("SELECT * FROM u"));
-    EXPECT_EQ(Run("SELECT * FROM t ORDER BY id ASC"), Run("SELECT * FROM u ORDER BY id ASC"));
-
-    // And the refusal left nothing behind: the lower chain is still the
-    // ascending run the equivalence above is a statement about.
-    const std::vector<catalog::SysRangeRow> ranges = RangesOfTable();
-    ASSERT_EQ(ranges.size(), 2u);
-    EXPECT_EQ(IdsInChain(ranges[0].entry_page),
-              (std::vector<std::uint64_t>{1, 2, kBoundary - 1}));
 }
 
 }  // namespace

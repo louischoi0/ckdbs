@@ -578,7 +578,38 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     in_doubt_blocker_ = 0;
     in_doubt_blocked_pk_ = 0;
     statement_trail_mark_ = 0;
-    DispatchOutcome outcome = DispatchInner(line, active);
+
+    // ---- H6 step 2: the trace, when this session asked for one ----------
+    //
+    // **Manual sampling** (`TRACE ON`), which is `observability.md` §9's
+    // decision taken at H6: nothing is collected unless a session said so,
+    // which makes zero-cost-when-off trivially true rather than argued.
+    // `trace_` is null on every other statement and `SpanScope` over a null
+    // context reads no clock at all - the property §6 sets the budget by.
+    //
+    // The context lives on the dispatcher for `DispatchInner`'s whole
+    // subtree rather than being threaded through it, which is the same
+    // trade `pending_commit_lsn_` above states and for the same reason: one
+    // statement runs at a time on a core (`sched.md` §3), so there is no
+    // second value to confuse it with, and threading it would put a
+    // parameter on a dozen signatures. §5's *rejection* of a thread-local
+    // stack is untouched by that - the danger there is a cooperative task
+    // yielding mid-span and leaving the stack describing another task, and
+    // a per-dispatcher context is per-core-per-statement, not per-thread.
+    std::optional<stats::TraceContext> trace;
+    if (tracing_ && traces_ != nullptr) {
+        trace.emplace(traces_->NextId(), clock_, std::string(line));
+        trace_ = &*trace;
+    }
+    DispatchOutcome outcome;
+    {
+        stats::SpanScope request(trace_, stats::Layer::kRequest);
+        outcome = DispatchInner(line, active);
+    }
+    if (trace.has_value()) {
+        trace_ = nullptr;
+        traces_->Add(std::move(*trace));
+    }
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
     // parameter on a dozen signatures for one number, and one statement runs
@@ -748,7 +779,8 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
     // write *inside* it is judged as itself.
     if (IEquals(cmd, "PING") || IEquals(cmd, "SELECT") || IEquals(cmd, "WITH") ||
         IEquals(cmd, "ANALYZE") || IEquals(cmd, "SHOW") || IEquals(cmd, "DESCRIBE") ||
-        IEquals(cmd, "DESC") || IEquals(cmd, "BEGIN") || IEquals(cmd, "START") ||
+        IEquals(cmd, "DESC") || IEquals(cmd, "TRACE") || IEquals(cmd, "BEGIN") ||
+        IEquals(cmd, "START") ||
         IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) {
         return Role::kReadOnly;
     }
@@ -843,8 +875,15 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
         if (IEquals(sub, "RELAYOUT")) return HandleShowRelayout(sub_rest);
         if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleShowCabinOptimizer();
+        // H6 step 3: `TRACES` is the ring, `TRACE <id>` one span tree.
+        if (IEquals(sub, "TRACES")) return HandleShowTraces();
+        if (IEquals(sub, "TRACE")) return HandleShowTrace(sub_rest);
         return {"ERR unknown SHOW target", false};
     }
+    // H6 step 3: manual sampling, which is `observability.md` §9's sampling
+    // decision taken at H6 - nothing is collected unless a session asks, so
+    // zero-cost-when-off is a property rather than an argument.
+    if (IEquals(cmd, "TRACE")) return HandleTrace(rest);
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
         return HandleDescribe(rest, session);
     }
@@ -1929,7 +1968,14 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
 }
 
 DispatchOutcome CommandDispatcher::HandleCreatePattern(std::string_view line) {
-    auto parsed = parser::Parse(line);
+    // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
     }
@@ -1969,7 +2015,14 @@ DispatchOutcome CommandDispatcher::HandleCreatePattern(std::string_view line) {
 }
 
 DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
-    auto parsed = parser::Parse(line);
+    // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
     }
@@ -2389,7 +2442,14 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
 }
 
 DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
-    auto parsed = parser::Parse(line);
+    // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
     }
@@ -2447,7 +2507,14 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
 
 DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                                                Session& session) {
-    auto parsed = parser::Parse(line);
+    // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
     }
@@ -2528,7 +2595,14 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                                    Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        auto parsed = parser::Parse(line);
+        // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
         if (!parsed.ok()) {
             return {"ERR " + parsed.status().message(), false};
         }
@@ -2976,7 +3050,7 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
         // rather than serving a half-count.
         exec::Budget budget(budget_.limit());
         auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
-                                       decay_half_life_ns_);
+                                       decay_half_life_ns_, core_id_);
         if (!one.ok()) return {"ERR " + one.status().message(), false};
         reports.push_back(std::move(one.value()));
     }
@@ -3003,6 +3077,16 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
                << " live=" << report.survey->live_tuples
                << " delete_marked=" << report.survey->delete_marked
                << " tuples_per_page=" << report.survey->tuples_per_page;
+            // **Absent when the survey covered the whole relation** (H3),
+            // which is every relation on an instance that has not armed
+            // `range_size_ids` - the absent-rather-than-zeroed rule C3's
+            // counters follow, for its reason: a field that reads
+            // `1/1` forever teaches a reader to skip it, and then it is
+            // not read on the one relation where it matters.
+            if (report.survey->surveyed_ranges != report.survey->relation_ranges) {
+                os << " surveyed_ranges=" << report.survey->surveyed_ranges << "/"
+                   << report.survey->relation_ranges;
+            }
         }
 
         if (report.plans.empty()) {
@@ -3108,6 +3192,62 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         }
     }
     return {os.str(), false};
+}
+
+// ---- H6 step 3: the three inspection commands ---------------------------
+//
+// The one-line `\n`-escaped convention `SHOW PAGE` established
+// (`client-manual.md`), so a text client reads them the same way.
+
+DispatchOutcome CommandDispatcher::HandleTrace(std::string_view rest) {
+    auto [word, tail] = SplitFirstToken(rest);
+    if (!tail.empty()) {
+        return {"ERR TRACE takes ON or OFF and nothing else", false};
+    }
+    if (traces_ == nullptr) {
+        // **Refused rather than silently accepted**: a session told `TRACE
+        // ON` that then finds an empty ring would read the absence as "the
+        // statement was too fast to show anything", which is the
+        // misdiagnosis this whole instrument exists to prevent.
+        return {"ERR tracing is not available on this dispatcher; no trace sink is installed",
+                false};
+    }
+    if (IEquals(word, "ON")) {
+        tracing_ = true;
+        return {"OK tracing on", false};
+    }
+    if (IEquals(word, "OFF")) {
+        tracing_ = false;
+        return {"OK tracing off", false};
+    }
+    return {"ERR TRACE takes ON or OFF", false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowTraces() {
+    if (traces_ == nullptr) return {"ERR no trace sink is installed", false};
+    return {stats::RenderTraceList(*traces_), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowTrace(std::string_view rest) {
+    if (traces_ == nullptr) return {"ERR no trace sink is installed", false};
+    auto [id_text, tail] = SplitFirstToken(rest);
+    if (id_text.empty() || !tail.empty()) {
+        return {"ERR SHOW TRACE takes one trace id (SHOW TRACES lists them)", false};
+    }
+    std::uint64_t id = 0;
+    for (char c : id_text) {
+        if (c < '0' || c > '9') return {"ERR trace id must be a number", false};
+        id = id * 10 + static_cast<std::uint64_t>(c - '0');
+    }
+    const stats::TraceContext* trace = traces_->Find(id);
+    if (trace == nullptr) {
+        // The ring is drop-oldest, so "gone" and "never existed" are one
+        // answer here and the message says which is likelier.
+        return {"ERR no trace " + std::to_string(id) +
+                    " in the ring; it may have been evicted (SHOW TRACES lists what is held)",
+                false};
+    }
+    return {stats::RenderTrace(*trace), false};
 }
 
 DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
@@ -3364,7 +3504,14 @@ DispatchOutcome CommandDispatcher::HandleShowFkeys() {
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                         Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        auto parsed = parser::Parse(line);
+        // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
         if (!parsed.ok()) {
             return {"ERR " + parsed.status().message(), false};
         }
@@ -3476,9 +3623,18 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
             // not a widening, so the promotion is a different type_val and a
             // different schema constant, chosen from the one fact the client
-            // declared. Writing `decimal128(p, s)` names the wide type
-            // directly and its bounds refuse p <= 18 toward the narrow
-            // spelling, so either way one declaration selects exactly one type.
+            // declared.
+            //
+            // **`decimal128(p, s)` is not a spelling this code ever sees**,
+            // and the sentence that said it "names the wide type directly
+            // and its bounds refuse p <= 18" was wrong (corrected
+            // 2026-08-29, H8). The parser admits a type-argument list for
+            // `DECIMAL`, `CHAR` and `VARCHAR` only, so `decimal128(24, 6)`
+            // is refused as *"type 'decimal128' takes no arguments"* before
+            // a column row is built. Nothing is lost by that: the wide type
+            // is reached by declaring `decimal(p, s)` with p >= 19, which
+            // is the promotion above, so one declaration still selects
+            // exactly one type - by precision, and only by precision.
             if (row.type_val == catalog::kTypeValDecimal ||
                 row.type_val == catalog::kTypeValDecimalWide) {
                 if (!col.has_precision) {
@@ -4680,7 +4836,14 @@ Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
 }
 
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
-    auto parsed = parser::Parse(line);
+    // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
     }
@@ -7168,7 +7331,14 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
 
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
                                                const txn::Snapshot& snapshot) {
-    auto parsed = parser::Parse(line);
+    // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
     }
@@ -8086,7 +8256,14 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
 DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope& scope,
                                                const txn::Snapshot& snapshot) {
-    auto parsed = parser::Parse(line);
+    // H6 step 2: the parse leg. One of `observability.md` §10's three
+    // request-level spans, and the cheapest to attribute wrongly - a
+    // statement that is slow to *parse* looks identical from outside to
+    // one that is slow to run.
+    auto parsed = [&] {
+        stats::SpanScope span(trace_, stats::Layer::kParse);
+        return parser::Parse(line);
+    }();
     if (!parsed.ok()) return {"ERR " + parsed.status().message(), false};
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};

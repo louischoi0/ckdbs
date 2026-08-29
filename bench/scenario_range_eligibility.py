@@ -195,6 +195,13 @@ def main():
     ap.add_argument("--port", type=int, default=15850)
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
+    # Refused here rather than three ways further down: `peer_listeners = on`
+    # is refused by the engine at `cores = 1` (so `wait_for_port` would time
+    # out), the peer round-robin below divides by `cores - 1`, and with no
+    # peer there is no foreign writer and so nothing this probe asks about.
+    if args.cores < 2:
+        sys.exit("--cores must be at least 2: this probe measures what a *peer* "
+                 "writer does to a relation, and a one-core instance has none")
     os.makedirs(args.workdir, exist_ok=True)
     check_host(args.workdir, args.force)
 
@@ -240,7 +247,7 @@ def main():
                 # per-core lifetime counter, so the value after this
                 # relation's workload includes every earlier relation's
                 # grants on the same server - which read a btree relation as
-                # spread purely because a heap one ran before it.
+                # having leased purely because a heap one ran before it.
                 before = peer_lease_grants(conns, args.cores)
                 placed = refused = 0
                 # Round-robin the peers, which is what keeps the top range's
@@ -259,20 +266,41 @@ def main():
                     out = c0.cmd(sql)
                     reads[shape.format(t="<rel>")] = (
                         "REFUSED: " + out[4:80] if out.startswith("ERR") else "ok")
+                # **A lease grant is not a range, and reading it as one
+                # over-reported this whole table.** `row_id_lease_service.cpp`
+                # fills `grant.count` and *then* calls
+                # `OpenRangeOnSystemCore`, which returns `kInvalidPageId` -
+                # block already handed over - for a catalog namespace, for
+                # any of `RangeEligible`'s five gates, for a durable
+                # `sys.assertions` row, for `first_id == 0`, and for IS5's
+                # top-owner suppression. So `grants > 0` says "a peer took a
+                # block of ids", which is true of *every* heap relation here
+                # and says nothing about whether a boundary opened.
+                #
+                # The behavioural witness is the read, and it is exact.
+                # Under `placement = creating` the relation is core 0's, so
+                # the fan-in route is skipped (it wants `owner_core !=
+                # core_id_`) and `CheckReadAffinity` runs
+                # `WhollyOwnedBy(0)` - which fails if and only if some range
+                # landed on another core, and every range this path opens is
+                # owned by the requesting *peer*. A relation that never
+                # split answers all five shapes here.
+                whole_scan = reads["SELECT * FROM <rel>"]
                 rows.append({"scenario": scenario, "relation": rel,
                              "clustered": clustered, "oid": oid,
                              "rows_placed": placed, "write_refusals": refused,
                              "peer_lease_grants": grants,
-                             "spread": grants > 0,
+                             "leased": grants > 0,
+                             "spread": whole_scan != "ok",
                              "reads": reads,
                              "readable": all(v == "ok" for v in reads.values()),
-                             "whole_scan": reads.get("SELECT * FROM <rel>")})
+                             "whole_scan": whole_scan})
         finally:
             stop_server(port)
             proc.wait(timeout=30)
         port += 1
 
-    print(f"\n{'scenario':<16} {'relation':<22} {'clus':<6} {'rows':>6} {'grants':>7} "
+    print(f"\n{'scenario':<16} {'relation':<22} {'clus':<6} {'rows':>6} {'leased':>7} "
           f"{'spread':>7} {'whole scan after the workload'}")
     print("-" * 108)
     for r in rows:
@@ -284,15 +312,20 @@ def main():
               f"{r['rows_placed']:>6} {r['peer_lease_grants']:>7} "
               f"{'yes' if r['spread'] else 'no':>7} {r['whole_scan'][:48]}")
 
+    # Two counts, because they answer two questions and the first used to
+    # be printed as the second: `leased` is how far the heap-only pump
+    # reaches, `spread` is how many relations a boundary actually opened in.
+    leased = [r for r in rows if r.get("leased")]
     spread = [r for r in rows if r.get("spread")]
-    broken = [r for r in rows if r.get("spread") and not r.get("readable")]
-    print(f"\n{len(spread)} of {len(rows)} scenario relations spread at all "
-          f"(the rest never asked for a lease, which is the heap-only pump).")
-    print(f"{len(broken)} of those {len(spread)} lost read shapes by spreading:")
-    for r in broken:
+    print(f"\n{len(leased)} of {len(rows)} scenario relations took a peer lease block "
+          f"(the rest never asked for one, which is the heap-only pump).")
+    print(f"{len(spread)} of those {len(leased)} actually split - a grant opens no "
+          f"boundary when a gate declines, when it is the first block, or when the "
+          f"asking core already owns the top range.")
+    for r in spread:
         lost = [s for s, v in r["reads"].items() if v != "ok"]
         print(f"  {r['scenario']}.{r['relation']}: {len(lost)} of "
-              f"{len(r['reads'])} shapes refused")
+              f"{len(r['reads'])} read shapes refused after the workload")
     print()
     print(json.dumps(rows, indent=2))
 

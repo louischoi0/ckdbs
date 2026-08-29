@@ -15,13 +15,23 @@ with reactors for every CPU there is. **A sweep cell whose throughput sits
 on this curve is measuring the harness**, and is reported as unresolved
 rather than quoted as an engine result.
 
-Three arms, each k processes each on its own core's session:
+Three arms, each k processes each on its own core's session. **Only the
+first is the harness ceiling**, and saying so is the point: the relation
+is `placement = creating`, so core 0 owns it and every peer's statement
+takes the statement-ship route to core 0 (`MayShip`, autocommit,
+single-relation). The other two therefore plateau where *one owner*
+saturates, which is a real reading and is not the driver's limit.
 
-  ping    `PING`, answered before any parsing - socket round trip plus
-          CPython, and the ceiling proper.
-  select  a pk lookup - the engine doing real, sync-free work.
-  insert  what the sweep actually runs, `durability = relaxed`, so the
-          gap between this and `ping` is the engine's share.
+  ping    `PING`, answered before any parsing and never shipped - socket
+          round trip plus CPython. **The ceiling proper**; this is the
+          curve a §4a cell is read against.
+  select  a pk lookup, shipped to core 0 from every peer - the engine
+          doing real, sync-free work under one owner.
+  insert  the same shape writing, `durability = relaxed`. It is the
+          sweep's *concentrated* arm, not its spread one: the sweep's
+          spread arm writes locally into a heap relation's own range,
+          which this probe deliberately does not (BTREE, unsplittable, so
+          the control never acquires the engine's own range refusals).
 
 Usage:
     bench/spread_client_ceiling.py --server build-release/kds_server \\
@@ -51,19 +61,37 @@ def looper(port, core, stmt, seconds, barrier, queue):
         conns, _ = collect_connections(port, {core: 1}, max_attempts=400)
         conn = conns[core][0]
         barrier.wait()
+        # **An answered statement and a refused one are counted apart**, and
+        # `ops` is the first. This probe exists to bound what the *harness*
+        # can drive, and a refusal is neither a round trip's worth of engine
+        # work nor a ceiling: `placement = creating` puts `ceil` on core 0,
+        # so every peer's `select` and `insert` here takes the statement-ship
+        # route to core 0, and anything that route declines comes back at
+        # very nearly PING speed. Summed into one `ops` those refusals
+        # *raised* the reported ceiling, which is the one direction a control
+        # must never err in. `attempts` keeps the old total visible.
         ops = errors = 0
-        end = time.monotonic() + seconds
         began = time.monotonic()
+        end = began + seconds
         i = 0
         while time.monotonic() < end:
             reply = conn.cmd(stmt.format(i=i))
             i += 1
             if reply.startswith("ERR"):
                 errors += 1
-            ops += 1
-        queue.put((core, {"ops": ops, "errors": errors, "began": began,
-                          "ended": time.monotonic()}))
+            else:
+                ops += 1
+        queue.put((core, {"ops": ops, "errors": errors, "attempts": ops + errors,
+                          "began": began, "ended": time.monotonic()}))
     except BaseException as exc:
+        # The barrier, before the report: a child that failed in
+        # `collect_connections` never reached `wait()`, and its siblings
+        # would park there until the parent's `queue.get` gave up - after
+        # which the parent's own exit blocks joining them.
+        try:
+            barrier.abort()
+        except BaseException:
+            pass
         queue.put((core, {"ops": 0, "error": f"{type(exc).__name__}: {exc}"}))
     finally:
         if conn is not None:
@@ -88,9 +116,15 @@ def run(port, cores, stmt, seconds):
     wall = (max(r["ended"] for r in stamps) - min(r["began"] for r in stamps)
             if stamps else 0.0)
     ops = sum(r.get("ops", 0) for r in out.values())
+    errors = sum(r.get("errors", 0) for r in out.values())
+    # A child that never ran is named, not averaged over: `wall` comes from
+    # the survivors, so a silently short `out` reads as a low ceiling.
+    dead = sorted(c for c, r in out.items() if "error" in r)
     return {"cores": cores, "wall_s": round(wall, 3), "ops": ops,
             "ops_per_s": round(ops / wall, 1) if wall > 0 else 0.0,
-            "errors": sum(r.get("errors", 0) for r in out.values()),
+            "errors": errors,
+            "refused_per_s": round(errors / wall, 1) if wall > 0 else 0.0,
+            "driver_failures": dead,
             "per_core": out}
 
 
@@ -147,7 +181,9 @@ def main():
                 row["arm"] = name
                 results.append(row)
                 print(f"  {name:<7} k={k:<2} {row['ops_per_s']:>12,.0f} ops/s  "
-                      f"errors={row['errors']}", flush=True)
+                      f"refused={row['errors']} ({row['refused_per_s']:,.0f}/s)"
+                      + (f"  DRIVER FAILED on {row['driver_failures']}"
+                         if row["driver_failures"] else ""), flush=True)
         finally:
             stop_server(port)
             proc.wait(timeout=30)

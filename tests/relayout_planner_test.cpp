@@ -245,7 +245,8 @@ TEST(RelayoutPlannerTest, TheSurveyedFormMeasuresAndPredicts) {
     exec::Budget budget;
     db.store().ResetFetches();
     auto report =
-        stats::PlanRelation(db.catalog(), db.store(), h_oid, budget, /*clock=*/nullptr, kHalfLife);
+        stats::PlanRelation(db.catalog(), db.store(), h_oid, budget, /*clock=*/nullptr,
+                            kHalfLife, /*core_id=*/0);
     ASSERT_TRUE(report.ok()) << report.status().message();
     EXPECT_TRUE(db.store().Fetched(access.value()->desc_page_id))
         << "the surveyed form is supposed to walk the chain, and did not";
@@ -277,13 +278,76 @@ TEST(RelayoutPlannerTest, TheSurveyedFormMeasuresAndPredicts) {
     EXPECT_EQ(compact.measured_pages_saved, 0u);
 }
 
+// ---- H3: the survey covers every range, not the lower one ----------------
+//
+// RD6 gave a relation one chain per range, and this survey kept walking
+// `desc_page_id` - which heads the lo = 0 range and nothing more. The
+// counts it reported were then the *lower* range's, and every density the
+// planner derives from them was computed over an undersized relation.
+//
+// **A read-back test, not a fixed call site**, which is RB3's own lesson:
+// its call-site inventory was believed and was wrong, and what caught it
+// was a test that asked for the rows back. So this asserts the totals
+// across a boundary rather than asserting that a particular head was
+// fetched.
+TEST(RelayoutPlannerTest, TheSurveyCoversEveryRangeOfASplitRelation) {
+    Instance db;
+    Load(db);
+
+    const catalog::Oid h_oid = OidOf(db, "h");
+    exec::Budget whole_budget;
+    auto whole = stats::PlanRelation(db.catalog(), db.store(), h_oid, whole_budget,
+                                     /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+    ASSERT_TRUE(whole.ok()) << whole.status().message();
+    ASSERT_TRUE(whole.value().survey.has_value());
+    const stats::RelationSurvey before = *whole.value().survey;
+    ASSERT_GT(before.live_tuples, 0u);
+
+    // Split above every id the relation holds, so the upper range is empty
+    // and the totals **must not move**. A survey that walked only the lower
+    // chain would also not move, so this is the control rather than the
+    // assertion - it pins that opening a boundary changes no count.
+    auto head = db.catalog().CreateRangeEntryPage(h_oid, /*lo=*/1'000'000);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(db.catalog().OpenRangeRows(h_oid, 1'000'000, /*owner_core=*/0, head.value()).ok());
+
+    exec::Budget split_budget;
+    auto split = stats::PlanRelation(db.catalog(), db.store(), h_oid, split_budget,
+                                     /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    ASSERT_TRUE(split.value().survey.has_value());
+    EXPECT_EQ(split.value().survey->live_tuples, before.live_tuples);
+    EXPECT_EQ(split.value().survey->delete_marked, before.delete_marked);
+    EXPECT_EQ(split.value().survey->surveyed_ranges, 2u);
+    EXPECT_EQ(split.value().survey->relation_ranges, 2u);
+
+    // **The assertion proper**: rows placed above the boundary land in the
+    // upper range's own chain, and the survey must count them. Before H3
+    // this read `before.live_tuples` - the upper chain was never walked.
+    for (int i = 0; i < 5; ++i) {
+        const std::string reply =
+            db.Run("INSERT INTO h VALUES (" + std::to_string(1'000'000 + i) + ", 7)");
+        ASSERT_NE(reply.find("INSERTED"), std::string::npos) << reply;
+    }
+
+    exec::Budget after_budget;
+    auto after = stats::PlanRelation(db.catalog(), db.store(), h_oid, after_budget,
+                                     /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    ASSERT_TRUE(after.value().survey.has_value());
+    EXPECT_EQ(after.value().survey->live_tuples, before.live_tuples + 5)
+        << "the survey missed the upper range's rows";
+    EXPECT_GT(after.value().survey->chain_pages, before.chain_pages)
+        << "the upper range's chain page was not counted";
+}
+
 TEST(RelayoutPlannerTest, TheSurveyRespectsTheRowBudget) {
     Instance db;
     Load(db);
 
     exec::Budget budget(10);  // 400 slots to walk: refused, not truncated
     auto report = stats::PlanRelation(db.catalog(), db.store(), OidOf(db, "h"), budget,
-                                      /*clock=*/nullptr, kHalfLife);
+                                      /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
     ASSERT_FALSE(report.ok());
     EXPECT_EQ(report.status().code(), StatusCode::kResourceExhausted)
         << report.status().message();
@@ -295,14 +359,14 @@ TEST(RelayoutPlannerTest, ABtreeRelationSurveysNothingAndPlansNothing) {
 
     exec::Budget budget;
     auto report = stats::PlanRelation(db.catalog(), db.store(), OidOf(db, "b"), budget,
-                                      /*clock=*/nullptr, kHalfLife);
+                                      /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
     ASSERT_TRUE(report.ok()) << report.status().message();
     EXPECT_FALSE(report.value().survey.has_value());
     EXPECT_TRUE(report.value().plans.empty());
     EXPECT_EQ(budget.touched(), 0u) << "a btree relation must not be walked";
 
     auto missing = stats::PlanRelation(db.catalog(), db.store(), /*rel_oid=*/999999, budget,
-                                       /*clock=*/nullptr, kHalfLife);
+                                       /*clock=*/nullptr, kHalfLife, /*core_id=*/0);
     ASSERT_FALSE(missing.ok());
     EXPECT_EQ(missing.status().code(), StatusCode::kNotFound);
 }

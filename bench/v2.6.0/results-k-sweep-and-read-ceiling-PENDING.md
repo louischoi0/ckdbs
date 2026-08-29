@@ -42,6 +42,16 @@ its.** IS7's 1.132× was taken on a 2-CPU box off a Debug build; the order
 says plainly that it is not this file's baseline and is not subtracted
 from. It is quoted in §4 only to say what it did *not* settle.
 
+**A note on the neighbouring file's version string**, because the rule it
+follows exists to stop exactly this. `bench/v2.6.0/results-insert-spreading-v2.2.1-127.md`
+names itself `v2.2.1-127`, and `git describe --tags a135a59` — the commit
+it documents — returns **`v2.4.0-48-ga135a59`**. `v2.4.0` is a reachable
+tag and `v2.2.1` is two tags behind it, so that filename dates the run to
+a build it was not taken on, which is the failure the "every measurement
+names its version, and `git describe --tags` is how" rule names. Recorded
+here rather than corrected in place: renaming another run's file breaks
+citations to it, and the correction is the operator's to make.
+
 **Build.** `cmake -DCMAKE_BUILD_TYPE=Release`, `-O3 -DNDEBUG -std=c++20
 -Wall -Wextra`, `-DKDS_WITH_TLS=1`. Every server started from a **copy**
 of the binary at `/home/ubuntu/ksweep/kds_server`
@@ -133,7 +143,151 @@ two leased blocks are what get past the mark rule.
 
 ## 4. The k sweep — CK1, CK2, HK1, HK2, HK5
 
-*(K-a and K-b. Filled from the run below.)*
+**Method.** One relation, written concurrently from k cores' sessions,
+4,000 rows per core. Arms differ in one config key — `range_size_ids = 0`
+(concentrated: peers ship to the owner) against `4096` (spread) — crossed
+with `durability` ∈ {`group`, `relaxed`}, at k = 1…8. `placement =
+creating` and `peer_listeners = on`, which is the arrangement that spreads
+widest: the relation is core 0's, so every peer is a foreign writer that
+takes a range of its own. Fresh server and data file per cell; **three
+reps, arms interleaved** — one rep touches every (k, durability, arm) cell
+once, so drift arriving mid-run lands on both arms rather than on whichever
+ran second. Medians across reps.
+
+**`peer_listeners` is omitted at k = 1**, where the engine refuses it
+(*"has no peer to listen; the only effect would be losing the exclusive
+bind on the one socket"*). So the k = 1 cell runs today's single-core
+configuration exactly, which is what HK5 asks of it — the unmoved
+baseline, not a one-core copy of the spread arm.
+
+**The driver was rewritten for this order and the two changes are
+load-bearing.** IS7 ran one k, one rep, arms in sequence, writers as
+CPython **threads**. Threads are what had to go: the loop is one
+synchronous send-and-read per row, so a thread holds the GIL for
+everything between the two socket calls, and at k = 8 the driver would
+bind before the engine did. Writers are now one process per core. §4b is
+the control that says, per k, whether a number is the engine's.
+
+### 4a. The numbers
+
+Measured on `v2.6.0-ksweep` at `03b815b`, binary
+`sha256 e493bc09…c886`. Medians of three interleaved reps; **every cell
+placed all `4000 × k` rows, no cell reported a writer error, and no cell
+came up short** (the driver prints `SHORT:` and `ERRORS:` lines and there
+are none).
+
+| k | group C | group S | **group S/C** | relaxed C | relaxed S | **relaxed S/C** |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 890 | 873 | **0.981** | 40,234 | 40,315 | **1.002** |
+| 2 | 892 | 926 | 1.038 | 30,966 | 28,658 | 0.925 |
+| 3 | 988 | 1,381 | 1.398 | 43,686 | 49,010 | 1.122 |
+| 4 | 1,361 | 1,986 | 1.460 | 60,398 | 60,365 | 0.999 |
+| 5 | 1,727 | 2,606 | **1.509** | 69,859 | 71,246 | 1.020 |
+| 6 | 2,094 | 2,734 | 1.306 | 72,577 | 78,844 | 1.086 |
+| 7 | 2,465 | 2,783 | 1.129 | 75,883 | 86,360 | 1.138 |
+| 8 | 2,880 | 2,784 | 0.967 | 78,073 | 93,371 | **1.196** |
+
+*(inserts/s; C = concentrated, `range_size_ids = 0`; S = spread, 4096.)*
+
+**HK5 holds — `cores = 1` is unmoved.** 0.981 and 1.002, the eleventh
+consecutive order. At one core there is no peer, no lease and no range:
+`ids_burnt` is 0 on both arms, so the spread arm is not a configuration so
+much as the same configuration under a different name.
+
+**CK2, and §8's prediction is refuted in the direction that matters.**
+§8 predicted the group arm flat-to-slightly-down, on v2.1.0's finding that
+spreading divides the commit batch. It is **not flat and not down**: the
+concentrated group arm itself rises 890 → 2,880 across k, and spreading
+adds up to **1.51×** on top of that at k = 5. Whatever divides the batch,
+it does not cost more than spreading buys anywhere below k = 8. v2.1.0's
+result is not contradicted — it was measured on rotation of *independent*
+sessions, and this is one relation — but the inference drawn from it in
+§8, that a durably-committed insert workload cannot gain from spreading,
+does not survive.
+
+**And the two arms do not track each other**, which is the second half of
+CK2 and directly corrects IS7's headline. IS7 found `group` and `relaxed`
+agreeing to 0.2% at k = 2 and called that the finding. Across the sweep
+they diverge sharply and in both directions — at k = 4, group is 1.460
+where relaxed is 0.999; at k = 8, group is 0.967 where relaxed is 1.196.
+**The 0.2% agreement was a coincidence of k = 2**, and the order was right
+to refuse to build on it.
+
+**CK1 — the shape, and what binds.** Two different curves:
+
+- **The group arm peaks and declines**: 1.038, 1.398, 1.460, **1.509**,
+  1.306, 1.129, 0.967. A clear maximum at k = 5 and a return to parity by
+  k = 8. This is the decline `bench/v2.1.0` §3a warned was live — that
+  device overlapped four streams at 3.37× before declining — arriving here
+  one core later.
+- **The relaxed arm rises, late, and monotonically past k = 5**: 1.020,
+  1.086, 1.138, **1.196** at k = 6, 7, 8, with no peak inside the sweep.
+
+The two arms disagreeing about *where* spreading helps is what names the
+binding constraint, because the arms differ in exactly one thing: whether
+`fdatasync` is on the critical path.
+
+- Under `group`, spreading's benefit is that k committers batch k
+  independent streams instead of one core serialising every write; it
+  peaks at k = 5 and falls away as the reactors start sharing physical
+  cores (§2: k ≥ 5 pairs each new reactor with an existing one's physical
+  core), so the **device-plus-SMT boundary** binds the group arm.
+- Under `relaxed` there is no sync, so the concentrated arm is bound by
+  **core 0 serialising every shipped statement** — visible in §4b's
+  control, where the same shape plateaus at ~80 k — and spreading lifts
+  exactly that: 93,371 against 78,073 at k = 8, which is the plateau being
+  exceeded.
+
+So **CK1's answer names two constraints, not one**: the group arm is bound
+by the device and the host's SMT pairing, and the relaxed arm by the
+single owner's serialisation, which is the one spreading exists to remove.
+The fan-in stage count — the third candidate the order listed — **binds
+neither**, for the reason §6a gives: it is not reached before the read
+surface closes.
+
+**HK1 is supported with a correction.** Throughput does rise with k, and
+the device does bind — but only on the arm that touches it. The falsifier
+the order named for HK1 (that the stage count binds first) is not what
+happened: the stage count binds *reads*, and this cell is writes.
+
+**The one anomaly, stated rather than smoothed.** k = 2 relaxed is 30,966
+concentrated against 43,686 at k = 3 and 40,234 at k = 1 — a dip below
+both neighbours on both arms. Three reps agree, so it is not a single bad
+cell. Unexplained; the most likely reading is that at k = 2 the one peer's
+shipped statements and core 0's own work land on two physical cores that
+share an L3 slice while k = 1 pays no wire at all, but nothing here
+measures that and it is left as an anomaly rather than dressed as a
+finding.
+
+### 4b. The harness's own ceiling, per k — and it is not close
+
+`bench/spread_client_ceiling.py`, k processes each on its own core's
+session against a k-core server, 3 s per arm. `ping` is answered before any
+parsing, so it is socket round trip plus CPython — the harness proper. The
+other two run against a **btree** relation core 0 owns, so peers ship: that
+is deliberately the *concentrated* shape, and its plateau is a second
+reading of the same limit §4a measures.
+
+| k | `ping` ops/s | pk `SELECT` ops/s | relaxed `INSERT` ops/s |
+|---:|---:|---:|---:|
+| 1 | 54,452 | 44,535 | 36,535 |
+| 2 | 100,730 | 61,827 | 53,114 |
+| 3 | 135,237 | 79,294 | 64,324 |
+| 4 | 176,570 | 92,907 | 72,856 |
+| 5 | 274,209 | 94,372 | 77,790 |
+| 6 | 447,886 | 94,197 | 79,965 |
+| 7 | 534,781 | 95,392 | 80,243 |
+| 8 | 595,627 | 95,895 | 80,042 |
+
+**The harness never saturates**: `ping` rises monotonically to 596 k ops/s,
+six to seven times the engine's plateau, so no cell in §4a sits on the
+driver's limit and none is reported as unresolved on that ground. The
+process-per-writer rewrite is what bought that; a thread-based driver is
+the reason the question had to be asked.
+
+**And the two engine arms plateau at k ≈ 4-5**, at ~95 k reads/s and
+~80 k inserts/s, which is one core-0-owned relation saturating its single
+owner. That plateau is the number the spread arm has to beat.
 
 ## 5. CK4 — what a scenario relation does when spreading is armed
 
@@ -167,6 +321,12 @@ copied verbatim.
 shapes** — `SELECT *`, `SELECT * WHERE id = 1`, `SELECT COUNT(*)`,
 `SELECT id`, `SELECT * LIMIT 10` — at **≈395 rows**, three orders of
 magnitude below §3's 262,144.
+
+`range_size_ids = 64` here, chosen so 400 rows is enough to spread; the
+**conclusion does not depend on it**, because what refuses these reads is
+the relation having a second *owner*, not having many ranges (§6a). A
+production block size delays the refusal by exactly one block and does not
+remove it.
 
 The eighteen that did not spread are the btree ones, and the reason is
 structural rather than a gate firing: **the pump is heap-only.**

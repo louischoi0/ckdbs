@@ -210,13 +210,62 @@ is exactly the argument for: a counter that says "how many syncs since boot"
 cannot answer any of them. A span per protocol leg would have settled RP8's
 question in one run and RR2's in the same run that raised it.
 
+### 8b. What the instrument would have read — CH6, answered 2026-08-29
+
+§10's steps 1-3 are **built** (work order H, H6): `Layer`, `Span`,
+`SpanScope`, `TraceContext` and `TraceSink` in `include/kds/stats/trace.hpp`,
+the context threaded through `CommandDispatcher` only, and
+`TRACE ON|OFF` / `SHOW TRACES` / `SHOW TRACE <id>`. Steps 4-5 are not, by
+the doc's own division.
+
+The row was asked to say what the three attributions above **would have
+read** had this existed — not to redo them, but to check the instrument
+answers the questions it was built for before it is pointed at a new one.
+Taking them in turn, and the third is the one that changes the answer:
+
+- **M3** would have read it. The decomposition it wanted is
+  `kRequest → kExecute` on the *owner* core against the arrival core's
+  park: a span tree on the owner separates the owner's execution from its
+  group commit, and subtracting that from the arrival core's total leaves
+  the wire. Every span it needs is a request-level one, which is step 2's
+  set.
+- **RP8** would have read it **only with step 4**. Its two candidate
+  explanations differ in *which durable wait* absorbs the others, and
+  prepare, decide and ack are `kWalFlush` spans inside
+  `Txn2pcService` — below the dispatcher, which is where step 2 stops. So
+  the honest answer is that the *shape* built here is the right one and
+  this particular question needs the spans pushed one layer down. §8a's
+  claim that "a span per protocol leg would have settled RP8's question in
+  one run" is correct about the design and optimistic about the scope: the
+  legs are not request-level.
+- **RR2** would **not** have been settled by any of it, and this is worth
+  recording because it is the instance that looked most like the
+  instrument's own case. Its question is whether a blocked writer's p50/p99
+  excess is reactor *queueing* — time between a wake being posted and the
+  task running — and that interval is not inside any span, because no span
+  is open while a task is not running. It is the scheduler's own
+  accounting, which `sched.md` §4's group-polling fields already carry, and
+  it wants a *wake-to-run* number those fields do not yet break out. A
+  trace tree would have shown the same total with nothing between the
+  spans.
+
+**So the instrument is right for one of the three today, one more after
+step 4, and the third belongs to the scheduler rather than here.** That is
+a narrower claim than §8a's, and it is the one the build supports.
+
 ## 9. Open decisions — do not assume
 
-- Whether tracing is compile-time removable or runtime-only (§6).
-- `kMaxSpansPerTrace`, trace-ring capacity, and what a dropped span does to a trace's credibility (mark the trace incomplete vs report partial).
+- ~~Whether tracing is compile-time removable or runtime-only (§6).~~
+  **Taken 2026-08-29 (H6): runtime-only.** A development tool that needs a
+  rebuild to answer a question is one nobody uses during the run that
+  raised it, and the off path is a null-pointer test — one predictable
+  branch and, crucially, no clock read — which is the budget §6 sets.
+  Reversible: making it compile-time removable later removes call sites,
+  it does not change their shape.
+- `kMaxSpansPerTrace`, trace-ring capacity, and ~~what a dropped span does to a trace's credibility (mark the trace incomplete vs report partial)~~ — **the last taken 2026-08-29 (H6): mark incomplete.** A span tree missing a node reads as a *fast* subtree rather than an absent one, which is the one way this instrument could lie about the thing it exists to measure; `TraceContext::complete()` is false and `SHOW TRACE` prints `incomplete dropped_spans=N`. The two capacities keep their `[PROPOSED]` values (64 spans, 256 traces) and stay open — nothing has measured them.
 - Global vs core-local `TraceId` once multi-core lands — and whether a trace can span cores at all, which is tied to the `[OPEN]` cross-core transaction question (`wal.md` §3).
 - Whether `SHOW TRACE*` survives the move to KWP/1 (`docs/spec/protocol.md`) as protocol messages, or stays a text-protocol debug affordance and disappears with it.
-- Sampling: fraction-based, slow-request-only (trace everything, keep only over-threshold), or manual. Slow-request-only is the most useful default for a development tool and the most complex to get right, since the decision to keep comes after the cost of collecting.
+- ~~Sampling: fraction-based, slow-request-only (trace everything, keep only over-threshold), or manual.~~ **Taken 2026-08-29 (H6): manual**, for steps 1-3. `TRACE ON` / `TRACE OFF` per session, and nothing is collected otherwise — which is what makes zero-cost-when-off a property rather than an argument, since the disabled path collects nothing at all rather than collecting and discarding. This defers the hard choice, deliberately: slow-request-only remains the most useful default and the most complex, and it wants a caller with an opinion about the threshold, which does not exist yet. Reversible with no call-site churn — a sampler decides whether to hand out a `TraceContext`, and every site already handles not getting one.
 - Whether `kPageIo` spans should distinguish cache hit from device read — the two differ by ~4 orders of magnitude and averaging them together produces a number that describes nothing.
 
 ## 10. Suggested build order

@@ -97,7 +97,56 @@ product of two ratified choices (D6's range = grant, RD7's run-shaped
 stage) and of nothing this phase introduces, which is why it is priced
 here rather than discovered in RD9's successor.
 
-**Three ways out, none taken here, each named with its owner:**
+### 3a. Measured, and the arithmetic was answering the wrong question
+
+**R4-M (`instructions/v2.6.0/r4-k-sweep.md`), worktree `v2.6.0-ksweep` at
+`03b815b`; `bench/v2.6.0/` §6a.** The arithmetic above is right and the
+ceiling is real. It is also **not what stops a spread relation being
+read**, and §3 could not have known that because it priced the fan-in and
+nothing else. Two limits sit in front of it, and a relation meets both at
+its **second** range:
+
+- **The fan-in client is core 0's alone.** `expeditor.cpp` builds it as
+  `remote_reads_.emplace(/*core_id=*/0, …)` and calls `SetRemoteReads` on
+  that one dispatcher. `CoreRuntime` — every peer — has `remote_steps_`,
+  the **server** half, and no client member at all. Every peer can serve a
+  stage; none can open one. So a session on a peer meets
+  `CheckReadAffinity`'s not-`WhollyOwnedBy` refusal for any relation with a
+  range elsewhere, whatever the count.
+- **The route requires the reader not to be the relation's `owner_core`**,
+  which under `placement = creating` is core 0 for every relation. So
+  under `creating` — the default, and the arrangement this section's
+  spreading exists to produce — **no core can read a spread relation at
+  all**.
+
+Where it is readable (a core-0 session, `placement = rotate`) the surface
+is one shape: `SELECT *`, optionally with a `WHERE`, optionally with a free
+`ORDER BY <pk> ASC`. A projection, an aggregate or a `LIMIT` is refused,
+because the route tests `chain.star()`, not aggregated, not sorted, no
+`LIMIT`/`OFFSET`, no sub-chain. Measured from every core under both
+placements; the table is in the results file.
+
+**What this costs the scenario benchmarks** (CK4, same file §5): six of
+this repository's twenty-four scenario relations spread — the heap ledgers
+`trades`, `user_periodic_profit`, `daily_stats`, `model_results`,
+`freights`, `charges` — and **all six lost all five read shapes their
+drivers use, at ~395 rows.** The other eighteen never spread, and not
+because a gate declined them: **the pump is heap-only**
+(`command_dispatcher.cpp`'s `heap_omitting_pk`), so a btree relation never
+records demand and `RangeEligible` is never asked. One consequence worth
+its own line: `SHOW META`'s `range_split_decline_detail` — RD5's C3,
+whose stated purpose is naming which gate to lift first — **cannot report
+D1**, the gate that blocks those eighteen, because the decline never
+happens.
+
+**Three ways out, none taken here, each named with its owner — and none of
+them moves the limit above.** The re-pricing R4-M's §8 performs: a larger
+`range_size_ids`, a larger `kMaxFanInUpstreams` and the per-core stripe
+all move a ceiling that is not what binds. What would move it is the
+**self-directed stage** `workplan-range-directory.md` §15d already names
+and defers (*"a design question and not this row's"*), plus a fan-in
+client on every core. Neither has an owner named anywhere, and that is
+this line's largest open hand-off.
 
 - **Raise `range_size_ids`.** Costs nothing structurally and is a config
   value: at 2^20 the ceiling is 67 M rows. What it costs is burn — a

@@ -496,6 +496,20 @@ with it and are §3 and §7b of that workplan: a read of a spread relation
 is bounded by the fan-in's 64 stages, and a write naming no primary key on
 a *multi-owner* relation is refused until R6.
 
+**The first of those two is corrected by measurement** (R4-M, 2026-08-29,
+worktree `v2.6.0-ksweep` at `03b815b`; `bench/v2.6.0/` §6a, and that
+workplan's §3a): the 64-stage ceiling is real but is **not what bounds the
+read**. The fan-in *client* is constructed for core 0 alone
+(`expeditor.cpp`; a `CoreRuntime` peer has `remote_steps_`, the server
+half, and no client), and the route additionally requires the reader not
+to be the relation's `owner_core` — which under `placement = creating` is
+core 0 for every relation. So under `creating` a spread relation is
+unreadable from **every** core in **every** shape, from its second range
+on; under `rotate` a core-0 session reads it, and only as `SELECT *` with
+an optional `WHERE` and an optional free `ORDER BY <pk> ASC`. Reads are
+therefore the binding cost of arming `range_size_ids`, ahead of anything
+the 64 in §3 prices.
+
 When an `INSERT` omits its key the engine issues an ascending one, so
 every such INSERT targets the relation's
 maximum id — the tail range — and naive range ownership spreads reads

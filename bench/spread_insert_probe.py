@@ -116,6 +116,13 @@ def start_server(binary, workdir, tag, cores, port, range_size_ids, durability):
             f"range_size_ids = {range_size_ids}\n"
             f"durability = {durability}\n"
             f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
+    # **The file, not just the config.** Tags are unique inside one run, so
+    # this only bites a *second* run over the same `--workdir` - and it bites
+    # silently in the one way that matters: a file left by a crashed run can
+    # already carry `sys.ranges` rows, and arm C's whole premise is that it
+    # never saw one. A surviving `spread` relation would at least fail the
+    # CREATE; a surviving range row would not.
+    subprocess.run(["rm", "-rf", data, data + ".wal"], check=False)
     with open(stderr_path, "w") as err:
         proc = subprocess.Popen([binary, "--config", conf],
                                 stdout=err, stderr=subprocess.STDOUT)
@@ -170,7 +177,13 @@ def insert_loop(port, core, rows, barrier, queue, deadline_s=30.0):
                 if not reply.startswith("ERR"):
                     break
                 if not is_retryable(reply) or time.monotonic() - started > deadline_s:
-                    queue.put((core, {"error": reply, "at_row": n,
+                    # `rows` even on the error path: a cell that stopped
+                    # early still placed rows, and leaving the key out made
+                    # the parent's `rows_placed` read zero for this core -
+                    # which understates the throughput and *overstates* the
+                    # burn, both silently, in exactly the cell whose error
+                    # is the thing worth reading.
+                    queue.put((core, {"rows": n, "error": reply, "at_row": n,
                                       "began": began, "ended": time.monotonic()}))
                     return
                 retries += 1
@@ -195,6 +208,18 @@ def insert_loop(port, core, rows, barrier, queue, deadline_s=30.0):
                                             int(len(latencies) * 0.99))] * 1e6,
         }))
     except BaseException as exc:  # a child must never die silently
+        # **Break the barrier on the way out.** A child that fails in
+        # `collect_connections` never reaches `barrier.wait()`, and every
+        # sibling that did waits there forever: the parent's `queue.get`
+        # times out after 600 s, and the parent's own exit then blocks
+        # joining the non-daemon children still parked at it. `abort()`
+        # raises BrokenBarrierError in each waiter, which this same handler
+        # turns into a reported driver error - so one child's failure ends
+        # the cell instead of hanging the sweep.
+        try:
+            barrier.abort()
+        except BaseException:
+            pass
         queue.put((core, {"error": f"driver: {type(exc).__name__}: {exc}"}))
     finally:
         if conn is not None:

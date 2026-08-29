@@ -88,6 +88,21 @@ struct RelationSurvey {
     std::uint64_t live_tuples = 0;
     std::uint64_t delete_marked = 0;    // upper bound on reclaimable (see above)
     std::uint64_t tuples_per_page = 0;  // from the schema constant, TuplesPerPage()
+
+    // **How much of the relation this survey actually saw** (H3,
+    // 2026-08-29). A relation is one chain per range since RD6, and the
+    // survey walks the ranges *this core* owns - so on a spread relation
+    // the two differ, and every count above is that fraction of the whole.
+    //
+    // Reported rather than refused, and reported rather than left implicit:
+    // a partial survey that says it is partial is worth more than none, and
+    // one that does not say so is exactly the wrong-reading-with-nothing-
+    // logged shape this row exists to end. Equal on every unsplit relation,
+    // which is every relation on an instance that has not armed
+    // `range_size_ids`, so a reader who has never split anything sees
+    // `1`/`1` and can ignore both.
+    std::uint32_t surveyed_ranges = 1;
+    std::uint32_t relation_ranges = 1;
 };
 
 // One candidate plan. R9's pair is `predicted_*` / `measured_*`: the
@@ -177,9 +192,17 @@ StatusOr<std::vector<RelationReport>> PlanAllRelations(catalog::Catalog& catalog
 // The surveyed form: adds the read-only chain walk for a heap relation
 // (budget-charged per slot examined; a spent budget fails the call with
 // the budget's own error). A btree relation gets shapes and no survey.
+//
+// `core_id` is the core doing the surveying, and it exists because a
+// relation is **one chain per range** since RD6 (H3): the walk covers the
+// ranges this core owns, and `RelationSurvey::surveyed_ranges` /
+// `relation_ranges` say how much of the relation that was. Not defaulted -
+// a caller that does not know which core it is on is a caller that would
+// silently survey the lo = 0 range and call it the relation, which is the
+// defect this parameter closes.
 StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageStore& store,
                                       catalog::Oid rel_oid, exec::Budget& budget,
                                       const sched::Clock* clock,
-                                      sched::MonoTimeNs half_life_ns);
+                                      sched::MonoTimeNs half_life_ns, std::uint32_t core_id);
 
 }  // namespace kds::stats

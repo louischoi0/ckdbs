@@ -69,6 +69,7 @@ add_executable(kds_tests
     waystone_page_test.cpp
     waystone_dir_test.cpp
     pattern_defs_test.cpp
+    trace_test.cpp
     create_pattern_test.cpp
     range_scan_test.cpp
     range_eligible_test.cpp

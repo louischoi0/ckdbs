@@ -207,12 +207,27 @@ TEST(TypesContract, Item3_PrecisionAndScaleBoundsAreRefusedAtCreateTable) {
     // `decimal(19, 0)` left this list when the wide type landed
     // (types.md TY2's separate int128 type, 2026-08-07): 19..38 now
     // selects `decimal128`, and the refusals move to the new edges.
+    //
+    // **These are the bounds refusals, and `decimal128(10, 2)` is not one
+    // of them** - it passed for the wrong reason until 2026-08-29 (H8).
+    // The parser admits a type-argument list for `DECIMAL`, `CHAR` and
+    // `VARCHAR` alone, so that spelling is refused as *"takes no
+    // arguments"* before any bound is consulted. Split out and asserted on
+    // its actual message below, because a refusal test that passes for a
+    // reason it does not name would keep passing if the bound it claims to
+    // check were deleted.
     for (const char* decl : {"decimal(0, 0)", "decimal(39, 0)", "decimal(5, 6)",
-                             "decimal(24, 25)", "decimal128(10, 2)", "decimal"}) {
+                             "decimal(24, 25)", "decimal"}) {
         const std::string reply =
             db.Run(std::string("CREATE TABLE bad (id int64, m ") + decl + ")");
         EXPECT_EQ(reply.substr(0, 3), "ERR") << decl << " -> " << reply;
     }
+
+    // The wide type is reached by precision, never by name-with-arguments.
+    const std::string named = db.Run("CREATE TABLE bad (id int64, m decimal128(10, 2))");
+    EXPECT_NE(named.find("takes no arguments"), std::string::npos) << named;
+    // And the declaration that *does* reach it is accepted.
+    EXPECT_EQ(db.Run("CREATE TABLE wide (id int64, m decimal(24, 6))").substr(0, 7), "CREATED");
 }
 
 // ---- Item 4: mixed-scale residual ---------------------------------------
