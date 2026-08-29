@@ -80,8 +80,14 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # declaration, so `--fk` requires it. HEAP for the two append-only ledgers,
 # which are written at the chain tail and never probed by pk.
 #
-# 68 columns per run against a ~7,800-column instance ceiling, so ~110 runs
-# per data file. Nothing reclaims a catalog row: there is no DROP TABLE.
+# 68 columns per run against a **7,616**-column instance ceiling, so ~112
+# runs per data file. Nothing reclaims a catalog row: there is no DROP
+# TABLE.
+#
+# The figure was "~7,800" until 2026-08-29 (H8): `sys.ranges` took a
+# catalog page at superblock v16 (RD1) and the ceiling moved with it, but
+# this comment did not. Derived, not measured - M2's arithmetic over the
+# pages `sys.columns` can reach.
 
 SCHEMA = {
     "organizations": (

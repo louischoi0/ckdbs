@@ -2,7 +2,14 @@
 
 How KDS makes a mutation durable, and how it will replay one. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/spec/page.md` (page header, flush gate, file layout), `docs/spec/txn.md` (transactions and MVCC), `docs/spec/heap-and-tuple.md`, `docs/rules/rules.md`, `docs/spec/sched.md`.
 
-**Status: every data mutation is logged; recovery is not implemented.** Nothing reads the log back, so a restart is protected only by `PageStore::Sync()` at `SYNC` or clean shutdown. §11a states exactly which mutations are logged today; §12 specifies the replay that does not exist yet.
+**Status: every data mutation is logged, and recovery runs at mount.** The sentence this replaced — *"recovery is not implemented. Nothing reads the log back"* — was written before RC01-RC06 and stayed after them; it was false from the day `src/wal/analysis.cpp`, `redo.cpp`, `recovery.cpp` and `src/server/mount_recovery.cpp` landed (corrected 2026-08-29, H8).
+
+The boundary that *is* true lives in `include/kds/wal/recovery.hpp` and is stated here rather than paraphrased, because a paraphrase is what drifted:
+
+- **Built**: analysis, redo, and the high-water repair, per core, followed by a completion checkpoint; `SHOW META` prints the recovery block. The catalog recovers too, and a torn catalog page refuses the mount rather than being served corrupt.
+- **Not built**: RC05, the undo phase, as a *default*. `RecoverStream` takes an injected `UndoPhase`; with one installed, losers are rolled back. **Without one, a stream analysis found losers in fails the mount, naming RC05** — deliberately, because redo without undo is worse than no recovery at all: redo restores uncommitted writes, and `txn.md` §8's accepted gap is that a surviving uncommitted row reads as *committed* on the next boot. A recovery that replays and stops has not left the database as it found it; it has published every loser's writes.
+
+§11a states exactly which mutations are logged today; §12 specifies the replay.
 
 *(Corrected 2026-08-10. This line read "logging works for INSERT" from before the transaction work, and understated the first half by four subsystems while the second half — the important one — stayed right, which is probably why it went unrevised.)*
 

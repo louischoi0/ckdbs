@@ -2976,7 +2976,7 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
         // rather than serving a half-count.
         exec::Budget budget(budget_.limit());
         auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
-                                       decay_half_life_ns_);
+                                       decay_half_life_ns_, core_id_);
         if (!one.ok()) return {"ERR " + one.status().message(), false};
         reports.push_back(std::move(one.value()));
     }
@@ -3003,6 +3003,16 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
                << " live=" << report.survey->live_tuples
                << " delete_marked=" << report.survey->delete_marked
                << " tuples_per_page=" << report.survey->tuples_per_page;
+            // **Absent when the survey covered the whole relation** (H3),
+            // which is every relation on an instance that has not armed
+            // `range_size_ids` - the absent-rather-than-zeroed rule C3's
+            // counters follow, for its reason: a field that reads
+            // `1/1` forever teaches a reader to skip it, and then it is
+            // not read on the one relation where it matters.
+            if (report.survey->surveyed_ranges != report.survey->relation_ranges) {
+                os << " surveyed_ranges=" << report.survey->surveyed_ranges << "/"
+                   << report.survey->relation_ranges;
+            }
         }
 
         if (report.plans.empty()) {
@@ -3476,9 +3486,18 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
             // not a widening, so the promotion is a different type_val and a
             // different schema constant, chosen from the one fact the client
-            // declared. Writing `decimal128(p, s)` names the wide type
-            // directly and its bounds refuse p <= 18 toward the narrow
-            // spelling, so either way one declaration selects exactly one type.
+            // declared.
+            //
+            // **`decimal128(p, s)` is not a spelling this code ever sees**,
+            // and the sentence that said it "names the wide type directly
+            // and its bounds refuse p <= 18" was wrong (corrected
+            // 2026-08-29, H8). The parser admits a type-argument list for
+            // `DECIMAL`, `CHAR` and `VARCHAR` only, so `decimal128(24, 6)`
+            // is refused as *"type 'decimal128' takes no arguments"* before
+            // a column row is built. Nothing is lost by that: the wide type
+            // is reached by declaring `decimal(p, s)` with p >= 19, which
+            // is the promotion above, so one declaration still selects
+            // exactly one type - by precision, and only by precision.
             if (row.type_val == catalog::kTypeValDecimal ||
                 row.type_val == catalog::kTypeValDecimalWide) {
                 if (!col.has_precision) {

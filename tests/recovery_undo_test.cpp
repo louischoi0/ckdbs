@@ -105,6 +105,23 @@ protected:
         return ptr.ok() ? ptr.value() : kNoUndoPtr;
     }
 
+    // `Record` with the target page named, for the H1 cases whose whole
+    // point is that the page is not `kHeapPage` and may not exist at all.
+    std::uint64_t RecordOnPage(PageId page, UndoRecordType type, std::uint16_t slot,
+                               std::uint64_t pk) {
+        UndoRecordFields rec{};
+        rec.prior_trx_id = 5;
+        rec.prior_undo_ptr = kNoUndoPtr;
+        rec.target_page_id = page;
+        rec.target_slot = slot;
+        rec.type = static_cast<std::uint8_t>(type);
+        rec.txn_prev_undo_ptr = kNoUndoPtr;
+        rec.pk = pk;
+        auto ptr = undo_.Append(kLoser, rec, {});
+        EXPECT_TRUE(ptr.ok()) << ptr.status().message();
+        return ptr.ok() ? ptr.value() : kNoUndoPtr;
+    }
+
     // Appends one undo record for `kLoser`, linking it to `prev`, and
     // returns its pointer - the shape `TransactionManager::AppendUndo`
     // produces at runtime.
@@ -367,6 +384,65 @@ TEST_F(RecoveryUndoTest, ASpillWhosePageWasNeverRedoneIsWorkAlreadyDone) {
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok())
         << "the mount was refused over a var-heap page redo never created";
     EXPECT_EQ(undo.already_done(), 1u);
+}
+
+// ---- H1: the same rule, for kInsert --------------------------------------
+//
+// `kVarHeapAppend`'s two tests above have `kInsert` twins, and until
+// 2026-08-29 the twins failed the mount. The ordering that produces the
+// state is the same one: an `UNDO_WRITE` is written **before** the
+// `HEAP_INSERT` it can undo, so a log whose readable prefix ends between
+// them leaves this chain naming a row redo never wrote.
+//
+// **Constructed directly rather than reached by a sim run**, and that is
+// deliberate: `MemoryLogDevice::Crash()` drops everything since the last
+// `Sync`, so `ckdbs-sim` cuts the log only at record boundaries it chose -
+// it cannot end a prefix *between* two records of one statement, which is
+// precisely this state. 171 green sim runs were not evidence about it
+// (`known-gaps.md`, and `sim/faults.hpp`'s note on the absent
+// `Crash(prefix)` primitive).
+TEST_F(RecoveryUndoTest, AnInsertWhoseSlotWasNeverRedoneIsWorkAlreadyDone) {
+    // The page exists - other rows of the same chain were redone - but this
+    // insert's slot is past the directory's end, which is what a slot redo
+    // never appended looks like. Before H1 the `slot < slot_count()` clause
+    // sent exactly this through the identity check, and the mount refused
+    // naming a row that had never been written.
+    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/0, /*pk=*/42, kNoUndoPtr);
+
+    RecoveryUndo undo(undo_);
+    ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok())
+        << "the mount was refused over an insert redo never applied";
+    EXPECT_EQ(undo.already_done(), 1u);
+    EXPECT_EQ(undo.compensations(), 0u);
+}
+
+TEST_F(RecoveryUndoTest, AnInsertWhosePageWasNeverRedoneIsWorkAlreadyDone) {
+    // The same state one page out: an insert that grew the chain writes its
+    // PAGE_INIT after the UNDO_WRITE too, so a prefix ending before both
+    // leaves the record naming a page that does not exist. The var-heap
+    // twin is `ASpillWhosePageWasNeverRedoneIsWorkAlreadyDone`.
+    const std::uint64_t head = RecordOnPage(server::kFirstUserPageId + 900,
+                                            UndoRecordType::kInsert, /*slot=*/0, /*pk=*/42);
+
+    RecoveryUndo undo(undo_);
+    ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok())
+        << "the mount was refused over a heap page redo never created";
+    EXPECT_EQ(undo.already_done(), 1u);
+}
+
+TEST_F(RecoveryUndoTest, AnOverwriteWhosePageIsMissingStillFailsTheMount) {
+    // The distinction H1's arm must not swallow, and the reason it tests
+    // the record type rather than the store's code alone: "the insert was
+    // never applied" is a legitimate recovery state, an **overwrite**
+    // naming a page that does not exist is not - an overwrite supersedes a
+    // row that existed before this transaction, so redo not having created
+    // its page is damage rather than ordering.
+    const std::uint64_t head = RecordOnPage(server::kFirstUserPageId + 901,
+                                            UndoRecordType::kOverwrite, /*slot=*/0, /*pk=*/42);
+
+    RecoveryUndo undo(undo_);
+    EXPECT_FALSE(undo.RollBack(store_, Losing(head)).ok())
+        << "a missing page was excused for a record type that cannot explain it";
 }
 
 TEST_F(RecoveryUndoTest, ASpillNamingANonVarHeapPageStillFailsTheMount) {

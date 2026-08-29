@@ -1035,6 +1035,56 @@ decide — and this driver races a writer against exactly that natural
 window, at swept ceiling values that bracket it, rather than manufacturing
 a longer one.
 
+### The insert-spreading probe (R4, 2026-08-29)
+
+`bench/spread_insert_probe.py` — **what id-block-aligned insert spreading
+costs and buys, on one relation written from several cores.** Rule 7's
+entry, owed by R4/IS7 and paid here. (RP8's two drivers were already
+documented above; work order H's claim that both were outstanding was
+half wrong, and this is the half that was.)
+
+The distinction from `tools/multicore_benchmark.py` is the whole reason it
+exists: that driver measures N **non-interfering** relations, one per core,
+which is the isolation question and is answered. This one measures several
+cores writing the **same** relation — which before R4 meant every peer
+shipped its INSERT to the relation's owner and the owner serialised them.
+
+Two arms differing in **one config key**, on one binary and one workload:
+`C-concentrated` (`range_size_ids = 0`, peers ship) against `S-spread`
+(`range_size_ids = N`, each peer takes a range of its own and inserts
+locally). `placement = creating` on both, so the relation is core 0's and
+every peer is a foreign writer to it — the shape `crosscore.md` §6b
+describes. Under `rotate` the relation lands on a *peer*, and on a host
+with one peer there is no second writer at all, so `rotate` would measure
+placement rather than spreading.
+
+**`--durability` is crossed with the arms and defaults to both**, and that
+is not thoroughness. `known-gaps.md` records that spreading writers over
+cores divides the group-commit batch and caps each core at the volume's
+single-stream `fdatasync` rate, so a `group`-only run risks reporting
+v2.1.0's finding under R4's name; `relaxed` is the arm where the sync is
+off the critical path and what remains is what spreading actually changes.
+At two cores the two ratios came out within 0.2% of each other, which is
+itself the reading — see `bench/v2.6.0/`.
+
+It also reports **the pump's client-visible cost**: how many retries a
+peer's first INSERT takes before its range exists (one, per core, ever).
+Note that `tools/multicore_benchmark.py` classifies the cross-core write
+refusal under `PERMANENT_TEXTS` — correct when written, and false once
+spreading is armed, where it is the transient a retry clears. This driver
+carries its own `is_retryable` for that reason.
+
+**Two things it cannot report**: the range count a run produced (nothing
+exposes it — `sys.ranges` has no catalog view and `SHOW META` carries only
+the *decline* counters, so `rowid_refill_grants` per core is the proxy),
+and any k above the host's CPU count, since the engine refuses `cores`
+beyond the hardware it detects.
+
+```bash
+bench/spread_insert_probe.py --server build-release/kds_server \
+    --workdir ~/spread --cores 2 --rows 4000 --durability group,relaxed
+```
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers

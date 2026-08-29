@@ -602,6 +602,76 @@ TEST(DevicePageStoreOwnershipTest, AWriteGrantAdmitsExactPagesAndNothingElse) {
     EXPECT_TRUE(store->MayWrite(131));
 }
 
+// ---- H4: the two refusals are not the same kind of refusal ---------------
+//
+// `Get()` on an unwritable page refused with `InvalidArgument` for both
+// reasons until 2026-08-29, while the code's own comment said
+// "refused-retryably beats detected-later". A client cannot act on a
+// comment: `IsRetryable` admits `kTxnConflict` alone, so the wire carried
+// no `retryable=1` and a driver had to match on message text to know
+// whether waiting would help.
+//
+// RB6 found it once in twenty cells of a freshly-placed relation's early
+// INSERTs, and its first fix was on the *driver* side - retry any `ERR` -
+// which manufactured real duplicate rows, because a loop whose INSERT
+// omits its pk cannot tell a refusal that wrote nothing from a reply lost
+// after a commit. Getting the classification right on the engine side is
+// what makes that safe rather than careful.
+TEST(DevicePageStoreOwnershipTest, AMissingGrantIsRetryableAndASystemPageIsNot) {
+    auto device = MakeDevice(64, 0);
+
+    // The pages have to **exist on the device** for the write check to be
+    // what refuses: a page this store cannot fault at all answers NotFound
+    // first, which is a different (and correct) refusal. So core 0 places
+    // them and flushes, exactly as a relation publish does before a peer is
+    // told about it.
+    {
+        auto core0 = OpenStore(*device);
+        ASSERT_NE(core0, nullptr);
+        auto system_page = core0->CreateAt(4);
+        ASSERT_TRUE(system_page.ok()) << system_page.status().message();
+        FormatPage(system_page.value().bytes(), PageType::kHeap);
+        auto relation_page = core0->CreateAt(130);
+        ASSERT_TRUE(relation_page.ok()) << relation_page.status().message();
+        FormatPage(relation_page.value().bytes(), PageType::kHeap);
+        ASSERT_TRUE(core0->Sync().ok());
+    }
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    LeasedIdSource lease(Extent{1000, 4});
+    store->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+    // The fault rights a relation grant conveys - read only, which is the
+    // whole point: this core can see page 130 and still may not write it.
+    store->GrantFaultPages(Extent{130, 1});
+
+    // A page whose *write* grant has not arrived: transient by construction
+    // - the drain tick asks for it and a later attempt succeeds - and
+    // refused **before** anything is dirtied, which makes a retry safe.
+    auto ungranted = store->Get(130);
+    ASSERT_FALSE(ungranted.ok());
+    EXPECT_EQ(ungranted.status().code(), StatusCode::kTxnConflict)
+        << ungranted.status().message();
+    EXPECT_TRUE(ungranted.status().retryable())
+        << "a client cannot tell 'wait for the grant' from 'never' without the bit";
+
+    // A system page has one writer for the life of the instance, so a peer
+    // asking is wrong now and wrong on every retry. Telling a client to
+    // retry that would cost it a loop against a promise nothing can keep.
+    auto system_page = store->Get(4);
+    ASSERT_FALSE(system_page.ok());
+    EXPECT_EQ(system_page.status().code(), StatusCode::kInvalidArgument)
+        << system_page.status().message();
+    EXPECT_FALSE(system_page.status().retryable());
+
+    // And once the grant lands the page is writable, which is the retry the
+    // bit was promising.
+    const PageId granted[] = {130};
+    store->GrantWritePages(granted);
+    EXPECT_TRUE(store->MayWrite(130));
+}
+
 TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverMutatesTheFreeMap) {
     // The guideline-1 property: the free map is core 0's, so a second writer
     // would be shared mutable state between cores.

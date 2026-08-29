@@ -57,7 +57,11 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
         // append that was not redone has nothing to undo, and refusing the
         // mount over it would fail a recovery the WAL is behaving
         // correctly in - which is the same reading kInsert's branch below
-        // gives to a slot that reads back nothing.
+        // gives to a slot that reads back nothing. **One rule, two record
+        // types** (H1/CH1, 2026-08-29): this arm was fixed first and the
+        // reviewer who fixed it named `kInsert` as the same shape; it is,
+        // and both now answer a missing page and a missing slot the same
+        // way.
         if (released.value() == ReleaseOutcome::kNothingToRelease) {
             ++already_done_;
             return Status::OK();
@@ -68,21 +72,46 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
 
     auto bytes = store.Get(rec.target_page_id);
     if (!bytes.ok()) {
+        // **A page redo never created** (H1). Same reading as the slot
+        // below and as the var-heap arm above: the UNDO_WRITE precedes the
+        // PAGE_INIT that would make this page exist, so a log whose
+        // readable prefix ends between them names a page nothing wrote.
+        // An insert that was not redone has nothing to retire, and
+        // refusing the mount over it would fail a recovery the WAL is
+        // behaving correctly in. `NotFound` alone - any other failure of
+        // the store is a real one and is reported.
+        if (rec.type == UndoRecordType::kInsert &&
+            bytes.status().code() == StatusCode::kNotFound) {
+            ++already_done_;
+            return Status::OK();
+        }
         return bytes.status().WithContext("undo: page " + std::to_string(rec.target_page_id) +
                                           " named by an undo record");
     }
     heap::PageView view(bytes.value().bytes());
     const std::optional<std::uint64_t> here = PkAt(view, rec.target_slot);
 
-    // ---- Already compensated? -------------------------------------------
+    // ---- Nothing to retire? ---------------------------------------------
     //
-    // Only kInsert can look like this, and it is the re-run case rather
-    // than damage: its compensation retires the slot, after which no pk is
-    // readable there. A slot inside the directory that reads back nothing,
-    // for a record that says "this transaction inserted here", is work the
-    // previous attempt finished.
-    if (rec.type == UndoRecordType::kInsert && !here.has_value() &&
-        rec.target_slot < view.slot_count()) {
+    // Only kInsert can look like this, and **the one rule covers two
+    // causes** - which is the point of stating it as one (H1/CH1, and the
+    // rule `kVarHeapAppend` above already holds). Either the previous undo
+    // attempt retired the slot, after which no pk is readable there; or
+    // redo never created it, because the UNDO_WRITE is written *before*
+    // the HEAP_INSERT it can undo and the log's readable prefix ended
+    // between the two. The engine cannot tell them apart at this point and
+    // does not need to: for a record that says "this transaction inserted
+    // here", a slot holding no row is a slot with nothing to retire.
+    //
+    // **The `slot < slot_count()` clause is gone deliberately.** It made
+    // the first cause the only admitted one, so a slot *past* the
+    // directory - the second cause's exact signature, since a slot redo
+    // never appended is past its end - fell through to the identity check
+    // and refused the mount naming a row that was never written. `PkAt`
+    // already answers nullopt for out-of-range, dead and too-short alike,
+    // and its own comment says why it does not distinguish them: every one
+    // of them answers "not the row I meant".
+    if (rec.type == UndoRecordType::kInsert && !here.has_value()) {
         ++already_done_;
         return Status::OK();
     }

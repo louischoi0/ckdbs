@@ -1030,6 +1030,39 @@ still waits on its own gate, so:
   stops after one round trip instead of spinning to its deadline. The
   review of this change found that case
   (`ADeniedRelationAnswersOnceWithoutTheBitThenAsksAgain`).
+
+- ~~**A fourth transient said "retry" without the bit, and it was not a
+  lease.**~~ **Closed 2026-08-29 (H4).** `DevicePageStore::Get`'s write
+  check refused with `InvalidArgument` for *both* of its reasons, while the
+  paragraph above it in the source said "refused-retryably beats
+  detected-later". The two are not one refusal: a **system** page has one
+  writer for the life of the instance, so a peer asking is wrong on every
+  retry, but **any other** page is refused because a grant has not arrived
+  *yet* — a relation published moments ago, an extent grant on the ring,
+  rights lost to a restart and re-requested by the drain tick. The second
+  now answers `TxnConflict`, and it is safe to retry precisely because the
+  check refuses **before** dirtying anything; the first keeps
+  `InvalidArgument`, so a client stops after one round trip.
+
+  Found by RB6 feeding a driver, roughly one cell in twenty of a freshly
+  placed relation's early INSERTs, and **insert spreading makes that path
+  more frequent** rather than less, which is why it was not deferred again.
+  The half worth recording is the driver's: RB6's first attempt retried on
+  any `ERR` and **manufactured real duplicate rows** — a 200-row cell read
+  400 — because a loop whose INSERT omits its pk cannot tell a pre-write
+  refusal from a reply lost after the commit. Getting the classification
+  right on the engine side is what makes a retry loop safe rather than
+  careful.
+
+  **CH4's verdict: one found, and the rest were already right.** The sweep
+  of every `InvalidArgument` in `device_page_store.cpp` and
+  `extent_lease.cpp` found no other transient wearing it — the remainder
+  are caller errors (a dirty or pinned frame at eviction, `page_lsn` 0, a
+  chosen-id placement on a leased store, the debug fault check), each
+  permanent by construction. The extent lease's own transient already used
+  `TxnConflict`, and its comment says why. So the class this entry and its
+  predecessor describe is now closed at four sites: three leases and the
+  store.
 - ~~**Statement shipping is built and unmeasured**~~ — **measured
   2026-08-26**, `bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md`
   (SS-B, the order at `instructions/v2.2.0/measurement-after-s5.md`). The
@@ -1977,29 +2010,36 @@ All fixed by `b11cc81`; the suite is green.
   both sources. `varchar(N)` declares that column's `kds.inline_cell_width`;
   `ALTER … WIDEN` stays refused, on the corrected reason (a cell width is
   part of the row-size constant, so changing it rewrites every row).
-- **Recovery's undo phase refuses the mount when a loser's `kInsert` record
-  names a slot redo never created.** `RecoveryUndo::Compensate`'s
-  already-done branch (`src/txn/recovery_undo.cpp`) covers only *slot inside
-  the directory, reads back nothing*; a slot **past** the directory falls
-  through to the identity check and fails the mount with "row id N is no
-  longer at page P slot S". That state is legitimate: an `UNDO_WRITE` is
-  written before the `HEAP_INSERT` it can undo, so a log whose readable
-  prefix ends between them leaves the chain naming a slot that was never
-  created. An insert that was not redone has nothing to retire.
+- ~~**Recovery's undo phase refuses the mount when a loser's `kInsert` record
+  names a slot redo never created.**~~ **Closed 2026-08-29 (H1)**, with the
+  answer the `kVarHeapAppend` reviewer recommended and for the reason that
+  reviewer gave: the two record types have one shape and now take one rule.
+  `RecoveryUndo::Compensate` counts a missing page *and* a missing slot as
+  `already_done_` for `kInsert`, where it previously admitted only "slot
+  inside the directory, reads back nothing" — so a slot **past** the
+  directory, which is exactly what a slot redo never appended looks like,
+  no longer falls through to the identity check and fails the mount.
 
-  **The var-heap twin of this was fixed 2026-08-28** — `kVarHeapAppend`
-  counts a missing slot or a missing page as `already_done_` — and the
-  reviewer of that work identified the `kInsert` case as the same shape,
-  recommending one answer for both. It was **deliberately not changed
-  there**: it is a recovery-semantics change for a record type that
-  predates the work, and making it inside another feature's review is how a
-  review stops being one. The proposed answer is the same one
-  `kVarHeapAppend` took.
+  **CH1's verdict: one rule, not two.** `kInsert` needed nothing the
+  var-heap case did not, so the arms say the same thing in the same words
+  and each names the other. What distinguishes them is only *how* the
+  absence is detected — `ReleaseVarHeapSlot` reports `kNothingToRelease`,
+  the heap arm reads `PkAt`'s nullopt — and both were already indifferent
+  to the cause, since a previous undo attempt's retire and a redo that
+  never ran are indistinguishable at that point and take the same action.
+  An **overwrite** naming a missing page is still a refused mount, and that
+  is the line the rule must not cross: an overwrite supersedes a row that
+  existed before this transaction, so redo not having created its page is
+  damage rather than ordering.
 
-  Neither case is reachable by `ckdbs-sim`: `MemoryLogDevice::Crash()` drops
-  everything since the last `Sync`, and `sim/faults.hpp` records that torn
-  injection waits on a `Crash(prefix)` primitive that does not exist. **171
-  green sim runs are not evidence about this.**
+  Tested by constructing the state directly rather than by a sim run
+  (`tests/recovery_undo_test.cpp`, three cases), because the class remains
+  unreachable by `ckdbs-sim`: `MemoryLogDevice::Crash()` drops everything
+  since the last `Sync`, so the harness cuts the log only at boundaries it
+  chose and never *between* two records of one statement. **171 green sim
+  runs were not evidence about this**, which is the entry's original point
+  and stays true — `sim/faults.hpp`'s absent `Crash(prefix)` primitive is
+  what would change it.
 
 - **A rolled-back spill made with `kNoTxnId` leaks.** `exec::LogChainInsert`
   logs its spills under `kNoTxnId` — the path `sys.pattern_defs` and the
@@ -2025,19 +2065,31 @@ All fixed by `b11cc81`; the suite is green.
   that work touches, and an unasked type change inside another feature's
   review is how a review stops being one.
 
-- **`SHOW RELAYOUT` surveys only the first range of a split relation.**
-  `src/stats/relayout_planner.cpp`'s `SurveyRelation` walks
-  `access->desc_page_id` and filters on heap-and-not-system alone, so once
-  RD6 gave a relation one chain per range the survey reports the **lower**
-  range's `chain_pages`, `live_tuples` and `delete_marked`, and the
-  planner's densities are computed from an undersized relation. Not a data
-  defect — Part I is shadow-only and every move is blocked by a
-  `physical-optimizer.md` §6 gate — and not reachable in a shipped
-  configuration either, since `range_size_ids` defaults to off. Found at
-  RB3's review (2026-08-29) and left there deliberately: the fix is not a
-  head substitution (the ring-consumer walk and the budget charging are
-  per-walk), and it belongs to the physical optimizer's owner rather than
-  to the row that created the condition.
-  `docs/inflight/in-progress/workplan-range-directory.md` §14e names it as
-  RD6's one open instance, so the row does not read as having closed the
-  class whole.
+- ~~**`SHOW RELAYOUT` surveys only the first range of a split relation.**~~
+  **Closed 2026-08-29 (H3).** `SurveyRelation` now walks one chain per
+  range through `TableAccess::WalkHeadsFor`, which answers `desc_page_id`
+  off one branch on a cached field wherever no directory exists — so the
+  unsplit path is the walk it always was. `RelationSurvey` gained
+  `surveyed_ranges` / `relation_ranges`, and `SHOW RELAYOUT` prints the
+  pair **only when they differ**: a survey that covered part of a relation
+  now says so, where the defect was that it did not.
+
+  **CH3's verdict: `SHOW RELAYOUT` was not the third and last caller — it
+  was the only *ungated* one.** The search found two more heap-chain walks
+  from `desc_page_id`, in `src/exec/cabin_optimizer_exec.cpp` and
+  `src/exec/assertion_build.cpp`, and both are unreachable on a split
+  relation rather than correct by construction: `RangeEligible` declines a
+  cabined or asserted relation, and the converse gate
+  (`RefuseAuxiliaryOnSplitRelation`) declines a Cabin, an index, an
+  assertion or an FK on a split one. The Cabin **optimizer's** auto-create
+  path routes through `Catalog::CreateCabin` and so through that gate too,
+  which is what makes the controller's own build safe. The pair closes it;
+  neither arm alone would.
+
+  So HH2 is falsified in letter and holds in effect, and the reason to
+  record that rather than the grep is RB3's lesson: the survey had no gate,
+  and nothing in its own file said so. Pinned by a read-back test
+  (`RelayoutPlannerTest.TheSurveyCoversEveryRangeOfASplitRelation`) that
+  places rows above a boundary and fails if the totals do not move —
+  fixing the call site alone would have looked identical and proved
+  nothing.

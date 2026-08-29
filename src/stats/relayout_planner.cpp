@@ -213,7 +213,7 @@ StatusOr<std::vector<RelationReport>> PlanAllRelations(catalog::Catalog& catalog
 StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageStore& store,
                                       catalog::Oid rel_oid, exec::Budget& budget,
                                       const sched::Clock* clock,
-                                      sched::MonoTimeNs half_life_ns) {
+                                      sched::MonoTimeNs half_life_ns, std::uint32_t core_id) {
     auto tables = catalog.ListTables();
     if (!tables.ok()) return tables.status();
     const auto object =
@@ -246,10 +246,35 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
     // ring consumer (spec-eviction §5, EVT06): a census of a relation
     // larger than memory must not flood the pool it is surveying for.
     auto ring = store.OpenScanRing();
-    Status walked = heap::ChainVisit(
-        store, access.value()->desc_page_id, storage::PageAccess::kRead,
-        [&](PageId page_id, heap::PageView& page,
-            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+    // **One walk per range, in `lo` order** (H3, and RD6's rule reaching
+    // the third caller of it). `desc_page_id` heads the lo = 0 range and
+    // nothing more: once a relation has one chain per range, walking it
+    // alone reports the *lower* range's `chain_pages`, `live_tuples` and
+    // `delete_marked`, and every density the planner derives is computed
+    // from an undersized relation. Not a data defect - Part I is
+    // shadow-only and every move is blocked by a §6 gate - but it is the
+    // "wrong reading with nothing logged" shape RD6 exists to end, and
+    // `workplan-range-directory.md` §14e named this instance rather than
+    // closing it.
+    //
+    // `WalkHeadsFor` answers `desc_page_id` for an unsplit relation off
+    // one branch on a cached field, so this is the walk it always was
+    // wherever no directory exists - which is every relation on an
+    // instance that has not armed `range_size_ids`.
+    //
+    // **Ownership is deliberately not checked**, unlike `VisitRelation`'s
+    // pass. A survey is a read, it runs on core 0's optimizer tick, and a
+    // range another core owns is one this core may not *fault* - so the
+    // heads are taken for this core and a foreign range's absence is
+    // reported by `surveyed_ranges` below rather than by refusing the
+    // whole survey. A partial survey that says it is partial is worth
+    // more than none; one that does not say so is the defect.
+    const std::vector<PageId> heads = access.value()->WalkHeadsFor(core_id);
+    survey.surveyed_ranges = static_cast<std::uint32_t>(heads.size());
+    survey.relation_ranges = static_cast<std::uint32_t>(
+        access.value()->ranges.empty() ? 1 : access.value()->ranges.size());
+    const auto visit = [&](PageId page_id, heap::PageView& page,
+                           std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             // Priced like any other relation read (V19): a spent budget
             // stops the walk with the budget's own error, and the caller
             // gets no half-survey to mistake for a small relation.
@@ -266,10 +291,13 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
                     ++survey.live_tuples;
                 }
             }
-            return storage::VisitControl::kContinue;
-        },
-        ring.get());
-    if (!walked.ok()) return walked;
+        return storage::VisitControl::kContinue;
+    };
+    for (PageId head : heads) {
+        Status walked = heap::ChainVisit(store, head, storage::PageAccess::kRead, visit,
+                                         ring.get());
+        if (!walked.ok()) return walked;
+    }
 
     report.value().survey = survey;
     report.value().plans = BuildPlans(report.value().shapes, report.value().survey);
