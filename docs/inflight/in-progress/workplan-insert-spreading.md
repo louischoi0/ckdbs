@@ -675,3 +675,123 @@ regardless of RR2: **`UNKNOWN_OUTCOME` is the wrong category for a read.**
 It exists because a write whose reply is lost may or may not have
 committed; a read mutates nothing, so there is no outcome to be unknown
 about and the honest answer is a retryable refusal or a bigger reply.
+
+## 11. AG0 — CA1's survey, and the branch it decides
+
+Work order `instructions/v2.6.0/r4-a-aggregate.md`, surveyed in worktree
+`v2.6.0-ksweep` at `7eeb7b5`. Read from the drivers' source, statement by
+statement, against the six relations R4-M's census found spread
+(`bench/v2.6.0/` §5). **Source-read**, sites named.
+
+| scenario | relation | read path | verification path | inside RR3's five? |
+|---|---|---|---|---|
+| s0 stockmarket | `trades` | `SELECT * FROM trades` once after the run, and only when `--users <= 200` (`scenario0:1407`) | none | **yes** |
+| s0 | `user_periodic_profit` | none — write-only | none | **yes**, vacuously |
+| s1 backtest | `daily_stats` | `SELECT * … WHERE symbol_id = ?` and `… WHERE session_no = ?` (`scenario1:1193`, `:1200`, `:1456`, `:1462`, `:1860`) | none | **yes** |
+| s1 | `model_results` | none — write-only | none | **yes**, vacuously |
+| **s2 freight** | **`freights`** | **`SELECT SUM(cbm) … WHERE operation_id = ?`** (`scenario2:830`), `SELECT * … WHERE operation_id = ?` (`:1118`), `SELECT status, COUNT(*), SUM(cbm) … GROUP BY status` (`:1123`), `SELECT c.org_id, SUM(f.cbm) … JOIN cargos … GROUP BY c.org_id` (`:1130`) | `SELECT SUM(cbm) … WHERE operation_id = ?` (I1, `:1215`), `SELECT f.id, f.cbm, f.price_per_cbm … JOIN cargos …` (I3, `:1244`) | **NO** |
+| **s2** | **`charges`** | none in the load | `SELECT SUM(amount) … WHERE freight_id = ?` (I3, `:1256`), `SELECT id … WHERE freight_id = ?` (I4, `:1267`) | **NO** |
+| s3 library | — | every relation is BTREE, so none spreads (R4-M §5) | — | n/a |
+
+### 11a. HA1 is falsified, and by a worse case than it named
+
+HA1 predicted the drivers' verification would fit inside RR3's five shapes,
+and named its falsifier as *"any driver verifying with `COUNT`, `SUM`,
+`GROUP BY` or a projection on a spread relation."* Scenario 2 does that —
+and **the first failing shape is not in verification at all.**
+
+`SELECT SUM(cbm) FROM freights WHERE operation_id = ?` is the booking
+transaction's **capacity read** (`scenario2_freight.py:830`), issued once
+per booking attempt in the hot path. So s2 does not fail at its invariant
+checks with a run behind it; **its load phase fails on the first booking**,
+which is a sharper statement than HA1's falsifier anticipated and is the
+reason this row is a survey rather than a formality.
+
+### 11b. The branch: which scenarios the aggregate can run on today
+
+- **s0 and s1 run now.** Their only reads of a spreading relation are
+  `SELECT *` with an optional non-pk `WHERE`, both inside RR3's five.
+- **s3 has nothing to run.** All four relations are BTREE, and the pump is
+  heap-only, so nothing spreads and `cores = N` with `range_size_ids`
+  armed is byte-identical to it disarmed. It is still worth running as
+  A-b's arm — the core count without spreading — which is what it measures
+  whether or not the knob is on.
+- **s2 is blocked**, and on four shapes rather than one:
+
+  1. an ungrouped aggregate with a filter — `SUM`, `COUNT`;
+  2. a grouped aggregate — `GROUP BY`;
+  3. a projection — `SELECT <cols>`;
+  4. **a join with the spread relation on one side** — two steps.
+
+  The first three are single-step widenings of `HandleSelect`'s shape gate,
+  which tests `star()`, `!aggregated()`, `!sorted()`, no `LIMIT`/`OFFSET`.
+  The fourth is not a shape gate at all: it needs the two-step pipeline to
+  plan a spread relation as a stage, which is a different mechanism and a
+  wider change than this order's §1 admits.
+
+**So s2 cannot be made to run by "exactly the shapes it needs and no
+more"** — it needs nearly all eleven plus the pipeline. Recorded here as
+the branch's outcome rather than attempted: AG3 builds the three
+single-step widenings, which unlock s2's *hot path* and three of its four
+blocked shapes; the join stays refused and s2's aggregate stays **not
+run**, with this section as its reason.
+
+### 11c. AG3's design, and the hazard that stops it being a small change
+
+Worked out in worktree `v2.6.0-ksweep` at `7eeb7b5`, **source-read**, and
+recorded rather than built — the reason is the last paragraph.
+
+**The mechanism is local, and that is the good news.** Projection and
+aggregation are **chain**-level, not step-level (`step_chain.hpp:729`:
+`star()` is `projection.empty() && !aggregated()`), and `ShippedForm`
+preserves `step.residual` while downgrading the access kind to a scan. So
+a stage already ships exactly the rows an aggregate needs — the relation's
+whole rows, filtered by the WHERE — and the widening is entirely on the
+session side: `FinishRemoteReads` currently renders decoded rows straight
+into the reply, and would instead feed them through the chain's projection
+or aggregation.
+
+That is tractable. `exec::ChainFrame` is a flat `AstValue` buffer with
+`Open(schemas, parent)` and `SlotsFor(rel_slot)`
+(`include/kds/exec/chain_frame.hpp:40`), so a single-step chain's frame can
+be built from a decoded wire row and handed to `Aggregator::Accumulate`,
+which is the same call the local walk makes
+(`command_dispatcher.cpp:6474`). **Grouped and ungrouped come together**:
+the aggregator handles `GROUP BY` internally, so shapes 1 and 2 are one
+change.
+
+**The hazard is `aggregator_`, and it is exactly this milestone's recurring
+defect class.** It is a *dispatcher member*, hoisted for a measured reason
+(≈4 µs per statement, 6.5% of a pk lookup) under a contract its own comment
+states: *"`Reset` points it at each statement's spec and labels, which live
+on that statement's chain — so between statements it holds pointers that
+are not valid, and nothing may read it there."*
+
+A fan-in **parks**. Two aggregated fan-in reads on one core therefore
+interleave inside that contract: both `Reset` the same aggregator against
+two different chains, and the chain a parked statement's spec points into
+is destroyed when `HandleSelect` returns. The failure is a **wrong
+aggregate, silently** — not a refusal, not a crash — which is the class
+every review in this line has caught and the one `join-inner-build.md` §6
+says may not be reached by inference.
+
+So AG3 is not "drop `!aggregated()` from the guard". It is:
+
+1. an aggregator owned by the **pending read** rather than by the
+   dispatcher (the 4 µs it was hoisted to save is noise against a
+   cross-core fan-in's wire cost, so the hoist's own argument does not
+   apply here);
+2. the aggregate spec, the column names and the output types **copied**
+   into the pending state, because `Reset` takes pointers into a chain
+   that does not outlive the park;
+3. `FinishRemoteReads` reshaped to decode into a `ChainFrame` and dispatch
+   to render / project / accumulate, with the header coming from the chain
+   rather than the relation's schema.
+
+**Not built here**, and the reason is not its size: it is that a wrong
+answer from it would be silent, and the order's own §6 requires every
+widening to land with an equivalence test and a vacuity matrix line. That
+is the right shape for this work and it is a session of its own, not a
+coda to one. What it would unlock is recorded in §11b: scenario 2's
+booking workload under `--no-manifest`, since the reporter's
+`JOIN … GROUP BY` is a two-step pipeline and out of reach either way.
