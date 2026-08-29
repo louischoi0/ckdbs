@@ -223,12 +223,15 @@ interleaved reps, plus the ceiling, the burn and the `range_size_ids`
 sweep. **Nothing of this plan remains open as work.** What it hands on is
 in §3a and §9:
 
-- **The read surface, which is this line's real ceiling** and belongs to
-  nobody yet — a self-directed stage and a fan-in client on every core.
+- **The read surface, which is this line's real ceiling** and belonged to
+  nobody — a self-directed stage and a fan-in client on every core.
+  **Both built 2026-08-29**, R4-R and RS: §10 and §11.
 - **D6's value**, to the operator, on §9a's curve.
-- **CK5 unanswered end to end**, because a spread relation cannot be read
-  back by the workloads that write it — which is why R5's mover should not
-  be designed against a scenario premise yet.
+- **CK5 unanswered end to end**, because a spread relation could not be
+  read back by the workloads that write it — which is why R5's mover should
+  not be designed against a scenario premise yet. **The impossibility is
+  gone** (§10, §11) and the aggregate becomes runnable; it is the next
+  order's, and until it runs CK5 stays unanswered rather than answered.
 
 ## 7. What IS1-IS5 concluded, what the build found, and what the review found
 
@@ -539,7 +542,12 @@ is refuted in its strong form - suppression *does* bound a contended
 relation, when exactly one peer contends.
 
 **And the ceiling is not what bounds a spread relation's readability**;
-§3a is that finding, and it is this milestone's largest.
+§3a is that finding, and it is this milestone's largest. **Superseded
+2026-08-29 by R4-R and RS** (§10, §11): both limits §3a names are closed,
+so the 64-stage arithmetic above is once again what binds — and it now
+counts the reading core's **own** run as a stage like any other (§10b).
+`docs/inflight/known-gaps.md` carries the same correction; the numbers in
+this section were measured before it and stand as measured.
 
 **CK3's other side, the burn.** `next_id - 1 - rows placed` is one to two
 lease blocks per contending core per mount: 3,678 ids at k = 8 / 512
@@ -644,7 +652,11 @@ real optimisation and it is **not this order's**, because it would replace
 a protocol path with a second one and RB4's whole lesson was that two
 spellings of one thing is two chances to forget one of them.
 
-### 10c. The predicate has to be written as a disjunction, not as `WhollyOwnedBy`
+### 10c. The predicate has to be written as a conjunction, not as `WhollyOwnedBy`
+
+*(Headed "disjunction" until RS; the formula below and `ServableBy` in
+`schema.hpp` are both conjunctions, and the argument was always about
+the second conjunct.)*
 
 The probe above is not the shipping form, and the difference is a
 correctness one. `WhollyOwnedBy(me)` is `owner_core == me` when the range
@@ -676,7 +688,268 @@ It exists because a write whose reply is lost may or may not have
 committed; a read mutates nothing, so there is no outcome to be unknown
 about and the honest answer is a retryable refusal or a bigger reply.
 
-## 11. AG0 — CA1's survey, and the branch it decides
+## 11. RS0-RS5 — the residue of R4-R, and the conclusions it did not owe
+
+Work order `instructions/v2.6.0/spread-realation.md` (rows **RS0-RS5**),
+opened in worktree `spread-relation` against `main` at `949a7d4` and worked
+on top of `7eeb7b5`.
+
+**Most of its scope had already landed when it opened, and that is recorded
+rather than re-derived.** R4-R (`instructions/v2.6.0/r4-r-readable-surface.md`,
+rows RR0-RR5 at `5b62ac3` with its review at `7eeb7b5`) is the same
+milestone under a different order, drafted a few hours earlier. The two
+overlap almost exactly:
+
+| RS row | what it asks | state on `7eeb7b5` |
+|---|---|---|
+| RS0 | §15d's design answer in the workplan, before code | **landed** as §10 (RR0) |
+| RS0 | the width comment (§2) and `core_affinity.cpp`'s stale message corrected | **not done** — §11a, §11b below |
+| RS1 | the fan-in client on every core (HS1, HS2) | **landed** as RR2 |
+| RS1 | **CS3**, absent versus zeroed | **not asked by R4-R** — §11c |
+| RS2 | the self-directed stage (HS3), **CS2** | **landed** as RR1; CS2 answered at §10b |
+| RS3 | `CheckReadAffinity`'s refusal narrowed | **landed** at `7eeb7b5` as `TableAccess::ServableBy` |
+| RS4 | **CS4**'s enumeration against the equivalence suite | **landed** as RR3 (`bench/spread_read_surface.py`) |
+| RS5 | the equivalence gate **from a non-zero core**, with its vacuity matrix | **not done** — §11d |
+| §9 | the ceiling arithmetic updated wherever it is carried | **not done** in `known-gaps.md` — §11e |
+
+So this section is the residue: two stale sentences, one conclusion nobody
+asked for, one gate, and the register entry. Nothing here rebuilds a
+mechanism R4-R built, and where RS's own hypotheses were already settled by
+RR0-RR3 they are cited rather than re-run.
+
+### 11a. The width comment was the argument for a constant that had become a limit
+
+`remote_step_service.hpp`'s note on `kMaxFanInUpstreams` read:
+
+> the width is the number of distinct **owner cores**, never the number of
+> boundaries. A 10 M-row relation at D6's size has ~2,441 ranges and at
+> most `cores` stages, which is the difference between a plan and an
+> absurdity.
+
+**False under R4, and R4-M measured it false**: interleaved spreading makes
+a maximal run one range, so the width is the range count, and the refusal
+fired at **65-72 stages** with `ids/stage` matching the block size to
+within 4% (§9's CK3). The bound of 64 is still safe for the one-byte wire
+count; what is gone is the sentence that made it comfortable, which is the
+kind a later reader reasons from — and would have reasoned from to conclude
+that no realistic relation can reach it.
+
+Corrected in place to state the width as **the number of maximal same-owner
+runs** — the core count only under contiguous ownership, the range count
+under interleaved — with R4-M's measurement and R4-R §10b's slot cost for a
+self-directed run named beside it.
+
+### 11b. And `core_affinity.cpp` said a built pipeline was not built
+
+`CrossCoreReadUnsupported` — the refusal a client actually sees — ended
+*"cross-core reads need the step pipeline, which is not built"*. The
+pipeline has existed since RD7 and, since RR2, on every core. What is true
+is narrower, and the message now says it: the route serves **a whole-row
+read of one relation outside a transaction**, and a statement reaching that
+line is not that shape.
+
+Two live drivers matched on the old spelling and move with it:
+`bench/refusal_baseline_probe.py`'s `cross_core_read` class key, and
+`bench/parked_coroutine_probe.py`'s explanatory quote — which keeps its
+argument and gains a note that the run it reports met the older wording.
+A results file is never edited; the two changed files are drivers.
+
+### 11c. CS3 — absent, not zeroed
+
+**The question R4-R did not ask.** Since RR2 every core holds a client, and
+`WireStepEndpoints` hands it every `kStepBatch` and `kStepEof` the core
+receives. Core 0 has always paid the discard; the order's question is
+whether a peer should pay it too, or skip.
+
+**And the first answer to *which* traffic was wrong** — RS's own
+`critics-developer` pass caught it, and it is recorded because the
+correction is the interesting part. This section first said the guard pays
+for *"the ones its own server half is producing for someone else's fan-in,
+the whole traffic of a peer that has opened nothing."* **A peer that only
+serves a fan-in receives no `kStepBatch` at all.** A batch is sent to
+`pipe.downstream` (`remote_step_service.cpp`), which is
+`StepOpenHead::downstream_core`, which `SessionStepClient::Open` sets to the
+**session's** core — and the ring is point-to-point. A serving core's
+inbound kinds are `kStepOpen`/`kStepCredit`/`kStepCancel`, all the server's,
+none of them touched by these guards. The cases where the guards actually
+fire are two: a **chained** pipeline's inner edge (P4d-4b-3), where this
+core hosts the consuming stage while the session is a third core, and a
+reply landing after `Close`. So the guard is smaller than first claimed —
+which is a reason to state its benefit accurately, not a reason to drop a
+correct early return.
+
+**It skips.** `SessionStepClient::OnStepBatch`/`OnStepEof`/`OnStepError`
+each return immediately when `reads_` is empty. This is behaviour-identical
+by construction — `Find` iterates `reads_` and every handler returns on
+`nullptr` with no side effect before the lookup — so it removes a decode
+whose answer is known, and nothing else. The repository's own
+absent-rather-than-zeroed discipline, applied where it had not been.
+
+**Its cost is below this host's measurement floor and is reported as not
+measured, not as zero** (§7's S-c): the work removed is one bounds check
+and a ~24-byte header `memcpy` per message, and the two-CPU host these rows
+were worked on cannot resolve that against a reactor's own variance. The
+argument for the change is the source-read one above, which does not need a
+number.
+
+### 11d. RS5 — the gate from a non-zero core, and what the vacuity matrix found
+
+RR5's `ACoreReadsARelationItOwnsButDoesNotWhollyHold` reads from **core 0**,
+which is where the fan-in client has always lived. RS5's case is the one RR2
+created and nothing covered: a **peer** opening a fan-in of its own, one
+stage self-directed (core 2 asking core 2) and one remote.
+
+Two tests, because one could not gate both halves:
+
+- **`APeerReadsASpreadRelationThroughItsOwnFanIn`** — the loopback rig, a
+  peer dispatcher, byte-identical against the same rows unsplit and
+  straddling the boundary, plus a count of opens to self versus to the
+  owner. It gates the *plan and the answer* from a non-zero core.
+- **`APeersOwnDispatcherPlansAFanInRatherThanRefusing`** — because the rig
+  above hands the dispatcher a client it built itself, so it would pass on a
+  tree where `CoreRuntime` never constructs one. This one uses a peer's own
+  transport and own client, and reads the verdict off **which refusal comes
+  back**: the synchronous `Dispatch` cannot finish a fan-in either way, so
+  it closes its stages and answers `TxnConflict("remote read needs the
+  reactor path")` — a refusal reached only *after* the route resolved the
+  ranges and opened the stages. Without RR2's wiring the answer is
+  `CheckReadAffinity`'s `Unsupported` instead, which is what every peer
+  answered before it.
+
+**The vacuity matrix** (§6's requirement: revert each mechanism, count what
+catches it, report the count). Four reversions, each rebuilt in
+`build-release` and run against the four tests that could plausibly catch
+one — RR5's, RS5's two, and RD7's `AFanInOverInterleavedOwnershipStillAnswersInRangeOrder`:
+
+| reversion | what it undoes | caught by |
+|---|---|---|
+| **R1** | `ServableBy` loses its conjunct: back to `owner_core == core_id` | **1** — RR5's `ACoreReadsARelationItOwnsButDoesNotWhollyHold` |
+| **R2** | the stage loop skips runs this core owns: **no self-directed stage** | **2** — RR5's *and* RS5's `APeerReadsASpreadRelationThroughItsOwnFanIn` |
+| **R3** | a peer's dispatcher never learns about its client (pre-RR2) | **1** — RS5's `APeersOwnDispatcherPlansAFanInRatherThanRefusing` |
+| **R4** | CS3's `reads_.empty()` guards removed | **0** |
+
+Four readings, and the fourth is the one worth stating:
+
+- **R1 is caught by RR5's test alone, and RS5's do not catch it** — which is
+  correct rather than a hole. RS5's fixture reads from a core that is not
+  the relation's `owner_core`, so `owner_core != core_id_` is already true
+  and the route is taken under either predicate. RR5's fixture is the only
+  one where the two predicates disagree, exactly as its own note says.
+- **R2 is the reversion both equivalence tests catch**, each losing the half
+  of the rows on its own side of the cut — RR5's the low range, RS5's the
+  high one. That is the straddle discipline doing what it is for.
+- **R3 is caught only by the test written for it**, and by construction: the
+  other two hand the dispatcher a client they built, so a tree where
+  `CoreRuntime` builds none is invisible to them. This is why RS5 is two
+  tests and not one.
+- **R4 is caught by nothing, and that is the correct count, not a gap.** The
+  guard is an early return on a condition under which every later line is a
+  no-op, so no behaviour can distinguish the two trees. Reported as a
+  measured zero for a reversion whose zero was predicted from the source —
+  which is the one case where "nothing caught it" is a pass.
+
+`AFanInOverInterleavedOwnershipStillAnswersInRangeOrder` caught none of the
+four: its reading core owns no run of the relation, so it exercises the
+all-remote fan-in and nothing this order touches.
+
+### 11e. CS1 answered with a number, and it supports §10b rather than reopening it
+
+**`bench/v2.6.0/results-self-directed-stage-and-read-surface-v2.2.1-135-g9eae44a.md`**,
+cell S-a, measured in worktree `spread-relation` at `9eae44a` on a **2-CPU**
+host — a quarter of the 8-logical/4-physical machine R4-M used, and the
+reason four of §7's cells are reported as not run below.
+
+§10b decided a self-directed run gets no message-free path, on the argument
+that a second spelling of one protocol is what RB4's lesson forbids. It had
+no number. Four arms over two 600-row relations, 300 reps, rep-interleaved,
+all replies byte-identical across routes:
+
+| | p50 (µs) |
+|---|---:|
+| `B` — `twin` from core 0, **0 stages** (local walk) | 128.8 |
+| `A` — `twin` from core 1, **1 remote stage** | 309.3 |
+| `C` — `spread` from core 1, **remote + self-directed** | 221.7 |
+| `D` — `spread` from core 0, **the same two, roles swapped** | 317.7 |
+
+**`A − B` = 180.5 µs** is what one remote stage costs over no stage at all.
+**`C − A` = −87.6 µs** — *negative*: adding a self-directed stage does not
+cost what a second remote hop would.
+
+**And the cause is measured, not inferred.** A companion probe on
+`sched_wakes_sent`/`_received` per core: a **remote** stage costs ~**32
+wake events per query** on each side of the hop whatever it walks; a
+**self-directed** stage costs exactly **2** — one to open, one at EOF —
+whatever it walks; a plain local walk costs **0**. So a self-send is not
+"about as expensive as a real hop": what a remote hop costs is
+overwhelmingly the cross-reactor wake, and a self-directed run never
+crosses reactors. §10b is therefore **better supported than its source
+argument alone made it look** — the message-free path would save the
+STEP_OPEN/EOF pair, 2 wakes against 32, which is not a fraction worth a
+second protocol spelling.
+
+**Two engine facts fell out of the rig and are worth carrying.**
+
+- **The split is 1 / 599, not balanced.** Core 1's first foreign write is
+  refused exactly once (`cross_core_write_refusal_detail=0>1:4000=1` for
+  the whole 600-row load); the demand it records is granted, and **every
+  later grant is a contiguous top-up of the same range row**, so the
+  relation reads `4000:2@2` after the first round and never grows a third
+  range. Core 0's anchor holds **one** row and core 1's range holds the
+  other 599. This is IS5's suppression at a scale small enough to watch,
+  and it is why §11's S-b cell is unreachable here for a *structural*
+  reason as well as a CPU one.
+- **Which stage is remote matters more than the row split.** `C` and `D`
+  are the same two stages with the roles swapped, and they differ by 96 µs:
+  `D`'s total tracks `A`'s remote cost almost exactly because `D`'s
+  599-row leg is the remote one.
+
+### 11f. What §7 could not run on this host, and why each is a refusal rather than noise
+
+**The engine refuses to start when `cores > nproc`**
+(`expeditor.cpp`: *"reactors are pinned one per core and never block, so
+overcommitting them serializes whole workloads behind each other"*). This
+host reports **2**. That is not a tolerable-noise condition; it is a
+startup refusal, and it takes three cells and one gate with it:
+
+- **S-b** (the ceiling at k = 4 and k = 8) — blocked twice over. The host
+  refuses `cores > 2`; and at `cores = 2` there is exactly one contending
+  peer, so IS5's top-owner suppression settles the relation at two ranges
+  forever and the 64-stage ceiling is structurally unreachable (§9's CK3
+  measured the same thing at two million rows). Needs a host with ≥ 3 CPUs.
+- **The kill −9 matrix** — run and confirmed blocked: every cell but
+  `fastpath.cores1` fails at the `cores 3 exceeds the 2` refusal. Reported
+  as **not run**, never as a pass rate. And `core_placement.hpp`'s
+  `AssignOwnerCore` shows a third core would be needed even if the count
+  guard were lifted: under `rotate` the owner is
+  `kSystemCore + 1 + (seq % (core_count - 1))`, which at `core_count = 2`
+  is core 1 for *every* relation, so two distinct peer owners never exist.
+- **S-c** (the per-`kStepBatch` cost with no fan-in open) — below this
+  host's resolution; §11c's source-read argument stands in its place, and
+  it is reported as not measured rather than as zero.
+- **S-d** (RD9(a) re-run) — the operator's standing suspension of
+  interleaved A/B overhead measurement (2026-08-24). Recorded with the
+  source reading that nothing in this order's diff is on the unsplit path.
+
+**One cell that did run and is reported as invalid rather than as a
+result**: the read surface under `--placement rotate`. Nothing split
+(`split_relation_detail=(absent)`), for the `AssignOwnerCore` reason above,
+so the grid answers the split relation identically to the unsplit control
+everywhere — which is evidence about the *fixture*, not about placement.
+The `creating` arm did run and **reproduces the 5-reachable / 11-refused
+surface** this order wrote into `known-gaps.md` and `CLAUDE.md`, at
+`4000:2@2`.
+
+**And the reason has a second half, which is the more interesting one.**
+`AssignOwnerCore` explains why both relations land on core 1; what explains
+why core 0's writes to them open no range is that **core 0 has no row-id
+lease table at all**, so its `PeekRowId` never returns `nullopt` and IS1's
+demand-recording branch is structurally unreachable from the system core.
+Under `rotate` at two cores the only core that could contend is the one
+that cannot record demand. So `rotate` needs **two peers** to spread, not
+merely two cores — the same shape as IS5's "two or more contending peers"
+precondition (§9's CK3), reached by a different route.
+
+## 12. AG0 — CA1's survey, and the branch it decides
 
 Work order `instructions/v2.6.0/r4-a-aggregate.md`, surveyed in worktree
 `v2.6.0-ksweep` at `7eeb7b5`. Read from the drivers' source, statement by
@@ -693,7 +966,7 @@ statement, against the six relations R4-M's census found spread
 | **s2** | **`charges`** | none in the load | `SELECT SUM(amount) … WHERE freight_id = ?` (I3, `:1256`), `SELECT id … WHERE freight_id = ?` (I4, `:1267`) | **NO** |
 | s3 library | — | every relation is BTREE, so none spreads (R4-M §5) | — | n/a |
 
-### 11a. HA1 is falsified, and by a worse case than it named
+### 12a. HA1 is falsified, and by a worse case than it named
 
 HA1 predicted the drivers' verification would fit inside RR3's five shapes,
 and named its falsifier as *"any driver verifying with `COUNT`, `SUM`,
@@ -707,7 +980,7 @@ checks with a run behind it; **its load phase fails on the first booking**,
 which is a sharper statement than HA1's falsifier anticipated and is the
 reason this row is a survey rather than a formality.
 
-### 11b. The branch: which scenarios the aggregate can run on today
+### 12b. The branch: which scenarios the aggregate can run on today
 
 - **s0 and s1 run now.** Their only reads of a spreading relation are
   `SELECT *` with an optional non-pk `WHERE`, both inside RR3's five.
@@ -736,7 +1009,7 @@ single-step widenings, which unlock s2's *hot path* and three of its four
 blocked shapes; the join stays refused and s2's aggregate stays **not
 run**, with this section as its reason.
 
-### 11c. AG3's design, and the hazard that stops it being a small change
+### 12c. AG3's design, and the hazard that stops it being a small change
 
 Worked out in worktree `v2.6.0-ksweep` at `7eeb7b5`, **source-read**, and
 recorded rather than built — the reason is the last paragraph.
@@ -792,6 +1065,6 @@ So AG3 is not "drop `!aggregated()` from the guard". It is:
 answer from it would be silent, and the order's own §6 requires every
 widening to land with an equivalence test and a vacuity matrix line. That
 is the right shape for this work and it is a session of its own, not a
-coda to one. What it would unlock is recorded in §11b: scenario 2's
+coda to one. What it would unlock is recorded in §12b: scenario 2's
 booking workload under `--no-manifest`, since the reporter's
 `JOIN … GROUP BY` is a two-step pipeline and out of reach either way.

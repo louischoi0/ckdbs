@@ -140,15 +140,24 @@ struct StepOpenUpstream {
 // (P4d-4b-3): a leaf has an output too - the forwarded layout it seals
 // for its consumer - and a section owned by the upstream half could
 // never say so. Empty means the whole row.
-// **How wide a fan-in may be, and why it is not the range count** (RD7).
-// A relation of k ranges does *not* open k stages: consecutive ranges on
-// one core are walked by one stage, in `lo` order, so the width is the
-// number of distinct **owner cores**, never the number of boundaries. A
-// 10 M-row relation at D6's size has ~2,441 ranges and at most
-// `cores` stages, which is the difference between a plan and an absurdity.
+// **How wide a fan-in may be: the number of maximal same-owner runs**
+// (RD7, corrected by R4-M/RS0 - `workplan-insert-spreading.md` §11a says
+// what the old wording claimed and why it was wrong). The width equals the
+// **core count** only under *contiguous* ownership; under interleaved
+// ownership every run is one range and it equals the **range count**, which
+// is exactly what R4's id-block-aligned insert spreading produces
+// (`crosscore.md` §6b). R4-M measured the refusal firing at **65-72
+// stages**, so the bound is a real limit on a spread relation's readable
+// size - roughly `64 x range_size_ids` rows
+// (`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`
+// §6). A **self-directed** run costs a slot like any other (R4-R §10b).
 //
-// The wire carries the count in one byte, which this bound is what makes
-// safe rather than lucky.
+// **One constant, two quantities**, and they are different questions: the
+// dispatcher's independent-stage count (`command_dispatcher.cpp`, not a
+// wire quantity - each stage is its own single-step pipeline with its own
+// `request_id`), and the STEP_OPEN envelope's upstream-edge count, which
+// the wire carries in one byte. 64 is safe for the second and chosen for
+// the first.
 inline constexpr std::size_t kMaxFanInUpstreams = 64;
 
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,

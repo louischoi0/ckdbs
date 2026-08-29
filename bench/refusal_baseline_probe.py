@@ -61,7 +61,7 @@ CLASSES = {
     # half of the same restriction; the second and third are shipping's own
     # bounds, and both are `UnknownOutcome` rather than a refusal - a
     # statement that ran and could not be reported.
-    "cross_core_read": "cross-core reads need the step pipeline",
+    "cross_core_read": "the step pipeline is built and serves a whole-row read",
     "shipped_reply_overlong": "its reply is",
     "shipped_unknown": "unknown outcome",
 }

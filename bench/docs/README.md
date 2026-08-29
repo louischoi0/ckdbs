@@ -1085,6 +1085,81 @@ bench/spread_insert_probe.py --server build-release/kds_server \
     --workdir ~/spread --cores 2 --rows 4000 --durability group,relaxed
 ```
 
+### The read-surface enumeration (R4-R/RR3, RS4, 2026-08-29)
+
+`bench/spread_read_surface.py` — **what shape a spread relation answers,
+from which core, stated by enumeration rather than claimed.** R4-M
+(`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md` §6a)
+found a spread relation readable as one shape from one core; R4-R/RS
+changed the route (`TableAccess::ServableBy`, a fan-in client on every
+core, a self-directed stage) and this driver asks the new surface the same
+honest way: every one of the equivalence suite's own shapes
+(`tests/range_chain_test.cpp`'s IM0/H5 inventory), from **every** core's
+session, against both a `spread` relation (written round-robin from every
+core, so it takes a range per peer) and an unsplit `whole` control on the
+same server — a shape refused on both is refused for a reason that has
+nothing to do with ranges, which the verdict column states.
+
+Prints a grid (`spread: c0 c1 ...` beside `whole (control): c0 c1 ...`)
+classified `ok` / `no-route` (`CheckReadAffinity`'s "cannot fan in over
+them") / `ceiling` (`kMaxFanInUpstreams`) / `reply-lost`
+(`UNKNOWN_OUTCOME`, statement shipping) / `affinity`, then a verdict per
+shape — *reachable everywhere*, *reachable on some cores*, *refused BY THE
+SPLIT* (the control answers, the split relation does not), or *refused,
+and not by the split* (both refuse). `--placement rotate` is the other
+side of `core_placement.hpp`'s `AssignOwnerCore`: at `cores = 2` it places
+every relation on core 1 (`kSystemCore + 1 + relation_seq % (core_count -
+1)` is `1` for any `relation_seq` when `core_count = 2`), so nothing
+written from core 0 alone can ever open a second range there (core 0 has
+no row-id lease table — `catalog.hpp`'s `PeekRowId` always answers from
+`sys.tables.next_id` directly on the system core, so its writes into a
+foreign relation never reach the `NoteRowIdDemand` branch that would open
+one) — `split_relation_detail` reads `(absent)` and the grid answers
+`whole`-and-`spread` identically, by construction rather than by finding.
+
+```bash
+bench/spread_read_surface.py --server build-release/kds_server \
+    --workdir ~/surface --cores 2 --range-size-ids 512 --rounds 300 \
+    --placement creating
+```
+
+### The self-directed-stage probe (R4-R §10b / CS1, 2026-08-29)
+
+`bench/self_directed_stage_probe.py` — **what a self-directed stage costs,
+against a real remote hop and against no stage at all.** §10b decided a
+self-directed run gets no message-free path — it is opened, credited and
+closed through the same STEP_OPEN/STEP_BATCH protocol a remote stage is,
+the ring hop being a send to itself
+(`include/kds/server/remote_step_service.hpp`'s `kMaxFanInUpstreams`
+comment). This driver prices that decision: one `cores = 2` server, two
+equal-sized relations (`spread`, written round-robin from both cores so it
+keeps its anchor range on core 0 and takes a second range on core 1;
+`twin`, written from core 0 alone and never split), four
+`SELECT * FROM <relation>` arms rep-interleaved from a session pinned to a
+chosen core (`tools/multicore_benchmark.collect_connections`, the only way
+to choose a core under `SO_REUSEPORT`):
+
+| arm | relation | core | stages |
+|---|---|---|---|
+| B | twin | 0 | 0 — `ServableBy(0)`, a plain local walk |
+| A | twin | 1 | 1, remote |
+| C | spread | 1 | 2 — one remote, one self-directed |
+| D | spread | 0 | 2 — the same two stages, opposite roles |
+
+Reports p0/p25/p50/p90/p95/p99 per arm (`tools/bench_common.Phase`, plus
+p90 since that is what the work order asked for), rows returned and a
+SHA-256 of every reply so `A` vs `B` and `C` vs `D` — the same relation
+over two routes — can be asserted byte-identical rather than merely
+"both ok", and the two differences the order's CS1 question turns on:
+`A - B` (what one remote stage costs over none) and `C - A` (what a
+self-directed stage adds on top of one remote stage). It measures; the
+results file does the reading.
+
+```bash
+bench/self_directed_stage_probe.py --server build-release/kds_server \
+    --workdir ~/selfdirected --reps 300 --rows 600
+```
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers

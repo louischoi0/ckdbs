@@ -2146,6 +2146,206 @@ TEST_F(CoreRuntimeTest, ACoreReadsARelationItOwnsButDoesNotWhollyHold) {
     EXPECT_EQ(straddle, "id,v\\n2,20\\n4096,30\\n4097,40");
 }
 
+// ---- RS5: the same equivalence, from a **non-zero** core ----------------
+//
+// RR5's case above reads from core 0, which is where the fan-in client has
+// always lived. RR2 put a client on every core, and **that is the case no
+// unit test covered**: a peer session opening a fan-in of its own, one
+// stage of which is *self-directed* - core 2 asking core 2 - and one of
+// which is remote.
+//
+// The distinction is not cosmetic. Before RR2 a peer had no client at all,
+// so this read fell through to statement shipping and was answered (or
+// lost) by core 0; the route exercised here did not exist. RB5's
+// discipline applies to it unchanged: byte-identical against the same rows
+// unsplit, **straddling the boundary**, because every defect this line has
+// found returned a right answer for data on one side of the cut.
+//
+// Vacuity matrix (`workplan-insert-spreading.md` §11): reverting
+// `ServableBy` to `owner_core == core_id_` alone, re-pinning the route to
+// `owner_core != core_id_`, and dropping the peer's client each fail this
+// test - which is what makes it a gate rather than a second spelling of
+// RR5's.
+TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    // `creating` again: core 0 owns both relations. The reader below is
+    // core **2**, which owns neither - and holds one range of one of them.
+    auto split = catalog2.CreateTable(catalog::kNamespacePublic, "spread", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "twin", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(whole.ok()) << whole.status().message();
+    ASSERT_EQ(catalog2.InitTableAccess(split.value()).value()->owner_core, 0u);
+
+    auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
+    auto ranges = catalog2.RangesOf(split.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u);
+    ASSERT_EQ(ranges.value()[0].owner_core, 0u) << "the low range must be the owner's";
+    ASSERT_EQ(ranges.value()[1].owner_core, 2u) << "the high range must be the reader's own";
+
+    auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
+        auto access = catalog2.InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload =
+            exec::EncodeRow(access.value()->schema, access.value()->layout, id, {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
+    };
+    const PageId whole_head = catalog2.GetSysTableRow(whole.value()).value().desc_page_id;
+    for (auto [id, v] : std::vector<std::pair<std::uint64_t, std::int64_t>>{
+             {1, 10}, {2, 20}, {4096, 30}, {4097, 40}}) {
+        place(split.value(), id, v,
+              id < 4096 ? ranges.value()[0].entry_page : ranges.value()[1].entry_page);
+        place(whole.value(), id, v, whole_head);
+    }
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    // **The reader is core 2.** Everything below is RR5's rig with that one
+    // substitution, which is the whole of what RS5 adds.
+    CoreRuntime::Config peer_config = ConfigFor(2);
+    peer_config.core_count = 3;
+    auto runtime = CoreRuntime::Open(peer_config, *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    for (catalog::Oid oid : {split.value(), whole.value()}) {
+        runtime.value()->GrantRelationFault(RelationFaultExtentOf(
+            catalog2.GetSysTableRow(oid).value(), storage::kDefaultExtentPages));
+    }
+
+    std::optional<SessionStepClient> client;
+    std::optional<RemoteStepServer> server_0;
+    std::optional<RemoteStepServer> server_2;
+    auto make_seam = [&] {
+        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
+            switch (kind) {
+                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+                default: ADD_FAILURE() << "unexpected server send";
+            }
+            return Status::OK();
+        }};
+    };
+    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
+    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
+    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
+    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
+    // Counted, because "the peer opened a fan-in" and "the peer walked the
+    // whole thing locally" produce the same rows and only one of them is
+    // this test's subject.
+    int opens_to_self = 0;
+    int opens_to_owner = 0;
+    client.emplace(
+        /*core_id=*/2,
+        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
+            sched::MessageHeader h{};
+            h.src_core = 2;
+            h.dst_core = dst;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen:
+                    (dst == 2 ? opens_to_self : opens_to_owner)++;
+                    to.OnStepOpen(h, payload);
+                    break;
+                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected client send";
+            }
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    const std::string split_reply =
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM spread").response;
+    const std::string whole_reply =
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM twin").response;
+    ASSERT_EQ(split_reply.rfind("ERR", 0), std::string::npos)
+        << "a peer could not read a relation one of whose ranges is its own: " << split_reply;
+    EXPECT_EQ(split_reply, whole_reply) << "the split changed the answer";
+    EXPECT_EQ(split_reply, "id,v\\n1,10\\n2,20\\n4096,30\\n4097,40");
+    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
+    // One stage to the owner for the split relation's low range, one to
+    // itself for its own - and one to the owner for the unsplit twin, which
+    // a peer also reaches only through the pipeline. The self-directed one
+    // is on a **non-zero** core, which is the mechanism RS5 gates.
+    EXPECT_EQ(opens_to_owner, 2) << "the owner's range and the whole twin are both remote stages";
+    EXPECT_EQ(opens_to_self, 1) << "the peer's own range was not walked by a self-directed stage";
+
+    const std::string straddle =
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM spread WHERE v > 15").response;
+    EXPECT_EQ(
+        straddle,
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM twin WHERE v > 15").response);
+    EXPECT_EQ(straddle, "id,v\\n2,20\\n4096,30\\n4097,40");
+}
+
+// **And the wiring, which the loopback rig above cannot gate.** That test
+// hands the dispatcher a client it built itself, so it would pass on a
+// tree where `CoreRuntime` never constructs one - which is exactly the
+// state every peer was in before RR2, and the state that made a spread
+// relation unreadable from a peer in any shape.
+//
+// So this one asserts the thing the rig assumes: a peer's **own**
+// dispatcher, on a peer's **own** transport, *plans* a fan-in instead of
+// refusing.
+//
+// **The evidence is which refusal comes back**, because the synchronous
+// `Dispatch` cannot finish a fan-in either way - it has no reactor to run
+// the other side on, so it closes every stage it opened and answers
+// `TxnConflict("remote read needs the reactor path")`. That refusal is
+// reached only *after* the route has resolved the ranges and opened the
+// stages, so it is proof the plan was made. Without RR2's
+// `remote_reads_.emplace(...)` and the `SetRemoteReads` that follows it,
+// the route is skipped entirely and the answer is `CheckReadAffinity`'s
+// `Unsupported` - `CrossCoreReadUnsupported`'s "relation 'spread2' is owned
+// by core 0 and this statement is running on core 1", which is what every
+// peer answered before RR2. **Not** the "cannot fan in over them" arm: that
+// one is reached only when `owner_core == core_id_`, and this fixture reads
+// from a core that owns nothing, so asserting its absence would assert
+// nothing. Completing the read is the test above's subject; reaching the
+// route is this one's.
+TEST_F(CoreRuntimeTest, APeersOwnDispatcherPlansAFanInRatherThanRefusing) {
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "spread2", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_EQ(catalog2.InitTableAccess(oid.value()).value()->owner_core, 0u);
+    auto head = catalog2.CreateRangeEntryPage(oid.value(), 4096);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, /*owner_core=*/1, head.value()).ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    // `max_payload` wide enough for a STEP_OPEN: the seam refuses an
+    // oversize message rather than truncating it, and that refusal would
+    // fall through to the very affinity error this test distinguishes
+    // itself from - a pass and a fail arriving as the same reply.
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 8192);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+
+    CoreRuntime::Config cfg = ConfigFor(1);
+    cfg.core_count = 2;
+    auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+
+    const DispatchOutcome out = peer.value()->dispatcher().Dispatch("SELECT * FROM spread2");
+    EXPECT_EQ(out.response.find("is owned by core 0"), std::string::npos)
+        << "the peer took CheckReadAffinity's refusal, so its dispatcher has no fan-in "
+           "client: " << out.response;
+    EXPECT_NE(out.response.find("remote read needs the reactor path"), std::string::npos)
+        << "the peer did not open a fan-in at all: " << out.response;
+}
+
 // ---- P4d-4b-3: a two-step join executes as a cross-core pipeline ---------
 
 TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) {
