@@ -1135,6 +1135,29 @@ TEST_F(CoreRuntimeTest, APeersLeaseBlockBecomesARangeItCanWrite) {
     // Invariant 3 made structural: nothing below the boundary can land in
     // this page even by mistake.
     EXPECT_EQ(view.min_key(), ranges.value()[1].lo);
+
+    // ---- R4/IS5: the second block opens no second boundary --------------
+    //
+    // The same core asking again lands in the range it already owns - ids
+    // only ascend and that range runs to the end of the space - so a
+    // boundary there would cut this core's own chain in two for nothing,
+    // and spend a fan-in stage per lease block forever.
+    for (std::uint64_t i = 0; i < cfg.range_size_ids; ++i) {
+        ASSERT_TRUE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
+    }
+    ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value())
+        << "a spent block did not read as demand";
+    peer.value()->MaybeRefillRowIds();
+    for (int i = 0; i < 40; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    ASSERT_EQ(peer.value()->row_id_refill().stats.grants, 2u) << "the second block never arrived";
+
+    auto after = core0_->catalog.RangesOf(oid.value());
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    EXPECT_EQ(after.value().size(), 2u)
+        << "a second block by the same core opened a second boundary";
 }
 
 // ---- R4/IS1: the pump ---------------------------------------------------
@@ -1313,6 +1336,117 @@ TEST_F(CoreRuntimeTest, APeerInsertsIntoItsOwnRangeInsteadOfShippingToTheOwner) 
         << "core 0 issued an id inside the block it leased to core 1";
 }
 
+// ---- R4/IS6: `crosscore.md` §8 test 12, at k = 2 writers ----------------
+//
+// *"k cores inserting concurrently each land in their own range's tail;
+// ids ascend per range; ids stay globally unique (K1's issue-once contract
+// across cores); invariant 3 holds per range."* All four, over two peers
+// and the relation's own owner, through `Dispatch`.
+TEST_F(CoreRuntimeTest, TwoPeersEachInsertIntoTheirOwnRangesTail) {
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "fanout",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/3, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
+    exec::AssertionEnforcer core0_enforcer;
+    ASSERT_TRUE(RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr,
+                                          core0_store_.get(), nullptr, &core0_enforcer)
+                    .ok());
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+
+    std::vector<std::unique_ptr<CoreRuntime>> peers;
+    for (std::uint32_t id : {1u, 2u}) {
+        CoreRuntime::Config cfg = ConfigFor(id);
+        cfg.range_size_ids = 4096;
+        auto peer = CoreRuntime::Open(cfg, *device_, clock_, nullptr);
+        ASSERT_TRUE(peer.ok()) << peer.status().message();
+        ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+        auto block = core0_ids.Carve(64);
+        ASSERT_TRUE(block.ok());
+        peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+        peers.push_back(std::move(peer.value()));
+    }
+
+    // Round 1: both are refused and both leave a demand. **Interleaved on
+    // purpose** - the two blocks are carved by one core in the order the
+    // requests arrive, so the ranges alternate owners, which is the
+    // arrangement §6b calls interleaved and RD7 opens one stage per.
+    for (auto& peer : peers) {
+        const auto out = peer->dispatcher().Dispatch("INSERT INTO fanout VALUES (1)").response;
+        ASSERT_EQ(out.rfind("ERR ", 0), 0u) << out;
+        peer->MaybeRefillRowIds();
+    }
+    for (int i = 0; i < 80; ++i) {
+        for (auto& peer : peers) peer->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    FlushCatalog();
+    for (auto& peer : peers) peer->InvalidateCatalog();
+
+    auto ranges = core0_->catalog.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    // The lo = 0 anchor CC9 requires, plus one range per writer core.
+    ASSERT_EQ(ranges.value().size(), 3u) << "two writers did not produce two ranges";
+    EXPECT_EQ(ranges.value()[0].lo, 0u);
+    EXPECT_EQ(ranges.value()[0].owner_core, 0u);
+    EXPECT_NE(ranges.value()[1].owner_core, ranges.value()[2].owner_core)
+        << "both blocks were granted to one core";
+
+    // Round 2: each runs **locally**, and the reply names an id inside that
+    // core's own range.
+    std::vector<std::uint64_t> issued;
+    for (std::size_t k = 0; k < peers.size(); ++k) {
+        for (int rep = 0; rep < 3; ++rep) {
+            const auto out =
+                peers[k]->dispatcher().Dispatch("INSERT INTO fanout VALUES (1)").response;
+            ASSERT_EQ(out.rfind("INSERTED", 0), 0u)
+                << "core " << (k + 1) << " did not insert into its own range: " << out;
+            // " id=" with the space: the reply opens with `oid=`, which
+            // contains `id=` and would be parsed instead.
+            const std::size_t at = out.find(" id=");
+            ASSERT_NE(at, std::string::npos) << out;
+            issued.push_back(std::strtoull(out.c_str() + at + 4, nullptr, 10));
+        }
+    }
+
+    // **Globally unique** (K1 across cores): the blocks are carved from one
+    // `sys.tables.next_id`, so no two cores can name the same id.
+    std::vector<std::uint64_t> sorted = issued;
+    std::sort(sorted.begin(), sorted.end());
+    EXPECT_EQ(std::adjacent_find(sorted.begin(), sorted.end()), sorted.end())
+        << "two cores issued the same id";
+
+    // **Ascending per range, and in each range's own chain** - which is
+    // also invariant 3 per range, since the head's `min_key` is `lo`.
+    for (std::size_t r = 1; r < ranges.value().size(); ++r) {
+        const catalog::SysRangeRow& row = ranges.value()[r];
+        auto& owner = peers[row.owner_core - 1];
+        auto page = owner->store().GetForRead(row.entry_page);
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        heap::PageView view(page.value().bytes());
+        EXPECT_EQ(view.min_key(), row.lo);
+        // Three rows from round 2 plus nothing from round 1, which was
+        // refused before it wrote.
+        EXPECT_EQ(view.slot_count(), 3u)
+            << "range at lo " << row.lo << " owned by core " << row.owner_core
+            << " did not take its owner's rows";
+        std::uint64_t previous = 0;
+        for (std::uint16_t slot = 0; slot < view.slot_count(); ++slot) {
+            auto tuple = view.ReadTuple(slot);
+            ASSERT_TRUE(tuple.ok()) << tuple.status().message();
+            auto id = KeystoneIdOfPayload(tuple.value().payload);
+            ASSERT_TRUE(id.ok());
+            EXPECT_GE(id.value(), row.lo) << "invariant 3 broken in this range";
+            EXPECT_GT(id.value(), previous) << "ids did not ascend inside one range";
+            previous = id.value();
+        }
+    }
+}
 
 // The other arm, and the one every existing relation takes: a gated
 // relation is declined, the ids arrive anyway, and the decline is readable
@@ -1558,12 +1692,14 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
 
 TEST_F(CoreRuntimeTest, ASelectAgainstARelationSplitAcrossTwoCoresFansInInRangeOrder) {
     // RB4's substance, and the first statement in this engine to consume
-    // more than one producer. The directory is written by hand because
-    // **nothing can produce this state yet**: `range_size_ids` defaults
-    // off, and even armed RD5 opens a range for the core that asked -
-    // the owner - so a second *owner* arrives only with R4's insert
-    // spreading. The fan-in is built ahead of its producer and this test
-    // is what stands in for it.
+    // more than one producer. The directory is written by hand, and since
+    // R4 that is a **fixture choice rather than a necessity**: insert
+    // spreading now produces a second owner through the ordinary route
+    // (`TwoPeersEachInsertIntoTheirOwnRangesTail` drives it), and this
+    // test keeps the hand-written split because what it is about is the
+    // fan-in's ordering, which wants a boundary at a known id and rows
+    // placed on both sides of it without a lease block's arithmetic in
+    // the way.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/3);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);

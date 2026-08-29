@@ -4497,32 +4497,46 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // inherited debt. The refusal is still the honest one and still
         // retryable; what it cannot yet promise is that a retry finds the
         // grant. Recorded rather than papered over.
+        //
+        // **Both, not either** (the review's C5). The first form asked the
+        // creation pages *or* the range head, on whether this core owned
+        // the relation - and the two are not alternatives. A core can own
+        // the relation *and* a higher range (IS5 suppresses only a carve
+        // that continues the asker's own top range, so an owner that took
+        // a block after some other core did holds a second one), and a row
+        // landing there would be admitted on a probe of a page it will not
+        // write. Four page ids at most, all `kInvalidPageId`-skipped, one
+        // bit test each on the funded path.
         if (grant_demand_ != nullptr) {
-            const PageId relation_creation[] = {access.desc_page_id, access.varheap_page_id,
-                                                access.anchor_page_id};
-            PageId range_head = kInvalidPageId;
-            const bool owns_relation = access.owner_core == core_id_;
-            if (!owns_relation) {
+            PageId probe[4] = {kInvalidPageId, kInvalidPageId, kInvalidPageId, kInvalidPageId};
+            std::size_t n = 0;
+            if (access.owner_core == core_id_) {
+                probe[n++] = access.desc_page_id;
+                probe[n++] = access.varheap_page_id;
+                probe[n++] = access.anchor_page_id;
+            } else if (!target_id.has_value()) {
                 // Checked, not assumed: reaching here without owning the
                 // relation means the arm above resolved a *range* to this
                 // core, which only the id-routed call can do. If that ever
                 // stops being true the answer must be a refusal, never a
                 // probe of some other core's creation pages.
-                if (!target_id.has_value()) {
-                    return Status::Corruption(
-                        "relation oid " + std::to_string(access.oid) + " is owned by core " +
-                        std::to_string(access.owner_core) + " yet core " +
-                        std::to_string(core_id_) +
-                        " admitted a write to it with no row id to name a range");
-                }
+                return Status::Corruption(
+                    "relation oid " + std::to_string(access.oid) + " is owned by core " +
+                    std::to_string(access.owner_core) + " yet core " +
+                    std::to_string(core_id_) +
+                    " admitted a write to it with no row id to name a range");
+            }
+            // The head of the chain this row actually goes into, whenever
+            // the caller named the row. On an unsplit relation it *is*
+            // `desc_page_id` and the duplicate costs one bit test.
+            if (target_id.has_value() &&
+                access.clustered_type == catalog::ClusteredType::kHeap) {
                 auto chain = access.HeapChainFor(*target_id);
                 if (!chain.ok()) return chain.status();
-                range_head = chain.value().head;
+                probe[n++] = chain.value().head;
             }
-            const std::span<const PageId> probe =
-                owns_relation ? std::span<const PageId>(relation_creation)
-                              : std::span<const PageId>(&range_head, 1);
-            for (PageId page : probe) {
+            for (std::size_t i = 0; i < n; ++i) {
+                const PageId page = probe[i];
                 if (page == kInvalidPageId || page_store_.MayWrite(page)) continue;
                 (void)page_store_.GetForRead(page);  // the claim runs on the fault
                 if (page_store_.MayWrite(page)) continue;
@@ -4766,8 +4780,18 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     //   - some row omits its pk: a row that names one draws from no lease
     //     at all (it writes the mark, which is core 0's page), so a lease
     //     would go unused.
-    //   - this core owns no range yet: once it does, the row is its own to
-    //     place and IS3 takes the local path instead of arriving here.
+    //
+    // **Not conditioned on "this core owns no range yet", which is the
+    // wrong question and was a livelock.** Owning a range and holding a
+    // lease are different facts, and a restart separates them: `sys.ranges`
+    // is durable and `RowIdLeaseTable` is memory-resident, so a restarted
+    // core owns its range and has no ids for it. Skipping the demand there
+    // left `Peek` empty forever - the statement ships to the relation's
+    // owner, the owner refuses it because the id lands in *this* core's
+    // range, and nothing ever asks for the block that would break the
+    // cycle. `NoteDemand` is idempotent (an existing entry, live or spent,
+    // is left exactly as it is), so asking unconditionally costs one map
+    // lookup on an armed instance and nothing at all on an unarmed one.
     //
     // Eligibility is deliberately **not** asked here. The tick asks it,
     // core 0 re-checks it against the durable rows, and both record the
@@ -4775,17 +4799,33 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // would be a second place for the answer to differ. The cost of being
     // wrong is one lease block for one relation on one core - the grant
     // arrives, no range opens, and `low_water()` is false thereafter.
-    const std::size_t omitted_arity =
-        ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
-    const bool any_row_omits_pk =
-        std::any_of(stmt.rows.begin(), stmt.rows.end(),
-                    [&](const std::vector<parser::AstValue>& r) {
-                        return r.size() == omitted_arity;
-                    });
-    const bool spreading = range_size_ids_ != kRangeSizeOff &&
-                           ta->clustered_type == catalog::ClusteredType::kHeap &&
-                           any_row_omits_pk;
-    if (spreading && !ta->OwnsAnyRange(core_id_)) catalog_.NoteRowIdDemand(ta->oid);
+    // Which rows omit their pk, counted **once** for the two questions that
+    // ask it: R4's routing below wants "any", and T3's sorted fill further
+    // down wants "every". Hoisted here rather than computed twice, which is
+    // what the first form of this row did - one extra pass over `stmt.rows`
+    // on every INSERT, for a fact the statement already had to derive.
+    const std::size_t fill_arity = ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
+    std::size_t rows_omitting_pk = 0;
+    for (const std::vector<parser::AstValue>& r : stmt.rows) {
+        if (r.size() == fill_arity) ++rows_omitting_pk;
+    }
+    const bool any_row_omits_pk = rows_omitting_pk > 0;
+    const bool every_row_omits_pk = rows_omitting_pk == stmt.rows.size();
+
+    // **Two gates, and they are deliberately not the same one** (the R4
+    // review's C3). The *pump* asks the runtime knob, because what it
+    // decides is whether a grant would open a boundary - a question about
+    // configuration. The *routing* asks the durable directory, because a
+    // relation that already has ranges has them whatever the knob says
+    // now: `HeapChainFor` and `VisitRelation` honour those rows
+    // unconditionally, and a router that stopped honouring them when the
+    // knob was turned off would send every INSERT to `owner_core` to be
+    // refused at placement, forever. Disarming the key must stop new
+    // boundaries opening; it cannot un-split what is on disk.
+    const bool heap_omitting_pk =
+        ta->clustered_type == catalog::ClusteredType::kHeap && any_row_omits_pk;
+    const bool pump = range_size_ids_ != kRangeSizeOff && heap_omitting_pk;
+    const bool route_by_range = heap_omitting_pk && !ta->ranges.empty();
 
     // ---- R4/IS3: which core this INSERT belongs on ----------------------
     //
@@ -4810,13 +4850,28 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // rather than issuing past its end, and a contiguous top-up extends the
     // same core's own run. So every id this statement issues resolves to
     // the range the first one did. That is an argument, not a proof, which
-    // is why `InsertIntoRelation` checks each row's landing range rather
+    // is why the placement check refuses each row's landing range rather
     // than trusting it.
+    //
+    // **The pump is the peek's other half, not a second question** (the
+    // review's S1). "No id to issue" *is* the demand, and it is the exact
+    // condition `RowIdLeaseTable::Next()` records demand on - so writing it
+    // as one branch is what keeps the two sites from drifting, and it costs
+    // one map descent instead of two on the common path. Asking
+    // unconditionally, as an earlier form did, was also the fix for a
+    // livelock: owning a range is durable and holding a lease is not, so a
+    // restart leaves a core owning a range with no block and nothing to
+    // record the demand that would refill it.
     std::optional<std::uint64_t> target_id;
     std::uint32_t target_core = ta->owner_core;
-    if (spreading && !ta->ranges.empty()) {
+    if (pump || route_by_range) {
         target_id = catalog_.PeekRowId(ta->oid);
-        if (target_id.has_value()) {
+        if (!target_id.has_value()) {
+            // No block here. On a peer that is demand; on core 0 it is a
+            // relation whose `sys.tables` row could not be read, and
+            // `NoteRowIdDemand` is a no-op there either way.
+            if (pump) catalog_.NoteRowIdDemand(ta->oid);
+        } else if (route_by_range) {
             auto owner = ta->RangeOwnerFor(*target_id);
             if (!owner.ok()) return {ErrorReply(owner.status()), false};
             target_core = owner.value();
@@ -4879,11 +4934,9 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // Checked over the rows rather than off the relation since 2026-08-25
     // (heap-and-tuple.md §4.1) - naming a key is a property of the row now.
     // Ineligibility, not a refusal: a statement that names keys still runs,
-    // through the ordinary per-row path below.
-    const std::size_t fill_arity = ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
-    const bool every_row_omits_pk =
-        std::all_of(stmt.rows.begin(), stmt.rows.end(),
-                    [&](const std::vector<parser::AstValue>& r) { return r.size() == fill_arity; });
+    // through the ordinary per-row path below. `every_row_omits_pk` is
+    // counted at the top of this function, in the one pass R4's routing
+    // also reads.
     if (bulk && every_row_omits_pk && SortedFillEligible(*ta, oid.value())) {
         return SortedFillInner(stmt, oid.value(), *ta, scope);
     }
@@ -5006,10 +5059,12 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // **The reason is mechanical, not a rule the engine holds.** An
     // earlier draft cited `crosscore.md:311-314`'s cross-range DML
     // refusal; that passage is about a statement spanning two *owners*,
-    // and both ranges of a split relation are owned by the same core
-    // today - `row_id_lease_service.cpp` opens a range for the core that
-    // asked, which is the owner - so a straddling batch spans no owner at
-    // all. Nor does the engine refuse the equivalent by another route: two
+    // and a straddling batch need not span one. **Corrected at R4**: two
+    // ranges of a split relation *can* now have different owners - that is
+    // what insert spreading produces - but the ownership question is the
+    // check above's, answered before this one and in its own words, and a
+    // straddle inside **one** core's two ranges still reaches here. Nor
+    // does the engine refuse the equivalent by another route: two
     // single-row INSERTs in one transaction land on either side of a
     // boundary through `InsertIntoRelation` and nothing objects. What
     // actually forces this is that `ChainAppendBatch` takes **one head**.
@@ -5028,6 +5083,25 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         return {ErrorReply(chain.status()), false};
     }
     if (!ta.ranges.empty()) {
+        // **R4/IS2, and this path needs it in its own words.** The fill does
+        // not go through `InsertIntoRelation`, so the placement check that
+        // refuses a row landing in a range this core does not own has to be
+        // made here too - it was missing, and the case is reachable rather
+        // than theoretical: `AllocateRowIdRange` draws from
+        // `sys.tables.next_id`, which sits above every block core 0 has
+        // leased out, so on a spread relation core 0's carve lands in the
+        // **top** range, which is whichever core asked last. Without this
+        // the batch is appended to that core's chain through its entry
+        // page, and core 0 holds no extent lease, so `MayWrite` admits it -
+        // two cores with divergent images of one page and nothing logged.
+        //
+        // Before the straddle test below because this is the safety
+        // question and that one is an implementation limit (§14f): a run
+        // that both straddles a boundary and starts in a foreign range
+        // should name the ownership first.
+        if (Status s = CheckRangePlacement(ta, first.value()); !s.ok()) {
+            return {ErrorReply(s), false};
+        }
         auto last = ta.HeapChainFor(first.value() + payloads.size() - 1);
         if (!last.ok()) {
             return {ErrorReply(last.status()), false};
@@ -5419,6 +5493,20 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     return std::nullopt;
 }
 
+Status CommandDispatcher::CheckRangePlacement(const catalog::TableAccess& access,
+                                              std::uint64_t id) const {
+    auto range_owner = access.RangeOwnerFor(id);
+    if (!range_owner.ok()) return range_owner.status();
+    if (range_owner.value() != core_id_) {
+        return Status::TxnConflict(
+            "row id " + std::to_string(id) + " of relation oid " + std::to_string(access.oid) +
+            " falls in a range owned by core " + std::to_string(range_owner.value()) +
+            ", not core " + std::to_string(core_id_) +
+            "; the insert was routed to the wrong core");
+    }
+    return Status::OK();
+}
+
 StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
     const catalog::TableAccess& access, std::uint64_t id, std::span<const std::byte> payload,
     std::uint64_t trx_id) {
@@ -5436,30 +5524,19 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // unsplit relation it is `desc_page_id` and `heap_tail_hint`,
             // byte for byte what this line was.
             //
-            // **R4/IS2: and the range it names must be this core's.** The
-            // routing above argues that it is - the id came from this
-            // core's lease, and a range is a lease grant - but "by
-            // construction" is what the RD6 defect was also true of, and a
-            // wrong answer there is a row written into another core's chain
-            // through a page this core has no right to. Refused by name
-            // here, where the id is in hand, rather than left to the
-            // store's `MayWrite` backstop naming a page number.
+            // **R4/IS2: and the range it names must be this core's**
+            // (`CheckRangePlacement` carries the argument). The routing
+            // above says it is - the id came from this core's lease, and a
+            // range is a lease grant - but "by construction" is what the
+            // RD6 defect was also true of, so it is checked.
             //
-            // Behind `ranges.empty()` and not inside `RangeOwnerFor`,
+            // The `ranges.empty()` test is here and not inside the check
             // because CD1's zero-cost invariant is measured on this exact
             // line: an unsplit relation must reach `ChainInsert` having
             // paid one predictable branch on a field already in a register,
-            // never a second out-of-line resolution beside `HeapChainFor`'s.
+            // never an out-of-line call beside `HeapChainFor`'s.
             if (!access.ranges.empty()) {
-                auto range_owner = access.RangeOwnerFor(id);
-                if (!range_owner.ok()) return range_owner.status();
-                if (range_owner.value() != core_id_) {
-                    return Status::TxnConflict(
-                        "row id " + std::to_string(id) + " of relation oid " +
-                        std::to_string(access.oid) + " falls in a range owned by core " +
-                        std::to_string(range_owner.value()) + ", not core " +
-                        std::to_string(core_id_) + "; the insert was routed to the wrong core");
-                }
+                if (Status s = CheckRangePlacement(access, id); !s.ok()) return s;
             }
             auto chain = access.HeapChainFor(id);
             if (!chain.ok()) return chain.status();
@@ -5597,7 +5674,16 @@ StatusOr<std::uint32_t> CommandDispatcher::WriteTargetCore(
     // fast path's own test, reused rather than re-derived: two answers to
     // "is this a point statement" is two chances to route a statement the
     // scan then handles differently.
-    if (std::optional<std::uint64_t> pk = PkEqualityTarget(access, where); pk.has_value()) {
+    //
+    // **A literal above the 40-bit space is not a routing question** (the
+    // review's C4). `PkEqualityTarget` admits any non-negative `int64`, and
+    // `ResolveRanges` refuses a span above `kIdSpaceEnd` as a caller that
+    // computed a bound wrong - which a user typing `WHERE id = 2^40` has
+    // not. Such an id names no row, so it names no range either; falling
+    // through leaves the statement answered by the rule below rather than
+    // turned into an `InvalidArgument` where it used to say `UPDATED 0`.
+    if (std::optional<std::uint64_t> pk = PkEqualityTarget(access, where);
+        pk.has_value() && *pk <= kMaxKeystoneId) {
         auto owner = access.RangeOwnerFor(*pk);
         if (!owner.ok()) return owner.status();
         *target_id = pk;
@@ -6502,11 +6588,15 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             // remotely and read locally one answer rather than two.
             //
             // Unsplit is `owner_core` and one stage, which is every
-            // relation this engine has: `range_size_ids` defaults off, and
-            // even armed, RD5 opens a range for the core that asked - the
-            // owner - so a second *owner* arrives only with R4's
-            // spreading. The fan-in is built ahead of its producer, and
-            // that is stated rather than implied.
+            // relation on an instance that has not armed `range_size_ids`
+            // - still the default. **This row's producer arrived at R4**
+            // (2026-08-29): a core that does not own a relation now
+            // records lease demand, so core 0 opens a range owned by that
+            // core and a second *owner* is an ordinary state rather than a
+            // hand-written fixture. The ceiling that arrives with it is
+            // `kMaxFanInUpstreams` below, and it is no longer unreachable:
+            // interleaved ownership makes a run one range, so stages equal
+            // ranges (`workplan-insert-spreading.md` §3).
             // **One stage per maximal contiguous run of ranges on one
             // core**, not one per core - the correction this row's review
             // forced. Grouping by core emits `A₁, A₃, B₂` where ownership

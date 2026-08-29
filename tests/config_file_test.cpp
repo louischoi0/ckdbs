@@ -491,19 +491,30 @@ TEST(ExpeditorConfigTest, PeerListenersParseAndRefuseTlsOrAuth) {
 
     constexpr auto kRotate = catalog::PlacementPolicy::kRotate;
     constexpr auto kCreating = catalog::PlacementPolicy::kCreatingCore;
-    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true, 1, kCreating).ok());
-    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2, kRotate).ok());
-    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2, kRotate).code(),
+    constexpr std::uint64_t kNoRanges = kRangeSizeOff;
+    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true, 1, kCreating, kNoRanges).ok());
+    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2, kRotate, kNoRanges).ok());
+    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2, kRotate, kNoRanges).code(),
               StatusCode::kUnsupported);
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2, kRotate).code(),
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2, kRotate, kNoRanges).code(),
               StatusCode::kUnsupported);
 
     // The two pairings that cannot work (the PW5 review's finding 6):
     // no peer to listen, and a placement under which a peer session could
     // serve nothing. Both are plain misconfigurations, so InvalidArgument.
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1, kRotate).code(),
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1, kRotate, kNoRanges).code(),
               StatusCode::kInvalidArgument);
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 2, kCreating).code(),
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 2, kCreating, kNoRanges).code(),
+              StatusCode::kInvalidArgument);
+
+    // **R4 narrowed the second of those.** With ranges armed a peer-accepted
+    // session writing a core-0 relation takes a range of its own and serves
+    // it locally (`crosscore.md` §6b), so creating-core placement is the
+    // arrangement insert spreading produces rather than a misconfiguration.
+    // The `cores = 1` refusal is untouched: a range needs a second core to
+    // be owned by, and SO_REUSEPORT on one socket is still the only effect.
+    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2, kCreating, 4096).ok());
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1, kCreating, 4096).code(),
               StatusCode::kInvalidArgument);
 }
 

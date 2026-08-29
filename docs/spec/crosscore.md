@@ -484,6 +484,18 @@ the owning decisions, never by relaxing the decline.
 
 ### 6b. Inserts and the Tail — Id-Block-Aligned Spreading (v2, R4)
 
+**Built 2026-08-29** (R4/IS1-IS5,
+`docs/inflight/in-progress/workplan-insert-spreading.md`), off by default:
+`range_size_ids` is still `kRangeSizeOff` and the operator takes its value
+on IS7's numbers. What R3 left and R4 supplies is a *producer* — a core
+that does not own a relation now records row-id lease demand before giving
+a foreign INSERT away, which is what makes core 0 open a range owned by
+that core — plus the routing over it: **a write is routed by the id it
+will issue, not by which relation the statement names.** Two limits ride
+with it and are §3 and §7b of that workplan: a read of a spread relation
+is bounded by the fan-in's 64 stages, and a write naming no primary key on
+a *multi-owner* relation is refused until R6.
+
 When an `INSERT` omits its key the engine issues an ascending one, so
 every such INSERT targets the relation's
 maximum id — the tail range — and naive range ownership spreads reads
@@ -501,9 +513,13 @@ first insert. The leases supply the ids; the per-range chains supply
 the tails; R3/R4 owns building the second. Consequences, stated now:
 
 - Per-relation id monotonicity becomes per-range monotonicity —
-  invariant 11's 2026-08-11 amendment (`docs/spec/heap-and-tuple.md` §4.1:
-  "monotonicity is now per-relation, never engine-wide") one level
-  down, and it needs the same loud documentation when built (R4).
+  invariant 11's 2026-08-11 amendment (`docs/spec/heap-and-tuple.md` §4.1)
+  one level down. **Written 2026-08-29 with R4**, as that spec's **§4.1a**:
+  ids ascend per range and no longer in issue order across a relation, and
+  the inference a caller loses is named there. `sys.tables.next_id` stays
+  one high-water mark, so ids remain globally unique across cores (K1) and
+  `key_order` is untouched — every block is carved *above* the mark, so
+  spreading never produces a below-mark key.
 - A **btree** relation whose caller names its keys spreads naturally —
   those ids need not ascend — and needs none of this. A **heap**
   relation does not get that for free even when the caller names its

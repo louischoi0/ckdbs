@@ -159,13 +159,73 @@ TEST_F(RangeChainTest, AnInsertWhoseIdFallsInAnotherCoresRangeIsRefusedByName) {
     // **And the refusal cost the mark**, which is worth pinning rather than
     // discovering: `AdmitExplicitRowId` moved `next_id` past the named key
     // before the placement check ran, so the next *omitted* key is above
-    // the boundary too and meets the same refusal. K3 calls a burnt id
-    // free, so this is a burn and not a leak - but it means a heap
-    // relation whose upper range is another core's has no further ids to
-    // issue **on this core**, which is precisely the state R4/IS3's
-    // routing exists to keep a statement out of.
+    // the boundary too. K3 calls a burnt id free, so this is a burn and not
+    // a leak.
+    //
+    // What that next statement now meets is the **routing** refusal, not
+    // the placement one, and the difference is the whole of R4/IS3: this
+    // core reads the id it is about to issue, finds core 2 owns its range,
+    // and declines to run the statement here at all. On a real instance it
+    // would ship there; this fixture has one core and no ship client, so
+    // the honest answer is the cross-core refusal. What must never appear
+    // again is "the insert was routed to the wrong core", which is the
+    // placement backstop firing because the routing above it did not.
     const std::string after = Run("INSERT INTO t VALUES (3)");
-    EXPECT_NE(after.find("owned by core 2"), std::string::npos) << after;
+    EXPECT_EQ(after.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << after;
+    EXPECT_EQ(after.find("routed to the wrong core"), std::string::npos)
+        << "the placement backstop answered a statement the router should have: " << after;
+}
+
+// ---- R4/IS4: a predicate-shaped write goes to its range's owner ---------
+//
+// Arming spreading costs something and this is where it is pinned rather
+// than discovered: on a relation whose ranges have different owners, a
+// write that names a primary key still runs (it touches one range), and a
+// write that names none is **refused by name** until multi-range
+// transactions exist. Both answers are given before a page is written.
+TEST_F(RangeChainTest, APkNamedWriteRunsOnItsRangesOwnerAndAnUnnamedOneIsRefused) {
+    Run("INSERT INTO t VALUES (1)");
+    Run("INSERT INTO t VALUES (2)");
+    SplitAt(kBoundary, /*owner_core=*/2);
+
+    // A pk in **this** core's range: it runs, and the walk never reaches
+    // the range core 2 owns.
+    const std::string updated = Run("UPDATE t SET v = 9 WHERE id = 1");
+    EXPECT_EQ(updated, "UPDATED 1") << updated;
+    const std::string deleted = Run("DELETE FROM t WHERE id = 2");
+    EXPECT_EQ(deleted, "DELETED 1") << deleted;
+
+    // A pk in core 2's range: refused as the cross-core write it is,
+    // retryably, and never answered "0 rows" - which is what a walk that
+    // silently skipped the foreign range would have said.
+    const std::string foreign =
+        Run("UPDATE t SET v = 9 WHERE id = " + std::to_string(kBoundary));
+    EXPECT_EQ(foreign.rfind("ERR TXN_CONFLICT retryable=1 ", 0), 0u) << foreign;
+
+    // No pk at all: the statement could touch every range, so it spans two
+    // owners and is refused naming R6. **Not** retryable - retrying changes
+    // nothing until multi-range writes exist.
+    const std::string spanning = Run("UPDATE t SET v = 9 WHERE v = 0");
+    EXPECT_EQ(spanning.rfind("ERR ", 0), 0u) << spanning;
+    EXPECT_NE(spanning.find("several owners"), std::string::npos) << spanning;
+    EXPECT_EQ(spanning.find("retryable=1"), std::string::npos)
+        << "a refusal that no retry can clear carried the retry bit: " << spanning;
+
+    const std::string spanning_delete = Run("DELETE FROM t WHERE v = 0");
+    EXPECT_NE(spanning_delete.find("several owners"), std::string::npos) << spanning_delete;
+}
+
+// The same relation with every range on **this** core keeps every write it
+// had: a split is not by itself a restriction, two owners are.
+TEST_F(RangeChainTest, ASplitRelationWithOneOwnerKeepsItsUnnamedWrites) {
+    Run("INSERT INTO t VALUES (1)");
+    SplitAt(kBoundary);
+    Run("INSERT INTO t VALUES (" + std::to_string(kBoundary) + ", 7)");
+
+    const std::string updated = Run("UPDATE t SET v = 9 WHERE v = 7");
+    EXPECT_EQ(updated, "UPDATED 1") << updated;
+    const std::string every = Run("UPDATE t SET v = 5");
+    EXPECT_EQ(every, "UPDATED 2") << every;
 }
 
 TEST_F(RangeChainTest, AScanOverASplitRelationReturnsEveryRangesRows) {

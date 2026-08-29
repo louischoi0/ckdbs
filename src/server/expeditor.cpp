@@ -114,7 +114,8 @@ std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept {
 }
 
 Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
-                               std::uint32_t cores, catalog::PlacementPolicy placement) {
+                               std::uint32_t cores, catalog::PlacementPolicy placement,
+                               std::uint64_t range_size_ids) {
     if (!peer_listeners) return Status::OK();
     if (tls || auth_scram) {
         return Status::Unsupported(
@@ -135,10 +136,21 @@ Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
             "peer_listeners = on with cores = 1 has no peer to listen; the only effect "
             "would be losing the exclusive bind on the one socket");
     }
-    if (placement != catalog::PlacementPolicy::kRotate) {
+    // **R4 falsified half of that second sentence, so the gate narrows.**
+    // "A peer-accepted session could serve nothing" was true while a peer's
+    // only answer to a core-0 relation was to ship the statement or refuse
+    // it. With `range_size_ids` armed, a peer-accepted session writing a
+    // relation core 0 created takes a **range of its own** and serves it
+    // locally (`crosscore.md` §6b, R4/IS1-IS3) - which is not merely
+    // permissible, it is the arrangement insert spreading exists to
+    // produce, and the one a measurement of it has to be able to configure.
+    // Reads still fan in, and a statement the peer cannot serve still
+    // ships, exactly as under rotation.
+    if (placement != catalog::PlacementPolicy::kRotate && range_size_ids == kRangeSizeOff) {
         return Status::InvalidArgument(
-            "peer_listeners = on needs placement = rotate: with creating-core placement "
-            "every relation is core 0's, so a peer-accepted session could serve nothing");
+            "peer_listeners = on needs placement = rotate, or range_size_ids set: with "
+            "creating-core placement and no ranges every relation is core 0's, so a "
+            "peer-accepted session could serve nothing");
     }
     return Status::OK();
 }
@@ -671,7 +683,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
     if (Status s = CheckFrameBudget(config.buffer_pool_frames, config.cores); !s.ok()) return s;
     if (Status s = CheckPeerListenerConfig(config.peer_listeners, config.tls, config.auth_scram,
-                                           config.cores, config.placement);
+                                           config.cores, config.placement,
+                                           config.range_size_ids);
         !s.ok()) {
         return s;
     }

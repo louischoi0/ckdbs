@@ -50,6 +50,46 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
     auto access = catalog.InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
 
+    // ---- R4/IS5: a carve that continues this core's own top range -------
+    //
+    // Every grant opened a boundary, which is right when the asker is a new
+    // writer and pure waste when it is the same one again: a *single*-writer
+    // relation cut its own chain in two per lease block and spent one
+    // fan-in stage per 4,096 rows, for a partition with one owner on both
+    // sides of it. The block lands in the top range either way - ids only
+    // ascend, and that range runs to `kIdSpaceEnd` - so when this core
+    // already owns the top range there is nothing to open and nothing lost
+    // by not opening it.
+    //
+    // The empty-directory case is the same statement: the relation is one
+    // range owned by `sys.tables.owner_core` (CC9), so an owner asking for
+    // its own first block needs no boundary either.
+    //
+    // What this does **not** do is bound the ceiling on a contended
+    // relation: with k cores taking turns, the top range's owner is a
+    // different core almost every time, so a range still opens per block.
+    // That is `workplan-insert-spreading.md` §3's arithmetic and it stands;
+    // this row removes the half of it that bought nothing.
+    //
+    // Not a gate decline, and deliberately not counted as one: no gate
+    // refused this relation, and `range_split_declines` is the evidence
+    // base for which owning decision to lift first (§9e). An entry there
+    // for "there was nothing to do" would corrupt exactly that reading.
+    {
+        const auto& ranges = access.value()->ranges;
+        const std::uint32_t top_owner =
+            ranges.empty() ? access.value()->owner_core : ranges.back().owner_core;
+        if (top_owner == owner_core) {
+            if (log != nullptr && log->enabled(LogLevel::kDebug)) {
+                log->Debug("range", "core " + std::to_string(owner_core) +
+                                        " already owns the top range of relation oid " +
+                                        std::to_string(rel_oid) + "; its block at " +
+                                        std::to_string(lo) + " opens no new boundary");
+            }
+            return kInvalidPageId;
+        }
+    }
+
     {
         const exec::RangeGate gate = exec::RangeEligible(*access.value(), enforcer);
         if (gate != exec::RangeGate::kNone) {

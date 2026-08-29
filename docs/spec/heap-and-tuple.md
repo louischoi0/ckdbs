@@ -217,6 +217,50 @@ The flag is read off `key_order` rather than off the storage type, and that is t
 
 **Implementation** — the key mode built 2026-08-11 (PK01-PK09, `docs/workplan-key-mode.md`, superseded) and removed 2026-08-25, with `tests/supplied_key_test.cpp` as the end-to-end cover, the admission cases in `tests/catalog_test.cpp` and the leaf-division cases in `tests/btree_test.cpp`.
 
+### 4.1a Monotonicity is per **range** once inserts spread (2026-08-29, R4)
+
+This is the amendment `crosscore.md` §6b asked to be made loudly, and it is
+§4.1's own argument one level down. Everything above holds; what changes is
+the scope over which "ascending" is a claim.
+
+**A relation's ids no longer ascend in issue order once more than one core
+inserts into it.** Under id-block-aligned insert spreading each core issues
+from its own leased block, ranges align to block boundaries, and a core
+appends to its own range's tail. So two rows inserted a microsecond apart on
+different cores carry ids thousands apart, and the *later* one may carry the
+*lower* id. Per **range**, ids still ascend exactly as §3.1b requires: a
+range is one chain, its block is contiguous and issued in order, and a
+higher block belongs to a different chain.
+
+Three consequences, each already true of the mechanism rather than added by
+this sentence:
+
+- **Invariant 3 is satisfied per range, and structurally.** A range's head
+  page is created with `min_key = lo` (`Catalog::CreateRangeEntryPage`), and
+  every id the owning core issues into it comes from a block starting at
+  `lo`. Nothing below the boundary can land in that chain even by mistake.
+- **`sys.tables.next_id` stays one high-water mark for the relation.** It is
+  what every block is carved from (`AllocateRowIdRange`), so ids remain
+  globally unique across cores by construction — K1's issue-once contract —
+  and the mark is still a ceiling on what has been placed. It is not, and
+  never was, a statement about the order rows arrived in.
+- **`key_order` is unaffected, and that is deliberate.** A block is issued
+  ascending within its chain, so no page ever takes an id below one already
+  on it, and slot order is still key order *within a page*. `kUnordered`
+  records a below-mark key landing, which spreading never produces — every
+  block is carved *above* the mark. `ORDER BY <pk>` over a spread relation
+  is ordered by the fan-in's range-order concatenation, not by this flag
+  (`crosscore.md` §2a, RD7).
+
+**What a caller may no longer infer** is the one thing worth saying plainly:
+comparing two ids of a spread relation orders them in the *id space*, never
+in time. That inference was already unavailable across relations and across
+histories (§4.1); it is now unavailable within one relation whenever
+`range_size_ids` is armed and a second core has taken a block. The engine
+makes no ordering promise it did not make before — but a caller relying on
+"higher id, inserted later" loses it here, which is why it is written down
+rather than left as a property of the allocator.
+
 ## 5. Indexing
 
 - A relation is stored either as a **heap chain** (§3.1b) or as a **clustered B+ tree** on the Keystone pk, chosen at `CREATE TABLE` and by nothing else — the key mode used to force `BTREE` and no longer exists (§4.1). On a btree relation the tree *is* the storage, and a descent is authoritative: a miss means the row does not exist, and no scan follows. That authority is what admits a caller-named key **below** the relation's high-water mark, which is the one thing a heap relation refuses. A heap relation has no pk index at all, so a point lookup scans the chain.

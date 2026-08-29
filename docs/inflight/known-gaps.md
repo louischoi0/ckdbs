@@ -841,6 +841,47 @@ still waits on its own gate, so:
 
 ## Concurrency and multicore
 
+- **A spread relation is readable up to 64 ranges, and a range is a lease
+  block** (R4, 2026-08-29,
+  `docs/inflight/in-progress/workplan-insert-spreading.md` §3). Insert
+  spreading opens one range per id-block lease, and interleaved ownership
+  is what it exists to produce — so consecutive ranges have different
+  owners, the read fan-in's "one stage per maximal contiguous run of ranges
+  on one core" degenerates to one stage per range, and
+  `kMaxFanInUpstreams = 64` (`remote_step_service.hpp:151`) refuses the
+  read above that. A relation contended by k cores is therefore readable up
+  to roughly `64 × range_size_ids` rows and then answers `Unsupported` — not
+  a wrong answer, but a hard ceiling that arrives inside one benchmark at
+  the 4,096 sweep centre (262,144 rows). **Bounded, not closed**: R4/IS5
+  stops a *single*-writer relation from opening a boundary per block at all
+  (a carve continuing this core's own top range opens none), so the ceiling
+  applies to genuinely contended relations. Three ways out are named with
+  their owners in that workplan's §3 — a larger `range_size_ids` (a config
+  value, trading the ceiling against 40-bit space burnt per mount), a larger
+  `kMaxFanInUpstreams` (one wire byte allows 255, `crosscore.md` §9's
+  sizing item), and a per-core **stripe** of the id space, which removes the
+  ceiling entirely and **reverses D6**. The last is the real answer and is
+  the operator's. Reachable only with `range_size_ids` armed, which is not
+  the default.
+
+- **On a multi-owner relation, a write naming no primary key is refused**
+  (R4/IS4, 2026-08-29). `UPDATE`/`DELETE` whose predicate reduces to no pk
+  could touch every range, so it spans owners, and a multi-range write is
+  R6's. Refused by name before a page is written, never half-applied and
+  never silently short. A pk-named write still runs, on the core owning
+  that key's range, and a split relation whose ranges are all one core's
+  keeps every write it had. Lifts at R6 with no further design; until then
+  it is the stated cost of arming `range_size_ids` on a relation.
+
+- **Core 0 never takes a range of a relation it does not own** (R4,
+  2026-08-29). `CoreRuntime::Open` installs a row-id lease table on peers
+  only — core 0 bumps `sys.tables.next_id` directly (M5) — so the demand
+  R4/IS1 records is a no-op there. Under `placement = rotate` a relation
+  owned by core 2 spreads over every peer except core 0, which keeps
+  shipping to the owner. M5's asymmetry, blueprint **R1**'s to retire; noted
+  because a k-core measurement over a peer-owned relation is (k-1)-way, not
+  k-way.
+
 - **Rotation divides the group-commit batch, so spreading writers over
   cores does not add write throughput** (found 2026-08-26 on the first
   host with three writer cores,

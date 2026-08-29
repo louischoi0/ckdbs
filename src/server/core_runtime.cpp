@@ -290,7 +290,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // only a peer: core 0 owns most relations but not all of them under a
     // rotating placement, so it too can hold a foreign INSERT that R4/IS1
     // wants to leave a demand behind.
-    runtime->dispatcher_->SetRangeSizeIds(config.range_size_ids);
+    runtime->dispatcher_->set_range_size_ids(config.range_size_ids);
     // Asymmetry 1 made enforceable at dispatch (PW4) - the argument is at
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {

@@ -282,12 +282,26 @@ public:
 
     // R4/IS2: the id `AllocateRowId` would issue next, without issuing it -
     // which is the id whose *range* decides where the row may be written.
-    // None on a core with no lease table, which is core 0, where the
-    // question does not arise: it bumps the mark itself and the relation's
-    // ranges are resolved from the row it just read.
-    std::optional<std::uint64_t> PeekRowId(Oid table_oid) const {
-        if (row_id_leases_ == nullptr) return std::nullopt;
-        return row_id_leases_->Peek(table_oid);
+    //
+    // **Both allocators answer, and core 0's answer is the one that was
+    // missed.** A leased core reads its block's cursor. Core 0 has no lease
+    // table and bumps `sys.tables.next_id` directly, so *its* next id is the
+    // mark - and the mark sits above every block core 0 has ever leased out,
+    // which on a spread relation puts it in the **top** range, owned by
+    // whichever core asked last. Answering `nullopt` here left core 0
+    // routing to itself and then refusing its own row at placement, which
+    // is a relation its owner could no longer insert into at all.
+    //
+    // The page read is the cost, and it is paid only where the question can
+    // change an answer: the dispatcher asks solely when ranges are armed
+    // *and* the relation already has a directory, so an unsplit relation -
+    // every relation on a default instance - never reaches this line, and
+    // the read is the one `AllocateRowId` is about to make anyway.
+    std::optional<std::uint64_t> PeekRowId(Oid table_oid) {
+        if (row_id_leases_ != nullptr) return row_id_leases_->Peek(table_oid);
+        auto row = GetSysTableRow(table_oid);
+        if (!row.ok()) return std::nullopt;
+        return row.value().next_id;
     }
 
     // Drops every cached fact without bumping the version. What a **peer**

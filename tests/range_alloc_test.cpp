@@ -152,8 +152,12 @@ TEST_F(RangeAllocTest, TheHeadPageIsOnTheDeviceBeforeTheGrantLeaves) {
 
 TEST_F(RangeAllocTest, ASecondRangeJoinsTheDirectoryWithoutASecondOpeningRow) {
     const catalog::Oid oid = MakeHeap("twice");
+    // Two **different** owners since R4/IS5: a second block for the core
+    // that already owns the top range opens no boundary at all (the test
+    // below), so this - the shape that still opens one - is the one the
+    // opening row's once-only rule has to be checked against.
     ASSERT_TRUE(Open(oid, 4096, 1).ok());
-    ASSERT_TRUE(Open(oid, 8192, 1).ok());
+    ASSERT_TRUE(Open(oid, 8192, 2).ok());
 
     auto ranges = catalog_.RangesOf(oid);
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
@@ -161,6 +165,48 @@ TEST_F(RangeAllocTest, ASecondRangeJoinsTheDirectoryWithoutASecondOpeningRow) {
     EXPECT_EQ(ranges.value()[0].lo, 0u);
     EXPECT_EQ(ranges.value()[1].lo, 4096u);
     EXPECT_EQ(ranges.value()[2].lo, 8192u);
+}
+
+// ---- R4/IS5 ------------------------------------------------------------
+//
+// The block lands in the top range either way - ids only ascend and that
+// range runs to the end of the id space - so when the asking core already
+// owns it, a boundary would cut that core's own chain in two and spend a
+// fan-in stage for a partition with one owner on both sides.
+TEST_F(RangeAllocTest, ASecondBlockForTheCoreOwningTheTopRangeOpensNoBoundary) {
+    const catalog::Oid oid = MakeHeap("continues");
+    ASSERT_TRUE(Open(oid, 4096, 1).ok());
+
+    auto again = Open(oid, 8192, 1);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(again.value(), kInvalidPageId) << "a continuing block opened a range";
+
+    auto ranges = catalog_.RangesOf(oid);
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    EXPECT_EQ(ranges.value().size(), 2u)
+        << "the same core's second block opened a second boundary";
+
+    // And a **different** core's block still opens one, so the suppression
+    // is about continuity and not about "one range per relation".
+    auto other = Open(oid, 12288, 2);
+    ASSERT_TRUE(other.ok()) << other.status().message();
+    EXPECT_NE(other.value(), kInvalidPageId);
+    EXPECT_EQ(catalog_.RangesOf(oid).value().size(), 3u);
+}
+
+// The relation's own owner asking for its first block: the empty directory
+// says one range owned by `sys.tables.owner_core` (CC9), so this core
+// already owns the top range and there is nothing to partition.
+TEST_F(RangeAllocTest, TheRelationsOwnerAskingForItsOwnFirstBlockOpensNoBoundary) {
+    const catalog::Oid oid = MakeHeap("selfowned");
+    auto row = catalog_.GetSysTableRow(oid);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+
+    auto opened = Open(oid, 4096, row.value().owner_core);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    EXPECT_EQ(opened.value(), kInvalidPageId);
+    EXPECT_TRUE(catalog_.RangesOf(oid).value().empty())
+        << "a relation gained a directory describing a partition with one owner";
 }
 
 TEST_F(RangeAllocTest, ARangeAtLoZeroIsRefusedByBothHalves) {

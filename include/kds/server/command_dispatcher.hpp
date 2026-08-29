@@ -1111,7 +1111,7 @@ public:
     // INSERT should leave a demand behind it (R4/IS1) - and an instance
     // that never sets it keeps `kRangeSizeOff`, which is every dispatcher
     // built outside `CoreRuntime::Open`.
-    void SetRangeSizeIds(std::uint64_t ids) noexcept { range_size_ids_ = ids; }
+    void set_range_size_ids(std::uint64_t ids) noexcept { range_size_ids_ = ids; }
 
     // Where CheckWriteAffinity reads that an index of a relation this core
     // owns is being built here (PW1c-6b-2, core_affinity.hpp). Installed
@@ -1401,6 +1401,22 @@ private:
                                                           std::span<const std::byte> payload,
                                                           std::uint64_t trx_id);
 
+    // **R4/IS2: a row may only be placed in a range this core owns**, asked
+    // at the id rather than left to the store's `MayWrite` backstop naming
+    // a page number. Two heap insert paths reach a chain head and neither
+    // goes through the other - the per-row `InsertIntoRelation` and
+    // `SortedFillInner`'s batch - so both ask, and they ask through one
+    // function because two spellings of this refusal is two chances for
+    // one of them to be forgotten (it was: the fill wrote a batch into the
+    // top range, which on a spread relation is the last core to have
+    // leased a block).
+    //
+    // **Every caller keeps it behind `ranges.empty()`** and this function
+    // does not re-test it, because CD1's zero-cost invariant is measured on
+    // the unsplit insert line: it must reach the chain having paid one
+    // predictable branch on a cached field, never an out-of-line call.
+    Status CheckRangePlacement(const catalog::TableAccess& access, std::uint64_t id) const;
+
     // A full ordered scan of the relation, whichever storage it uses. Both
     // walk sibling/next links left to right, so the row order is identical.
     //
@@ -1419,16 +1435,17 @@ private:
 
     // `span` is the pk window the statement can possibly touch (R4/IS4),
     // and it narrows *which ranges are walked* - never which rows match,
-    // which stays `fn`'s. The default is the whole relation, which is what
-    // every caller meant before ranges existed and what a predicate naming
-    // no pk still means. A `WHERE pk = k` write passes `PkSpan::Equality`,
-    // and on a spread relation that is the difference between walking one
-    // range and meeting the ownership refusal on somebody else's.
+    // which stays `fn`'s. `PkSpan::Whole()` is the whole relation, which is
+    // what a predicate naming no pk means; a `WHERE pk = k` write passes
+    // `PkSpan::Equality`, and on a spread relation that is the difference
+    // between walking one range and meeting the ownership refusal on
+    // somebody else's. Not defaulted: both callers have an answer, and a
+    // default here would let a third one walk every range by omission.
     Status VisitRelation(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        catalog::PkSpan span = catalog::PkSpan::Whole());
+        catalog::PkSpan span);
 
     // Appends the record set above for one placed tuple, stamps page_lsn
     // on every page it touched, and applies the durability class. A no-op
@@ -1823,7 +1840,7 @@ private:
     // because it is `cross_core_writes_`'s neighbour in form and purpose:
     // per core, aggregate, the evidence a placement decision is made from.
     RangeSplitDeclineCounters range_split_declines_;
-    // `SetRangeSizeIds`; `kRangeSizeOff` means no range ever opens and this
+    // `set_range_size_ids`; `kRangeSizeOff` means no range ever opens and this
     // dispatcher's write path is the one it always was.
     std::uint64_t range_size_ids_ = kRangeSizeOff;
     // This core's reactor, set_scheduler_view(); null off a reactor.
@@ -1936,9 +1953,11 @@ private:
     // the row is written: it comes from this core's own lease, and a range
     // **is** a lease grant, which is the whole of why an insert can be
     // routed to a core that does not own the relation.
+    // Not defaulted, for `VisitRelation`'s reason: every caller knows
+    // whether it has a row id, and a default would make "no id" the answer
+    // a fourth write path gave by forgetting to think about it.
     Status CheckWriteAffinity(const catalog::TableAccess& access, std::string_view relation,
-                              Session& session,
-                              std::optional<std::uint64_t> target_id = std::nullopt);
+                              Session& session, std::optional<std::uint64_t> target_id);
 
     // **Which core a predicate-shaped write belongs on** (R4/IS4), for the
     // two verbs that name their rows by WHERE rather than by the row they

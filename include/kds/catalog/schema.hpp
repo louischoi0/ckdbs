@@ -285,19 +285,6 @@ struct TableAccess {
         return true;
     }
 
-    // Whether **any** range is `core_id`'s - the question the write path
-    // asks, and a different one from `WhollyOwnedBy` (R4/IS1). Under
-    // insert spreading a core owns some of a relation's ranges and none of
-    // the rest, which is the state the whole phase exists to produce: a
-    // reader needs every range, a writer needs the one its row lands in.
-    bool OwnsAnyRange(std::uint32_t core_id) const noexcept {
-        if (ranges.empty()) return owner_core == core_id;
-        for (const RangeTarget& range : ranges) {
-            if (range.owner_core == core_id) return true;
-        }
-        return false;
-    }
-
     // The chain a row with `id` belongs in. Heap relations only; a btree
     // relation descends and has no chain.
     //

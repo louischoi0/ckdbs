@@ -100,8 +100,15 @@ Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 // socket loses the exclusive bind), and with creating-core placement
 // (every relation is core 0's, so a peer session could serve nothing). A
 // free function for the same reason its two siblings above are.
+//
+// **The placement clause narrowed at R4** and takes `range_size_ids` for
+// it: with ranges armed, a peer-accepted session writing a relation core 0
+// created takes a range of its own and serves it locally (`crosscore.md`
+// §6b), which is the arrangement insert spreading exists to produce rather
+// than a misconfiguration. Unarmed the refusal is unchanged.
 Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
-                               std::uint32_t cores, catalog::PlacementPolicy placement);
+                               std::uint32_t cores, catalog::PlacementPolicy placement,
+                               std::uint64_t range_size_ids);
 
 // EV4 (docs/spec/eviction.md §6), under the operator invariant of
 // 2026-08-24: the key is an instance total and every core's share is
