@@ -864,6 +864,41 @@ still waits on its own gate, so:
   the operator's. Reachable only with `range_size_ids` armed, which is not
   the default.
 
+- **A spread relation is barely readable at all, and the 64-range ceiling
+  above is not what stops it** (R4-M, 2026-08-29, measured in worktree
+  `v2.6.0-ksweep`; `bench/v2.6.0/` §6a). Two limits sit in front of the
+  entry above, and a relation meets both at its **second** range rather
+  than its sixty-fifth:
+
+  - **The fan-in client exists on core 0 alone.** `expeditor.cpp`
+    constructs it as `remote_reads_.emplace(/*core_id=*/0, …)` and calls
+    `SetRemoteReads` on that one dispatcher; `CoreRuntime` — every peer —
+    has `remote_steps_`, the **server** half, and no client member at all.
+    So every peer can *serve* a stage and none can *open* one, and a
+    session on a peer takes `CheckReadAffinity`'s
+    not-`WhollyOwnedBy` refusal for any relation with a range elsewhere.
+  - **The route also requires the reader not to be the relation's
+    `owner_core`**, which under `placement = creating` — the default, and
+    the arrangement spreading exists to produce — is core 0 for every
+    relation. So under `creating` a spread relation is **unreadable from
+    every core, in every shape**.
+
+  Where it *is* readable (a core-0 session, `placement = rotate`), the
+  surface is one shape: `SELECT *`, optionally with a `WHERE`, optionally
+  with a free `ORDER BY <pk> ASC`. A projection, an aggregate or a `LIMIT`
+  is refused, because the route tests `chain.star()`, not aggregated, not
+  sorted, no `LIMIT`/`OFFSET`, no sub-chain. Measured at 395 rows on six of
+  this repository's own scenario relations — all six of the heap ledgers
+  that spread lost all five read shapes the drivers use.
+
+  **The three ways out named in the entry above do not move this.** A
+  larger `range_size_ids`, a larger `kMaxFanInUpstreams` and the per-core
+  stripe all move a ceiling that is not what binds. What would move it is
+  the **self-directed stage** `workplan-range-directory.md` §15d already
+  names and defers (*"a design question and not this row's"*), plus a
+  fan-in client on every core. Neither has an owner. Reachable only with
+  `range_size_ids` armed, which is not the default.
+
 - **On a multi-owner relation, a write naming no primary key is refused**
   (R4/IS4, 2026-08-29). `UPDATE`/`DELETE` whose predicate reduces to no pk
   could touch every range, so it spans owners, and a multi-range write is

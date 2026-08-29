@@ -225,6 +225,19 @@ struct Condition {
     ColumnName col;                  // unset for kExists / kNotExists
     CompareOp op = CompareOp::kEq;   // kCompareValue and kCompareSubquery
 
+    // **Test `kind` before `op`, and before `val`.** Both default to a
+    // value that reads as a legal equality - `op` to `kEq`, and for a
+    // `kBetween` `val` holds a real integer literal (the low bound) - so a
+    // consumer that reads them without checking `kind` sees
+    // `WHERE id BETWEEN 2 AND 5` as `WHERE id = 2`. That is not
+    // hypothetical: it has happened twice, in two different consumers of a
+    // raw `Condition` - the catalog view's bound reader, and
+    // `CommandDispatcher::PkEqualityTarget`, where it made an UPDATE or
+    // DELETE write the low bound's row alone and answer `UPDATED 1`.
+    // Anything lowered through `exec::CompileWhere` is safe, because it
+    // splits a `kBetween` into two conjuncts first; the hazard belongs to
+    // the sites that read this struct directly.
+
     RhsKind rhs_kind = RhsKind::kLiteral;
     AstValue val;       // rhs_kind == kLiteral; the low bound for kBetween
     AstValue val_high;  // kBetween only: the high bound

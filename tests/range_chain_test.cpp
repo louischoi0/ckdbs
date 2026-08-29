@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <optional>
 #include <string>
 #include <vector>
@@ -396,6 +397,11 @@ protected:
     void SetUp() override {
         RangeChainTest::SetUp();
         Run("CREATE TABLE u (id int64, v int64)");
+        // The third relation, unsplit and named by neither substitution:
+        // the join and subquery shapes below need a partner that is *not*
+        // the twin, or they would compare `t JOIN u` against `u JOIN u`,
+        // which is refused (a binding may not repeat).
+        Run("CREATE TABLE j (id int64, v int64)");
         // `t` is cut at the boundary; `u` is not. Rows are placed by name
         // in **ascending** id order into both, so the two differ in one
         // thing only.
@@ -411,6 +417,11 @@ protected:
             Run("INSERT INTO t VALUES (" + std::to_string(id) + ", " + v + ")");
             Run("INSERT INTO u VALUES (" + std::to_string(id) + ", " + v + ")");
         }
+        // `j` matches one row from **each** range, so a join or a subquery
+        // over it has to reach both to answer - the straddle discipline
+        // one relation over.
+        Run("INSERT INTO j VALUES (1, 2)");
+        Run("INSERT INTO j VALUES (2, " + std::to_string(kBoundary * 2) + ")");
 
         // **Without this the whole suite is vacuous.** Every test below
         // compares `t` against `u`; if the cut had not happened, or if
@@ -431,16 +442,52 @@ protected:
         return {1, 2, kBoundary - 1, kBoundary, kBoundary + 1, kBoundary + 2};
     }
 
+    // `sql` with every standalone identifier `t` rewritten to `u`, which
+    // is how the whole-relation twin of a statement is spelled.
+    //
+    // **Token-level, not the first `" t"`.** The original substitution
+    // replaced one occurrence, and RB5's review had to check each call
+    // site by hand to confirm it hit the right one. A qualified name
+    // (`SELECT t.id FROM t`) hits the wrong one and a join names the
+    // relation twice, so rewriting every identifier occurrence is what
+    // makes the substitution correct by construction rather than by
+    // inspection - and it is what lets the shapes below be joins and
+    // subqueries at all.
+    static std::string AgainstTheWholeRelation(const std::string& sql) {
+        std::string out;
+        out.reserve(sql.size());
+        for (std::size_t i = 0; i < sql.size(); ++i) {
+            const bool starts =
+                i == 0 || !(std::isalnum(static_cast<unsigned char>(sql[i - 1])) ||
+                            sql[i - 1] == '_' || sql[i - 1] == '.');
+            const bool ends = i + 1 == sql.size() ||
+                              !(std::isalnum(static_cast<unsigned char>(sql[i + 1])) ||
+                                sql[i + 1] == '_');
+            out.push_back(sql[i] == 't' && starts && ends ? 'u' : sql[i]);
+        }
+        return out;
+    }
+
     // The reply for `sql` against `t` (split) and against `u` (whole),
     // with the relation name the only textual difference.
+    //
+    // A **qualified** projection (`SELECT t.id`) puts the relation's name
+    // in the reply's header, so the substitution that makes the twin
+    // statement also changes the twin's header - `u.id` against `t.id`.
+    // That is the substitution showing through, not the split, so the
+    // header is renamed back before the comparison and the rows are
+    // compared untouched. Restricted to the header on purpose: a value
+    // containing `u.` must never be rewritten.
     void ExpectSame(const std::string& sql) {
-        std::string split_sql = sql;
-        std::string whole_sql = sql;
-        const std::size_t at = whole_sql.find(" t");
-        ASSERT_NE(at, std::string::npos) << sql;
-        whole_sql.replace(at, 2, " u");
-        const std::string split = Run(split_sql);
-        const std::string whole = Run(whole_sql);
+        const std::string whole_sql = AgainstTheWholeRelation(sql);
+        ASSERT_NE(whole_sql, sql) << "the statement names no relation to substitute: " << sql;
+        const std::string split = Run(sql);
+        std::string whole = Run(whole_sql);
+        const std::size_t body = whole.find("\\n");
+        for (std::size_t at = whole.find("u."); at != std::string::npos && at < body;
+             at = whole.find("u.", at + 1)) {
+            whole[at] = 't';
+        }
         EXPECT_EQ(split, whole) << "the split changed the answer for: " << sql;
         EXPECT_EQ(split.rfind("ERR", 0), std::string::npos)
             << "both sides refused, which proves nothing: " << split;
@@ -493,22 +540,191 @@ TEST_F(RangeEquivalenceTest, ADeleteAndAnUpdateAcrossTheBoundaryAgree) {
     ExpectSame("SELECT * FROM t");
 }
 
-TEST_F(RangeEquivalenceTest, TheEquivalenceRestsOnInsertionOrderMatchingRangeOrder) {
-    // **Stated because it bounds the claim above.** A heap relation's rows
-    // come back in *chain* order, which is insertion order; a split
-    // relation's come back per range, concatenated in `lo` order. The two
-    // coincide only while rows were inserted ascending - which the fixture
-    // does, and which is what an engine-issued pk produces.
+// ---- RB5's first review item: the shapes the suite did not cover ------
+//
+// The review asked *"does every shippable shape have an equivalence
+// test"* and the answer was no. Eight shapes were covered - the whole
+// scan, pk equality, a pk range, non-pk predicates, four aggregates,
+// ordered reads and the write half - and the ones below were not. They
+// are not filler: each is a route that reaches the per-range walk
+// differently from the eight, and three of them (LIMIT, GROUP BY, the
+// correlated subquery) are places where a range-blind implementation
+// returns a **plausible short answer** rather than an error, which is the
+// exact defect class every one of this milestone's reviews caught.
+
+TEST_F(RangeEquivalenceTest, AProjectionIsByteIdentical) {
+    // `SELECT *` and a projected list take different emit paths; the
+    // eight shapes only ever asked for the star.
+    ExpectSame("SELECT id FROM t");
+    ExpectSame("SELECT v, id FROM t");
+}
+
+TEST_F(RangeEquivalenceTest, ALimitCrossingTheBoundaryIsByteIdentical) {
+    // **The early-termination shape, and the one most able to lie.** A
+    // walk that satisfies the limit inside the lower range never reaches
+    // the boundary, so a range-blind continuation is invisible until the
+    // limit *exceeds* the lower range's three rows. All three cases:
+    // stopping short of the cut, stopping exactly on it, and crossing it.
+    ExpectSame("SELECT * FROM t LIMIT 2");
+    ExpectSame("SELECT * FROM t LIMIT 3");
+    ExpectSame("SELECT * FROM t LIMIT 4");
+    ExpectSame("SELECT * FROM t LIMIT 100");
+    // And the offset, which is the other half of `LIMIT n OFFSET m` means
+    // "rows [m, m+n) of the unlimited reply": an offset consumed per
+    // range rather than per relation would skip three rows twice.
+    ExpectSame("SELECT * FROM t LIMIT 2 OFFSET 2");
+    ExpectSame("SELECT * FROM t LIMIT 3 OFFSET 3");
+    ExpectSame("SELECT * FROM t LIMIT 0");
+}
+
+TEST_F(RangeEquivalenceTest, AnOrderedLimitIsByteIdentical) {
+    // `ORDER BY` under `LIMIT` is the top-N heap path, not the sort path,
+    // and it is fed by the walk this milestone changed.
+    ExpectSame("SELECT * FROM t ORDER BY id DESC LIMIT 2");
+    ExpectSame("SELECT * FROM t ORDER BY v ASC LIMIT 4");
+}
+
+TEST_F(RangeEquivalenceTest, AGroupedAggregateWhoseGroupStraddlesTheBoundaryIsByteIdentical) {
+    // **A group with a member in each range**, which is the aggregate
+    // shape a boundary can break: per-range partials must merge into one
+    // group, not emit the group twice. The four aggregates already
+    // covered are ungrouped, so nothing tested the merge.
+    for (const char* rel : {"t", "u"}) {
+        const std::string r = rel;
+        Run("UPDATE " + r + " SET v = 100 WHERE id = 1");
+        Run("UPDATE " + r + " SET v = 100 WHERE id = " + std::to_string(kBoundary));
+    }
+    ExpectSame("SELECT v, COUNT(*) FROM t GROUP BY v");
+    ExpectSame("SELECT v, SUM(id) FROM t GROUP BY v");
+    ExpectSame("SELECT v, MIN(id), MAX(id) FROM t GROUP BY v");
+}
+
+TEST_F(RangeEquivalenceTest, TheRemainingAggregateFormsAreByteIdentical) {
+    // `COUNT(DISTINCT)` carries a **set** across the boundary rather than
+    // a scalar, which is the accumulator shape neither `SUM` nor `COUNT`
+    // exercises. (`AVG` is not here: it requires a DECIMAL column and
+    // both columns are `int64`, so it refuses on both sides - a refusal
+    // `ExpectSame` correctly calls proof of nothing.)
+    ExpectSame("SELECT COUNT(DISTINCT v) FROM t");
+    // An aggregate under a predicate that straddles: the filter runs per
+    // range and the accumulator does not.
+    ExpectSame("SELECT COUNT(*) FROM t WHERE id BETWEEN 2 AND " + std::to_string(kBoundary));
+}
+
+TEST_F(RangeEquivalenceTest, AJoinOverTheSplitRelationIsByteIdenticalOnEitherSide) {
+    // The split relation as the **outer** of the join, driving the walk...
+    ExpectSame("SELECT t.id, j.id FROM t JOIN j ON t.v = j.v");
+    // ...and as the **inner**, where it is walked once per outer row and
+    // a range-blind walk answers a subset without saying so.
+    ExpectSame("SELECT j.id, t.id FROM j JOIN t ON j.v = t.v");
+    // A pk-keyed join, which executes as a probe rather than a scan and
+    // so resolves the range per outer row instead of walking every one.
     //
-    // Insert one row out of order into both and the *sets* still agree
-    // while the byte-identity does not. That is a property of the heap's
-    // unordered rows (invariant 4), not of ranges, and a reader who takes
-    // "byte-identical" as unconditional would be surprised by it later.
-    Run("INSERT INTO u VALUES (3, 6)");
-    Run("INSERT INTO t VALUES (3, 6)");
-    const std::string split = Run("SELECT * FROM t ORDER BY id ASC");
-    const std::string whole = Run("SELECT * FROM u ORDER BY id ASC");
-    EXPECT_EQ(split, whole) << "ordered, the two must still agree exactly";
+    // **`j` needs a key above the cut for this to say anything.** Its two
+    // fixture rows are ids 1 and 2, so every probe resolves to the lower
+    // range and a resolver that answered "range 0" unconditionally would
+    // pass - the vacuity this file's other shapes are built to avoid.
+    // This id is above `j`'s own high-water mark, so `j` admits it -
+    // asserted, because a refusal here would return the shape to being
+    // vacuous and both sides would still agree while it was.
+    ASSERT_EQ(Run("INSERT INTO j VALUES (" + std::to_string(kBoundary) + ", 1)").rfind("ERR", 0),
+              std::string::npos);
+    ExpectSame("SELECT j.id, t.v FROM j JOIN t ON j.id = t.id");
+}
+
+TEST_F(RangeEquivalenceTest, ASubqueryOverTheSplitRelationIsByteIdentical) {
+    // Correlated `EXISTS` with the split relation inside - the shape
+    // `AResumedPrefixWalkCrossesTheBoundaryItStoppedBefore` found a live
+    // defect in, here as an equivalence rather than a row count.
+    ExpectSame("SELECT j.id FROM j WHERE EXISTS (SELECT t.id FROM t WHERE t.v = j.v)");
+    ExpectSame("SELECT j.id FROM j WHERE NOT EXISTS (SELECT t.id FROM t WHERE t.v = j.v)");
+    // Uncorrelated `IN` / `NOT IN`, which materialise the inner side once.
+    ExpectSame("SELECT j.id FROM j WHERE j.v IN (SELECT t.v FROM t)");
+    ExpectSame("SELECT j.id FROM j WHERE j.v NOT IN (SELECT t.v FROM t)");
+    // And the split relation on the **outside**, with the unsplit one in
+    // the predicate: the walk is the split relation's and the subquery is
+    // evaluated per row of it.
+    ExpectSame("SELECT t.id FROM t WHERE t.v IN (SELECT j.v FROM j)");
+    // A scalar subquery, which is a third evaluation shape again. (An
+    // *aggregate* inside a subquery is refused engine-wide, AG8, so the
+    // scalar has to be a plain single-row select.)
+    ExpectSame("SELECT t.id FROM t WHERE t.v = (SELECT j.v FROM j WHERE j.id = 2)");
+}
+
+TEST_F(RangeEquivalenceTest, TheRemainingComparisonOperatorsAreByteIdenticalAcrossTheBoundary) {
+    // The eight shapes used `=`, `>`, and `BETWEEN`. The rest of
+    // `PredicateKind`'s value comparisons, each with its match set
+    // straddling the cut - an operator whose pk bound is derived wrong
+    // narrows the resolved range set and drops the far side silently.
+    const std::string b = std::to_string(kBoundary);
+    ExpectSame("SELECT * FROM t WHERE id != " + b);
+    ExpectSame("SELECT * FROM t WHERE id >= " + std::to_string(kBoundary - 1));
+    ExpectSame("SELECT * FROM t WHERE id <= " + std::to_string(kBoundary + 1));
+    ExpectSame("SELECT * FROM t WHERE id < " + std::to_string(kBoundary + 2));
+    ExpectSame("SELECT * FROM t WHERE id > 1");
+    // A predicate matching nothing must also agree: "no rows" from a walk
+    // that never crossed the boundary reads the same as "no rows" from
+    // one that did, and only the split/whole comparison separates them.
+    ExpectSame("SELECT * FROM t WHERE id = " + std::to_string(kBoundary * 4));
+    ExpectSame("SELECT * FROM t WHERE v = 999999");
+}
+
+TEST_F(RangeEquivalenceTest, AnUnpredicatedWriteAcrossTheBoundaryAgrees) {
+    // The write half covered a pk-named `UPDATE` and `DELETE`. The
+    // unpredicated forms are the ones that must touch **every** range,
+    // and they are legal here because every range is one core's (§7b: a
+    // split is not by itself a restriction, two owners are).
+    ExpectSame("UPDATE t SET v = 5");
+    ExpectSame("SELECT * FROM t");
+    // Straddling, and **narrow on purpose**: it takes one row from each
+    // side rather than everything above `kBoundary - 1`, so the
+    // unpredicated `DELETE` below still has rows in *both* ranges to
+    // remove. Deleting four here left it two rows in the lower range
+    // alone, which is the one thing the unpredicated form exists to test.
+    ExpectSame("DELETE FROM t WHERE id BETWEEN " + std::to_string(kBoundary - 1) + " AND " +
+               std::to_string(kBoundary));
+    ExpectSame("SELECT * FROM t");
+    ExpectSame("DELETE FROM t");
+    ExpectSame("SELECT COUNT(*) FROM t");
+}
+
+// **The bound on every claim above, asserted rather than described.**
+//
+// Byte-identity holds because a heap relation **refuses** a named key
+// below its high-water mark (`catalog.cpp`'s `AdmitExplicitRowId`,
+// heap-and-tuple.md §3.1b/§4.1): chain order and range order coincide only
+// while rows arrive ascending, and on one core nothing else is admitted.
+// So the out-of-order insert RB5's version described in a comment is not
+// merely untested here, it is unconstructible.
+//
+// The falsifier lives where R4 makes it reachable - each core issues from
+// its **own leased block**, which is never checked against the mark - and
+// is `core_runtime_test.cpp`'s `TwoPeersEachInsertIntoTheirOwnRangesTail`,
+// round 3.
+TEST_F(RangeEquivalenceTest, AnOutOfOrderInsertIsRefusedSoOneCoreCannotBreakTheByteIdentity) {
+    // Id 3 sorts into the *lower* range, whose chain already ends at
+    // `kBoundary - 1`; in a whole relation it would land at the tail,
+    // after `kBoundary + 2`. Both relations refuse it, by the same rule,
+    // and the messages differ only in the oid they name.
+    const std::string into_split = Run("INSERT INTO t VALUES (3, 6)");
+    const std::string into_whole = Run("INSERT INTO u VALUES (3, 6)");
+    for (const std::string& refusal : {into_split, into_whole}) {
+        EXPECT_EQ(refusal.rfind("ERR primary key 3 is below relation ", 0), 0u) << refusal;
+        EXPECT_NE(refusal.find("high-water mark 4099"), std::string::npos) << refusal;
+        EXPECT_NE(refusal.find("ids must ascend"), std::string::npos) << refusal;
+    }
+
+    // So the two still agree, and they agree **because** the ascent holds
+    // rather than because ranges preserve an arbitrary order.
+    EXPECT_EQ(Run("SELECT * FROM t"), Run("SELECT * FROM u"));
+    EXPECT_EQ(Run("SELECT * FROM t ORDER BY id ASC"), Run("SELECT * FROM u ORDER BY id ASC"));
+
+    // And the refusal left nothing behind: the lower chain is still the
+    // ascending run the equivalence above is a statement about.
+    const std::vector<catalog::SysRangeRow> ranges = RangesOfTable();
+    ASSERT_EQ(ranges.size(), 2u);
+    EXPECT_EQ(IdsInChain(ranges[0].entry_page),
+              (std::vector<std::uint64_t>{1, 2, kBoundary - 1}));
 }
 
 }  // namespace

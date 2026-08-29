@@ -5649,6 +5649,21 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
     if (where.size() != 1) return std::nullopt;
 
     const parser::Condition& cond = where.front();
+    // **`op` only means anything for a `kCompareValue`** (`ast.hpp:226`
+    // says so), and every other kind leaves it at its `kEq` default. For
+    // most of them that is harmless because `val` is unset and the type
+    // test below rejects it - but **`kBetween` carries a real integer
+    // literal in `val`: its *low bound*.** Without this line
+    // `WHERE id BETWEEN 2 AND 5` reads here as `WHERE id = 2`, and the two
+    // callers then act on it: the point-lookup fast path applies an
+    // UPDATE/DELETE to the low bound's row alone and reports `UPDATED 1`,
+    // and `WriteTargetCore` narrows the write's `PkSpan` to that row's
+    // range so a split relation never walks the ranges above it. Both are
+    // silent wrong answers; the read path is unaffected because
+    // `exec::CompileWhere` lowers a `kBetween` into two conjuncts before
+    // anything executes, and this function is the one consumer that reads
+    // the raw condition instead.
+    if (cond.kind != parser::PredicateKind::kCompareValue) return std::nullopt;
     if (cond.op != parser::CompareOp::kEq) return std::nullopt;
     if (cond.val.type != parser::ValueType::kInt) return std::nullopt;
     // Negative ids do not exist (invariant 6 zero-extends the 40-bit id),

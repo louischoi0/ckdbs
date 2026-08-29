@@ -1422,30 +1422,72 @@ TEST_F(CoreRuntimeTest, TwoPeersEachInsertIntoTheirOwnRangesTail) {
         << "two cores issued the same id";
 
     // **Ascending per range, and in each range's own chain** - which is
-    // also invariant 3 per range, since the head's `min_key` is `lo`.
-    for (std::size_t r = 1; r < ranges.value().size(); ++r) {
-        const catalog::SysRangeRow& row = ranges.value()[r];
-        auto& owner = peers[row.owner_core - 1];
-        auto page = owner->store().GetForRead(row.entry_page);
-        ASSERT_TRUE(page.ok()) << page.status().message();
-        heap::PageView view(page.value().bytes());
-        EXPECT_EQ(view.min_key(), row.lo);
-        // Three rows from round 2 plus nothing from round 1, which was
-        // refused before it wrote.
-        EXPECT_EQ(view.slot_count(), 3u)
-            << "range at lo " << row.lo << " owned by core " << row.owner_core
-            << " did not take its owner's rows";
-        std::uint64_t previous = 0;
-        for (std::uint16_t slot = 0; slot < view.slot_count(); ++slot) {
-            auto tuple = view.ReadTuple(slot);
-            ASSERT_TRUE(tuple.ok()) << tuple.status().message();
-            auto id = KeystoneIdOfPayload(tuple.value().payload);
-            ASSERT_TRUE(id.ok());
-            EXPECT_GE(id.value(), row.lo) << "invariant 3 broken in this range";
-            EXPECT_GT(id.value(), previous) << "ids did not ascend inside one range";
-            previous = id.value();
+    // also invariant 3 per range, since the head's `min_key` is `lo`. The
+    // row count is asserted and not inferred: without it the ascent runs
+    // over whichever rows happen to be present, so writes landing in the
+    // wrong range would leave every remaining check trivially true.
+    auto each_range_ascends = [&](std::uint16_t expected_rows, const char* when) {
+        for (std::size_t r = 1; r < ranges.value().size(); ++r) {
+            const catalog::SysRangeRow& row = ranges.value()[r];
+            auto& owner = peers[row.owner_core - 1];
+            auto page = owner->store().GetForRead(row.entry_page);
+            ASSERT_TRUE(page.ok()) << page.status().message();
+            heap::PageView view(page.value().bytes());
+            EXPECT_EQ(view.min_key(), row.lo);
+            EXPECT_EQ(view.slot_count(), expected_rows)
+                << "range at lo " << row.lo << " owned by core " << row.owner_core
+                << " did not take its owner's rows " << when;
+            std::uint64_t previous = 0;
+            for (std::uint16_t slot = 0; slot < view.slot_count(); ++slot) {
+                auto tuple = view.ReadTuple(slot);
+                ASSERT_TRUE(tuple.ok()) << tuple.status().message();
+                auto id = KeystoneIdOfPayload(tuple.value().payload);
+                ASSERT_TRUE(id.ok());
+                EXPECT_GE(id.value(), row.lo) << "invariant 3 broken " << when;
+                EXPECT_GT(id.value(), previous) << "ids did not ascend inside one range " << when;
+                previous = id.value();
+            }
+        }
+    };
+    // Round 2's three, and nothing from round 1, which was refused before
+    // it wrote.
+    each_range_ascends(3, "in round 2");
+
+    // ---- RB5's second review item, answered where it is reachable ------
+    //
+    // **Round 3 interleaves the two writers**, which round 2 did not: it
+    // ran each core's three inserts together, so the issue sequence
+    // happened to ascend and nothing said whether it had to. It does not,
+    // and that is R4's amendment to invariant 11 (§4.1a) as an assertion
+    // rather than a sentence - each core issues from its **own leased
+    // block**, carved above the mark once and never consulted again, so
+    // alternating writers descend every time the turn passes back down.
+    //
+    // This is the falsifier `range_chain_test.cpp`'s
+    // `AnOutOfOrderInsertIsRefusedSoOneCoreCannotBreakTheByteIdentity`
+    // cannot construct: on one core the below-the-mark refusal forbids
+    // exactly this sequence, and two leased blocks are what get past it.
+    std::vector<std::uint64_t> interleaved;
+    for (int rep = 0; rep < 3; ++rep) {
+        for (auto& peer : peers) {
+            const auto out = peer->dispatcher().Dispatch("INSERT INTO fanout VALUES (2)").response;
+            ASSERT_EQ(out.rfind("INSERTED", 0), 0u) << out;
+            const std::size_t at = out.find(" id=");
+            ASSERT_NE(at, std::string::npos) << out;
+            interleaved.push_back(std::strtoull(out.c_str() + at + 4, nullptr, 10));
         }
     }
+    EXPECT_FALSE(std::is_sorted(interleaved.begin(), interleaved.end()))
+        << "two interleaved writers issued an ascending sequence, so this host produced no "
+           "second block and the test proves nothing";
+    std::vector<std::uint64_t> unique = interleaved;
+    std::sort(unique.begin(), unique.end());
+    EXPECT_EQ(std::adjacent_find(unique.begin(), unique.end()), unique.end())
+        << "interleaving cost uniqueness, which it must not";
+
+    // **The ascent moved down a level, it was not given up**: round 2's
+    // three rows plus round 3's three, still ascending inside each range.
+    each_range_ascends(6, "after round 3's interleaving");
 }
 
 // The other arm, and the one every existing relation takes: a gated

@@ -888,6 +888,44 @@ TEST_F(CommandDispatcherTest, ACatalogViewsBetweenTakesBothBounds) {
     EXPECT_EQ(empty, "name") << empty;
 }
 
+TEST_F(CommandDispatcherTest, AWriteWhosePkPredicateIsBetweenTouchesEveryRowInTheRange) {
+    // **The same `op`-default hazard as the test above, in a second
+    // consumer.** `PkEqualityTarget` answers "is this a bare pk point
+    // lookup" from the raw `Condition`, and it read `op` alone - which a
+    // `kBetween` leaves at `kEq` while `val` holds the *low bound*. So
+    // `WHERE id BETWEEN 2 AND 5` reported itself as `WHERE id = 2`, and
+    // the point-lookup fast path then wrote that one row and answered
+    // `UPDATED 1`. On a **btree** relation the descent makes that fast
+    // path fire, which is why the relation here is btree and not heap:
+    // on a heap one the locator declines and the scan hides the defect.
+    //
+    // Read-side `BETWEEN` was always right (`exec::CompileWhere` lowers
+    // the kind into two conjuncts), so the SELECT below is the control
+    // that says the predicate itself parses and matches four rows - and
+    // therefore that `UPDATED 1` was a write disagreeing with a read of
+    // its own WHERE clause, not a predicate nobody supported.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE b (id int64, v int64) BTREE").response.substr(0, 7),
+              "CREATED");
+    for (int i = 1; i <= 6; ++i) {
+        const std::string n = std::to_string(i);
+        ASSERT_EQ(d.Dispatch("INSERT INTO b VALUES (" + n + ", " + n + ")").response.substr(0, 8),
+                  "INSERTED");
+    }
+
+    EXPECT_EQ(d.Dispatch("SELECT id FROM b WHERE id BETWEEN 2 AND 5").response,
+              "id\\n2\\n3\\n4\\n5");
+    EXPECT_EQ(d.Dispatch("UPDATE b SET v = 99 WHERE id BETWEEN 2 AND 5").response, "UPDATED 4");
+    EXPECT_EQ(d.Dispatch("SELECT id FROM b WHERE v = 99").response, "id\\n2\\n3\\n4\\n5");
+    EXPECT_EQ(d.Dispatch("DELETE FROM b WHERE id BETWEEN 2 AND 5").response, "DELETED 4");
+    EXPECT_EQ(d.Dispatch("SELECT id FROM b").response, "id\\n1\\n6");
+
+    // The control the fix must not cost: a real pk equality still takes
+    // the point path and still answers one row.
+    EXPECT_EQ(d.Dispatch("UPDATE b SET v = 7 WHERE id = 1").response, "UPDATED 1");
+    EXPECT_EQ(d.Dispatch("SELECT v FROM b WHERE id = 1").response, "v\\n7");
+}
+
 TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
     // Every integer a view emits is built from a `uint64_t`
     // (catalog_view.cpp's `Int()`), and `sys.patterns.pattern_id` is a
