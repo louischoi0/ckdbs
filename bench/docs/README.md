@@ -648,6 +648,70 @@ parallelism — a cost, not a speedup. Two writer cores need `--cores 3
 only; `bench/run_pw6.py` below is what `bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md`
 is built from.
 
+### `tools/range_directory_probe.py` — the range-size sweep over a subject that can split
+
+RD9(b)/(c)'s driver (`instructions/v2.5.0/range-directory.md` §7,
+`docs/inflight/in-progress/workplan-range-directory.md` RD9). The three
+named bulk bench relations (`daily_bars`, `cargos`, `loans`) are all
+`BTREE`, and D1's decline means none of them can ever split; `§6a`'s other
+four gates rule out anything indexed, cabined, spilling (`varchar`), FK-
+linked or asserted. So this driver's one relation, `rd9b (id int64, a
+int64, b int64, c int32, d int32) HEAP`, is the narrowest shape that
+clears every gate: no index, no Cabin, no `varchar`, no FK, no assertion —
+`exec::RangeEligible` reads `kNone` for it every run. It is created under
+`placement = rotate` (a peer core, never core 0 — RB2's finding: core 0
+never leases row ids, so a core-0-owned relation can never open a range),
+with `range_size_ids` set from the config so the sweep can arm and size
+the range mechanism directly.
+
+Fresh server, fresh data file per `(rows, range_size_ids)` cell, `--reps`
+repeats each. Per cell: `rows` engine-issued-pk INSERTs from the owner's
+own session (each range boundary opens exactly where `AllocateRowIdRange`
+carves the next lease block, so the range count is `ceil(rows /
+range_size_ids)` when armed and 1 when `range_size_ids = 0`), a
+`COUNT(*)` verify, `SHOW META`'s `rowid_refill_grants` as an independent
+cross-check on the range count and the absence of `range_split_decline`
+as confirmation the five gates held, then `--scan-ops` repeats of a bare
+`SELECT * FROM rd9b` and `--point-ops` repeats of a pk point lookup, both
+from the **owner's own session** (the local, per-range chain walk RD6
+added), and — when `cores >= 2` gives a foreign core to sit on — the same
+scan again from a **foreign session** (the pre-existing one-stage
+statement-shipping path, with the owner-side walk now running behind it).
+
+**What it cannot produce, and why**: every range opened through the
+ordinary INSERT path lands on the *same* core that asked
+(`OpenRangeOnSystemCore(..., owner_core=header.src_core, ...)`,
+`src/server/row_id_lease_service.cpp:84-89`) — R4's insert-spreading
+policy, the only mechanism that would hand a later range to a different
+core, is out of `range-directory.md`'s scope. So this driver's relation
+never has ranges on more than one owner core, and `CommandDispatcher`
+merges consecutive same-owner ranges into one remote stage before shipping
+anything (`src/server/command_dispatcher.cpp:6296-6310`). **A genuine
+k>1-stage cross-core fan-in cannot be produced by any driver reachable
+through this engine's wire protocol in this build** — only R4 or reaching
+past the wire into the engine's own C++ test fixtures
+(`tests/core_runtime_test.cpp`'s hand-written directory rows) can. The
+scan-remote phase is the closest reachable proxy: a real remote read,
+over a real range-owner walk, always at one stage.
+
+| flag | default | meaning |
+|---|---|---|
+| `--server` | required | the binary — a **copy**, per the rules above |
+| `--workdir` | required | data files/configs/logs — a block device, never tmpfs |
+| `--cores` | 2 | server core count; the relation's owner is core 1 whenever `cores = 2` (rotation skips core 0) |
+| `--rows` | `200,1000,10000` | comma list, rule 9's sweep |
+| `--range-sizes` | `0,2048,4096,8192` | comma list; `0` is `kRangeSizeOff` (today's unsplit default), the rest arm `range_size_ids` |
+| `--reps` | 3 | fresh server + fresh data file per rep |
+| `--scan-ops` / `--point-ops` | 20 / 30 | repeated reads per cell, for the percentile table |
+| `--json` | none | per-cell raw results |
+
+```bash
+tools/range_directory_probe.py --server $HOME/rd9bench/bin/kds_server-XXXX \
+    --workdir $HOME/rd9bench/run/rangesweep --cores 2 \
+    --rows 200,1000,10000 --range-sizes 0,2048,4096,8192 --reps 3 \
+    --json $HOME/rd9bench/run/rangesweep.json
+```
+
 ### `bench/run_pw6.py` — the PW6 matrix, its PostgreSQL twin, the probes and the report
 
 Imports `multicore_benchmark` and calls `run_config` directly, which hands
