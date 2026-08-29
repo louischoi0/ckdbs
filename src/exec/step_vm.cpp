@@ -190,6 +190,12 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
 struct WalkMark {
     PageId page = kInvalidPageId;
     std::uint32_t visited = 0;
+    // Which of the relation's ranges `page` sits in (RD6). Carried because
+    // a page id cannot answer it: a resumed walk starts in the middle of a
+    // relation, and one that assumed the *first* range would walk every
+    // range from there again - emitting their rows a second time and then
+    // claiming the relation covered.
+    std::size_t range = 0;
 };
 
 // What a resumable walk reads and writes: where to start, how far it got,
@@ -1566,6 +1572,11 @@ private:
         const bool prefixed = prefix != nullptr;
         const PageId resume_page = prefixed ? prefix->resume.page : kInvalidPageId;
         const std::uint32_t resume_visited = prefixed ? prefix->resume.visited : 0;
+        // Which range's chain the walk is in, so a chain end can find the
+        // next one - and so a *resume* does not restart at the first. Only
+        // meaningful for a split heap relation; `ranges.size()` is the
+        // terminating value for every other shape.
+        std::size_t range_index = prefixed ? prefix->resume.range : 0;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -1703,7 +1714,7 @@ private:
                     mark_frozen = true;
                     return s;
                 }
-                prefix->mark = WalkMark{page_id, visited_on_page};
+                prefix->mark = WalkMark{page_id, visited_on_page, range_index};
                 return s;
             };
 
@@ -1802,7 +1813,17 @@ private:
                 cur = first.value();
             }
         } else {
-            cur = access.desc_page_id;
+            // RD6: a heap relation is one chain until it is split and
+            // **one chain per range** after (CC8), so the walk starts at
+            // the first range's head and steps to the next range's when a
+            // chain ends. `ranges` is ascending by `lo`, which is the
+            // order this walk therefore emits in - and the order RD7
+            // concatenates remote stages in, so the local and remote
+            // answers agree by construction.
+            //
+            // Unsplit is the field it always was, reached by one branch on
+            // a cached vector's emptiness.
+            cur = access.ranges.empty() ? access.desc_page_id : access.ranges.front().entry_page;
         }
 
         // ---- The page loop, owned by the coroutine (P4d-3) ---------------
@@ -1835,6 +1856,23 @@ private:
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) {
+                // RD6: a chain that ended is not the relation that ended,
+                // once a relation has several. Step to the next range's
+                // head and keep walking; **only when there is none is the
+                // relation covered**, which is what the completeness claim
+                // below rests on - a walk that stopped at the first chain
+                // would let a later bucket miss conclude absence for rows
+                // it never looked at.
+                //
+                // A `cut` ends the walk here whatever ranges remain: the
+                // visitor asked to stop, and the two endings are told apart
+                // by `cut` alone (the page primitives answer both with
+                // kInvalidPageId).
+                if (!cut && !is_btree && range_index + 1 < live_access->ranges.size()) {
+                    ++range_index;
+                    cur = live_access->ranges[range_index].entry_page;
+                    continue;
+                }
                 // Both endings arrive here - the page primitives answer a
                 // visitor stop and a chain end with the same id - and only
                 // `cut` tells them apart. A walk that ran out of relation

@@ -89,4 +89,28 @@ Status CheckKeystoneColumn(const Schema& schema) {
     return Status::OK();
 }
 
+StatusOr<TableAccess::HeapChain> TableAccess::HeapChainFor(std::uint64_t id) const {
+    // RD3's zero-cost invariant, reaching the write path: one load from an
+    // entry the caller is already holding, one predictable branch, and the
+    // two fields every insert used before ranges existed.
+    if (ranges.empty()) {
+        return HeapChain{desc_page_id, &heap_tail_hint};
+    }
+    auto resolved = ResolveRanges(ranges, PkSpan::Equality(id));
+    if (!resolved.ok()) return resolved.status();
+    // Exactly one range holds an id: the rows partition the space, so an
+    // equality names one and `ResolveRanges` never answers empty for a
+    // call it accepted. Checked rather than assumed, because what a wrong
+    // answer here produces is a row in the wrong chain, which is the
+    // defect this function exists to close.
+    if (resolved.value().size() != 1) {
+        return Status::Corruption(
+            "relation oid " + std::to_string(oid) + ": id " + std::to_string(id) +
+            " resolved to " + std::to_string(resolved.value().size()) +
+            " ranges; a single id belongs to exactly one");
+    }
+    const RangeTarget& range = resolved.value().front();
+    return HeapChain{range.entry_page, &range.tail_hint};
+}
+
 }  // namespace kds::catalog

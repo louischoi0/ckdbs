@@ -226,6 +226,46 @@ struct TableAccess {
     // `const TableAccess*`, because this vector dies with the entry.
     std::vector<RangeTarget> ranges;
 
+    // ---- RD6: which chain a row belongs in ------------------------------
+    //
+    // A heap relation is one chain until it is split and **one chain per
+    // range** after (CC8), so "where does this row go" stops being a field
+    // and becomes a question about the id. This is that question, asked
+    // once so no write path re-derives it.
+    //
+    // **The defect it closes is a wrong answer with nothing logged.**
+    // `desc_page_id` is CREATE-fixed, and every insert path used it as the
+    // head. After a cut it heads the *lower* range, `ChainTail` returns
+    // that range's last page, and since a high id clears that page's
+    // `min_key` the row is **accepted there** - `heap_chain.hpp`'s
+    // `OutOfRange` guard only fires on an id *below* the tail's `min_key`,
+    // so nothing refuses. The pk then routes the reader to the upper range
+    // and the row is gone. Closing it at the head is what makes the class
+    // gone rather than the instance.
+    struct HeapChain {
+        PageId head = kInvalidPageId;
+        // The hint to start the tail search from and to write the landing
+        // page back into - `&heap_tail_hint` unsplit, the range's own
+        // otherwise. Never null.
+        //
+        // **It points into the cache entry and dies with it**, so it may
+        // not be held across a park: `CatalogCache::Invalidate()` frees
+        // the storage, and the same rule `range_directory.hpp` states for
+        // a resolved range span applies here for the same reason. Both
+        // callers today are synchronous; RD7's pipeline will not be.
+        PageId* tail_hint = nullptr;
+    };
+
+    // The chain a row with `id` belongs in. Heap relations only; a btree
+    // relation descends and has no chain.
+    //
+    // **The unsplit answer is one predictable branch on a cached field**
+    // (`ranges.empty()`) and then the two fields it always was, which is
+    // RD3's zero-cost invariant reaching the write path. A split relation
+    // resolves through `ResolveRanges`, whose refusals cross unchanged -
+    // an id outside the 40-bit space is a caller that computed one.
+    StatusOr<HeapChain> HeapChainFor(std::uint64_t id) const;
+
     // Whether an id has ever landed on this relation out of order
     // (well_known.hpp's KeyOrder, docs/spec/heap-and-tuple.md section 4.1), from
     // sys.tables.

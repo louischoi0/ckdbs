@@ -81,6 +81,23 @@ struct RangeTarget {
     std::uint64_t hi = kIdSpaceEnd;
     std::uint32_t owner_core = 0;
     PageId entry_page = kInvalidPageId;
+
+    // Where this range's chain last placed a tuple - RD6's per-range half
+    // of `TableAccess::heap_tail_hint`, with that field's whole argument
+    // unchanged one level down: advisory and self-healing, because a chain
+    // grows only at its tail and a page never leaves it, so a stale value
+    // is behind and never wrong.
+    //
+    // **Per range and not per relation, because the hint's safety
+    // argument is per *chain*.** `heap_chain.hpp` states it: a hint from
+    // another chain "is a logic error upstream that this layer cannot
+    // detect". Once a relation has several chains, one hint for all of
+    // them is exactly that error, handed in deliberately.
+    //
+    // `mutable` for the reason the relation-wide hint is: the cache is
+    // core-local, statements run to completion, and the entry this lives
+    // in dies on the next `BumpVersion`, so the hint never survives DDL.
+    mutable PageId tail_hint = kInvalidPageId;
 };
 
 // The pk bounds a plan reduces its predicate to, half-open like a range

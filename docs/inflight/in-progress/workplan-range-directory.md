@@ -557,9 +557,14 @@ the zero-cost invariant is stated as the two numbers it actually is. §12a
 carries the two debts RB1 hands to RB2 and RB3. **RD5** as RB2 —
 allocation, the converse gates, C3's counters, and **CD2 in §13**, where
 §2b's answer turns out to be forced twice rather than chosen. §13a records
-what its review caught; §13b the two limits it states. **The build resumes
-at RD6** (RB3), which is also what raises `range_size_ids` off its default:
-a range only becomes honourable when it is its own chain.
+what its review caught; §13b the two limits it states. **RD6** as RB3 —
+per-range chains, **CD3 in §14**, and the second half of the route the plan
+did not name (§14a: the step VM owns the scan cursor, so the reads were
+still wrong after the insert sites were fixed). §14c says which of the four
+mutation verbs is buildable and why the other three are not; §14d corrects
+this line's earlier claim that RD6 raises `range_size_ids` — **RB4 does**,
+because a multi-owner relation is not readable until the pipeline exists.
+**The build resumes at RD7** (RB4).
 
 ## 9. RD4 — the hypotheses, the C2 enumeration, the fifth gate, and C3's decision
 
@@ -1275,3 +1280,166 @@ classes rather than instances.
   not lease row ids — it bumps `next_id` directly. RD9's subject must
   therefore be a *peer-owned heap* relation, which narrows the order's §7
   subject problem further than §7 states it.
+
+## 14. CD3 — the insert head, and the walk that turned out to matter more
+
+Built as RB3 in worktree `v2.5.0-ragne-directory` on top of `3454bbc`.
+
+**CD3 as the order states it: the head now comes from the directory per
+range, and `heap_tail_hint` became per range with it.**
+`TableAccess::HeapChainFor(id)` is the one place the question "which chain
+does this row belong in" is answered, and `RangeTarget::tail_hint` is the
+hint. Per *chain* rather than per relation, because that is the scope
+`heap_chain.hpp` states the hint's safety argument over — *"a caller
+handing in some other chain's page is a logic error upstream that this
+layer cannot detect"* — so one hint across two chains is that error handed
+in deliberately, on every other insert.
+
+The named test, which the order asked for: a post-split INSERT lands in
+the range its id names **and is absent from the lower chain**. Both halves,
+because the defect's signature is that the row exists somewhere and the
+reader cannot see it.
+
+### 14a. The route had a second half, and the order pointed at only one
+
+RD6's row names `sys.tables.desc_page_id` and its two insert sites. Those
+were fixed and the reads were still wrong: **the step VM owns the scan
+cursor**, not `CommandDispatcher::VisitRelation`, and its heap arm set
+`cur = access.desc_page_id` and followed `next_page_id` to the end. A
+`SELECT *` over a split relation returned the lower range's rows and
+reported success — the same wrong-answer-with-nothing-logged class CD3
+names, one layer up from where the plan was looking.
+
+It was caught by RB3's own test rather than by inspection
+(`row 4096 missing from: id,v\n1,1\n2,2`), which is the argument for
+writing the end-to-end test before believing the call-site inventory.
+
+**The walk now steps to the next range's head when a chain ends, in `lo`
+order.** That order is not a convenience: it is the order RD7 concatenates
+remote stages in, so the local answer and the remote answer agree **by
+construction** rather than by two implementations happening to match. A
+visitor `cut` still ends the walk wherever it happens, and the
+completeness claim a later Cabin bucket-miss rests on (*"a walk that ran
+out of relation covered all of it"*) now means every range rather than the
+first.
+
+### 14b. The multi-row INSERT met the boundary, and is refused there
+
+`ChainAppendBatch` writes a **contiguous** id run into one chain, so the
+run shares a chain exactly while it stays inside one range. A run that
+crosses a boundary is refused retryably rather than split across two
+chains: splitting it would make one statement write two ranges, which is
+the cross-range DML `crosscore.md:311-314` already answers with a
+retryable refusal, and a half-written statement is what the refusal is
+for. Tested with the high-water mark moved under the boundary, and
+asserted to leave both chains empty.
+
+### 14c. The mutation API — what is buildable and what is not
+
+RD6's row asks for *"the mutation API Part III will call (split / set /
+modify / merge, §0), one caller today, no policy"*. Taken as follows,
+because the four verbs are not one kind of thing:
+
+- **split** is built and has its caller: `Catalog::CreateRangeEntryPage`
+  plus `Catalog::OpenRangeRows`, split in two because CC10's ordering
+  requires the caller to interpose (§13a).
+- **set** and **modify** — changing a range's `owner_core` or its
+  `entry_page` — are **migration's** verbs, and the work order's §1 puts
+  migration out of scope. A primitive that moves ownership with none of
+  CC10's protocol around it (quiesce, flush, handoff record, durable row,
+  grant, broadcast) is a footgun rather than a substrate: its first use
+  would be the one that gets the ordering wrong. They land with the mover,
+  which is R5's.
+- **merge is not a catalog operation at all**, and this is the one worth
+  recording rather than deferring. Removing a boundary means the upper
+  range's rows must join the lower range's chain, which is **page
+  movement** — and HD3's whole claim is that a range operation moves no
+  page, which is what makes CC10's page-boundary rule vacuous rather than
+  checked. A catalog verb called `merge` that only deleted a row would
+  leave the upper chain unreachable and its rows lost, silently. Merge is
+  the mover's, or it is nothing.
+
+So the API that exists is split, and the other three are named here with
+the reason each is absent. **Nothing lands before a caller exists** is the
+rule this follows; a verb with neither a caller nor sound semantics is the
+worse half of it.
+
+### 14d. The default stays off, and this corrects §13's expectation
+
+`range_size_ids` remains `kRangeSizeOff`. §13 said RD6 raises it; that was
+wrong, and the reason is 14a: RD6 makes the *local* walk range-aware, but a
+relation whose ranges are owned by different cores still needs RD7's
+pipeline to be read at all — `VisitRelation` refuses a foreign range
+rather than answering partially, and the step VM's walk faults pages this
+core may not hold. **RB4 is what makes a multi-owner relation readable,
+and RB5's equivalence is what proves it**; the default is theirs to raise,
+not RD6's.
+
+### 14e. What RB3's review caught, and the one instance it leaves open
+
+Three defects, all fixed in the same commit, and one site named rather
+than closed. The first is the one worth carrying forward, because it is a
+class the plan did not anticipate.
+
+- **A resumed prefix walk re-walked every later range.** `range_index`
+  started at 0 unconditionally, but the JB6 resume path starts at
+  `resume_page`, which for a walk cut inside range *k* sits in range *k* —
+  so when that chain ended the walk jumped to `ranges[1]` and went
+  forward again. `ANALYZE` read `examined=9` on a six-row relation, with
+  three rows re-emitted and re-bucketed against the
+  `join_build_max_rows` cap. **Coverage was never lost** (the earlier
+  walk had covered range 0), so `complete` was not a lie and no
+  EXISTS/IN answer changed — what broke was the walk's own contract, each
+  row once. The fix carries the range **in the mark**, which is the only
+  thing that can answer it: a page id cannot say which chain it belongs
+  to. Stated at that width because the fix should not be oversold.
+- **`VisitRelation`'s "refused, never partial" was partial.** The
+  ownership check sat inside the walking loop, so a foreign range at
+  index *k* refused only after ranges 0..*k*-1 had been visited — and
+  this visitor is UPDATE's and DELETE's, at `PageAccess::kWrite`, so those
+  ranges were already **written**. Now an ownership pass over every range
+  precedes the walking pass. Unreachable today; load-bearing at R4.
+- **The straddle refusal lost its `retryable` bit** by rendering a
+  `TxnConflict`'s bare message instead of going through `ErrorReply` —
+  exactly the drift `command_dispatcher.cpp`'s error-surface header
+  declares single-homed.
+
+**The open instance, named rather than claimed closed:**
+`src/stats/relayout_planner.cpp`'s `SurveyRelation` walks
+`desc_page_id` and filters only on heap-and-not-system, so a split
+relation's survey reports the **lower** range's `chain_pages`,
+`live_tuples` and `delete_marked`. Not a data defect — Part I is
+shadow-only and every move is blocked by a §6 gate — but it is the
+"wrong reading with nothing logged" shape RD6 exists to end, and it
+belongs to the physical optimizer's owner rather than to this row. **RD6
+closes the class on the statement paths and leaves this one instance**;
+saying so is the difference between a row that closed a class and a row
+that claimed to.
+
+Three further sites are structural rather than wrong, inherited
+deliberately: `RelationFaultExtentOf` never prefetches a range head
+(performance only), the creation-page grant demand tests desc/varheap/
+anchor so a lost range-head grant surfaces as the store's backstop naming
+a page id rather than the retryable refusal, and the post-recovery audit
+does not open range entry pages, so a torn one is not reported.
+
+### 14f. An open question RB3 hands to the operator
+
+**The multi-row INSERT straddle refusal may be the wrong answer, and the
+reason it was built is not the reason it was documented.** The comment
+cited `crosscore.md:311-314`'s cross-range DML refusal; that passage is
+about a statement spanning two *owners*, and both ranges of a split
+relation share an owner today, so a straddling batch spans none. The
+engine does not hold the rule by another route either: two single-row
+INSERTs in one transaction land on either side of a boundary and nothing
+objects. What actually forces the refusal is that `ChainAppendBatch`
+takes one head.
+
+So it is an implementation limit surfacing as a user-visible error for a
+fact §0 says the user does not have. **Partitioning the run at the
+boundary would remove it** — the ids are contiguous, the split index is
+`boundary - first`, each sub-run is still contiguous, and it is one loop
+over `HeapChainFor`. Not taken here: it changes what RD8 pins, and
+whether a refusal is acceptable for an invisible fact is the operator's
+call, not CLA's. The comment at the site now says what the refusal
+actually refuses.

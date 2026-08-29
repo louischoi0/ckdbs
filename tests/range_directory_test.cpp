@@ -1,5 +1,7 @@
 #include "kds/catalog/range_directory.hpp"
 
+#include "kds/catalog/schema.hpp"
+
 #include <gtest/gtest.h>
 
 #include <vector>
@@ -196,6 +198,106 @@ TEST(RangeDirectoryTest, AOneRowDirectoryStillResolvesRatherThanReadingAsUnsplit
     ASSERT_EQ(one.value().size(), 1u);
     EXPECT_EQ(one.value()[0].owner_core, 3u);
     EXPECT_EQ(one.value()[0].entry_page, 700u);
+}
+
+// ---- RD6: which chain a row belongs in ------------------------------
+
+TEST(HeapChainForTest, AnUnsplitRelationAnswersTheTwoFieldsItAlwaysDid) {
+    TableAccess access;
+    access.oid = 4000;
+    access.desc_page_id = 300;
+    access.heap_tail_hint = 301;
+
+    auto chain = access.HeapChainFor(12345);
+    ASSERT_TRUE(chain.ok()) << chain.status().message();
+    EXPECT_EQ(chain.value().head, 300u);
+    // The *same* hint, by address: an unsplit insert must write its
+    // landing page back where every insert before ranges existed wrote it,
+    // or the O(1) tail search silently becomes a walk from the head.
+    EXPECT_EQ(chain.value().tail_hint, &access.heap_tail_hint);
+}
+
+TEST(HeapChainForTest, ASplitRelationAnswersTheRangeTheIdBelongsTo) {
+    TableAccess access;
+    access.oid = 4000;
+    access.desc_page_id = 300;
+    std::vector<SysRangeRow> rows(2);
+    rows[0].rel_oid = 4000;
+    rows[0].lo = 0;
+    rows[0].entry_page = 300;
+    rows[1].rel_oid = 4000;
+    rows[1].lo = 4096;
+    rows[1].entry_page = 900;
+    access.ranges = RangeTargetsFrom(rows);
+
+    // **The defect, from the other side.** Before RD6 every insert used
+    // `desc_page_id` - page 300 - for both of these, so the second row
+    // landed in the lower range's chain, was accepted (its id clears that
+    // tail's `min_key`), and then read as zero rows because the pk routed
+    // the reader to page 900.
+    auto below = access.HeapChainFor(4095);
+    ASSERT_TRUE(below.ok()) << below.status().message();
+    EXPECT_EQ(below.value().head, 300u);
+
+    auto above = access.HeapChainFor(4096);
+    ASSERT_TRUE(above.ok()) << above.status().message();
+    EXPECT_EQ(above.value().head, 900u);
+}
+
+TEST(HeapChainForTest, EachRangeGetsItsOwnTailHint) {
+    TableAccess access;
+    access.oid = 4000;
+    access.desc_page_id = 300;
+    std::vector<SysRangeRow> rows(2);
+    rows[0].rel_oid = 4000;
+    rows[0].lo = 0;
+    rows[0].entry_page = 300;
+    rows[1].rel_oid = 4000;
+    rows[1].lo = 4096;
+    rows[1].entry_page = 900;
+    access.ranges = RangeTargetsFrom(rows);
+
+    // One hint per chain, which is what `heap_chain.hpp`'s safety argument
+    // is stated over: a hint from another chain is a logic error that
+    // layer cannot detect, and one hint shared across two chains would be
+    // exactly that error, handed in on every other insert.
+    auto lower = access.HeapChainFor(10);
+    auto upper = access.HeapChainFor(5000);
+    ASSERT_TRUE(lower.ok());
+    ASSERT_TRUE(upper.ok());
+    EXPECT_NE(lower.value().tail_hint, upper.value().tail_hint);
+    EXPECT_NE(lower.value().tail_hint, &access.heap_tail_hint)
+        << "a split relation wrote its landing page into the relation-wide hint";
+
+    // Written through a const access, which is the borrow every write path
+    // holds - the `mutable` on `RangeTarget::tail_hint` is what makes the
+    // hint usable at all, and this is where that would fail to compile.
+    const TableAccess& borrowed = access;
+    auto again = borrowed.HeapChainFor(5000);
+    ASSERT_TRUE(again.ok());
+    *again.value().tail_hint = 901;
+    EXPECT_EQ(access.ranges[1].tail_hint, 901u);
+}
+
+TEST(HeapChainForTest, AnIdOutsideTheSpaceIsRefusedRatherThanPlaced) {
+    TableAccess access;
+    access.oid = 4000;
+    access.desc_page_id = 300;
+    std::vector<SysRangeRow> rows(2);
+    rows[0].rel_oid = 4000;
+    rows[0].lo = 0;
+    rows[0].entry_page = 300;
+    rows[1].rel_oid = 4000;
+    rows[1].lo = 4096;
+    rows[1].entry_page = 900;
+    access.ranges = RangeTargetsFrom(rows);
+
+    // `ResolveRanges`' refusals cross unchanged. An id above the 40-bit
+    // space names no range, and placing it somewhere would be the wrong
+    // chain by definition.
+    auto refused = access.HeapChainFor(kIdSpaceEnd);
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
 }
 
 }  // namespace

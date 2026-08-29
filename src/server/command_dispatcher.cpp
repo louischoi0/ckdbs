@@ -4798,8 +4798,56 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         payloads.push_back(std::move(encoded.value()));
     }
 
-    auto filled = heap::ChainAppendBatch(page_store_, ta.desc_page_id, first.value(), payloads,
-                                         WriterId(scope), ta.oid, &ta.heap_tail_hint);
+    // RD6, and the batch needs one range for the **whole** run: the ids
+    // are `[first, first + rows)` contiguous, so they share a chain
+    // exactly when the run does not cross a boundary.
+    //
+    // **The reason is mechanical, not a rule the engine holds.** An
+    // earlier draft cited `crosscore.md:311-314`'s cross-range DML
+    // refusal; that passage is about a statement spanning two *owners*,
+    // and both ranges of a split relation are owned by the same core
+    // today - `row_id_lease_service.cpp` opens a range for the core that
+    // asked, which is the owner - so a straddling batch spans no owner at
+    // all. Nor does the engine refuse the equivalent by another route: two
+    // single-row INSERTs in one transaction land on either side of a
+    // boundary through `InsertIntoRelation` and nothing objects. What
+    // actually forces this is that `ChainAppendBatch` takes **one head**.
+    //
+    // That makes the refusal an implementation limit surfacing as a user
+    // error, which §0's direction argues against - *a range is information
+    // the user does not have* - and partitioning the run at the boundary
+    // would remove it (the ids are contiguous, so the split index is
+    // `boundary - first` and each sub-run is still contiguous).
+    // Deliberately **not** done here: it changes what RD8 pins, and
+    // whether a user-visible refusal is acceptable for a fact the user
+    // cannot see is the operator's call. `workplan-range-directory.md`
+    // §14f carries the proposal.
+    auto chain = ta.HeapChainFor(first.value());
+    if (!chain.ok()) {
+        return {ErrorReply(chain.status()), false};
+    }
+    if (!ta.ranges.empty()) {
+        auto last = ta.HeapChainFor(first.value() + payloads.size() - 1);
+        if (!last.ok()) {
+            return {ErrorReply(last.status()), false};
+        }
+        if (last.value().head != chain.value().head) {
+            // Rendered through `ErrorReply`, which is where the retryable
+            // bit is spelled: a TxnConflict written out as its bare
+            // message loses the `TXN_CONFLICT retryable=1 ` token a client
+            // library's retry loop switches on, and this refusal *is*
+            // retryable - the id block is already burnt, so the same
+            // statement re-issued carves above the boundary and lands in
+            // one range.
+            return {ErrorReply(Status::TxnConflict(
+                        "this multi-row INSERT spans a range boundary of relation '" +
+                        stmt.table_name +
+                        "'; retry it as separate statements, or as rows that fall in one range")),
+                    false};
+        }
+    }
+    auto filled = heap::ChainAppendBatch(page_store_, chain.value().head, first.value(), payloads,
+                                         WriterId(scope), ta.oid, chain.value().tail_hint);
     if (!filled.ok()) {
         return {"ERR " + filled.status().message(), false};
     }
@@ -5182,8 +5230,14 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // one page rather than failing. Duplicate-key and min_key
             // enforcement live in there - they are heap invariants, not
             // dispatcher policy.
-            auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id, payload,
-                                            trx_id, access.oid, &access.heap_tail_hint);
+            // RD6: the head is the *range's*, not the relation's
+            // (`TableAccess::HeapChainFor` owns the argument). On an
+            // unsplit relation it is `desc_page_id` and `heap_tail_hint`,
+            // byte for byte what this line was.
+            auto chain = access.HeapChainFor(id);
+            if (!chain.ok()) return chain.status();
+            auto placed = heap::ChainInsert(page_store_, chain.value().head, id, payload, trx_id,
+                                            access.oid, chain.value().tail_hint);
             if (!placed.ok()) return placed.status();
 
             out.page_id = placed.value().page_id;
@@ -5222,8 +5276,50 @@ Status CommandDispatcher::VisitRelation(
         fn) {
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap:
+            // RD6: **one chain per range** (CC8), so a walk is one walk per
+            // range in `lo` order - which is the order RD7 concatenates in,
+            // established here so the local and the remote answer agree by
+            // construction rather than by two implementations matching.
+            //
+            // The unsplit path is the single `ChainVisit` it always was,
+            // reached by one branch on a cached field.
+            if (!access.ranges.empty()) {
+                // **Refused, never partial - so every range is checked
+                // before any is walked.** This visitor is UPDATE's and
+                // DELETE's, not only a scan's, so a refusal raised in the
+                // middle of the walking loop would leave the ranges before
+                // it already written. Every range of a relation is owned by
+                // the core that asked for the lease, which is the
+                // relation's owner, so today this cannot fire - it fires
+                // when R4 starts handing blocks to *other* cores, and at
+                // that point the whole answer is RD7's pipeline to
+                // assemble. A walk that skipped a foreign range would
+                // return fewer rows and say nothing, which is the class
+                // RD6 exists to close.
+                for (const catalog::RangeTarget& range : access.ranges) {
+                    if (range.owner_core != core_id_) {
+                        return Status::Unsupported(
+                            "relation oid " + std::to_string(access.oid) +
+                            " has a range at lo " + std::to_string(range.lo) +
+                            " owned by core " + std::to_string(range.owner_core) +
+                            ", which core " + std::to_string(core_id_) +
+                            " cannot read locally; a scan across owners is the remote-step "
+                            "pipeline's (docs/spec/crosscore.md §2a)");
+                    }
+                }
+                for (const catalog::RangeTarget& range : access.ranges) {
+                    if (Status s = heap::ChainVisit(page_store_, range.entry_page, page_access, fn);
+                        !s.ok()) {
+                        return s;
+                    }
+                }
+                return Status::OK();
+            }
             return heap::ChainVisit(page_store_, access.desc_page_id, page_access, fn);
         case catalog::ClusteredType::kBtree:
+            // No range arm: D1 declines every btree relation, so one never
+            // has a directory. Left as an absence rather than a refusal,
+            // because the gate is what makes it unreachable.
             return btree::BtreeVisit(page_store_, access.desc_page_id, page_access, fn);
     }
     return Status::Corruption("relation oid " + std::to_string(access.oid) +

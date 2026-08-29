@@ -924,9 +924,8 @@ struct SysRangeRow {
     // Where this range's own sub-structure starts (CC8): the chain head for
     // a heap range, that range's subtree entry for a btree one. **The field
     // that makes a range a sub-structure rather than a span** - RD6's
-    // per-range chains take the insert head from here, which is what closes
-    // the defect where `sys.tables.desc_page_id` headed the lower range for
-    // every insert and a row belonging above landed in it with no refusal.
+    // per-range chains take the insert head from here
+    // (`TableAccess::HeapChainFor` owns what that closes).
     PageId entry_page;
 
     static constexpr std::size_t kRangeIdOffset = 0;

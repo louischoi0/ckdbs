@@ -1983,3 +1983,20 @@ All fixed by `b11cc81`; the suite is green.
   deliberately not fixed there: it is a change to the same parser production
   that work touches, and an unasked type change inside another feature's
   review is how a review stops being one.
+
+- **`SHOW RELAYOUT` surveys only the first range of a split relation.**
+  `src/stats/relayout_planner.cpp`'s `SurveyRelation` walks
+  `access->desc_page_id` and filters on heap-and-not-system alone, so once
+  RD6 gave a relation one chain per range the survey reports the **lower**
+  range's `chain_pages`, `live_tuples` and `delete_marked`, and the
+  planner's densities are computed from an undersized relation. Not a data
+  defect — Part I is shadow-only and every move is blocked by a
+  `physical-optimizer.md` §6 gate — and not reachable in a shipped
+  configuration either, since `range_size_ids` defaults to off. Found at
+  RB3's review (2026-08-29) and left there deliberately: the fix is not a
+  head substitution (the ring-consumer walk and the budget charging are
+  per-walk), and it belongs to the physical optimizer's owner rather than
+  to the row that created the condition.
+  `docs/inflight/in-progress/workplan-range-directory.md` §14e names it as
+  RD6's one open instance, so the row does not read as having closed the
+  class whole.
