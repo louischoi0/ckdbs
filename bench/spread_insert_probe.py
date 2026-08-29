@@ -67,10 +67,18 @@ def start_server(binary, workdir, tag, cores, port, range_size_ids, durability):
     with open(conf, "w") as f:
         f.write(
             f"data_file = {data}\nport = {port}\ncores = {cores}\n"
-            # `creating`, so the relation is core 0's and every peer is a
-            # foreign writer to it - which is the shape spreading acts on.
-            # `rotate` would put it on one peer and make the run measure
-            # placement instead.
+            # **`creating` on both arms**, which is the shape §6b describes
+            # and the one that spreads widest: the relation is core 0's, so
+            # every peer is a foreign writer that takes a range of its own
+            # once armed, and core 0 keeps its direct allocator. Under
+            # `rotate` the relation lands on a *peer*, and on a host with
+            # only one peer there would be no second writer at all -
+            # `rotate` measures placement, not spreading.
+            #
+            # This pairing was refused at startup until 2026-08-29; the
+            # refusal's premise ("a peer session could serve nothing") had
+            # been false since statement shipping and is doubly false with
+            # ranges. `expeditor.cpp` carries the argument.
             "placement = creating\n"
             # Without this the kernel never accepts a session on a peer and
             # there is no foreign writer at all (PW5).

@@ -1,5 +1,6 @@
 #include "kds/server/config_file.hpp"
 
+#include <type_traits>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -491,31 +492,31 @@ TEST(ExpeditorConfigTest, PeerListenersParseAndRefuseTlsOrAuth) {
 
     constexpr auto kRotate = catalog::PlacementPolicy::kRotate;
     constexpr auto kCreating = catalog::PlacementPolicy::kCreatingCore;
-    constexpr std::uint64_t kNoRanges = kRangeSizeOff;
-    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true, 1, kCreating, kNoRanges).ok());
-    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2, kRotate, kNoRanges).ok());
-    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2, kRotate, kNoRanges).code(),
-              StatusCode::kUnsupported);
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2, kRotate, kNoRanges).code(),
-              StatusCode::kUnsupported);
+    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true, 1).ok());
+    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2).ok());
+    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2).code(), StatusCode::kUnsupported);
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2).code(), StatusCode::kUnsupported);
 
-    // The two pairings that cannot work (the PW5 review's finding 6):
-    // no peer to listen, and a placement under which a peer session could
-    // serve nothing. Both are plain misconfigurations, so InvalidArgument.
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1, kRotate, kNoRanges).code(),
-              StatusCode::kInvalidArgument);
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 2, kCreating, kNoRanges).code(),
+    // The one pairing that cannot work (the PW5 review's finding 6): no
+    // peer to listen, so SO_REUSEPORT on the only socket loses the
+    // exclusive bind for nothing. A plain misconfiguration, so
+    // InvalidArgument.
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1).code(),
               StatusCode::kInvalidArgument);
 
-    // **R4 narrowed the second of those.** With ranges armed a peer-accepted
-    // session writing a core-0 relation takes a range of its own and serves
-    // it locally (`crosscore.md` §6b), so creating-core placement is the
-    // arrangement insert spreading produces rather than a misconfiguration.
-    // The `cores = 1` refusal is untouched: a range needs a second core to
-    // be owned by, and SO_REUSEPORT on one socket is still the only effect.
-    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2, kCreating, 4096).ok());
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1, kCreating, 4096).code(),
-              StatusCode::kInvalidArgument);
+    // **The placement clause is retired** (2026-08-29). It refused
+    // creating-core placement because "a peer session could serve
+    // nothing", which statement shipping (SS2) and insert spreading (R4)
+    // each falsified - a peer-accepted session ships what it cannot own
+    // and, with ranges armed, takes a range of a core-0 relation and
+    // serves its writes locally. The function no longer takes placement or
+    // `range_size_ids` at all, which is why this is asserted as an absence
+    // of parameters rather than as a pair of accepted values.
+    static_assert(std::is_invocable_r_v<Status, decltype(CheckPeerListenerConfig), bool, bool,
+                                        bool, std::uint32_t>,
+                  "CheckPeerListenerConfig judges the listener alone");
+    (void)kRotate;
+    (void)kCreating;
 }
 
 TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal) {

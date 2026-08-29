@@ -114,8 +114,7 @@ std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept {
 }
 
 Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
-                               std::uint32_t cores, catalog::PlacementPolicy placement,
-                               std::uint64_t range_size_ids) {
+                               std::uint32_t cores) {
     if (!peer_listeners) return Status::OK();
     if (tls || auth_scram) {
         return Status::Unsupported(
@@ -124,34 +123,40 @@ Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
             "listeners is PW5's open half (workplan-peer-writer.md) - run peer listeners on "
             "the loopback plaintext port, or keep one listener");
     }
-    // Two pairings that cannot work, refused rather than served (the PW5
-    // review's finding 6). One core has no peer to listen - the sole
-    // effect would be SO_REUSEPORT on the only socket, which lets a
-    // second process bind the same port and silently take half the
-    // connections into a different database. And creating-core placement
-    // puts every relation on core 0, so every peer-accepted session would
-    // refuse every statement while answering OK to PING.
+    // One pairing that cannot work, refused rather than served (the PW5
+    // review's finding 6): one core has no peer to listen, so the sole
+    // effect would be SO_REUSEPORT on the only socket, which lets a second
+    // process bind the same port and silently take half the connections
+    // into a different database.
     if (cores == 1) {
         return Status::InvalidArgument(
             "peer_listeners = on with cores = 1 has no peer to listen; the only effect "
             "would be losing the exclusive bind on the one socket");
     }
-    // **R4 falsified half of that second sentence, so the gate narrows.**
-    // "A peer-accepted session could serve nothing" was true while a peer's
-    // only answer to a core-0 relation was to ship the statement or refuse
-    // it. With `range_size_ids` armed, a peer-accepted session writing a
-    // relation core 0 created takes a **range of its own** and serves it
-    // locally (`crosscore.md` §6b, R4/IS1-IS3) - which is not merely
-    // permissible, it is the arrangement insert spreading exists to
-    // produce, and the one a measurement of it has to be able to configure.
-    // Reads still fan in, and a statement the peer cannot serve still
-    // ships, exactly as under rotation.
-    if (placement != catalog::PlacementPolicy::kRotate && range_size_ids == kRangeSizeOff) {
-        return Status::InvalidArgument(
-            "peer_listeners = on needs placement = rotate, or range_size_ids set: with "
-            "creating-core placement and no ranges every relation is core 0's, so a "
-            "peer-accepted session could serve nothing");
-    }
+    // **The second pairing this used to refuse is retired**, and it was
+    // already wrong before R4 rather than made wrong by it. The refusal
+    // read *"creating-core placement puts every relation on core 0, so
+    // every peer-accepted session would refuse every statement while
+    // answering OK to PING"* - true when PW5 wrote it, and falsified twice
+    // since:
+    //
+    //   - **statement shipping** (SS2, 2026-08-26): an autocommit
+    //     single-relation statement whose relation another core owns is
+    //     carried to that owner and answered with the owner's own reply.
+    //     A peer-accepted session under creating-core placement serves
+    //     every such statement, which is most of them.
+    //   - **insert spreading** (R4, 2026-08-29): with `range_size_ids`
+    //     armed such a session takes a **range of its own** on a core-0
+    //     relation and serves its writes locally, which is not merely
+    //     permissible - it is the arrangement `crosscore.md` §6b
+    //     describes, and the one a measurement of it must be able to
+    //     configure.
+    //
+    // What the refusal protected against therefore no longer exists, and
+    // keeping it cost the configuration §6b is written about. A statement
+    // a peer still cannot serve is refused by the affinity check with its
+    // own message, which is where a refusal about ownership belongs -
+    // never at startup, on a guess about what the sessions will ask for.
     return Status::OK();
 }
 
@@ -683,8 +688,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
     if (Status s = CheckFrameBudget(config.buffer_pool_frames, config.cores); !s.ok()) return s;
     if (Status s = CheckPeerListenerConfig(config.peer_listeners, config.tls, config.auth_scram,
-                                           config.cores, config.placement,
-                                           config.range_size_ids);
+                                           config.cores);
         !s.ok()) {
         return s;
     }
