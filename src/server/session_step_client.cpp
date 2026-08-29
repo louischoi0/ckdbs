@@ -11,13 +11,15 @@
 namespace kds::server {
 
 StatusOr<PipelineTag> SessionStepClient::Open(const exec::Step& step, std::uint32_t owner_core,
-                                              std::uint64_t request_id) {
+                                              std::uint64_t request_id, catalog::PkSpan span) {
     auto descriptor = EncodeStepDescriptor(ShippedForm(step));
     if (!descriptor.ok()) return descriptor.status();
 
     StepOpenHead head{};
     head.tag = PipelineTag{request_id, core_id_, step.step_id};
     head.downstream_core = core_id_;
+    head.range_lo = span.lo;
+    head.range_hi = span.hi;
 
     // A single-step read is a pipeline of one - the whole-row P4c shape
     // (no output spec, no upstream) - so registration, the send, and the
@@ -420,14 +422,18 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
     up.upstream_core = outer_core;
     up.forwarded.reserve(fwd.size());
     for (std::uint16_t pos : fwd) up.forwarded.push_back(outer_schema.columns[pos]);
-    up.enclosed_open = EncodeStepOpen(leaf_head, leaf_descriptor.value(), nullptr, leaf_output);
+    up.enclosed_open = EncodeStepOpen(leaf_head, leaf_descriptor.value(), {}, leaf_output);
 
     StepOpenHead final_head{};
     final_head.tag = PipelineTag{request_id, session_core, inner.step_id};
     final_head.downstream_core = session_core;
     final_head.downstream_step = 0;  // the session's own read, the historical zero
 
-    plan.final_open = EncodeStepOpen(final_head, final_descriptor.value(), &up, final_output);
+        // One upstream: the two-step shape has a single producer, and RD7's
+    // fan-in is what makes the span plural. A span of one is what that
+    // shape has always encoded.
+    const StepOpenUpstream ups[] = {up};
+    plan.final_open = EncodeStepOpen(final_head, final_descriptor.value(), ups, final_output);
     plan.final_core = inner_core;
     plan.final_tag = final_head.tag;
     plan.final_rel_oid = inner.rel_oid;

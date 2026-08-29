@@ -240,7 +240,17 @@ struct DispatchOutcome {
     // `Dispatch()` can finish one only when it already completed (the
     // in-process loopback case), because with no reactor there is nothing
     // to pump the reply through.
-    std::optional<PipelineTag> pending_remote = std::nullopt;
+    // **A group since RD7** (§5's third cost). A read of a split relation
+    // opens one stage per range, so the statement parks on k tags rather
+    // than one and completes only when every one of them has. In **range
+    // order** (CC9's ascending `lo`), which is the order their rows are
+    // concatenated in - the same order the local walk emits in, so a
+    // split relation read remotely and read locally answer alike.
+    //
+    // Empty is "no remote read", which is what `std::optional`'s absence
+    // used to say; one element is every read before RD7 and every read of
+    // an unsplit relation after it.
+    std::vector<PipelineTag> pending_remote = {};
 
     // A peer-owned relation's CREATE INDEX this statement sent to the owner
     // to build (PW1c-6b-3): the reply is not in `response` yet.
@@ -1536,7 +1546,10 @@ private:
     // Formats a completed remote read into the exact reply the local path
     // would have produced (workplan P4c) - same header, same row shape -
     // and closes the read. Call only when the read is done.
-    DispatchOutcome FinishRemoteRead(const PipelineTag& tag);
+    // Frames the reply for a whole fan-in: the header once, then every
+    // stage's rows in `tags` order. Closes each read whatever the outcome,
+    // because a read left open holds its batches for the session's life.
+    DispatchOutcome FinishRemoteReads(const std::vector<PipelineTag>& tags);
 
 
     bool logging(LogLevel level) const noexcept {

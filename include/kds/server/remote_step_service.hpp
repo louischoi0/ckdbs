@@ -74,10 +74,37 @@ struct StepOpenHead {
     // order from zero, so a step that consumes an upstream edge always
     // has a producer numbered below it and can never itself be step 0.
     // Every pre-4b encoder's zero therefore already meant what it now
-    // says. Keeps the head padding-free at 24 bytes.
+    // says.
+    //
+    // **Shared across the siblings of one fan-in** (RD7, §5's fourth
+    // cost): every sibling's enclosed open names the same
+    // `downstream_step`, which is what keeps `OpenConsumingStage`'s
+    // cross-check meaningful - it is the consumer they all feed, and a
+    // sibling naming a different one is a mis-plan rather than a second
+    // consumer.
     std::uint32_t downstream_step = 0;
+
+    // **Which slice of the relation this stage is responsible for** (RD7).
+    // A read of a split relation opens one stage per *maximal contiguous
+    // run* of ranges on one core, and this half-open pk span is that run;
+    // the stage walks the ranges it owns that fall inside it, and no
+    // others.
+    //
+    // Per run and **not per core**, which is the correction the row's
+    // review forced. Grouping by core emits `A₁, A₃, B₂` where ownership
+    // interleaves - and interleaving is not a corner case, it is exactly
+    // what R4's id-block-aligned insert spreading produces (`crosscore.md`
+    // §6b). Per run restores true `lo` order, which is what makes a split
+    // relation's answer byte-identical to the unsplit one (§8 test 9).
+    //
+    // `[0, kIdSpaceEnd)` is the whole relation, which is what every open
+    // before RD7 meant and what an unsplit relation's single stage means
+    // now - so a zeroed `range_hi` is the one value that would be wrong,
+    // and the encoder never writes one.
+    std::uint64_t range_lo = 0;
+    std::uint64_t range_hi = catalog::kIdSpaceEnd;
 };
-static_assert(sizeof(StepOpenHead) == 24);
+static_assert(sizeof(StepOpenHead) == 40);
 
 // One column of a stage's output row: either a pass-through of an
 // input-layout column or a column of the stage's own relation, in output
@@ -112,9 +139,20 @@ struct StepOpenUpstream {
 // (P4d-4b-3): a leaf has an output too - the forwarded layout it seals
 // for its consumer - and a section owned by the upstream half could
 // never say so. Empty means the whole row.
+// **How wide a fan-in may be, and why it is not the range count** (RD7).
+// A relation of k ranges does *not* open k stages: consecutive ranges on
+// one core are walked by one stage, in `lo` order, so the width is the
+// number of distinct **owner cores**, never the number of boundaries. A
+// 10 M-row relation at D6's size has ~2,441 ranges and at most
+// `cores` stages, which is the difference between a plan and an absurdity.
+//
+// The wire carries the count in one byte, which this bound is what makes
+// safe rather than lucky.
+inline constexpr std::size_t kMaxFanInUpstreams = 64;
+
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
                                       std::span<const std::byte> descriptor,
-                                      const StepOpenUpstream* upstream = nullptr,
+                                      std::span<const StepOpenUpstream> upstreams = {},
                                       std::span<const StepOutputColumn> output = {});
 
 // One STEP_BATCH framing for every producer of one - the server's Seal,
@@ -128,7 +166,10 @@ std::vector<std::byte> EncodeStepBatch(const PipelineTag& tag, std::uint32_t seq
 // what it points at, which every message handler already does.
 struct StepOpenParts {
     StepOpenHead head{};
-    std::optional<StepOpenUpstream> upstream;
+    // **Plural since RD7**: one entry per upstream stage of a fan-in, in
+    // range order. Empty for a leaf; one entry for every chained open
+    // before RD7 and every chained open over an unsplit relation after it.
+    std::vector<StepOpenUpstream> upstreams;
     // The stage's output row, in the order its downstream decodes.
     // Empty = the whole row in schema order (the P4c shape).
     std::vector<StepOutputColumn> output;
@@ -258,10 +299,10 @@ private:
         // outer frame's loop condition picks the new credit up itself.
         bool draining = false;
 
-        // The input edge, present only on a consuming stage (P4d-4b-2):
-        // where its rows come from, keyed by the *upstream* stage's tag.
-        // Batches queue here raw; the consumer coroutine decodes them,
-        // which keeps the message handler allocation-light and the
+        // The input edges, present only on a consuming stage (P4d-4b-2):
+        // where its rows come from, each keyed by the *upstream* stage's
+        // tag. Batches queue here raw; the consumer coroutine decodes
+        // them, which keeps the message handler allocation-light and the
         // decode where the input schema lives.
         struct InputEdge {
             PipelineTag input_tag{};
@@ -269,13 +310,41 @@ private:
             std::deque<std::vector<std::byte>> input;
             bool input_eof = false;
         };
-        std::optional<InputEdge> consumer;
+
+        // **Plural since RD7** (§5's second cost), and the singular form
+        // was a silent wrong answer waiting for a split relation: with k
+        // upstreams, siblings 2..k's batches found no edge to match and
+        // hit `FindInputEdge`'s "no consuming pipeline wants it - §3's
+        // silent discard". Their rows simply vanished, and the statement
+        // reported success.
+        //
+        // **In range order, and consumed in that order** (CC9's ascending
+        // `lo`): `consumers[i]` is sibling `i`, and `consumed` names the
+        // one the coroutine is draining. Strict concatenation rather than
+        // interleaving, which is what makes the fan-in's output
+        // range-ordered - and it is affordable because each edge's credit
+        // ceiling bounds what a not-yet-consumed sibling may buffer, so a
+        // waiting producer stalls on credit rather than filling memory.
+        std::vector<InputEdge> consumers;
+        std::size_t consumed = 0;
+
+        // Whether this stage consumes at all - the test the singular
+        // `std::optional` used to answer, kept as a name so no site
+        // rediscovers that an empty vector means "a leaf stage".
+        bool consuming() const noexcept { return !consumers.empty(); }
+        // The edge being drained, or null once every sibling has ended.
+        InputEdge* active() noexcept {
+            return consumed < consumers.size() ? &consumers[consumed] : nullptr;
+        }
     };
 
     Pipeline* Find(const PipelineTag& tag);
-    // The consuming pipeline whose input edge `input_tag` feeds, or null -
-    // the one match OnStepBatch and OnStepEof share.
-    Pipeline* FindByInputTag(const PipelineTag& input_tag);
+    // The **edge** `input_tag` feeds, or null - the one match OnStepBatch
+    // and OnStepEof share. It answers the edge rather than the pipeline
+    // because since RD7 a consuming stage has k of them, and a caller
+    // handed the pipeline would have to re-run this search to know which
+    // sibling's batch it is holding.
+    Pipeline::InputEdge* FindInputEdge(const PipelineTag& input_tag);
     void Erase(const PipelineTag& tag);
     void Drain(Pipeline& pipe);
 
@@ -323,7 +392,11 @@ private:
     // the pipeline, submits RunConsumer, and forwards the enclosed open
     // upstream - in exactly that order, because the chained-open contract
     // is "state first, upstream last".
-    void OpenConsumingStage(const StepOpenHead& head, const StepOpenUpstream& up,
+    // `ups` is the fan-in, in range order (RD7). Every sibling forwards
+    // the **same** layout and names the same `downstream_step` - they are
+    // one step's stages - so the first decides the input schema and the
+    // rest are checked against it rather than each building their own.
+    void OpenConsumingStage(const StepOpenHead& head, std::span<const StepOpenUpstream> ups,
                             std::span<const StepOutputColumn> output, exec::Step step,
                             const catalog::Schema& schema);
 

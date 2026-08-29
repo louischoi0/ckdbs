@@ -185,6 +185,36 @@ TEST_F(RangeChainTest, AResumedPrefixWalkCoversEachRangeOnceRatherThanTwice) {
     EXPECT_NE(plan.find("build_rows=6"), std::string::npos) << plan;
 }
 
+TEST_F(RangeChainTest, AResumedPrefixWalkCrossesTheBoundaryItStoppedBefore) {
+    // The sibling of the test above, and the case it cannot reach: there
+    // the mark lands in the **last** range, so a resume that never steps
+    // to a next one is indistinguishable from a correct one. Here the mark
+    // lands in the *first*, and the row the second outer probe needs is in
+    // the second - so a resume that does not cross the boundary reports a
+    // row that exists as absent, and sets `complete` while saying it.
+    Run("CREATE TABLE u (id int64, v int64)");
+    Run("INSERT INTO t VALUES (100), (101), (102)");
+    SplitAt(kBoundary);
+    Run("INSERT INTO t VALUES (4096, 500)");
+    Run("INSERT INTO t VALUES (4097, 501)");
+
+    // First outer row matches the *first* row of the lower range, so the
+    // sub-chain's walk is cut one row in and the mark it leaves is inside
+    // range 0 with both ranges still uncovered.
+    Run("INSERT INTO u VALUES (100)");
+    // Second outer row matches nothing the prefix holds and only the upper
+    // range can answer it.
+    Run("INSERT INTO u VALUES (501)");
+
+    const std::string out =
+        Run("SELECT u.id FROM u WHERE EXISTS (SELECT t.id FROM t WHERE t.v = u.v)");
+    std::size_t rows = 0;
+    for (std::size_t at = out.find("\\n"); at != std::string::npos; at = out.find("\\n", at + 1)) {
+        ++rows;
+    }
+    EXPECT_EQ(rows, 2u) << "a resume that stopped at the boundary answers one row: " << out;
+}
+
 TEST_F(RangeChainTest, APkLookupAcrossTheBoundaryFindsItsRow) {
     Run("INSERT INTO t VALUES (1)");
     SplitAt(kBoundary);

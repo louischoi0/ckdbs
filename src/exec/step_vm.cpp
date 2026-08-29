@@ -249,6 +249,8 @@ using InnerBuildStore = std::unordered_map<std::uint32_t, InnerBuildState>;
 
 class ChainRunner {
 public:
+    void set_walk_span(catalog::PkSpan span) noexcept { walk_span_ = span; }
+
     // `builds` is the statement's inner-build store, shared the way
     // `stats` and `budget` are: a nested runner is rebuilt per outer row,
     // and a map rebuilt per outer row is not a map (JB6). Null means "this
@@ -1577,6 +1579,12 @@ private:
         // meaningful for a split heap relation; `ranges.size()` is the
         // terminating value for every other shape.
         std::size_t range_index = prefixed ? prefix->resume.range : 0;
+        // The chain heads this core walks, in `lo` order (RD7,
+        // `TableAccess::WalkHeadsFor`): a stage of a fan-in covers the
+        // ranges it owns and no others, because the rest are another
+        // stage's and the session concatenates them. One entry - the
+        // relation's own head - for every unsplit relation.
+        std::vector<PageId> walk_heads;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -1791,6 +1799,28 @@ private:
         // is what makes the seek an accelerator that cannot change the
         // answer - the same property tail pruning rests on.
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
+        // Filled **before** the start is chosen, and only for a *split*
+        // heap relation.
+        //
+        // Before, because a resumed walk (JB6) starts at its mark and still
+        // needs the next range's head when that chain ends: filling this
+        // only on the from-the-head path left a resumed walk with no heads
+        // at all, so it stopped at the range it resumed in and then set
+        // `prefix->complete` - a partial map reported as total, which is
+        // the one thing a prefix may not conclude.
+        //
+        // Only when split, because `WalkHeadsFor` answers an unsplit
+        // relation with a one-element vector: that is a heap allocation on
+        // every walk - and a walk runs once per outer row under a
+        // correlated sub-chain - where RD3's zero-cost invariant is one
+        // load of the field it always was.
+        if (!is_btree && !access.ranges.empty()) {
+            // The span applies to the outermost relation, which is what a
+            // stage is assigned; an inner step reads a different relation
+            // and the assignment says nothing about it.
+            walk_heads = access.WalkHeadsFor(
+                catalog_.core_id(), index == 0 ? walk_span_ : catalog::PkSpan::Whole());
+        }
         PageId cur = kInvalidPageId;
         if (resume_page != kInvalidPageId) {
             // Resuming (JB6): the mark names the page and the skip above
@@ -1823,7 +1853,13 @@ private:
             //
             // Unsplit is the field it always was, reached by one branch on
             // a cached vector's emptiness.
-            cur = access.ranges.empty() ? access.desc_page_id : access.ranges.front().entry_page;
+            if (access.ranges.empty()) {
+                cur = access.desc_page_id;  // unsplit: the field it always was
+            } else if (walk_heads.empty()) {
+                co_return Status::OK();  // split, and no range of ours: no rows
+            } else {
+                cur = walk_heads.front();
+            }
         }
 
         // ---- The page loop, owned by the coroutine (P4d-3) ---------------
@@ -1868,9 +1904,9 @@ private:
                 // visitor asked to stop, and the two endings are told apart
                 // by `cut` alone (the page primitives answer both with
                 // kInvalidPageId).
-                if (!cut && !is_btree && range_index + 1 < live_access->ranges.size()) {
+                if (!cut && !is_btree && range_index + 1 < walk_heads.size()) {
                     ++range_index;
-                    cur = live_access->ranges[range_index].entry_page;
+                    cur = walk_heads[range_index];
                     continue;
                 }
                 // Both endings arrive here - the page primitives answer a
@@ -2321,6 +2357,11 @@ private:
     }
 
     catalog::Catalog& catalog_;
+    // RD7's stage assignment; see `StepChain::walk_span`. Set once,
+    // immediately after construction, and read only at the outermost
+    // step - a nested step reads a different relation.
+    catalog::PkSpan walk_span_ = catalog::PkSpan::Whole();
+
     storage::PageStore& store_;
 
     // Scratch for AcceptTupleAt()'s decode, reused across rows so a scan
@@ -2695,6 +2736,9 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
 
     ChainRunner runner(catalog, store, sink, /*depth=*/parent != nullptr ? 1u : 0u, parent,
                        counters, spend, trail, replay, cabins, snapshot, indexes, resume_gate);
+    // RD7: the slice this chain covers, which a fan-in's stage was
+    // assigned and every other chain leaves whole.
+    runner.set_walk_span(chain.walk_span);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by

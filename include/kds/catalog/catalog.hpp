@@ -1239,6 +1239,17 @@ private:
     std::uint32_t core_count_ = 1;
     std::uint32_t core_id_ = kSystemCore;  // see the constructor's comment
 
+  public:
+    // Which core this catalog belongs to. Read by the executor to know
+    // **which ranges are its to walk** (RD7): a stage covers the ranges it
+    // owns, and the catalog is already the thing every executor holds that
+    // knows where it is running. Exposed rather than threaded through the
+    // executor's constructors, which would have been the same fact copied
+    // into a second place to disagree from.
+    std::uint32_t core_id() const noexcept { return core_id_; }
+
+  private:
+
     Logger* log_ = nullptr;
     // Armed by the `CommandDispatcher` constructor, so it is null for
     // bootstrap, for recovery, for a test over a bare store - and **for

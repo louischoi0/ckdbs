@@ -7,6 +7,7 @@
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
 #include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
 #include "kds/server/txn_2pc_service.hpp"  // R6-3: the coordinator's two phases
+#include "kds/server/remote_step_service.hpp"  // RD7: the fan-in ceiling
 
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
@@ -496,17 +497,27 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         }
     }
 
-    if (out->pending_remote.has_value() && remote_reads_ != nullptr) {
+    if (!out->pending_remote.empty() && remote_reads_ != nullptr) {
         // The remote read (workplan P4c). The predicate re-finds the state
         // each poll, so a torn-down read wakes the waiter instead of
         // dangling a flag address (the reads vector may reallocate).
-        const PipelineTag tag = *out->pending_remote;
-        const std::function<bool()> finished = [this, tag] {
-            SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
-            return read == nullptr || read->done;
+        //
+        // **Every stage, one park** (RD7): a fan-in over a split relation
+        // opens one stage per range, and the statement is finished when
+        // the last of them is. One `WaitUntil` over a predicate that ands
+        // them rather than k sequential parks - k parks would serialise on
+        // whichever stage the loop happened to name first, turning a
+        // fan-out into a fan-out-then-queue.
+        const std::vector<PipelineTag> tags = out->pending_remote;
+        const std::function<bool()> finished = [this, tags] {
+            for (const PipelineTag& tag : tags) {
+                SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
+                if (read != nullptr && !read->done) return false;
+            }
+            return true;
         };
         co_await sched::WaitUntil{&finished};
-        *out = FinishRemoteRead(tag);
+        *out = FinishRemoteReads(tags);
     }
 
     if (out->pending_index_build.has_value() && index_builds_ != nullptr) {
@@ -621,19 +632,29 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
 
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     DispatchOutcome outcome = DispatchAndStage(line, session);
-    if (outcome.pending_remote.has_value()) {
+    if (!outcome.pending_remote.empty()) {
         // With no reactor there is nothing to pump the reply through, so
-        // the synchronous path can only finish a read that is already
+        // the synchronous path can only finish reads that are already
         // complete - the in-process loopback arrangement tests use. An
-        // incomplete one is closed and refused retryably rather than
-        // spun on: a wait with nothing to run the other side is a hang.
-        const PipelineTag tag = *outcome.pending_remote;
-        SessionStepClient::RemoteRead* read =
-            remote_reads_ != nullptr ? remote_reads_->Find(tag) : nullptr;
-        if (read != nullptr && read->done) {
-            outcome = FinishRemoteRead(tag);
+        // incomplete one closes **every** stage and refuses retryably
+        // rather than spinning: a wait with nothing to run the other side
+        // is a hang, and a half-closed fan-in leaks the rest.
+        bool all_done = remote_reads_ != nullptr;
+        if (all_done) {
+            for (const PipelineTag& tag : outcome.pending_remote) {
+                SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
+                if (read == nullptr || !read->done) {
+                    all_done = false;
+                    break;
+                }
+            }
+        }
+        if (all_done) {
+            outcome = FinishRemoteReads(outcome.pending_remote);
         } else {
-            if (remote_reads_ != nullptr) remote_reads_->Close(tag);
+            if (remote_reads_ != nullptr) {
+                for (const PipelineTag& tag : outcome.pending_remote) remote_reads_->Close(tag);
+            }
             return {ErrorReply(Status::TxnConflict(
                         "remote read needs the reactor path; retry on a served connection")),
                     false};
@@ -4449,36 +4470,43 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     return Status::OK();
 }
 
-DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
-    SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
-    if (read == nullptr) {
+DispatchOutcome CommandDispatcher::FinishRemoteReads(const std::vector<PipelineTag>& tags) {
+    // Every stage is closed on every exit, success or not: a read left
+    // open holds its batches for the session's life, and with a fan-in an
+    // early return would leak the k-1 the failing one did not name.
+    struct CloseAll {
+        SessionStepClient* reads;
+        const std::vector<PipelineTag>& tags;
+        ~CloseAll() {
+            for (const PipelineTag& tag : tags) reads->Close(tag);
+        }
+    } close_all{remote_reads_, tags};
+
+    // **The first stage decides the layout, and the rest must agree by
+    // construction rather than by check.** Siblings of one fan-in are one
+    // step's stages: the session plans one projection and encloses it in
+    // every sibling's open, so a differing layout would be a mis-plan
+    // rather than a data condition - and the per-field decode below is
+    // what catches a wire that disagrees anyway (invariant 13 one level
+    // up), on every sibling, not just the first.
+    SessionStepClient::RemoteRead* head = remote_reads_->Find(tags.front());
+    if (head == nullptr) {
         return {ErrorReply(Status::IoError("remote read state vanished before completion")),
                 false};
     }
-    if (!read->error.ok()) {
-        const Status error = read->error;
-        remote_reads_->Close(tag);
-        return {ErrorReply(error), false};
-    }
 
-    // One renderer for both read shapes (P4d-4b-3): what varies is only
-    // where the layout, the headings and the types come from - planned by
-    // the session (the projected pipeline) or the relation's schema (the
-    // P4c star read, whose layout the read leaves empty). Resolved once,
-    // then one loop - a second formatter is exactly how the local
-    // renderer's own warning says `projection_types` gets forgotten. The
-    // decode is checked per field on both shapes (invariant 13 one level
-    // up): the P4c edge is the same wire from the same peer, and a width
-    // the layout disagrees with is Corruption, never interpreted.
-    std::vector<catalog::SysColumnRow> layout = std::move(read->output_layout);
-    std::vector<std::string> names = std::move(read->column_names);
-    std::vector<std::uint32_t> types = std::move(read->projection_types);
+    std::vector<catalog::SysColumnRow> layout = std::move(head->output_layout);
+    std::vector<std::string> names = std::move(head->column_names);
+    std::vector<std::uint32_t> types = std::move(head->projection_types);
     if (layout.empty()) {
-        auto access = catalog_.InitTableAccess(read->rel_oid);
-        if (!access.ok()) {
-            remote_reads_->Close(tag);
-            return {ErrorReply(access.status()), false};
-        }
+        // One renderer for both read shapes (P4d-4b-3): what varies is only
+        // where the layout, the headings and the types come from - planned
+        // by the session (the projected pipeline) or the relation's schema
+        // (the P4c star read, whose layout the read leaves empty). Resolved
+        // once, then one loop - a second formatter is exactly how the local
+        // renderer's own warning says `projection_types` gets forgotten.
+        auto access = catalog_.InitTableAccess(head->rel_oid);
+        if (!access.ok()) return {ErrorReply(access.status()), false};
         layout = access.value()->schema.columns;
         names.reserve(layout.size());
         types.reserve(layout.size());
@@ -4497,34 +4525,39 @@ DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
         os << name;
         first_col = false;
     }
-    for (const auto& batch : read->batches) {
-        std::span<const std::byte> rows;
-        auto header = DecodeStepBatchHeader(batch, rows);
-        if (!header.ok()) {
-            remote_reads_->Close(tag);
-            return {ErrorReply(header.status()), false};
+
+    // **In `tags` order, which is range order** - the same order the local
+    // walk emits a split relation in (`step_vm.cpp`), so the two answers
+    // are one answer. An error anywhere fails the whole statement rather
+    // than truncating: a fan-in that rendered the stages it could would be
+    // a short answer reported as a complete one.
+    for (const PipelineTag& tag : tags) {
+        SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
+        if (read == nullptr) {
+            return {ErrorReply(Status::IoError("remote read state vanished before completion")),
+                    false};
         }
-        auto decoded = wire::DecodeRowBatch(rows, layout.size());
-        if (!decoded.ok()) {
-            remote_reads_->Close(tag);
-            return {ErrorReply(decoded.status()), false};
-        }
-        for (const auto& row : decoded.value()) {
-            os << "\\n";
-            bool first_val = true;
-            for (std::size_t i = 0; i < layout.size(); ++i) {
-                if (!first_val) os << ',';
-                auto value = wire::FieldToValueChecked(layout[i], row[i]);
-                if (!value.ok()) {
-                    remote_reads_->Close(tag);
-                    return {ErrorReply(value.status()), false};
+        if (!read->error.ok()) return {ErrorReply(read->error), false};
+
+        for (const auto& batch : read->batches) {
+            std::span<const std::byte> rows;
+            auto header = DecodeStepBatchHeader(batch, rows);
+            if (!header.ok()) return {ErrorReply(header.status()), false};
+            auto decoded = wire::DecodeRowBatch(rows, layout.size());
+            if (!decoded.ok()) return {ErrorReply(decoded.status()), false};
+            for (const auto& row : decoded.value()) {
+                os << "\\n";
+                bool first_val = true;
+                for (std::size_t i = 0; i < layout.size(); ++i) {
+                    if (!first_val) os << ',';
+                    auto value = wire::FieldToValueChecked(layout[i], row[i]);
+                    if (!value.ok()) return {ErrorReply(value.status()), false};
+                    os << exec::FormatValue(types[i], value.value());
+                    first_val = false;
                 }
-                os << exec::FormatValue(types[i], value.value());
-                first_val = false;
             }
         }
     }
-    remote_reads_->Close(tag);
     return {os.str(), false};
 }
 
@@ -4545,6 +4578,21 @@ Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
         if (access.value()->owner_core != core_id_) {
             refusal =
                 CrossCoreReadUnsupported(core_id_, access.value()->owner_core, step.rel_name);
+            return false;
+        }
+        // **Owned here is not the same as wholly here** (RD7). Since the
+        // walk covers the ranges this core owns and no others
+        // (`TableAccess::WalkHeadsFor`), a relation whose `owner_core` is
+        // this core but one of whose ranges is not would be walked short:
+        // rows silently missing, success reported - the one ending this row
+        // may not leave open. The fan-in in `HandleSelect` is the route
+        // that answers such a read; a statement reaching this line could
+        // not take it, so a refusal is the only honest ending.
+        if (!access.value()->WhollyOwnedBy(core_id_)) {
+            refusal = Status::Unsupported(
+                "relation '" + step.rel_name +
+                "' has ranges on another core and this shape cannot fan in over them; "
+                "reading it here would answer short");
             return false;
         }
         return true;
@@ -6218,13 +6266,80 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         auto owner_access = catalog_.InitTableAccess(step.rel_oid);
         if (owner_access.ok() && owner_access.value()->owner_core != core_id_ &&
             step.sub_chains.empty() && !step.emit_in_key_order) {
-            auto tag = remote_reads_->Open(step, owner_access.value()->owner_core,
-                                           next_remote_request_++);
-            if (tag.ok()) {
-                DispatchOutcome pending;
-                pending.pending_remote = tag.value();
-                return pending;
+            // **Which cores hold this relation** (RD7). One stage per
+            // owner *core*, never per range: a relation of k ranges is
+            // read by at most `cores` stages, because consecutive ranges
+            // on one core are one stage's walk in `lo` order
+            // (`kMaxFanInUpstreams` says why the distinction is the
+            // difference between a plan and an absurdity).
+            //
+            // The order is the order of each core's **first** range, so
+            // the concatenation `FinishRemoteReads` performs is range
+            // order - the same order the local walk emits in
+            // (`step_vm.cpp`), which is what makes a split relation read
+            // remotely and read locally one answer rather than two.
+            //
+            // Unsplit is `owner_core` and one stage, which is every
+            // relation this engine has: `range_size_ids` defaults off, and
+            // even armed, RD5 opens a range for the core that asked - the
+            // owner - so a second *owner* arrives only with R4's
+            // spreading. The fan-in is built ahead of its producer, and
+            // that is stated rather than implied.
+            // **One stage per maximal contiguous run of ranges on one
+            // core**, not one per core - the correction this row's review
+            // forced. Grouping by core emits `A₁, A₃, B₂` where ownership
+            // interleaves, and interleaving is not a corner case: it is
+            // exactly what R4's id-block-aligned insert spreading produces
+            // (`crosscore.md` §6b). Per run, the concatenation is true
+            // `lo` order, which is what makes a split relation's answer
+            // byte-identical to the unsplit one (§8 test 9).
+            //
+            // A run is also why a stage needs its span: two runs on one
+            // core would otherwise each walk both, and the reply would
+            // carry every row of that core twice.
+            struct Stage {
+                std::uint32_t owner;
+                catalog::PkSpan span;
+            };
+            std::vector<Stage> stages;
+            for (const catalog::RangeTarget& range : owner_access.value()->ranges) {
+                if (!stages.empty() && stages.back().owner == range.owner_core &&
+                    stages.back().span.hi == range.lo) {
+                    stages.back().span.hi = range.hi;  // the run continues
+                    continue;
+                }
+                stages.push_back(Stage{range.owner_core, catalog::PkSpan{range.lo, range.hi}});
             }
+            if (stages.empty()) {
+                stages.push_back(
+                    Stage{owner_access.value()->owner_core, catalog::PkSpan::Whole()});
+            }
+            if (stages.size() > kMaxFanInUpstreams) {
+                DispatchOutcome refused;
+                refused.response = ErrorReply(Status::Unsupported(
+                    "relation '" + step.rel_name + "' needs " + std::to_string(stages.size()) +
+                    " stages, above the fan-in ceiling of " +
+                    std::to_string(kMaxFanInUpstreams)));
+                return refused;
+            }
+
+            DispatchOutcome pending;
+            bool opened_all = true;
+            for (const Stage& stage : stages) {
+                auto tag =
+                    remote_reads_->Open(step, stage.owner, next_remote_request_++, stage.span);
+                if (!tag.ok()) {
+                    opened_all = false;
+                    break;
+                }
+                pending.pending_remote.push_back(tag.value());
+            }
+            if (opened_all) return pending;
+            // **A partial fan-in is closed, not served.** The stages that
+            // did open would otherwise hold their batches for the
+            // session's life and the reply would be short by whatever the
+            // unopened one held - a wrong answer with nothing logged.
+            for (const PipelineTag& tag : pending.pending_remote) remote_reads_->Close(tag);
             // A step the descriptor refuses falls through to the honest
             // refusal rather than a worse error. An index or Cabin probe
             // is no longer in that class - the session ships it as the
@@ -6263,7 +6378,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             if (plan.ok()) {
                 if (auto tag = remote_reads_->OpenPipeline(std::move(plan.value())); tag.ok()) {
                     DispatchOutcome pending;
-                    pending.pending_remote = tag.value();
+                    pending.pending_remote.push_back(tag.value());
                     return pending;
                 }
             }

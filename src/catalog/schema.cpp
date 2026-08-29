@@ -89,6 +89,23 @@ Status CheckKeystoneColumn(const Schema& schema) {
     return Status::OK();
 }
 
+std::vector<PageId> TableAccess::WalkHeadsFor(std::uint32_t core_id, PkSpan span) const {
+    if (ranges.empty()) return {desc_page_id};
+    std::vector<PageId> heads;
+    heads.reserve(ranges.size());
+    for (const RangeTarget& range : ranges) {
+        // Owned here **and** inside this stage's slice. Both halves are
+        // needed and neither implies the other: ownership is what keeps a
+        // stage off pages it cannot fault, and the span is what keeps two
+        // stages of one core from each emitting the other's rows when
+        // ownership interleaves.
+        if (range.owner_core != core_id) continue;
+        if (range.lo >= span.hi || span.lo >= range.hi) continue;
+        heads.push_back(range.entry_page);
+    }
+    return heads;
+}
+
 StatusOr<TableAccess::HeapChain> TableAccess::HeapChainFor(std::uint64_t id) const {
     // RD3's zero-cost invariant, reaching the write path: one load from an
     // entry the caller is already holding, one predictable branch, and the

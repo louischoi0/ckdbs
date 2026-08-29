@@ -37,8 +37,8 @@ namespace kds::server {
 // statement by the session core, sequential per core - never
 // pointer-derived (sched.md §7's determinism rule).
 struct PipelineTag {
-    // The u64 leads so the struct packs to 16 bytes with no padding -
-    // invariant 6's spirit for a wire form, even an in-process one.
+    // The u64 leads so the struct packs with no padding - invariant 6's
+    // spirit for a wire form, even an in-process one.
     std::uint64_t request_id = 0;
     std::uint32_t session_core = 0;
     std::uint32_t step_id = 0;
@@ -46,6 +46,24 @@ struct PipelineTag {
     friend bool operator==(const PipelineTag&, const PipelineTag&) = default;
 };
 static_assert(sizeof(PipelineTag) == 16);
+
+// **RD7 grew this struct by a `sibling` field and the field was removed
+// again at the row's review**, which is worth a sentence because §5 of
+// `workplan-range-directory.md` still lists it as the fan-in's first cost.
+//
+// §5's argument was sound on its premise: siblings of one fan-in must be
+// told apart, *a reply must be matched and not trusted* (SS1), and
+// overloading `step_id` would have changed what a Waystone trail is keyed
+// on. What changed is the premise. §5 assumed one `request_id` for the
+// whole statement, so siblings could differ only inside the tag; the
+// dispatcher mints `next_remote_request_++` **per stage**, so they differ
+// already and every exact-tag site tells them apart with no new field.
+//
+// A field that is never written is worse than absent: it reads as the
+// discriminator while something else discriminates, so the next planner
+// sets it and believes it matters. Whichever future shape mints k stages
+// under one request_id is the one that needs this back - and it will need
+// to add it deliberately rather than find it already there and unwired.
 
 // ---- The send seam ------------------------------------------------------
 

@@ -1377,6 +1377,289 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
     EXPECT_EQ(refused.response.rfind("ERR ", 0), 0u);
 }
 
+// ---- RD7: a read of a split relation fans in over its owners ------------
+
+TEST_F(CoreRuntimeTest, ASelectAgainstARelationSplitAcrossTwoCoresFansInInRangeOrder) {
+    // RB4's substance, and the first statement in this engine to consume
+    // more than one producer. The directory is written by hand because
+    // **nothing can produce this state yet**: `range_size_ids` defaults
+    // off, and even armed RD5 opens a range for the core that asked -
+    // the owner - so a second *owner* arrives only with R4's insert
+    // spreading. The fan-in is built ahead of its producer and this test
+    // is what stands in for it.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "split", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // The cut: [0, 4096) stays with the relation's owner, [4096, end)
+    // goes to another core.
+    auto upper_head = catalog2.CreateRangeEntryPage(oid.value(), 4096);
+    ASSERT_TRUE(upper_head.ok()) << upper_head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, /*owner_core=*/2, upper_head.value())
+                    .ok());
+
+    auto ranges = catalog2.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u);
+    ASSERT_NE(ranges.value()[0].owner_core, ranges.value()[1].owner_core)
+        << "the fixture did not produce a two-owner relation";
+
+    // Two rows in each range's own chain, placed directly: what RB4 is
+    // being tested on is the read, and RB3 already owns the write half.
+    auto access = catalog2.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    auto place = [&](std::uint64_t id, std::int64_t v, PageId head) {
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout, id,
+                                       {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, head, id, payload.value(), 1,
+                                      access.value()->oid)
+                        .ok());
+    };
+    place(1, 10, ranges.value()[0].entry_page);
+    place(2, 20, ranges.value()[0].entry_page);
+    place(4096, 30, ranges.value()[1].entry_page);
+    place(4097, 40, ranges.value()[1].entry_page);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    runtime.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+
+    // One server per owner core, and the client routes by the core the
+    // stage names - which is what a fan-in is, and what the single-server
+    // loopback above could not express.
+    std::optional<SessionStepClient> client;
+    auto make_seam = [&] {
+        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
+            switch (kind) {
+                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+                default: ADD_FAILURE() << "unexpected server send";
+            }
+            return Status::OK();
+        }};
+    };
+    //
+    // **One catalog per core, which is what production has**: a stage
+    // walks the ranges *it* owns (`TableAccess::WalkHeadsFor`), and the
+    // executor learns which core it is on from the catalog it was built
+    // with. Sharing one catalog across two servers would make both stages
+    // believe they were core 0 and answer nothing - the fixture would be
+    // lying about the one fact the fan-in turns on.
+    catalog::Catalog catalog_lo(*core0_store_, storage::kDefaultInlineCellWidth,
+                                /*core_count=*/3, ranges.value()[0].owner_core);
+    catalog::Catalog catalog_hi(*core0_store_, storage::kDefaultInlineCellWidth,
+                                /*core_count=*/3, ranges.value()[1].owner_core);
+    std::optional<RemoteStepServer> owner_lo;
+    std::optional<RemoteStepServer> owner_hi;
+    owner_lo.emplace(catalog_lo, *core0_store_, ranges.value()[0].owner_core, make_seam());
+    owner_hi.emplace(catalog_hi, *core0_store_, ranges.value()[1].owner_core, make_seam());
+    client.emplace(
+        /*core_id=*/0,
+        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            RemoteStepServer& to =
+                dst == ranges.value()[0].owner_core ? *owner_lo : *owner_hi;
+            sched::MessageHeader h{};
+            h.src_core = 0;
+            h.dst_core = dst;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
+                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected client send";
+            }
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    // **Range order, and every range.** A fan-in that dropped a sibling
+    // would answer two rows and report success - §3's silent discard,
+    // which the plural `InputEdge` exists to end - and one that
+    // concatenated out of order would disagree with the local walk over
+    // the same rows.
+    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM split");
+    EXPECT_EQ(out.response, "id,v\\n1,10\\n2,20\\n4096,30\\n4097,40");
+    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
+}
+
+TEST_F(CoreRuntimeTest, ASelectAgainstARelationWithARangeOnAnotherCoreIsRefusedNotAnsweredShort) {
+    // The other half of RD7's ownership question, and the one that decides
+    // a *wrong answer* rather than a route. `sys.tables.owner_core` names
+    // one core; a range of the same relation may name another. The walk
+    // covers the ranges this core owns and no others
+    // (`TableAccess::WalkHeadsFor`), so a read that runs locally over a
+    // relation owned here but not *wholly* here returns the rows of one
+    // range and reports success - two rows where four exist, with nothing
+    // logged. The fan-in cannot take this statement, because its gate is
+    // "somebody else owns the relation" and here nobody else does.
+    //
+    // A refusal is therefore the only honest ending, and this test is what
+    // says so: an answer of any kind here is the defect.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "half_here", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    auto upper_head = catalog2.CreateRangeEntryPage(oid.value(), 4096);
+    ASSERT_TRUE(upper_head.ok()) << upper_head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, /*owner_core=*/2, upper_head.value())
+                    .ok());
+
+    auto ranges = catalog2.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u);
+    // The default placement is the creating core, so the relation is core
+    // 0's - which is exactly what keeps the fan-in from firing.
+    ASSERT_EQ(ranges.value()[0].owner_core, 0u);
+    ASSERT_EQ(ranges.value()[1].owner_core, 2u);
+
+    auto access = catalog2.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    auto place = [&](std::uint64_t id, std::int64_t v, PageId head) {
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout, id,
+                                       {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, head, id, payload.value(), 1,
+                                      access.value()->oid)
+                        .ok());
+    };
+    place(1, 10, ranges.value()[0].entry_page);
+    place(4096, 30, ranges.value()[1].entry_page);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    runtime.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+
+    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM half_here");
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("answer short"), std::string::npos) << out.response;
+}
+
+TEST_F(CoreRuntimeTest, AFanInOverInterleavedOwnershipStillAnswersInRangeOrder) {
+    // **The case grouping by owner core gets wrong**, and the reason RB4's
+    // stages are per contiguous *run*: ownership A,B,A emits A's two runs
+    // adjacent if the fan-in groups by core, so the answer comes back
+    // `1,2, 8192,8193, 4096,4097` where the same rows unsplit on one core
+    // read `1,2, 4096,4097, 8192,8193`. §8 test 9 asks for byte-identical,
+    // and interleaving is not a corner case - it is what R4's
+    // id-block-aligned spreading produces (`crosscore.md` §6b).
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "woven", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // [0,4096) -> the relation's owner, [4096,8192) -> another core,
+    // [8192, end) -> back to the owner. Two runs on one core.
+    for (auto [lo, owner] : std::vector<std::pair<std::uint64_t, std::uint32_t>>{{4096, 2},
+                                                                                {8192, 1}}) {
+        auto head = catalog2.CreateRangeEntryPage(oid.value(), lo);
+        ASSERT_TRUE(head.ok()) << head.status().message();
+        ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), lo, owner, head.value()).ok());
+    }
+    auto ranges = catalog2.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 3u);
+    ASSERT_EQ(ranges.value()[0].owner_core, ranges.value()[2].owner_core)
+        << "the fixture did not interleave ownership";
+    ASSERT_NE(ranges.value()[0].owner_core, ranges.value()[1].owner_core);
+
+    auto access = catalog2.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    auto place = [&](std::uint64_t id, std::int64_t v, PageId head) {
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout, id,
+                                       {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, head, id, payload.value(), 1,
+                                      access.value()->oid)
+                        .ok());
+    };
+    place(1, 10, ranges.value()[0].entry_page);
+    place(4096, 20, ranges.value()[1].entry_page);
+    place(8192, 30, ranges.value()[2].entry_page);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    runtime.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+
+    std::optional<SessionStepClient> client;
+    auto make_seam = [&] {
+        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
+            switch (kind) {
+                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+                default: ADD_FAILURE() << "unexpected server send";
+            }
+            return Status::OK();
+        }};
+    };
+    const std::uint32_t core_a = ranges.value()[0].owner_core;
+    const std::uint32_t core_b = ranges.value()[1].owner_core;
+    catalog::Catalog catalog_a(*core0_store_, storage::kDefaultInlineCellWidth, 3, core_a);
+    catalog::Catalog catalog_b(*core0_store_, storage::kDefaultInlineCellWidth, 3, core_b);
+    std::optional<RemoteStepServer> server_a;
+    std::optional<RemoteStepServer> server_b;
+    server_a.emplace(catalog_a, *core0_store_, core_a, make_seam());
+    server_b.emplace(catalog_b, *core0_store_, core_b, make_seam());
+    client.emplace(
+        /*core_id=*/0,
+        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            RemoteStepServer& to = dst == core_a ? *server_a : *server_b;
+            sched::MessageHeader h{};
+            h.src_core = 0;
+            h.dst_core = dst;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
+                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected client send";
+            }
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    // Three stages, not two: core A's two runs are two stages, each
+    // walking its own span. Grouping by core would give two stages and
+    // this order wrong; a stage without its span would give core A's rows
+    // twice.
+    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM woven");
+    EXPECT_EQ(out.response, "id,v\\n1,10\\n4096,20\\n8192,30");
+    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
+}
+
 // ---- P4d-4b-3: a two-step join executes as a cross-core pipeline ---------
 
 TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) {

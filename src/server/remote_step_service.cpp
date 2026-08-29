@@ -128,31 +128,35 @@ StatusOr<catalog::Schema> NarrowTo(const catalog::Schema& schema,
 
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
                                       std::span<const std::byte> descriptor,
-                                      const StepOpenUpstream* upstream,
+                                      std::span<const StepOpenUpstream> upstreams,
                                       std::span<const StepOutputColumn> output) {
     std::vector<std::byte> out;
     // One allocation, as the pre-4b encoder had: the envelope's size is
     // fully known up front.
     std::size_t total = sizeof(head) + 1 + 1 + descriptor.size();
-    if (upstream != nullptr) {
-        total += 4 + 4 + upstream->forwarded.size() * sizeof(catalog::SysColumnRow) + 4 +
-                 upstream->enclosed_open.size();
+    for (const StepOpenUpstream& up : upstreams) {
+        total += 4 + 4 + up.forwarded.size() * sizeof(catalog::SysColumnRow) + 4 +
+                 up.enclosed_open.size();
     }
     if (!output.empty()) total += 4 + output.size() * kOutputColumnBytes;
     out.reserve(total);
     out.resize(sizeof(head));
     std::memcpy(out.data(), &head, sizeof(head));
 
-    out.push_back(std::byte{upstream != nullptr ? std::uint8_t{1} : std::uint8_t{0}});
-    if (upstream != nullptr) {
-        PutU32(out, upstream->upstream_core);
-        PutU32(out, static_cast<std::uint32_t>(upstream->forwarded.size()));
-        for (const catalog::SysColumnRow& col : upstream->forwarded) {
+    // **A count where a presence flag was** (RD7). 0 and 1 mean exactly
+    // what the flag meant, so every pre-RD7 envelope decodes unchanged;
+    // what is new is that 2..k is now spellable. Bounded by
+    // `kMaxFanInUpstreams`, which is what keeps one byte enough.
+    out.push_back(std::byte{static_cast<std::uint8_t>(upstreams.size())});
+    for (const StepOpenUpstream& up : upstreams) {
+        PutU32(out, up.upstream_core);
+        PutU32(out, static_cast<std::uint32_t>(up.forwarded.size()));
+        for (const catalog::SysColumnRow& col : up.forwarded) {
             const auto* bytes = reinterpret_cast<const std::byte*>(&col);
             out.insert(out.end(), bytes, bytes + sizeof(col));
         }
-        PutU32(out, static_cast<std::uint32_t>(upstream->enclosed_open.size()));
-        out.insert(out.end(), upstream->enclosed_open.begin(), upstream->enclosed_open.end());
+        PutU32(out, static_cast<std::uint32_t>(up.enclosed_open.size()));
+        out.insert(out.end(), up.enclosed_open.begin(), up.enclosed_open.end());
     }
 
     // The output spec, beside the upstream section rather than inside it
@@ -180,14 +184,16 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
     std::memcpy(&parts.head, payload.data(), sizeof(parts.head));
     std::span<const std::byte> rest = payload.subspan(sizeof(parts.head));
 
-    const std::uint8_t has_upstream = std::uint8_t(rest.front());
+    const std::uint8_t upstream_count = std::uint8_t(rest.front());
     rest = rest.subspan(1);
-    if (has_upstream > 1) {
-        return Status::InvalidArgument("STEP_OPEN envelope carries upstream flag " +
-                                       std::to_string(has_upstream) +
-                                       ", which no encoder writes");
+    if (upstream_count > kMaxFanInUpstreams) {
+        return Status::InvalidArgument("STEP_OPEN envelope carries " +
+                                       std::to_string(upstream_count) +
+                                       " upstream edges, above the fan-in ceiling of " +
+                                       std::to_string(kMaxFanInUpstreams));
     }
-    if (has_upstream == 1) {
+    parts.upstreams.reserve(upstream_count);
+    for (std::uint8_t edge = 0; edge < upstream_count; ++edge) {
         StepOpenUpstream up;
         auto core = TakeU32(rest);
         if (!core.ok()) return core.status();
@@ -221,7 +227,7 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
         }
         up.enclosed_open.assign(rest.begin(), rest.begin() + enclosed.value());
         rest = rest.subspan(enclosed.value());
-        parts.upstream = std::move(up);
+        parts.upstreams.push_back(std::move(up));
     }
 
     if (rest.empty()) {
@@ -343,8 +349,8 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
     }
     const catalog::Schema& schema = access.value()->schema;
 
-    if (env.upstream.has_value()) {
-        OpenConsumingStage(head, *env.upstream, env.output, std::move(step.value()), schema);
+    if (!env.upstreams.empty()) {
+        OpenConsumingStage(head, env.upstreams, env.output, std::move(step.value()), schema);
         return;
     }
 
@@ -389,6 +395,10 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
     // references - written against its slot in the session's chain - are
     // re-slotted to the only slot this chain has.
     exec::StepChain chain;
+    // RD7: the slice the session assigned this stage. `[0, kIdSpaceEnd)`
+    // on every open that names none, which is every leaf read of an
+    // unsplit relation and every open written before this row.
+    chain.walk_span = catalog::PkSpan{head.range_lo, head.range_hi};
     exec::Step local = std::move(step.value());
     for (exec::StepPredicate& pred : local.residual) {
         pred.lhs.rel_slot = 0;
@@ -453,7 +463,8 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
     Drain(pipelines_.back());
 }
 
-void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head, const StepOpenUpstream& up,
+void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head,
+                                          std::span<const StepOpenUpstream> ups,
                                           std::span<const StepOutputColumn> output,
                                           exec::Step step, const catalog::Schema& schema) {
     const std::uint32_t session = head.tag.session_core;
@@ -463,11 +474,28 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head, const StepOp
                                       "reactor; this server is reactorless"));
         return;
     }
-    if (up.enclosed_open.size() < sizeof(StepOpenHead) + 2) {
-        SendError(head.tag, session,
-                  Status::InvalidArgument(
-                      "a consuming stage's enclosed upstream open has no head"));
-        return;
+    const StepOpenUpstream& up = ups.front();
+    for (const StepOpenUpstream& sibling : ups) {
+        if (sibling.enclosed_open.size() < sizeof(StepOpenHead) + 2) {
+            SendError(head.tag, session,
+                      Status::InvalidArgument(
+                          "a consuming stage's enclosed upstream open has no head"));
+            return;
+        }
+        // **One step's stages forward one layout.** Checked rather than
+        // assumed because the alternative is silent: a sibling forwarding
+        // a different layout would have its rows decoded against the
+        // first's, which is invariant 13's forbidden shape on the wire -
+        // plausible values from the wrong widths, no error anywhere.
+        if (sibling.forwarded.size() != up.forwarded.size() ||
+            std::memcmp(sibling.forwarded.data(), up.forwarded.data(),
+                        up.forwarded.size() * sizeof(catalog::SysColumnRow)) != 0) {
+            SendError(head.tag, session,
+                      Status::InvalidArgument(
+                          "the stages of one fan-in forward different row layouts; they are "
+                          "one step's producers and must agree"));
+            return;
+        }
     }
     if (output.empty()) {
         SendError(head.tag, session,
@@ -527,6 +555,10 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head, const StepOp
     }
 
     exec::StepChain chain;
+    // RD7: the slice the session assigned this stage. `[0, kIdSpaceEnd)`
+    // on every open that names none, which is every leaf read of an
+    // unsplit relation and every open written before this row.
+    chain.walk_span = catalog::PkSpan{head.range_lo, head.range_hi};
     chain.steps.push_back(std::move(step));
 
     catalog::Schema input_schema;
@@ -538,8 +570,11 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head, const StepOp
                                                                : schema.columns[col.index]);
     }
 
-    StepOpenHead upstream_head{};
-    std::memcpy(&upstream_head, up.enclosed_open.data(), sizeof(upstream_head));
+    std::vector<StepOpenHead> upstream_heads(ups.size());
+    for (std::size_t i = 0; i < ups.size(); ++i) {
+        std::memcpy(&upstream_heads[i], ups[i].enclosed_open.data(), sizeof(StepOpenHead));
+    }
+    const StepOpenHead& upstream_head = upstream_heads.front();
 
     // The enclosed open must actually address *this* stage: its
     // `downstream_core`/`downstream_step` name where its batches will be
@@ -548,24 +583,35 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head, const StepOp
     // that never opened. Refused here, where the two halves first meet
     // (P4d-4b-3; this is also what makes `downstream_step` a read field
     // rather than a written-and-forgotten one).
-    if (upstream_head.downstream_core != core_id_ ||
-        upstream_head.downstream_step != head.tag.step_id) {
-        SendError(head.tag, session,
-                  Status::InvalidArgument(
-                      "a consuming stage's enclosed open addresses core " +
-                      std::to_string(upstream_head.downstream_core) + " step " +
-                      std::to_string(upstream_head.downstream_step) + ", not this stage"));
-        return;
+    // §5's fourth cost, and the check it names survives a fan-in only
+    // because it is applied to **every** sibling: they all feed this
+    // consumer, so they all name the same `downstream_step`, and one that
+    // does not is a plan wired to a second consumer that never opened.
+    for (const StepOpenHead& up_head : upstream_heads) {
+        if (up_head.downstream_core != core_id_ ||
+            up_head.downstream_step != head.tag.step_id) {
+            SendError(head.tag, session,
+                      Status::InvalidArgument(
+                          "a consuming stage's enclosed open addresses core " +
+                          std::to_string(up_head.downstream_core) + " step " +
+                          std::to_string(up_head.downstream_step) + ", not this stage"));
+            return;
+        }
     }
 
     Pipeline pipe;
     pipe.tag = head.tag;
     pipe.downstream = head.downstream_core;
     pipe.producing = true;
-    Pipeline::InputEdge edge;
-    edge.input_tag = upstream_head.tag;
-    edge.upstream_core = up.upstream_core;
-    pipe.consumer.emplace(std::move(edge));
+    // One edge per sibling, in the order the session planned them, which
+    // is range order - `Pipeline::consumers` says why that order is the
+    // answer's order rather than an arbitrary one.
+    for (std::size_t i = 0; i < ups.size(); ++i) {
+        Pipeline::InputEdge edge;
+        edge.input_tag = upstream_heads[i].tag;
+        edge.upstream_core = ups[i].upstream_core;
+        pipe.consumers.push_back(std::move(edge));
+    }
     pipelines_.push_back(std::move(pipe));
 
     submit_(sched::MakeCoroTask(
@@ -608,8 +654,13 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
         // the enclosed open, so a producer may be live and would park on
         // a credit gate nobody will open again.
         SendError(tag, tag.session_core, snapshot.status());
-        if (Pipeline* pipe = Find(tag); pipe != nullptr && pipe->consumer.has_value()) {
-            CancelUpstream(pipe->consumer->input_tag, pipe->consumer->upstream_core);
+        if (Pipeline* pipe = Find(tag); pipe != nullptr) {
+            // **Every sibling**, and each is owed one: a producer whose
+            // cancel never arrives parks on its credit gate for the
+            // process's life (§7), and with a fan-in there are k of them.
+            for (const Pipeline::InputEdge& edge : pipe->consumers) {
+                CancelUpstream(edge.input_tag, edge.upstream_core);
+            }
         }
         Erase(tag);
         co_return snapshot.status();
@@ -642,8 +693,13 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
     // (teardown, cancel, the upstream's EOF) opens it too.
     const std::function<bool()> actionable = [this, tag] {
         Pipeline* pipe = Find(tag);
-        return pipe == nullptr || pipe->cancelled || !pipe->consumer.has_value() ||
-               !pipe->consumer->input.empty() || pipe->consumer->input_eof;
+        if (pipe == nullptr || pipe->cancelled || !pipe->consuming()) return true;
+        // The *active* edge's state, not any edge's: the fan-in is
+        // concatenated in range order, so a later sibling's arrival is not
+        // something this stage can act on yet. It queues against its own
+        // credit, which is what bounds the wait rather than a buffer.
+        const Pipeline::InputEdge* edge = pipe->active();
+        return edge == nullptr || !edge->input.empty() || edge->input_eof;
     };
     // The shared credit gate, parked on after every joined row: buffering
     // stays bounded at the credit ceiling plus one *row's* seals for the
@@ -654,10 +710,24 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
 
     // Every stopping exit owes the upstream a cancel (§7): without one
     // the producer parks on its credit gate for the process's life.
-    auto fail = [&](const PipelineTag& input_tag, std::uint32_t upstream_core,
-                    const Status& status) {
+    //
+    // **Every sibling still owed one, not only the edge that failed.** A
+    // fan-in has k producers and a stopping exit ends the stage for all of
+    // them; the edges below `consumed` have already ended on their own EOF,
+    // so what is owed is exactly the tail the cancelled-pipeline arm above
+    // cancels. Collected *before* anything is sent, because a synchronous
+    // seam can route a cancel back and erase this pipeline from inside
+    // `SendError`, leaving nothing to read the list off.
+    auto fail = [&](const Status& status) {
+        std::vector<std::pair<PipelineTag, std::uint32_t>> owed;
+        if (Pipeline* pipe = Find(tag); pipe != nullptr) {
+            for (std::size_t i = pipe->consumed; i < pipe->consumers.size(); ++i) {
+                owed.emplace_back(pipe->consumers[i].input_tag,
+                                  pipe->consumers[i].upstream_core);
+            }
+        }
         SendError(tag, tag.session_core, status);
-        CancelUpstream(input_tag, upstream_core);
+        for (const auto& [in_tag, core] : owed) CancelUpstream(in_tag, core);
         Erase(tag);
     };
 
@@ -665,19 +735,34 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
         co_await sched::WaitUntil{&actionable};
         Pipeline* pipe = Find(tag);
         if (pipe == nullptr) co_return Status::OK();  // torn down; nothing to say
-        if (pipe->cancelled || !pipe->consumer.has_value()) {
-            if (pipe->consumer.has_value()) {
-                CancelUpstream(pipe->consumer->input_tag, pipe->consumer->upstream_core);
+        if (pipe->cancelled || !pipe->consuming()) {
+            // Every sibling still owed a cancel gets one - the ones
+            // already drained have ended on their own, and cancelling a
+            // finished edge is the harmless no-op §3's discard rule makes
+            // it.
+            for (std::size_t i = pipe->consumed; i < pipe->consumers.size(); ++i) {
+                CancelUpstream(pipe->consumers[i].input_tag, pipe->consumers[i].upstream_core);
             }
             Erase(tag);
             co_return Status::OK();
         }
 
-        if (pipe->consumer->input.empty()) {
-            // Input EOF with the queue empty: this stage's own end - the
-            // upstream already finished, so there is nothing left to
-            // cancel. The final seal, then EOF downstream rides the
-            // producing=false drain.
+        Pipeline::InputEdge* edge = pipe->active();
+        if (edge != nullptr && edge->input.empty() && edge->input_eof &&
+            pipe->consumed + 1 < pipe->consumers.size()) {
+            // **This sibling ended; the fan-in has not.** Range-order
+            // concatenation is exactly this step: advance to the next
+            // range's edge and keep going, with no seal in between - the
+            // batches a consumer emits are its own, not one per upstream.
+            ++pipe->consumed;
+            continue;
+        }
+
+        if (edge == nullptr || edge->input.empty()) {
+            // Input EOF with the queue empty on the **last** edge: this
+            // stage's own end - every upstream already finished, so there
+            // is nothing left to cancel. The final seal, then EOF
+            // downstream rides the producing=false drain.
             if (writer.row_count() > 0) SealAndDrain(tag, writer);
             if (Pipeline* done = Find(tag); done != nullptr) {
                 if (done->cancelled) {
@@ -690,20 +775,20 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
             co_return Status::OK();
         }
 
-        const std::vector<std::byte> batch = std::move(pipe->consumer->input.front());
-        pipe->consumer->input.pop_front();
-        const PipelineTag input_tag = pipe->consumer->input_tag;
-        const std::uint32_t upstream_core = pipe->consumer->upstream_core;
+        const std::vector<std::byte> batch = std::move(edge->input.front());
+        edge->input.pop_front();
+        const PipelineTag input_tag = edge->input_tag;
+        const std::uint32_t upstream_core = edge->upstream_core;
 
         std::span<const std::byte> rows_bytes;
         auto batch_header = DecodeStepBatchHeader(batch, rows_bytes);
         if (!batch_header.ok()) {
-            fail(input_tag, upstream_core, batch_header.status());
+            fail(batch_header.status());
             co_return batch_header.status();
         }
         auto rows = wire::DecodeRowBatch(rows_bytes, input_schema.columns.size());
         if (!rows.ok()) {
-            fail(input_tag, upstream_core, rows.status());
+            fail(rows.status());
             co_return rows.status();
         }
         // Two independently-encoded counts of one thing, never compared
@@ -715,7 +800,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                 "input batch declares " + std::to_string(batch_header.value().row_count) +
                 " rows but decodes to " + std::to_string(rows.value().size()) +
                 " under the forwarded layout; the edge's two ends disagree");
-            fail(input_tag, upstream_core, skew);
+            fail(skew);
             co_return skew;
         }
 
@@ -737,7 +822,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                 slots[i] = std::move(value.value());
             }
             if (!filled.ok()) {
-                fail(input_tag, upstream_core, filled);
+                fail(filled);
                 co_return filled;
             }
             // **Awaited and gated** (P4d-4c's gated inner walk): the inner
@@ -762,7 +847,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                     "this pipeline stage examined " + std::to_string(used) +
                     " rows, its whole row-touch budget; a join whose inner side is walked "
                     "once per input row is what that budget exists to stop");
-                fail(input_tag, upstream_core, over);
+                fail(over);
                 co_return over;
             }
             Status ran = co_await exec::ExecuteAsync(
@@ -788,7 +873,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                 /*cabins=*/nullptr, &snapshot.value().snap, /*indexes=*/true, &output_ok,
                 /*parent=*/&outer);
             if (!ran.ok()) {
-                fail(input_tag, upstream_core, ran);
+                fail(ran);
                 co_return ran;
             }
             if (Pipeline* q = Find(tag); q == nullptr || q->cancelled) {
@@ -814,9 +899,12 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
     }
 }
 
-RemoteStepServer::Pipeline* RemoteStepServer::FindByInputTag(const PipelineTag& input_tag) {
+RemoteStepServer::Pipeline::InputEdge* RemoteStepServer::FindInputEdge(
+    const PipelineTag& input_tag) {
     for (Pipeline& pipe : pipelines_) {
-        if (pipe.consumer.has_value() && pipe.consumer->input_tag == input_tag) return &pipe;
+        for (Pipeline::InputEdge& edge : pipe.consumers) {
+            if (edge.input_tag == input_tag) return &edge;
+        }
     }
     return nullptr;  // no consuming pipeline wants it: §3's silent discard
 }
@@ -825,16 +913,16 @@ void RemoteStepServer::OnStepBatch(std::span<const std::byte> payload) {
     std::span<const std::byte> rows;
     auto batch_header = DecodeStepBatchHeader(payload, rows);
     if (!batch_header.ok()) return;  // malformed: dropped, as the session client drops
-    if (Pipeline* pipe = FindByInputTag(batch_header.value().tag); pipe != nullptr) {
-        pipe->consumer->input.emplace_back(payload.begin(), payload.end());
+    if (Pipeline::InputEdge* edge = FindInputEdge(batch_header.value().tag); edge != nullptr) {
+        edge->input.emplace_back(payload.begin(), payload.end());
     }
 }
 
 void RemoteStepServer::OnStepEof(std::span<const std::byte> payload) {
     auto eof = DecodePipelinePayload<StepEofPayload>(payload);
     if (!eof.ok()) return;
-    if (Pipeline* pipe = FindByInputTag(eof.value().tag); pipe != nullptr) {
-        pipe->consumer->input_eof = true;
+    if (Pipeline::InputEdge* edge = FindInputEdge(eof.value().tag); edge != nullptr) {
+        edge->input_eof = true;
     }
 }
 

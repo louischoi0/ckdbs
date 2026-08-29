@@ -256,6 +256,35 @@ struct TableAccess {
         PageId* tail_hint = nullptr;
     };
 
+    // The entry pages this **core** must walk, in `lo` order (RD7).
+    //
+    // A stage of a fan-in covers the ranges it owns and no others: the
+    // rest are another stage's, and the session concatenates them. That
+    // makes the rule uniform rather than conditional - *walk what you
+    // own* is true of a lone local reader too, because the dispatcher
+    // sends the statement to a fan-in whenever any range is somebody
+    // else's, so a core that reads locally owns all of them.
+    //
+    // Empty `ranges` answers the one entry it always did, which is the
+    // unsplit path and RD3's zero-cost invariant reaching the walk.
+    // `span` is the slice this stage was assigned (RD7): a read of a split
+    // relation opens one stage per maximal contiguous run of ranges on one
+    // core, and a stage covers its run alone. `PkSpan::Whole()` - the
+    // default and every pre-RD7 caller's meaning - is the whole relation.
+    std::vector<PageId> WalkHeadsFor(std::uint32_t core_id,
+                                     PkSpan span = PkSpan::Whole()) const;
+
+    // Whether every range is `core_id`'s - the question the dispatcher
+    // asks before reading locally. True for an unsplit relation by
+    // definition: it is one range, owned by `owner_core`.
+    bool WhollyOwnedBy(std::uint32_t core_id) const noexcept {
+        if (ranges.empty()) return owner_core == core_id;
+        for (const RangeTarget& range : ranges) {
+            if (range.owner_core != core_id) return false;
+        }
+        return true;
+    }
+
     // The chain a row with `id` belongs in. Heap relations only; a btree
     // relation descends and has no chain.
     //

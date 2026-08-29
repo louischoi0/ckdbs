@@ -7,6 +7,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
+#include "kds/catalog/range_directory.hpp"
 #include "kds/parser/ast.hpp"
 
 // The compiled form of a SELECT-class statement: an ordered list of steps,
@@ -667,6 +668,18 @@ struct SortKey {
 
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
+
+    // **Which slice of `steps[0]`'s relation this chain covers** (RD7).
+    // A stage of a fan-in is assigned one maximal contiguous run of the
+    // relation's ranges, and walks that run alone; the session
+    // concatenates the stages in run order. `Whole()` is every other
+    // chain, which is every chain a local statement compiles.
+    //
+    // **In-memory and never encoded**: the wire carries it once, on
+    // `StepOpenHead`, and the stage copies it here after decoding. Putting
+    // it in the step descriptor would have been the same fact on the wire
+    // twice, which is how the two come to disagree.
+    catalog::PkSpan walk_span = catalog::PkSpan::Whole();
 
     // Uncorrelated sub-chains, executed once each before `steps` opens.
     // Hoisting is not an optimizer rewrite - an uncorrelated subquery's

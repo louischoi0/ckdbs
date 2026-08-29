@@ -91,8 +91,13 @@ public:
     // Ships `step` to its owner and registers the read. `request_id` is
     // the session core's per-statement sequence (§3 - sequential, never
     // pointer-derived). Refuses what the descriptor codec refuses.
+    // `span` is the stage's slice of the relation (RD7,
+    // `StepOpenHead::range_lo`). Defaulted to the whole id space, which is
+    // what a read of an unsplit relation is and what every caller before
+    // RD7 meant.
     StatusOr<PipelineTag> Open(const exec::Step& step, std::uint32_t owner_core,
-                               std::uint64_t request_id);
+                               std::uint64_t request_id,
+                               catalog::PkSpan span = catalog::PkSpan::Whole());
 
     // Registers the pipeline's read and sends the chained open to the
     // final stage's core - which forwards its enclosed upstream open

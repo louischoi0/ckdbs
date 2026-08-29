@@ -370,11 +370,11 @@ TEST(SessionStepPipelineTest, BuildTwoStepPipelineComputesTheEdgeAndNormalizesTh
     EXPECT_EQ(parts.value().head.tag, (PipelineTag{31, 0, 1}));
     EXPECT_EQ(parts.value().head.downstream_core, 0u);
     EXPECT_EQ(parts.value().head.downstream_step, 0u);
-    ASSERT_TRUE(parts.value().upstream.has_value());
-    EXPECT_EQ(parts.value().upstream->upstream_core, 1u);
-    ASSERT_EQ(parts.value().upstream->forwarded.size(), 2u);
-    EXPECT_EQ(std::string(catalog::NameView(parts.value().upstream->forwarded[0].name)), "id");
-    EXPECT_EQ(std::string(catalog::NameView(parts.value().upstream->forwarded[1].name)),
+    ASSERT_TRUE(parts.value().upstreams.size() == 1u);
+    EXPECT_EQ(parts.value().upstreams.front().upstream_core, 1u);
+    ASSERT_EQ(parts.value().upstreams.front().forwarded.size(), 2u);
+    EXPECT_EQ(std::string(catalog::NameView(parts.value().upstreams.front().forwarded[0].name)), "id");
+    EXPECT_EQ(std::string(catalog::NameView(parts.value().upstreams.front().forwarded[1].name)),
               "b_id");
     ASSERT_EQ(parts.value().output.size(), 2u);
     EXPECT_EQ(parts.value().output[0].from_upstream, 1);
@@ -399,12 +399,12 @@ TEST(SessionStepPipelineTest, BuildTwoStepPipelineComputesTheEdgeAndNormalizesTh
 
     // The enclosed leaf open: addressed to the consuming stage (core 2,
     // step 1), its output spec the forwarded layout as local columns.
-    auto leaf = DecodeStepOpenEnvelope(parts.value().upstream->enclosed_open);
+    auto leaf = DecodeStepOpenEnvelope(parts.value().upstreams.front().enclosed_open);
     ASSERT_TRUE(leaf.ok()) << leaf.status().message();
     EXPECT_EQ(leaf.value().head.tag, (PipelineTag{31, 0, 0}));
     EXPECT_EQ(leaf.value().head.downstream_core, 2u);
     EXPECT_EQ(leaf.value().head.downstream_step, 1u);
-    EXPECT_FALSE(leaf.value().upstream.has_value());
+    EXPECT_TRUE(leaf.value().upstreams.empty());
     ASSERT_EQ(leaf.value().output.size(), 2u);
     EXPECT_EQ(leaf.value().output[0].from_upstream, 0);
     EXPECT_EQ(leaf.value().output[0].index, 0u);
@@ -460,8 +460,8 @@ TEST(SessionStepPipelineTest, AStructureServedLeafShipsAsItsWalkToo) {
 
     auto final_parts = DecodeStepOpenEnvelope(plan.value().final_open);
     ASSERT_TRUE(final_parts.ok());
-    ASSERT_TRUE(final_parts.value().upstream.has_value());
-    auto leaf = DecodeStepOpenEnvelope(final_parts.value().upstream->enclosed_open);
+    ASSERT_TRUE(final_parts.value().upstreams.size() == 1u);
+    auto leaf = DecodeStepOpenEnvelope(final_parts.value().upstreams.front().enclosed_open);
     ASSERT_TRUE(leaf.ok()) << leaf.status().message();
     auto shipped = DecodeStepDescriptor(leaf.value().descriptor);
     ASSERT_TRUE(shipped.ok()) << shipped.status().message();

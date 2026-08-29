@@ -1443,3 +1443,125 @@ over `HeapChainFor`. Not taken here: it changes what RD8 pins, and
 whether a refusal is acceptable for an invisible fact is the operator's
 call, not CLA's. The comment at the site now says what the refusal
 actually refuses.
+
+## 15. RD7 — the pipeline over ranges, and the two things §5 had wrong
+
+Built as RB4 in worktree `v2.5.0-ragne-directory` on top of `343f532`.
+
+**What the row delivers.** A read of a relation whose ranges span several
+cores opens **one stage per maximal contiguous run of ranges on one
+core**, each stage carrying the pk span it was assigned; the session parks
+once over all of them and concatenates their rows in stage order, which is
+`lo` order, which is the order the local walk emits after RD6. A split
+relation read remotely and read locally are therefore one answer rather
+than two that agree.
+
+§5's four costs are not what landed, and both departures are corrections
+rather than shortcuts. They are recorded here because §5 still states the
+original shape, and a reader who finds the code disagreeing needs the
+reason at the same place.
+
+### 15a. Cost 1 was retracted: `sibling` was never written
+
+§5 killed the cheap answer — giving each sibling its own `step_id` — and it
+was right to: `step_id` is the compiler's, global across the statement, and
+it keys `StepStats`, the trail-replay key's top 24 bits, the collector's
+`uint16_t`, and `ANALYZE`'s printer. The replacement was a `sibling` field
+on `PipelineTag`.
+
+**It was built and nothing ever set it.** The row's review found it dead:
+the dispatcher tells its stages apart by minting `next_remote_request_++`
+**per stage**, so the tags already differ and every exact-tag site works
+with no new field. §5's premise — one `request_id` for the whole statement,
+so siblings could differ only inside the tag — is what changed, not its
+argument.
+
+A field that is never written is worse than an absent one: it reads as the
+discriminator while something else discriminates, so the next planner sets
+it and believes it matters. Deleted; `PipelineTag` is 16 bytes again and
+both headers are back to 24. **Whichever future shape mints k stages under
+one `request_id` needs it back, and will have to add it deliberately
+rather than find it already there and unwired.**
+
+### 15b. Cost 2 and 4 survive, and what they are for
+
+The plural `InputEdge` (with its `consumed` cursor) and the wire's upstream
+**count** are built, correct and codec-tested. They serve the *chained*
+fan-in — a consuming stage whose upstream relation is split — which
+nothing plans yet: `BuildTwoStepPipeline` emits one upstream. They are
+usable as they stand, because a planner that mints per-stage `request_id`s
+(which the dispatcher already does) gets distinguishable tags with no
+further mechanism.
+
+Stated rather than implied: the session-read fan-in this row delivers rides
+cost 3 alone. Costs 2 and 4 are substrate with a named absent caller.
+
+### 15c. Cost 3's stages are per **run**, not per core — §8 test 9's whole point
+
+§5 said nothing about how stages are grouped, and the first build grouped
+by owner core. That is wrong for the workload the fan-in exists for.
+Ownership `A, B, A` — core A owning two non-adjacent runs — emits
+`A₁, A₃, B₂` when grouped by core, where the same rows unsplit read
+`1, 2, 3`. §8 test 9 asks for **byte-identical**, and interleaved
+ownership is not a corner case: it is exactly what R4's
+id-block-aligned insert spreading produces (`crosscore.md` §6b).
+
+So a stage is a maximal contiguous run, and **that is why a stage needs a
+span**: two runs on one core would otherwise each walk both and the reply
+would carry that core's rows twice. `StepOpenHead` carries the assigned
+`[lo, hi)`, `StepChain::walk_span` holds it in memory, and
+`TableAccess::WalkHeadsFor(core, span)` filters on **both** halves —
+ownership keeps a stage off pages it cannot fault, the span keeps two
+stages of one core from emitting each other's rows. Neither implies the
+other.
+
+`Step::range` was **not** overloaded for this, though it already means "a
+pk range this step covers": it means a user's `BETWEEN`, and a real one
+would collide. That is §5's `step_id` lesson applied a second time.
+
+### 15d. What the review caught, and the pattern in it
+
+Three wrong-answer defects, each now pinned by a test that fails without
+its fix:
+
+- **A resumed prefix walk stopped at the range boundary and called the map
+  complete.** `walk_heads` was filled only in the from-the-head branch, so
+  JB6's resume left it empty and the range continuation was dead: `EXISTS`
+  answered one row where two existed, reported as success. That is the one
+  conclusion `join-inner-build.md` §6 says a prefix may not draw.
+- **`WhollyOwnedBy` was added for the "owned here but not wholly here"
+  case and never called.** Such a relation took neither the fan-in nor a
+  full local walk, and returned half its rows. `CheckReadAffinity` now
+  refuses it — an honest refusal; widening the fan-in gate to cover it
+  needs a self-directed stage, which is a design question and not this
+  row's.
+- **`RunConsumer`'s `fail()` cancelled one sibling and stranded the rest**,
+  where its two neighbouring exits already loop.
+
+The pattern worth naming: **every one is a short or duplicated answer with
+nothing logged**, which is the same class RD6 closed at the walk. A fan-in
+multiplies the ways to produce it, and each of the three came from a site
+that was correct while there was exactly one of something.
+
+Two further review findings taken: a lost NSDMI on `pending_remote` had
+added 280 compiler warnings, and two test assertions were silently
+weakened by a mechanical rewrite (`EXPECT_FALSE(size() == 1)` passes at 0,
+2, 3, …) — the second time in this milestone that a scripted API migration
+loosened a test rather than breaking it.
+
+### 15e. Handed on
+
+- **`unsent_batches()` counts only the output side.** The fan-in's input
+  queues (`consumers[i].input`) are invisible to it, so §8 test 2's
+  bounded-buffering check does not see k×ceiling of them. Buffering *is*
+  bounded — each edge stalls on its own credit — but the instrument no
+  longer covers what it was written to police.
+- **`Catalog::core_id()` is a second name for a fact `CommandDispatcher`
+  and `RemoteStepServer` each already hold**, and they already disagree in
+  one test fixture. The no-parallel-knobs answer is to derive the
+  dispatcher's and the server's from the catalog rather than add a third;
+  ~40 construction sites, so not taken here.
+- **`EncodeStepOpen` truncates where the decoder refuses**: 256 upstreams
+  write a count byte of 0, which decodes as "leaf". Unreachable (the
+  dispatcher checks first, and the ceiling is 64), but the two ends of one
+  wire disagree about the rule.
