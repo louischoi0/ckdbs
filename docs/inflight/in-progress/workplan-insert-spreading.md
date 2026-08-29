@@ -155,6 +155,10 @@ this line's largest open hand-off.
   against 40-bit space consumed per (relation, core, mount). This is the
   D6 sweep's axis and it now has a hard constraint on one side of it that
   §10b's table did not carry. **IS7 measures it; the operator takes it.**
+  **Measured 2026-08-29 by R4-M** (§9a): the sweep runs 256..65,536 at
+  k = 4, and the knob turns out to have a *third* axis - below 4,096 a
+  block is spent as fast as it is granted and the relaxed arm falls to
+  0.434x at 256, so a small size costs throughput as well as ceiling.
 - **Raise `kMaxFanInUpstreams`.** The wire carries the upstream index in
   one byte (`remote_step_service.cpp:149`), so 255 is reachable without
   a format change — a 4× ceiling for the cost of per-stage state on the
@@ -209,11 +213,22 @@ the converse gates RD5 built are what decline them).
 ## 6. Where to pick this up
 
 At `86f2052`, nothing of IS1-IS8 was built. **IS1-IS3 landed at `7b0ba61`**
-in worktree `v2.6.0-insert-spreading-1` (§7). **IS4-IS6 and IS8's doc half
-follow it in the same tree.** What remains is **IS7**, the measurement,
-whose design constraint is §8 — the group-commit finding bounds the
-headline number before the run starts, so the run has two durability arms
-or it reports v2.1.0's result under R4's name.
+in worktree `v2.6.0-insert-spreading-1` (§7); **IS4-IS6 and IS8's doc half
+follow it in the same tree**, and **IS7 landed at `a135a59`** — honestly,
+at the only k a 2-CPU host allowed.
+
+**IS1-IS8 are built and R4-M has measured them** (§9), on hardware that
+runs the sweep IS7 could not: k = 1..8, both durability arms, three
+interleaved reps, plus the ceiling, the burn and the `range_size_ids`
+sweep. **Nothing of this plan remains open as work.** What it hands on is
+in §3a and §9:
+
+- **The read surface, which is this line's real ceiling** and belongs to
+  nobody yet — a self-directed stage and a fan-in client on every core.
+- **D6's value**, to the operator, on §9a's curve.
+- **CK5 unanswered end to end**, because a spread relation cannot be read
+  back by the workloads that write it — which is why R5's mover should not
+  be designed against a scenario premise yet.
 
 ## 7. What IS1-IS5 concluded, what the build found, and what the review found
 
@@ -464,3 +479,108 @@ a relation has (`sys.ranges` has no catalog view, and `SHOW META` carries
 only the *decline* counters). The unit tests assert it directly; the probe
 reports `rowid_refill_grants` per core as the proxy. Worth an observability
 field if the range count ever needs to be read operationally.
+
+## 9. R4-M's conclusions — CK1-CK5, measured
+
+Work order `instructions/v2.6.0/r4-k-sweep.md`, run in worktree
+`v2.6.0-ksweep` across `03b815b` and `5b37fec`; the file is
+`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`, with
+raw driver output beside it under `archive/r4m-ksweep/`. Host: Xeon
+8488C, 8 logical CPUs on 4 physical cores, SMT active, ext4. Suite
+3037/3037 and `scripts/sim.sh` 171/0 at the commit measured.
+
+**CK1 — the shape, and what binds. Two constraints, not one.** Insert
+throughput at k = 1..8, both durability arms, three interleaved reps:
+
+  k  group C  group S   S/C   relaxed C  relaxed S   S/C
+  1      890      873  0.981     40,234     40,315  1.002
+  4    1,361    1,986  1.460     60,398     60,365  0.999
+  5    1,727    2,606  1.509     69,859     71,246  1.020
+  8    2,880    2,784  0.967     78,073     93,371  1.196
+
+The **group** arm peaks at k = 5 and returns to parity by k = 8 - the
+device plus this host's SMT pairing, reactors being pinned one per CPU
+index (`expeditor.cpp`'s `CPU_SET(core_id)`) so k >= 5 puts each new one on
+an existing physical core. The **relaxed** arm rises monotonically past
+k = 5 to 1.196, and what it lifts is core 0 serialising every shipped
+statement - measured independently at ~80k inserts/s by the control. **The
+fan-in stage count, the order's third candidate, binds neither**: it binds
+reads, and it is not what closes the read surface (§3a).
+
+The control is `bench/spread_client_ceiling.py`, the sweep's own process
+model: `PING` reaches 596k ops/s at k = 8, six to seven times the engine's
+plateau, with `errors=0` on all 24 arms. No cell sits on the harness.
+
+**CK2 — the group arm was not flat, and §8's prediction is refuted.** §8
+expected flat-to-down on v2.1.0's commit-batching finding. The
+concentrated group arm rises 890 -> 2,880 on its own and spreading adds up
+to 1.51x on top. v2.1.0's result is not contradicted - it measured rotation
+of *independent* sessions and this is one relation - but the inference §8
+drew from it, that a durably-committed insert workload cannot gain from
+spreading, does not survive.
+
+**And the two arms do not track each other**, which corrects IS7 directly.
+IS7 found `group` and `relaxed` agreeing to 0.2% at k = 2 and called that
+the finding; across the sweep they diverge in both directions (k = 4: 1.460
+against 0.999; k = 8: 0.967 against 1.196). **The agreement was a
+coincidence of k = 2.**
+
+**CK3 — the ceiling, measured, and §3's arithmetic holds.** The refusal
+fires at 65-72 stages, at 32,025 / 64,730 / 234,776 rows for block sizes
+512 / 1,024 / 4,096 against an arithmetic of 32,768 / 65,536 / 262,144.
+`ids/stage` is 512 / 1,056 / 4,277 at k = 4, so **stages equal blocks to
+within 4%**.
+
+**With a precondition §3 did not state: two or more peers must contend.**
+At one peer (k = 2 under `rotate`) IS5's top-owner suppression fires on
+every carve after the first, the relation settles at two ranges, and the
+ceiling was **not reached after two million rows** at any block size. HK4
+is refuted in its strong form - suppression *does* bound a contended
+relation, when exactly one peer contends.
+
+**And the ceiling is not what bounds a spread relation's readability**;
+§3a is that finding, and it is this milestone's largest.
+
+**CK3's other side, the burn.** `next_id - 1 - rows placed` is one to two
+lease blocks per contending core per mount: 3,678 ids at k = 8 / 512
+(7.2 blocks, seven peers), and about thirteen blocks at 4,096 nearly
+independent of k, consistent with a refill landing before its predecessor
+is spent and not attributed further. **A restart adds nothing to it** - a
+live block's remainder was charged to the mark when it was carved, so §3's
+*"a restart burns every live block"* double-counts; what a restart costs is
+the re-carving after it, which is the same one to two blocks again.
+
+**CK4 - the scenario benches do not fit, and not for a size reason.** Six
+of twenty-four scenario relations spread, and all six lost **all five**
+read shapes their drivers use, at ~395 rows. §3a carries it. The aggregate
+cell is **reported as not run**.
+
+**CK5 - the aggregate says nothing, because it could not be run.** The
+question the line has been deferring - does the engine go faster with more
+cores - is answered for *writes* by CK1 and is **unanswered end to end**,
+because a spread relation cannot be read back by the workloads that write
+it. That is a stronger reason than "the number was bad", and it is the
+reason the mover (R5) should not be designed against a scenario premise
+yet.
+
+### 9a. D6's value, handed over with a sweep behind it
+
+RD9(b) re-run at k = 4 with the large end reachable, ceiling from §6's
+measurement where measured and arithmetic above 4,096:
+
+  range_size_ids   group S/C   relaxed S/C   read ceiling      burnt (k=4)
+             256       1.333         0.434   ~16,384 (arith)             -
+           1,024       1.401         0.809   64,730 (measured)       3,814
+           4,096       1.470         1.025   234,776 (measured)     56,018
+          16,384       1.296         1.001   ~1,048,576 (arith)          -
+          65,536       1.339         1.031   ~4,194,304 (arith)          -
+
+**The new finding is at the small end.** A small block does not only lower
+the ceiling, it **costs throughput outright** - 0.434x at 256 and 0.809x at
+1,024 on the relaxed arm, because a block that small is spent as fast as it
+is granted and every exhaustion is a round trip to core 0 plus a client
+retry. §3 framed the knob as ceiling against burn; **there is a third axis
+and below 4,096 it dominates both.** So: below 4,096 is a loss on every
+axis; 4,096 is the throughput optimum on both arms; above it costs ~10% of
+the group arm's gain per 4x of ceiling. The value is the operator's; this
+is the curve it is taken on.

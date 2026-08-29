@@ -29,6 +29,20 @@ scenario benchmarks (§5), not at 262,144. So the order's aggregate cell —
 gated on CK4 exactly so that this would be established before it ran —
 **is reported as not run**, with the refusal that stops it.
 
+**Where the ceiling *is* reachable, §3's arithmetic is right** (§6): the
+refusal fires at 65-72 stages and at 32,025 / 64,730 / 234,776 rows for
+block sizes 512 / 1,024 / 4,096, against an arithmetic of 32,768 / 65,536 /
+262,144. And it has a precondition §3 did not state — **two or more peers
+must contend**. At one peer, IS5's suppression holds the relation at two
+ranges and the ceiling was not reached after two million rows.
+
+**The one number that changes a decision** is §6d's: `range_size_ids` below
+4,096 does not merely lower the ceiling, it **costs throughput** — the
+relaxed arm runs at 0.434× at 256 and 0.809× at 1,024 against ~1.0 from
+4,096 up, because a small block is spent as fast as it is granted. §3
+framed the knob as ceiling against burn; there is a third axis, and below
+4,096 it dominates both.
+
 ## 2. Provenance
 
 **Host.** Intel Xeon Platinum 8488C, **8 logical CPUs on 4 physical
@@ -361,7 +375,123 @@ behaviour instead.
 
 ## 6. CK3, HK3, HK4 — the ceiling as a measured number
 
-*(K-c, K-d, K-e. Filled from the run below.)*
+`bench/spread_ceiling_probe.py`, **`placement = rotate` from a core-0
+session** (§6a: the only readable arrangement), `durability = relaxed`,
+writers on every core, polled on rows rather than on the clock and densely
+from 85% of the arithmetic. Measured at `5b37fec`
+(`v2.4.0-52-g5b37fec`), binary `sha256 0f8eccdb…a070`. **Every cell
+reported all its writers and none errored** (`writers_unreported` empty,
+`writer_errors` empty in all fifteen).
+
+| k | `range_size_ids` | last readable | refused at | **stages** | 64 × size | ids/stage | ids burnt |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 512 | 1,202,162 | **not reached** | — | 32,768 | — | 526 |
+| 2 | 1024 | 1,442,846 | **not reached** | — | 65,536 | — | 994 |
+| 2 | 4096 | 2,000,662 | **not reached** | — | 262,144 | — | 2,282 |
+| 3 | 512 | 33,040 | 33,393 | 65 | 32,768 | 528 | 899 |
+| 3 | 1024 | 75,122 | 75,520 | 65 | 65,536 | 1,229 | 3,327 |
+| 3 | 4096 | 275,138 | 276,410 | 65 | 262,144 | 5,104 | 55,321 |
+| 4 | 512 | 30,805 | 32,025 | 66 | 32,768 | 512 | 1,484 |
+| 4 | 1024 | 63,236 | 64,730 | 65 | 65,536 | 1,056 | 3,814 |
+| 4 | 4096 | 218,390 | 234,776 | 68 | 262,144 | 4,277 | 56,018 |
+| 6 | 512 | 28,367 | 30,964 | 67 | 32,768 | 527 | 2,444 |
+| 6 | 1024 | 50,424 | 63,432 | 68 | 65,536 | 1,039 | 5,912 |
+| 6 | 4096 | 209,464 | 225,988 | 67 | 262,144 | 4,157 | 52,512 |
+| 8 | 512 | 2,248 | 20,316 | 72 | 32,768 | 533 | 3,678 |
+| 8 | 1024 | 33,955 | 61,413 | 67 | 65,536 | 1,055 | 7,031 |
+| 8 | 4096 | 198,075 | 222,608 | 71 | 262,144 | 4,038 | 61,317 |
+
+**HK3 is supported: the ceiling is 64 × `range_size_ids`, measured.** The
+refusal fires at 65-72 stages — 65 is the first count above
+`kMaxFanInUpstreams`, and the excess is the poll bracket, not the engine —
+and the row counts land on the arithmetic: 32,025 against 32,768 at 512,
+64,730 against 65,536 at 1024, 234,776 against 262,144 at 4096. Neither of
+HK3's falsifiers fired at k ≥ 4. **§3's arithmetic was right**, and this
+is the number it predicted.
+
+**HK4 is refuted in its strong form, and the refutation is the operator's
+most useful line here.** HK4 said IS5's suppression *does not* bound a
+contended relation. At k = 2 it bounds it completely: the ceiling is **not
+reached after two million rows** at any size, and `ids/stage` cannot even
+be computed because there is no second stage. The reason is source-read
+and then confirmed: `range_alloc.cpp` suppresses on **top-owner
+identity** — if the core asking already owns the relation's top range, no
+boundary opens — and under `rotate` at k = 2 exactly one peer ever asks,
+so every carve after the first is suppressed and the relation settles at
+two ranges forever.
+
+At k ≥ 4 suppression is essentially absent: `ids/stage` is 512, 1,056,
+4,277 against block sizes of 512, 1,024, 4,096 — **stages equal blocks to
+within 4%**. k = 3 is the transition, where two peers alternate imperfectly
+and `ids/stage` runs 3-25% above the block size.
+
+**So the ceiling is a function of how many peers contend, not just of the
+block size**, and that was in neither §3 nor the order:
+
+| peers that take ranges | ranges | ceiling |
+|---|---|---|
+| 1 (k = 2 under `rotate`) | 2, forever | **none** |
+| ≥ 2 (k ≥ 3) | ≈ one per block | 64 × `range_size_ids` |
+
+### 6b. K-e — the burn, which is the other side of D6
+
+`ids burnt` above is `next_id - 1 - rows placed`: the 40-bit space charged
+for and not occupied by a row. It is dominated by the **unissued remainder
+of every live lease block**, so its floor is set by how many cores hold one.
+
+At 512 and 1,024 it reads as almost exactly that: 3,678 at k = 8 / 512 is
+7.2 blocks against seven peers holding one each, and 7,031 at k = 8 / 1,024
+is 6.9. **At 4,096 it is about twice that and nearly independent of k** —
+55,321 / 56,018 / 52,512 / 61,317 at k = 3, 4, 6, 8, or roughly thirteen
+blocks in every case. Consistent with a refill landing before its
+predecessor is spent, so a core holds two blocks rather than one; **not
+attributed further, because no instrument here separates them.**
+
+The trade for the operator, in one line: burn is **one to two blocks per
+contending core per mount**, so it scales with `range_size_ids` while the
+ceiling does too — 3,678 ids burnt buys a 32k-row ceiling, and 61,317 buys
+a 262k-row one.
+
+**`burnt/mount` is 0 in every cell**, and that corrects a claim rather than
+confirming one. §3 says *"a restart burns every live block"*. The remount
+does not move `next_id`: those blocks' remainders were already charged to
+the mark **when they were carved**, so they are counted in the column
+above and a restart adds nothing to it. What a restart costs is the
+*re-carving* after it, which is the same one-to-two blocks per core again.
+
+### 6c. K-g — read cost against range count (RD9(c))
+
+Timed at geometric checkpoints inside the same cells, whole-relation
+`SELECT *` from the core-0 session.
+
+**The x-axis is `rows / range_size_ids`, which is the true stage count only
+where suppression does not fire** — so at k ≥ 4 it is the stage count (§6's
+`ids/stage`), and at **k = 2 it is not**: the relation has two ranges
+however many blocks it took, so the k = 2 rows below are read cost against
+*size*, with the stage count pinned at 2. Labelled rather than corrected,
+because it is the honest pair of readings.
+
+| k | size | series (`rows/block` : read ms / reply KiB) |
+|---|---|---|
+| 2 | 4096 | 1:2/21 · 4:11/207 · 18:31/907 · 72:142/4034 · 289:743/17253 |
+| 4 | 4096 | 1:1/23 · 5:15/244 · 10:12/522 · 21:25/1092 · 43:58/2314 |
+| 8 | 1024 | 2:2/21 · 5:65/82 · 16:98/200 · 33:146/422 |
+| 8 | 4096 | 1:10/39 · 6:43/349 · 12:59/614 · 24:46/1227 · 49:90/2572 |
+
+**Reply size is the dominant term, not the stage count.** The k = 2 series
+— two stages throughout — costs 743 ms for 17 MiB, and the k = 4 series at
+43 genuine stages costs 58 ms for 2.3 MiB; per KiB those are 0.043 and
+0.025 ms, so *more* stages came out cheaper per byte. Where a stage cost is
+visible it is at **small** replies on many cores: k = 8 / 1024 runs
+0.095 ms/KiB at 2 stages and 0.346 at 33, a 3.6× per-byte rise across a
+16× rise in stages.
+
+So RD9(c)'s answer is that **the fan-in's per-stage cost is real but
+second-order against the bytes it carries**, and it is measurable only
+where the reply is small enough not to swamp it. That is a weaker
+conclusion than the cell was designed for, and it is the honest one: the
+run does not separate stage count from reply size, because on this
+mechanism they rise together by construction.
 
 ### 6a. Why the ceiling is measurable in exactly one configuration
 
@@ -417,6 +547,51 @@ So §6's ceiling below is measured under `placement = rotate`, from a
 core-0 session, polling `SELECT *`. That is not a convenience: it is the
 only configuration in which a spread relation can be read at all, and it
 is *not* the configuration the k sweep or IS7 measured writes in.
+
+## 6d. K-f — D6's value, with a sweep behind it and the ceiling bounding one side
+
+RD9(b) re-run with the large end reachable, which two cores could not do.
+k = 4, both arms, both durability classes, two interleaved reps each,
+`placement = creating` (the throughput arrangement, as §4). The ceiling
+column is §6's measured number at k = 4 where it was measured and the
+arithmetic where it was not.
+
+| `range_size_ids` | group S/C | **relaxed S/C** | read ceiling | ids burnt at k=4 |
+|---:|---:|---:|---:|---:|
+| 256 | 1.333 | **0.434** | ~16,384 † | — |
+| 1,024 | 1.401 | **0.809** | 64,730 (measured) | 3,814 |
+| 4,096 | **1.470** | 1.025 | 234,776 (measured) | 56,018 |
+| 16,384 | 1.296 | 1.001 | ~1,048,576 † | — |
+| 65,536 | 1.339 | 1.031 | ~4,194,304 † | — |
+
+† arithmetic; §6 measured 512/1024/4096 and the three landed on it.
+
+**The finding is at the small end, and it is new.** A small block does not
+merely lower the ceiling — it **costs throughput outright**: the relaxed
+arm runs at **0.434×** at 256 and 0.809× at 1,024, against ~1.0 from 4,096
+up. That is the refill rate showing through: a block of 256 is spent in
+milliseconds, and every exhaustion is a round trip to core 0 plus a client
+retry. §3's trade was stated as *ceiling against burn*; **there is a third
+axis, and below 4,096 it dominates both**.
+
+The group arm peaks at 4,096 (1.470) and is flat-ish either side, because
+its cost is the commit path rather than the refill.
+
+**So D6's value, handed to the operator with the sweep behind it:**
+
+- **Below 4,096 is a loss on every axis** — lower ceiling, worse
+  throughput. 256 and 1,024 are not candidates.
+- **4,096 is the throughput optimum on both arms** and buys a 234,776-row
+  ceiling for 56,018 burnt ids per mount at k = 4.
+- **Above 4,096 costs a little throughput and buys a lot of ceiling**:
+  16,384 gives up 12% of the group arm's gain (1.296 against 1.470) for
+  4× the ceiling; 65,536 gives up 9% for 16×.
+- **The ceiling only exists at all where two or more peers contend** (§6's
+  HK4 result). A relation written by one peer has none, at any size.
+
+CLA does not pick the value; the shape above is what the pick is made on,
+and the one thing this order can say flatly is that **the sweep's centre
+was not obviously wrong and its bottom end was**.
 
 ## 7. Versus PostgreSQL
 
@@ -477,13 +652,22 @@ hand-off.
   (`SELECT * FROM ranges` → `ERR no columns for this rel_id`, measured) and
   `SHOW META` carries only decline counters. The fan-in refusal names its
   stage count, so the count is *measured* at the ceiling and *estimated*
-  (`ids issued / range_size_ids`) below it — §6 marks which is which. A
+  (`ids issued / range_size_ids`) below it — §6 and §6c mark which is
+  which, and §6c's k = 2 rows are exactly where the estimate is wrong. A
   `SHOW META` field would close this; adding one is an engine diff and the
   order forbids it, so it is a finding rather than a cell.
-- **`range_size_ids` above 16,384 was not swept to the ceiling.** At
-  65,536 the ceiling is ~4.2 M ids and the run is minutes of pure ingest
-  per cell; the sweep's large end is bounded by wall clock, not by
-  principle, and §6 says which sizes were reached.
+- **The ceiling above `range_size_ids = 4096` was not reached.** 16,384
+  and 65,536 put it at ~1 M and ~4.2 M rows, minutes of pure ingest per
+  cell; §6d marks those two rows as arithmetic. The three that *were*
+  measured landed on the arithmetic, which is a reason to trust the other
+  two rather than a substitute for measuring them.
+- **K-g does not separate stage count from reply size**, because on this
+  mechanism they rise together by construction. §6c states what it can and
+  stops there.
+- **Why `ids burnt` at 4,096 is about twice the live-block bound**, and
+  nearly independent of k. Measured (§6b), consistent with a refill landing
+  before its predecessor is spent, and left unattributed — no instrument
+  here separates one core's blocks from another's.
 - **Per-statement overhead A/B.** Suspended for v2-stage development by
   the operator amendment of 2026-08-24. Stated as a fact, not implied as a
   pass.

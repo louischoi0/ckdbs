@@ -852,10 +852,20 @@ still waits on its own gate, so:
   read above that. A relation contended by k cores is therefore readable up
   to roughly `64 × range_size_ids` rows and then answers `Unsupported` — not
   a wrong answer, but a hard ceiling that arrives inside one benchmark at
-  the 4,096 sweep centre (262,144 rows). **Bounded, not closed**: R4/IS5
+  the 4,096 sweep centre (262,144 rows). **Measured 2026-08-29** (R4-M,
+  `bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md` §6):
+  the refusal fires at 65-72 stages and at 32,025 / 64,730 / 234,776 rows
+  for block sizes 512 / 1,024 / 4,096, against an arithmetic of 32,768 /
+  65,536 / 262,144 — so the arithmetic holds, and `ids/stage` at k = 4 is
+  512 / 1,056 / 4,277, i.e. stages equal blocks to within 4%.
+  **Bounded, not closed**: R4/IS5
   stops a *single*-writer relation from opening a boundary per block at all
   (a carve continuing this core's own top range opens none), so the ceiling
-  applies to genuinely contended relations. Three ways out are named with
+  applies to genuinely contended relations — and *how* contended is now a
+  measured precondition rather than a hedge: at **one** peer the ceiling was
+  **not reached after two million rows** at any block size, because every
+  carve after the first is suppressed and the relation settles at two
+  ranges. Two or more contending peers are what make it exist. Three ways out are named with
   their owners in that workplan's §3 — a larger `range_size_ids` (a config
   value, trading the ceiling against 40-bit space burnt per mount), a larger
   `kMaxFanInUpstreams` (one wire byte allows 255, `crosscore.md` §9's
@@ -863,6 +873,14 @@ still waits on its own gate, so:
   ceiling entirely and **reverses D6**. The last is the real answer and is
   the operator's. Reachable only with `range_size_ids` armed, which is not
   the default.
+
+  **And the knob has a third axis nobody had measured** (R4-M §6d): below
+  4,096 a lease block is spent as fast as it is granted, so every
+  exhaustion costs a round trip to core 0 plus a client retry and
+  throughput falls outright — the relaxed arm runs **0.434×** at 256 and
+  0.809× at 1,024, against ~1.0 from 4,096 up. So a small `range_size_ids`
+  is a loss on every axis, not a ceiling-for-burn trade, and the trade only
+  begins above 4,096.
 
 - **A spread relation is barely readable at all, and the 64-range ceiling
   above is not what stops it** (R4-M, 2026-08-29, measured in worktree
