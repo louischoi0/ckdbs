@@ -12,6 +12,7 @@
 #include <thread>
 #include <utility>
 
+#include "kds/exec/varheap_sweep.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/send_retry.hpp"
@@ -863,6 +864,32 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     auto finalized = expeditor->database_->catalog.FinalizeDeleteMarksAtMount();
     if (!finalized.ok()) return finalized.status();
     expeditor->recovery_.catalog_marks_finalized = finalized.value();
+
+    // H7: collect the spills nothing points at. Two relations log their
+    // spills under `kNoTxnId` (`exec::LogChainInsert`'s callers -
+    // `sys.pattern_defs` and the assertion catalog), so there is no
+    // transaction to chain an undo record to and a rolled-back
+    // `CREATE PATTERN`'s body text has no compensation to release it.
+    // Every *other* spill is released by the ordinary rollback path since
+    // 2026-08-28, which is what makes this a hole rather than the general
+    // case.
+    //
+    // **The same window as the sweep above, for the same reasons**: after
+    // recovery, so a spill this mount's own log restored is included; and
+    // before the listener binds, so "what the rows point at" is a closed
+    // question rather than a race. Core 0's alone - these are catalog
+    // var-heap pages.
+    auto swept = exec::SweepUnownedSpills(expeditor->database_->catalog, *expeditor->store_,
+                                          expeditor->wal_.get());
+    if (!swept.ok()) return swept.status();
+    expeditor->recovery_.varheap_slots_swept = swept.value().released;
+    if (swept.value().released > 0) {
+        expeditor->logger_->Info(
+            "varheap", "swept " + std::to_string(swept.value().released) +
+                           " unreferenced var-heap slot(s) across " +
+                           std::to_string(swept.value().pages) + " page(s); " +
+                           std::to_string(swept.value().retained) + " still referenced");
+    }
 
     // The transaction ceiling recovery computed, applied and made durable
     // before the sequence that caches it is built. `SetNextTrxId` refuses to

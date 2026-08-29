@@ -6,6 +6,7 @@
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/exec/varheap_sweep.hpp"
 #include "kds/storage/varheap.hpp"
 
 // sys.pattern_defs, the one catalog relation stored in ordinary user tuple
@@ -147,6 +148,97 @@ TEST_F(PatternDefsTest, ListReturnsEveryDefinitionInChainOrder) {
     // Keystone ids come from the relation's own persistent sequence, so
     // they are distinct and increasing.
     EXPECT_LT(all.value()[0].id, all.value()[1].id);
+}
+
+// ---- H7: the sweep that collects a spill nothing points at ---------------
+//
+// `exec::LogChainInsert` logs its spills under `kNoTxnId`, so a spill made
+// on this path has no transaction to chain an undo record to and no
+// compensation. Every *other* spill has been released by the ordinary
+// rollback path since 2026-08-28, which is what makes this the remaining
+// hole rather than the general case - and `DeletePatternDef` retires the
+// row outright, so the value it pointed at is orphaned the moment the
+// definition goes.
+TEST_F(PatternDefsTest, TheMountSweepCollectsASpillNoRowPointsAt) {
+    const std::string body(4000, 'x');
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 21, "doomed", body, 0).ok());
+
+    auto access = catalog_.InitTableAccess(catalog::kSysPatternDefsTable);
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    const PageId root = access.value()->varheap_page_id;
+    ASSERT_NE(root, kInvalidPageId);
+    {
+        auto page = store_.GetForRead(root);
+        ASSERT_TRUE(page.ok());
+        ASSERT_GT(varheap::PageLiveSlots(page.value().bytes()), 0u)
+            << "the body did not spill, so there is nothing for the sweep to be about";
+    }
+
+    // A sweep now must collect **nothing**: the row is live and points at
+    // its value. This is the assertion that keeps the sweep from being a
+    // collector of things in use.
+    auto before = exec::SweepUnownedSpills(catalog_, store_, /*wal=*/nullptr);
+    ASSERT_TRUE(before.ok()) << before.status().message();
+    EXPECT_GT(before.value().retained, 0u) << "a live spill was not retained";
+    const std::uint64_t live_slots_after_first_sweep = [&] {
+        auto page = store_.GetForRead(root);
+        EXPECT_TRUE(page.ok());
+        return static_cast<std::uint64_t>(varheap::PageLiveSlots(page.value().bytes()));
+    }();
+    EXPECT_GT(live_slots_after_first_sweep, 0u)
+        << "the sweep collected a value the relation still points at";
+
+    // Now orphan it: the row is retired outright, so nothing references the
+    // value and nothing released it.
+    ASSERT_TRUE(DeletePatternDef(catalog_, store_, nullptr, 21).ok());
+    {
+        auto page = store_.GetForRead(root);
+        ASSERT_TRUE(page.ok());
+        EXPECT_GT(varheap::PageLiveSlots(page.value().bytes()), 0u)
+            << "something already released the spill, and this row has no leak to close";
+    }
+
+    auto after = exec::SweepUnownedSpills(catalog_, store_, /*wal=*/nullptr);
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    EXPECT_GT(after.value().released, 0u) << "the orphaned spill was not collected";
+    {
+        auto page = store_.GetForRead(root);
+        ASSERT_TRUE(page.ok());
+        EXPECT_EQ(varheap::PageLiveSlots(page.value().bytes()), 0u)
+            << "the orphaned value is still live after the sweep";
+    }
+
+    // Idempotent, which is what makes it safe to run at every mount and to
+    // replay after a crash mid-sweep: a second pass changes nothing about
+    // what is live.
+    auto again = exec::SweepUnownedSpills(catalog_, store_, /*wal=*/nullptr);
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    auto page = store_.GetForRead(root);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(varheap::PageLiveSlots(page.value().bytes()), 0u);
+}
+
+TEST_F(PatternDefsTest, TheMountSweepKeepsEveryValueALiveRowPointsAt) {
+    // The direction the sweep must never err in. Three definitions, all
+    // live, all spilled - a sweep that collected any of them would turn a
+    // leak into a wrong answer, and the body comes back whole afterwards.
+    const std::string a(3000, 'a');
+    const std::string b(3000, 'b');
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 31, "keep_a", a, 0).ok());
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 32, "keep_b", b, 0).ok());
+
+    auto swept = exec::SweepUnownedSpills(catalog_, store_, /*wal=*/nullptr);
+    ASSERT_TRUE(swept.ok()) << swept.status().message();
+    EXPECT_EQ(swept.value().released, 0u) << "a live spill was collected";
+
+    auto found = FindPatternDefByPatternId(catalog_, store_, 31);
+    ASSERT_TRUE(found.ok());
+    ASSERT_TRUE(found.value().has_value());
+    EXPECT_EQ(found.value()->source_text, a) << "the sweep damaged a value it should have kept";
+    auto second = FindPatternDefByPatternId(catalog_, store_, 32);
+    ASSERT_TRUE(second.ok());
+    ASSERT_TRUE(second.value().has_value());
+    EXPECT_EQ(second.value()->source_text, b);
 }
 
 }  // namespace

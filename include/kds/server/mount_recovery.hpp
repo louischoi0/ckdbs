@@ -145,6 +145,19 @@ struct MountRecovery {
     // and the one a clean shutdown always produces.
     std::uint64_t catalog_marks_finalized = 0;
 
+    // Var-heap slots this mount collected because no row pointed at them
+    // (H7, `exec/varheap_sweep.hpp`). The leak it exists for is a
+    // rolled-back `CREATE PATTERN`'s spilled body text: `LogChainInsert`
+    // logs its spills under `kNoTxnId`, so there is no transaction to chain
+    // an undo record to and no compensation runs.
+    //
+    // **Not a leak count.** `varheap::PageRelease` is idempotent and cannot
+    // tell a live slot it is killing from a tombstone it is rewriting, so
+    // this counts *slots the sweep did not find a reference for*, which on
+    // a relation that has rolled back before includes the ones an earlier
+    // mount already collected. Non-zero is not a defect report.
+    std::uint64_t varheap_slots_swept = 0;
+
     // ---- Assertion enforcement, resumed (RC07) ----
     //
     // `assertions_enforcing` is what `SHOW ASSERTIONS` will report `enforcing=1`

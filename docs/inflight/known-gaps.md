@@ -2041,14 +2041,64 @@ All fixed by `b11cc81`; the suite is green.
   and stays true — `sim/faults.hpp`'s absent `Crash(prefix)` primitive is
   what would change it.
 
-- **A rolled-back spill made with `kNoTxnId` leaks.** `exec::LogChainInsert`
-  logs its spills under `kNoTxnId` — the path `sys.pattern_defs` and the
-  assertion catalog use — so there is no transaction to chain an undo
-  record to and no compensation. A rolled-back `CREATE PATTERN`'s spilled
-  body text stays in the var-heap. Pre-existing in effect (nothing
-  reclaimed anything before 2026-08-28); what is new is that every *other*
-  spill is now released, so this is the remaining hole rather than the
-  general case. A mount-time sweep collects it.
+- ~~**`ckdbs-sim` cannot cut a log between two records of one statement.**~~
+  **Closed 2026-08-29 (H2).** `MemoryLogDevice::Crash(keep_bytes)` keeps the
+  first `keep_bytes` of the unsynced run in (segment, offset) order — append
+  order — and drops the rest; `SimInstance::CrashWithLogPrefix` drives it,
+  with `UnsyncedLogBytes()` so a caller can choose a cut *inside* the run
+  rather than past its end. `Crash()` is `Crash(0)`, asserted rather than
+  assumed.
+
+  **CH2's verdict: one class, not one case.** The primitive reaches every
+  state where a statement's records are *partly* durable, which is larger
+  than the `kInsert` case that motivated it — anywhere the engine writes two
+  records for one action and the second can be lost while the first
+  survives. That includes the `UNDO_WRITE`-before-`HEAP_INSERT` ordering H1
+  fixed and the `VARHEAP_APPEND` twin, and it is the shape a chain-growing
+  insert's `PAGE_INIT` sits in. What it does **not** reach is a hole in the
+  middle — a later record durable while an earlier one is not — and that
+  exclusion is deliberate: `sim/faults.hpp` argues the realistic power-cut
+  image is a partial record at the tail with nothing after it, and nothing
+  in `wal.md` is written against a scatter.
+
+  **The page device still takes the whole crash**, which bounds what this
+  buys. A torn *page* is unhealable until the full-page-image cadence
+  exists ([GATED: FPI]), so cutting the page overlay would produce a mount
+  refusal that says nothing about recovery's logic. So the primitive
+  sharpens the **log** half of every recovery entry here whose evidence was
+  "sim is green"; the page half is unchanged and still gated.
+
+  Not yet wired into the seeded generator — the primitive and its driver
+  exist and are tested, and choosing cut points from a seed is the sweep's
+  own row (SIM12-SIM14, phase S-4).
+
+- ~~**A rolled-back spill made with `kNoTxnId` leaks.**~~ **Closed
+  2026-08-29 (H7)** by the mount-time sweep this entry proposed.
+  `exec::SweepUnownedSpills` runs in the window `FinalizeDeleteMarksAtMount`
+  already owns — after recovery, so a spill this mount's own log restored is
+  included, and before the listener binds, so "what the rows point at" is a
+  closed question rather than a race — and `SHOW META`'s recovery block
+  gains `varheap_slots_swept`.
+
+  **Scoped to the two relations that take the `kNoTxnId` path**, named in a
+  constant rather than discovered: `sys.pattern_defs` and the assertion
+  catalog are `exec::LogChainInsert`'s only callers, and every other
+  relation's spills are released by the rollback path, so sweeping them
+  would put a second authority over bytes `varheap_release.hpp` already
+  owns. Adding a third `LogChainInsert` caller has to be a decision to add
+  it here too.
+
+  Two things the row states rather than over-claims. **`varheap_slots_swept`
+  is not a leak count**: `varheap::PageRelease` is idempotent and cannot
+  tell a live slot from a tombstone it is rewriting, so the figure is
+  "slots no row referenced", which after the first sweep includes what an
+  earlier one collected. And **a delete-marked row counts as a live
+  reference** — nothing retires a heap slot yet, so such a row is still
+  readable by an older snapshot and collecting its value would turn a leak
+  into a wrong answer, which is the one direction this must never err in.
+  Pinned by a pair: one test that the sweep collects an orphaned spill and
+  is idempotent, one that it keeps every value a live row points at and the
+  bodies still read back whole.
 
 - **`decimal128(p, s)` cannot be written**, though
   `src/server/command_dispatcher.cpp`'s CREATE TABLE comment says it can:

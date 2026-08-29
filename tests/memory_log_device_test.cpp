@@ -1,5 +1,6 @@
 #include "kds/wal/memory_log_device.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -152,6 +153,134 @@ TEST(MemoryLogDeviceTest, ReadsSeeUndurableWritesUntilTheCrash) {
     std::vector<std::byte> read(pending.size());
     ASSERT_TRUE(device->ReadAt(0, 0, read).ok());
     EXPECT_EQ(read, pending);
+}
+
+// ---- H2: the prefix crash ------------------------------------------------
+//
+// `Crash()` cuts the log where a `Sync()` already was, so every state it
+// can produce is one the writer had asked to be made durable as a whole.
+// The state it *cannot* produce is the one an interrupted flush leaves: a
+// readable prefix ending part-way through what one statement wrote. That
+// is the class `sim/faults.hpp` records torn injection as waiting on, and
+// the class recovery's `kInsert` case (H1) lives in - an `UNDO_WRITE`
+// durable while the `HEAP_INSERT` it can undo is not.
+TEST(MemoryLogDeviceTest, ACrashWithAPrefixKeepsTheHeadOfTheUnsyncedRunAndDropsTheTail) {
+    auto device = MakeDevice();
+    ASSERT_NE(device, nullptr);
+    ASSERT_TRUE(device->CreateSegment(0).ok());
+
+    // Durable ground truth first, so the cut below is provably cutting the
+    // *unsynced* run and not the log.
+    const std::vector<std::byte> durable = Pattern(8, 1);
+    ASSERT_TRUE(device->WriteAt(0, 0, durable).ok());
+    ASSERT_TRUE(device->Sync().ok());
+    EXPECT_EQ(device->UnsyncedBytes(), 0u) << "a sync leaves nothing to cut";
+
+    // Two "records", written in order and neither synced.
+    const std::vector<std::byte> first = Pattern(8, 2);
+    const std::vector<std::byte> second = Pattern(8, 3);
+    ASSERT_TRUE(device->WriteAt(0, 8, first).ok());
+    ASSERT_TRUE(device->WriteAt(0, 16, second).ok());
+    ASSERT_EQ(device->UnsyncedBytes(), first.size() + second.size());
+
+    // The cut falls between them: the first record survives whole, the
+    // second is gone, and the durable bytes below both are untouched.
+    device->Crash(/*keep_bytes=*/first.size());
+
+    std::vector<std::byte> read(24);
+    ASSERT_TRUE(device->ReadAt(0, 0, read).ok());
+    EXPECT_TRUE(std::equal(durable.begin(), durable.end(), read.begin()))
+        << "the crash reached below the last sync";
+    EXPECT_TRUE(std::equal(first.begin(), first.end(), read.begin() + 8))
+        << "the record the flush had finished did not survive";
+    const std::vector<std::byte> zeroes(8, std::byte{0});
+    EXPECT_TRUE(std::equal(zeroes.begin(), zeroes.end(), read.begin() + 16))
+        << "the record the flush was interrupted in survived anyway";
+}
+
+TEST(MemoryLogDeviceTest, ACrashPrefixCanCutInsideOneWrite) {
+    // The tear proper: not "record boundaries", but a cut part-way through
+    // a single transfer, which is what a power loss during one write leaves
+    // and what `TearNextWrite` models on the *writing* side. Doing it from
+    // the crash side is what lets a driver decide the cut after the writes
+    // have happened, which is how a seed-chosen crash point works.
+    auto device = MakeDevice();
+    ASSERT_NE(device, nullptr);
+    ASSERT_TRUE(device->CreateSegment(0).ok());
+
+    const std::vector<std::byte> record = Pattern(16, 7);
+    ASSERT_TRUE(device->WriteAt(0, 0, record).ok());
+    device->Crash(/*keep_bytes=*/6);
+
+    std::vector<std::byte> read(16);
+    ASSERT_TRUE(device->ReadAt(0, 0, read).ok());
+    EXPECT_TRUE(std::equal(record.begin(), record.begin() + 6, read.begin()));
+    for (std::size_t i = 6; i < read.size(); ++i) {
+        EXPECT_EQ(read[i], std::byte{0}) << "byte " << i << " survived a cut before it";
+    }
+}
+
+TEST(MemoryLogDeviceTest, ACrashPrefixOfZeroIsTheWholeCrashAndOneOfEverythingIsNone) {
+    // The two ends, stated so a caller can reason about the knob rather
+    // than probe it: 0 is `Crash()`, and a value at or above the unsynced
+    // run is a crash that happened to lose nothing.
+    const std::vector<std::byte> record = Pattern(16, 9);
+    // The segment is synced into existence first, so what the crash cuts is
+    // the *write* and not the segment - otherwise both arms drop segment 0
+    // whole and the reads below fail identically, proving nothing.
+    const auto armed = [&record] {
+        auto d = MakeDevice();
+        EXPECT_TRUE(d->CreateSegment(0).ok());
+        EXPECT_TRUE(d->Sync().ok());
+        EXPECT_TRUE(d->WriteAt(0, 0, record).ok());
+        return d;
+    };
+
+    auto device = armed();
+    auto twin = armed();
+    device->Crash(/*keep_bytes=*/0);
+    twin->Crash();
+    std::vector<std::byte> cut(16);
+    std::vector<std::byte> whole(16);
+    ASSERT_TRUE(device->ReadAt(0, 0, cut).ok());
+    ASSERT_TRUE(twin->ReadAt(0, 0, whole).ok());
+    EXPECT_EQ(cut, whole) << "Crash(0) and Crash() must leave the same image";
+    EXPECT_EQ(cut, std::vector<std::byte>(16, std::byte{0}))
+        << "the unsynced write survived a cut that keeps nothing";
+    EXPECT_EQ(device->segment_count(), twin->segment_count());
+
+    auto keeper = armed();
+    keeper->Crash(/*keep_bytes=*/keeper->UnsyncedBytes());
+    std::vector<std::byte> kept(16);
+    ASSERT_TRUE(keeper->ReadAt(0, 0, kept).ok());
+    EXPECT_EQ(kept, record) << "a cut at the end of the run lost something";
+}
+
+TEST(MemoryLogDeviceTest, ACrashPrefixSpansSegmentsInAppendOrder) {
+    // Append order is (segment, offset), so a cut that runs past the first
+    // segment's unsynced bytes lands in the second - and a segment created
+    // since the last sync with nothing left in it never existed, which is
+    // the reading `Crash()` already gives its own tail.
+    auto device = MakeDevice();
+    ASSERT_NE(device, nullptr);
+    ASSERT_TRUE(device->CreateSegment(0).ok());
+    ASSERT_TRUE(device->Sync().ok());
+    ASSERT_TRUE(device->CreateSegment(1).ok());
+
+    const std::vector<std::byte> in_first = Pattern(8, 4);
+    const std::vector<std::byte> in_second = Pattern(8, 5);
+    ASSERT_TRUE(device->WriteAt(0, 0, in_first).ok());
+    ASSERT_TRUE(device->WriteAt(1, 0, in_second).ok());
+
+    // Cut inside segment 1: segment 0's bytes are all below it.
+    device->Crash(/*keep_bytes=*/in_first.size() + 4);
+    std::vector<std::byte> read0(8);
+    std::vector<std::byte> read1(8);
+    ASSERT_TRUE(device->ReadAt(0, 0, read0).ok());
+    ASSERT_TRUE(device->ReadAt(1, 0, read1).ok());
+    EXPECT_EQ(read0, in_first) << "the earlier segment lost bytes to a later cut";
+    EXPECT_TRUE(std::equal(in_second.begin(), in_second.begin() + 4, read1.begin()));
+    for (std::size_t i = 4; i < read1.size(); ++i) EXPECT_EQ(read1[i], std::byte{0});
 }
 
 TEST(MemoryLogDeviceTest, FailedSyncLeavesTheDurableImageBehind) {

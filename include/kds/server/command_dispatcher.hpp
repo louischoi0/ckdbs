@@ -32,6 +32,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/server/core_affinity.hpp"
 #include "kds/server/range_alloc.hpp"
+#include "kds/stats/trace.hpp"
 #include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
@@ -922,6 +923,14 @@ private:
     // `QualityOf`) - this handler renders and never computes.
     DispatchOutcome HandleShowCabinOptimizer();
 
+    // H6 step 3 (`observability.md` §10): `TRACE ON|OFF` is the manual
+    // sampler, `SHOW TRACES` the ring, `SHOW TRACE <id>` one span tree with
+    // self-time separated from child-time - which is the number that finds
+    // the culprit, where total only says which subtree to open next.
+    DispatchOutcome HandleTrace(std::string_view rest);
+    DispatchOutcome HandleShowTraces();
+    DispatchOutcome HandleShowTrace(std::string_view rest);
+
     // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) -----------
     //
     // The write paths' three entry points. They live here rather than in
@@ -1112,6 +1121,12 @@ public:
     // that never sets it keeps `kRangeSizeOff`, which is every dispatcher
     // built outside `CoreRuntime::Open`.
     void set_range_size_ids(std::uint64_t ids) noexcept { range_size_ids_ = ids; }
+
+    // H6: the core-local trace ring this dispatcher records into when a
+    // session has asked for it (`TRACE ON`). A dispatcher never told
+    // collects nothing, which is every configuration that does not want the
+    // instrument. `sink` must outlive this.
+    void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
 
     // Where CheckWriteAffinity reads that an index of a relation this core
     // owns is being built here (PW1c-6b-2, core_affinity.hpp). Installed
@@ -1839,6 +1854,22 @@ private:
     // here because this is where `SHOW META` reads its counters from, and
     // because it is `cross_core_writes_`'s neighbour in form and purpose:
     // per core, aggregate, the evidence a placement decision is made from.
+    // ---- H6: per-request tracing (`observability.md` §10 steps 1-3) -----
+    //
+    // `traces_` is the core-local ring; `tracing_` is the session's
+    // `TRACE ON`; `trace_` is the context of the statement in flight, null
+    // on every untraced one - which is what every `SpanScope` in this file
+    // branches on and the whole of the disabled path.
+    //
+    // Owned here rather than passed, for `pending_commit_lsn_`'s reason
+    // stated at `DispatchAndStage`: one statement runs at a time on a core,
+    // so there is no second value to confuse it with, and the alternative
+    // is a parameter on a dozen signatures. Off by default, so a dispatcher
+    // that is never told behaves exactly as it did.
+    stats::TraceSink* traces_ = nullptr;
+    stats::TraceContext* trace_ = nullptr;
+    bool tracing_ = false;
+
     RangeSplitDeclineCounters range_split_declines_;
     // `set_range_size_ids`; `kRangeSizeOff` means no range ever opens and this
     // dispatcher's write path is the one it always was.

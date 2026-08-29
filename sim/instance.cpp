@@ -155,6 +155,28 @@ void SimInstance::Crash() {
     TearDown();
 }
 
+void SimInstance::CrashWithLogPrefix(std::uint64_t keep_bytes) {
+    // H2: the same power cut, with the log cut **inside** its unsynced run
+    // instead of at the last `Sync()`. What that reaches which `Crash()`
+    // cannot is a log whose readable prefix ends part-way through what one
+    // statement wrote — an `UNDO_WRITE` durable while the `HEAP_INSERT` it
+    // can undo is not, which is recovery's H1 case.
+    //
+    // The **page** device still takes the whole crash, and that is a scope
+    // statement rather than an omission: a torn *page* is unhealable until
+    // the full-page-image cadence exists ([GATED: FPI], `known-gaps.md`),
+    // so cutting the page device's overlay would produce a mount refusal
+    // that says nothing about recovery's logic. `sim/faults.hpp` records
+    // the same split.
+    page_device_->Crash();
+    log_device_->Crash(keep_bytes);
+    TearDown();
+}
+
+std::uint64_t SimInstance::UnsyncedLogBytes() const noexcept {
+    return log_device_->UnsyncedBytes();
+}
+
 Status SimInstance::CleanShutdown() {
     // The dispatcher's own SYNC: log first, then the store, the same order
     // and the same code a client's SYNC runs.

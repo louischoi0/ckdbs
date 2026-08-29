@@ -112,6 +112,8 @@ add_library(kds
     src/wal/file_log_device.cpp
     src/wal/writer.cpp
     src/exec/row_codec.cpp
+    src/exec/varheap_sweep.cpp
+    src/stats/trace.cpp
     src/exec/index_key.cpp
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
