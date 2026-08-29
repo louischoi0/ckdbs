@@ -1040,10 +1040,33 @@ TEST(DevicePageStoreOwnershipTest, APageStampedByThisStreamIsClaimedWithoutAGran
     // (`device_page_store.cpp`'s `permanent = page_id < system_page_limit_`).
     // `foreign` and `blank` are user pages, so the retryable code is the
     // right answer and this line was asserting the pre-split one.
+    //
+    // **And the code is not the same in both builds**, which is why this
+    // asserts per build rather than one value (found 2026-08-29 by RS's
+    // pre-push gate, the first Debug run since `91f69ed`; every gate since
+    // has been `build-release`, per CLAUDE.md's measurement rule, so the
+    // Debug arm went unrun). These two pages can be neither faulted nor
+    // written by this core - the lease is 1000..1003, no grant names them -
+    // so in a **debug** build the shared-nothing fault check above the write
+    // check (`device_page_store.cpp`'s `#ifndef NDEBUG` block) refuses first
+    // and returns `InvalidArgument`, and H4's `TxnConflict` is never
+    // reached. Release compiles that block out and answers `TxnConflict`.
+    //
+    // Asserted as it is rather than made uniform because **which refusal is
+    // right here is not this test's call**: the divergence means a debug
+    // build tells a client "wrong on every retry" where release says
+    // "retry once the grant lands", and H4 chose the second deliberately.
+    // Recorded for the owner of `device_page_store.cpp` rather than papered
+    // over by asserting only the code the current build happens to give.
+#ifndef NDEBUG
+    const StatusCode kUnwritablePageCode = StatusCode::kInvalidArgument;
+#else
+    const StatusCode kUnwritablePageCode = StatusCode::kTxnConflict;
+#endif
     for (PageId page : {foreign, blank}) {
         auto refused = store->Get(page);
         EXPECT_FALSE(refused.ok()) << "page " << page << " must not be writable";
-        if (!refused.ok()) EXPECT_EQ(refused.status().code(), StatusCode::kTxnConflict);
+        if (!refused.ok()) EXPECT_EQ(refused.status().code(), kUnwritablePageCode);
         EXPECT_FALSE(store->MayWrite(page));
     }
     EXPECT_EQ(store->stamp_claims(), 2u);
