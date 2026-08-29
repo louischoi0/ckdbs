@@ -584,3 +584,94 @@ and below 4,096 it dominates both.** So: below 4,096 is a loss on every
 axis; 4,096 is the throughput optimum on both arms; above it costs ~10% of
 the group arm's gain per 4x of ceiling. The value is the operator's; this
 is the curve it is taken on.
+
+## 10. RR0 — the design answer §15d deferred
+
+Work order `instructions/v2.6.0/r4-r-readable-surface.md`, written in
+worktree `v2.6.0-ksweep` at `949a7d4` **before RR1's code**, and grounded
+in a throwaway experiment rather than in reasoning alone — the experiment
+is named below because it is what makes this a design *answer* rather than
+a design *proposal*.
+
+`workplan-range-directory.md` §15d deferred the self-directed stage as *"a
+design question and not this row's."* The answer is smaller than the
+deferral implies.
+
+### 10a. A self-directed stage is not a new mechanism, and the message stays
+
+HR1 guessed it would be *"the fan-in's existing shape minus the message."*
+**Half right, and the wrong half is the interesting one: the message does
+not go away, and it does not need to.** The ring already carries a stage a
+core opens against itself — `core_runtime_test.cpp`'s two-step pipeline
+forwards an enclosed leaf open to its own core and its comment says so
+outright (*"self-sends are the same protocol"*), and `expeditor.cpp`
+constructs core 0's own `RemoteStepServer` for exactly this, with the
+comment *"a stage placed on a relation core 0 owns is served here, like any
+peer serves its own … producers and consumers land on core 0's one
+reactor."*
+
+So the producing half of a self-directed stage was built and wired at
+P4d-4b-3. What has never been reachable is a **plan that asks for one**.
+
+**The whole of it is one predicate.** `HandleSelect`'s fan-in route is
+guarded by, among the shape tests, `owner_access->owner_core != core_id_`
+— *"is this relation someone else's"*, which is the question the route was
+born asking when it meant "ship this read to the owner". RD7 generalised
+the route to many stages and left that predicate alone. The question it
+should ask is **"can this read be served by a purely local walk"**, and
+under `placement = creating` — where every relation is core 0's — the two
+answers differ for exactly the relation this milestone is about.
+
+*Verified before writing this section*: replacing that one predicate with
+`!WhollyOwnedBy(core_id_)`, on a 4-core instance with `range_size_ids =
+512`, `placement = creating` and 1,200 rows spread across the boundary, a
+**core-0 session reads the relation** — `SELECT *` (10,855 bytes),
+`WHERE id = 1`, `WHERE v = 1` and `ORDER BY id ASC` all answer, where every
+one of them was refused before. No other line changed.
+
+### 10b. What it does to the stage count (HR4's subject)
+
+**Nothing.** A self-directed run is still one stage: `stages` is built
+from the range list before any owner is consulted, and
+`stages.size() > kMaxFanInUpstreams` is tested on that list. A local run
+costs an upstream slot exactly as a remote one does, because it *is* an
+upstream — opened, credited and closed through the same protocol, with the
+ring hop being a self-send.
+
+So HR4's falsifier does not fire and §8's first two ways out are **not**
+re-priced. Making the local run message-free would change that — it is a
+real optimisation and it is **not this order's**, because it would replace
+a protocol path with a second one and RB4's whole lesson was that two
+spellings of one thing is two chances to forget one of them.
+
+### 10c. The predicate has to be written as a disjunction, not as `WhollyOwnedBy`
+
+The probe above is not the shipping form, and the difference is a
+correctness one. `WhollyOwnedBy(me)` is `owner_core == me` when the range
+list is empty and *"every range is mine"* when it is not. So a relation
+whose `owner_core` is another core but whose ranges had all become this
+core's would answer **true** and be sent down the local path — where
+`CheckReadAffinity`'s `owner_core != core_id_` arm refuses it outright.
+That state is unreachable today (CC9 gives the `lo = 0` anchor to the
+owner, and no mover exists to move it), but a route predicate that is
+correct only because of a neighbouring invariant is the shape this
+milestone has been caught by twice. RR1 writes the question it means:
+
+    servable_locally = owner_core == core_id_ && WhollyOwnedBy(core_id_)
+
+and takes the route when it is false.
+
+### 10d. What this does not answer
+
+**The peer half is a different problem and RR2 owns it.** With the
+predicate fixed, a core-0 session reads a spread relation and a **peer
+session still cannot** — it has no `remote_reads_` at all, so it falls
+through to statement shipping, ships the read to core 0, and the reply is
+lost above some size: measured, a peer's `SELECT * FROM spread` over 1,200
+rows answers `ERR UNKNOWN_OUTCOME retryable=0 statement shipping: the
+statement executed on its owner but its reply …` while the same session's
+`WHERE id = 1` answers normally. That failure is worth its own line
+regardless of RR2: **`UNKNOWN_OUTCOME` is the wrong category for a read.**
+It exists because a write whose reply is lost may or may not have
+committed; a read mutates nothing, so there is no outcome to be unknown
+about and the honest answer is a retryable refusal or a bigger reply.

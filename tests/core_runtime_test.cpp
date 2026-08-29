@@ -2015,6 +2015,137 @@ TEST_F(CoreRuntimeTest, AFanInOverInterleavedOwnershipStillAnswersInRangeOrder) 
     EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
 }
 
+// ---- R4-R/RR5: the equivalence case that did not exist until RR1 --------
+//
+// **A relation the reading core *owns* but does not wholly hold**, which
+// is what `placement = creating` produces the moment R4's spreading opens
+// a peer's range - and which, before RR1, no core could read in any shape
+// (`bench/v2.6.0/` §6a measured that at 395 rows). The route's predicate
+// asked *"is this relation someone else's"*; it now asks *"can a local
+// walk serve this"*, and this is the case where the two answers differ.
+//
+// Byte-identical against the same rows unsplit, **straddling the
+// boundary**, which is RB5's discipline: every defect this line has found
+// returned a right answer for data that stayed on one side of the cut.
+TEST_F(CoreRuntimeTest, ACoreReadsARelationItOwnsButDoesNotWhollyHold) {
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    // **`creating`, not `rotate`** - the arrangement spreading produces and
+    // the one the old predicate could not serve: core 0 owns both
+    // relations, and one of them has a range elsewhere.
+    auto split = catalog2.CreateTable(catalog::kNamespacePublic, "held", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "wholly", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(whole.ok()) << whole.status().message();
+    ASSERT_EQ(catalog2.InitTableAccess(split.value()).value()->owner_core, 0u)
+        << "the fixture did not place both relations on core 0";
+
+    // One cut, and the range above it is **core 2's** - so core 0 owns the
+    // relation and holds only the range below.
+    auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
+    auto ranges = catalog2.RangesOf(split.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u);
+    ASSERT_EQ(ranges.value()[0].owner_core, 0u);
+    ASSERT_EQ(ranges.value()[1].owner_core, 2u) << "the fixture did not put a range elsewhere";
+
+    auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
+        auto access = catalog2.InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload =
+            exec::EncodeRow(access.value()->schema, access.value()->layout, id, {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
+    };
+    // **Rows on both sides**, and the same rows in the same order into the
+    // unsplit twin, so the two replies differ in the split and nothing else.
+    const PageId whole_head = catalog2.GetSysTableRow(whole.value()).value().desc_page_id;
+    for (auto [id, v] : std::vector<std::pair<std::uint64_t, std::int64_t>>{
+             {1, 10}, {2, 20}, {4096, 30}, {4097, 40}}) {
+        place(split.value(), id, v,
+              id < 4096 ? ranges.value()[0].entry_page : ranges.value()[1].entry_page);
+        place(whole.value(), id, v, whole_head);
+    }
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    for (catalog::Oid oid : {split.value(), whole.value()}) {
+        runtime.value()->GrantRelationFault(RelationFaultExtentOf(
+            catalog2.GetSysTableRow(oid).value(), storage::kDefaultExtentPages));
+    }
+
+    std::optional<SessionStepClient> client;
+    std::optional<RemoteStepServer> server_0;
+    std::optional<RemoteStepServer> server_2;
+    auto make_seam = [&] {
+        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
+            switch (kind) {
+                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+                default: ADD_FAILURE() << "unexpected server send";
+            }
+            return Status::OK();
+        }};
+    };
+    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
+    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
+    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
+    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
+    client.emplace(
+        /*core_id=*/0,
+        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            // **A stage directed at core 0 itself is served here**, which is
+            // the self-directed stage RR0 answered: the same protocol, a
+            // self-send, and no second path
+            // (`workplan-insert-spreading.md` §10a).
+            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
+            sched::MessageHeader h{};
+            h.src_core = 0;
+            h.dst_core = dst;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
+                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected client send";
+            }
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    const std::string split_reply =
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM held").response;
+    const std::string whole_reply =
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM wholly").response;
+    ASSERT_EQ(split_reply.rfind("ERR", 0), std::string::npos)
+        << "a relation this core owns but does not wholly hold was refused: " << split_reply;
+    // A star reply's header carries column names and not the relation's, so
+    // these compare whole rather than modulo a substitution.
+    EXPECT_EQ(split_reply, whole_reply) << "the split changed the answer";
+    EXPECT_EQ(split_reply, "id,v\\n1,10\\n2,20\\n4096,30\\n4097,40");
+    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
+
+    // **The straddle, and the half that would pass on one side alone.** A
+    // predicate matching rows in both ranges is what a walk stopping at the
+    // boundary answers short.
+    const std::string straddle =
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM held WHERE v > 15").response;
+    EXPECT_EQ(
+        straddle,
+        runtime.value()->dispatcher().Dispatch("SELECT * FROM wholly WHERE v > 15").response);
+    EXPECT_EQ(straddle, "id,v\\n2,20\\n4096,30\\n4097,40");
+}
+
 // ---- P4d-4b-3: a two-step join executes as a cross-core pipeline ---------
 
 TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) {

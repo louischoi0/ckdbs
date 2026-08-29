@@ -26,6 +26,8 @@
 #include <cstring>
 #include <charconv>
 #include <iomanip>
+#include <map>
+#include <set>
 #include <sstream>
 #include <variant>
 
@@ -1161,6 +1163,48 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                              out << key.rel_oid << ':' << exec::RangeGateName(key.gate);
                          },
                          /*even_when_zero=*/false);
+
+    // **How many ranges each split relation actually has** (R4-R §7's
+    // instrument gap, added with RR1). Nothing reported this from outside
+    // the process: `sys.ranges` has no column definitions, so
+    // `SELECT * FROM ranges` answers *"no columns for this rel_id"*, and
+    // the block above carries only *declines*. R4-M could measure the count
+    // only where the fan-in refusal names it - above 64 stages - and had to
+    // estimate it as `ids issued / range_size_ids` everywhere below, which
+    // is wrong by construction wherever IS5's suppression fires.
+    //
+    // **Absent when nothing is split**, which is `SHOW META`'s
+    // absent-rather-than-zeroed rule and also the honest reading: an
+    // instance that has never armed `range_size_ids` has no ranges to
+    // report, not zero of them. So a single-core instance and every
+    // unarmed one print nothing here, and this field cannot be read as a
+    // behaviour change on either.
+    //
+    // Keyed `oid:count@owners` because the count alone does not say what
+    // the ceiling cares about: `stages == ranges` only while consecutive
+    // ranges have *different* owners, so a reader comparing this against
+    // `kMaxFanInUpstreams` needs the owner count beside it.
+    {
+        std::map<catalog::Oid, std::pair<std::size_t, std::size_t>> split;
+        if (auto tables = catalog_.ListTables(); tables.ok()) {
+            for (const catalog::SysObjectRow& row : tables.value()) {
+                auto ranges = catalog_.RangesOf(row.oid);
+                if (!ranges.ok() || ranges.value().size() < 2) continue;
+                std::set<std::uint32_t> owners;
+                for (const catalog::SysRangeRow& r : ranges.value()) owners.insert(r.owner_core);
+                split.emplace(row.oid, std::make_pair(ranges.value().size(), owners.size()));
+            }
+        }
+        if (!split.empty()) {
+            os << " split_relations=" << split.size() << " split_relation_detail=";
+            bool first = true;
+            for (const auto& [oid, counts] : split) {
+                if (!first) os << ',';
+                os << oid << ':' << counts.first << '@' << counts.second;
+                first = false;
+            }
+        }
+    }
 
     // **Statement shipping** (D7 of the statement-shipping work order).
     // Two halves, because a core is both an arrival core and an owner and
@@ -6750,8 +6794,40 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         !MayEnrolShip(session)) {
         const exec::Step& step = chain.value().steps[0];
         auto owner_access = catalog_.InitTableAccess(step.rel_oid);
-        if (owner_access.ok() && owner_access.value()->owner_core != core_id_ &&
-            step.sub_chains.empty() && !step.emit_in_key_order) {
+        // **The question is "can a local walk serve this", not "is this
+        // relation someone else's"** (R4-R/RR1, the answer
+        // `workplan-range-directory.md` §15d deferred; the reasoning and
+        // the experiment are `workplan-insert-spreading.md` §10).
+        //
+        // This predicate was `owner_core != core_id_` from the row that
+        // introduced the route, when it meant *ship this read to the
+        // owner*. RD7 generalised the route to one stage per contiguous run
+        // of same-owner ranges and left the predicate alone, so a relation
+        // this core **owns** but does not wholly **hold** fell through it -
+        // and then met `CheckReadAffinity`'s not-`WhollyOwnedBy` refusal,
+        // which is the honest ending for a statement that could not take
+        // this route and the wrong one for a statement that can.
+        //
+        // Under `placement = creating` every relation is core 0's, which is
+        // exactly the arrangement R4's spreading produces, so before this
+        // line a spread relation was unreadable from every core in every
+        // shape (`bench/v2.6.0/` §6a measured it at 395 rows).
+        //
+        // **A disjunction rather than `!WhollyOwnedBy(core_id_)` alone**,
+        // and the difference is correctness rather than taste: that helper
+        // answers `owner_core == core_id_` for an empty range list and
+        // *every range is mine* for a full one, so a relation owned
+        // elsewhere whose ranges had all become this core's would answer
+        // true, take the local path, and be refused by the very arm this
+        // route exists to avoid. CC9 makes that state unreachable today -
+        // the `lo = 0` anchor is the owner's and no mover exists - but a
+        // route predicate correct only because of a neighbouring invariant
+        // is the shape this milestone has been caught by twice.
+        const bool servable_locally =
+            owner_access.ok() && owner_access.value()->owner_core == core_id_ &&
+            owner_access.value()->WhollyOwnedBy(core_id_);
+        if (owner_access.ok() && !servable_locally && step.sub_chains.empty() &&
+            !step.emit_in_key_order) {
             // **Which cores hold this relation** (RD7). One stage per
             // owner *core*, never per range: a relation of k ranges is
             // read by at most `cores` stages, because consecutive ranges

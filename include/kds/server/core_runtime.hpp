@@ -476,6 +476,16 @@ private:
     // answers STEP_OPENs for relations it owns.
     std::optional<RemoteStepServer> remote_steps_;
 
+    // **And the client half** (R4-R/RR2), armed beside it. Until 2026-08-29
+    // this existed on core 0 alone — `expeditor.cpp` built one and called
+    // `SetRemoteReads` on that one dispatcher — so every core could
+    // *serve* a fan-in stage and none but core 0 could *open* one. The
+    // consequence was not a performance property: a session's ability to
+    // read a spread relation depended on which core `SO_REUSEPORT` had
+    // accepted it on, which is not something a client can choose or
+    // observe. Declared before `dispatcher_`, which borrows it.
+    std::optional<SessionStepClient> remote_reads_;
+
     // PW1c-6b-2 (index_build_service.hpp): the window the dispatcher's
     // gate reads - declared before the dispatcher, which holds a pointer
     // - and the owner's half of a peer-owned relation's CREATE INDEX,
