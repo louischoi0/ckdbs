@@ -882,40 +882,55 @@ still waits on its own gate, so:
   is a loss on every axis, not a ceiling-for-burn trade, and the trade only
   begins above 4,096.
 
-- **A spread relation is barely readable at all, and the 64-range ceiling
-  above is not what stops it** (R4-M, 2026-08-29, measured in worktree
-  `v2.6.0-ksweep`; `bench/v2.6.0/` §6a). Two limits sit in front of the
-  entry above, and a relation meets both at its **second** range rather
-  than its sixty-fifth:
+- ~~**A spread relation is barely readable at all, and the 64-range ceiling
+  above is not what stops it**~~ (R4-M, 2026-08-29, measured in worktree
+  `v2.6.0-ksweep`; `bench/v2.6.0/` §6a). **Closed 2026-08-29 by R4-R
+  (RR1, RR2) and RS**, `docs/inflight/in-progress/workplan-insert-spreading.md`
+  §10-§11 — the entry is kept because what it measured was true, and
+  because the two limits it names are the ones a reader of the older
+  results files will meet:
 
-  - **The fan-in client exists on core 0 alone.** `expeditor.cpp`
-    constructs it as `remote_reads_.emplace(/*core_id=*/0, …)` and calls
-    `SetRemoteReads` on that one dispatcher; `CoreRuntime` — every peer —
-    has `remote_steps_`, the **server** half, and no client member at all.
-    So every peer can *serve* a stage and none can *open* one, and a
-    session on a peer takes `CheckReadAffinity`'s
-    not-`WhollyOwnedBy` refusal for any relation with a range elsewhere.
-  - **The route also requires the reader not to be the relation's
-    `owner_core`**, which under `placement = creating` — the default, and
-    the arrangement spreading exists to produce — is core 0 for every
-    relation. So under `creating` a spread relation is **unreadable from
-    every core, in every shape**.
+  - **The fan-in client existed on core 0 alone.** Every peer had
+    `remote_steps_`, the **server** half, and no client at all: a peer
+    could serve a stage and could not open one. **Gone at RR2** —
+    `CoreRuntime` constructs a `SessionStepClient` like `Expeditor` does,
+    and `WireStepEndpoints` is the one home of the six-kind registration
+    both now share (the `kStepBatch`/`kStepEof` fan-out to *both*
+    endpoints is the rule that must not be written twice; a scheduler
+    holds one handler per kind and **assigns**).
+  - **The route also required the reader not to be the relation's
+    `owner_core`**, which under `placement = creating` — the default — is
+    core 0 for every relation, so a spread relation was unreadable from
+    every core in every shape. **Gone at RR1**: the route asks
+    `TableAccess::ServableBy(core)` — *whether a walk on this core alone
+    answers the relation whole* — and takes itself when that is false, so
+    a run of ranges this core owns becomes a **self-directed stage**. That
+    stage is not a new mechanism: it is the ordinary protocol with the ring
+    hop being a self-send, and it costs an upstream slot like any other.
 
-  Where it *is* readable (a core-0 session, `placement = rotate`), the
-  surface is one shape: `SELECT *`, optionally with a `WHERE`, optionally
-  with a free `ORDER BY <pk> ASC`. A projection, an aggregate or a `LIMIT`
-  is refused, because the route tests `chain.star()`, not aggregated, not
-  sorted, no `LIMIT`/`OFFSET`, no sub-chain. Measured at 395 rows on six of
-  this repository's own scenario relations — all six of the heap ledgers
-  that spread lost all five read shapes the drivers use.
+  **The readable surface now** (RR3/RS4, `bench/spread_read_surface.py`, 16
+  shapes × 4 cores against an unsplit twin on the same server, verdicts
+  identical under both placements): **5 shapes from every core** — star,
+  `+WHERE` on the pk, `+WHERE` on a non-pk, `+BETWEEN`, and a free
+  `+ORDER BY <pk> ASC`. **11 still refused**, and the unsplit control says
+  the split is what refuses them: any projection, `LIMIT`/`OFFSET`,
+  `ORDER BY` anything but the pk ascending, and every aggregate
+  (`COUNT`/`SUM`/`COUNT(DISTINCT)`/`GROUP BY`). The route tests
+  `chain.star()`, not aggregated, not sorted, no quota, no sub-chain, and
+  each exclusion is a correctness statement rather than an oversight
+  (`command_dispatcher.cpp`'s eligible-class comment says which).
 
-  **The three ways out named in the entry above do not move this.** A
-  larger `range_size_ids`, a larger `kMaxFanInUpstreams` and the per-core
-  stripe all move a ceiling that is not what binds. What would move it is
-  the **self-directed stage** `workplan-range-directory.md` §15d already
-  names and defers (*"a design question and not this row's"*), plus a
-  fan-in client on every core. Neither has an owner. Reachable only with
-  `range_size_ids` armed, which is not the default.
+  **And one more gate, added by RR1's review**: the route is refused
+  **inside an explicit transaction**, not merely inside one that can enrol.
+  Each stage mints its own latest-committed view, so a transaction that
+  wrote on a participant and then read the relation back would be answered
+  without its own uncommitted row. Snapshot forwarding to the remote-step
+  pipeline is `crosscore.md` §9's open item and is what would lift it.
+
+  **So the 64-stage ceiling in the entry above is once again the binding
+  limit**, which is what it was priced as before R4-M found two limits in
+  front of it. The three ways out named there are live again, with their
+  owners unchanged.
 
 - **On a multi-owner relation, a write naming no primary key is refused**
   (R4/IS4, 2026-08-29). `UPDATE`/`DELETE` whose predicate reduces to no pk

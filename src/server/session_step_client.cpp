@@ -80,6 +80,15 @@ SessionStepClient::RemoteRead* SessionStepClient::Find(const PipelineTag& tag) {
 }
 
 void SessionStepClient::OnStepBatch(std::span<const std::byte> payload) {
+    // **Absent, not zeroed** (R4-R/RS1, CS3). Since RR2 every core holds a
+    // client, and `WireStepEndpoints` hands it every STEP_BATCH and STEP_EOF
+    // the core receives - including the ones its *server* half is producing
+    // for someone else's fan-in, which is the whole traffic of a peer that
+    // has opened nothing. With no read registered, `Find` cannot match any
+    // tag, so the decode below is work whose answer is known: skipped here
+    // rather than discarded after it, which is the discipline this
+    // repository already applies to counters.
+    if (reads_.empty()) return;
     std::span<const std::byte> rows;
     auto header = DecodeStepBatchHeader(payload, rows);
     if (!header.ok()) return;
@@ -102,6 +111,7 @@ void SessionStepClient::OnStepBatch(std::span<const std::byte> payload) {
 }
 
 void SessionStepClient::OnStepEof(std::span<const std::byte> payload) {
+    if (reads_.empty()) return;  // OnStepBatch's rule, same reason
     auto eof = DecodePipelinePayload<StepEofPayload>(payload);
     if (!eof.ok()) return;
     RemoteRead* read = Find(eof.value().tag);
@@ -110,6 +120,7 @@ void SessionStepClient::OnStepEof(std::span<const std::byte> payload) {
 }
 
 void SessionStepClient::OnStepError(std::span<const std::byte> payload) {
+    if (reads_.empty()) return;  // OnStepBatch's rule, same reason
     auto error = DecodePipelinePayload<StepErrorPayload>(payload);
     if (!error.ok()) return;
     // By statement, not by exact tag: a pipeline's failure arrives under
