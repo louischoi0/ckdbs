@@ -10,3 +10,10 @@
 3
 4
 5
+# H9: an append-split whose separator promotion met an injected page-fail-grow
+# left the new leaf linked into the sibling chain and routed by nothing, so a
+# later append spliced its leaf in front of it and the chain descended
+# (`min_key 78 does not exceed a predecessor page's max id 183`). Fixed by
+# promoting the separator before the sibling link; btree.cpp carries the
+# ordering argument.
+20260826003

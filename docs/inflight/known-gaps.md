@@ -1854,6 +1854,40 @@ still waits on its own gate, so:
 
 ## Storage and key modes
 
+- **A btree leaf *division* stopped part-way still leaves the tree
+  half-published, and unlike the append it is not fixed** (2026-08-30, the
+  residue H9 leaves behind). H9 was the append shape: a grow whose separator
+  promotion failed had already written the sibling link, so the new leaf sat
+  in the chain routed by nothing and the chain later descended. The fix is an
+  ordering — separator first, link last, the link written through the
+  descent's own pin so it cannot fail (`docs/spec/heap-and-tuple.md` §5,
+  `src/storage/btree/btree.cpp`) — and **the same ordering does not rescue
+  `SplitLeafAndInsert`**, which is the other way a leaf grows (§5): it
+  rewrites the *old* leaf destructively, moving the upper half out, and only
+  then promotes. Both orders leave a bad state if the promotion fails:
+  promote-last (today) leaves the moved half in a leaf no separator routes
+  to, so a lookup for a moved key answers NotFound and a re-insert of it is
+  admitted as a duplicate; promote-first would leave a routed leaf holding
+  rows no scan can reach. The two writes genuinely need to be one, which
+  means pre-reserving everything the promotion can consume — including the
+  page allocations an ancestor split may need — before the old leaf is
+  touched. Pre-allocation leaks a page when it goes unused, and nothing
+  frees a page (page.md §5), so the fix waits on that. **Reachability**: only
+  a caller-named key that sorts *inside* a full leaf takes this path (§4.1),
+  which is btree-only and never produced by an omitted key, and it needs an
+  I/O failure at the promotion. Unreached by the simulation, whose workload
+  names no keys — so this is read from the source, not observed.
+  **The secondary index tree has the same shape and the same reason**
+  (`src/storage/index/index_tree.cpp`: `SplitInto`, then the sibling link,
+  then the propagation loop that can fail at `store.Get(parent_id)` or
+  `store.CreateNew()`), and there it is the *ordinary* path rather than a
+  caller-named-key one, because an index leaf always divides — the append
+  shape does not exist. Its consequence is a descent that misses entries the
+  division moved right, so a lookup answers NotFound for rows that exist,
+  while a sibling walk still sees them. Also unreached by the simulation
+  (its workload creates no secondary indexes under faults) and also read
+  from the source.
+
 - ~~**An instance cannot exceed 65,280 pages — 510 MiB of data file**~~ —
   **lifted 2026-08-26** (`docs/inflight/in-progress/workplan-multi-free-map.md` FM1-FM5). The
   free map is a family of pages now, one pair per 65,280-id region at

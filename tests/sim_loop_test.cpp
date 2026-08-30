@@ -654,6 +654,31 @@ TEST(SimFaults, TheCorpusReallyFiresInjectionsAndErrorsStatements) {
     EXPECT_GT(verdict.errored_ops, 0u) << verdict.Summary(config);
 }
 
+// H9, and the reason it is spelled out rather than inherited from the
+// corpus loop above: the defect needs the injection that lands at op 1418,
+// and that loop runs 800 ops. An append-split whose separator promotion met
+// an injected `page-fail-grow` used to leave the new leaf linked into the
+// sibling chain and routed by nothing - so the *old* leaf kept taking the
+// ids that leaf held, the next append spliced its own leaf in front of the
+// unrouted one, and the chain descended. The sweep read it as `min_key 78
+// does not exceed a predecessor page's max id 183`. Both profiles, because
+// both failed identically when it was found.
+TEST(SimFaults, AnErroredGrowLeavesTheLeafChainAscending) {
+    for (const Profile profile : {Profile::kUniform, Profile::kZipfian}) {
+        SimConfig config;
+        config.seed = 20260826003;
+        config.ops = 1500;
+        config.mode = SimMode::kClean;
+        config.iterations = 2;
+        config.profile = profile;
+        config.faults = FaultProfile::kIo;
+        config.fault_rate = 40;
+        const SimVerdict verdict = RunSimulation(config);
+        EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+        EXPECT_GT(verdict.faults_fired, 0u) << verdict.Summary(config);
+    }
+}
+
 // The quiescence probe must be able to fail: an engine that survives a
 // fault run by refusing everything afterwards would pass every other check
 // in the loop. Hand-fed here by dropping a relation behind the oracle's
@@ -797,6 +822,30 @@ TEST(SimPlanTest, APlanIsAPureFunctionOfTheSeedAndTheIteration) {
     SimConfig clean = config;
     clean.mode = SimMode::kClean;
     EXPECT_EQ(BuildPlan(clean, 0).entries.size(), clean.ops);
+}
+
+// A verdict signature is multi-line whenever the failure was a *finding* -
+// the integrity sweep prints one line per finding - and the writer used to
+// emit only the first line as a comment, so the reader met the second as a
+// tag and refused the file the minimizer had just written. That broke the
+// shrink workflow scripts/sim.sh advertises, on exactly the runs worth
+// shrinking. Found while minimizing H9 (seed 20260826003).
+TEST(SimCase, ACaseFileWithAMultiLineSignatureStillReads) {
+    SimConfig config;
+    config.seed = 3;
+    config.ops = 40;
+    config.mode = SimMode::kClean;
+
+    const SimPlan plan = BuildPlan(config, 0);
+    const std::string path = std::string(KDS_BINARY_DIR) + "/multiline.sim";
+    ASSERT_TRUE(WriteCase(path, config, plan,
+                          "seed=# iteration=#: integrity: # finding(s)\n"
+                          "   page #: relation : min_key # does not exceed a predecessor page")
+                    .ok());
+
+    auto loaded = ReadCase(path);
+    ASSERT_TRUE(loaded.ok()) << loaded.status().message();
+    EXPECT_EQ(loaded.value().plan.entries.size(), plan.entries.size());
 }
 
 TEST(SimCase, ACaseFileRoundTripsAndReplays) {
