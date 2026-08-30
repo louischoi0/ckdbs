@@ -1,5 +1,7 @@
 #include "kds/exec/varheap_sweep.hpp"
 
+#include "kds/exec/catalog_spills.hpp"
+
 #include <set>
 #include <utility>
 
@@ -13,60 +15,6 @@
 
 namespace kds::exec {
 namespace {
-
-// A spill pointer, as a key the referenced set can hold.
-using SpillRef = std::pair<PageId, std::uint16_t>;
-
-// Every var-heap slot the relation's **live** rows point at.
-//
-// Delete-marked rows count as live references here, deliberately: nothing
-// retires a heap slot yet (`known-gaps.md`, reclamation), so a delete-marked
-// row is still readable by an older snapshot and its spilled value must
-// still resolve. Collecting a value a readable row points at would turn a
-// leak into a wrong answer, which is the one direction this sweep must
-// never err in.
-Status ReferencedSpills(const catalog::TableAccess& access, storage::PageStore& store,
-                        std::set<SpillRef>& out) {
-    return heap::ChainVisit(
-        store, access.desc_page_id, storage::PageAccess::kRead,
-        [&](PageId, heap::PageView& page, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            auto tuple = page.ReadTuple(slot);
-            if (!tuple.ok()) {
-                // A dead or unreadable slot points at nothing. NotFound is
-                // the ordinary "retired slot" answer and is not an error.
-                if (tuple.status().code() == StatusCode::kNotFound) {
-                    return storage::VisitControl::kContinue;
-                }
-                return tuple.status();
-            }
-            const std::span<const std::byte> payload = tuple.value().payload;
-            for (std::size_t col = 0; col < access.layout.offsets.size(); ++col) {
-                // **Only a `varchar` column is a tagged cell**, which is
-                // `SchemaCanSpill`'s own rule and the reason it is the
-                // spill gate: `char` is fixed by declaration and every
-                // numeric type by its width, so neither can exceed its cell
-                // and neither carries a tag. Column 0 is the Keystone word,
-                // a raw u64. Decoding any of them as a cell reads a payload
-                // byte as a tag - which is what the first form of this did,
-                // and it failed the sweep on tag 21 of an integer.
-                if (col >= access.schema.columns.size()) continue;
-                if (access.schema.columns[col].type_val != catalog::kTypeValVarchar) continue;
-                const std::uint32_t offset = access.layout.offsets[col];
-                if (offset >= payload.size()) continue;
-                auto cell = storage::DecodeCell(payload.subspan(offset));
-                // **A cell this build cannot read is not a licence to
-                // collect.** A corrupt tag here means the row's references
-                // are unknown, and an unknown reference must be treated as
-                // present - so the whole sweep fails rather than freeing
-                // bytes something may point at.
-                if (!cell.ok()) return cell.status();
-                if (cell.value().tag != storage::CellTag::kSpilled) continue;
-                const varheap::VarHeapPtr ptr = varheap::DecodePtr(cell.value().varheap_ptr);
-                out.insert({ptr.page_id, ptr.slot});
-            }
-            return storage::VisitControl::kContinue;
-        });
-}
 
 // Releases every slot of the relation's var-heap chain that `referenced`
 // does not name.
@@ -109,22 +57,20 @@ Status SweepChain(const catalog::TableAccess& access, storage::PageStore& store,
     return Status::OK();
 }
 
-// The relations whose spills are logged under `kNoTxnId`, named rather than
-// discovered: `exec::LogChainInsert`'s two callers are `sys.pattern_defs`
-// and the assertion catalog, and adding a third caller must be a decision
-// to add it here too rather than a silent widening of what gets swept.
-constexpr catalog::Oid kUnownedSpillRelations[] = {
-    catalog::kSysPatternDefsTable,
-    catalog::kSysAssertionsTable,
-};
-
 }  // namespace
 
 StatusOr<VarHeapSweepReport> SweepUnownedSpills(catalog::Catalog& catalog,
                                                 storage::PageStore& store,
                                                 wal::WalManager* wal) {
     VarHeapSweepReport report;
-    for (catalog::Oid oid : kUnownedSpillRelations) {
+    // `kVarHeapCatalogRelations` (`catalog_spills.hpp`) is the shared list,
+    // and **this sweep is the consumer with the stricter test**: every
+    // entry's spills must be logged under `wal::kNoTxnId`, because a
+    // relation whose spills a transaction owns is already released by
+    // rollback and undo and sweeping it would be a second authority over
+    // the same bytes. That list's comment carries the rule; adding an entry
+    // there is a decision about this file too.
+    for (catalog::Oid oid : kVarHeapCatalogRelations) {
         auto access = catalog.InitTableAccess(oid);
         if (!access.ok()) {
             // A catalog relation this build knows and this file does not

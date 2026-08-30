@@ -124,21 +124,6 @@ StatusOr<std::vector<AssertionDef>> ListAssertions(catalog::Catalog& catalog,
 StatusOr<std::vector<AssertionDef>> ListAssertionTargets(catalog::Catalog& catalog,
                                                           storage::PageStore& store);
 
-// The var-heap pages the stored declarations spill into - **the ids the
-// rows name, with no fetch of any of them**.
-//
-// A peer's mount reads this before it reads the declarations, and grants
-// itself fault rights over exactly these pages (`CoreRuntime::Open`,
-// PW1c-6c). Exactly these, page by page, and never the extent around them:
-// a range grant covers pages this core may *own*, and a page that answers
-// `MayFault` from a grant never reaches `TryClaimByStamp`, so the peer
-// would silently lose the write rights PW1c-7 restores to it on the fault -
-// which is a restarted owner unable to write its own relation. That was
-// measured, not reasoned: an extent-wide grant here failed
-// `APeersOwnPagesSurviveARestartByTheirStamp`.
-StatusOr<std::vector<PageId>> AssertionSpillPages(catalog::Catalog& catalog,
-                                                   storage::PageStore& store);
-
 // The assertion named `name`, case-insensitively, or nullopt.
 //
 // Case-insensitive because every other identifier in this engine is: an

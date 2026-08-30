@@ -1663,8 +1663,19 @@ still waits on its own gate, so:
   which made **PW1c before PW5 an ordering requirement — answered
   2026-08-24 by the interim guard**: a peer dispatcher refuses
   INSERT/UPDATE/DELETE by name (release-mode, beside PW4's DDL guard), so
-  a peer listener is read-only until PW1c-4 lands. The original scoping
-  note follows:
+  a peer listener is read-only until PW1c-4 lands.
+  **The write half is enforced in every build since PW1c-5; the read half
+  is not, and still is not** (found 2026-08-31 by CB0, worktree
+  `cr-catalog-placement`). `MayFault` is consulted inside `#ifndef NDEBUG`
+  (`src/storage/device_page_store.cpp:438`), so in `build-release` a peer
+  that faults a page it holds no lease, grant or stamp for **succeeds** and
+  reads the owner's bytes. It corrupts nothing — a read is a read, and a
+  var-heap value is immutable per version — but it means a
+  shared-nothing violation is invisible in the configuration every
+  measurement is taken in, and a test can only catch a missing fault grant
+  in Debug. That is how `sys.pattern_defs`' missing grant stayed latent, and
+  it is why CB2's tests assert both arms rather than one.
+  The original scoping note follows:
   a peer cannot issue a **transaction id** at all (`TrxIdSequence`
   constructs spent, and a peer's persist callback refuses), two catalog
   write points ride the ordinary INSERT (a clustered root growing a level,

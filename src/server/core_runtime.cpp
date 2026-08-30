@@ -10,6 +10,7 @@
 #include "kds/sched/send_retry.hpp"
 
 #include "kds/exec/assertion_catalog.hpp"
+#include "kds/exec/catalog_spills.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -304,6 +305,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {
         runtime->dispatcher_->SetCatalogReadOnly(true);
+        // CR5/CB6: a DDL this core ships to core 0 changes catalog pages
+        // core 0 flushes before it answers, and the invalidation broadcast
+        // is a task that nothing orders against that answer. The same
+        // `InvalidateCatalog()` the ring handler runs, so the two paths
+        // cannot come to mean different things.
+        runtime->dispatcher_->SetCatalogInvalidate([runtime = runtime.get()] {
+            runtime->InvalidateCatalog();
+        });
         // And where its rights probe records a relation this core owns but
         // cannot write (PW1c-7); the tick in Run() asks core 0 for it.
         runtime->dispatcher_->SetRelationGrantDemand(&runtime->grant_demand_);
@@ -354,18 +363,27 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // around them would be wrong, and measurably so: a page that answers
     // `MayFault` from a grant never reaches `TryClaimByStamp`, so an extent
     // covering pages this core owns would cost it PW1c-7's restored write
-    // rights (`exec::AssertionSpillPages` carries the argument and the test
+    // rights (`exec::CatalogSpillPages` carries the argument and the test
     // that proved it).
+    //
+    // **Every catalog relation with a var-heap, not the assertion catalog
+    // alone** (CB2, `crosscore.md` CC12/CR1). `sys.pattern_defs` has the
+    // same shape and had no peer reader, so its failure was latent - and
+    // latent twice over, because the read-side `MayFault` check is a Debug
+    // one: a release build faulted core 0's page and answered, so nothing
+    // reported the violation. `SHOW PATTERNS` and `CREATE PATTERN`'s
+    // duplicate-name probe are the two readers that reach it.
     if (is_peer) {
-        if (auto spills = exec::AssertionSpillPages(*runtime->catalog_, *runtime->store_);
+        if (auto spills = exec::CatalogSpillPages(*runtime->catalog_, *runtime->store_,
+                                                  exec::kVarHeapCatalogRelations);
             spills.ok()) {
             for (const PageId page : spills.value()) {
                 runtime->store_->GrantFaultPages(storage::Extent{page, 1});
             }
         } else if (log != nullptr && log->enabled(LogLevel::kError)) {
             log->Error("recovery", "core " + std::to_string(config.core_id) +
-                                       ": could not read which pages the stored assertion "
-                                       "declarations spill into, so none can be revived here: " +
+                                       ": could not read which pages the stored catalog "
+                                       "declarations spill into, so none can be read here: " +
                                        spills.status().message());
         }
     }

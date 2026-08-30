@@ -309,7 +309,7 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // var-heap: crosscore.md CC12/CR1 (operator ratification 2026-08-31).
 //
 // This is the one catalog var-heap a peer reads today, and it reads it by
-// the pages a row names being granted individually (exec::AssertionSpillPages,
+// the pages a row names being granted individually (exec::CatalogSpillPages,
 // core_runtime.cpp) rather than by an extent - an extent would cover pages
 // that core owns and cost it PW1c-7's stamp-claimed write rights. CC12 does
 // **not** ratify that page-at-a-time grant as the general mechanism; CR3

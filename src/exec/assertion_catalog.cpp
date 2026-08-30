@@ -153,47 +153,6 @@ StatusOr<std::vector<AssertionDef>> ListAssertionTargets(catalog::Catalog& catal
     return ScanAssertions(catalog, store, /*resolve_spills=*/false);
 }
 
-StatusOr<std::vector<PageId>> AssertionSpillPages(catalog::Catalog& catalog,
-                                                  storage::PageStore& store) {
-    auto access = OpenAssertions(catalog);
-    if (!access.ok()) return access.status();
-    const catalog::TableAccess& rel = *access.value();
-
-    std::vector<PageId> pages;
-    Status walked = heap::ChainVisit(
-        store, rel.desc_page_id, storage::PageAccess::kRead,
-        [&](PageId, heap::PageView& page,
-            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            auto tuple = page.ReadTuple(slot);
-            if (!tuple.ok()) {
-                if (tuple.status().code() == StatusCode::kNotFound) {
-                    return storage::VisitControl::kContinue;
-                }
-                return tuple.status();
-            }
-            if (tuple.value().deleted) return storage::VisitControl::kContinue;
-
-            std::vector<parser::AstValue> values(kColumnCount);
-            std::vector<PendingSpill> spills;
-            if (Status s = DecodeRowInto(rel.schema, rel.layout, tuple.value().payload, values,
-                                          &spills);
-                !s.ok()) {
-                return s;
-            }
-            // The ids the row *names*, never followed: this runs where the
-            // fetch is not yet permitted, which is the whole point.
-            for (const PendingSpill& spill : spills) {
-                if (spill.ptr.page_id == kInvalidPageId) continue;
-                if (std::find(pages.begin(), pages.end(), spill.ptr.page_id) == pages.end()) {
-                    pages.push_back(spill.ptr.page_id);
-                }
-            }
-            return storage::VisitControl::kContinue;
-        });
-    if (!walked.ok()) return walked;
-    return pages;
-}
-
 StatusOr<std::optional<AssertionDef>> FindAssertionByName(catalog::Catalog& catalog,
                                                           storage::PageStore& store,
                                                           std::string_view name) {

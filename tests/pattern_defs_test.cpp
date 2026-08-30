@@ -2,10 +2,16 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <optional>
 #include <string>
 
 #include "kds/catalog/well_known.hpp"
+#include "kds/exec/catalog_spills.hpp"
+#include "kds/storage/device_page_store.hpp"
+#include "kds/storage/extent_lease.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 #include "kds/exec/varheap_sweep.hpp"
 #include "kds/storage/varheap.hpp"
 
@@ -239,6 +245,152 @@ TEST_F(PatternDefsTest, TheMountSweepKeepsEveryValueALiveRowPointsAt) {
     ASSERT_TRUE(second.ok());
     ASSERT_TRUE(second.value().has_value());
     EXPECT_EQ(second.value()->source_text, b);
+}
+
+// ---- CR1/CB0: what a peer hits when a definition spilled ----------------
+//
+// A catalog relation's *root* page is reserved so that bootstrap can find
+// it without a catalog read; its **var-heap is not** - it comes from the
+// general supply through `CreateNew()` and is recorded in `sys.tables`
+// (`crosscore.md` CC12/CR1). So a peer, whose store refuses pages at or
+// above `system_page_limit_` unless a lease, a grant or a stamp says
+// otherwise, can read every `sys.pattern_defs` *row* and not the bodies
+// those rows point at.
+//
+// `sys.assertions` has the same shape and a peer reader, so its mount
+// grants itself the pages its rows name. `sys.pattern_defs` has the shape
+// and no peer reader, which is why this is the relation CR1 gets exercised
+// on first.
+class PatternDefsPeerReadTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto made = storage::MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        device_ = std::move(made.value());
+
+        // Core 0: no lease, so it reaches everything and writes the
+        // catalog. 128 = kds::server::kFirstUserPageId, the reserved
+        // range's end.
+        auto opened = storage::DevicePageStore::Open(*device_, 128);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        core0_ = std::move(opened.value());
+        core0_catalog_.emplace(*core0_);
+        ASSERT_TRUE(core0_catalog_->Bootstrap().ok());
+
+        // Long enough to spill: `kDefaultInlineCellWidth` is far below this,
+        // so `source_text` cannot sit in the row and the body goes to the
+        // var-heap page the relation's `varheap_page_id` roots.
+        ASSERT_TRUE(InsertPatternDef(*core0_catalog_, *core0_, /*wal=*/nullptr, 77, "wide",
+                                     body_, 1)
+                        .ok());
+        // The peer reads the device, never core 0's frames.
+        ASSERT_TRUE(core0_->Sync().ok());
+    }
+
+    // A second store over the same device, arranged as a peer's: a lease of
+    // its own ids, and the reserved range as the system limit.
+    void OpenPeer() {
+        auto opened = storage::DevicePageStore::Open(*device_, 128);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        peer_ = std::move(opened.value());
+        peer_->SetCoreOwnership(/*core_id=*/1, &peer_lease_, /*system_page_limit=*/128);
+        peer_catalog_.emplace(*peer_, storage::kDefaultInlineCellWidth, /*core_count=*/2,
+                              /*core_id=*/1);
+    }
+
+    const std::string body_ = std::string(3000, 'p');
+    std::unique_ptr<storage::MemoryPageDevice> device_;
+    std::unique_ptr<storage::DevicePageStore> core0_;
+    std::optional<catalog::Catalog> core0_catalog_;
+    storage::LeasedIdSource peer_lease_{storage::Extent{4096, 8}};
+    std::unique_ptr<storage::DevicePageStore> peer_;
+    std::optional<catalog::Catalog> peer_catalog_;
+};
+
+TEST_F(PatternDefsPeerReadTest, WithoutAGrantTheRowsReadAndTheBodyDoesNot) {
+    OpenPeer();
+
+    // The rows themselves are reachable: they live on page 10, inside the
+    // reserved range every core reads (CC11).
+    auto access = peer_catalog_->InitTableAccess(catalog::kSysPatternDefsTable);
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    ASSERT_NE(access.value()->varheap_page_id, kInvalidPageId);
+    EXPECT_LT(access.value()->desc_page_id, 128u) << "the root page is reserved (CR1)";
+    EXPECT_GE(access.value()->varheap_page_id, 128u)
+        << "the var-heap root is not reserved (CR1) - that is the whole subject";
+
+    auto defs = ListPatternDefs(*peer_catalog_, *peer_);
+#ifndef NDEBUG
+    // The refusal, read rather than assumed: `DevicePageStore` checks
+    // `MayFault` on the fault path and answers `InvalidArgument`, naming the
+    // page.
+    ASSERT_FALSE(defs.ok()) << "a peer resolved a spill it was granted nothing for";
+    EXPECT_EQ(defs.status().code(), StatusCode::kInvalidArgument) << defs.status().message();
+    EXPECT_EQ(defs.status().message(),
+              "DevicePageStore: core 1 may not fault page " +
+                  std::to_string(access.value()->varheap_page_id) +
+                  "; it belongs to another core")
+        << "the refusal a peer meets, recorded verbatim (CB0)";
+#else
+    // **And the divergence, stated rather than left to be discovered.** The
+    // `MayFault` gate on the *read* path is `#ifndef NDEBUG`
+    // (`device_page_store.cpp`, the guideline-1 check); only the write half
+    // is enforced in every build. So in a release build the peer faults core
+    // 0's page and answers correctly, and the shared-nothing violation is
+    // invisible - which is what makes this a latent defect rather than a
+    // visible one, and why the grant is built rather than argued about.
+    ASSERT_TRUE(defs.ok()) << defs.status().message();
+#endif
+}
+
+TEST_F(PatternDefsPeerReadTest, TheGrantTheMountTakesMakesTheBodyReadable) {
+    OpenPeer();
+
+    // What `CoreRuntime::Open` does for a peer, in the one line it does it:
+    // read the ids the rows name - without fetching any of them, which is
+    // the property that lets this run before the rights exist - and grant
+    // exactly those pages, one at a time.
+    auto pages = exec::CatalogSpillPages(*peer_catalog_, *peer_, exec::kVarHeapCatalogRelations);
+    ASSERT_TRUE(pages.ok()) << pages.status().message();
+    ASSERT_FALSE(pages.value().empty()) << "the definition spilled, so a page must be named";
+    for (const PageId page : pages.value()) {
+        EXPECT_GE(page, 128u) << "a reserved-range page needs no grant";
+        peer_->GrantFaultPages(storage::Extent{page, 1});
+    }
+
+    // And now the whole body, byte for byte, on the core that did not write
+    // it. A truncated or empty answer here is the spill resolution silently
+    // not happening, which is the failure this relation's own round-trip
+    // test guards on core 0.
+    auto def = FindPatternDefByName(*peer_catalog_, *peer_, "wide");
+    ASSERT_TRUE(def.ok()) << def.status().message();
+    ASSERT_TRUE(def.value().has_value());
+    EXPECT_EQ(def.value()->source_text, body_);
+    EXPECT_EQ(def.value()->pattern_id, 77u);
+}
+
+TEST_F(PatternDefsPeerReadTest, TheGrantIsExactlyThePagesTheRowsNameAndNoExtent) {
+    OpenPeer();
+
+    auto pages = exec::CatalogSpillPages(*peer_catalog_, *peer_, exec::kVarHeapCatalogRelations);
+    ASSERT_TRUE(pages.ok()) << pages.status().message();
+    for (const PageId page : pages.value()) peer_->GrantFaultPages(storage::Extent{page, 1});
+
+    // The extent around a named page stays unreachable. This is the half
+    // that is not a convenience: a page answering `MayFault` from a grant
+    // never reaches `TryClaimByStamp`, so an extent grant would cost a
+    // restarted owner the write rights its stamp restores
+    // (`catalog_spills.hpp`; the measured failure was
+    // `APeersOwnPagesSurviveARestartByTheirStamp`).
+    const PageId neighbour = pages.value().back() + 1;
+    EXPECT_FALSE(peer_->MayFault(neighbour))
+        << "the grant widened to the extent around the pages the rows name";
+
+    // A grant conveys read rights and nothing else, which is what makes it
+    // sound for a page core 0 owns: a var-heap value is immutable per
+    // version (invariant 14), so reading one needs no coherence protocol,
+    // and writing one is refused in every build.
+    EXPECT_FALSE(peer_->MayWrite(pages.value().front()));
 }
 
 }  // namespace

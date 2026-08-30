@@ -914,6 +914,41 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         // not disagree about the transaction's fate (txn.md section 10-8's
         // posture). Decided at the PW4 review, before PW5's listeners make
         // the path reachable.
+        // **CR5/CB4: a route, where one can be made.** `MayShip`'s four
+        // conditions are exactly this row's admission test and are reused
+        // rather than restated - the ship client exists, this path can
+        // park, the statement is autocommit (CB5), and the session has not
+        // already shipped. A DDL inside an explicit transaction therefore
+        // falls through to the refusal below and poisons, as it always did:
+        // enrolling core 0 as a participant would put a core into the
+        // prepare phase for relations `known-gaps.md` still records as
+        // non-transactional, which is a worse failure than a refusal the
+        // client can see.
+        //
+        // `kSysTablesTable` is the oid because a DDL names an object this
+        // core may not be able to resolve, and the field is **routing and
+        // logging only**: the owner's dedup record keys on
+        // `(requester, session_id, sequence)`, and the SS3 review retracted
+        // the cross-check against the relation the text resolves to
+        // (`statement_ship_service.hpp`). So two `CREATE`s from one session
+        // are distinct by their sequence, not by an oid neither of them has.
+        if (MayShip(session)) {
+            DispatchOutcome shipped = ShipStatement(line, catalog::kSysTablesTable,
+                                                    catalog::kSystemCore, "sys.tables", session);
+            // **Why this core drops its own cache when the answer comes**
+            // (CB6). Core 0 flushes the catalog pages *inline* before
+            // publishing, but the invalidation broadcast is a **task**
+            // (`Expeditor::BroadcastCatalogInvalidation` submits a
+            // send-retry), so nothing orders it against the reply to this
+            // ship. Before CR5 that race only ever cost another session a
+            // retryable "not found"; now it is the DDL's *own* session,
+            // which would be told its committed `CREATE TABLE` does not
+            // exist by the very core it typed it on. The pages are on the
+            // device by then, so dropping this core's cache is sufficient
+            // and needs nothing from the broadcast.
+            if (shipped.pending_shipped.has_value()) shipped.pending_shipped->ddl = true;
+            return shipped;
+        }
         session.Poison();
         return {ErrorReply(PeerDdlRefused(core_id_, cmd)), false};
     }
@@ -4399,6 +4434,12 @@ DispatchOutcome CommandDispatcher::FinishShippedStatement(
     // wrote, `retryable` bit included (statement_ship_service.hpp).
     DispatchOutcome out;
     out.response = reply->status.ok() ? reply->text : ErrorReply(reply->status);
+    // CB6: a DDL this core shipped has changed catalog pages core 0 flushed
+    // before it answered, so every fact cached here about them is stale.
+    // Dropped on success only - a refused DDL wrote nothing - and before the
+    // reply reaches the client, which is what makes the client's next
+    // statement on this core see its own DDL.
+    if (shipped.ddl && reply->status.ok() && catalog_invalidate_) catalog_invalidate_();
     statement_ship_->Close(shipped.request_id);
     return out;
 }

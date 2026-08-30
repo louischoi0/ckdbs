@@ -208,6 +208,14 @@ struct PendingShippedStatement {
     // answer is not an *unknown outcome*, because there is no outcome to be
     // unknown about. Both were right while only writes shipped.
     bool read = false;
+
+    // **This statement was a DDL routed to core 0** (CR5/CB4). Set at the
+    // one site that ships one, so it is a fact about which fork sent the
+    // statement rather than a guess from its text. What it buys is in
+    // `FinishShippedStatement`: this core drops its catalog cache when the
+    // answer is a success, because the invalidation broadcast is a task and
+    // nothing orders it against this reply.
+    bool ddl = false;
 };
 
 // A `COMMIT` of a transaction whose writes touched more than one owner
@@ -1214,6 +1222,13 @@ public:
     // `cores = 1` byte-identical.
     void SetStatementShip(StatementShipClient* client) noexcept { statement_ship_ = client; }
 
+    // Drops every fact this core caches about the catalog. Wired by
+    // `CoreRuntime` to the same `InvalidateCatalog()` the `kCatalogInvalidate`
+    // ring handler runs, so a DDL this core shipped and a DDL core 0 was
+    // told about converge on one implementation. Unset on a dispatcher
+    // nobody wired (the tests' path), where no DDL can be shipped either.
+    void SetCatalogInvalidate(std::function<void()> fn) { catalog_invalidate_ = std::move(fn); }
+
     // Arms the **coordinator's half of the cross-owner commit** (R6-3,
     // txn_2pc_service.hpp): a `COMMIT` of a transaction that enrolled
     // participants runs D4's two phases instead of committing straight
@@ -1684,6 +1699,11 @@ private:
     // SS2's client, on every core of a multi-core instance; null wherever
     // the cross-core refusal still stands (see SetStatementShip).
     StatementShipClient* statement_ship_ = nullptr;
+
+    // `SetCatalogInvalidate`. Empty on a dispatcher nobody wired, which is
+    // every test fixture and every single-core instance - both of which are
+    // also instances where no DDL is ever shipped.
+    std::function<void()> catalog_invalidate_;
     // R6-3's coordinator half; null on a single-core instance and every
     // fixture, which is also where no session ever has a participant.
     Txn2pcClient* txn_2pc_ = nullptr;

@@ -31,6 +31,10 @@
 #include "kds/server/relation_grant_service.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
+// CB4: the rig arms core 0's *owner* half of statement shipping, which
+// nothing needed until a peer's DDL was routed there rather than refused.
+#include "kds/server/shipped_statement_executor.hpp"
+#include "kds/server/statement_ship_service.hpp"
 // R6-8: the rig arms core 0 as a coordinator, so a write inside a
 // transaction ships and enrols instead of being refused.
 #include "kds/server/txn_2pc_service.hpp"
@@ -3953,6 +3957,14 @@ struct ForeignIndexRig {
     // pointer to it and must die first.
     std::optional<Txn2pcClient> txn2pc;
     std::optional<CommandDispatcher> dispatcher;
+    // **Core 0's owner half of statement shipping** (SS1's wiring rule:
+    // every core answers requests and every core receives replies). The
+    // rig had only the arrival half, because until CR5 nothing shipped
+    // *to* core 0 - a peer's DDL was refused at its own dispatch. Declared
+    // after `dispatcher` so both die before it: the executor holds a
+    // reference to it, and the server holds the executor's seam.
+    std::optional<ShippedStatementExecutor> executor;
+    std::optional<StatementShipServer> ship_server;
     std::unique_ptr<CoreRuntime> peer;
     catalog::Oid oid = 0;
     catalog::SysTableRow row{};
@@ -4070,6 +4082,24 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     ASSERT_TRUE(rig.txn2pc->RegisterReplyReceivers().ok());
     rig.dispatcher->SetTxn2pc(&*rig.txn2pc);
 
+    // **Core 0's owner half of statement shipping** (CB4). Production wires
+    // both halves on every core (`CoreRuntime::AttachTransport`); this rig
+    // built core 0 by hand and so has to do the same, or a DDL a peer ships
+    // under CR5 reaches a core that never registered the handler and times
+    // out instead of running.
+    rig.executor.emplace(/*core_id=*/0, *rig.dispatcher, *rig.core0, rig.clock,
+                         /*log=*/nullptr, /*wal=*/nullptr);
+    rig.ship_server.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.executor->Seam(),
+                            /*log=*/nullptr);
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(
+                        sched::RingMessageKind::kShippedStatementRequest,
+                        [&rig](const sched::MessageHeader& header,
+                               std::span<const std::byte> payload) {
+                            rig.ship_server->OnRequest(header, payload);
+                        })
+                    .ok());
+
     // **The owner's group-commit drain**, which `CoreRuntime::Run()`
     // installs and this rig has to install itself, because it pumps
     // `RunOnce()` rather than running the reactor. Without it a statement
@@ -4089,6 +4119,82 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
             .Dispatch("INSERT INTO " + std::string(table) + " VALUES (10), (20), (30)")
             .response;
     ASSERT_NE(ins.rfind("ERR", 0), 0u) << ins;
+}
+
+// ---- CR5 / CB4-CB6: a peer routes DDL to core 0 --------------------------
+//
+// PW4 refused the whole verb on a peer, because every target of
+// `CREATE`/`ALTER`/`DROP` writes state only the system core may write. CR5
+// keeps that premise and changes the answer: the peer **ships** the
+// statement to core 0 and waits, so the refusal survives for the cases the
+// route cannot serve rather than for all of them. `MayShip`'s conditions
+// are what decide which of the two a client gets.
+
+TEST_F(CoreRuntimeTest, APeerWithNoShipClientStillRefusesDdlAndPoisons) {
+    // No transport, so no ship client and no parkable path: `MayShip` is
+    // false on all three counts and the statement takes PW4's refusal
+    // unchanged. This is the arm that keeps a single-core instance and
+    // every fixture byte-identical.
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    const auto out = peer.value()->dispatcher().Dispatch("CREATE TABLE t (id int64, v int64)");
+    EXPECT_EQ(out.response.rfind("ERR", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("core 1"), std::string::npos)
+        << "the refusal was not the peer-DDL one: " << out.response;
+}
+
+TEST_F(CoreRuntimeTest, APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cb4_base");
+
+    // The peer's own statement, driven as its reactor would drive it: it
+    // parks on the ship, and core 0 runs the DDL under its own catalog.
+    DispatchOutcome out;
+    auto statement = sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        rig.peer->dispatcher().DispatchAsync("CREATE TABLE cb4_new (id int64, v int64)", nullptr,
+                                             &out));
+    bool done = false;
+    for (int i = 0; i < 256 && !done; ++i) {
+        done = statement->Poll() == sched::PollResult::kDone;
+        if (!done) rig.Pump();
+    }
+    ASSERT_TRUE(done) << "the shipped DDL never finished";
+    EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
+
+    // It ran where the catalog is writable, which is the whole point: core
+    // 0's own catalog has the relation, and the peer wrote no page of it.
+    auto oid = rig.catalog2->FindTableOidByName("cb4_new");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    EXPECT_FALSE(rig.peer->store().MayWrite(catalog::kCatalogPageTables));
+
+    // **CB6: the peer sees its own DDL.** Core 0's invalidation broadcast is
+    // a submitted task and nothing orders it against the reply to this ship,
+    // so without CB6 the session that typed the statement could be told by
+    // its own core that the relation does not exist. The peer drops its
+    // catalog cache when the answer arrives, and core 0 flushed the pages
+    // before answering, so the next statement on this core resolves.
+    const std::string described = rig.peer->dispatcher().Dispatch("DESCRIBE cb4_new").response;
+    EXPECT_NE(described.rfind("ERR", 0), 0u)
+        << "a peer could not resolve the DDL it had just been told succeeded: " << described;
+}
+
+TEST_F(CoreRuntimeTest, ADdlInsideAnExplicitTransactionIsStillRefusedOnAPeer) {
+    // CB5: shipping inside a transaction would enrol core 0 as a 2PC
+    // participant, and `known-gaps.md` still records ALTER, cabin, pattern,
+    // assertion and FK as non-transactional. A participant with nothing to
+    // prepare is a worse failure than a refusal the client can see, so the
+    // transactional case keeps PW4's answer and poisons.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "cb5_base");
+
+    Session session;
+    ASSERT_NE(rig.peer->dispatcher().Dispatch("BEGIN", &session).response.rfind("ERR", 0), 0u);
+    const auto out =
+        rig.peer->dispatcher().Dispatch("CREATE TABLE cb5_new (id int64)", &session);
+    EXPECT_EQ(out.response.rfind("ERR", 0), 0u) << out.response;
+    EXPECT_TRUE(session.failed()) << "the refusal did not poison the transaction";
 }
 
 TEST_F(CoreRuntimeTest, ACreateIndexOnAPeerRelationIsBuiltByTheOwnerAndPublishedByCore0) {
