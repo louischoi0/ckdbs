@@ -272,9 +272,11 @@ the probe rather than from reading; they are marked.
   row-id lease table on peers only (core 0 bumps the mark directly, M5), so
   `NoteRowIdDemand` is a no-op there. Under `placement = rotate` a relation
   owned by core 2 spreads over every peer but core 0, which ships to the
-  owner as before. That is M5's asymmetry and blueprint **R1**'s to retire,
-  not this phase's — recorded so a k-core measurement is not read as k-way
-  when the relation is not core 0's.
+  owner as before. That is M5's asymmetry, and it is **kept rather than
+  retired** — the operator declined blueprint §8 on 2026-08-31, so core 0
+  remains the sole writer of the reserved range (`crosscore.md` CC11/CC12).
+  Recorded so a k-core measurement is not read as k-way when the relation
+  is not core 0's; that reading is now permanent, not provisional.
 - **A named key that resolves to a foreign range burns the mark.**
   `AdmitExplicitRowId` advances `sys.tables.next_id` past the supplied key
   *before* IS2's placement check runs, so a refused explicit INSERT above a

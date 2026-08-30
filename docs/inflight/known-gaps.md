@@ -982,9 +982,12 @@ still waits on its own gate, so:
   only — core 0 bumps `sys.tables.next_id` directly (M5) — so the demand
   R4/IS1 records is a no-op there. Under `placement = rotate` a relation
   owned by core 2 spreads over every peer except core 0, which keeps
-  shipping to the owner. M5's asymmetry, blueprint **R1**'s to retire; noted
-  because a k-core measurement over a peer-owned relation is (k-1)-way, not
-  k-way.
+  shipping to the owner. M5's asymmetry — **decided 2026-08-31, and kept**:
+  the operator declined blueprint §8, so core 0 stays the sole writer of the
+  reserved range (`crosscore.md` CC11, CC12,
+  `instructions/v2.7.0/r1-catalog-placement-ratification.md`). This is
+  therefore a **permanent property**, not a pending item — a k-core
+  measurement over a peer-owned relation is (k-1)-way and will stay so.
 
 - **Rotation divides the group-commit batch, so spreading writers over
   cores does not add write throughput** (found 2026-08-26 on the first
@@ -1781,7 +1784,14 @@ still waits on its own gate, so:
   `cross_core_write_refusals`, `cross_core_write_refusal_keys` and a capped
   `cross_core_write_refusal_detail` of `home>target:oid=count`, per core.
   The class the counter cannot see is DDL on a peer, refused by verb before
-  any relation is resolved; the two owner-core refusals
+  any relation is resolved — **and that refusal is being replaced by a
+  route** (operator ratification 2026-08-31, CR5, `crosscore.md` CC13): a
+  peer detects the DDL verb at the same place and **ships the statement to
+  core 0**, waiting for the outcome, instead of refusing. `PeerDdlRefused`
+  stays reachable for what the route does not cover, so this entry narrows
+  rather than closes; the build order is
+  `instructions/v2.7.0/cb-catalog-placement-buildout.md` CB4-CB6. The two
+  owner-core refusals
   (`RelationWriteRightsPending`, `IndexBuildPending`) are excluded by
   decision, being this core's own writes waiting on a grant rather than
   cross-core writes. `docs/spec/crosscore.md` §6's older claim — that PW5's

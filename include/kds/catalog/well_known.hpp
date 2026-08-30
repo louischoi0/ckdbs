@@ -281,7 +281,22 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // Its *var-heap* root is not fixed - that one is allocated by CreateNew()
 // and recorded in sys.tables, where it is DDL-immutable and therefore
 // cacheable (rows.hpp's note on varheap_page_id).
+//
+// That split is **intended, not incidental**: operator ratification
+// 2026-08-31, crosscore.md CC12/CR1 - a catalog relation's root page stays
+// in the reserved range because bootstrap must find it without a catalog
+// read; its var-heap does not, and any catalog relation that later gains
+// one places it the same way. The cost CC12 names: a page outside the
+// range is not peer-readable through MayFault's page_id <
+// system_page_limit_ arm, and sys.pattern_defs has no peer reader today,
+// which is why it is where CR3 gets exercised first.
 inline constexpr PageId kCatalogPagePatternDefs = 10;
+// sys.access_stats is pinned here, inside the reserved range, which CC11
+// makes core-0-write-only - and Catalog::RecordAccess runs per *statement*,
+// so on a peer it has nowhere to write. That is the consequence CC12/CR3 was
+// chosen for: a per-core sys.access_stats may be managed outside the reserved
+// range on the ordinary relation rules, and it is R5's (the mover's) gate.
+// Do not read this constant as settling where a per-core copy lives.
 inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
@@ -289,7 +304,17 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // Root heap page of sys.assertions. Fixed like the nine above, and - like
 // sys.pattern_defs, the other row-codec catalog relation - its *var-heap*
 // root is not: that one is allocated by CreateNew() and recorded in
-// sys.tables, where it is DDL-immutable and therefore cacheable.
+// sys.tables, where it is DDL-immutable and therefore cacheable. Intended
+// rather than incidental, and binding on any catalog relation that gains a
+// var-heap: crosscore.md CC12/CR1 (operator ratification 2026-08-31).
+//
+// This is the one catalog var-heap a peer reads today, and it reads it by
+// the pages a row names being granted individually (exec::AssertionSpillPages,
+// core_runtime.cpp) rather than by an extent - an extent would cover pages
+// that core owns and cost it PW1c-7's stamp-claimed write rights. CC12 does
+// **not** ratify that page-at-a-time grant as the general mechanism; CR3
+// (a grown catalog page managed outside the reserved range, on the ordinary
+// relation rules) is what governs.
 inline constexpr PageId kCatalogPageAssertions = 14;
 
 // Root heap page of sys.ranges (RD1). Fixed for the reason kSysRangesTable

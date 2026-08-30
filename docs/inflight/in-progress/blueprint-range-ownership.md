@@ -109,52 +109,30 @@ its core; migrate when cores imbalance; merge is `[OPEN]` and probably
 v2 (cold ranges cost only directory rows). The mover is the physical
 optimizer's Part III and inherits Part I's discipline.
 
-## 8. Every core equivalent — retiring M5
+## 8. Every core equivalent — retiring M5 — **declined as written**
 
-Required, and separable from ranges:
+**Declined by the operator, 2026-08-31**
+(`instructions/v2.7.0/r1-catalog-placement-ratification.md`, CR4).
+M5 stands: **core 0 is the sole writer of the reserved range, and every
+core reads it.** This section is kept as the record of what was proposed
+and what became of each part, not as work; what replaces it is
+`docs/spec/crosscore.md` **CC11** (the access rule) and **CC12** (catalog
+page placement and DDL's route), which own the rules and their reasoning.
 
-- **Superblock, free map and catalog: every core reads, core 0 alone
-  writes.** Operator decision 2026-08-30, ratified into
-  `docs/spec/crosscore.md` CC11, which owns the rule and its reasoning.
-  Both candidates this bullet used to offer are **declined**: no
-  partition-boundary lock on any of the three (rules.md §3's last-resort
-  clause is not invoked, and no subsystem header gains an acquisition
-  order), and no rotating coordinator. It was not decided by measurement
-  in the end, because the measurement's premise fell: read scalability was
-  what equal authority would have bought, and a peer already fills from
-  the **device** rather than from core 0 — catalog frames are the
-  authority and the cache is the memo
-  (`src/server/core_runtime.cpp:928-932`), and the free map is re-read with
-  `RefreshFreeMapFromDevice` (`:919-920`). What one writer
-  buys is what a lock or a coordinator would have had to rebuild: total
-  order over the structure from a single stream, and no DDL that spans two
-  WAL streams.
-  **The rule is the store's existing check rather than new code**, which
-  is why R1 owes it no build — `DevicePageStore::MayFault` admits the
-  whole system range on a leased store (*"the fixed system range is
-  readable by every core"*, `src/storage/device_page_store.cpp:651-656`),
-  `MayWrite` refuses it (`:804-810`, and `ResidentBytes` at `:479-489`
-  answers `InvalidArgument` rather than a retryable status because a
-  system page is wrong on every retry), and `FlushMaps` (`:286-299`)
-  refuses the map write-back on a leased store on the one path that never
-  asks `MayWrite`. Core 0 holds no lease, so nothing gates it.
-  **Wider than `instructions/v2.6.0/v2.6.0-core-catalog.md` RM0's
-  amendment**, which settled the catalog alone on §1's reasoning and left
-  the free map and superblock `[OPEN]` as their own question: the
-  operator's ruling covers all three on one rule, so RM0's split is
-  overtaken rather than executed, and its reasoning survives as CC11's.
-  **What the rule does not reach**: a *relation's* shared structure — the
-  btree's top levels under a split relation, whose writer is the root's
-  owner core and never core 0 by construction. That keeps its own
-  `[OPEN]`, renamed in `crosscore.md` §9 so it no longer cites this
-  closed bullet.
-- DDL runs on any core; the peer DDL refusal (PW4) becomes unnecessary
-  rather than unbuilt.
-- Per-core listeners (PW5) stop being "peers forward to core 0" and start
-  being the front door.
-- Statistics relations become per-core (`crosscore.md` §2 already calls
-  for it): a peer that records nothing cannot feed the mover, so this is a
-  prerequisite of §7, not an optimisation.
+| §8 item, as written | Disposition |
+|---|---|
+| 1. Superblock, free map and catalog take a partition-boundary lock each, or stay message-serialised | **Moot** — one writer, no contention (**CC11**, operator decision 2026-08-30). The `[OPEN]` is *removed, not resolved*, and with it the unsettled question of whether `rules.md` §3's partition-boundary allowance is an exception to guideline 1 — no document answers it and this decision no longer needs it answered |
+| 2. DDL runs on any core; PW4 becomes unnecessary | **Declined** (CR2, **CC12**). A peer ships the DDL to core 0 and waits, so `PeerDdlRefused` (`src/server/command_dispatcher.cpp:918`) **stays necessary** rather than becoming unnecessary. The item wanted the refusal to stop existing; the ruling keeps it and routes around it |
+| 3. Per-core listeners become the front door | **Partial, by consequence.** Reads are already equal — `DevicePageStore::MayFault` admits the whole system range on a leased store, and its own comment calls that a correctness requirement (`src/storage/device_page_store.cpp:651-656`) — while writes ship to core 0. PW5 is built; this ratification opens no further work here |
+| 4. Statistics relations become per-core | **Preserved as the requirement, declined as the mechanism.** What R5 needs is that a peer's accesses reach the statistics at all; **CR7** supplies that by *batching* — a peer accumulates locally and flushes to core 0, which applies the batch to the one `sys.access_stats` at page 11, each entry carrying its `core_id`. So per-core **relations** were not the route taken, and the questions they would have opened (oid allocation, migrating page 11's rows, what a core-count change does to a departed core's relation) do not arise. It is **R5's gate** (CB7), not R1's item — see §11 |
+
+**One reading of the ruling is not yet confirmed and is flagged where it
+matters.** The operator's fourth decision was written as "항목 8 기각";
+§8 has four items and no item 8, so CLA read it as *§8 itself is
+declined*, which is the reading CR1-CR3 are consistent with. If item **4**
+was meant instead, **R5 does not open** — §6a of `crosscore.md` states
+that a peer recording nothing cannot feed the mover. The CR carries the
+question; this table is settled only once it is answered.
 
 ## 9. Buffer pool
 
@@ -188,14 +166,18 @@ per-core pool structure survives unchanged.
 | Stage | Content | Gate |
 |---|---|---|
 | R0 | ~~Ratify PL~~ — **closed 2026-08-24**, PL-B + PL-C guard (`docs/spec/page-lsn-cross-stream.md` §9) | done |
-| R1 | Every core equivalent. **Shared-structure access rule: closed 2026-08-30** by operator decision — every core reads, core 0 alone writes (§8, `crosscore.md` CC11) — and it is the store's existing check, so this item is decided with **nothing to build**. **Per-core listeners: built** (PW5). **Still owed**: per-core statistics relations (the mover's prerequisite, §8's third bullet), and the consequence the rule leaves standing — DDL runs on any core by **shipping to core 0**, not by writing the catalog there, so PW4's refusal becomes unreachable rather than removed (`instructions/v2.6.0/v2.6.0-core-catalog.md` rows RM1-RM7) | PL not needed |
+| R1 | ~~Every core equivalent~~ — **declined as a stage, 2026-08-31** (§8, `instructions/v2.7.0/r1-catalog-placement-ratification.md`). The three rulings that replace it are `crosscore.md` **CC11** (every core reads, core 0 alone writes — the store's existing check, nothing to build) and **CC12** (CR1: catalog roots stay reserved, their var-heaps do not; CR2: a peer **ships** DDL to core 0 and waits, so `PeerDdlRefused` **stays**; CR3: a grown catalog page may leave the reserved range on the ordinary relation rules). **Per-core listeners: built** (PW5). What was this row's remaining owed item — per-core statistics relations — is **not R1's any more**: it has a mechanism (CR3) and a consumer (R5), and it is listed as R5's gate below | closed — nothing buildable remains under this row |
 | R2 | Global frame accounting — **static half built 2026-08-24** (the instance budget divides over every core per EV4, worktree `r2-frame-budget`); the dynamic arbiter that rebalances shares by demand remains | none |
 | R3 | Range directory + read path: `sys.ranges`, engine-internal range allocation behind the §6a gates — no user-facing range DDL, in this phase or any later one (operator direction 2026-08-27) — pipeline over ranges. Placement still static | R1 |
 | R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (`crosscore.md` §6b, per-range chains included) | R3, PW1b |
-| R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | R1, R3; the PL contract built |
+| R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | **R3; peer-recorded access statistics (CB7)**; the PL contract built. **Restated 2026-08-31**: the gate used to read "R1, R3", and after CR4 declined R1 as a stage that named nothing buildable. What the mover actually needs from that stage is that a peer's accesses reach `sys.access_stats` at all — a peer that records nothing cannot feed it (`crosscore.md` §6a). CR7 supplies that **without** a per-core relation: `sys.access_stats` stays one relation at page 11, core-0-written, and a peer batches locally and flushes to core 0 with its `core_id` on each entry (order `instructions/v2.7.0/cb-catalog-placement-buildout.md`, CB7). CB satisfies this one prerequisite and **does not open R5** — split/migrate policy and its constants stay `[OPEN]` |
 | R6 | Multi-range transactions | ~~2PC — separate decision~~ — **the gate is satisfied**: cross-owner transactions are built and specified (`docs/spec/cross-owner-txn.md`, 2026-08-28), so R6 inherits the protocol rather than designing one. Remaining gate: **R3**, for RD3's resolver |
 
-R1+R2 stand on their own merits even if ranges are never built.
+R2 stands on its own merits even if ranges are never built. **R1 no longer
+does** — not because it failed but because it was declined as a stage on
+2026-08-31 (§8): its access rule is the store's existing check (CC11), its
+listeners are built (PW5), and its one remaining buildable item became
+R5's gate (CC12/CR3).
 
 **What R6 inherits, recorded here so the next reader does not re-derive
 whether 2PC exists** (`instructions/v2.5.0/cross-owner-protocol-closing.md`'s
