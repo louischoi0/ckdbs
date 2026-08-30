@@ -1,4 +1,39 @@
-# Workplan — Stride forest: parallel ascending ingest on explicit-keyed btrees
+# Workplan — Stride forest — **CLOSED, REJECTED**
+
+**Status: closed and rejected.** Rejected by the operator 2026-08-27,
+marked here 2026-08-31. Nothing in this plan is to be built, and no task row
+below is live. It is kept because the argument is worth more than the plan
+was: the census, the review and the numbers in it are the record of *why*
+this project spreads ingest by range rather than by hash class, and a later
+reader proposing the same idea should meet the reasoning rather than a gap.
+
+**Why rejected, not deferred.** The line this project pursues is
+range-granular core ownership (`docs/spec/crosscore.md` §6b, and the R3/R4
+build that followed), which answers the same problem — an ascending-key
+workload serialising on the rightmost leaf — without a second per-relation
+structure, a second routing rule, or the cross-class read-consistency
+question §6 leaves open here. Two mechanisms for one problem is the cost
+that decided it.
+
+**Why it still sits under `blocked/`.** The path is kept so that every
+citation to it resolves; the status is this banner, not the directory. Three
+documents name it — `instructions/v2.3.0-reactor-wake.md`,
+`instructions/v2.2.0-stmtshipping.md`, `instructions/v2.2.0/pretasks-stmtshipping.md` —
+and moving the file would trade a true status for four broken references.
+`docs/inflight/`'s buckets describe work that is live; a rejected plan is in
+none of them, and inventing a fifth for one file would cost more than this
+line does.
+
+**What a later reader must not conclude:** that it was built and failed, or
+that it was measured and lost. It was drafted, reviewed and censused, and
+**never built** — the decision is an architectural one about which of two
+mechanisms this engine carries, taken before either was measured against the
+other.
+
+---
+
+## The plan as it stood (historical, not live)
+
 
 Drafted 2026-08-25 against `main` at `7fb5492` (`git describe` pending a tag on
 that tree). Source citations below are `path:line` on that commit. Lineage:
