@@ -511,6 +511,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // whichever stage the loop happened to name first, turning a
         // fan-out into a fan-out-then-queue.
         const std::vector<PipelineTag> tags = out->pending_remote;
+        // Moved off the outcome for the reason `tags` is copied off it: the
+        // finish **overwrites** `*out`, so anything it reads has to be the
+        // coroutine frame's rather than the object being assigned to.
+        const PendingRemoteRender render = std::move(out->remote_render);
         const std::function<bool()> finished = [this, tags] {
             for (const PipelineTag& tag : tags) {
                 SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
@@ -519,7 +523,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             return true;
         };
         co_await sched::WaitUntil{&finished};
-        *out = FinishRemoteReads(tags);
+        *out = FinishRemoteReads(tags, render);
     }
 
     if (out->pending_index_build.has_value() && index_builds_ != nullptr) {
@@ -683,7 +687,8 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
             }
         }
         if (all_done) {
-            outcome = FinishRemoteReads(outcome.pending_remote);
+            const PendingRemoteRender render = std::move(outcome.remote_render);
+            outcome = FinishRemoteReads(outcome.pending_remote, render);
         } else {
             if (remote_reads_ != nullptr) {
                 for (const PipelineTag& tag : outcome.pending_remote) remote_reads_->Close(tag);
@@ -4759,7 +4764,46 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     return Status::OK();
 }
 
-DispatchOutcome CommandDispatcher::FinishRemoteReads(const std::vector<PipelineTag>& tags) {
+namespace {
+
+// **One renderer per output shape, shared by the local path and the fan-in**
+// (R4-A/AG3). A remotely-fetched row and a locally-walked one reach the same
+// `ChainFrame` and the same values, so a second formatter here would be
+// exactly the drift the local renderer's own warning names: a sorted reply
+// rendering a DATE as an epoch day because one of two copies forgot
+// `projection_types`. The fold's output row has the same trap in its
+// `type_val` lookup, which is why both live here rather than one.
+
+// One projected row, comma-joined, appended to `out` (which is cleared).
+void RenderProjectedRow(std::span<const exec::ColumnRef> projection,
+                        std::span<const std::uint32_t> types, const exec::ChainFrame& frame,
+                        std::string& out) {
+    out.clear();
+    for (std::size_t i = 0; i < projection.size(); ++i) {
+        if (i != 0) out += ',';
+        out += exec::FormatValue(i < types.size() ? types[i] : 0, frame.Get(projection[i]));
+    }
+}
+
+// One row of a fold's output, in the spec's item order.
+//
+// One item per output value - the fold emits `spec.items` and nothing else -
+// so the item's `type_val` is this value's column type. `MIN(d)` renders as
+// a date; `COUNT(*)` carries type_val 0 and renders as the integer it is.
+void RenderAggregateRow(const exec::AggregateSpec& spec,
+                        std::span<const parser::AstValue> row, std::string& out) {
+    out.clear();
+    for (std::size_t i = 0; i < row.size(); ++i) {
+        if (i != 0) out += ',';
+        const std::uint32_t type_val = i < spec.items.size() ? spec.items[i].type_val : 0;
+        out += exec::FormatValue(type_val, row[i]);
+    }
+}
+
+}  // namespace
+
+DispatchOutcome CommandDispatcher::FinishRemoteReads(const std::vector<PipelineTag>& tags,
+                                                     const PendingRemoteRender& render) {
     // Every stage is closed on every exit, success or not: a read left
     // open holds its batches for the session's life, and with a fan-in an
     // early return would leak the k-1 the failing one did not name.
@@ -4805,14 +4849,85 @@ DispatchOutcome CommandDispatcher::FinishRemoteReads(const std::vector<PipelineT
         }
     }
 
+    // **The chain's own output, when the statement named one** (AG3). The
+    // wire rows are the relation's, so the headings are not: a fold labels
+    // its items (`sum(cbm)`) and a projection its columns, both resolved at
+    // compile and copied onto the outcome because the chain does not
+    // survive the park.
+    const bool chain_rendered = render.chain_rendered();
+    const std::vector<std::string>& headings = chain_rendered ? render.column_names : names;
+
     // Byte-identical to the local reply: the header of column names, then
     // one "\n"-escaped comma row per match, FormatValue's rendering.
     std::ostringstream os;
     bool first_col = true;
-    for (const std::string& name : names) {
+    for (const std::string& name : headings) {
         if (!first_col) os << ',';
         os << name;
         first_col = false;
+    }
+
+    // The frame a projection or a fold reads through - the same type the
+    // local walk fills, so the two consumers are one consumer. One step,
+    // which the route's gate requires (no join, no sub-chain, nothing
+    // hoisted), so every compiled reference is `{up=0, rel_slot=0}` and the
+    // buffer is this relation's columns.
+    catalog::Schema wire_schema;
+    exec::ChainFrame frame;
+    std::string row_scratch;
+    std::optional<exec::Aggregator> fold;
+    if (chain_rendered) {
+        wire_schema.columns = layout;
+        const std::vector<const catalog::Schema*> schemas{&wire_schema};
+        frame.Open(schemas, nullptr);
+
+        // **Checked once, not per row.** A reference the frame cannot
+        // resolve is a malformed chain, and the compiler's bound is what
+        // makes that unreachable - but `Get` indexes without checking, so
+        // the difference between a reported error and a read past the end
+        // of a vector is this loop. `CanResolve` is the same answer the
+        // executor's own frame gives.
+        auto unresolvable = [&](const exec::ColumnRef& ref) { return !frame.CanResolve(ref); };
+        bool bad = std::any_of(render.projection.begin(), render.projection.end(), unresolvable);
+        // One heading per emitted value, which is what makes the header
+        // line and the row lines the same width. The compiler resolves both
+        // together; a disagreement here is a reply whose columns do not
+        // line up, reported rather than sent.
+        if (!render.projection.empty() &&
+            (render.column_names.size() != render.projection.size() ||
+             render.projection_types.size() != render.projection.size())) {
+            bad = true;
+        }
+        if (render.aggregate.has_value()) {
+            for (const exec::AggregateItem& item : render.aggregate->items) {
+                if (!item.star_arg && unresolvable(item.ref)) bad = true;
+            }
+            bad = bad || std::any_of(render.aggregate->group_keys.begin(),
+                                     render.aggregate->group_keys.end(), unresolvable);
+            bad = bad || render.column_names.size() != render.aggregate->items.size();
+        }
+        if (bad) {
+            return {ErrorReply(Status::InvalidArgument(
+                        "a remote read's output does not describe the rows its stages "
+                        "returned")),
+                    false};
+        }
+
+        if (render.aggregate.has_value()) {
+            // **The aggregator is this statement's, not the dispatcher's.**
+            // `aggregator_` is hoisted to save ~4 us per statement under a
+            // contract that holds only while nothing parks between `Reset`
+            // and `Finish`, and a fan-in parks; the saving is noise against
+            // a stage's wire cost, so the fold is built here and dies here.
+            // Through `Reset`, which is the one way a fold is pointed at a
+            // statement - the local path's too.
+            fold.emplace();
+            if (Status s = fold->Reset(*render.aggregate, render.column_names,
+                                       aggregate_limits_);
+                !s.ok()) {
+                return {ErrorReply(s), false};
+            }
+        }
     }
 
     // **In `tags` order, which is range order** - the same order the local
@@ -4820,6 +4935,11 @@ DispatchOutcome CommandDispatcher::FinishRemoteReads(const std::vector<PipelineT
     // are one answer. An error anywhere fails the whole statement rather
     // than truncating: a fan-in that rendered the stages it could would be
     // a short answer reported as a complete one.
+    //
+    // The order is what makes a *fold* one answer too, and not only a row
+    // stream: `Finish` emits groups in first-seen order (AG6), so the
+    // groups of a split relation are founded in the order its unsplit twin
+    // founds them.
     for (const PipelineTag& tag : tags) {
         SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
         if (read == nullptr) {
@@ -4835,17 +4955,42 @@ DispatchOutcome CommandDispatcher::FinishRemoteReads(const std::vector<PipelineT
             auto decoded = wire::DecodeRowBatch(rows, layout.size());
             if (!decoded.ok()) return {ErrorReply(decoded.status()), false};
             for (const auto& row : decoded.value()) {
-                os << "\\n";
-                bool first_val = true;
+                if (!chain_rendered) {
+                    os << "\\n";
+                    bool first_val = true;
+                    for (std::size_t i = 0; i < layout.size(); ++i) {
+                        if (!first_val) os << ',';
+                        auto value = wire::FieldToValueChecked(layout[i], row[i]);
+                        if (!value.ok()) return {ErrorReply(value.status()), false};
+                        os << exec::FormatValue(types[i], value.value());
+                        first_val = false;
+                    }
+                    continue;
+                }
+                std::span<parser::AstValue> slots = frame.SlotsFor(0);
                 for (std::size_t i = 0; i < layout.size(); ++i) {
-                    if (!first_val) os << ',';
                     auto value = wire::FieldToValueChecked(layout[i], row[i]);
                     if (!value.ok()) return {ErrorReply(value.status()), false};
-                    os << exec::FormatValue(types[i], value.value());
-                    first_val = false;
+                    slots[i] = std::move(value.value());
                 }
+                if (fold.has_value()) {
+                    if (Status s = fold->Accumulate(frame); !s.ok()) return {ErrorReply(s), false};
+                    continue;
+                }
+                RenderProjectedRow(render.projection, render.projection_types, frame,
+                                   row_scratch);
+                os << "\\n" << row_scratch;
             }
         }
+    }
+
+    if (fold.has_value()) {
+        Status emitted = fold->Finish([&](std::span<const parser::AstValue> row) -> Status {
+            RenderAggregateRow(*render.aggregate, row, row_scratch);
+            os << "\\n" << row_scratch;
+            return Status::OK();
+        });
+        if (!emitted.ok()) return {ErrorReply(emitted), false};
     }
     return {os.str(), false};
 }
@@ -6484,22 +6629,15 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         return {"ERR " + ran.message(), false};
     }
 
+    // Through the one renderer the fan-in's fold also emits by
+    // (`RenderAggregateRow`): a locally folded row and a remotely fetched
+    // one are the same output row, and two formatters for it is how one of
+    // them comes to forget an item's `type_val`.
+    std::string row_scratch;
     Status emitted = aggregator_.Finish(
         [&](std::span<const parser::AstValue> row) -> Status {
-            os << "\\n";
-            bool first = true;
-            for (std::size_t i = 0; i < row.size(); ++i) {
-                if (!first) os << ',';
-                // One item per output value, in written order - the fold
-                // emits `spec.items` and nothing else - so the item's
-                // `type_val` is this value's column type. `MIN(d)` renders
-                // as a date; `COUNT(*)` carries type_val 0 and renders as
-                // the integer it is.
-                const std::uint32_t type_val =
-                    i < chain.aggregate->items.size() ? chain.aggregate->items[i].type_val : 0;
-                os << exec::FormatValue(type_val, row[i]);
-                first = false;
-            }
+            RenderAggregateRow(*chain.aggregate, row, row_scratch);
+            os << "\\n" << row_scratch;
             return Status::OK();
         });
     if (!emitted.ok()) {
@@ -6807,9 +6945,24 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // read on a single-core instance and most reads on any other - reaches
     // its answer without ever asking. CP2's "free at the instruction level"
     // is a claim about that path and this row does not spend it.
+    //
+    // **The shape gate is three shapes wide since AG3** (R4-A,
+    // `workplan-insert-spreading.md` §12): the star read P4c shipped, a
+    // **projection**, and a **fold** - grouped or not. All three read the
+    // same batches, because what a stage ships does not change: whole rows
+    // of the relation, filtered by the residual the descriptor carries
+    // (`ShippedForm` preserves it). The widening is on the session side
+    // alone - `FinishRemoteReads` feeds the decoded row into the same
+    // `ChainFrame` the local walk fills, and then projects it or folds it.
+    //
+    // What stays refused, and each because it is a correctness statement
+    // rather than an oversight: a **quota** (`LIMIT`/`OFFSET`) and a
+    // **sort** both apply at emission, and the remote side emits
+    // everything in its own order; `ANALYZE` would describe a local run it
+    // did not perform; a **join** needs a spread relation planned as a
+    // stage, which is the two-step pipeline's and not a shape gate at all.
     if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 1 &&
-        chain.value().hoisted.empty() && chain.value().star() &&
-        !chain.value().aggregated() && !chain.value().sorted() &&
+        chain.value().hoisted.empty() && !chain.value().sorted() &&
         !chain.value().limit.has_value() && chain.value().offset == 0 &&
         !session.in_explicit_txn()) {
         const exec::Step& step = chain.value().steps[0];
@@ -6887,23 +7040,48 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                 return refused;
             }
 
-            DispatchOutcome pending;
-            bool opened_all = true;
-            for (const Stage& stage : stages) {
-                auto tag =
-                    remote_reads_->Open(step, stage.owner, next_remote_request_++, stage.span);
-                if (!tag.ok()) {
-                    opened_all = false;
-                    break;
+            // **A widened shape takes this route only when no single core
+            // can answer the statement** (AG3). One stage means one owner
+            // holds every range, and such a statement **ships as text** a
+            // few lines below - parsed and folded on that owner, which
+            // sends back the fold's one row instead of every row it read.
+            // Pulling the rows here to fold them would be the same answer
+            // over the whole relation's worth of wire, so the fall-through
+            // is the point rather than a gap. The star read keeps P4c's
+            // routing untouched: it has no owner-side reduction to lose.
+            const bool widened = !chain.value().star();
+            if (!widened || stages.size() > 1) {
+                DispatchOutcome pending;
+                // Copied, not borrowed: the chain dies with this frame and
+                // the read finishes after a park (`PendingRemoteRender`'s
+                // header says why). Left empty for a star read, which
+                // renders from the relation's schema as it always has.
+                if (widened) {
+                    pending.remote_render.projection = chain.value().projection;
+                    pending.remote_render.column_names = chain.value().column_names;
+                    pending.remote_render.projection_types = chain.value().projection_types;
+                    pending.remote_render.aggregate = chain.value().aggregate;
                 }
-                pending.pending_remote.push_back(tag.value());
+                bool opened_all = true;
+                for (const Stage& stage : stages) {
+                    auto tag = remote_reads_->Open(step, stage.owner, next_remote_request_++,
+                                                   stage.span);
+                    if (!tag.ok()) {
+                        opened_all = false;
+                        break;
+                    }
+                    pending.pending_remote.push_back(tag.value());
+                }
+                if (opened_all) return pending;
+                // **A partial fan-in is closed, not served.** The stages
+                // that did open would otherwise hold their batches for the
+                // session's life and the reply would be short by whatever
+                // the unopened one held - a wrong answer with nothing
+                // logged.
+                for (const PipelineTag& tag : pending.pending_remote) {
+                    remote_reads_->Close(tag);
+                }
             }
-            if (opened_all) return pending;
-            // **A partial fan-in is closed, not served.** The stages that
-            // did open would otherwise hold their batches for the
-            // session's life and the reply would be short by whatever the
-            // unopened one held - a wrong answer with nothing logged.
-            for (const PipelineTag& tag : pending.pending_remote) remote_reads_->Close(tag);
             // A step the descriptor refuses falls through to the honest
             // refusal rather than a worse error. An index or Cabin probe
             // is no longer in that class - the session ships it as the
@@ -7130,23 +7308,19 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // day because a second formatter forgot `projection_types`.
     std::string row_scratch;
     auto render = [&](const exec::ChainFrame& frame, std::string& out) {
+        if (star_access == nullptr) {
+            // The one projected-row renderer, shared with the fan-in's
+            // (`RenderProjectedRow`) so a remotely fetched row and a
+            // locally walked one are formatted by one routine.
+            RenderProjectedRow(compiled.projection, compiled.projection_types, frame, out);
+            return;
+        }
         out.clear();
-        bool first_val = true;
-        if (star_access != nullptr) {
-            for (std::size_t i = 0; i < star_access->schema.columns.size(); ++i) {
-                if (!first_val) out += ',';
-                out += exec::FormatValue(
-                    star_access->schema.columns[i].type_val,
-                    frame.Get(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)}));
-                first_val = false;
-            }
-        } else {
-            for (std::size_t i = 0; i < compiled.projection.size(); ++i) {
-                if (!first_val) out += ',';
-                out += exec::FormatValue(compiled.projection_types[i],
-                                         frame.Get(compiled.projection[i]));
-                first_val = false;
-            }
+        for (std::size_t i = 0; i < star_access->schema.columns.size(); ++i) {
+            if (i != 0) out += ',';
+            out += exec::FormatValue(
+                star_access->schema.columns[i].type_val,
+                frame.Get(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)}));
         }
     };
 

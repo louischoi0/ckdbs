@@ -231,6 +231,50 @@ struct PendingCrossOwnerCommit {
     std::vector<std::uint32_t> participants;
 };
 
+// How a finished fan-in becomes a reply when the chain's own projection or
+// fold is what produces it (R4-A/AG3, `workplan-insert-spreading.md` §12).
+//
+// **Carried by value across the park, because the chain is not.** The
+// compiled `StepChain` dies with `HandleSelect`'s frame while the read
+// completes on the reactor, and `Aggregator::Reset` borrows its spec and
+// its labels - so the fold's whole spec and the projection's headings are
+// *copied* here rather than pointed at. That is also why the aggregator
+// itself is a local of `FinishRemoteReads` and not the dispatcher's
+// hoisted `aggregator_`: a fan-in parks, two aggregated fan-ins on one
+// core would interleave inside that member's one-statement contract, and
+// the failure would be a wrong number rather than a refusal.
+//
+// **Not the same fact as `RemoteRead::column_names`**, which the two-step
+// pipeline fills. That one describes *the rows on the wire* - a projected
+// final edge, rendered straight out. This one describes what the session
+// computes **from whole rows**: the stage ships the relation's row,
+// filtered by the WHERE it was given, and the projection or the fold is
+// applied here. Empty is the P4c star shape, which renders from the
+// relation's schema exactly as it always did.
+struct PendingRemoteRender {
+    // The select list, resolved (`StepChain::projection`). Empty for a star
+    // read and for a fold, whose output is its items and not chain columns.
+    std::vector<exec::ColumnRef> projection;
+
+    // The reply's headings: the projected columns' names, or the fold's
+    // labels (`count(*)`, `sum(v)`). Empty means "the relation's columns",
+    // which is the star shape.
+    std::vector<std::string> column_names;
+
+    // One per projected column, in the same order - the reason a DATE
+    // renders as a date rather than an epoch day.
+    std::vector<std::uint32_t> projection_types;
+
+    // The fold, or nothing (AG1's spec, copied whole).
+    std::optional<exec::AggregateSpec> aggregate;
+
+    // Whether anything here changes how the reply is built. Both empty is
+    // the star read, which is every fan-in before AG3.
+    bool chain_rendered() const noexcept {
+        return aggregate.has_value() || !projection.empty();
+    }
+};
+
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
@@ -252,6 +296,10 @@ struct DispatchOutcome {
     // used to say; one element is every read before RD7 and every read of
     // an unsplit relation after it.
     std::vector<PipelineTag> pending_remote = {};
+
+    // What to do with the rows those stages return (AG3). Default-empty is
+    // the star read: whole rows, rendered from the relation's schema.
+    PendingRemoteRender remote_render = {};
 
     // A peer-owned relation's CREATE INDEX this statement sent to the owner
     // to build (PW1c-6b-3): the reply is not in `response` yet.
@@ -1598,7 +1646,10 @@ private:
     // Frames the reply for a whole fan-in: the header once, then every
     // stage's rows in `tags` order. Closes each read whatever the outcome,
     // because a read left open holds its batches for the session's life.
-    DispatchOutcome FinishRemoteReads(const std::vector<PipelineTag>& tags);
+    // `render` says whether the chain's own projection or fold produces the
+    // reply (AG3); default-empty is the star read this began as.
+    DispatchOutcome FinishRemoteReads(const std::vector<PipelineTag>& tags,
+                                      const PendingRemoteRender& render);
 
 
     bool logging(LogLevel level) const noexcept {

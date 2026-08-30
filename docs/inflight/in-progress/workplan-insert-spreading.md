@@ -1068,3 +1068,139 @@ is the right shape for this work and it is a session of its own, not a
 coda to one. What it would unlock is recorded in §12b: scenario 2's
 booking workload under `--no-manifest`, since the reporter's
 `JOIN … GROUP BY` is a two-step pipeline and out of reach either way.
+
+**That session ran: §12d below.** This section stays as it was written -
+the design it records is the design that was built, and the hazard it
+names is what the build had to solve.
+
+### 12d. AG3 built — the fold and the projection over a fan-in
+
+**The session of its own §12c called for**, worked in worktree `r4s` on top
+of `8f53e88`. §12c stays as written: its design survived the build, and the
+hazard it named — the dispatcher's hoisted `aggregator_` — is what the build
+had to solve rather than something it discovered.
+
+**Three shapes, one mechanism.** `HandleSelect`'s fan-in gate used to test
+`chain.star()`; it now admits a **projection** and a **fold** (grouped or
+not) beside it. Nothing about a stage changes: the descriptor ships the same
+step, the stage walks the same rows and applies the same residual, and the
+batch carries the relation's whole row exactly as it did for the star read.
+The widening is entirely on the session side — `FinishRemoteReads` fills the
+same `exec::ChainFrame` the local walk fills, then projects it or folds it.
+So the equivalence claim is structural: **the local path and the fan-in path
+differ in where the row came from and in nothing else**, which is what
+`AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplitTwinDoes` gates
+against a locally-walked twin.
+
+**What is still refused, each for its own reason and none of them
+provisional.** A **sort** and a **quota** (`LIMIT`/`OFFSET`) both apply at
+emission and the remote side emits everything in its own order — the same
+sentence that excluded them from the star read, unchanged. `ANALYZE`
+describes a local run it did not perform. A **join** is not a shape gate at
+all: it needs a spread relation planned as a *stage*, which is the two-step
+pipeline's work and is why §12b's fourth blocked shape survives this row.
+
+#### The routing rule: one owner keeps the ship path
+
+The widened shapes take the fan-in **only when the stage list has more than
+one entry**. One stage means one core owns every range, and such a statement
+already has a better answer a few lines below: it **ships as text** to that
+owner, which parses it, folds it there and returns the fold's one row. A
+fan-in would pull every row of the relation across the ring to fold it here
+— the same answer over the whole relation's worth of wire.
+
+**So a single-owner relation routes exactly as it did before this row.** A
+projection or an aggregate of a relation another core owns whole fell
+through the shape gate to `CheckReadAffinity`, and from there to
+`ShipStatement`; it still does, by the same two lines. The widening adds a
+route where there was none — a relation *no* core owns whole — and changes
+none where there already was one, which is why nothing about statement
+shipping's cost or its 992-byte reply cap moves here.
+
+The star read is untouched by the rule and keeps P4c's routing: it has no
+owner-side reduction to lose, so which core reads the rows is a matter of
+one hop rather than of volume. `AWidenedShapeOverASingleOwnerRelationIsNotFannedIn`
+is the gate, and it asserts both halves from a peer — the split relation is
+fanned in (one remote stage, one self-directed), the single-owner twin opens
+no stage at all, and the star read over that same twin still does.
+
+#### The aggregator is the statement's, which is what §12c's hazard required
+
+`aggregator_` is a **dispatcher** member, hoisted for a measured ~4 µs per
+statement under a contract its own comment states: between statements it
+holds pointers into a chain that no longer exists, and nothing may read it
+there. **A fan-in parks.** Two aggregated fan-in reads on one core — one
+dispatcher per `CoreRuntime`, so two sessions on a core share it — would
+interleave inside that contract, and the failure would be a *wrong number*
+rather than a refusal.
+
+So the fold is a local of `FinishRemoteReads`, pointed at the statement
+through the same `Reset` the local path uses, and the spec and the labels it
+borrows are **copied onto the outcome** (`PendingRemoteRender`) rather than
+borrowed from the chain, because the chain dies with `HandleSelect`'s frame
+while the read is still in flight. The 4 µs the hoist exists to save is
+noise against a stage's wire cost, so the hoist's own argument does not
+reach this path.
+
+#### Two things the order of the stages decides, not one
+
+`FinishRemoteReads` concatenates in `tags` order, which is range order —
+already load-bearing for the row stream, because that is the order the local
+walk emits a split relation in. **It is now load-bearing for a fold too**:
+`Finish` emits groups in first-seen order (AG6), so a fan-in that
+concatenated its stages in any other order would answer the same groups in a
+different order — a wrong reply that every per-group assertion would still
+pass. The equivalence test puts a duplicate group key on each side of the
+cut for exactly that reason.
+
+#### What a stage ships, stated rather than found later
+
+The batch is the relation's row in schema order, and **any column no
+consumer of the row reads travels as NULL** — that is AP01's decode mask
+(`Step::read_columns`) reaching the wire, since the stage fills its frame
+from the mask and the empty output spec then encodes every slot. It is safe
+by the compiler's own invariant rather than by luck: `read_columns` is
+computed as the superset of every reader *including the projection and the
+fold's items and group keys*, which are precisely the slots the session
+reads back. A widening that ever renders a column the chain does not
+reference must narrow the shipped output spec first.
+
+**And the volume is the cost this row does not pay down.** A fold ships
+every row it folds: `SELECT COUNT(*)` over a spread relation moves the whole
+relation across the ring to count it. `aggregate.hpp`'s `Merge` (AG-M) is
+the reserved answer — a stage folding its own partition and shipping states,
+the session merging — and it is *not* this row's: it needs the descriptor to
+carry an `AggregateSpec`, which is a wire format, and a partial-aggregate
+protocol on top of it. Named here so the measurement that prices the
+aggregate reads against a known ceiling rather than discovering one.
+
+#### The vacuity matrix
+
+§6's requirement: revert each mechanism, count what catches it. Five
+reversions, each rebuilt and run against the six tests that could plausibly
+catch one — the two this row adds, RR5's, RS5's two, and RD7's
+`AFanInOverInterleavedOwnershipStillAnswersInRangeOrder`.
+
+| reversion | what it undoes | caught by |
+|---|---|---|
+| **A1** | the shape gate: back to `star() && !aggregated()` | **2** — both of this row's |
+| **A2** | `FinishRemoteReads` ignores the render and emits whole rows | **2** — both of this row's |
+| **A3** | the render facts are never copied onto the outcome | **2** — both of this row's |
+| **A4** | the routing rule: a widened shape fans in whatever the owner count | **1** — `AWidenedShapeOverASingleOwnerRelationIsNotFannedIn` |
+| **A5** | the stages are concatenated in reverse rather than range order | **4** — RD7's, RR5's, RS5's first, and this row's equivalence test |
+
+Four readings:
+
+- **A2 and A3 are one mechanism from its two ends** — copy the facts, then
+  use them — and they are caught by the same two tests. Reported as the pair
+  they are rather than as two independent findings.
+- **A4 is caught by one test and that is the correct count.** The
+  equivalence test's oracle relation is *local* to the reading core, so the
+  rule never applies to it; the peer fixture is the only one where a
+  single-owner relation and a two-owner one sit side by side.
+- **A5 is caught by four, three of which predate this row.** That is the
+  range-order property being a property of the route and not of the fold —
+  and the fourth catch is what makes the group-order claim above a gated one
+  rather than an argument.
+- **Nothing was caught by nothing.** Every mechanism this row adds is
+  distinguishable by a test, which is the reading §11d's R4 could not give.

@@ -2346,6 +2346,275 @@ TEST_F(CoreRuntimeTest, APeersOwnDispatcherPlansAFanInRatherThanRefusing) {
         << "the peer did not open a fan-in at all: " << out.response;
 }
 
+// ---- R4-A/AG3: the fold and the projection over a spread relation -------
+//
+// RR1 and RR2 made a spread relation *readable*; what they made readable
+// was one shape, `SELECT *` with an optional WHERE. Every aggregate and
+// every projection stayed refused by `HandleSelect`'s shape gate, which is
+// what stopped scenario 2's booking transaction dead: its capacity read is
+// `SELECT SUM(cbm) ... WHERE operation_id = ?`, in the hot path and not in
+// a verification pass (`workplan-insert-spreading.md` §12a).
+//
+// The widening is on the session side alone - a stage ships the same whole
+// rows, filtered by the same residual - so **the oracle is the local walk**:
+// `wholly` is this core's entirely and is folded by `RunAggregated` off a
+// `ChainFrame` the executor filled, while `held` is folded by
+// `FinishRemoteReads` off a `ChainFrame` filled from the wire. A difference
+// between the two is the defect this test exists to catch.
+//
+// **Straddling the boundary**, per RB5's discipline, and with duplicate
+// group keys on both sides of the cut: `GROUP BY` emits in first-seen order
+// (AG6), so a fan-in that concatenated its stages in any order but range
+// order would answer the same *groups* in a different order - a wrong reply
+// that every per-group assertion would still pass.
+TEST_F(CoreRuntimeTest, AFoldAndAProjectionOverASpreadRelationAnswerAsTheUnsplitTwinDoes) {
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    auto split = catalog2.CreateTable(catalog::kNamespacePublic, "held", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "wholly", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(whole.ok()) << whole.status().message();
+    ASSERT_EQ(catalog2.InitTableAccess(split.value()).value()->owner_core, 0u);
+
+    auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
+    auto ranges = catalog2.RangesOf(split.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u);
+
+    auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
+        auto access = catalog2.InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload =
+            exec::EncodeRow(access.value()->schema, access.value()->layout, id, {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
+    };
+    // `10` appears once on each side of the cut, so a group founded in the
+    // low range is folded into again from the high one.
+    const PageId whole_head = catalog2.GetSysTableRow(whole.value()).value().desc_page_id;
+    for (auto [id, v] : std::vector<std::pair<std::uint64_t, std::int64_t>>{
+             {1, 10}, {2, 20}, {4096, 10}, {4097, 40}}) {
+        place(split.value(), id, v,
+              id < 4096 ? ranges.value()[0].entry_page : ranges.value()[1].entry_page);
+        place(whole.value(), id, v, whole_head);
+    }
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    for (catalog::Oid oid : {split.value(), whole.value()}) {
+        runtime.value()->GrantRelationFault(RelationFaultExtentOf(
+            catalog2.GetSysTableRow(oid).value(), storage::kDefaultExtentPages));
+    }
+
+    std::optional<SessionStepClient> client;
+    std::optional<RemoteStepServer> server_0;
+    std::optional<RemoteStepServer> server_2;
+    auto make_seam = [&] {
+        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
+            switch (kind) {
+                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+                default: ADD_FAILURE() << "unexpected server send";
+            }
+            return Status::OK();
+        }};
+    };
+    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
+    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
+    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
+    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
+    client.emplace(
+        /*core_id=*/0,
+        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
+            sched::MessageHeader h{};
+            h.src_core = 0;
+            h.dst_core = dst;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen: to.OnStepOpen(h, payload); break;
+                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected client send";
+            }
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    // Each shape twice: over the split relation through the fan-in, and
+    // over the unsplit twin through the local walk. The expected text is
+    // pinned as well as compared, so a change that broke *both* paths the
+    // same way would not read as agreement.
+    struct Case {
+        const char* shape;
+        const char* expected;
+    };
+    for (const Case& c : std::vector<Case>{
+             {"SELECT v FROM %s", "v\\n10\\n20\\n10\\n40"},
+             {"SELECT v FROM %s WHERE v > 15", "v\\n20\\n40"},
+             {"SELECT COUNT(*) FROM %s", "count(*)\\n4"},
+             {"SELECT SUM(v) FROM %s", "sum(v)\\n80"},
+             {"SELECT SUM(v) FROM %s WHERE v > 15", "sum(v)\\n60"},
+             {"SELECT v, COUNT(*) FROM %s GROUP BY v", "v,count(*)\\n10,2\\n20,1\\n40,1"},
+             {"SELECT COUNT(*), MIN(v), MAX(v) FROM %s",
+              "count(*),min(v),max(v)\\n4,10,40"}}) {
+        const std::string shape(c.shape);
+        const std::size_t at = shape.find("%s");
+        ASSERT_NE(at, std::string::npos);
+        const std::string on_split = shape.substr(0, at) + "held" + shape.substr(at + 2);
+        const std::string on_whole = shape.substr(0, at) + "wholly" + shape.substr(at + 2);
+
+        const std::string split_reply =
+            runtime.value()->dispatcher().Dispatch(on_split).response;
+        const std::string whole_reply =
+            runtime.value()->dispatcher().Dispatch(on_whole).response;
+        ASSERT_NE(split_reply.rfind("ERR", 0), 0u)
+            << "the fan-in refused `" << on_split << "`: " << split_reply;
+        EXPECT_EQ(split_reply, whole_reply)
+            << "the split changed the answer to `" << on_split << "`";
+        EXPECT_EQ(split_reply, c.expected) << "`" << on_split << "`";
+        EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
+    }
+}
+
+// ---- AG3's routing rule: one owner keeps the ship path -------------------
+//
+// A widened shape takes the fan-in **only when no single core can answer
+// the statement whole**. One stage means one owner holds every range, and
+// such a statement ships as text to that owner, which folds it there and
+// sends back the fold's one row instead of every row it read; pulling the
+// rows here to fold them would be the same answer over the whole
+// relation's worth of wire.
+//
+// Read from a **peer**, because that is where the two cases sit side by
+// side: `spread` has a range of its own and a range of the owner's - two
+// stages, one of them self-directed - while `twin` is the owner's
+// entirely. The rig has no statement-ship service wired, so `twin`'s
+// widened read ends at the affinity refusal, which is exactly the evidence
+// wanted: the route declined it, and the count of opens says so.
+TEST_F(CoreRuntimeTest, AWidenedShapeOverASingleOwnerRelationIsNotFannedIn) {
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    auto split = catalog2.CreateTable(catalog::kNamespacePublic, "spread", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(split.ok()) << split.status().message();
+    auto whole = catalog2.CreateTable(catalog::kNamespacePublic, "twin", TwoColumnSchema(),
+                                      catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(whole.ok()) << whole.status().message();
+
+    auto head = catalog2.CreateRangeEntryPage(split.value(), 4096);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(catalog2.OpenRangeRows(split.value(), 4096, /*owner_core=*/2, head.value()).ok());
+    auto ranges = catalog2.RangesOf(split.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), 2u);
+
+    auto place = [&](catalog::Oid oid, std::uint64_t id, std::int64_t v, PageId chain) {
+        auto access = catalog2.InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        parser::AstValue value;
+        value.type = parser::ValueType::kInt;
+        value.int_val = v;
+        value.raw_int_text = std::to_string(v);
+        auto payload =
+            exec::EncodeRow(access.value()->schema, access.value()->layout, id, {value});
+        ASSERT_TRUE(payload.ok());
+        ASSERT_TRUE(heap::ChainInsert(*core0_store_, chain, id, payload.value(), 1, oid).ok());
+    };
+    const PageId whole_head = catalog2.GetSysTableRow(whole.value()).value().desc_page_id;
+    for (auto [id, v] : std::vector<std::pair<std::uint64_t, std::int64_t>>{
+             {1, 10}, {2, 20}, {4096, 10}, {4097, 40}}) {
+        place(split.value(), id, v,
+              id < 4096 ? ranges.value()[0].entry_page : ranges.value()[1].entry_page);
+        place(whole.value(), id, v, whole_head);
+    }
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    CoreRuntime::Config peer_config = ConfigFor(2);
+    peer_config.core_count = 3;
+    auto runtime = CoreRuntime::Open(peer_config, *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    for (catalog::Oid oid : {split.value(), whole.value()}) {
+        runtime.value()->GrantRelationFault(RelationFaultExtentOf(
+            catalog2.GetSysTableRow(oid).value(), storage::kDefaultExtentPages));
+    }
+
+    std::optional<SessionStepClient> client;
+    std::optional<RemoteStepServer> server_0;
+    std::optional<RemoteStepServer> server_2;
+    auto make_seam = [&] {
+        return StepSendSeam{[&](std::uint32_t, sched::RingMessageKind kind,
+                                std::vector<std::byte> payload) {
+            switch (kind) {
+                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+                default: ADD_FAILURE() << "unexpected server send";
+            }
+            return Status::OK();
+        }};
+    };
+    catalog::Catalog catalog_0(*core0_store_, storage::kDefaultInlineCellWidth, 3, 0);
+    catalog::Catalog catalog_2(*core0_store_, storage::kDefaultInlineCellWidth, 3, 2);
+    server_0.emplace(catalog_0, *core0_store_, 0, make_seam());
+    server_2.emplace(catalog_2, *core0_store_, 2, make_seam());
+    int opens_to_self = 0;
+    int opens_to_owner = 0;
+    client.emplace(
+        /*core_id=*/2,
+        [&](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            RemoteStepServer& to = dst == 0 ? *server_0 : *server_2;
+            sched::MessageHeader h{};
+            h.src_core = 2;
+            h.dst_core = dst;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen:
+                    (dst == 2 ? opens_to_self : opens_to_owner)++;
+                    to.OnStepOpen(h, payload);
+                    break;
+                case sched::RingMessageKind::kStepCredit: to.OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepCancel: to.OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected client send";
+            }
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    // Two owners: the fan-in answers it, one stage to each, the peer's own
+    // being the self-directed one.
+    const std::string folded =
+        runtime.value()->dispatcher().Dispatch("SELECT SUM(v) FROM spread").response;
+    EXPECT_EQ(folded, "sum(v)\\n80") << folded;
+    EXPECT_EQ(opens_to_owner, 1);
+    EXPECT_EQ(opens_to_self, 1) << "the peer's own range was not walked by a self-directed stage";
+    EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
+
+    // One owner: no stage is opened at all. The refusal that comes back is
+    // the affinity one, because this rig ships nothing - what is asserted
+    // is that the route declined, not what the ship path would have said.
+    const std::string not_fanned =
+        runtime.value()->dispatcher().Dispatch("SELECT SUM(v) FROM twin").response;
+    EXPECT_EQ(opens_to_owner, 1) << "a single-owner fold was fanned in: " << not_fanned;
+    EXPECT_EQ(opens_to_self, 1);
+    EXPECT_EQ(not_fanned.rfind("ERR", 0), 0u) << not_fanned;
+
+    // And the star read over that same single-owner relation still fans in,
+    // untouched: P4c's routing is not what this rule narrows.
+    const std::string star = runtime.value()->dispatcher().Dispatch("SELECT * FROM twin").response;
+    EXPECT_EQ(star, "id,v\\n1,10\\n2,20\\n4096,10\\n4097,40") << star;
+    EXPECT_EQ(opens_to_owner, 2) << "the star read stopped taking the fan-in";
+}
+
 // ---- P4d-4b-3: a two-step join executes as a cross-core pipeline ---------
 
 TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) {
