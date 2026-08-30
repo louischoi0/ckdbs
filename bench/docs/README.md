@@ -1160,6 +1160,47 @@ bench/self_directed_stage_probe.py --server build-release/kds_server \
     --workdir ~/selfdirected --reps 300 --rows 600
 ```
 
+### The fan-in fold-cost probe (R4-A/AG3, 2026-08-30)
+
+`bench/fanin_fold_cost_probe.py` — **what a fold over a fan-in costs, and
+what AG3's routing rule is worth.** §12d widened the fan-in's shape gate to
+admit a projection and a fold, and took one routing decision on argument
+alone: a widened shape fans in *only* when no single core owns the relation
+whole, because where one does the statement ships as text and is folded on
+the owner, returning one row instead of every row. This driver prices that
+decision.
+
+**It imports its fixture from `self_directed_stage_probe.py`** — the same
+`cores = 2` server, the same `spread`/`twin` pair, the same load — rather
+than restating it, so the two cells measure one rig by construction. Two
+copies of a fixture are two fixtures that agree today.
+
+| arm | relation | core | statement | stages |
+|---|---|---|---|---|
+| `Lstar` | twin | 0 | `SELECT *` | 0 — local walk, whole rows |
+| `Lfold` | twin | 0 | `SELECT SUM(v)` | 0 — local walk, folded locally |
+| `Ship` | twin | 1 | `SELECT SUM(v)` | 0 — shipped as text, folded on the owner |
+| `Fstar` | spread | 0 | `SELECT *` | 2 — fan-in, whole rows |
+| `Ffold` | spread | 0 | `SELECT SUM(v)` | 2 — fan-in, folded at the session |
+
+Reports p0/p25/p50/p90/p95/p99 per arm and four differences: `Ffold − Ship`
+(the routing rule's price), `Ffold − Lfold` (what the fan-in costs a fold),
+and the two star-versus-fold pairs, which exist to **identify a reply-size
+effect rather than to report a fold that costs less than nothing** — the
+aggregated arm is faster than the star on both routes because 13 bytes come
+back instead of ~7 KB, and the local pair is what proves that is what it is.
+
+**The correctness check is exact and free.** The fixture gives `spread` and
+`twin` the same multiset of `v`, so `SELECT SUM(v)` must answer identically
+over all three routes — local walk, statement shipping, two-stage fan-in —
+and the driver hashes every reply to assert it byte for byte rather than
+"all three ok".
+
+```bash
+bench/fanin_fold_cost_probe.py --server build-release/kds_server \
+    --workdir ~/foldcost --reps 300 --rows 600
+```
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers

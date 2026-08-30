@@ -939,7 +939,15 @@ still waits on its own gate, so:
   the session folds, no stage does. `aggregate.hpp`'s `Merge` (AG-M) is the
   reserved answer — a stage folding its own partition and shipping states —
   and it is unbuilt, because it needs the step descriptor to carry an
-  `AggregateSpec`, which is a wire format. Nothing has measured the cost.
+  `AggregateSpec`, which is a wire format. **Measured at `eb03112`**
+  (`bench/v2.6.0/results-ag3-fold-cost-v2.2.1-141-geb03112.md`, 600 rows,
+  two owners, 2 CPUs): `SUM(v)` costs 84.4 µs on a local walk, 124.5 µs
+  shipped and folded on the owner, and 247.1 µs over a two-stage fan-in
+  folded at the session — so **the routing rule is worth +122.6 µs per
+  statement at that row count**, and that is also the upper bound on what
+  AG-M would recover. The fold's own per-row CPU is *not* in those numbers
+  (§4 of that file): an aggregated statement measures faster than the star
+  over the same rows on both routes, which is reply size, not a free fold.
 
   **And on a peer, a spread relation is now readable in shapes its unsplit
   twin is not** (§4 of that results file): the fan-in streams under credit,

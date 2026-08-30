@@ -1171,8 +1171,37 @@ relation across the ring to count it. `aggregate.hpp`'s `Merge` (AG-M) is
 the reserved answer — a stage folding its own partition and shipping states,
 the session merging — and it is *not* this row's: it needs the descriptor to
 carry an `AggregateSpec`, which is a wire format, and a partial-aggregate
-protocol on top of it. Named here so the measurement that prices the
-aggregate reads against a known ceiling rather than discovering one.
+protocol on top of it.
+
+**Measured**, at `eb03112` on a 2-CPU host, 600 rows, two owners, 300
+rep-interleaved reps (`bench/fanin_fold_cost_probe.py`,
+`bench/v2.6.0/results-ag3-fold-cost-v2.2.1-141-geb03112.md`):
+
+| p50 µs | |
+|---:|---|
+| 84.4 | `SUM(v)` on a local walk |
+| 124.5 | `SUM(v)` shipped as text, folded on the owner |
+| 247.1 | `SUM(v)` over a two-stage fan-in, folded at the session |
+
+**The routing rule above is worth `+122.6 µs` per statement at this row
+count** — the gap between folding at the session over every row and folding
+on the owner over the same rows and shipping one — and it is wire volume,
+so it grows with the rows while the ship arm does not. That is also the
+first real estimate of what AG-M would recover, as an upper bound: a merged
+fold still pays k stage opens and k EOFs where shipping pays one.
+
+**The fold's own CPU is not in those numbers and is not claimed.** The
+aggregated statement measures *faster* than the star over the same rows on
+both routes (−80.9 µs on the fan-in, −38.6 µs with no wire at all), which
+is a reply-size effect — 13 bytes against ~7 KB — and the local pair is
+what identifies it as one. §4 of the results file says so; separating the
+fold's per-row work needs two arms with equal reply sizes, which nothing
+has run.
+
+**And the equivalence holds outside the fixture.** The three fold routes —
+local walk, shipped, fan-in — answered `sum(v)\n179700` **byte for byte**,
+300 reps each, one distinct reply per arm, through a real ring and a real
+client rather than the loopback rig the unit test uses.
 
 #### The vacuity matrix
 
