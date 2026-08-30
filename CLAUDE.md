@@ -137,10 +137,20 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 - Tests accompany every subsystem; contract suites (waystone, index, cabin,
   types, assertion) compare configurations byte-for-byte — keep them green
   and extend them with the feature.
-- **Never push what you have not built.** `main` has twice received commits
-  that were never compiled. `scripts/githooks/pre-push` is the gate; enable
-  it once per clone with `git config core.hooksPath scripts/githooks`, and
-  bypass it with `git push --no-verify` only when you can say why.
+- **Never push what you have not built — unless the operator says to.**
+  `main` has twice received commits that were never compiled.
+  `scripts/githooks/pre-push` is the gate; enable it once per clone with
+  `git config core.hooksPath scripts/githooks`. On CLA's own initiative the
+  gate runs, and `--no-verify` needs a reason CLA can state.
+  **Amended 2026-08-31 (operator):** when the operator asks for a push with
+  the tests skipped, or for a force push, CLA does it — no re-litigating, no
+  waiting for a suite the operator has waived. Two things CLA still owes in
+  that case, because they are what keep the exception from becoming a
+  silent lowering of the bar: **say plainly in the reply what was skipped**
+  (the hook, the suite, or both) and **never report an unrun suite as a
+  pass** — a landed commit whose tests were waived carries "not run", not
+  an implied green. The Session Workflow's step 4 gate below is a gate on
+  CLA proceeding unasked, never on the operator.
 - **Measure in `build-release`, never `./build` (Debug)** — Debug has
   reported the wrong sign twice. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.** Details:
@@ -239,7 +249,9 @@ git push origin main
 
 A failed review, a measured regression, or an unrun test suite stops the
 chain before the merge. Say which, and do not offer the push as though
-the gate had passed.
+the gate had passed. **This stops CLA, not the operator** (2026-08-31): an
+operator who asks for the push anyway gets it, with what was skipped named
+in the reply and never reported as a pass.
 
 **Workflow mode** is an outer loop — `intermediary-agent` pulling tasks
 from `cws` and `reporter-agent` syncing outcomes back — that wraps this
