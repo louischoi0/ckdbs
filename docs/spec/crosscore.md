@@ -496,19 +496,44 @@ with it and are §3 and §7b of that workplan: a read of a spread relation
 is bounded by the fan-in's 64 stages, and a write naming no primary key on
 a *multi-owner* relation is refused until R6.
 
-**The first of those two is corrected by measurement** (R4-M, 2026-08-29,
-worktree `v2.6.0-ksweep` at `03b815b`; `bench/v2.6.0/` §6a, and that
-workplan's §3a): the 64-stage ceiling is real but is **not what bounds the
-read**. The fan-in *client* is constructed for core 0 alone
-(`expeditor.cpp`; a `CoreRuntime` peer has `remote_steps_`, the server
-half, and no client), and the route additionally requires the reader not
-to be the relation's `owner_core` — which under `placement = creating` is
-core 0 for every relation. So under `creating` a spread relation is
-unreadable from **every** core in **every** shape, from its second range
-on; under `rotate` a core-0 session reads it, and only as `SELECT *` with
-an optional `WHERE` and an optional free `ORDER BY <pk> ASC`. Reads are
-therefore the binding cost of arming `range_size_ids`, ahead of anything
-the 64 in §3 prices.
+**The first of those two was corrected by measurement and has since been
+fixed** — both halves are recorded here because the intermediate reading
+is quoted in results files that stay as history.
+
+**What R4-M found** (2026-08-29, worktree `v2.6.0-ksweep` at `03b815b`;
+`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md` §6a,
+and `workplan-insert-spreading.md` §3a): the 64-stage ceiling is real but
+was **not what bounded the read**. Two limits sat in front of it. The
+fan-in *client* was constructed for core 0 alone (a `CoreRuntime` peer had
+`remote_steps_`, the server half, and no client), and the route
+additionally required the reader not to be the relation's `owner_core` —
+which under `placement = creating` is core 0 for every relation. So a
+spread relation was unreadable from **every** core in **every** shape from
+its second range on.
+
+**Both are gone** (R4-R and RS, 2026-08-29, `workplan-insert-spreading.md`
+§10–§11). Every core constructs a `SessionStepClient`, and the route asks
+`TableAccess::ServableBy(core)` — *can a walk on this core alone answer
+this relation whole* — so a run of ranges the reader owns becomes a
+**self-directed stage**: the ordinary protocol with the ring hop being a
+self-send, costing an upstream slot like any other stage.
+
+**The surface that leaves** is enumerated rather than claimed
+(`bench/spread_read_surface.py`; at `3446666`,
+`bench/v2.6.0/results-ag3-read-surface-v2.2.1-140-g3446666.md`, `cores =
+2`, `placement = creating`): **11 shapes from every core** — `SELECT *`
+with an optional `WHERE`, `BETWEEN`, a free `ORDER BY <pk> ASC`, any
+projection, and every aggregate, the last two since AG3
+(`workplan-insert-spreading.md` §12d). **5 refused**: `LIMIT`/`OFFSET` and
+any `ORDER BY` but the pk ascending, both because a quota and a sort apply
+at **emission** while the remote side emits everything in its own order. A
+join is not on that list: it is the two-step pipeline planning a spread
+relation as a stage, which is unbuilt. The route is also refused **inside
+an explicit transaction**, because each stage mints its own
+latest-committed view — snapshot forwarding is §9's.
+
+So the 64-stage ceiling in §3 is once again the binding limit on a read,
+which is what it was priced as before R4-M found two limits in front of it.
 
 When an `INSERT` omits its key the engine issues an ascending one, so
 every such INSERT targets the relation's

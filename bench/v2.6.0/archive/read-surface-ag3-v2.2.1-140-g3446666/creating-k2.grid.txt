@@ -1,0 +1,25 @@
+
+placed=600 placement=creating cores=2 range_size_ids=512
+split_relation_detail=4000:2@2
+
+shape                spread: c0  c1               whole (control): c0  c1      verdict
+----------------------------------------------------------------------------------------------------
+star                 ok    ok                     ok    ok                     reachable everywhere
+star+where-pk        ok    ok                     ok    ok                     reachable everywhere
+star+where-nonpk     ok    ok                     ok    ok                     reachable everywhere
+star+between         ok    ok                     ok    ok                     reachable everywhere
+star+order-pk-asc    ok    ok                     ok    ok                     reachable everywhere
+star+order-pk-desc   no-r  no-r                   ok    repl                   refused BY THE SPLIT
+star+order-nonpk     no-r  no-r                   ok    repl                   refused BY THE SPLIT
+projection           ok    ok                     ok    repl                   reachable everywhere
+projection-multi     ok    ok                     ok    repl                   reachable everywhere
+limit                no-r  no-r                   ok    ok                     refused BY THE SPLIT
+limit+offset         no-r  no-r                   ok    ok                     refused BY THE SPLIT
+order+limit          no-r  no-r                   ok    ok                     refused BY THE SPLIT
+count                ok    ok                     ok    ok                     reachable everywhere
+sum                  ok    ok                     ok    ok                     reachable everywhere
+count-distinct       ok    ok                     ok    ok                     reachable everywhere
+group-by             ok    ok                     ok    repl                   reachable everywhere
+
+**Separately**: on a peer, these shapes lose their reply against the *unsplit* control and answer UNKNOWN_OUTCOME - statement shipping, not ranges: group-by, projection, projection-multi, star+order-nonpk, star+order-pk-desc
+

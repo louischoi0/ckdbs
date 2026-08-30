@@ -908,17 +908,45 @@ still waits on its own gate, so:
     stage is not a new mechanism: it is the ordinary protocol with the ring
     hop being a self-send, and it costs an upstream slot like any other.
 
-  **The readable surface now** (RR3/RS4, `bench/spread_read_surface.py`, 16
-  shapes × 4 cores against an unsplit twin on the same server, verdicts
-  identical under both placements): **5 shapes from every core** — star,
-  `+WHERE` on the pk, `+WHERE` on a non-pk, `+BETWEEN`, and a free
-  `+ORDER BY <pk> ASC`. **11 still refused**, and the unsplit control says
-  the split is what refuses them: any projection, `LIMIT`/`OFFSET`,
-  `ORDER BY` anything but the pk ascending, and every aggregate
-  (`COUNT`/`SUM`/`COUNT(DISTINCT)`/`GROUP BY`). The route tests
-  `chain.star()`, not aggregated, not sorted, no quota, no sub-chain, and
-  each exclusion is a correctness statement rather than an oversight
-  (`command_dispatcher.cpp`'s eligible-class comment says which).
+  **The readable surface now** (AG3, measured at `3446666` —
+  `bench/v2.6.0/results-ag3-read-surface-v2.2.1-140-g3446666.md`, the same
+  `bench/spread_read_surface.py` enumeration RR3/RS4 ran, 16 shapes × every
+  core against an unsplit twin on the same server): **11 shapes from every
+  core** — star, `+WHERE` on the pk, `+WHERE` on a non-pk, `+BETWEEN`, a
+  free `+ORDER BY <pk> ASC`, **any projection**, and **every aggregate**
+  (`COUNT`/`SUM`/`COUNT(DISTINCT)`/`GROUP BY`). **5 still refused**, and the
+  unsplit control says the split is what refuses them: `LIMIT`/`OFFSET`
+  (with or without a sort), and `ORDER BY` anything but the pk ascending.
+  Both exclusions are one sentence: **a sort and a quota apply at emission**
+  and the remote side emits everything in its own order, so shipping either
+  would answer in an order or a cardinality nobody asked for
+  (`command_dispatcher.cpp`'s eligible-class comment says it). A **join**
+  is not on this list at all: it is not a shape gate but the two-step
+  pipeline planning a spread relation as a stage, which is unbuilt.
+
+  Two riders on that count, both from the same run. **It is a `cores = 2`,
+  `placement = creating` measurement** — RR3's "identical under both
+  placements" came from a 4-core run and does not carry, because at two
+  cores `rotate` produces no split relation to enumerate at all
+  (`core_placement.hpp`'s `relation_seq % (core_count - 1)`). And **a
+  widened shape only fans in when no single core owns the whole relation**:
+  where one does, the statement ships as text and is folded on the owner,
+  which is where it went before AG3 and returns one row rather than every
+  row (`workplan-insert-spreading.md` §12d).
+
+  **A fold over a fan-in ships every row it folds.** `SELECT COUNT(*)` over
+  a spread relation moves the whole relation across the ring to count it;
+  the session folds, no stage does. `aggregate.hpp`'s `Merge` (AG-M) is the
+  reserved answer — a stage folding its own partition and shipping states —
+  and it is unbuilt, because it needs the step descriptor to carry an
+  `AggregateSpec`, which is a wire format. Nothing has measured the cost.
+
+  **And on a peer, a spread relation is now readable in shapes its unsplit
+  twin is not** (§4 of that results file): the fan-in streams under credit,
+  while an unsplit foreign relation is reached by statement shipping, whose
+  single reply is lost above 992 bytes. Five shapes answer on the split
+  relation and `UNKNOWN_OUTCOME` on the control. The cap was always there;
+  what AG3 removed is the refusal that used to mask it.
 
   **And one more gate, added by RR1's review**: the route is refused
   **inside an explicit transaction**, not merely inside one that can enrol.
