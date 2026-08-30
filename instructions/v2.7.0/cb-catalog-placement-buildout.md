@@ -3,7 +3,8 @@
 Drafted 2026-08-31 against `main` at `6b5b368` (`v2.2.1-142-g6b5b368`).
 Governed by `instructions/v2.7.0/r1-catalog-placement-ratification.md`
 (CR1-CR4) and its addendum CR5-CR8 below. Supersedes
-`r1-every-core-equivalent.md`, withdrawn by CR4.
+`r1-every-core-equivalent.md`, withdrawn by CR4 and **marked closed and
+rejected** on 2026-08-31 — that file is now a tombstone stating why.
 
 ## Addendum to the ratification — CR5-CR8
 

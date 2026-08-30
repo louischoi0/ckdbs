@@ -6,7 +6,9 @@ where this document paraphrases.
 
 This supersedes the scope of `instructions/v2.7.0/r1-every-core-equivalent.md`,
 which is withdrawn: its B0-B4 measurement series answered a question CR4
-removes.
+removes. **That order is marked closed and rejected** (operator,
+2026-08-31); the file is kept as a tombstone carrying the disposition, so
+this citation resolves to a decision rather than to nothing.
 
 ## CR1 — a catalog relation's root page stays reserved; its var-heap does not
 
