@@ -101,7 +101,14 @@ What flows between steps is not whole rows: step k forwards, per row, the
 join key consumed by step k+1 plus only the columns the final projection
 needs from step k's relation. Step k+1 performs its lookup (pk descent,
 Waystone/Cabin hint, or scan per the plan) against its **local** state with
-its **local** trail/statistics recording — no statistics cross cores.
+its **local** trail/statistics recording. **Waystone trails do not cross
+cores; access statistics have since 2026-08-31** (CC13/CR7) — a peer folds
+its access shapes locally and flushes them to core 0, which owns the one
+`sys.access_stats`. The sentence used to read "no statistics cross cores"
+and is narrowed rather than deleted, because the trail half of it still
+holds and for its own reason: `RegisterPattern` hands the recorder a
+pointer it uses immediately, so it needs an answer, and a stage cannot wait
+for one.
 
 A pipeline is torn down when the session core has framed the final row,
 received `STEP_ERROR`, or issued `STEP_CANCEL` (§7).

@@ -1,5 +1,7 @@
 #include "kds/server/expeditor.hpp"
 
+#include "kds/server/access_stats_service.hpp"
+
 #include <pthread.h>
 #include <sched.h>
 
@@ -865,6 +867,19 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!finalized.ok()) return finalized.status();
     expeditor->recovery_.catalog_marks_finalized = finalized.value();
 
+    // CR6/CB8: discard `sys.access_stats` if it is damaged. **The same
+    // window and for the same reasons as the two maintenance steps around
+    // it**: after recovery, so this mount's own log has had its say, and
+    // before the listener binds, so nothing is reading the relation while
+    // it is judged. Core 0's alone, being a catalog page.
+    //
+    // Unlike them it is a *discard* rather than a repair, because the
+    // relation is unlogged (CR6): there is no record to replay and nothing
+    // to compensate, so the choice is an empty statistic or a permanently
+    // failing one.
+    auto stats_reset = expeditor->database_->catalog.ResetAccessStatsIfDamaged();
+    if (!stats_reset.ok()) return stats_reset.status();
+
     // H7: collect the spills nothing points at. Two relations log their
     // spills under `kNoTxnId` (`exec::LogChainInsert`'s callers -
     // `sys.pattern_defs` and the assertion catalog), so there is no
@@ -1411,6 +1426,9 @@ Status Expeditor::Serve() {
             core_config.budget = exec::Budget(config_.max_rows_touched);
             core_config.in_doubt_ceiling_ns = config_.in_doubt_ceiling_ns;
             core_config.range_size_ids = config_.range_size_ids;
+            // CR7: the instance's switch reaches the peers now that they
+            // have somewhere to put a shape.
+            core_config.access_statistics = config_.access_statistics;
             core_config.buffer_pool_frames =
                 FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
             core_config.lease = lease.value();
@@ -1606,6 +1624,21 @@ Status Expeditor::Serve() {
             !s.ok()) {
             return s;
         }
+
+        // **CR7's receiving half**, core 0's alone: a peer folds its access
+        // shapes and sends them here, because `sys.access_stats` sits in the
+        // reserved range and only this core may write it (CC11). The
+        // counters are core 0's own `SHOW META` block, and what they count
+        // is what this core *applied* - a peer's `access_batches_sent` and
+        // this core's `access_batches_applied` differ by exactly CR8's
+        // permitted drops, which is what makes a drop diagnosable from
+        // either end.
+        if (Status s = RegisterAccessStatsBatchHandler(scheduler, database_->catalog,
+                                                       &access_batch_counters_);
+            !s.ok()) {
+            return s;
+        }
+        dispatcher_->SetAccessStatsApplied(&access_batch_counters_);
 
         // Core 0's DDL choke point, wired to the broadcast. Installed after
         // the peers exist so the loop below always has somebody to tell.

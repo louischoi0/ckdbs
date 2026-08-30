@@ -188,6 +188,14 @@ enum class RingMessageKind : std::uint16_t {
     // anything, since the decision is the coordinator's COMMIT record.
     kTxnResolveRequest = 37,
     kTxnResolveReply = 38,
+
+    // CR7: a peer's folded access statistics, peer -> core 0, one-way.
+    // There is no reply and there is deliberately no retry: `sys.access_stats`
+    // is invariant 8's advisory class, so a full ring **drops** the batch
+    // (CR8) where every other kind on this enum retries. The exception is
+    // stated here as well as at the send, because this enum is where a
+    // reader looks to learn what a kind costs.
+    kAccessStatsBatch = 39,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -223,6 +231,7 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kTxnDecideReply:
         case RingMessageKind::kTxnResolveRequest:
         case RingMessageKind::kTxnResolveReply:
+        case RingMessageKind::kAccessStatsBatch:
             return true;
         case RingMessageKind::kUnset:
             return false;

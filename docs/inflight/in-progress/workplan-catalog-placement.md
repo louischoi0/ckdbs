@@ -19,9 +19,9 @@ Worked in worktree `cr-catalog-placement`.
 | CB4 | The peer DDL guard becomes a route | **Done** — §3 |
 | CB5 | Autocommit only; a DDL in a transaction still refuses and poisons | **Done** — §3 |
 | CB6 | `CREATE` has no oid to ship; the invalidation questions | **Done** — §3a, and it found a live defect the order predicted only as a question |
-| CB7 | The peer-side statistics batch and its ring path | **Not started** |
-| CB8 | `RecordAccess` unlogged under CR6 | **Not started** |
-| CB9 | The rule text CR6 requires, in `rules.md` §5 | **Not started** |
+| CB7 | The peer-side statistics batch and its ring path | **Built** — §4; the constants sweep is owed |
+| CB8 | `RecordAccess` unlogged under CR6 | **Built** — §5, and sub-question 1's answer changed what the discard is for |
+| CB9 | The rule text CR6 requires, in `rules.md` §5 | **Done** — the rule, and RV3's own text amended to point at it |
 
 ## 1. CB0 — the failure is latent in a second sense than the order assumed
 
@@ -166,3 +166,95 @@ this closes exactly.
 matters more than the relation it was found on: a release build cannot
 distinguish a granted read from an ungranted one, so no test in that
 configuration can catch B3. The suite runs in both.
+
+## 4. CB7 — the batch, and what it did *not* get a knob for
+
+**Peers recorded nothing at all, and by construction rather than by
+failure.** `CoreRuntime::Open` passes `access_statistics = false` for every
+core it opens (`src/server/core_runtime.cpp:280`), so a peer never even
+attempted the write that CC11 would have refused. That is
+`crosscore.md` §6a's *"a peer that records nothing cannot feed the mover"*
+in the source, and it is the whole of what CB7 had to close.
+
+Four decisions, each of which could have gone the other way:
+
+- **The batch is a *sink*, not a second recorder.** `RecordChainAccess`
+  computes the shape once and chooses where it lands, so a peer's fold and
+  core 0's row can never come to disagree about what a shape is. The
+  alternative - a peer-side recorder walking the chain itself - is how two
+  definitions of "shape" get born.
+- **`RecordAccess` took a `count`, rather than the batch path taking its own
+  entry point.** One row, one saturation, both paths. A separate applier
+  would have been a second authority over the same ranking.
+- **The buffer is derived from the ring slot** (`kAccessBatchCapacity`), the
+  rule `kShippedStatementTextMax` already follows, so a batch is always one
+  message and a slot resize moves the buffer rather than silently truncating
+  a flush.
+- **No new interval knob.** The flush rides `wal_drain_interval_ns` with the
+  other peer ticks, because the engine already names "how often a core does
+  its cheap background work" and a second name for one quantity is what this
+  project's own rule forbids. **What CB7's sweep sizes is the buffer**, and
+  that is the only constant this row leaves open.
+
+**CR8's drop is the engine's one exception to never-drop**
+(`sched/send_retry.hpp`, M7's yield-and-retry), and it is stated at three
+sites - the enum, the send, and the service header - because a reader who
+finds a dropped message needs to learn it was *ruled* rather than
+overlooked. The batch is cleared on a drop as well as on a send: holding it
+would grow one shape's count without bound and then flush a number that
+names no interval, which is worse than the gap.
+
+`SHOW META` gains one block on both ends. A peer prints what it sent, core 0
+what it applied, and **the difference between the two is exactly the
+drops** - which is what makes a drop diagnosable from either side rather
+than only where it happened. `access_shape_overflows` is the second,
+different loss: a shape that arrived with no slot between two ticks, which
+is the number that says the buffer is too small for this workload.
+
+## 5. CB8 — unlogged, and the discard that makes it safe
+
+The write loses its WAL record on both paths (`OverwriteLogged` and
+`InsertRow` take `nullptr`), and the undo hook goes with it: a row nothing
+redoes has nothing to compensate.
+
+**Sub-question 1's answer is not the one the order's framing implied.**
+*"A torn or stale page 11 after a crash: is it detected, and by what?"* -
+`sys.access_stats` has exactly three call sites (`catalog.cpp`: bootstrap,
+`RecordAccess`, `ListAccessStats`), and **no mount path reads it at all**.
+So a torn page is detected by the ordinary page checksum on fault, and the
+consequence today is a dropped statistic on every statement and a failing
+`SHOW ACCESS` - never a refused mount. Under CR6 that page also loses redo,
+so there is no repair path and the damage is **permanent**.
+
+That turns CB8's proposed discard from a tidy-up into the thing that makes
+CR6 safe, and it is what the code does: `Catalog::ResetAccessStatsIfDamaged`
+runs at mount in the window `FinalizeDeleteMarksAtMount` and
+`SweepUnownedSpills` already share - after recovery, before the listener
+binds, core 0's alone.
+
+Two properties worth stating:
+
+- **The walk is the detector, and it is the ordinary one.** `ChainVisit`
+  answering non-OK *is* the damage report: a torn page fails its checksum, a
+  broken link fails the traversal. A hand-rolled walk here would be a second
+  opinion about what a readable chain is.
+- **The growth pages leak.** Nothing reclaims a page in this engine, so a
+  discard drops the chain and leaves its pages allocated. Stated rather than
+  discovered; it is the same class of leak `known-gaps.md` already owns.
+
+Sub-question 3 - whether an unlogged page can sit in a heap chain alongside
+logged ones - **does not arise as posed**: the relation's writes all go
+through the two call sites above, so the whole relation is unlogged rather
+than a mixture. What the question was really guarding against is a
+half-applied grow, and that is what the discard answers.
+
+## 6. CB9 — the rule, and RV3's own sentence
+
+`docs/rules/rules.md` §5 carries the exception, in the form the order gave
+it, and `ddl-transactional.md` §7 now says to read RV3's *"catalog writes
+are WAL-logged"* as *"every catalog write except that one"*. One line was
+added to the order's text and is worth flagging as CLA's: **the test is the
+content's class, not its cost** - a relation a reader may act on is not a
+statistic however cheap it is to rebuild - because "resembles this one" was
+the failure mode the order named, and cheapness is the resemblance most
+likely to be argued.

@@ -24,6 +24,7 @@
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/stats/access_batch.hpp"
 #include "kds/stats/access_stats.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
@@ -1229,6 +1230,28 @@ public:
     // nobody wired (the tests' path), where no DDL can be shipped either.
     void SetCatalogInvalidate(std::function<void()> fn) { catalog_invalidate_ = std::move(fn); }
 
+    // **Where this core's access shapes go** (CR7). Unset on core 0, which
+    // writes `sys.access_stats` directly because it is the only core that
+    // may. Set on a peer, whose accesses are folded here and flushed to
+    // core 0 on the reactor tick - and setting it is also what *enables*
+    // recording on a peer, which was constructed with it off because there
+    // was nowhere to put a shape. `batch` must outlive the dispatcher.
+    void SetAccessBatch(stats::AccessBatch* batch) noexcept {
+        access_batch_ = batch;
+        access_batch_counters_ = batch == nullptr ? nullptr : &batch->counters();
+    }
+
+    // **Where this core's `SHOW META` reads its CR7 block from when it is
+    // the core that *applies* batches** - core 0, which folds a peer's
+    // counts into `sys.access_stats` and owns the counters the handler
+    // fills. A peer sets the pointer through `SetAccessBatch` instead,
+    // because its batch carries its own; the block is one block either way,
+    // and which half of it is non-zero says which end of the wire this core
+    // is.
+    void SetAccessStatsApplied(const stats::AccessBatchCounters* counters) noexcept {
+        access_batch_counters_ = counters;
+    }
+
     // Arms the **coordinator's half of the cross-owner commit** (R6-3,
     // txn_2pc_service.hpp): a `COMMIT` of a transaction that enrolled
     // participants runs D4's two phases instead of committing straight
@@ -1699,6 +1722,13 @@ private:
     // SS2's client, on every core of a multi-core instance; null wherever
     // the cross-core refusal still stands (see SetStatementShip).
     StatementShipClient* statement_ship_ = nullptr;
+
+    // `SetAccessBatch`. Null on core 0 and on every dispatcher nobody wired.
+    stats::AccessBatch* access_batch_ = nullptr;
+
+    // What `SHOW META`'s CR7 block reads: a peer's own batch counters, or on
+    // core 0 the handler's applied counts.
+    const stats::AccessBatchCounters* access_batch_counters_ = nullptr;
 
     // `SetCatalogInvalidate`. Empty on a dispatcher nobody wired, which is
     // every test fixture and every single-core instance - both of which are

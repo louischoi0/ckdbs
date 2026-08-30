@@ -2814,7 +2814,7 @@ Status Catalog::RetirePattern(std::uint64_t pattern_id) {
 }
 
 Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
-                              std::uint64_t last_seen) {
+                              std::uint64_t last_seen, std::uint64_t count) {
     if (kind == kAccessKindUnset) {
         return Status::InvalidArgument("catalog: access kind 0 is reserved for an unset row");
     }
@@ -2833,12 +2833,30 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
         }
 
         // Saturating for the reason rows.hpp gives: a wrapped count would
-        // invert the ranking this exists to produce.
-        if (row.use_count != std::numeric_limits<std::uint64_t>::max()) ++row.use_count;
+        // invert the ranking this exists to produce. `count` is 1 on the
+        // statement path and a peer's fold on CR7's batch path, so the
+        // saturation is an add rather than an increment - the two paths
+        // share this row, and a second one would be a second authority over
+        // the same ranking.
+        if (row.use_count > std::numeric_limits<std::uint64_t>::max() - count) {
+            row.use_count = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            row.use_count += count;
+        }
         row.last_seen = last_seen;
         auto encoded = row.Encode();
         // In place - the row size is fixed, so there is nothing to move.
-        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+        //
+        // **Unlogged, by CR6** (`docs/rules/rules.md` §5): `nullptr` where
+        // every other catalog write passes `wal_`. This relation's whole
+        // content is a statistic - invariant 8's advisory class, priced as
+        // performance and never as a result - so it is neither redone nor
+        // undone, and a mount that finds it damaged discards it
+        // (`ResetAccessStatsIfDamaged`). It is the **sole** exception to
+        // RV3's rule that catalog writes are logged as ordinary record
+        // types; a second one has to be shown to meet the same test rather
+        // than to resemble this one.
+        if (Status s = OverwriteLogged(/*wal=*/nullptr, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
         }
         return true;
@@ -2857,14 +2875,18 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
     SysAccessStatRow row{};
     row.rel_id = rel_id;
     row.column_mask = column_mask;
-    row.use_count = 1;
+    row.use_count = count;
     row.last_seen = last_seen;
     row.kind = kind;
     // No BumpVersion(): nothing cached is derived from these rows, and the
     // argument is the one sys.patterns' registration already makes - a
     // statistic appearing cannot stale a cached relation, and this runs on
     // the statement path where a cache drop would dangle a held pointer.
-    return InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageAccessStats, row, kBootstrapXid);
+    // Unlogged and un-undone, by CR6 - the same exception the update path
+    // above takes, and for the same reason. The undo hook goes with the WAL
+    // pointer: a row nothing redoes has nothing to compensate.
+    return InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_, kCatalogPageAccessStats,
+                     row, kBootstrapXid);
 }
 
 StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
@@ -3084,6 +3106,51 @@ StatusOr<SysFkeyRow> Catalog::FindForeignKeyOnColumn(Oid child_rel_oid,
         }
     }
     return Status::NotFound("no foreign key on this column");
+}
+
+StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
+    // CR6's other half, and the thing that *makes* the exception safe.
+    //
+    // An unlogged relation has no redo and no undo, so nothing repairs it -
+    // and `sys.access_stats` has no reader at mount either (its only readers
+    // are `RecordAccess` and `SHOW ACCESS`), so damage would surface as a
+    // failing statistic on every statement and a failing `SHOW ACCESS`,
+    // permanently. The free map's precedent is a *repair* at mount (D9,
+    // RC04); this relation's answer is **discard**, because invariant 8
+    // already prices a deleted trail as performance and never a result, and
+    // a relation with no rows is simply unweighed by the shadow planner
+    // (`physical-optimizer.md` §5's decay score).
+    //
+    // The walk is the detector: a torn page fails its checksum on fault and
+    // a broken chain fails the walk, and either answers the same way. The
+    // chain's growth pages are **not** reclaimed - nothing reclaims a page
+    // in this engine - so a discard leaks them, which is the cost stated
+    // rather than discovered.
+    // **The walk is the detector, and it is the ordinary one**: a torn page
+    // fails its checksum on fault and a broken link fails the traversal, so
+    // `ChainVisit` answering non-OK *is* the damage report. Writing a second
+    // walk here would be a second opinion about what a readable chain is.
+    const Status walked = heap::ChainVisit(
+        store_, kCatalogPageAccessStats, storage::PageAccess::kRead,
+        [](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            return storage::VisitControl::kContinue;
+        });
+    if (walked.ok()) return false;
+
+    // Re-formatted in place at its fixed id, which is what makes this a
+    // discard rather than a re-bootstrap: the `sys.objects` and `sys.tables`
+    // rows still name page 11 and stay true.
+    auto head = store_.Get(kCatalogPageAccessStats);
+    if (!head.ok()) return head.status();
+    auto fresh = heap::PageView::CreateEmpty(head.value().bytes(), 0);
+    if (!fresh.ok()) return fresh.status();
+    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("catalog",
+                    "sys.access_stats was damaged and has been discarded: it is unlogged by "
+                    "CR6, so nothing redoes it, and an empty statistic is a slower optimizer "
+                    "rather than a wrong answer");
+    }
+    return true;
 }
 
 StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {

@@ -874,8 +874,15 @@ Four things this phase found, each of which had to be fixed or recorded:
   uses immediately, so it cannot be shipped either. **Peers therefore run
   with `waystone_recording` and `access_statistics` off.** Both are
   advisory — invariant 8, and "a degraded statistic, not a degraded
-  database" — so a peer returns identical rows, more slowly. The real fix
-  is per-core statistics relations, which crosscore.md §2 already calls for.
+  database" — so a peer returns identical rows, more slowly.
+  **The access-statistics half closed 2026-08-31** (CR7, `crosscore.md`
+  CC13): a peer folds its shapes into a local batch and flushes them to
+  core 0 on the reactor tick. Note what the fix was *not* - per-core
+  statistics relations, which this line used to name and which the
+  ratification declined, since the requirement was that a peer's accesses
+  be counted at all, not that each core own a relation. Waystone's half
+  stands: `RegisterPattern` hands back a pointer the recorder uses at once,
+  so it needs an answer nothing here can wait for.
 - **Catalog reads dirtied the catalog.** `ScanAll` used `Get()`, which marks
   a frame dirty by convention rather than by what was written — so every
   lookup dirtied a catalog page and every checkpoint wrote all nine back

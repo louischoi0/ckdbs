@@ -1272,6 +1272,28 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // which is R6's multi-owner and in-transaction population and the
     // evidence base a 2PC decision would be made from. A field whose
     // meaning changed silently would have destroyed that series.
+    // **CR7: where this core's access statistics went, or came from.**
+    // Absent rather than zeroed where nothing is wired - a single-core
+    // instance has neither half - which is the rule the shipping and
+    // scheduler blocks follow. A peer prints what it *sent*; core 0 prints
+    // what it *applied*, and the difference between the two ends is
+    // exactly CR8's permitted drops.
+    if (access_batch_counters_ != nullptr) {
+        const stats::AccessBatchCounters& c = *access_batch_counters_;
+        os << " access_batches_sent=" << c.batches_sent
+           << " access_entries_sent=" << c.entries_sent
+           << " access_batches_dropped=" << c.batches_dropped
+           << " access_batches_applied=" << c.batches_applied
+           << " access_entries_applied=" << c.entries_applied;
+        // The buffer's own loss, which is a different thing from CR8's: a
+        // shape that arrived with no slot left between two ticks. Non-zero
+        // means the buffer is too small for this workload's shape count,
+        // which is the number CB7's sweep exists to size.
+        if (access_batch_ != nullptr && access_batch_->overflow_drops() != 0) {
+            os << " access_shape_overflows=" << access_batch_->overflow_drops();
+        }
+    }
+
     if (statement_ship_ != nullptr) {
         os << " shipped_statements=" << statement_ship_->shipped()
            << " shipped_replies=" << statement_ship_->replies()
@@ -3446,7 +3468,14 @@ void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_o
     // being one. Same relation and the same call every other access goes
     // through, so `SHOW ACCESS` compares constraint cost against query cost
     // without anyone having to know which is which.
-    if (!access_stats_enabled_) return;
+    if (!access_stats_enabled_ && access_batch_ == nullptr) return;
+    if (access_batch_ != nullptr) {
+        // CR7's sink, for the same reason the step path takes it: this core
+        // may not write the relation.
+        access_batch_->Note(exec::StoredAccessKind(kind), rel_oid, column_mask,
+                            static_cast<std::uint64_t>(NowNs()));
+        return;
+    }
     Status recorded = catalog_.RecordAccess(exec::StoredAccessKind(kind), rel_oid, column_mask,
                                             static_cast<std::uint64_t>(NowNs()));
     // Dropped deliberately: a statistic that could fail a write would be a
@@ -7434,9 +7463,13 @@ void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
     // this is the physical optimizer's input (docs/spec/heap-and-tuple.md §7),
     // not a trail, and it is collected whether or not anything is recording
     // or replaying one.
-    if (!access_stats_enabled_) return;
+    // **A batch is a sink, and having one is what enables recording on a
+    // peer** (CR7): a peer may not write `sys.access_stats` at all, so it
+    // was constructed with recording off and stays off until
+    // `SetAccessBatch` gives it somewhere to put a shape.
+    if (!access_stats_enabled_ && access_batch_ == nullptr) return;
     stats::RecordChainAccess(catalog_, chain, static_cast<std::uint64_t>(NowNs()),
-                             &access_counters_);
+                             &access_counters_, access_batch_);
 }
 
 void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,

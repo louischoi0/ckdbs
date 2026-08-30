@@ -11,6 +11,7 @@
 
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/catalog_spills.hpp"
+#include "kds/server/access_stats_service.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -277,7 +278,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->dispatcher_.emplace(
         runtime->superblock_, *runtime->catalog_, *runtime->store_, log, &clock,
         &*runtime->wal_, config.durability, config.budget,
-        /*recorder=*/nullptr, /*replay_enabled=*/false, /*access_statistics=*/false,
+        /*recorder=*/nullptr, /*replay_enabled=*/false,
+        /*access_statistics=*/false,
         /*cabins=*/nullptr, &*runtime->txn_manager_, config.isolation, config.core_id);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
@@ -313,6 +315,20 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         runtime->dispatcher_->SetCatalogInvalidate([runtime = runtime.get()] {
             runtime->InvalidateCatalog();
         });
+        // CR7: a peer records its access shapes into a local batch and
+        // flushes them to core 0 on the tick. Before this it recorded
+        // nothing at all - the dispatcher above is constructed with
+        // `access_statistics = false`, because `sys.access_stats` sits in
+        // the reserved range and a peer may not write it - which is
+        // `crosscore.md` §6a's "a peer that records nothing cannot feed the
+        // mover", and the one prerequisite of R5 this order owes.
+        // Honouring the instance's own `access_statistics` switch rather
+        // than a second one: a peer used to be forced off because it had
+        // nowhere to write, and now the operator's one setting means the
+        // same thing on every core. Off leaves the peer exactly as it was.
+        if (config.access_statistics) {
+            runtime->dispatcher_->SetAccessBatch(&runtime->access_batch_);
+        }
         // And where its rights probe records a relation this core owns but
         // cannot write (PW1c-7); the tick in Run() asks core 0 for it.
         runtime->dispatcher_->SetRelationGrantDemand(&runtime->grant_demand_);
@@ -1026,6 +1042,7 @@ void CoreRuntime::Run() {
                 MaybeRefillTrxIds();
                 MaybeRefillRowIds();
                 MaybeRequestRelationGrants();
+                MaybeFlushAccessStats();
                 // And the index-build windows' ceiling (PW1c-6b-2).
                 if (index_builds_.has_value()) index_builds_->Expire(scheduler_->clock().Now());
             });
@@ -1057,6 +1074,16 @@ void CoreRuntime::Run() {
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor stopped");
     }
+}
+
+void CoreRuntime::MaybeFlushAccessStats() {
+    // One send, no retry, and a drop if the ring is full: CR8, the engine's
+    // one exception to `sched/send_retry.hpp`'s never-drop rule, on the
+    // ground invariant 8 already states - this trail is priced as
+    // performance and never as a result. `FlushAccessBatch` carries the
+    // argument and the counters that keep a drop visible.
+    if (transport_ == nullptr) return;
+    (void)FlushAccessBatch(*transport_, config_.core_id, catalog::kSystemCore, access_batch_);
 }
 
 void CoreRuntime::MaybeRefillLease() {

@@ -15,6 +15,7 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/stats/access_batch.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/extent_lease_service.hpp"
@@ -64,9 +65,12 @@
 //      already specifies as retryable.
 //   2. **Allocation comes from a lease**, never from the free map, which is
 //      also core 0's (storage/extent_lease.hpp).
-//   3. **Nothing is recorded.** `waystone_recording` and
-//      `access_statistics` are off on a peer, and this is not a default
-//      anybody should change without reading the next paragraph.
+//   3. **Waystone records nothing here.** `waystone_recording` is off on a
+//      peer, and this is not a default anybody should change without
+//      reading the next paragraph. **`access_statistics` is no longer in
+//      that sentence**: since CR7 (2026-08-31) a peer records its access
+//      shapes into a local batch and flushes them to core 0, which applies
+//      them to the one `sys.access_stats` only it may write.
 //
 // ---- Why a peer records nothing (P6's known cost) -----------------------
 //
@@ -82,10 +86,17 @@
 // Both features are advisory by construction - invariant 8 for Waystone,
 // "a degraded statistic, not a degraded database" for the other - so a peer
 // with them off returns **exactly the same rows**, more slowly, and
-// contributes nothing to the optimizer's input. That is the honest cost of
-// this phase. The fix is per-core statistics relations, which crosscore.md
-// §2 already calls for ("no statistics cross cores") and which is a page
-// layout change to three relations.
+// contributes nothing to the optimizer's input.
+//
+// **Half of that cost is paid off** (CR7, `crosscore.md` CC13): the access
+// statistics now cross, by folding on the peer and flushing to core 0 on
+// the reactor tick, and a full ring drops the batch rather than retrying it
+// (CR8). Note what was *not* the fix: per-core statistics **relations**,
+// which this paragraph used to name and which the ratification declined -
+// they would have opened oid allocation, row migration and a core-count
+// question, where the requirement was only that a peer's accesses be
+// counted at all. Waystone's half stands, for the reason above it: the
+// recorder needs an answer and nothing here can wait for one.
 //
 // Core 0 still owns the superblock, the free map, the catalog pages and the
 // listener. Those live on `Expeditor` rather than here: they are the
@@ -144,6 +155,14 @@ public:
         // the range, and `kRangeSizeOff` (0) is the default; the argument
         // for both is `server/range_alloc.hpp`'s.
         std::uint64_t range_size_ids = kRangeSizeOff;
+
+        // CR7: whether this core records access shapes at all. **The
+        // instance's own `access_statistics` setting**, passed down rather
+        // than re-decided here - core 0 has always read it, and a peer used
+        // to have it forced off because it had nowhere to write. Now it
+        // folds into a batch and flushes to core 0, so the operator's one
+        // switch means the same thing on every core.
+        bool access_statistics = true;
 
         // This core's page-id lease, carved by core 0's ExtentAllocator
         // before the worker starts.
@@ -311,6 +330,16 @@ public:
     // the same tick as the leases; a no-op with no transport or no demand.
     void MaybeRequestRelationGrants();
 
+    // And CR7's access statistics, on the same tick and for the same reason
+    // the lease checks are there: cheap `system` work, and a timer of its
+    // own would cost more than it measures. The **cadence is
+    // `wal_drain_interval_ns`**, deliberately not a knob of its own - the
+    // engine already has a name for "how often a core does its cheap
+    // background work", and a second name for one quantity is what
+    // `docs/rules/rules.md` and this milestone's own review rule forbid.
+    // What CB7's sweep sizes is the *buffer*, `kAccessBatchCapacity`.
+    void MaybeFlushAccessStats();
+
     // The receive side of CC7's flush-then-grant handoff (workplan P6b):
     // fault rights over a relation's page range, granted by core 0 at DDL
     // publish. What the `kRelationFaultGrant` handler calls; exposed so a
@@ -460,6 +489,12 @@ private:
     // MaybeRequestRelationGrants. Peers only; core 0's dispatcher is never
     // given it.
     RelationGrantDemand grant_demand_;
+
+    // CR7: this core's folded access shapes, between two ticks. Peers only -
+    // core 0 writes `sys.access_stats` directly, being the only core that
+    // may. Declared before the dispatcher for the reason every other seam
+    // here is: the dispatcher holds a pointer to it.
+    stats::AccessBatch access_batch_;
     // One re-delivery request in flight per core (the PW1c-7 review's C4):
     // each request makes core 0 run a whole publish - a catalog scan, an
     // extent flush, three appends and one fsync on its reactor - so a client

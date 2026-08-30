@@ -840,10 +840,22 @@ public:
     // one. Every caller is expected to drop the failure: a statistic that
     // could fail a query would be a worse trade than no statistic.
     Status RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
-                        std::uint64_t last_seen);
+                        std::uint64_t last_seen,
+                        std::uint64_t count = 1);
 
     // Every access shape, in page order. The inspection surface behind
     // `SHOW ACCESS`.
+    // CR6: discard `sys.access_stats` if it is damaged, at mount and only
+    // there. True when it was discarded.
+    //
+    // The relation is unlogged, so nothing redoes or undoes it and no repair
+    // exists; and no mount path reads it, so damage would otherwise surface
+    // as a failing statistic on every statement and a failing `SHOW ACCESS`,
+    // for the life of the file. Discarding is sound on invariant 8's terms -
+    // a deleted trail costs performance and never a result - and the growth
+    // pages it drops are leaked, since nothing reclaims a page.
+    StatusOr<bool> ResetAccessStatsIfDamaged();
+
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 
     // ---- sys.cabins (docs/spec/cabin.md §10) -----------------------------

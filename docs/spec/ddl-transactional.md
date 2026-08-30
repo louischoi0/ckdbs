@@ -669,6 +669,19 @@ a committed `CREATE INDEX`'s backfilled tree travels as full page images
 before the row that publishes it. `SHOW META`: `ddl_durable=1`,
 `catalog_recovered=1`.
 
+**One relation is outside this rule, by ratification rather than by
+oversight** (2026-08-31, CR6; the rule text is `docs/rules/rules.md` §5).
+`sys.access_stats` is written **unlogged**: its whole content is a
+statistic, which invariant 8 already prices as performance and never as a
+result, so it is neither redone nor undone and a mount that finds it
+damaged **discards** it (`Catalog::ResetAccessStatsIfDamaged`). Read RV3's
+sentences above as "every catalog write except that one" — the exception is
+sole, and a second relation would have to be shown to meet the same test
+rather than to resemble this one. What made it necessary is CR7: a peer's
+accesses now reach this relation too, and a per-statement statistic that
+could fail a statement, or a damaged page that no redo can repair and no
+mount reads, are both worse trades than an empty trail.
+
 Two contract changes D2 carries, stated because nothing else states
 them: **a failed DDL statement inside an explicit transaction now
 poisons the session**, exactly as a failed DML statement does — before
