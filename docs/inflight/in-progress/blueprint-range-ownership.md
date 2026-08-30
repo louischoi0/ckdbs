@@ -26,7 +26,9 @@ a page between streams builds against that contract.
 **Promoted: `docs/spec/crosscore.md` CC8** — the unit, the too-coarse /
 too-fine argument, the per-range sub-structure qualification (a heap
 range is its own chain, a btree range its own subtree entry), and the
-shared-structure `[OPEN]` the btree's top-of-tree hop lands on. One
+`[OPEN]` the btree's top-of-tree hop lands on — which since 2026-08-30 is
+that hop **alone**, §8's system-structure rule having been decided and
+CC11 not reaching a structure core 0 does not write. One
 line: a range is `[lo, hi)` over the 40-bit Keystone id space of one
 relation; a relation starts life as one range owned by its creating
 core, which makes `sys.tables.owner_core` the degenerate case, not a
@@ -111,10 +113,41 @@ optimizer's Part III and inherits Part I's discipline.
 
 Required, and separable from ranges:
 
-- Superblock, free map and catalog gain a partition-boundary lock each
-  (rules.md §3's last-resort clause, justification in the subsystem
-  header) *or* stay message-serialised through a rotating coordinator —
-  `[OPEN]`, decided by measurement.
+- **Superblock, free map and catalog: every core reads, core 0 alone
+  writes.** Operator decision 2026-08-30, ratified into
+  `docs/spec/crosscore.md` CC11, which owns the rule and its reasoning.
+  Both candidates this bullet used to offer are **declined**: no
+  partition-boundary lock on any of the three (rules.md §3's last-resort
+  clause is not invoked, and no subsystem header gains an acquisition
+  order), and no rotating coordinator. It was not decided by measurement
+  in the end, because the measurement's premise fell: read scalability was
+  what equal authority would have bought, and a peer already fills from
+  the **device** rather than from core 0 — catalog frames are the
+  authority and the cache is the memo
+  (`src/server/core_runtime.cpp:928-932`), and the free map is re-read with
+  `RefreshFreeMapFromDevice` (`:919-920`). What one writer
+  buys is what a lock or a coordinator would have had to rebuild: total
+  order over the structure from a single stream, and no DDL that spans two
+  WAL streams.
+  **The rule is the store's existing check rather than new code**, which
+  is why R1 owes it no build — `DevicePageStore::MayFault` admits the
+  whole system range on a leased store (*"the fixed system range is
+  readable by every core"*, `src/storage/device_page_store.cpp:651-656`),
+  `MayWrite` refuses it (`:804-810`, and `ResidentBytes` at `:479-489`
+  answers `InvalidArgument` rather than a retryable status because a
+  system page is wrong on every retry), and `FlushMaps` (`:286-299`)
+  refuses the map write-back on a leased store on the one path that never
+  asks `MayWrite`. Core 0 holds no lease, so nothing gates it.
+  **Wider than `instructions/v2.6.0/v2.6.0-core-catalog.md` RM0's
+  amendment**, which settled the catalog alone on §1's reasoning and left
+  the free map and superblock `[OPEN]` as their own question: the
+  operator's ruling covers all three on one rule, so RM0's split is
+  overtaken rather than executed, and its reasoning survives as CC11's.
+  **What the rule does not reach**: a *relation's* shared structure — the
+  btree's top levels under a split relation, whose writer is the root's
+  owner core and never core 0 by construction. That keeps its own
+  `[OPEN]`, renamed in `crosscore.md` §9 so it no longer cites this
+  closed bullet.
 - DDL runs on any core; the peer DDL refusal (PW4) becomes unnecessary
   rather than unbuilt.
 - Per-core listeners (PW5) stop being "peers forward to core 0" and start
@@ -139,8 +172,11 @@ per-core pool structure survives unchanged.
 ## 10. What this blueprint deliberately gives up
 
 - **Deterministic simulation pays a permanent tax.** Directory mutations
-  and boundary locks are new interleaving points; each must be a seeded
-  scheduling point or sim fidelity drops. Budgeted, not avoidable.
+  are new interleaving points; each must be a seeded scheduling point or
+  sim fidelity drops. Budgeted, not avoidable. **Halved 2026-08-30**: the
+  boundary locks this bullet also counted are not built — §8's rule is one
+  writer per system structure, so the system structures add no interleaving
+  point at all, and only the directory's does.
 - **Multi-range transactions wait for 2PC.** Stated in §5; the blueprint
   widens CC3's refusal before it removes it.
 - **Recovery gains a phase.** Handoff records (PL-B) must be analysed
@@ -152,7 +188,7 @@ per-core pool structure survives unchanged.
 | Stage | Content | Gate |
 |---|---|---|
 | R0 | ~~Ratify PL~~ — **closed 2026-08-24**, PL-B + PL-C guard (`docs/spec/page-lsn-cross-stream.md` §9) | done |
-| R1 | Every core equivalent: shared-structure access rule, per-core listeners, per-core statistics relations | PL not needed |
+| R1 | Every core equivalent. **Shared-structure access rule: closed 2026-08-30** by operator decision — every core reads, core 0 alone writes (§8, `crosscore.md` CC11) — and it is the store's existing check, so this item is decided with **nothing to build**. **Per-core listeners: built** (PW5). **Still owed**: per-core statistics relations (the mover's prerequisite, §8's third bullet), and the consequence the rule leaves standing — DDL runs on any core by **shipping to core 0**, not by writing the catalog there, so PW4's refusal becomes unreachable rather than removed (`instructions/v2.6.0/v2.6.0-core-catalog.md` rows RM1-RM7) | PL not needed |
 | R2 | Global frame accounting — **static half built 2026-08-24** (the instance budget divides over every core per EV4, worktree `r2-frame-budget`); the dynamic arbiter that rebalances shares by demand remains | none |
 | R3 | Range directory + read path: `sys.ranges`, engine-internal range allocation behind the §6a gates — no user-facing range DDL, in this phase or any later one (operator direction 2026-08-27) — pipeline over ranges. Placement still static | R1 |
 | R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (`crosscore.md` §6b, per-range chains included) | R3, PW1b |
@@ -208,7 +244,10 @@ Per-range local vs global secondary indexes
 — **not ratified**; owner: `index.md` §13); split/migrate policy and
 its constants (promoted 2026-08-24: `crosscore.md` §9 indexes it, the
 physical optimizer's Part III spec owns it when drafted);
-shared-structure access mechanism (§8); merge; 2PC. The id-block
+~~shared-structure access mechanism (§8)~~ — **closed 2026-08-30**, every
+core reads and core 0 alone writes (`crosscore.md` CC11), with the btree's
+top-of-tree hop left open under its own name in `crosscore.md` §9;
+merge; 2PC. The id-block
 interleave default closed 2026-08-27 as **default** (CLA's reading of
 the operator's range direction, correctable; `crosscore.md` §6b
 carries it). The split *gates* — which relations may split at all
