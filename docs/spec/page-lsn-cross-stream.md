@@ -5,7 +5,10 @@ logged handoff over a flushed page, reinforced by an owning-stream stamp in
 the page header. §9 states the binding form; §§6-8 are kept as the record
 the choice was made from. PL-A, PL-D and PL-E are **declined** (PL-D may
 still be *implemented first* as a stepping stone, but it is not the
-contract; PL-A carries the named revisit clause in §9). Owning specs:
+contract). **PL-A's revisit clause fired 2026-08-28 when 2PC was ratified,
+was executed the same day, and the operator ruled on 2026-08-30: PL-A is
+declined again, and the re-decline is confirmed.** The clause is spent —
+§9 carries the ruling and the finding it rests on. Owning specs:
 `docs/spec/wal.md` §3 and §15, `docs/inflight/in-progress/workplan-crosscore.md` guideline 3.
 Scoped 2026-08-24 in the main checkout on `main` at `a755521`; ratified the
 same day at `b53cdb0`. Every claim below is a read of the source with its
@@ -352,12 +355,23 @@ Consequences that bind other work:
   interaction that does exist runs the safe way — a prepared transaction
   lowers its core's redo start, so a scan meets *more* handoff records in
   order, which rule 3's forward scan and rule 6's restamp already handle;
-  nothing in 2PC raises a redo start past a handoff. **CLA's verdict is to
+  nothing in 2PC raises a redo start past a handoff. **CLA's verdict was to
   decline PL-A again**, since the second decision it would have paid for
-  turned out not to exist, while its append-path cost is unchanged. That
-  verdict is a **proposal awaiting the operator**, not a closure: this
-  clause re-opened a ratified decision rather than delegating it, and R6-9
-  writes the ruling in here.
+  turned out not to exist, while its append-path cost is unchanged.
+
+  **Ruled 2026-08-30 — the operator authorized and confirmed the
+  re-decline.** PL-A is declined a second time, on the record above, and
+  the revisit clause is **spent**: it was a one-shot tied to 2PC's
+  ratification, that trigger has fired and been answered, so PL-A carries
+  no standing re-open condition any more. Re-opening it takes a fresh
+  operator decision with a new reason, and the reason cannot be 2PC — the
+  finding is that the built protocol makes no cross-stream comparison, so
+  the case for one global LSN is *weaker* after 2PC than before it. What
+  stands unchanged is the ratified contract, PL-B's logged handoff with the
+  PL-C stamp, and PL-A's price: an atomic on the engine's hottest append
+  path, which `wal.md` §3's *"no shared tail pointer, no lock, no atomic
+  contention on the append path"* and `workplan-crosscore.md` guideline 1
+  both spend.
 
 ## 10. Explicitly not in scope
 

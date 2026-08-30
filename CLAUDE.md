@@ -304,16 +304,17 @@ interface that keeps every listed option viable.
   `wal.md` §3, `superblock.hpp`'s pin and `blueprint-range-ownership.md` §12
   carry it with the three constraints it rides with. (Page redo identity across streams was **ratified
   2026-08-24**: PL-B logged handoff with the PL-C stream stamp,
-  `docs/spec/page-lsn-cross-stream.md` §9 — no longer open; PL-A reopens
-  only if 2PC is ratified, by that decision. **That trigger fired
-  2026-08-28** when D1–D7 were ratified, so **PL-A is open and awaiting the
-  operator**: R6-7 executed the revisit and found 2PC changes nothing about
-  page identity across streams — the decision lives in one stream, no wire
-  payload carries an LSN, and the recovery-time resolution is a lookup
-  rather than a cross-stream comparison — so CLA's proposal is to decline
-  PL-A again.
-  The verdict is the operator's to rule on; `page-lsn-cross-stream.md` §9
-  and `workplan-cross-owner-txn.md`'s R6-7 carry the argument.) (Undo retention was ratified and built 2026-08-19,
+  `docs/spec/page-lsn-cross-stream.md` §9. **PL-A is closed 2026-08-30** —
+  its revisit clause fired 2026-08-28 when 2PC's D1–D7 were ratified, R6-7
+  executed the revisit the same day and found 2PC changes nothing about
+  page identity across streams (the decision lives in one stream, no wire
+  payload carries an LSN, the recovery-time resolution is a lookup rather
+  than a cross-stream comparison), and the operator **authorized and
+  confirmed the re-decline**. PL-A stays declined and the clause is
+  **spent**: it was a one-shot on 2PC's ratification, so nothing re-opens
+  PL-A automatically again and a fresh operator decision would need a
+  reason other than 2PC. `page-lsn-cross-stream.md` §9 and
+  `workplan-cross-owner-txn.md`'s R6-7 carry the argument.) (Undo retention was ratified and built 2026-08-19,
   `docs/inflight/in-progress/workplan-undo-purge.md` — `SnapshotTooOld` surfacing reopens only
   with the declined byte-cap policy; UP4's mount-time reclaim of a
   previous run's pages stays open there.)
@@ -340,8 +341,21 @@ interface that keeps every listed option viable.
   batch/credit/ring/extent sizing; the `ring_full` retry protocol;
   core-count changes; initial placement policy (`creating` | `rotate`);
   split/migrate policy and constants (the mover); auxiliary placement
-  under a split relation (each §6a gate's owner); the shared-structure
-  access mechanism. (The id-block interleave default was closed
+  under a split relation (each §6a gate's owner); and — narrowed to the
+  **btree's top-of-tree hop** alone — the shared-structure access
+  mechanism, since a split btree's top levels are written by the root's
+  owner core and so are the one shared structure CC11's rule does not
+  reach (`docs/spec/crosscore.md` §9, `workplan-range-directory.md` D1;
+  the candidate that would remove the structure instead is
+  `instructions/v2.6.0/v2.6.0-per-range-trees.md`). (**The *system*
+  structures' access rule was closed 2026-08-30 by the operator**: the
+  superblock, the free map and the catalog are read by every core with the
+  same authority and written by core 0 alone, with blueprint §8's two
+  candidates — a partition-boundary lock and a rotating coordinator —
+  both declined. It is the store's existing check rather than new code, so
+  it lands as a decision with nothing to build; `docs/spec/crosscore.md`
+  CC11 owns it, and blueprint §11's R1 row records what R1 still owes.)
+  (The id-block interleave default was closed
   2026-08-27 as **default** — CLA's reading of the operator's range
   direction, correctable — `docs/spec/crosscore.md` §6b.) (`CREATE
   INDEX` on a peer-owned relation is **decided and built 2026-08-25**:

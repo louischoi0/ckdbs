@@ -150,7 +150,7 @@ this workplan means the v2.4.0 path.
 | R6-4 | Recovery (D4) | **Built 2026-08-28**, this worktree |
 | R6-5 | In-doubt handling (D5) | **Built 2026-08-28**, `056cf9b`; review at `ad0aa2f` |
 | R6-6 | PW3b extension | **Built 2026-08-28** (tests and prose; no engine change) |
-| R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). Verdict is a proposal — the operator rules |
+| R6-7 | PL-A revisit | **Built 2026-08-28** (analysis and doc; no engine code, which was the expected outcome). **Ruled 2026-08-30: the operator authorized and confirmed the re-decline** — PL-A stays declined, the revisit clause is spent, and `page-lsn-cross-stream.md` §9 carries the ruling |
 | R6-8 | Dispatch | **Built 2026-08-28**, this worktree |
 | R6-9 | Docs | — |
 | **RP7** | **The correctness gate** (parent §5 in full) | **Run 2026-08-28**, this worktree. 12 cells x 3 passes, 36/36; suite 2,872 and `sim.sh` 171/0 against the pre-R6 arm's 2,789 and 171/0, one sitting. Re-run after the `origin/main` merge at `6cc8236`: 2,917 green, matrix 12/12. CP2 concluded. Overhead not measured. **Re-run whole on the tree with the read half in it** (§6's first requirement), `af36f24`: suite **2,929** green, `sim.sh` **171/0**, matrix **36/36**, one sitting; asymmetric participant state reached at three points. `bench/v2.5.0/archive/rr-kill-matrix-36cells.json` |
@@ -1536,12 +1536,18 @@ comparison §7 said would change if 2PC arrived did change: it got *worse*
 for PL-A, because 2PC turned out to be free of the thing PL-A was going to
 subsidise.
 
-**This is not CLA's to close.** Storage and WAL decisions are the operator's
-(`CLAUDE.md` Open Decisions), and the clause re-opened a ratified decision
-rather than delegating it. R6-9 carries the proposal into
-`page-lsn-cross-stream.md` §9 once it is ruled on; until then that file
-records the revisit as executed with this verdict pending, and `CLAUDE.md`'s
-Transactions & WAL line needs the same correction.
+**This was not CLA's to close, and it is closed now.** Storage and WAL
+decisions are the operator's (`CLAUDE.md` Open Decisions), and the clause
+re-opened a ratified decision rather than delegating it. **Ruled 2026-08-30:
+the operator authorized and confirmed the re-decline.** PL-A stays declined
+on the reasoning above, and the clause is **spent** rather than merely
+satisfied — it was a one-shot tied to 2PC's ratification, so nothing
+re-opens PL-A automatically again; a fresh operator decision would have to,
+on a reason other than 2PC. The ruling is written into
+`page-lsn-cross-stream.md` §9 (and its header, which used to advertise the
+clause as live) and into `CLAUDE.md`'s Transactions & WAL line, both on the
+worktree `r1-shared-structure-rule`; R6-9's entry for this item is
+therefore discharged.
 
 ## R6-8 — dispatch, and CP3
 

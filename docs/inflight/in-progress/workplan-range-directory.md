@@ -77,17 +77,31 @@ R3's gate is **R1**. Its three parts are in three states; one blocks.
 |---|---|---|
 | Per-core listeners | **Built** (PW5: `src/server/tcp_server.cpp:45`, `include/kds/server/core_runtime.hpp:197`) | No |
 | Per-core statistics relations | **Not built** — a peer's dispatcher is built `/*access_statistics=*/false` with no recorder (`src/server/core_runtime.cpp:239`; premise at `core_runtime.hpp:65-66`) | **No.** `blueprint-range-ownership.md:122-124` scopes it exactly: per-core statistics are *"a prerequisite of §7"* — migration, split, merge — *"not an optimisation"*. §7 is the mover, which the direction hands to the physical optimizer. They gate **Part III's range work**, not this substrate |
-| Shared-structure access rule | **`[OPEN]`** (`crosscore.md` §9, blueprint §8) | **Yes, twice** — see below |
+| Shared-structure access rule | **Half decided 2026-08-30**: the system structures are every-core-read / core-0-write (`crosscore.md` CC11); the btree's top-of-tree hop stays **`[OPEN]`** (`crosscore.md` §9) | **Yes, once** — the btree leg below still binds; the catalog leg is answered rather than survived |
 
 **The shared-structure rule bites in two places, and naming only btree
-would be this plan letting itself off.**
+would be this plan letting itself off.** *(Amended 2026-08-30: the second
+place is now decided rather than merely survivable — see its bullet.)*
 
-- **btree, and it is fatal to that half.** `crosscore.md` §9: the
-  mechanism *"gates R3's btree ranges, not only 'every core
-  equivalent'"*. CC8: a btree range's *"top levels belong to whoever owns
-  the root — that hop is the shared-structure access mechanism, still
-  `[OPEN]`"*. So **heap only** in this build, inherited not chosen.
-- **The catalog, and it is survivable.** The blueprint states the rule
+- **btree, and it is fatal to that half.** `crosscore.md` §9 as it stood
+  when this was written: the mechanism *"gates R3's btree ranges, not only
+  'every core equivalent'"*. CC8: a btree range's *"top levels belong to
+  whoever owns the root"*, and that hop is `[OPEN]`. So **heap only** in
+  this build, inherited not chosen. **Unchanged by the 2026-08-30 ruling**
+  — CC11 decides who may write the *system* structures, and a btree's top
+  levels belong to the root's owner core, never to core 0, so the rule does
+  not reach them; §9 now names this leg as the btree hop on its own terms
+  rather than as "the shared-structure access mechanism".
+- **The catalog, and it is survivable — and since 2026-08-30 it is
+  *decided*.** The operator ruled the blueprint's three system structures
+  under one rule: every core reads with the same authority, core 0 alone
+  writes (`crosscore.md` CC11). R3's catalog reads on every routed
+  statement are exactly what the read half permits, so this leg is no
+  longer a plan proceeding on an open decision. The paragraph below stands
+  as written for the residue it names, which the rule does not remove: a
+  peer reads core 0's catalog bytes off the device, and coherence is the
+  invalidation broadcast, not a protocol. The original wording follows.
+  The blueprint states the rule
   over *"**superblock, free map and catalog**"* (`:114-117`), and R3 adds a
   catalog relation every core reads on every routed statement, over the
   residue `docs/inflight/known-gaps.md:697` already names — *a peer reads
@@ -376,7 +390,7 @@ ceiling. Full derivation with every site:
 
 | # | Decision | Owner | Blocks |
 |---|---|---|---|
-| **D1** | **The shared-structure access mechanism** (§1) | `crosscore.md` §9, blueprint §8 | **btree ranges entirely** |
+| **D1** | **The shared-structure access mechanism** (§1). **Narrowed 2026-08-30 by operator decision**: the *system* structures — superblock, free map, catalog — are settled, every core reads and core 0 alone writes (`crosscore.md` **CC11**, blueprint §8 closed), and that half of this row is answered. What is left, and what still blocks, is the **btree's top-of-tree hop**: its writer is the root's owner core and never core 0, so CC11's rule does not reach it | `crosscore.md` §9 (renamed there as the btree hop; blueprint §8's own bullet is closed) | **btree ranges entirely** — unchanged, since the half that gated them is the half still open |
 | **D2** | **Where a range's entry page is recorded.** CC9 says the directory row. The anchor page already holds `{u64 key, u32 root}` entries, capacity **679** (`include/kds/storage/anchor_page.hpp:36-42`), plus one bare clustered-root slot at offset 32 — but keyed on `index_oid`, whose `0` is that slot's sentinel (`catalog.cpp:1116-1121`), which a range at `lo = 0` collides with. **Priced at §10a (RA5)**: the collision is not a blocker — `lo = 0` dissolves by identification, `lo > 0` costs one tagged constant — so the choice is on §10a's table | `crosscore.md` CC9 | RD2. **This plan follows CC9**; the anchor is recorded as declined, now with §10a's cost basis rather than the collision alone |
 | **D3** | **Range policy** — when to split, when to merge, the migration trigger | `physical-optimizer.md` Part III (unwritten) | Nothing. RD6 exposes the API; policy has no caller here |
 | **D4** | **Fan-in identity in the pipeline tag** (§5). Inside CLA's latitude; listed because it grows a wire form | this plan | RD7 |
@@ -1077,8 +1091,10 @@ established and the cross-owner line reused twice — **a reply must be
 matched, not trusted** — so the tag has to distinguish siblings of one
 fan-in from each other, not merely from other statements.
 
-**Still not taken**: **D1** (the shared-structure access mechanism, and so
-the btree decline), which now has a third candidate recorded in the order's
+**Still not taken**: **D1** in its surviving half (the **btree's
+top-of-tree hop**, and so the btree decline — the system-structure half was
+taken 2026-08-30 as `crosscore.md` CC11 and reaches no relation's tree),
+which now has a third candidate recorded in the order's
 §7 — give each range its own tree rooted in the directory row's
 `entry_page`, removing the shared structure rather than accessing it — and
 which needs the operator rather than a bench, because unlike blueprint §8's
