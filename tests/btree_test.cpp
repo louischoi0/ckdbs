@@ -279,14 +279,26 @@ TEST(BtreeTest, ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo) {
     EXPECT_TRUE(changes[0].is_new_page);
     EXPECT_EQ(changes[0].min_key, 2u);
 
-    // Then the old leaf, whose forward link now reaches it. Not a new page,
-    // so it needs a FULL_PAGE_IMAGE - no record type describes a link edit.
-    EXPECT_EQ(changes[1].page_id, first_leaf);
-    EXPECT_FALSE(changes[1].is_new_page);
+    // The old leaf is reported too, whose forward link now reaches it. Not a
+    // new page, so it needs a FULL_PAGE_IMAGE - no record type describes a
+    // link edit. **Asserted by membership rather than by position**: the
+    // link is written after the separator is promoted (H9), so the old leaf
+    // now trails the ancestors instead of preceding them. Which page sits at
+    // which index was never the contract - the images are self-contained, so
+    // redo reconstructs each page whichever order it meets them in. What is
+    // the contract is that no mutated page goes unrecorded.
+    std::size_t old_leaf_entries = 0;
+    for (const storage::StructuralChange& change : changes) {
+        if (change.page_id != first_leaf) continue;
+        ++old_leaf_entries;
+        EXPECT_FALSE(change.is_new_page);
+    }
+    EXPECT_EQ(old_leaf_entries, 1u) << "the relinked old leaf must be reported exactly once";
 
     // A brand-new internal node is reported too, and also as not-new: an
-    // entry array has no PAGE_INIT that describes it.
-    for (std::size_t i = 2; i < changes.size(); ++i) {
+    // entry array has no PAGE_INIT that describes it. Only the leaf the
+    // tuple landed in is new.
+    for (std::size_t i = 1; i < changes.size(); ++i) {
         EXPECT_FALSE(changes[i].is_new_page) << "change " << i;
     }
 }
@@ -1083,6 +1095,99 @@ TEST(BtreeTest, AnAppendSplitInsideTheChainKeepsTheLeafToItsRight) {
     for (std::uint64_t id : {10u, 20u, 30u}) {
         EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost id " << id;
     }
+}
+
+// A store that refuses one chosen allocation, so a test can stop a grow at
+// the point the sim's `page-fail-grow` stopped one. Forwards everything
+// else; the base's three pure seams are the whole surface.
+class GrowFailingStore final : public storage::PageStore {
+public:
+    explicit GrowFailingStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
+
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
+    }
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        if (countdown_ > 0 && --countdown_ == 0) {
+            return Status::OutOfSpace("injected: the device cannot grow");
+        }
+        return inner_.CreateNewUnpinned();
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        return inner_.GetUnpinned(page_id);
+    }
+
+    // Refuse the `n`-th allocation from now, and only that one.
+    void FailAllocationNumber(int n) noexcept { countdown_ = n; }
+
+private:
+    storage::InMemoryPageStore& inner_;
+    int countdown_ = 0;
+};
+
+// H9 (`docs/spec/heap-and-tuple.md` section 3.1b): the leaf chain must stay
+// ascending even when a grow dies half-way. Found by the simulation, not by
+// review - seed 20260826003, `--mode clean --faults io`, whose integrity
+// sweep read `min_key 78 does not exceed a predecessor page's max id 183`.
+TEST(BtreeTest, AGrowThatDiesPromotingItsSeparatorLeavesTheLeafChainAlone) {
+    storage::InMemoryPageStore backing(128);
+    GrowFailingStore store(backing);
+    Tree tree(store);
+
+    ASSERT_TRUE(tree.Insert(10, kOnePerLeafFiller).ok());
+    const PageId root_leaf = tree.root;
+
+    // The next insert needs two pages: the leaf it appends, then the root
+    // the promotion grows above it. Refusing the **second** stops the insert
+    // after the new leaf exists and before any separator routes to it -
+    // exactly where the injected fault stopped the engine in the sim.
+    store.FailAllocationNumber(2);
+    auto failed = tree.Insert(20, kOnePerLeafFiller);
+    ASSERT_FALSE(failed.ok()) << "the refused allocation must fail the insert";
+    EXPECT_EQ(failed.status().code(), StatusCode::kOutOfSpace);
+
+    // The whole of the fix. A link written here would put a leaf in the
+    // sibling chain that no separator routes to, so the old leaf keeps
+    // taking the ids that leaf holds - and the next append splices its new
+    // leaf *in front of* the unrouted one, which is how the chain came to
+    // descend. An unlinked page costs an allocation and nothing else.
+    {
+        auto bytes = store.Get(root_leaf);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        EXPECT_EQ(heap::PageView(bytes.value().bytes()).next_page_id(), kInvalidPageId)
+            << "a leaf whose separator never landed must not be in the sibling chain";
+    }
+    EXPECT_EQ(tree.root, root_leaf) << "a failed grow must not have repointed the root";
+
+    // And the tree still grows correctly after it: every leaf opens above
+    // every id its predecessors hold, which is the property the sim checks
+    // and the one the tail-page duplicate check rests on.
+    ASSERT_TRUE(tree.Insert(20, kOnePerLeafFiller).ok());
+    ASSERT_TRUE(tree.Insert(30, kOnePerLeafFiller).ok());
+
+    PageId current = kInvalidPageId;
+    std::uint64_t current_max = 0;
+    std::uint64_t predecessors_max = 0;
+    bool have_predecessor = false;
+    std::vector<std::uint64_t> scanned;
+    for (const ScannedRow& row : ScanAll(store, tree.root)) {
+        if (row.page_id != current) {
+            if (current != kInvalidPageId) {
+                predecessors_max = std::max(predecessors_max, current_max);
+                have_predecessor = true;
+            }
+            current = row.page_id;
+            current_max = 0;
+            if (have_predecessor) {
+                EXPECT_GT(MinKeyOf(store, current), predecessors_max)
+                    << "leaf " << current << " opens at or below a predecessor's ids";
+            }
+        }
+        current_max = std::max(current_max, row.id);
+        scanned.push_back(row.id);
+    }
+    EXPECT_EQ(scanned, (std::vector<std::uint64_t>{10, 20, 30}))
+        << "a scan must read the ids in ascending order, page by page";
 }
 
 TEST(BtreeTest, AnIdBelowItsLeafsMinKeyIsRefused) {

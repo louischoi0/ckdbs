@@ -703,29 +703,56 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     }
     out.page_id = new_leaf_id;
     out.slot = new_slot.value();
-
-    // Sibling link last, after the tuple is in: the link is what makes the
-    // leaf reachable to a scan, so publishing it earlier would expose an
-    // empty leaf. Re-fetched because CreateNew() may have handed out a new
-    // frame (today's stores do not move frames; a buffer pool with eviction
-    // will).
-    auto leaf_again = store.Get(leaf_id);
-    if (!leaf_again.ok()) return leaf_again.status();
-    heap::PageView(leaf_again.value().bytes()).set_next_page_id(new_leaf_id);
-
-    // Redo order: the new leaf's PAGE_INIT (which the HEAP_INSERT then
-    // fills), then the old leaf's image carrying the link that reaches it,
-    // then the ancestors. The images are self-contained, so the order among
-    // them is not load-bearing; what matters is that all of them precede
-    // the HEAP_INSERT the caller emits for the tuple.
     out.Record(new_leaf_id, /*is_new_page=*/true, /*min_key=*/id);
-    out.Record(leaf_id, /*is_new_page=*/false, 0);
 
+    // ---- The separator first, the sibling link last (H9) -----------------
+    //
+    // The two writes that publish a new leaf go to *different* structures -
+    // the parent's separator makes it reachable to a descent, the old leaf's
+    // link makes it reachable to a scan - and this path cannot make them one
+    // write. So the order is chosen by which half-applied state the engine
+    // can survive, and only one of them can be:
+    //
+    //   - **link written, separator not** is unsurvivable. The leaf is in
+    //     the sibling chain and routed by nothing, so the *old* leaf still
+    //     takes every id the new one holds. It is full, so the next such id
+    //     appends yet another leaf and splices it in front - between the old
+    //     leaf and the unrouted one - and the chain now descends: the sim
+    //     read it as `min_key 78 does not exceed a predecessor page's max id
+    //     183` (H9, seed 20260826003). Ascending leaves are what
+    //     `heap-and-tuple.md` section 3.1b's page-wise ordering rests on.
+    //   - **separator written, link not** leaves the created page allocated
+    //     and unreachable to a scan, which is the residue this file already
+    //     accepts twice above: harmless, because no tuple that any caller
+    //     kept is in it - a failed promote fails the insert.
+    //
     // `sep` is the new subtree's low key, which is exactly the new leaf's
     // min_key - the same number, never a separately derived boundary
     // (btree_page.hpp's routing rule).
-    return PromoteSeparator(store, descent.value(), /*sep=*/id, /*child=*/new_leaf_id,
-                            std::move(out), owner_oid);
+    auto promoted = PromoteSeparator(store, descent.value(), /*sep=*/id, /*child=*/new_leaf_id,
+                                     std::move(out), owner_oid);
+    if (!promoted.ok()) return promoted.status();
+
+    // **Infallible, which is what makes the ordering above worth anything.**
+    // Written through the descent's own handle rather than a fresh fetch,
+    // and that handle is already everything this write needs: `DescendTo`
+    // took the leaf with `Get` when `leaf_for_write` was set, so the frame
+    // is pinned *and* its dirty flag is flipped, and the pin rides in
+    // `Descent` exactly so the bytes stay valid for its lifetime (a pinned
+    // frame is never a victim, and its bytes are a `unique_ptr` allocation
+    // the frame map cannot move). The re-fetch that used to stand here
+    // guarded against a frame move a held pin already forbids, duplicated a
+    // write fetch already made, and could **fail** - which is how the engine
+    // reached the state this ordering exists to prevent.
+    leaf.set_next_page_id(new_leaf_id);
+
+    // Redo order: the new leaf's PAGE_INIT (which the HEAP_INSERT then
+    // fills), then the ancestors, then the old leaf's image carrying the
+    // link that reaches it. The images are self-contained, so the order
+    // among them is not load-bearing; what matters is that all of them
+    // precede the HEAP_INSERT the caller emits for the tuple.
+    promoted.value().Record(leaf_id, /*is_new_page=*/false, 0);
+    return promoted;
 }
 
 StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id) {

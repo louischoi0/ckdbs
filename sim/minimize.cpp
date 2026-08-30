@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <utility>
 
 namespace kds::sim {
@@ -170,7 +171,19 @@ Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan
     if (!out) return Status::IoError("cannot write the case file " + path);
 
     out << "# ckdbs-sim case (bench/workplan-teststrategy SIM07)\n";
-    out << "# failure:" << signature << "\n";
+    // A verdict signature runs to several lines whenever the failure was a
+    // finding rather than a summary - an integrity sweep prints one line per
+    // finding - and every one of them has to carry the comment marker.
+    // Without this the reader below met the second line as a tag and
+    // refused the file the minimizer had just written
+    // (`unknown tag '   page #: relation ...'`), so the shrink workflow
+    // scripts/sim.sh advertises could not replay its own output.
+    std::string comment = signature;
+    for (std::size_t at = comment.find('\n'); at != std::string::npos;
+         at = comment.find('\n', at + 3)) {
+        comment.replace(at, 1, "\n# ");
+    }
+    out << "# failure:" << comment << "\n";
     out << "config\tseed=" << config.seed << "\tmode=" << SimModeName(config.mode)
         << "\tprofile=" << ProfileName(config.profile)
         << "\tfaults=" << FaultProfileName(config.faults)
