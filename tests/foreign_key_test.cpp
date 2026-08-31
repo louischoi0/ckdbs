@@ -354,7 +354,7 @@ TEST(ForeignKeyColocation, RefusesRelationsOnDifferentCores) {
 
     Status refused = catalog::CheckForeignKeyColocation(parent, child);
     EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.code(), StatusCode::kUnsupported);
+    EXPECT_EQ(refused.code(), StatusCode::kNotImplemented);
     // Both cores named, so the reply says what would have to move.
     EXPECT_NE(refused.message().find("core 1"), std::string::npos) << refused.message();
     EXPECT_NE(refused.message().find("core 0"), std::string::npos) << refused.message();

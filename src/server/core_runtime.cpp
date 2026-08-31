@@ -253,7 +253,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // its sequence draws windows from the lease installed below, and
         // this callback is the backstop that says a lease source went
         // missing rather than a gap that has not been filled.
-        return Status::Unsupported("core " + std::to_string(core_id) +
+        return Status::NotImplemented("core " + std::to_string(core_id) +
                                     " cannot raise the transaction-id ceiling; the superblock "
                                     "belongs to the system core, and this core's transaction-id "
                                     "lease source is not installed");

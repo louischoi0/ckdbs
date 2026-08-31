@@ -72,26 +72,26 @@ TEST(ParserAlterTest, TheGrammarsOwnWordsAreOrdinaryNames) {
 
 // ---- The AL1 refusal surface ----------------------------------------------
 
-TEST(ParserAlterTest, AddColumnIsUnsupportedWithItsPosition) {
+TEST(ParserAlterTest, AddColumnIsNotImplementedWithItsPosition) {
     const std::string_view sql = "ALTER TABLE t ADD COLUMN x int";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "ADD")));
 }
 
-TEST(ParserAlterTest, DropColumnIsUnsupportedWithItsPosition) {
+TEST(ParserAlterTest, DropColumnIsNotImplementedWithItsPosition) {
     const std::string_view sql = "ALTER TABLE t DROP COLUMN a";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "DROP")));
 }
 
-TEST(ParserAlterTest, ModifyAndSetAreUnsupported) {
+TEST(ParserAlterTest, ModifyAndSetAreNotImplemented) {
     EXPECT_EQ(Parse("ALTER TABLE t MODIFY a bigint").status().code(),
-              StatusCode::kUnsupported);
-    EXPECT_EQ(Parse("ALTER TABLE t SET x = 1").status().code(), StatusCode::kUnsupported);
+              StatusCode::kNotImplemented);
+    EXPECT_EQ(Parse("ALTER TABLE t SET x = 1").status().code(), StatusCode::kNotImplemented);
 }
 
 // ---- Malformed forms ------------------------------------------------------

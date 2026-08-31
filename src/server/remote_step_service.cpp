@@ -473,7 +473,7 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head,
     const std::uint32_t session = head.tag.session_core;
     if (!submit_) {
         SendError(head.tag, session,
-                  Status::Unsupported("a consuming stage parks between batches and needs a "
+                  Status::NotImplemented("a consuming stage parks between batches and needs a "
                                       "reactor; this server is reactorless"));
         return;
     }

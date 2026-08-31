@@ -791,7 +791,7 @@ TEST_F(CatalogTest, CreateIndexRefusesRatherThanTruncatingOrGuessing) {
     unique.flags = kIndexFlagUnique;
     auto refused = catalog_.CreateIndex(unique);
     EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(refused.status().code(), StatusCode::kNotImplemented);
 
     // A name already in use.
     ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table.value(), "taken", 1)).ok());

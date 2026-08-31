@@ -34,12 +34,22 @@ enum class StatusCode {
     // that bit. Every other code here means "this will fail the same way
     // again".
     kTxnConflict,
-    // A form the language reserves but cannot execute (docs/spec/parser-v2.md J2,
-    // I18): table-position nesting, outer joins, over-depth sub-chains,
-    // non-pk ORDER BY. Distinct from kInvalidArgument on purpose - the
-    // statement is well-formed and the position it carries points at what
-    // the engine will not do, not at a typo. A client that sees it should
-    // rewrite the statement, never retry it.
+    // A form this engine's architecture cannot admit, ever (operator rule,
+    // 2026-08-31). Distinct from kInvalidArgument on purpose - the statement
+    // is well-formed and the position it carries points at what the engine
+    // will not do, not at a typo - and distinct from kNotImplemented below,
+    // which is the whole point of the pair.
+    //
+    // **The test is whether a later release could lift it without changing
+    // the architecture.** If it could, the refusal is kNotImplemented. This
+    // code is for the refusals where it could not: one falls out of a hard
+    // invariant (a pk UPDATE, invariant 11 - the id is the tuple's identity
+    // and not a field of it), out of a fixed structure's ceiling (the
+    // fan-in's stage cap, the shipped reply's one slot), out of a format
+    // (comparing decimals of different width or scale, which are different
+    // types), or out of a protocol's shape (a `$name` bind on a wire that
+    // has no bind step). A client seeing this must rewrite the statement,
+    // on this release and on every later one.
     kUnsupported,
     // A scalar subquery returned more than one row (docs/spec/parser-v2.md §2).
     // Parse time cannot prove cardinality in general, so this is per
@@ -109,6 +119,23 @@ enum class StatusCode {
     // read its own data back before deciding anything - which is advice
     // no other code in this enum needs to carry.
     kUnknownOutcome,
+    // A form the design admits and nobody has built yet (operator rule,
+    // 2026-08-31). The sibling of kUnsupported above, and the two are
+    // separated because they tell a client two different things: this one
+    // says *this release*, and a client may feature-detect and try again
+    // against a later server; kUnsupported says *this engine*, and a client
+    // that waits for it is waiting forever.
+    //
+    // Everything an owning doc calls "out of scope for v1", "deferred", or
+    // names as an open task in a workplan spells itself here: outer joins,
+    // `NOT` outside `NOT IN`/`NOT EXISTS`, CTEs, derived tables, UNIQUE
+    // indexes, multi-column cabins, ALTER TABLE's data-moving verbs. What it
+    // does **not** mean is "try again in a moment": within one process both
+    // codes are equally permanent, and every caller that treats kUnsupported
+    // as a settled refusal (exec/cabin_optimizer_exec.cpp's BUILDING park is
+    // the live one) must treat this identically. The difference is across
+    // releases, not across retries - neither code is retryable.
+    kNotImplemented,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -173,6 +200,9 @@ public:
     static Status UnknownOutcome(std::string msg) {
         return Status(StatusCode::kUnknownOutcome, std::move(msg));
     }
+    static Status NotImplemented(std::string msg) {
+        return Status(StatusCode::kNotImplemented, std::move(msg));
+    }
 
     // A status decoded off a wire: the code as the integer it travelled as,
     // and a message the receiver chose. **A code outside the enum degrades
@@ -199,6 +229,7 @@ public:
             case StatusCode::kFkViolation: return FkViolation(std::move(msg));
             case StatusCode::kAssertionViolation: return AssertionViolation(std::move(msg));
             case StatusCode::kUnknownOutcome: return UnknownOutcome(std::move(msg));
+            case StatusCode::kNotImplemented: return NotImplemented(std::move(msg));
         }
         return IoError(std::move(msg));
     }
@@ -211,8 +242,18 @@ public:
     // being retryable. Returns OK unchanged; there is nothing to say about
     // a success.
     Status WithContext(std::string_view prefix) const {
+        return WithMessage(std::string(prefix) + ": " + message_);
+    }
+
+    // The same code under a message this layer composed. `WithContext` is
+    // the prefix form of it; a layer that must *append* - a byte position
+    // belongs at the end of a sentence, not buried in the middle - needs
+    // this one, and the alternative is a call site that switches on the
+    // code to pick a factory, which is the re-wrapping-with-the-wrong-code
+    // mistake in slower motion.
+    Status WithMessage(std::string msg) const {
         if (ok()) return *this;
-        return Status(code_, std::string(prefix) + ": " + message_);
+        return Status(code_, std::move(msg));
     }
 
     bool ok() const noexcept { return code_ == StatusCode::kOk; }

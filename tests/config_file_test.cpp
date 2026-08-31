@@ -519,8 +519,8 @@ TEST(ExpeditorConfigTest, PeerListenersParseAndRefuseTlsOrAuth) {
     constexpr auto kCreating = catalog::PlacementPolicy::kCreatingCore;
     EXPECT_TRUE(CheckPeerListenerConfig(false, true, true, 1).ok());
     EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2).ok());
-    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2).code(), StatusCode::kUnsupported);
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2).code(), StatusCode::kUnsupported);
+    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2).code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2).code(), StatusCode::kNotImplemented);
 
     // The one pairing that cannot work (the PW5 review's finding 6): no
     // peer to listen, so SO_REUSEPORT on the only socket loses the

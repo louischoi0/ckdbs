@@ -129,7 +129,7 @@ Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
                                std::uint32_t cores) {
     if (!peer_listeners) return Status::OK();
     if (tls || auth_scram) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "peer_listeners = on cannot yet be combined with tls or auth: the credential "
             "store and TLS context live on core 0's stack, and sharing them across per-core "
             "listeners is PW5's open half (workplan-peer-writer.md) - run peer listeners on "
@@ -1225,7 +1225,7 @@ Status Expeditor::Serve() {
                                     std::to_string(config_.port) +
                                     " must open with a TLS 1.3 handshake");
 #else
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "tls = on, but this server was built without TLS (KDS_WITH_TLS=OFF); "
             "rebuild with OpenSSL or turn the key off");
 #endif
@@ -1254,7 +1254,7 @@ Status Expeditor::Serve() {
                                     std::to_string(credentials->size()) + " user(s) from " +
                                     config_.users_file);
 #else
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "auth = scram, but this server was built without KDS_WITH_TLS; "
             "rebuild with OpenSSL or turn the key off");
 #endif

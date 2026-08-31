@@ -155,7 +155,7 @@ TEST(ParserPaginationTest, TheKeyCountCapRefusesAtTheOffendingKey) {
     const std::string_view sql = "SELECT a FROM t ORDER BY c1, c2, c3, c4, c5, c6, c7, c8, c9";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "c9")));
 }
 
@@ -210,11 +210,11 @@ TEST(ParserPaginationTest, AWhereColumnMayBeNamedLimit) {
 
 // ---- Refusals: expressions and ordinals -----------------------------------
 
-TEST(ParserPaginationTest, OrderByAnExpressionIsUnsupported) {
+TEST(ParserPaginationTest, OrderByAnExpressionIsNotImplemented) {
     const std::string_view sql = "SELECT a FROM t ORDER BY count(x)";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "count")));
 }
 
@@ -222,29 +222,29 @@ TEST(ParserPaginationTest, OrderByAnExpressionIsUnsupported) {
 // refusals beside it, and for a reason neither of those had: the ordinal
 // names a select-list position, which is a second spelling of something
 // that already has one. An output sort existing changes nothing about it.
-TEST(ParserPaginationTest, AnOrdinalOrderByIsUnsupported) {
+TEST(ParserPaginationTest, AnOrdinalOrderByIsNotImplemented) {
     const std::string_view sql = "SELECT a FROM t ORDER BY 1";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "1")));
 }
 
 // ---- Refusals: aggregated output ------------------------------------------
 
-TEST(ParserPaginationTest, LimitOverAnAggregateIsUnsupported) {
+TEST(ParserPaginationTest, LimitOverAnAggregateIsNotImplemented) {
     const std::string_view sql = "SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "LIMIT")));
 }
 
-TEST(ParserPaginationTest, OffsetOverAnAggregateIsUnsupported) {
+TEST(ParserPaginationTest, OffsetOverAnAggregateIsNotImplemented) {
     const std::string_view sql = "SELECT COUNT(*) FROM t OFFSET 2";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "OFFSET")));
 }
 
@@ -253,7 +253,7 @@ TEST(ParserPaginationTest, OffsetOverAnAggregateIsUnsupported) {
 TEST(ParserPaginationTest, AGroupByAloneIsAggregatedForTheTail) {
     const auto parsed = Parse("SELECT b FROM t GROUP BY b LIMIT 1");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
 }
 
 // `[AMENDED 2026-08-24 — docs/inflight/in-progress/workplan-having.md HV4]` This was a refusal
@@ -296,41 +296,41 @@ TEST(ParserPaginationTest, OrderByAnAggregateTheSelectListDoesNotNameParses) {
 
 // Without a fold there is nothing for an aggregate key to be the answer of,
 // so OB1's refusal stands unchanged - wording, code and byte.
-TEST(ParserPaginationTest, OrderByAnAggregateWithoutAFoldIsStillUnsupported) {
+TEST(ParserPaginationTest, OrderByAnAggregateWithoutAFoldIsStillNotImplemented) {
     const std::string_view sql = "SELECT a FROM t ORDER BY COUNT(*)";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "COUNT")));
 }
 
 // A call this grammar has no function for, over a fold: refused at the
 // key's own byte rather than left to fail as trailing garbage past it.
-TEST(ParserPaginationTest, OrderByANonAggregateCallOverAFoldIsUnsupported) {
+TEST(ParserPaginationTest, OrderByANonAggregateCallOverAFoldIsNotImplemented) {
     const std::string_view sql = "SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY foo(b)";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "foo")));
 }
 
 // ---- Refusals: subquery position ------------------------------------------
 
-TEST(ParserPaginationTest, LimitInASubqueryIsUnsupported) {
+TEST(ParserPaginationTest, LimitInASubqueryIsNotImplemented) {
     const std::string_view sql =
         "SELECT a FROM t WHERE id IN (SELECT id FROM u LIMIT 3)";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "LIMIT")));
 }
 
-TEST(ParserPaginationTest, OrderByInASubqueryIsUnsupported) {
+TEST(ParserPaginationTest, OrderByInASubqueryIsNotImplemented) {
     const std::string_view sql =
         "SELECT a FROM t WHERE EXISTS (SELECT x FROM u ORDER BY id)";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "ORDER")));
 }
 
@@ -340,7 +340,7 @@ TEST(ParserPaginationTest, DeleteWhereSubqueryTailIsRefusedToo) {
     const auto parsed =
         Parse("DELETE FROM t WHERE EXISTS (SELECT x FROM u LIMIT 1)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
 }
 
 // ---- Refusals: the count --------------------------------------------------

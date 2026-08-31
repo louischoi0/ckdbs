@@ -194,11 +194,11 @@ TEST(ParserSubqueryTest, DepthUnwindsSoSiblingSubqueriesEachGetTheFullBudget) {
 
 // ---- Nesting outside predicate position -----------------------------------
 
-TEST(ParserSubqueryTest, ASubqueryInFromIsUnsupportedWithItsPosition) {
+TEST(ParserSubqueryTest, ASubqueryInFromIsNotImplementedWithItsPosition) {
     //                  01234567890123
     auto parsed = Parse("SELECT * FROM (SELECT * FROM u)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported)
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented)
         << "a derived table must not read as a syntax error";
     EXPECT_NE(parsed.status().message().find("byte 14"), std::string::npos)
         << parsed.status().message();
@@ -206,19 +206,19 @@ TEST(ParserSubqueryTest, ASubqueryInFromIsUnsupportedWithItsPosition) {
         << parsed.status().message();
 }
 
-TEST(ParserSubqueryTest, ASubqueryInAJoinsRelationPositionIsUnsupportedToo) {
+TEST(ParserSubqueryTest, ASubqueryInAJoinsRelationPositionIsNotImplementedToo) {
     // The rule is on the relation-reference production, so it holds
     // wherever a relation reference appears - not just after FROM.
     auto parsed = Parse("SELECT t.id FROM t JOIN (SELECT * FROM u) ON t.id = u.id");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
 }
 
-TEST(ParserSubqueryTest, ACteIsUnsupportedRatherThanAnUnknownKeyword) {
+TEST(ParserSubqueryTest, ACteIsNotImplementedRatherThanAnUnknownKeyword) {
     //                  0123
     auto parsed = Parse("WITH x AS (SELECT * FROM u) SELECT * FROM x");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported)
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented)
         << "WITH is declined, not unrecognized";
     EXPECT_NE(parsed.status().message().find("byte 0"), std::string::npos)
         << parsed.status().message();
@@ -261,7 +261,7 @@ TEST(ParserSubqueryTest, BareNotIsRefusedWithAnExplanation) {
     for (auto sql : {"SELECT * FROM t WHERE NOT id = 1", "SELECT * FROM t WHERE id NOT = 1"}) {
         auto parsed = Parse(sql);
         ASSERT_FALSE(parsed.ok()) << sql;
-        EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported) << sql;
+        EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented) << sql;
         EXPECT_NE(parsed.status().message().find("NOT"), std::string::npos)
             << sql << ": " << parsed.status().message();
     }

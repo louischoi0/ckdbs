@@ -345,7 +345,7 @@ TEST(ParserAggregateTest, HavingAgainstAColumnIsRefusedAtTheColumn) {
     const StatusOr<Statement> parsed =
         Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > b");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 45));
 }
 
@@ -355,7 +355,7 @@ TEST(ParserAggregateTest, HavingOverANonAggregateCallIsRefusedAtTheName) {
     const std::string_view sql = "SELECT b FROM t GROUP BY b HAVING foo(b) > 1";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 34));
 }
 
@@ -363,7 +363,7 @@ TEST(ParserAggregateTest, HavingAgainstAnotherAggregateIsRefusedAtIt) {
     const StatusOr<Statement> parsed =
         Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > SUM(q)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 45));
 }
 
@@ -373,7 +373,7 @@ TEST(ParserAggregateTest, HavingAgainstASubqueryIsRefusedAtTheParen) {
     const StatusOr<Statement> parsed =
         Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > (SELECT COUNT(*) FROM u)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 45));
 }
 
@@ -392,7 +392,7 @@ TEST(ParserAggregateTest, HavingInsideASubqueryIsRefused) {
     const StatusOr<Statement> parsed =
         Parse("SELECT * FROM t WHERE id IN (SELECT id FROM u HAVING COUNT(*) > 1)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 46));
 }
 
@@ -424,7 +424,7 @@ TEST(ParserAggregateTest, AnAggregateInsideASubqueryIsRefused) {
     const StatusOr<Statement> parsed =
         Parse("SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 35));
 }
 
@@ -432,7 +432,7 @@ TEST(ParserAggregateTest, AGroupByInsideASubqueryIsRefused) {
     const StatusOr<Statement> parsed =
         Parse("SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 55));
 }
 
@@ -440,7 +440,7 @@ TEST(ParserAggregateTest, GroupByTakesColumnReferencesOnly) {
     const StatusOr<Statement> parsed =
         Parse("SELECT COUNT(*) FROM t GROUP BY count(x)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 32));
 }
 

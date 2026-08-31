@@ -186,7 +186,7 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
     // statement, and the number that matters to them is how long a
     // declaration may be.
     if (source_text.size() > varheap::kMaxValueSize) {
-        return Status::Unsupported("assertion declaration of " +
+        return Status::NotImplemented("assertion declaration of " +
                                    std::to_string(source_text.size()) + " bytes exceeds the " +
                                    std::to_string(varheap::kMaxValueSize) +
                                    "-byte limit on a single stored value");
@@ -466,7 +466,7 @@ StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
     // guards - these buy the position of the failure, `index_ddl.cpp`'s
     // "one implementation, two callers" note.
     if (stmt.source_text.size() > varheap::kMaxValueSize) {
-        return Status::Unsupported("assertion declaration of " +
+        return Status::NotImplemented("assertion declaration of " +
                                    std::to_string(stmt.source_text.size()) +
                                    " bytes exceeds the " +
                                    std::to_string(varheap::kMaxValueSize) +

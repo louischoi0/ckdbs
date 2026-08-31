@@ -114,6 +114,12 @@ degrade to a warning), and `Catalog::CreateForeignKey` checks again
 because it is the door every foreign key comes through — the argument
 `CreateCabin` already makes about `NO CABIN`.
 
+**`[AMENDED 2026-08-31 - which refusal code]`** The heap parent and the cross-core
+pair answer **`NotImplemented`** (`include/kds/base/status.hpp`): both are listed
+as open in `CLAUDE.md`, so both are things a later release could build, and telling
+a client "rewrite, forever" about them would be a false statement about this
+engine's future.
+
 **A heap parent is refused, `Unsupported`** — a decision taken at FK-M1
 and not in the original F-set. F1 puts the reference on the parent's
 Keystone id, and a heap relation has no pk index: `LocateByPk` answers

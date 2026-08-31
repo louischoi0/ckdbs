@@ -1102,7 +1102,7 @@ Status RefuseAuxiliaryOnSplitRelation(const TableAccess& access, std::string_vie
     // and FK on such a relation forever - with a message reading "split
     // across 1 ranges" - would be a self-refuting refusal.
     if (access.ranges.size() <= 1) return Status::OK();
-    return Status::Unsupported(
+    return Status::NotImplemented(
         "relation oid " + std::to_string(access.oid) + " is split across " +
         std::to_string(access.ranges.size()) + " ranges, and " + std::string(auxiliary) +
         " on a split relation is declined until where it lives under a boundary is decided "
@@ -3029,7 +3029,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
                                         std::to_string(def.covered_cols.size()));
     }
     if ((def.flags & kIndexFlagUnique) != 0) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "catalog: UNIQUE indexes are not supported (docs/spec/index.md IX11); v1 is a read "
             "accelerator that cannot fail a write for a reason of its own");
     }
@@ -3062,7 +3062,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
     // (`kByOwner`) writes no relation page here, so the refusal has
     // nothing to guard.
     if (seed == AnchorSeed::kHere && access.value()->owner_core != core_id_ && on_publish_) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "catalog: relation oid " + std::to_string(def.table_oid) + " is owned by core " +
             std::to_string(access.value()->owner_core) + " and core " +
             std::to_string(core_id_) +
@@ -3103,7 +3103,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
         // always exists. IS NULL answers by scan; revisit with a measured
         // need, like index.md §13's other opens.
         if (!schema.columns[def.key_cols[i]].notnull) {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "catalog: column '" +
                 std::string(NameView(schema.columns[def.key_cols[i]].name)) +
                 "' is nullable, and an index key must always exist (docs/spec/null.md D2; "
@@ -3123,7 +3123,7 @@ Status Catalog::CheckIndexDef(const IndexDef& def, AnchorSeed seed) {
         // with no null bitmap of its own, so a NULL has no representation
         // there either.
         if (!schema.columns[pos].notnull) {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "catalog: covered column '" + std::string(NameView(schema.columns[pos].name)) +
                 "' is nullable, and an index entry has no NULL encoding (docs/spec/null.md D2)");
         }

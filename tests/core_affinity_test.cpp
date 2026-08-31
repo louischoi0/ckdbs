@@ -80,8 +80,8 @@ TEST(CoreAffinityTest, AWriteRefusalIsRetryableAndNamesBothCores) {
 TEST(CoreAffinityTest, AReadRefusalIsNotRetryable) {
     // Retrying changes nothing, and telling a client to retry a statement
     // that can never run here costs it a loop.
-    Status s = CrossCoreReadUnsupported(/*this_core=*/0, /*target=*/1, "trades");
-    EXPECT_EQ(s.code(), StatusCode::kUnsupported);
+    Status s = CrossCoreReadNotImplemented(/*this_core=*/0, /*target=*/1, "trades");
+    EXPECT_EQ(s.code(), StatusCode::kNotImplemented);
     EXPECT_NE(s.message().find("trades"), std::string::npos) << s.message();
     EXPECT_NE(s.message().find("pipeline"), std::string::npos)
         << "the message should name the route that could not take this "

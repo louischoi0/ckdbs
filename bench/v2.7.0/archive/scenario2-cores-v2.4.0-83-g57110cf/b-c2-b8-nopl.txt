@@ -1,0 +1,82 @@
+== b-c2-b8-nopl ==
+cores: 2   peer_listeners: off   port: 15623
+driver flags: --cargos 20000 --bookings 5000 --seed 1 --verify 0 --manifest-customers 0 --bookers 8
+binary sha256: 275317929d6dde4d384e90c6aa94725a9b39d3b017bc9b01b7e2471fa36bf9a4
+uptime before:  04:27:29 up  6:17,  1 user,  load average: 0.55, 0.74, 0.80
+created 8 relations with suffix _042729:
+  organizations_042729
+  ships_042729
+  operations_042729
+  cargos_042729
+  fees_042729
+  recipes_042729
+  freights_042729
+  charges_042729
+
+read probe - which of the reads S2-02..S2-04 need does this server take?
+
+  pk lookup           ok
+  capacity aggregate  ok
+  recipe filterscan   ok
+  voyage manifest     ok
+  voyage rollup       ok
+  customer statement  ok
+
+
+ckdbs benchmark - 68 columns, 57369 rows resident, 1 connection
+server 127.0.0.1:15623  table scenario2_042729
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0   47574.5  32317.9  34682.4  39512.5  84537.6  84537.6   84537.6     0
+load-organizations        2000         0    1080.9    682.6   1008.8   1076.0   1290.6   1375.9    5281.7     0
+load-ships                 200         0    1075.0    743.5   1025.4   1071.3   1213.3   1281.4    1374.2     0
+load-operations           2000         0    1172.7    704.4   1041.8   1153.8   1458.5   1613.8    9141.2     0
+load-fees                   12         0    1317.1   1135.8   1242.0   1306.6   1484.8   1484.8    1484.8     0
+load-recipes                93         0    1275.6    983.7   1241.7   1273.7   1401.0   1463.4    1463.4     0
+load-cargos              20000         0    1273.3    791.5   1162.1   1272.1   1509.1   1600.4   12483.5     0
+booking                   5024       822    9490.5   1261.3   6535.0   8592.6  15936.1  18918.3  168430.0     0
+cargo-lookup              5025       823     674.4     20.6     61.6    305.7   1441.9   1603.8  152738.3     0
+credit-lookup             5025       823     592.3     18.6     63.5    126.1   1433.7   1594.8  152650.7     0
+capacity-read             5025       823     559.8     18.2     60.4    121.3   1424.6   1564.8    4916.3     0
+recipe-read               5025       823     571.7     25.3     69.1    132.8   1425.6   1576.6    7281.3     0
+freight-insert            5001       819     627.6     16.2     59.1    298.6   1410.2   1561.2  152616.0     0
+charge-insert            28069     4,595     543.2     13.3     51.2    109.1   1402.7   1570.8  152653.9     0
+operation-update          5001       819     534.5     16.7     52.1     99.3   1395.7   1567.0  152421.1     0
+org-update                5001       819     510.7     15.9     51.1    100.7   1397.9   1556.4    4810.4     1
+commit                    5000       819    1658.8    725.5   1156.2   1337.9   2643.1   2903.0  148171.6     0
+manifest-scan              140        23     750.4     22.1    170.0    391.4   1741.2   1883.4    1927.3     0
+voyage-rollup              140        23     808.3     22.8    164.6    433.2   1875.9   2013.6    2148.4     0
+customer-statement           0         0       0.0      0.0      0.0      0.0      0.0      0.0       0.0     0
+
+  ddl: 8 relations
+  booking: BEGIN/COMMIT, capacity=cached, 8 bookers, contended
+  org-update: 1 error replies, first: ERR TXN_CONFLICT retryable=1 row id=261 was written by transaction 28477
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+bookings
+  committed                 5000       818.6 TPS
+  rejected-capacity           24        0.5% of attempts
+  rejected-credit              0        0.0% of attempts
+  conflicted                   1          1 retries
+    on organizations            1      100.0% of conflicts
+    retries/booking         0.00
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              8, contended (shared voyages and customers)
+  per booker           #0:625  #1:625  #2:625  #3:625  #4:625  #5:625  #6:625  #7:625
+  cargo pool left      15000
+
+  manifest reporter    7 passes, 280 reads, 162 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+  wrote /home/ubuntu/bench-s2-cores/out/b-c2-b8-nopl.json
+driver exit: 0
+server utime+stime ticks before: 0 9
+server utime+stime ticks after:  199 209
+load samples max: 0.80 0.79 0.81
+data file bytes: 19922944
+uptime after:  04:28:08 up  6:18,  1 user,  load average: 0.82, 0.79, 0.81

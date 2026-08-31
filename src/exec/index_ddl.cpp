@@ -36,7 +36,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
             // the same one-implementation-two-doors split the pre-check
             // below describes.
             if (!access.schema.columns[i].notnull) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "column '" + col.name + "' is nullable and cannot be in an index "
                     "(docs/spec/null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
                     std::to_string(col.byte_offset) + ")");
@@ -417,12 +417,15 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
         // The byte belongs to the statement, and only this layer has it.
         // `WithContext` would prefix instead of append and would bury the
         // position mid-sentence, so the one refusal that names the user's
-        // object gets it spelled out the way the sibling above does.
-        if (s.code() == StatusCode::kUnsupported) {
-            return Status::Unsupported("index '" + stmt.index_name + "': " + s.message() +
-                                       " (byte " + std::to_string(stmt.byte_offset) + ")");
+        // object gets it spelled out the way the sibling above does -
+        // through `WithMessage`, which keeps whatever code arrived rather
+        // than naming one here. Naming one is how a re-wrap answers "could
+        // a later release lift this?" with its own guess.
+        if (s.code() != StatusCode::kUnsupported && s.code() != StatusCode::kNotImplemented) {
+            return s;
         }
-        return s;
+        return s.WithMessage("index '" + stmt.index_name + "': " + s.message() + " (byte " +
+                             std::to_string(stmt.byte_offset) + ")");
     }
     return row.value().index_oid;
 }

@@ -250,6 +250,10 @@ enum class ErrorCategory : std::uint16_t {
     // write a correct retry loop, which is the whole reason categories
     // mirror engine Status rather than being coarsened.
     kUnknownOutcome,
+    // Appended for StatusCode::kNotImplemented (2026-08-31), which is the
+    // half of the refusal pair a later release can lift; base/status.hpp
+    // carries the test that separates the two.
+    kNotImplemented,
     // Appended for StatusCode::kFkViolation and kAssertionViolation
     // (2026-08-31, P12). Both earn a category on the rule above and on a
     // fact the newline protocol already established: `ErrorReply` gives
@@ -258,6 +262,10 @@ enum class ErrorCategory : std::uint16_t {
     // would make the binary protocol *less* discriminating than the text
     // one it replaces - and a client library ported across would lose a
     // branch it already has.
+    //
+    // **After `kNotImplemented`, not before**, and the order is the whole
+    // point of appending: `kNotImplemented` reached `main` first, so it is
+    // 15 to anything already compiled against it. These two take 16 and 17.
     kFkViolation,
     kAssertionViolation,
 };

@@ -2393,7 +2393,7 @@ TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
 // stages, so it is proof the plan was made. Without RR2's
 // `remote_reads_.emplace(...)` and the `SetRemoteReads` that follows it,
 // the route is skipped entirely and the answer is `CheckReadAffinity`'s
-// `Unsupported` - `CrossCoreReadUnsupported`'s "relation 'spread2' is owned
+// `NotImplemented` - `CrossCoreReadNotImplemented`'s "relation 'spread2' is owned
 // by core 0 and this statement is running on core 1", which is what every
 // peer answered before RR2. **Not** the "cannot fan in over them" arm: that
 // one is reached only when `owner_core == core_id_`, and this fixture reads
@@ -6130,8 +6130,12 @@ TEST_F(CoreRuntimeTest, AShippedWriteToAnFkLinkedPeerRelationIsRefusedByTheOwner
     EXPECT_NE(out.response.find("FK-linked relation cannot take writes"), std::string::npos)
         << out.response;
     // Byte for byte the line the owner writes itself - the property the
-    // round trip actually promises. `kUnsupported` renders bare, so both
-    // ends produce the same bare line (`ErrorReply`'s table).
+    // round trip actually promises, and since 2026-08-31 it promises more
+    // than it used to: the refusal is `NOT_IMPLEMENTED`, a spelled token,
+    // so this equality now proves the *code* survived the ring rather than
+    // proving two bare lines match. `Status::FromWire` is where it would be
+    // lost, and an arm missing there degrades the code to IoError, which
+    // renders bare - which is exactly what this assertion catches.
     EXPECT_EQ(out.response,
               rig.peer->dispatcher().Dispatch("INSERT INTO fkchild VALUES (1)").response);
 
@@ -6675,7 +6679,7 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
     send_request(1, foreign);
     pump();
     ASSERT_TRUE(replies.count(1));
-    EXPECT_EQ(replies[1].status_code, static_cast<std::uint32_t>(StatusCode::kUnsupported))
+    EXPECT_EQ(replies[1].status_code, static_cast<std::uint32_t>(StatusCode::kNotImplemented))
         << replies[1].message;
     EXPECT_NE(std::string(replies[1].message).find("owned by core 0"), std::string::npos)
         << replies[1].message;

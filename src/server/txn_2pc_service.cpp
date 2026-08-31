@@ -65,7 +65,7 @@ namespace {
 // coordinator a whole deadline per phase, which on the prepare leg reads as
 // an abort and says nothing about why.
 Status NoParticipantSeam() {
-    return Status::Unsupported(
+    return Status::NotImplemented(
         "cross-owner transaction: this core has no participant seam installed; the wire is "
         "built and the participant is not");
 }

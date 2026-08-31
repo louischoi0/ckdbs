@@ -209,7 +209,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
         // than left to a null call, because a handler that crashes and a
         // handler that is not built yet must not look alike.
         Reply(requester, request_id, session_id, sequence,
-              Status::Unsupported("statement shipping: this core has no executor installed; "
+              Status::NotImplemented("statement shipping: this core has no executor installed; "
                                   "the wire is built and the owner-side execution is not (SS3)"),
               {}, 0);
         return;

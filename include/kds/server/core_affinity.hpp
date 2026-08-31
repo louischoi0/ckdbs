@@ -133,7 +133,7 @@ Status CrossCoreWriteRefused(std::uint32_t home_core, std::uint32_t target_core,
 // telling a client to retry a statement that can never run here would be a
 // lie that costs it a loop. The message names the relation and both cores,
 // because the operator's next question is always "so where should it run?".
-Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_core,
+Status CrossCoreReadNotImplemented(std::uint32_t this_core, std::uint32_t target_core,
                                 std::string_view relation);
 
 // The refusal every DDL verb gets on a non-system core

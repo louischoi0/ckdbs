@@ -184,7 +184,7 @@ InvalidArgument	2e2a3c1453705f3b	cbf29ce484222325	SELECT * FROM t, u
 # ok -> Unsupported. `SELECT *` is ambiguous across relations, so an
 # explicit list became mandatory as soon as there was one to write. Two
 # deliberate flips, two tasks; no hash moved in either.
-Unsupported	e9242b44747c5e35	cbf29ce484222325	SELECT * FROM t JOIN u ON t.id = u.id
+NotImplemented	e9242b44747c5e35	cbf29ce484222325	SELECT * FROM t JOIN u ON t.id = u.id
 ok	a91c9b42e1642b7c	cbf29ce484222325	SELECT * FROM t AS a
 # [V07] predicate-position subqueries.
 ok	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u)
@@ -230,10 +230,10 @@ ok	d1d97970aff68c0c	b5d410774c7ffc00	SELECT * FROM t OFFSET 5
 ok	9e51e28ff0f77902	90e9577200715765	SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 2 OFFSET 1
 ok	7f56cd80953c49c8	cbf29ce484222325	SELECT limit, offset FROM t
 ok	44d61d637a45b7d0	cbf29ce484222325	SELECT * FROM t ORDER BY id DESC
-Unsupported	e967d58b511229ec	b5d414774c8002cc	SELECT * FROM t ORDER BY 1
+NotImplemented	e967d58b511229ec	b5d414774c8002cc	SELECT * FROM t ORDER BY 1
 ok	f54a1f175f7d80c0	cbf29ce484222325	SELECT * FROM t ORDER BY id, name
-Unsupported	53268d89f9272838	b5d410774c7ffc00	SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5
-Unsupported	da3c546ef95221a8	b5d416774c800632	SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 3)
+NotImplemented	53268d89f9272838	b5d410774c7ffc00	SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5
+NotImplemented	da3c546ef95221a8	b5d416774c800632	SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 3)
 InvalidArgument	cfd92d5cf2657bf9	184a11bf54847d88	SELECT * FROM t LIMIT -1
 InvalidArgument	cfd92d5cf2657bf9	064a8a899bed480c	SELECT * FROM t LIMIT 1.5
 InvalidArgument	7a69afcc608c62f9	935e8a7428e56318	SELECT * FROM t OFFSET 5 LIMIT 10
@@ -272,8 +272,8 @@ ok	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER 
 ok	-	-	ALTER TABLE t RENAME TO u
 ok	-	-	ALTER TABLE t RENAME COLUMN a TO b
 ok	-	-	alter table t rename to u;
-Unsupported	-	-	ALTER TABLE t ADD COLUMN x int
-Unsupported	-	-	ALTER TABLE t DROP COLUMN a
+NotImplemented	-	-	ALTER TABLE t ADD COLUMN x int
+NotImplemented	-	-	ALTER TABLE t DROP COLUMN a
 InvalidArgument	-	-	ALTER TABLE t
 InvalidArgument	-	-	ALTER t RENAME TO u
 
@@ -314,17 +314,19 @@ ok	a9c615e6411952e5	cbf29ce484222325	SELECT a.id, b.id FROM t AS a JOIN t AS b O
 ok	ee7a5fe23cf0e3b8	cbf29ce484222325	select t.id from t join u on t.id = u.id
 ok	09203711bb6e1327	b5d414774c8002cc	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE t.id = 1
 #
-# Unsupported — a well-formed statement this engine declines, each with the
-# byte position of what it declined. Distinct from InvalidArgument, which
-# means "look for a typo".
-Unsupported	3597f4484605402f	cbf29ce484222325	SELECT * FROM t LEFT JOIN u ON t.id = u.id
-Unsupported	8aec5874566e99c1	cbf29ce484222325	SELECT * FROM t RIGHT JOIN u ON t.id = u.id
-Unsupported	f6e1013d24de0aa0	cbf29ce484222325	SELECT * FROM t FULL OUTER JOIN u ON t.id = u.id
+# Declined — a well-formed statement this engine refuses, each with the byte
+# position of what it refused. Distinct from InvalidArgument, which means
+# "look for a typo"; and split in two since 2026-08-31, so each row says
+# whether a later release could lift it (NotImplemented) or the
+# architecture forbids it (Unsupported).
+NotImplemented	3597f4484605402f	cbf29ce484222325	SELECT * FROM t LEFT JOIN u ON t.id = u.id
+NotImplemented	8aec5874566e99c1	cbf29ce484222325	SELECT * FROM t RIGHT JOIN u ON t.id = u.id
+NotImplemented	f6e1013d24de0aa0	cbf29ce484222325	SELECT * FROM t FULL OUTER JOIN u ON t.id = u.id
 # One relation named twice with no way to tell the occurrences apart.
 Unsupported	a297f62980ae08d9	cbf29ce484222325	SELECT * FROM t JOIN t ON t.id = t.id
 Unsupported	ec10eded05cdb080	cbf29ce484222325	SELECT * FROM t AS a JOIN u AS a ON a.id = a.id
 # An unqualified ON column names no relation; V14 owns resolution.
-Unsupported	f0039522b21c1cd9	cbf29ce484222325	SELECT * FROM t JOIN u ON id = u.id
+NotImplemented	f0039522b21c1cd9	cbf29ce484222325	SELECT * FROM t JOIN u ON id = u.id
 #
 # Rejected outright — malformed, not merely undoable.
 InvalidArgument	a1bf63b73d194ba6	cbf29ce484222325	SELECT * FROM t JOIN u
@@ -348,10 +350,12 @@ ok	fca9c395f4a2af53	b5d414774c8002cc	SELECT * FROM t WHERE t.id = 1
 ok	c91e56fa7a992cb3	3ce015249a7377f5	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE u.status = 'open'
 ok	e1d213b42ea6b631	78f79099c419719c	UPDATE t SET a = 1 WHERE t.id = 2
 #
-# Unsupported — `SELECT *` has no answer once there is more than one
-# relation for it to span, and written order being the client's to choose
-# is exactly what makes it unanswerable.
-Unsupported	7bfb6efe6f64c69c	cbf29ce484222325	SELECT * FROM t AS a JOIN u AS b ON a.id = b.id
+# `SELECT *` has no answer today once there is more than one relation for
+# it to span, and written order being the client's to choose is exactly
+# what makes it unanswerable here. NotImplemented rather than Unsupported:
+# cross-relation `*` is a real SQL semantic a later release could adopt by
+# fixing an order, not something the architecture forbids.
+NotImplemented	7bfb6efe6f64c69c	cbf29ce484222325	SELECT * FROM t AS a JOIN u AS b ON a.id = b.id
 #
 # Rejected — malformed select lists. `SELECT *, a` and `SELECT a, *` are
 # here because star is a whole select list, never a list element.
@@ -381,16 +385,19 @@ ok	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM
 ok	372af9a2b308c984	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t))))
 Unsupported	a6d47bc00b1c1048	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t)))))
 #
-# Nesting outside predicate position. Each is Unsupported with a position,
+# Nesting outside predicate position. Each is refused with a position,
 # never a bare syntax error: the relation-reference production must not
 # reach the statement production, and WITH must not lex as a statement
-# head. A derived table's result would have to become a relation with a
-# schema, probed by something other than a pk - which is the execution
-# model, not an unimplemented feature.
-Unsupported	8395ef7c84c6184e	b5d414774c8002cc	SELECT * FROM t WHERE NOT id = 1
-Unsupported	6a572ac142c50425	cbf29ce484222325	SELECT * FROM t JOIN (SELECT * FROM u) ON t.id = u.id
-Unsupported	ea325ba2b616a269	cbf29ce484222325	SELECT * FROM (SELECT * FROM u)
-Unsupported	-	-	WITH x AS (SELECT * FROM u) SELECT * FROM x
+# head. These read NotImplemented since 2026-08-31, and the older argument
+# for calling them architectural is what changed: it was that a derived
+# table's result would have to become a relation probed by something other
+# than a pk, and `exec::InnerBuild` (join-inner-build.md) now buckets a
+# statement-scoped row set and probes it by a non-pk key. The shape is
+# unbuilt, not excluded.
+NotImplemented	8395ef7c84c6184e	b5d414774c8002cc	SELECT * FROM t WHERE NOT id = 1
+NotImplemented	6a572ac142c50425	cbf29ce484222325	SELECT * FROM t JOIN (SELECT * FROM u) ON t.id = u.id
+NotImplemented	ea325ba2b616a269	cbf29ce484222325	SELECT * FROM (SELECT * FROM u)
+NotImplemented	-	-	WITH x AS (SELECT * FROM u) SELECT * FROM x
 #
 # Malformed. `IN (1, 2)` is [V08]'s value list and stays rejected here.
 InvalidArgument	d7a6bdcced6fcc02	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u
@@ -407,8 +414,8 @@ InvalidArgument	9964d7fce0f74496	cbf29ce484222325	UPDATE t SET a = (SELECT id FR
 # the grammar or reserved-and-rejected. AG8 decides it: the forms parse and
 # are refused *as aggregation*, permanently for v1 — a fold inside a
 # sub-chain puts an aggregation boundary where the execution model has none.
-Unsupported	009742650befee6a	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)
-Unsupported	dd4d901ce6b336cc	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)
+NotImplemented	009742650befee6a	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)
+NotImplemented	dd4d901ce6b336cc	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)
 
 # ---- Top level — rejected --------------------------------------------------
 InvalidArgument	-	-	\n
@@ -457,7 +464,7 @@ InvalidArgument	-	-	CREATE PATTERN p($a int64, $b varchar) OF SELECT id, name FR
 InvalidArgument	-	-	CREATE PATTERN p($f int64) WITH (pinned = on) OF SELECT id FROM t WHERE id = $f
 InvalidArgument	-	-	CREATE PATTERN p($f int64) WITH (pinned = off, expected_instances = 100000) OF SELECT id FROM t WHERE id = $f
 InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = $f
-Unsupported	-	-	DROP PATTERN p
+NotImplemented	-	-	DROP PATTERN p
 # A parameter used twice was legal - a readability device, not a constraint:
 # the fingerprint cannot enforce that two slots carry the same value (spec
 # section 3.3).
@@ -473,7 +480,7 @@ InvalidArgument	-	-	CREATE PATTERN p(f int64) OF SELECT * FROM t
 InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT * FROM t WITH (pinned = on)
 InvalidArgument	-	-	CREATE PATTERN p($f int64) SELECT * FROM t
 InvalidArgument	-	-	CREATE PATTERN ($f int64) OF SELECT * FROM t
-Unsupported	-	-	DROP PATTERN
+NotImplemented	-	-	DROP PATTERN
 # v1 declared SELECT-class bodies only; INSERT/UPDATE patterns were deferred
 # (spec section 9), gated by validation rather than by the fingerprint.
 InvalidArgument	-	-	CREATE PATTERN p($f int64) OF INSERT INTO t VALUES (1)
@@ -537,11 +544,11 @@ ok	-	-	CREATE INDEX unique ON t (index) COVERING (covering)
 ok	98c09327562a9560	b5d414774c8002cc	SELECT index FROM t WHERE covering = 1
 # UNIQUE is refused at its own byte: enforcing uniqueness makes the index a
 # constraint, which would let an index failure abort a write (IX11).
-Unsupported	-	-	CREATE UNIQUE INDEX ix ON t (a)
+NotImplemented	-	-	CREATE UNIQUE INDEX ix ON t (a)
 # A cap refuses and never truncates (spec §11), with the offending column's
 # position - which is the one thing only this layer knows.
-Unsupported	-	-	CREATE INDEX ix ON t (a, b, c, d, e)
-Unsupported	-	-	CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)
+NotImplemented	-	-	CREATE INDEX ix ON t (a, b, c, d, e)
+NotImplemented	-	-	CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)
 InvalidArgument	-	-	CREATE INDEX ix (a)
 InvalidArgument	-	-	CREATE INDEX ix ON t
 InvalidArgument	-	-	DROP INDEX
@@ -567,15 +574,15 @@ ok	-	-	DROP ASSERTION lim
 # its own byte. AS11 (a lower bound would have to be checked on DELETE),
 # AS3/AS7 (timing clauses), §10 (aggregates that are not incrementally
 # maintainable, or are not bounds at all).
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5
 Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 DEFERRABLE
 Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT DEFERRABLE
 Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT VALID
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK MIN(v) <= 1
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK MIN(v) <= 1
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1
 
 # Wrong rather than reserved: no ceiling in any direction, a bound that is not
 # a non-negative integer literal, a predicate that could never admit a row
@@ -584,7 +591,7 @@ Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= -1
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1.5
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 1
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK TOTAL(v) <= 1
@@ -601,8 +608,8 @@ ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
 # documented as meaning `aggregate <= N`; that reinterpreted what the operator
 # wrote, and enforcing real equality needs the lower-bound half v1 excludes.
 # A verdict moving with the task that owns it, which is what this column is for.
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
-Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
+NotImplemented	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
 
 # ---- Physical optimizer surface (docs/spec/physical-optimizer.md, PX06) ----
 # SHOW is a dispatcher verb, not SQL - the verdict matches SHOW TABLES above -

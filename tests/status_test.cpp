@@ -23,7 +23,7 @@ const std::vector<StatusCode>& AllErrorCodes() {
         StatusCode::kIoError,         StatusCode::kTxnConflict, StatusCode::kUnsupported,
         StatusCode::kCardinalityViolation, StatusCode::kResourceExhausted,
         StatusCode::kFkViolation,          StatusCode::kAssertionViolation,
-        StatusCode::kUnknownOutcome,
+        StatusCode::kUnknownOutcome,      StatusCode::kNotImplemented,
     };
     return codes;
 }
@@ -48,6 +48,8 @@ Status Make(StatusCode code) {
             return Status::AssertionViolation("m");
         case StatusCode::kUnknownOutcome:
             return Status::UnknownOutcome("m");
+        case StatusCode::kNotImplemented:
+            return Status::NotImplemented("m");
         case StatusCode::kOk:              return Status::OK();
     }
     // Unreachable for a code in AllErrorCodes(); a new enumerator lands
@@ -105,6 +107,32 @@ TEST(StatusTest, UnsupportedIsDistinctFromInvalidArgumentAndNotRetryable) {
     EXPECT_NE(s.code(), StatusCode::kInvalidArgument);
     EXPECT_FALSE(s.retryable());
     EXPECT_NE(s.message().find("position 21"), std::string::npos);
+}
+
+TEST(StatusTest, NotImplementedIsTheOtherHalfOfUnsupportedAndNotRetryable) {
+    // The pair, and what separates them (status.hpp, operator rule
+    // 2026-08-31): kUnsupported means the architecture forbids it and no
+    // release lifts it; kNotImplemented means nobody built it yet. A client
+    // feature-detecting a form reads exactly this difference, so folding
+    // them back together would tell it to wait forever or to give up early.
+    const Status not_built = Status::NotImplemented("outer joins are not supported at byte 21");
+    EXPECT_EQ(not_built.code(), StatusCode::kNotImplemented);
+    EXPECT_NE(not_built.code(), StatusCode::kUnsupported);
+    EXPECT_FALSE(not_built.retryable());
+    EXPECT_NE(not_built.message().find("byte 21"), std::string::npos);
+}
+
+TEST(StatusTest, EveryCodeSurvivesTheWireDecodeItTravelsAs) {
+    // `FromWire`'s own comment says two switches drifted once. A code
+    // appended to the enum and *not* to that switch degrades to IoError -
+    // silently, because the trailing return makes it well-formed C++ - and
+    // a refusal that arrives from a peer as IoError has lost both its
+    // meaning and, at the dispatcher, its spelled token. This is the guard.
+    for (const StatusCode code : AllErrorCodes()) {
+        const Status decoded = Status::FromWire(static_cast<std::uint32_t>(code), "m");
+        EXPECT_EQ(decoded.code(), code) << "code " << static_cast<int>(code) << " degraded";
+        EXPECT_EQ(decoded.message(), "m");
+    }
 }
 
 TEST(StatusTest, CardinalityViolationIsNotRetryable) {

@@ -246,27 +246,27 @@ TEST(AssertionDdlTest, AssertionDdlIsNotFingerprintedAndTheVersionDidNotMove) {
 // something other than what the operator wrote. Enforcing real equality means
 // enforcing the lower-bound half, which is the DELETE and decreasing-UPDATE
 // write path v1 excludes - so `=` costs exactly what `>=` costs.
-TEST(AssertionDdlTest, EqualityIsUnsupportedBecauseReadingItAsAnUpperBoundWouldLie) {
+TEST(AssertionDdlTest, EqualityIsNotImplementedBecauseReadingItAsAnUpperBoundWouldLie) {
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5",
-                  StatusCode::kUnsupported, "equality assertions (=)");
+                  StatusCode::kNotImplemented, "equality assertions (=)");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100",
-                  StatusCode::kUnsupported, "enforcing a lower bound");
+                  StatusCode::kNotImplemented, "enforcing a lower bound");
 
     // Refused at the operator, before the bound is even read - so the
     // degenerate-predicate check below never sees an `=`, and `= 0` is now
     // answered by this rule rather than by that one.
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0",
-                  StatusCode::kUnsupported, "equality assertions (=)");
+                  StatusCode::kNotImplemented, "equality assertions (=)");
 }
 
-TEST(AssertionDdlTest, ALowerBoundIsUnsupportedAtItsOwnOperator) {
+TEST(AssertionDdlTest, ALowerBoundIsNotImplementedAtItsOwnOperator) {
     // AS11, and the one refusal that pays for a whole write path: a lower
     // bound has to be re-checked on DELETE and on every decreasing UPDATE,
     // which is exactly why v1 can leave DELETE uninstrumented (§4.2).
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5",
-                  StatusCode::kUnsupported, "lower-bound");
+                  StatusCode::kNotImplemented, "lower-bound");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5",
-                  StatusCode::kUnsupported, "lower-bound");
+                  StatusCode::kNotImplemented, "lower-bound");
     // The byte is the operator's, not the statement's.
     auto parsed = ParseSql("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5");
     ASSERT_FALSE(parsed.ok());
@@ -316,7 +316,7 @@ TEST(AssertionDdlTest, TheThreeUnmaintainableAggregatesAreRefusedByName) {
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK MAX(v) <= 1",
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1",
          }) {
-        ExpectRefusal(sql, StatusCode::kUnsupported, "out of scope for assertions");
+        ExpectRefusal(sql, StatusCode::kNotImplemented, "out of scope for assertions");
     }
     // A word that is no aggregate at all is a different answer: there is no
     // decision to wait on.
@@ -329,11 +329,11 @@ TEST(AssertionDdlTest, CountTakesStarAndSumTakesAColumnAndNeitherIsCoerced) {
     // reading it as `COUNT(*)` would enforce a bound the operator did not
     // write, so it is refused rather than folded.
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1",
-                  StatusCode::kUnsupported, "COUNT(*)");
+                  StatusCode::kNotImplemented, "COUNT(*)");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1",
                   StatusCode::kInvalidArgument, "SUM takes a column");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1",
-                  StatusCode::kUnsupported, "DISTINCT");
+                  StatusCode::kNotImplemented, "DISTINCT");
 }
 
 // ---- Wrong, rather than reserved ---------------------------------------
@@ -420,10 +420,10 @@ TEST(AssertionDdlTest, TheIndexCapsStillRefuseAndStillNameTheirByte) {
     // not turn it off for the index: a cap refuses and never truncates
     // (docs/spec/index.md §13), which is what keeps a truncated index from
     // being declared complete.
-    ExpectRefusal("CREATE INDEX ix ON t (a, b, c, d, e)", StatusCode::kUnsupported,
+    ExpectRefusal("CREATE INDEX ix ON t (a, b, c, d, e)", StatusCode::kNotImplemented,
                   "index key columns");
     ExpectRefusal("CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)",
-                  StatusCode::kUnsupported, "covered columns");
+                  StatusCode::kNotImplemented, "covered columns");
 }
 
 }  // namespace

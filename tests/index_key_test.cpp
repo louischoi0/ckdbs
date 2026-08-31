@@ -364,7 +364,7 @@ TEST(IndexKeyTest, ANullIsRefusedBecauseItsPositionIsUndecided) {
     parser::AstValue null_value;  // defaults to kNull
     Status s = EncodeIndexKeyColumn(col, null_value, out);
     EXPECT_FALSE(s.ok());
-    EXPECT_EQ(StatusCode::kUnsupported, s.code());
+    EXPECT_EQ(StatusCode::kNotImplemented, s.code());
 }
 
 TEST(IndexKeyTest, AFloatColumnIsRefusedAtWidth) {

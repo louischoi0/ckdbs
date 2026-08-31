@@ -298,7 +298,7 @@ TEST_F(RangeAllocTest, ASplitRelationTakesNoIndexCabinOrForeignKey) {
     def.name = "ix_split";
     def.key_cols = {1};
     Status ix = catalog_.CreateIndex(def).status();
-    EXPECT_EQ(ix.code(), StatusCode::kUnsupported) << ix.message();
+    EXPECT_EQ(ix.code(), StatusCode::kNotImplemented) << ix.message();
     EXPECT_NE(ix.message().find("split across"), std::string::npos) << ix.message();
 
     // Column **1**, not 0: the pk column is refused for its own reason
@@ -307,12 +307,12 @@ TEST_F(RangeAllocTest, ASplitRelationTakesNoIndexCabinOrForeignKey) {
     // through this same door, which is the one that would otherwise cabin a
     // split relation with nobody having asked.
     Status cabin = catalog_.CreateCabin(oid, 1, catalog::kCabinOriginUser).status();
-    EXPECT_EQ(cabin.code(), StatusCode::kUnsupported) << cabin.message();
+    EXPECT_EQ(cabin.code(), StatusCode::kNotImplemented) << cabin.message();
     EXPECT_NE(cabin.message().find("split across"), std::string::npos) << cabin.message();
 
     const catalog::Oid child = MakeHeap("child");
     Status fk = catalog_.CreateForeignKey(child, 0, oid, 0).status();
-    EXPECT_EQ(fk.code(), StatusCode::kUnsupported) << fk.message();
+    EXPECT_EQ(fk.code(), StatusCode::kNotImplemented) << fk.message();
     EXPECT_NE(fk.message().find("split across"), std::string::npos) << fk.message();
 }
 
@@ -328,7 +328,7 @@ TEST_F(RangeAllocTest, ASplitRelationTakesNoAssertion) {
     Status refused = exec::InsertAssertion(catalog_, store_, /*wal=*/nullptr, /*id=*/11, oid,
                                            "a_split", "CREATE ASSERTION a_split ...",
                                            kInvalidPageId);
-    EXPECT_EQ(refused.code(), StatusCode::kUnsupported) << refused.message();
+    EXPECT_EQ(refused.code(), StatusCode::kNotImplemented) << refused.message();
     EXPECT_NE(refused.message().find("split across"), std::string::npos) << refused.message();
 
     // And the row really is absent, not merely reported so.

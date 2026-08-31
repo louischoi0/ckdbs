@@ -181,7 +181,7 @@ TEST_F(StatementShipTest, AnUninstalledExecutorRefusesRatherThanLookingLikeACras
     const ShippedStatementOutcome* out = client_->Find(1);
     ASSERT_NE(out, nullptr);
     ASSERT_TRUE(out->arrived);
-    EXPECT_EQ(out->status.code(), StatusCode::kUnsupported);
+    EXPECT_EQ(out->status.code(), StatusCode::kNotImplemented);
     EXPECT_NE(out->status.message().find("SS3"), std::string::npos) << out->status.message();
 }
 

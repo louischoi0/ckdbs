@@ -127,7 +127,7 @@ TEST(ParserJoinTest, BindingComparisonIsCaseInsensitive) {
 
 // ---- Outer joins: reserved, refused, positioned ---------------------------
 
-TEST(ParserJoinTest, OuterJoinKeywordsAreUnsupportedWithTheirOwnPosition) {
+TEST(ParserJoinTest, OuterJoinKeywordsAreNotImplementedWithTheirOwnPosition) {
     struct Case {
         const char* sql;
         std::size_t keyword_at;
@@ -142,7 +142,7 @@ TEST(ParserJoinTest, OuterJoinKeywordsAreUnsupportedWithTheirOwnPosition) {
     for (const Case& c : cases) {
         auto parsed = Parse(c.sql);
         ASSERT_FALSE(parsed.ok()) << c.sql;
-        EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported) << c.sql;
+        EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented) << c.sql;
         // The position is the keyword's own, not "wherever the parser
         // gave up" - which is the whole reason these words are reserved
         // before they are implementable (spec I9).
@@ -174,7 +174,7 @@ TEST(ParserJoinTest, AJoinWithoutOnIsRejected) {
         << parsed.status().message();
 }
 
-TEST(ParserJoinTest, AnUnqualifiedOnColumnIsUnsupportedWithItsPosition) {
+TEST(ParserJoinTest, AnUnqualifiedOnColumnIsNotImplementedWithItsPosition) {
     //                 0123456789012345678901234567890
     auto parsed = Parse("SELECT * FROM t JOIN u ON id = u.id");
     ASSERT_FALSE(parsed.ok());
@@ -182,7 +182,7 @@ TEST(ParserJoinTest, AnUnqualifiedOnColumnIsUnsupportedWithItsPosition) {
     // resolution this parser does not do. When V14's compiler resolves
     // unqualified names against the FROM list this can loosen; until then
     // refusing beats guessing which relation owns `id`.
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_NE(parsed.status().message().find("byte 26"), std::string::npos)
         << parsed.status().message();
 }

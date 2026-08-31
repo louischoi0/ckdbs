@@ -101,7 +101,7 @@ TEST_F(RecoveryTest, ALoserWithNoUndoPhaseRefusesTheMountBeforeRedoWrites) {
 
     auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_FALSE(r.ok());
-    EXPECT_EQ(r.status().code(), StatusCode::kUnsupported) << r.status().message();
+    EXPECT_EQ(r.status().code(), StatusCode::kNotImplemented) << r.status().message();
 
     // The point of the test: nothing was written. A refusal taken after redo
     // would have left the loser's row on the page, which txn.md §8's gap

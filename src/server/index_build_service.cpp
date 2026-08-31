@@ -118,7 +118,7 @@ void IndexBuildServer::OnRequest(const sched::MessageHeader& header,
     }
     if (row.value().owner_core != core_id_) {
         Reply(requester, request_id, request.index_oid, kInvalidPageId,
-              Status::Unsupported("relation oid " + std::to_string(request.table_oid) +
+              Status::NotImplemented("relation oid " + std::to_string(request.table_oid) +
                                   " is owned by core " +
                                   std::to_string(row.value().owner_core) + ", not core " +
                                   std::to_string(core_id_) +

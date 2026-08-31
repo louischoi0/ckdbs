@@ -222,8 +222,16 @@ Status CabinOptimizerExecutor::ApplyCreate(const stats::ActionItem& action,
         // resetting to CANDIDATE, or the controller would retry a settled
         // refusal every confirm cycle forever. A transient failure resets
         // and retries.
+        // `kNotImplemented` sits beside `kUnsupported` here, and must
+        // (2026-08-31): the two differ in what a *client* should do across
+        // releases, never in whether this process can retry - and the
+        // refusal that reaches this arm today, a Cabin on a split relation
+        // (catalog.cpp, crosscore.md §6a), is one of the codes that moved.
+        // Reading it as transient would retry a settled refusal every
+        // confirm cycle forever, which is the bug this test exists to stop.
         if (created.status().code() != StatusCode::kInvalidArgument &&
             created.status().code() != StatusCode::kUnsupported &&
+            created.status().code() != StatusCode::kNotImplemented &&
             created.status().code() != StatusCode::kNotFound) {
             controller_.NoteBuildFailed(action.rel_oid, action.col_pos);
             ++counters_.build_failures;

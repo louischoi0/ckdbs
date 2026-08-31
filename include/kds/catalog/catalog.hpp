@@ -899,7 +899,8 @@ public:
     //
     // Fails with NotFound for either relation; InvalidArgument for column 0,
     // a column past the schema, or a column that cannot hold a Keystone id;
-    // Unsupported for a heap parent or a cross-core pair (F5); AlreadyExists
+    // NotImplemented for a heap parent or a cross-core pair (F5, both named
+    // open in foreign-keys.md); AlreadyExists
     // for a second foreign key on the same column.
     //
     // **Bumps the catalog version**, and reaches further than its arguments:
