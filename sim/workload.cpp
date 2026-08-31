@@ -32,7 +32,6 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kCommit: return "commit";
         case Op::Kind::kRollback: return "rollback";
         case Op::Kind::kCreateCabin: return "create-cabin";
-        case Op::Kind::kCreatePattern: return "create-pattern";
     }
     return "unknown";
 }
@@ -42,7 +41,7 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
          {Op::Kind::kCreateTable, Op::Kind::kInsert, Op::Kind::kSelectPk,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kUpdate,
           Op::Kind::kDelete, Op::Kind::kBegin, Op::Kind::kCommit, Op::Kind::kRollback,
-          Op::Kind::kCreateCabin, Op::Kind::kCreatePattern}) {
+          Op::Kind::kCreateCabin}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
@@ -215,15 +214,21 @@ Op Workload::Next() {
         return DataOp();
     }
 
+    // 85 data ops, 4 syncs, 3 Cabin declarations and 8 transaction starts
+    // per hundred rolls. Three of the data ops were `CREATE PATTERN` until
+    // the operator withdrew declared patterns on 2026-08-31; the band went
+    // to data rather than to any other kind so that the transaction rate -
+    // which is what the crash cases are drawn against - did not move with
+    // it.
     const std::uint64_t roll = rng_.Below(100);
-    if (roll < 82) return DataOp();
-    if (roll < 86) {
+    if (roll < 85) return DataOp();
+    if (roll < 89) {
         Op op;
         op.kind = Op::Kind::kSync;
         op.sql = "SYNC";
         return op;
     }
-    if (roll < 89) {
+    if (roll < 92) {
         // A Cabin on the only column that can carry one here: the pk is
         // refused by name, and `name` is the spill-prone varchar the
         // harness deliberately keeps in the var-heap's hands.
@@ -238,28 +243,6 @@ Op Workload::Next() {
         }
         return DataOp();  // already declared; the roll is spent, not wasted
     }
-    if (roll < 92) {
-        // A pattern is identified by its **shape**, not its name: a second
-        // declaration of a body that fingerprints the same is refused
-        // ("this shape is already declared as ..."), so the generator
-        // tracks shapes exactly as it tracks cabins. Two per relation, the
-        // pk point read and the non-key filter, which are the two access
-        // kinds a trail can be recorded for here.
-        const Table& table = PickTable();
-        const bool by_pk = rng_.Chance(50);
-        const std::string shape = table.name + (by_pk ? ":id" : ":v");
-        if (cabins_.insert("pattern/" + shape).second) {
-            Op op;
-            op.kind = Op::Kind::kCreatePattern;
-            op.table = table.name;
-            op.sql = "CREATE PATTERN p" + std::to_string(patterns_++) +
-                     (by_pk ? " ($k int64) OF SELECT * FROM " + table.name + " WHERE id = $k"
-                            : " ($x int64) OF SELECT * FROM " + table.name + " WHERE v = $x");
-            return op;
-        }
-        return DataOp();
-    }
-
     in_txn_ = true;
     txn_ops_left_ = 1 + rng_.Below(8);
     Op op;

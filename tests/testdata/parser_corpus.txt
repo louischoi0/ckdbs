@@ -433,51 +433,65 @@ ok	-	-	DELETE FROM t WHERE id = 1
 InvalidArgument	-	-	SET DURABILITY STRICT
 InvalidArgument	-	-	SHOW TABLES
 
-# ---- CREATE PATTERN / DROP PATTERN ----------------------------------------
+# ---- CREATE PATTERN / DROP PATTERN: withdrawn 2026-08-31 ------------------
 #
-# A declaration is not patternable itself - its leading word is CREATE - so
-# both hash columns are "-" throughout. What *is* fingerprinted is the body,
-# separately, and fingerprint_test.cpp owns that property; these lines pin
-# the grammar.
-ok	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f
-ok	-	-	CREATE PATTERN p() OF SELECT * FROM t
-ok	-	-	CREATE PATTERN p($a int64, $b varchar) OF SELECT id, name FROM t WHERE id = $a AND name = $b
-ok	-	-	CREATE PATTERN p($f int64) WITH (pinned = on) OF SELECT id FROM t WHERE id = $f
-ok	-	-	CREATE PATTERN p($f int64) WITH (pinned = off, expected_instances = 100000) OF SELECT id FROM t WHERE id = $f
-ok	-	-	CREATE PATTERN p($f int64) OF SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = $f
-ok	-	-	DROP PATTERN p
-# A parameter used twice is legal - a readability device, not a constraint:
+# The operator withdrew user-declared patterns
+# (docs/spec/create-pattern-user-defined-patterns-v1.md, marked withdrawn),
+# so every line below is a **refusal now** and the block is kept as the
+# record of that: `CREATE PATTERN` falls through to CREATE TABLE's
+# `ExpectKeyword("TABLE")` and answers InvalidArgument with the word's
+# position, `DROP PATTERN` meets the target list and answers Unsupported.
+#
+# **Not one hash moved with the removal**, which is the property this block
+# is now worth most for. A declaration was never patternable itself - its
+# leading word is CREATE - so both hash columns were "-" before and are "-"
+# after; and the `$param` lines further down keep the exact pattern_ids they
+# carried, because the `$x` token still lexes and still folds to
+# ShapeTag::kValue. `kFingerprintVersion` therefore does not move and no
+# stored waystone is retired by this change.
+#
+# The verdicts below were `ok` until 2026-08-31 and pinned the grammar.
+InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f
+InvalidArgument	-	-	CREATE PATTERN p() OF SELECT * FROM t
+InvalidArgument	-	-	CREATE PATTERN p($a int64, $b varchar) OF SELECT id, name FROM t WHERE id = $a AND name = $b
+InvalidArgument	-	-	CREATE PATTERN p($f int64) WITH (pinned = on) OF SELECT id FROM t WHERE id = $f
+InvalidArgument	-	-	CREATE PATTERN p($f int64) WITH (pinned = off, expected_instances = 100000) OF SELECT id FROM t WHERE id = $f
+InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = $f
+Unsupported	-	-	DROP PATTERN p
+# A parameter used twice was legal - a readability device, not a constraint:
 # the fingerprint cannot enforce that two slots carry the same value (spec
-# section 3.3), and the doc says so rather than letting anyone mistake it
-# for a bug.
-ok	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f AND other = $f
+# section 3.3).
+InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT id FROM t WHERE id = $f AND other = $f
 
-# The type annotation is mandatory - inference from first use was
-# considered and rejected (spec section 2).
+# The type annotation was mandatory - inference from first use was
+# considered and rejected (spec section 2). These lines refused before the
+# withdrawal too, and still do; what changed is which layer refuses them.
 InvalidArgument	-	-	CREATE PATTERN p($f) OF SELECT * FROM t
 InvalidArgument	-	-	CREATE PATTERN p(f int64) OF SELECT * FROM t
-# WITH must precede OF: the body runs to end of statement, which is what
-# means the parser never has to find where a SELECT ends.
+# WITH had to precede OF: the body ran to end of statement, which is what
+# meant the parser never had to find where a SELECT ends.
 InvalidArgument	-	-	CREATE PATTERN p($f int64) OF SELECT * FROM t WITH (pinned = on)
 InvalidArgument	-	-	CREATE PATTERN p($f int64) SELECT * FROM t
 InvalidArgument	-	-	CREATE PATTERN ($f int64) OF SELECT * FROM t
-InvalidArgument	-	-	DROP PATTERN
-# v1 declares SELECT-class bodies only; INSERT/UPDATE patterns are deferred
+Unsupported	-	-	DROP PATTERN
+# v1 declared SELECT-class bodies only; INSERT/UPDATE patterns were deferred
 # (spec section 9), gated by validation rather than by the fingerprint.
 InvalidArgument	-	-	CREATE PATTERN p($f int64) OF INSERT INTO t VALUES (1)
 
 # ---- $param outside a declaration -----------------------------------------
 #
 # The token exists and fingerprints - it is reserved for the extended
-# protocol's named binds (D4) - but no production outside a CREATE PATTERN
-# body accepts it. Note the hashes are present, not "-": these statements
-# lex fine, they just do not parse, which is the same state a bare `?` in
-# value position was already in.
+# protocol's named binds (D4) - and since 2026-08-31 **no production
+# accepts it at all**, the CREATE PATTERN body having been the one that did.
+# Note the hashes are present, not "-": these statements lex fine, they just
+# do not parse, which is the same state a bare `?` in value position was
+# already in.
 #
 # The first line's pattern_id is 0212b03badb413ad, which is *the same hash*
-# the `= 1` and `= ?` lines above carry. That is spec section 3.2's whole
-# claim, sitting in the corpus where it cannot rot: a declared body and the
-# live traffic it is meant to match reduce to one pattern.
+# the `= 1` and `= ?` lines above carry. That was spec section 3.2's whole
+# claim - a declared body and the live traffic it was meant to match reduce
+# to one pattern - and the line is kept because it is now what proves the
+# withdrawal moved no hash.
 Unsupported	0212b03badb413ad	cbf29ce484222325	SELECT * FROM t WHERE id = $x
 Unsupported	ae34f9ce9d472ac9	b5d414774c8002cc	UPDATE t SET c = $x WHERE id = 1
 

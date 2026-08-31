@@ -37,8 +37,8 @@
 // Deliberately out of scope for v1, stated rather than implied: catalog
 // relations (`sys.*`) are checked at the catalog level only — their rows
 // are typed catalog codecs, not user tuples, so the per-tuple checks do
-// not apply to them (sys.pattern_defs, the one exception, is skipped with
-// them). The documented-gap ghost detector (docs/spec/txn.md section 8) lives
+// not apply to them (`sys.assertions`, the one exception, is stored in
+// user tuple format and is skipped with them). The documented-gap ghost detector (docs/spec/txn.md section 8) lives
 // in the loop's oracle reconciliation, not here: an uncommitted-but-
 // surviving row is structurally indistinguishable from a committed one,
 // which is precisely the gap.

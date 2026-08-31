@@ -7,6 +7,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/stats/cabin_store.hpp"
+#include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
@@ -126,14 +127,25 @@ TEST_F(DropTableTest, DependentsDropWithTheRelation) {
 }
 
 TEST_F(DropTableTest, APatternGhostIsHarmless) {
+    // The pattern is registered by traffic, on the second sighting - the
+    // only way to get one since declared patterns were withdrawn on
+    // 2026-08-31 - which needs a recorder, so this builds a second
+    // dispatcher over the same store rather than giving the fixture one.
     Ok("CREATE TABLE t (id int64, v varchar)");
-    Ok("CREATE PATTERN watch($k int64) OF SELECT v FROM t WHERE id = $k");
+    Ok("INSERT INTO t VALUES ('one')");
+    stats::TrailRecorder recorder(boot_->catalog, store_);
+    CommandDispatcher recording(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                                /*clock=*/nullptr, /*wal=*/nullptr,
+                                wal::DurabilityClass::kGroup, exec::Budget(), &recorder);
+    recording.Dispatch("SELECT v FROM t WHERE id = 1");
+    recording.Dispatch("SELECT v FROM t WHERE id = 1");
+    ASSERT_NE(Run("SHOW PATTERNS").find("patterns=1"), std::string::npos);
 
     EXPECT_EQ(Run("DROP TABLE t").rfind("ERR", 0), std::string::npos);
     EXPECT_NE(Run("SHOW PATTERNS").rfind("ERR", 0), 0u);
 
-    // The successor answers normally; the ghost declaration names a dead
-    // oid and can never mis-attribute (DT4).
+    // The successor answers normally; the ghost row names a dead oid and
+    // can never mis-attribute (DT4).
     Ok("CREATE TABLE t (id int64, v varchar)");
     Ok("INSERT INTO t VALUES ('x')");
     EXPECT_EQ(Run("SELECT v FROM t WHERE id = 1"), "v\\nx");

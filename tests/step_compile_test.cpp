@@ -406,28 +406,12 @@ TEST_F(StepCompileTest, ADerivedEqualityPromotesAWrittenRangeToALookup) {
     EXPECT_TRUE(chain.steps[0].residual[2].derived);
 }
 
-TEST_F(StepCompileTest, AParamOnTheJoinKeyPropagatesAndIsMarkedDerived) {
-    // §5: a declared pattern's body must compile to the plan the traffic's
-    // literal form takes, so `$p` propagates - and the derived conjunct is
-    // marked, which is what lets CREATE PATTERN's checks and ANALYZE name
-    // only what the client wrote. A `$param` parses only inside a pattern
-    // body, so the body is compiled through the declaration's AST.
-    auto parsed = parser::Parse(
-        "CREATE PATTERN jp($p int64) OF "
-        "SELECT acct.name FROM acct JOIN trade ON acct.id = trade.acct_id "
-        "WHERE trade.acct_id = $p");
-    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
-    const auto& decl = std::get<parser::CreatePatternStmt>(parsed.value());
-    auto compiled = Compile(boot_->catalog, *decl.body);
-    ASSERT_TRUE(compiled.ok()) << compiled.status().message();
-    const StepChain& chain = compiled.value();
-
-    ASSERT_EQ(chain.steps.size(), 2u);
-    EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup);
-    ASSERT_EQ(chain.steps[0].residual.size(), 1u);
-    EXPECT_TRUE(chain.steps[0].residual[0].derived);
-    EXPECT_EQ(chain.steps[0].residual[0].rhs.literal.type, parser::ValueType::kParam);
-}
+// `AParamOnTheJoinKeyPropagatesAndIsMarkedDerived` stood here: it compiled a
+// `CREATE PATTERN` body so a `$p` could reach a join key, and checked that
+// equality propagation carried it and marked the derived conjunct. Both
+// halves are still covered by the literal case above; what the test needed
+// and no longer exists is a production that accepts `$p` at all, withdrawn
+// with declared patterns on 2026-08-31.
 
 TEST_F(StepCompileTest, PropagationStaysInsideItsOwnBlock) {
     // The sub-chain's `trade.acct_id = acct.id` reaches outward (up == 1),

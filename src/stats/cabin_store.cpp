@@ -67,10 +67,11 @@ std::optional<CabinKey> MakeValueKey(const parser::AstValue& value) {
         }
         case parser::ValueType::kNull:
         case parser::ValueType::kParam:
-            // Refused, for the reasons the header gives. Both are silent
-            // refusals rather than errors: a value that cannot be observed
-            // simply takes the scan path, which is what it would have done
-            // if no Cabin existed.
+            // Refused, for the reasons the header gives; kParam is
+            // unreachable besides, since declared patterns were withdrawn
+            // (ast.hpp). Both are silent refusals rather than errors: a
+            // value that cannot be observed simply takes the scan path,
+            // which is what it would have done if no Cabin existed.
             return std::nullopt;
     }
     return std::nullopt;

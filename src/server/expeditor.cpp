@@ -880,11 +880,12 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     auto stats_reset = expeditor->database_->catalog.ResetAccessStatsIfDamaged();
     if (!stats_reset.ok()) return stats_reset.status();
 
-    // H7: collect the spills nothing points at. Two relations log their
-    // spills under `kNoTxnId` (`exec::LogChainInsert`'s callers -
-    // `sys.pattern_defs` and the assertion catalog), so there is no
-    // transaction to chain an undo record to and a rolled-back
-    // `CREATE PATTERN`'s body text has no compensation to release it.
+    // H7: collect the spills nothing points at. The assertion catalog -
+    // `exec::LogChainInsert`'s one remaining caller since `sys.pattern_defs`
+    // went with declared patterns on 2026-08-31 - logs its spills under
+    // `kNoTxnId`, so there is no transaction to chain an undo record to and
+    // a rolled-back `CREATE ASSERTION`'s body text has no compensation to
+    // release it.
     // Every *other* spill is released by the ordinary rollback path since
     // 2026-08-28, which is what makes this a hole rather than the general
     // case.

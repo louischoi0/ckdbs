@@ -355,9 +355,10 @@ struct StepPredicate {
 
     // True for a conjunct the compiler derived by equality propagation
     // (docs/spec/parser-v2.md §5) rather than one the client wrote. Execution
-    // ignores it; the two consumers are diagnostic truthfulness: ANALYZE
-    // marks the line, and CREATE PATTERN's parameter checks skip it - a
-    // warning must name a predicate the client can find in their text.
+    // ignores it; the consumer is diagnostic truthfulness - ANALYZE marks
+    // the line, so a plan never shows a predicate the client cannot find in
+    // their text. `CREATE PATTERN`'s parameter checks were the second
+    // consumer, for the same reason, until 2026-08-31.
     // Deliberately not serialized by step_descriptor.cpp: a shipped chain's
     // peer only evaluates residuals, and false is the safe default.
     bool derived = false;

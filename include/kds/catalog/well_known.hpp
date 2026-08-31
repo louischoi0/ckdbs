@@ -92,45 +92,42 @@ inline constexpr Oid kSysIndexesTable = 113;
 // pattern has to be rooted somewhere that survives a restart.
 inline constexpr Oid kSysPatternsTable = 114;
 
-// sys.pattern_defs (docs/spec/create-pattern-user-defined-patterns-v1.md
-// section 4.2): the name and source text of a *declared* pattern, joined to
-// sys.patterns by pattern_id. An auto-registered pattern has no row here and
-// keeps printing as a bare hex id.
+// **115, and 120 through 124, are retired.** They were `sys.pattern_defs`
+// - the name and source text of a *declared* pattern - and its five
+// `sys.columns` rows, until the operator withdrew user-declared patterns on
+// 2026-08-31 (`docs/spec/create-pattern-user-defined-patterns-v1.md`, marked
+// withdrawn and kept as the design record). Bootstrap no longer creates the
+// relation and no build reads those rows.
 //
-// It is a sibling relation rather than two more fields on SysPatternRow
-// because that row is fixed-width and stays that way, and a pattern's source
-// text is neither fixed-width nor small.
+// **They are never reused.** The static_assert below states the rule the
+// retirement rides on: an oid names exactly one object for the life of a
+// database, so a relation added later goes past the highest value here and
+// never into this gap - a re-initialized directory would otherwise be the
+// only place the difference did not show, and a pre-withdrawal file opened
+// by a later build would resolve a new relation's oid to rows that describe
+// a pattern definition. The run is **five** values, not the four the
+// retired comment claimed: the schema carried `id`, `pattern_id`,
+// `param_count`, `name` and `source_text`.
 //
-// **This is the first catalog relation stored in ordinary user tuple
-// format** - a Keystone word, tagged cells, var-heap spill - where every
-// other one is a fixed-offset typed row codec (catalog/rows.hpp). That is
-// the deliberate consequence of storing text: the fixed-length rule already
-// answers "where do arbitrary-length values go", and inventing a second
-// answer for one catalog row would be inventing a second var-heap protocol.
-// It costs one thing worth naming: its rows cannot be read from
-// `catalog/`, because decoding them needs the row codec, which sits above
-// the catalog. The readers live in stats/pattern_defs.hpp.
-inline constexpr Oid kSysPatternDefsTable = 115;
-
-// Fixed oids for sys.pattern_defs' four sys.columns rows, one per schema
-// position. Fixed rather than from GenerateUserOid() because these rows are
-// written *during* bootstrap: the oid sequence recovers its position by
-// reading sys.objects and sys.columns, and asking it for an oid while those
-// are the pages being built is a question with no answer yet.
-inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
+// What was learned here and is not retired with it: a catalog relation may
+// be stored in ordinary user tuple format - a Keystone word, tagged cells,
+// var-heap spill - rather than as a fixed-offset typed row codec, when it
+// stores text. `sys.assertions` below is the argument's other user, and
+// carries it now.
 
 // sys.assertions (docs/spec/assertion.md §8.2, workplan AST03): one row per
 // declared assertion - a group-level upper-bound constraint over one
 // relation.
 //
-// **The second catalog relation stored in ordinary user tuple format**, and
-// for sys.pattern_defs' reason rather than a new one: it stores the
-// declaration's `source_text` verbatim (AS10), and the fixed-length rule
-// already answers where an arbitrary-length value goes. That choice is what
-// lets the `GROUP BY` list have no cap at all - the columns are recovered by
-// re-parsing the stored text, so a longer list costs text and not a widened
-// row - and it is why there is no sibling relation for them, exactly as
-// there is none for a pattern's parameters.
+// **The only catalog relation stored in ordinary user tuple format**, and
+// the second one built that way: it stores the declaration's `source_text`
+// verbatim (AS10), and the fixed-length rule already answers where an
+// arbitrary-length value goes. `sys.pattern_defs` was the first and is
+// retired above, which leaves this relation carrying the argument alone.
+// That choice is what lets the `GROUP BY` list have no cap at all - the
+// columns are recovered by re-parsing the stored text, so a longer list
+// costs text and not a widened row - and it is why there is no sibling
+// relation for them.
 //
 // Its readers therefore cannot live in `catalog/` either: decoding needs
 // `exec::DecodeRowInto`, and `exec/` depends on `catalog/`. They are
@@ -138,22 +135,23 @@ inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
 inline constexpr Oid kSysAssertionsTable = 116;
 
 // Fixed oids for sys.assertions' six sys.columns rows, one per schema
-// position - fixed rather than from GenerateUserOid() for the reason
-// kSysPatternDefsColumnOidBase gives: they are written during bootstrap,
-// before the oid sequence has pages to recover its position from.
+// position. Fixed rather than from GenerateUserOid() because these rows are
+// written *during* bootstrap: the oid sequence recovers its position by
+// reading sys.objects and sys.columns, and asking it for an oid while those
+// are the pages being built is a question with no answer yet.
 inline constexpr Oid kSysAssertionsColumnOidBase = 140;
 
 // sys.access_stats (docs/spec/heap-and-tuple.md §7): one row per access *shape*
 // - `(kind, rel_id, column_mask)` - with how often it ran and when it last
 // ran. A fixed-offset typed row like its neighbours, not a row-codec
-// relation: everything in it is fixed-width, so none of sys.pattern_defs'
+// relation: everything in it is fixed-width, so none of sys.assertions'
 // reasons apply.
 inline constexpr Oid kSysAccessStatsTable = 130;
 
 // sys.cabins (docs/spec/cabin.md §10): one row per Cabin - a
 // `(relation, non-pk column)` store authoritative for observed values.
 // Fixed-offset typed rows like every catalog relation except
-// sys.pattern_defs, since nothing in the row is variable-width.
+// sys.assertions, since nothing in the row is variable-width.
 //
 // The Cabin is a catalog object for the reason sys.patterns is: its
 // *existence* is DDL and has to survive a restart. Its observed set does
@@ -164,7 +162,7 @@ inline constexpr Oid kSysCabinsTable = 131;
 // sys.fkeys (docs/spec/foreign-keys.md §1): one row per foreign key - a
 // child relation's column that references a parent relation's Keystone id.
 // Fixed-offset typed rows like every catalog relation except
-// sys.pattern_defs, since nothing in the row is variable-width.
+// sys.assertions, since nothing in the row is variable-width.
 //
 // **There is no parent-column field, and that is F1, not an omission.** A
 // foreign key references the parent's engine pk and never a business key,
@@ -182,7 +180,7 @@ inline constexpr Oid kSysFkeysTable = 132;
 //
 // **Created empty at bootstrap (RD1); its row is `SysRangeRow` (RD2,
 // 2026-08-28).** Fixed-offset and typed, as RD1 predicted it would be:
-// everything CC9 names is fixed-width, so none of sys.pattern_defs' reasons
+// everything CC9 names is fixed-width, so none of sys.assertions' reasons
 // for the user-tuple format apply. **Still empty on every existing file** -
 // nothing writes a row until RD5's allocator exists, which is what made
 // defining the format free of a version bump. It bootstraps at a fixed low
@@ -222,9 +220,11 @@ inline constexpr Oid kUserOidStart = 4000;
 //
 // Namespaces, types and relations share one oid space - `register_namespace`
 // and `register_type` both write into `sys.objects` - so they are checked
-// together rather than per group. The two `*ColumnOidBase` values name the
-// start of a small run (four columns from 120, six from 140); the bases are
-// listed and the runs are clear of every other value here.
+// together rather than per group. `kSysAssertionsColumnOidBase` names the
+// start of a small run (six columns from 140); the base is listed and the
+// run is clear of every other value here. **The retired 115 and 120-124 are
+// deliberately absent**: nothing declares them any more, and this list
+// cannot police a gap - the comment where they stood is what does.
 //
 // **`kTypeInt64` is deliberately absent**: it is an alias for `kTypeInt`, not
 // a distinct oid, so listing it would fail this check on a fact that is
@@ -240,8 +240,7 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kTypeDate,            kTypeTimestamp,        kTypeDecimalWide,
     kTypeDroppedTable,    kSysTypesTable,        kSysObjectsTable,
     kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
-    kSysPatternsTable,    kSysPatternDefsTable,  kSysAssertionsTable,
-    kSysPatternDefsColumnOidBase,                kSysAccessStatsTable,
+    kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
     kSysRangesTable,      kUserOidStart,
 };
@@ -275,21 +274,26 @@ inline constexpr PageId kCatalogPageTables = 7;
 inline constexpr PageId kCatalogPageIndexes = 8;
 inline constexpr PageId kCatalogPagePatterns = 9;
 
-// Root heap page of sys.pattern_defs. Fixed like the six above, even though
-// the relation is an ordinary row-codec one: it has to be findable at
-// bootstrap without a catalog read, which is the same reason the others are.
-// Its *var-heap* root is not fixed - that one is allocated by CreateNew()
-// and recorded in sys.tables, where it is DDL-immutable and therefore
-// cacheable (rows.hpp's note on varheap_page_id).
+// **Page 10 is reserved and unused.** It was the root heap page of
+// sys.pattern_defs until the operator withdrew user-declared patterns on
+// 2026-08-31; bootstrap no longer creates it, so on a directory
+// initialized by this build page 10 is never written. It keeps its place
+// in the numbering rather than being handed to the next catalog relation,
+// for the reason the retired oids above are never reused: a file
+// initialized by an older build has a live pattern_defs root there, and a
+// new relation rooted at 10 would read that page as its own.
 //
-// That split is **intended, not incidental**: operator ratification
-// 2026-08-31, crosscore.md CC12/CR1 - a catalog relation's root page stays
-// in the reserved range because bootstrap must find it without a catalog
-// read; its var-heap does not, and any catalog relation that later gains
-// one places it the same way. The cost CC12 names: a page outside the
-// range is not peer-readable through MayFault's page_id <
-// system_page_limit_ arm, and sys.pattern_defs has no peer reader today,
-// which is why it is where CR3 gets exercised first.
+// The rule this page was the first exercise of survives it, and
+// `kCatalogPageAssertions` now carries it alone: a catalog relation's root
+// page stays in the reserved range because bootstrap must find it without
+// a catalog read, while its *var-heap* root is allocated by CreateNew()
+// and recorded in sys.tables, where it is DDL-immutable and therefore
+// cacheable (rows.hpp's note on varheap_page_id). That split is intended,
+// not incidental - operator ratification 2026-08-31, crosscore.md
+// CC12/CR1 - and the cost CC12 names is that a page outside the reserved
+// range is not peer-readable through MayFault's `page_id <
+// system_page_limit_` arm, which is why `CoreRuntime::Open` grants those
+// pages one at a time (exec/catalog_spills.hpp).
 inline constexpr PageId kCatalogPagePatternDefs = 10;
 // sys.access_stats is pinned here, inside the reserved range, which CC11
 // makes core-0-write-only - and Catalog::RecordAccess runs per *statement*,
@@ -301,10 +305,10 @@ inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
 
-// Root heap page of sys.assertions. Fixed like the nine above, and - like
-// sys.pattern_defs, the other row-codec catalog relation - its *var-heap*
-// root is not: that one is allocated by CreateNew() and recorded in
-// sys.tables, where it is DDL-immutable and therefore cacheable. Intended
+// Root heap page of sys.assertions. Fixed like the ones above, and - as
+// the one row-codec catalog relation left - its *var-heap* root is not:
+// that one is allocated by CreateNew() and recorded in sys.tables, where it
+// is DDL-immutable and therefore cacheable. Intended
 // rather than incidental, and binding on any catalog relation that gains a
 // var-heap: crosscore.md CC12/CR1 (operator ratification 2026-08-31).
 //
@@ -335,11 +339,14 @@ inline constexpr PageId kCatalogPageRanges = 15;
 // chain of heap pages linked through `next_page_id`, exactly as a user
 // relation is; the id here is where the chain starts. Callers that need
 // every page use the overflow range below as well.
+// `kCatalogPagePatternDefs` is deliberately **not** in this list: nothing
+// creates that page any more, so flushing it would name a page this build
+// never writes.
 inline constexpr PageId kAllCatalogPages[] = {
-    kCatalogPageTypes,       kCatalogPageColumns,     kCatalogPageObjects,
-    kCatalogPageTables,      kCatalogPageIndexes,     kCatalogPagePatterns,
-    kCatalogPagePatternDefs, kCatalogPageAccessStats, kCatalogPageCabins,
-    kCatalogPageFkeys,       kCatalogPageAssertions,  kCatalogPageRanges,
+    kCatalogPageTypes,       kCatalogPageColumns,    kCatalogPageObjects,
+    kCatalogPageTables,      kCatalogPageIndexes,    kCatalogPagePatterns,
+    kCatalogPageAccessStats, kCatalogPageCabins,     kCatalogPageFkeys,
+    kCatalogPageAssertions,  kCatalogPageRanges,
 };
 
 // ---- Where a catalog chain grows into ------------------------------------

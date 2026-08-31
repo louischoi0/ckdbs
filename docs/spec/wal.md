@@ -165,7 +165,7 @@ Verified against the emission sites:
 | assertions | `ASSERT_BUILD` at CREATE, `ASSERT_RESERVE` / `ASSERT_COMMIT` / `ASSERT_ROLLBACK` on the write paths, `ASSERT_DROP` at teardown |
 | checkpointer | `CHECKPOINT_BEGIN` / `CHECKPOINT_END` |
 
-A third ordering rule joined the two below on **2026-08-28**, and it is RV3's applied to the var-heap: **an `UNDO_WRITE{kVarHeapAppend}` precedes the `VARHEAP_APPEND` it can undo**, so redo alone can never resurrect an append the undo phase has no record to release. What it closes is the orphan `docs/rules/rule-fixed-length-tuple.md` §5 used to hand to "purge's reclamation sweep": a crash between a spill and its tuple write now rolls back like any other loser write, and no sweep is owed. The one gap left is stated rather than implied — a spill logged with `kNoTxnId` (`LogChainInsert`'s path for `sys.pattern_defs` and the assertion catalog) has no transaction to chain to and no record, so a rolled-back one leaks until a mount-time sweep exists.
+A third ordering rule joined the two below on **2026-08-28**, and it is RV3's applied to the var-heap: **an `UNDO_WRITE{kVarHeapAppend}` precedes the `VARHEAP_APPEND` it can undo**, so redo alone can never resurrect an append the undo phase has no record to release. What it closes is the orphan `docs/rules/rule-fixed-length-tuple.md` §5 used to hand to "purge's reclamation sweep": a crash between a spill and its tuple write now rolls back like any other loser write, and no sweep is owed. The one gap left is stated rather than implied — a spill logged with `kNoTxnId` (`LogChainInsert`'s path, taken by the assertion catalog and, until 2026-08-31, by `sys.pattern_defs`) has no transaction to chain to and no record, so a rolled-back one leaks until a mount-time sweep exists.
 
 Ordering rules that are load-bearing and already enforced: `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/spec/index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one. RV3 adds two more: a catalog write's `UNDO_WRITE` precedes its row record (redo alone must never resurrect a row the undo phase has no record to retire), and a catalog record's **envelope names the acting transaction or `kNoTxnId`, never the header's writer** — analysis notes every named envelope as a loser until a commit in range says otherwise, so a `next_id` bump logged under the relation's long-committed creator invented phantom crash losers (the RV3 review's B1). One safety note the relation-root `PAGE_INIT`s rest on: they are deliberately unstamped (the first row record stamps the page), and a root that never receives a row is protected by the **checkpointer flushing every page in its snapshot** before `CHECKPOINT_END` — the safety lives in that flush, not in a stamp.
 
@@ -182,9 +182,10 @@ nothing (the SpaceManager of `docs/spec/page.md` §5 is unbuilt), and the
 and directory pages (`stats/waystone_dir.cpp`) — which invariant 8
 exempts by construction: deleting them wholesale must never change a
 result, so they owe the log nothing. Nothing *authoritative* is outside.
-The two **row-codec definition relations** (`sys.pattern_defs`,
-`sys.assertions`' source rows) joined on 2026-08-19 through
-`exec/wal_row_log.hpp` — the same order rules, `kNoTxnId` envelopes —
+The **row-codec definition relations** (`sys.assertions`' source rows,
+and `sys.pattern_defs`' until it was withdrawn on 2026-08-31) joined on
+2026-08-19 through `exec/wal_row_log.hpp` — the same order rules,
+`kNoTxnId` envelopes —
 which closed the last silent crash loss: an acknowledged
 `CREATE ASSERTION` now survives and **enforces** after a crash. Two
 pre-existing holes fell out of proving that end to end (both

@@ -5,15 +5,15 @@
 
 namespace kds::stats {
 
-bool TrailRecorder::WouldRecord(std::uint8_t sightings, std::uint8_t origin) const noexcept {
-    // A declared pattern records from its first execution: the declaration
-    // is the evidence n=2 exists to gather, so gathering it again is asking
-    // a question the operator already answered
-    // (create-pattern-user-defined-patterns-v1.md section 7).
-    if (origin == catalog::kOriginUser) return sightings >= 1;
-    // An observed one waits for the second sighting. The first execution
-    // only counts - which is what keeps a one-shot query from paying for a
-    // page write it will never read back (waystone-concpets.md section 9).
+bool TrailRecorder::WouldRecord(std::uint8_t sightings) const noexcept {
+    // An instance waits for its second sighting. The first execution only
+    // counts - which is what keeps a one-shot query from paying for a page
+    // write it will never read back (waystone-concpets.md section 9).
+    //
+    // This took an `origin` and answered `sightings >= 1` for a declared
+    // pattern until 2026-08-31, when the operator withdrew declared
+    // patterns: every pattern is observed now, so there is one threshold
+    // and it is this one.
     return sightings >= kAutoRecordThreshold;
 }
 
@@ -54,8 +54,7 @@ const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t pattern
     // version (waystone-concpets.md section 4): absences are never cached,
     // so no cached entry claims this pattern is missing, and the
     // `const TableAccess*` the running statement is holding cannot dangle.
-    auto registered = catalog_.RegisterPattern(pattern_id, stmt_class, catalog::kOriginAuto,
-                                                /*flags=*/0);
+    auto registered = catalog_.RegisterPattern(pattern_id, stmt_class);
     if (!registered.ok()) return nullptr;
     ++stats_.patterns_registered;
     return registered.value();
@@ -111,19 +110,16 @@ void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCol
 
     const std::uint8_t seen = Observe(key);
 
-    // The origin decides the threshold, so the pattern row has to be looked
-    // at before the policy can be applied - but only if it already exists.
-    // An unregistered shape is auto by definition (nothing has declared
-    // it), which lets the common first-execution case answer without
-    // touching the catalog at all.
-    const catalog::PatternAccess* known = nullptr;
-    if (auto found = catalog_.FindPattern(key.pattern_id); found.ok()) known = found.value();
-    const std::uint8_t origin = known != nullptr ? known->origin : catalog::kOriginAuto;
+    // The threshold is asked **before** the catalog, which is the whole
+    // saving: a shape on its first sighting - every one-shot query in the
+    // database - answers from the sighting table alone and never touches a
+    // catalog page. This read the pattern row first while a declared
+    // pattern could lower the threshold to 1; withdrawing declared patterns
+    // took that dependence away, and with it a lookup EnsurePattern() was
+    // about to repeat.
+    if (!WouldRecord(seen)) return;
 
-    if (!WouldRecord(seen, origin)) return;
-
-    const catalog::PatternAccess* pattern =
-        known != nullptr ? known : EnsurePattern(key.pattern_id, stmt_class);
+    const catalog::PatternAccess* pattern = EnsurePattern(key.pattern_id, stmt_class);
     if (pattern == nullptr) {
         ++stats_.write_failures;
         return;

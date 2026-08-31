@@ -79,7 +79,7 @@ DROP ASSERTION <name> ;
 - Assertion names live in the same namespace as other schema objects and must
   be unique.
 
-### 3.1 Create-time validation (maximized, per CREATE PATTERN precedent)
+### 3.1 Create-time validation (maximized, per the CREATE PATTERN precedent)
 
 `CREATE ASSERTION` fails immediately (before any scan) when:
 

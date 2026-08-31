@@ -105,16 +105,16 @@ bool IsNull(const parser::AstValue& value) noexcept {
     return value.type == parser::ValueType::kNull;
 }
 
-// A chain compiled from a declared pattern's body carries `$param`
-// placeholders and **must never be executed**: nothing binds them, so any
-// answer it produced would be an answer to a statement nobody wrote.
+// A `$param` is a value position with nothing bound to it, so a chain
+// carrying one **must never be executed**: any answer it produced would be
+// an answer to a statement nobody wrote.
 //
-// Reachable only through a defect - `$x` is a parse error outside a
-// CREATE PATTERN body, and CREATE PATTERN compiles for validation and
-// discards the chain - so it is reported as Corruption, alongside this
-// file's other malformed-chain checks, and it fails loudly rather than
-// treating the placeholder as a non-matching value. A quiet false here would
-// turn the defect into a query that silently returns no rows.
+// Unreachable since declared patterns were withdrawn - `$x` is now a parse
+// error wherever it is written (ast.hpp) - so it is reported as Corruption,
+// alongside this file's other malformed-chain checks, and it fails loudly
+// rather than treating the placeholder as a non-matching value. A quiet
+// false here would turn the defect that produced it into a query that
+// silently returns no rows.
 Status RefuseUnboundParam(const parser::AstValue& value) {
     if (value.type != parser::ValueType::kParam) return Status::OK();
     return Status::Corruption("a declared pattern's chain reached execution: parameter '$" +

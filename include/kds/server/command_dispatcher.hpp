@@ -19,7 +19,6 @@
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/server/session_step_client.hpp"
-#include "kds/exec/pattern_ddl.hpp"
 #include "kds/exec/cabin_ddl.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/exec/index_maintain.hpp"
@@ -515,11 +514,11 @@ public:
     //   SHOW META             -> superblock stats, one line
     //   SHOW TABLES           -> space-separated table names
     //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
-    //                            section per sys.patterns row, carrying
-    //                            `origin=user|auto` and `pinned=yes|no`
-    //                            plus `name=` and `params=` for the ones
-    //                            that were declared (auto patterns have no
-    //                            sys.pattern_defs row and stay bare hex).
+    //                            section per sys.patterns row, identified
+    //                            by its hex pattern_id and carrying
+    //                            `origin=` and `pinned=`, both of which
+    //                            read `auto` / `no` on every row since
+    //                            declared patterns were withdrawn.
     //                            An inspection surface: it lists rows from
     //                            older fingerprint revisions too, marked
     //                            `stale=v<n>`, because those are the dead
@@ -536,27 +535,6 @@ public:
     //                            one shape, which is what keeps the list
     //                            bounded by the schema rather than by the
     //                            data.
-    //   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
-    //       OF <select>
-    //                         -> "CREATED PATTERN name=<s>
-    //                            pattern_id=0x<hex> dir_depth=<n>
-    //                            params=<n>", or "ADOPTED PATTERN ..." when
-    //                            an auto-registered row for the same shape
-    //                            already existed and was upgraded in place
-    //                            (keeping its recorded trails). Checks that
-    //                            pass with something to say append
-    //                            "\n"-escaped "WARN ..." sections - an
-    //                            implicit conversion, or a body whose trail
-    //                            can never replay. See
-    //                            src/exec/pattern_ddl.hpp for the full
-    //                            validation chain and where the error /
-    //                            warning line falls.
-    //   DROP PATTERN <name>   -> "DROPPED PATTERN name=<s>
-    //                            pattern_id=0x<hex>". Removes the
-    //                            declaration, not the shape: the waystones
-    //                            are left for retention, and auto
-    //                            registration may re-learn the shape later
-    //                            as a nameless row.
     //   SHOW PAGE <page_id> [VALUES]
     //                         -> page dump: header + slot directory for a
     //                            heap page or a B+ tree leaf, or level +
@@ -753,10 +731,10 @@ private:
 
     // `SHOW BUDGET` - every relation's Keystone id consumption
     // (`docs/rules/keystoneid-invariant.md` K-M4). Listed for *every* relation
-    // including the catalog's own, because two of those - sys.patterns and
-    // sys.pattern_defs - genuinely issue ids, and a listing that hid them
-    // would hide the only relations whose consumption an operator does not
-    // control.
+    // including the catalog's own, because some of those - sys.patterns,
+    // sys.cabins, sys.assertions - genuinely issue ids, and a listing that
+    // hid them would hide the only relations whose consumption an operator
+    // does not control.
     DispatchOutcome HandleShowBudget();
 
     // Both take the session so a `CREATE TABLE` inside an explicit
@@ -873,16 +851,10 @@ private:
     // which is what turns on `ViewFor`'s filtering.
     void MarkHoldsDdl(const txn::Transaction& txn);
 
-    // `CREATE PATTERN` / `DROP PATTERN`. Both take the whole statement
-    // line, not a suffix: a declaration's stored canon is its own text
-    // verbatim, so the parser has to see exactly what the client sent.
-    DispatchOutcome HandleCreatePattern(std::string_view line);
-    DispatchOutcome HandleDropPattern(std::string_view line);
-
     // `CREATE CABIN` / `DROP CABIN` (docs/spec/cabin.md §10). One handler
     // for both: they share a parse and a reply shape, and differ only in
-    // which catalog call they reach. Takes the whole statement line, like
-    // the pattern handlers, because the parser is what resolves the two
+    // which catalog call they reach. Takes the whole statement line rather
+    // than a suffix, because the parser is what resolves the two
     // identifiers.
     DispatchOutcome HandleCabin(std::string_view line);
 
@@ -963,11 +935,12 @@ private:
     // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
     // on and its declaration verbatim.
     //
-    // The `SHOW` surface rather than `SELECT * FROM sys.assertions`, for the
-    // reason `sys.pattern_defs` has no view either: a catalog *view* is read
-    // through `catalog::Catalog` alone, and a row-codec relation's rows need
-    // a `PageStore` to resolve their var-heap spills. Both row-codec catalog
-    // relations are therefore surfaced by `SHOW`, which has one.
+    // The `SHOW` surface rather than `SELECT * FROM sys.assertions`: a
+    // catalog *view* is read through `catalog::Catalog` alone, and a
+    // row-codec relation's rows need a `PageStore` to resolve their
+    // var-heap spills. So the one row-codec catalog relation is surfaced by
+    // `SHOW`, which has one. `sys.pattern_defs` had no view for the same
+    // reason until it was withdrawn on 2026-08-31.
     DispatchOutcome HandleShowAssertions();
     DispatchOutcome HandleShowRelayout(std::string_view rest);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
@@ -1114,9 +1087,9 @@ private:
     // this one visibly share everything above the sink.
     //
     // `sql` is the stripped statement, taken so the reply can report the
-    // statement's `pattern_id` - the number a `CREATE PATTERN` declaration
-    // printed, which is how an operator checks that traffic actually
-    // matches what they declared.
+    // statement's `pattern_id` - the same number `SHOW PATTERNS` lists a
+    // row under, which is how an operator checks which observed pattern a
+    // statement actually matched.
     // `trail` and `replay` are the same two halves an ordinary execution
     // gets. ANALYZE takes them because its contract is that the run it
     // describes is the run that actually happened: a diagnostic that
@@ -1585,9 +1558,9 @@ private:
     //
     // A scope with no transaction records nothing, which is the pre-existing
     // unowned path (a dispatcher built without a manager, and the
-    // `kNoTxnId` writes `LogChainInsert` makes for sys.pattern_defs and the
-    // assertion catalog). Those spills still leak on rollback, and that is
-    // stated in `workplan-varchar-char.md` rather than silently true.
+    // `kNoTxnId` writes `LogChainInsert` makes for the assertion catalog).
+    // Those spills still leak on rollback, and that is stated in
+    // `workplan-varchar-char.md` rather than silently true.
     Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t pk,
                       const std::vector<exec::AppendedSpill>& spills);
 

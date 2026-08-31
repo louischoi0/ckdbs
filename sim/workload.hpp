@@ -10,7 +10,7 @@
 //     INSERT, pk point SELECT, pk BETWEEN range, non-pk FilterScan, SYNC
 //     UPDATE and DELETE, each by pk and by a non-key predicate   (v2)
 //     BEGIN / COMMIT / ROLLBACK, isolation level drawn per transaction (v2)
-//     CREATE CABIN, CREATE PATTERN                                (v2)
+//     CREATE CABIN                                                (v2)
 //
 // The generator is engine-independent on purpose: it never reads a reply.
 // Point-lookup keys are guessed from its own insert counter (ids are
@@ -71,7 +71,6 @@ struct Op {
         kCommit,
         kRollback,
         kCreateCabin,
-        kCreatePattern,
     };
     Kind kind;
     std::string table;
@@ -133,10 +132,8 @@ private:
     std::size_t txn_ops_left_ = 0;
 
     // Cabins are named by (table, column) and a second CREATE on the same
-    // pair is an error, so the generator remembers what it declared;
-    // patterns are named, and the counter keeps the names unique.
+    // pair is an error, so the generator remembers what it declared.
     std::set<std::string> cabins_;
-    std::size_t patterns_ = 0;
 };
 
 }  // namespace kds::sim

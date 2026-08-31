@@ -19,9 +19,6 @@
 //       [GROUP BY <col> [, ...]] [HAVING <hcond> [AND <hcond>]*]
 //       [ORDER BY <key> [ASC]] [LIMIT <int>] [OFFSET <int>];
 //   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*];
-//   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
-//       OF <select>;
-//   DROP PATTERN <name>;
 //
 //   <rel>   ::= <name> [AS <alias>]
 //   <join>  ::= JOIN <rel> ON <qcol> = <qcol>
@@ -58,13 +55,21 @@ namespace kds::parser {
 
 // What sits in a value position.
 //
-// `kParam` is a declared pattern's `$name`
-// (docs/spec/create-pattern-user-defined-patterns-v1.md). It is a value
-// **position** with no value in it: a declaration is not an execution, and
-// nothing ever binds one - a chain compiled from a pattern body exists to be
-// type-checked and fingerprinted, never run. Every path that would consume a
-// value refuses it explicitly (exec/row_codec.cpp, exec/step_vm.cpp) rather
-// than treating it as a missing string.
+// `kParam` is a value **position** with no value in it: the `$name` of a
+// user-declared pattern, which the operator withdrew on 2026-08-31
+// (docs/spec/create-pattern-user-defined-patterns-v1.md, marked withdrawn).
+// **Nothing constructs one now** - `$x` was accepted by exactly one
+// production, the body of `CREATE PATTERN`, and that production is gone, so
+// the parser refuses the token everywhere.
+//
+// The enumerator stays rather than leaving the enum a hole. It is
+// serialized by value in step descriptors (server/step_descriptor.hpp,
+// `kStepDescriptorVersion`), so renumbering the kinds after it would be a
+// wire change made for a cleanup; and every path that would consume a value
+// already refuses it by name (exec/row_codec.cpp, exec/step_vm.cpp,
+// exec/aggregate.cpp), which is cheaper to keep than to re-derive if the
+// re-design brings a placeholder back. Those refusals are now unreachable
+// arms over a kind nothing produces, and each says so where it sits.
 // `kDecimal` is the **one** kind the type work added, and TY5 is explicit
 // that it is one rather than three: a `DATE` *is* an integer - days since
 // the epoch - and a `TIMESTAMP` is microseconds since it, so both reuse
@@ -85,12 +90,12 @@ struct AstValue {
 
     // Where the value sits in the statement text.
     //
-    // Set for every literal the parser produces, and for kParam. It was
-    // kParam only until TY05, when a literal became something a *later*
-    // stage can reject: the step compiler coerces one against its column's
-    // type (docs/spec/types.md §3.1), so `WHERE d = '2026-02-30'` fails
-    // long after the token is gone, and without the offset that failure
-    // can name the column but not the byte.
+    // Set for every literal the parser produces. It was kParam's alone
+    // until TY05, when a literal became something a *later* stage can
+    // reject: the step compiler coerces one against its column's type
+    // (docs/spec/types.md §3.1), so `WHERE d = '2026-02-30'` fails long
+    // after the token is gone, and without the offset that failure can name
+    // the column but not the byte.
     //
     // **Nothing compares it.** Chain identity renders operand values, not
     // offsets; Cabin keys are built from the value's kind and contents; the
@@ -101,7 +106,9 @@ struct AstValue {
     std::int64_t int_val = 0;  // valid when type == kInt
 
     // kStr: the string value. **kParam: the parameter's name**, without the
-    // sigil and as written.
+    // sigil and as written - which nothing produces since the declaration
+    // grammar was withdrawn, and which the unreachable arms still quote in
+    // their refusals.
     //
     // Sharing the field rather than adding one is deliberate. A kParam
     // carries no string value, so nothing is being overloaded away; and an
@@ -136,7 +143,8 @@ struct AstValue {
     std::int64_t dec_hi = 0;
 
     // The parameter name a kParam value names. Spelled out so no call site
-    // has to know which field it borrows.
+    // has to know which field it borrows; its callers are the unreachable
+    // kParam arms, which quote the name in what they refuse.
     const std::string& param_name() const noexcept { return str_val; }
 };
 
@@ -671,90 +679,14 @@ struct AlterStmt {
     std::uint32_t new_name_byte_offset = 0;
 };
 
-// ---- CREATE PATTERN / DROP PATTERN ---------------------------------------
-//
-//   CREATE PATTERN <name> ( $p <type> [, ...] ) [WITH (<k> = <v> [, ...])]
-//       OF <select>
-//   DROP PATTERN <name>
-//
-// The clause order is not a style choice. `WITH` comes *before* `OF` and the
-// body comes last, so the body runs to end of statement and the parser never
-// has to find where a SELECT ends - the same trick the ANALYZE prefix uses,
-// wrapping an intact statement rather than reaching inside one.
-
-// One declared parameter: `$flag bool`.
-//
-// The type annotation is **mandatory**. Inferring it from first use was
-// considered and rejected: it would make the declared contract depend on the
-// order predicates are written in, and would leave the CREATE-time type
-// check with nothing stable to check against.
-//
-// `type_name` stays unresolved here, exactly as ColumnDef::type_name does
-// and for the reason this file's header gives - the parser is a syntax
-// layer, and sys.types is the catalog's business.
-struct PatternParam {
-    std::string name;  // without the sigil, as written
-    std::string type_name;
-    std::uint32_t byte_offset = 0;  // of the `$`
-};
-
-// One `WITH` option: `pinned = on`. Both sides stay text; which keys exist
-// and what values they take is validated against the catalog, not here.
-struct PatternOption {
-    std::string key;
-    std::string value;
-    std::uint32_t byte_offset = 0;  // of the key
-};
-
-// One occurrence of a `$param` inside the body, in written order.
-//
-// Recorded separately from the AST the values landed in because the two
-// CREATE-time checks that need them ask set questions - "is every use
-// declared?" and "is every declaration used?" - and answering those by
-// re-walking a compiled chain would miss any occurrence the compiler folded
-// away.
-struct ParamUse {
-    std::string name;
-    std::uint32_t byte_offset = 0;
-};
-
-struct CreatePatternStmt {
-    std::string name;
-    std::uint32_t byte_offset = 0;  // of the pattern name
-
-    std::vector<PatternParam> params;  // may be empty: `()` is legal
-    std::vector<PatternOption> options;
-
-    // The declared body. shared_ptr for the reason Condition::subquery
-    // gives: Statement is copied by value, and unique_ptr would make the
-    // whole AST move-only.
-    std::shared_ptr<SelectStmt> body;
-
-    // **The whole declaration, verbatim** - `CREATE PATTERN` through the
-    // last token of the body - sliced from the input rather than rebuilt
-    // from the AST.
-    //
-    // This is the canon stored in `sys.pattern_defs`. The whole statement
-    // and not just the body, because a fingerprint version bump re-registers
-    // a declared pattern at boot (spec section 7) and that has to restore
-    // the declared types and the `WITH` options too - neither of which is
-    // recoverable from the body alone. It is also why there is no separate
-    // relation for the parameters: this text already carries them.
-    std::string source_text;
-
-    // The body alone, verbatim, sigils included. **This is what gets
-    // fingerprinted** - the declaration's leading clauses are not part of
-    // the shape any live statement has, so hashing them would guarantee the
-    // pattern matched nothing (spec section 3.2).
-    std::string body_text;
-
-    std::vector<ParamUse> param_uses;
-};
-
-struct DropPatternStmt {
-    std::string name;
-    std::uint32_t byte_offset = 0;
-};
+// `CREATE PATTERN` / `DROP PATTERN` stood here until 2026-08-31, when the
+// operator withdrew user-declared patterns
+// (`docs/spec/create-pattern-user-defined-patterns-v1.md`, marked withdrawn
+// and kept as the design record). A pattern is a fingerprint-identified
+// case tracked by statistics, and the declaration path was a second model
+// of that one thing. Nothing replaces these statements: `sys.patterns`, the
+// fingerprint, the waystone directory and the trail recorder never read the
+// declaration, which is what made removing it safe.
 
 // `DROP TABLE <name>` (docs/spec/drop-table.md). Catalog-scoped: the
 // relation becomes unreachable and its oid is tombstoned, never reissued
@@ -881,7 +813,7 @@ struct AssertionStmt {
     std::uint32_t bound_byte_offset = 0;
 
     // The whole declaration, verbatim, for `sys.assertions.source_text` -
-    // the `sys.pattern_defs` model (AS10), where the stored text is the
+    // the stored-text model (AS10), where the stored text is the
     // canon and the catalog row carries no per-column table beside it. It is
     // also what makes an unbounded `GROUP BY` list storable in a fixed-width
     // row: the columns are recovered by re-parsing this, not by widening a
@@ -902,8 +834,8 @@ struct AssertionStmt {
 };
 
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
-                               DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt,
-                               IndexStmt, AssertionStmt, AlterStmt, DropTableStmt>;
+                               DeleteStmt, CabinStmt, IndexStmt, AssertionStmt, AlterStmt,
+                               DropTableStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

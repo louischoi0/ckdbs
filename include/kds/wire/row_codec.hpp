@@ -131,8 +131,9 @@ void EncodeRowDescription(const std::vector<FieldDescription>& fields,
 //
 // Fails with InvalidArgument if the value's kind cannot satisfy the column
 // (an integer for a text column, a decimal whose scale disagrees), and
-// with Unsupported for a `kParam`, which is a declaration's placeholder
-// and never a result value.
+// with Unsupported for a `kParam`, which is a placeholder and never a
+// result value - unreachable since declared patterns were withdrawn
+// (parser/ast.hpp), and kept with the enumerator.
 Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& value,
                    std::vector<std::byte>& out);
 

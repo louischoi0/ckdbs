@@ -1754,11 +1754,18 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARelationSplitAcrossTwoCoresFansInInRangeO
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // The cut: [0, 4096) stays with the relation's owner, [4096, end)
-    // goes to another core.
+    // goes to another core. **The other core is read off the relation, not
+    // written down**: rotation counts the relations that already exist, so
+    // a bootstrap relation added or removed moves which core `CreateTable`
+    // picks - which is exactly what withdrawing `sys.pattern_defs` did on
+    // 2026-08-31, and what a hard-coded 2 was silently depending on.
+    auto owner = catalog2.InitTableAccess(oid.value());
+    ASSERT_TRUE(owner.ok()) << owner.status().message();
+    const std::uint32_t other_core = owner.value()->owner_core == 1 ? 2 : 1;
+
     auto upper_head = catalog2.CreateRangeEntryPage(oid.value(), 4096);
     ASSERT_TRUE(upper_head.ok()) << upper_head.status().message();
-    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, /*owner_core=*/2, upper_head.value())
-                    .ok());
+    ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), 4096, other_core, upper_head.value()).ok());
 
     auto ranges = catalog2.RangesOf(oid.value());
     ASSERT_TRUE(ranges.ok()) << ranges.status().message();
@@ -1932,9 +1939,16 @@ TEST_F(CoreRuntimeTest, AFanInOverInterleavedOwnershipStillAnswersInRangeOrder) 
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // [0,4096) -> the relation's owner, [4096,8192) -> another core,
-    // [8192, end) -> back to the owner. Two runs on one core.
-    for (auto [lo, owner] : std::vector<std::pair<std::uint64_t, std::uint32_t>>{{4096, 2},
-                                                                                {8192, 1}}) {
+    // [8192, end) -> back to the owner. Two runs on one core. Both cores
+    // are read off the relation rather than written down, for the reason
+    // the two-owner test above states: rotation counts existing relations,
+    // so a bootstrap relation removed moves which core CreateTable picks.
+    auto owner = catalog2.InitTableAccess(oid.value());
+    ASSERT_TRUE(owner.ok()) << owner.status().message();
+    const std::uint32_t own_core = owner.value()->owner_core;
+    const std::uint32_t other_core = own_core == 1 ? 2 : 1;
+    for (auto [lo, owner] : std::vector<std::pair<std::uint64_t, std::uint32_t>>{
+             {4096, other_core}, {8192, own_core}}) {
         auto head = catalog2.CreateRangeEntryPage(oid.value(), lo);
         ASSERT_TRUE(head.ok()) << head.status().message();
         ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), lo, owner, head.value()).ok());
@@ -3693,7 +3707,7 @@ TEST_F(CoreRuntimeTest, APeerRefusesEveryDdlVerbByNameAndStillServesReads) {
     const std::string_view ddl[] = {
         "CREATE TABLE pw4 (id int64, v int64)",
         "CREATE INDEX pw4_v ON pw4 (v)",
-        "CREATE PATTERN p4 ON pw4 (v)",
+        "CREATE ASSERTION a4 ON pw4 GROUP BY (v) CHECK COUNT(*) <= 1",
         "CREATE CABIN c4 ON pw4 (v)",
         "ALTER TABLE pw4 RENAME TO pw4b",
         "DROP TABLE pw4",

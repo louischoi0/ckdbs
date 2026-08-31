@@ -109,14 +109,6 @@ void CatalogCache::UpdatePatternWaystone(std::uint64_t pattern_id, PageId root,
     it->second.dir_depth = depth;
 }
 
-void CatalogCache::UpdatePatternOrigin(std::uint64_t pattern_id, std::uint8_t origin,
-                                       std::uint16_t flags) noexcept {
-    auto it = patterns_.find(pattern_id);
-    if (it == patterns_.end()) return;
-    it->second.origin = origin;
-    it->second.flags = flags;
-}
-
 void CatalogCache::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId root) noexcept {
     auto it = table_access_.find(rel_oid);
     if (it == table_access_.end()) return;

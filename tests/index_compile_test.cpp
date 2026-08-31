@@ -286,15 +286,13 @@ TEST_F(IndexCompileTest, ACoveredColumnFiltersBeforeTheBaseDescent) {
               Run("SELECT id FROM u WHERE a = 1 AND b = 2"));
 }
 
-TEST_F(IndexCompileTest, AParamNeverEntersAnIndex) {
-    // A declared pattern's body is compiled to be type-checked and
-    // fingerprinted, never run, so there is no value to encode a key from -
-    // and nothing is lost, because these kinds are search-class either way.
-    Ok("CREATE TABLE t (id int64, a int64) BTREE");
-    Ok("CREATE INDEX ix ON t (a)");
-    const std::string out = Run("CREATE PATTERN p ($x int64) OF SELECT * FROM t WHERE a = $x");
-    EXPECT_NE(out.rfind("ERR", 0), 0u) << out;
-}
+// `AParamNeverEntersAnIndex` stood here: it declared a pattern whose body
+// put a `$x` on an indexed column and checked the declaration was accepted
+// rather than made into a key. Nothing constructs a `kParam` since declared
+// patterns were withdrawn on 2026-08-31, so there is no statement left that
+// could reach the guard; the guard itself stays in `step_compiler.cpp` with
+// the reason it is kept, which is that a kParam borrows `str_val` for a
+// name and would index it.
 
 TEST_F(IndexCompileTest, ATypedKeyColumnCompilesItsLiteralOnce) {
     // Coercion is a compile-time act and so is the key encoding that follows

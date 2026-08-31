@@ -74,7 +74,6 @@ add_library(kds
     src/catalog/sys_object_registry.cpp
     src/stats/waystone_page.cpp
     src/stats/waystone_dir.cpp
-    src/stats/pattern_defs.cpp
     src/stats/trail_store.cpp
     src/stats/trail_recorder.cpp
     src/stats/access_stats.cpp
@@ -128,7 +127,6 @@ add_library(kds
     src/exec/catalog_view.cpp
     src/exec/trail_replay.cpp
     src/exec/tuple_verify.cpp
-    src/exec/pattern_ddl.cpp
     src/exec/wal_row_log.cpp
     src/exec/cabin_ddl.cpp
     src/exec/index_ddl.cpp

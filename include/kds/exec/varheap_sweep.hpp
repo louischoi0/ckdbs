@@ -17,12 +17,18 @@
 // rollback and recovery's undo phase both reach it. That closed the general
 // case and left one hole, which is what this file is for.
 //
-// `exec::LogChainInsert` logs its spills under `wal::kNoTxnId`, and two
-// callers take that path - `sys.pattern_defs` (`CREATE PATTERN`'s body
-// text) and the assertion catalog. `kNoTxnId` means *no transaction owns
-// this write*, so there is no undo chain to link the append into and no
-// compensation to run: a rolled-back `CREATE PATTERN`'s spilled body stays
-// in the var-heap, referenced by nothing, forever.
+// `exec::LogChainInsert` logs its spills under `wal::kNoTxnId`, and **one**
+// caller takes that path: the assertion catalog, which stores a
+// declaration's source text. `kNoTxnId` means *no transaction owns this
+// write*, so there is no undo chain to link the append into and no
+// compensation to run: a rolled-back `CREATE ASSERTION`'s spilled body
+// stays in the var-heap, referenced by nothing, forever.
+//
+// It was two callers until 2026-08-31 - `sys.pattern_defs` held `CREATE
+// PATTERN`'s body text the same way - and the operator's withdrawal of
+// declared patterns removed the second. The sweep is unchanged by that: the
+// hole is the `kNoTxnId` logging path, not the relation, so one caller
+// leaves it exactly as open as two did.
 //
 // **The answer is a sweep rather than an undo record**, and the reason is
 // the envelope rather than convenience. Giving these writes a real
@@ -42,11 +48,11 @@
 // is between two pages.
 //
 // It is deliberately **not** a general var-heap collector. It sweeps the
-// two relations whose spills are made with `kNoTxnId`, named explicitly,
-// because every other relation's spills are already released by the
-// mechanism above and sweeping them would be a second authority over the
-// same bytes - the thing `varheap_release.hpp` exists to prevent for the
-// release step itself.
+// relations whose spills are made with `kNoTxnId`, named explicitly in
+// `catalog_spills.hpp`, because every other relation's spills are already
+// released by the mechanism above and sweeping them would be a second
+// authority over the same bytes - the thing `varheap_release.hpp` exists to
+// prevent for the release step itself.
 //
 // Concurrency: mount-time, single-threaded, core 0. It writes catalog-owned
 // var-heap pages, which is core 0's by M5.
@@ -75,9 +81,9 @@ struct VarHeapSweepReport {
 // unlogged store), in which case the releases are unlogged like every other
 // write on such a store.
 //
-// Returns the totals across both relations. A relation with no var-heap
-// chain - nothing has spilled into it yet - contributes nothing and is not
-// an error.
+// Returns the totals across every relation on that list. One with no
+// var-heap chain - nothing has spilled into it yet - contributes nothing
+// and is not an error.
 StatusOr<VarHeapSweepReport> SweepUnownedSpills(catalog::Catalog& catalog,
                                                 storage::PageStore& store,
                                                 wal::WalManager* wal);

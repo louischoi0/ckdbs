@@ -19,17 +19,16 @@
 //
 // ---- Recording is not free, so it is not unconditional ------------------
 //
-// `n = 2` for an auto-observed pattern (spec section 9, decided
-// 2026-08-01): the first execution of an instance only *counts*, the second
-// records. Recording on first sight pays a page write for every one-shot
-// query a client ever sends; waiting longer misses short-lived hot
-// instances. Two is the smallest n that excludes the one-shot case.
+// `n = 2`, for every pattern (spec section 9, decided 2026-08-01): the
+// first execution of an instance only *counts*, the second records.
+// Recording on first sight pays a page write for every one-shot query a
+// client ever sends; waiting longer misses short-lived hot instances. Two
+// is the smallest n that excludes the one-shot case.
 //
-// `n = 1` for a **user-declared** pattern
-// (docs/spec/create-pattern-user-defined-patterns-v1.md section 7): a
-// declaration *is* the evidence n=2 waits for. An operator who wrote
-// `CREATE PATTERN` has already said this shape repeats, and making them
-// prove it again with traffic is asking a question that was answered.
+// A **user-declared** pattern recorded at `n = 1` - a declaration was the
+// evidence n=2 waits for - until the operator withdrew declared patterns on
+// 2026-08-31. One threshold is the whole policy now, which is what lets the
+// recorder answer a first sighting without reading the catalog at all.
 //
 // ---- What this deliberately does not do ---------------------------------
 //
@@ -69,8 +68,7 @@ public:
     // otherwise.
     static constexpr std::size_t kMaxSightings = 4096;
 
-    // Executions an auto-observed instance must reach before its trail is
-    // written. A declared pattern's instances record at 1.
+    // Executions an instance must reach before its trail is written.
     static constexpr std::uint8_t kAutoRecordThreshold = 2;
 
     struct Stats {
@@ -108,7 +106,7 @@ public:
     // Whether an instance would record *right now*, without observing it.
     // Exposed for tests and for a future EXPLAIN-style surface; the policy
     // lives in one place and this is it.
-    bool WouldRecord(std::uint8_t sightings, std::uint8_t origin) const noexcept;
+    bool WouldRecord(std::uint8_t sightings) const noexcept;
 
 private:
     // Bumps `key`'s sighting count and returns the new value, clearing the

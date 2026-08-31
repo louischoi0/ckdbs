@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
-#include "kds/exec/pattern_ddl.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -88,21 +87,6 @@ TEST_F(TrailRecorderTest, AnObservedInstanceRecordsOnItsSecondExecution) {
     EXPECT_EQ(recorder_->stats().patterns_registered, 1u);
 }
 
-TEST_F(TrailRecorderTest, ADeclaredPatternRecordsOnItsFirstExecution) {
-    // A declaration *is* the evidence n=2 waits for
-    // (create-pattern-user-defined-patterns-v1.md section 7), so
-    // making an operator prove it again with traffic asks a question they
-    // already answered.
-    ASSERT_EQ(Run("CREATE PATTERN p($id int64) OF SELECT * FROM t WHERE id = $id").substr(0, 7),
-              "CREATED");
-
-    const std::string sql = "SELECT * FROM t WHERE id = 3";
-    Run(sql);
-    EXPECT_EQ(TrailFor(sql).size(), 1u);
-    // Declared, so nothing had to be auto-registered.
-    EXPECT_EQ(recorder_->stats().patterns_registered, 0u);
-}
-
 TEST_F(TrailRecorderTest, TwoInstancesOfOnePatternCountSeparately) {
     // The sighting count is per *instance*, not per pattern: one hot
     // argument must not make a cold one look hot.
@@ -118,12 +102,13 @@ TEST_F(TrailRecorderTest, TwoInstancesOfOnePatternCountSeparately) {
 }
 
 TEST_F(TrailRecorderTest, WouldRecordIsTheOnePlaceThePolicyLives) {
-    EXPECT_FALSE(recorder_->WouldRecord(0, catalog::kOriginAuto));
-    EXPECT_FALSE(recorder_->WouldRecord(1, catalog::kOriginAuto));
-    EXPECT_TRUE(recorder_->WouldRecord(2, catalog::kOriginAuto));
-
-    EXPECT_FALSE(recorder_->WouldRecord(0, catalog::kOriginUser));
-    EXPECT_TRUE(recorder_->WouldRecord(1, catalog::kOriginUser));
+    // One threshold for every pattern. A `CREATE PATTERN` declaration
+    // lowered it to 1 for the shape it named - the declaration *was* the
+    // evidence n=2 waits for - until the operator withdrew declared
+    // patterns on 2026-08-31, which left this the whole of the policy.
+    EXPECT_FALSE(recorder_->WouldRecord(0));
+    EXPECT_FALSE(recorder_->WouldRecord(1));
+    EXPECT_TRUE(recorder_->WouldRecord(2));
 }
 
 // ---- What is in a trail --------------------------------------------------

@@ -290,8 +290,10 @@ TEST(LexerTest, ANamedParameterKeepsItsNameAndDropsItsSigil) {
 
 TEST(LexerTest, ANamedParameterIsNotTheBindPlaceholder) {
     // Two token types, deliberately: they agree about the fingerprint
-    // (both are ShapeTag::kValue) and disagree about the grammar - `?` is
-    // refused everywhere, `$x` is accepted in a declared pattern body.
+    // (both are ShapeTag::kValue) and disagree about what a client is told.
+    // `$x` was accepted in a declared pattern body until 2026-08-31 and is
+    // now refused everywhere too, with its own message - the token stays
+    // reserved for the extended protocol's named binds (D4).
     auto toks = LexAll("? $x");
     EXPECT_EQ(toks[0].type, TokenType::kParam);
     EXPECT_EQ(toks[1].type, TokenType::kNamedParam);

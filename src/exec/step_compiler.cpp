@@ -423,8 +423,9 @@ bool IsOwnColumn(const ColumnRef& ref, std::uint16_t slot) {
 //    per-row comparisons when measured.
 //
 // Derived conjuncts carry `StepPredicate::derived`, so ANALYZE can mark
-// them and CREATE PATTERN's parameter checks can name only what the client
-// wrote.
+// them and name only what the client wrote. `CREATE PATTERN`'s parameter
+// checks were the second reader of the mark, for the same reason, until
+// that statement was withdrawn on 2026-08-31.
 void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predicates) {
     // Equivalence classes over this chain's columns (`up == 0` on both
     // sides) connected by written column-column equalities, in first-seen
@@ -585,6 +586,8 @@ ColumnBounds BoundsOnColumn(const Step& step, std::uint16_t slot, std::uint16_t 
     for (const StepPredicate& pred : step.residual) {
         if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != col_pos) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        // Unconstructible since declared patterns were withdrawn, and kept
+        // for EqualityOnColumn's reason below.
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
         if (pred.op == parser::CompareOp::kGte) out.low = &pred.rhs.literal;
         if (pred.op == parser::CompareOp::kLte) out.high = &pred.rhs.literal;
@@ -599,11 +602,13 @@ const parser::AstValue* EqualityOnColumn(const Step& step, std::uint16_t slot,
         if (pred.op != parser::CompareOp::kEq) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
         if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != col_pos) continue;
-        // A `$param` never enters an index, for the reason CabinProbeOf
-        // declines one: a declared pattern's body is compiled to be
-        // type-checked and fingerprinted, never run, so there is no value to
-        // encode a key from - and nothing is lost, since these kinds are
-        // search-class and the replayability verdict is the same either way.
+        // A `$param` never enters an index. Nothing constructs one since
+        // declared patterns were withdrawn (ast.hpp), so this is
+        // unreachable - and it stays because the failure it prevents is
+        // silent rather than loud: a kParam borrows `str_val` for the
+        // parameter's *name*, so encoding one as a key on a varchar column
+        // would index the name and return a wrong answer, where every other
+        // consumer of this kind refuses it outright.
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
         return &pred.rhs.literal;
     }
@@ -828,11 +833,10 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
         const catalog::TableAccess::CabinRef cabin = access.CabinOn(pred.lhs.col_pos);
         if (cabin.id == 0) continue;
 
-        // A `$param` never probes a Cabin. A declared pattern's body is
-        // compiled to be type-checked and fingerprinted, never run, so
-        // there is no value to key an entry set on - and unlike the pk case
-        // above, nothing is lost by declining: kCabinProbe is search-class,
-        // so the declaration's replayability verdict is the same either way.
+        // A `$param` never probes a Cabin. Unreachable for
+        // EqualityOnColumn's reason and kept for it, though the exposure
+        // here is smaller: `MakeCabinKey` already refuses the kind, so this
+        // guard saves the walk rather than the answer.
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
 
         CabinProbe probe;
@@ -1607,22 +1611,22 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             }
 
             if (candidate->kind == OperandKind::kLiteral) {
-                // A declared pattern's `$param` is pk-eligible, and it has
-                // to be. The access kind *is* Waystone's trust model
-                // (step_chain.hpp), so a `WHERE id = $x` body that compiled
-                // to kScan would be reported as un-replayable at CREATE
-                // PATTERN - a warning about precisely the shape declaring a
-                // pattern exists to make replayable. A param stands for an
-                // integer the traffic will supply, so it is treated as one
-                // here; the chain still never executes.
-                const bool param = candidate->literal.type == parser::ValueType::kParam;
                 // A negative literal cannot be a pk: ids are zero-extended
                 // 40-bit values (invariant 7), so this equality can never
                 // hold. Left as a scan with the residual intact, which
                 // returns the correct empty answer rather than probing an
                 // enormous unsigned key.
-                if (!param && (candidate->literal.type != parser::ValueType::kInt ||
-                               candidate->literal.int_val < 0)) {
+                //
+                // A declared pattern's `$param` was pk-eligible here, so a
+                // `WHERE id = $x` body compiled to kLookup and the
+                // declaration's replayability warning read true - the
+                // access kind *is* Waystone's trust model
+                // (step_chain.hpp). That was the one place `kParam` was
+                // consumed rather than refused, and it went with declared
+                // patterns on 2026-08-31; a kParam now falls through this
+                // check like any other non-integer literal.
+                if (candidate->literal.type != parser::ValueType::kInt ||
+                    candidate->literal.int_val < 0) {
                     continue;
                 }
                 step.kind = AccessKind::kLookup;

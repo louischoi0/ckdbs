@@ -306,12 +306,12 @@ inline constexpr std::uint8_t kCabinPolicyAuto = 2;
 // **Enabled.** A Cabin is created on this column at `CREATE TABLE`, and its
 // values are observed **on first selection** rather than on second.
 //
-// The n=1 half mirrors the rule `CREATE PATTERN` already settled
-// (`TrailRecorder`: n=1 for a declared pattern, n=2 for an auto-observed
-// one) and rests on the same argument: a declaration *is* the evidence that
-// waiting exists to gather. An operator who wrote `CABIN` on the column has
-// already said it is probed by value, and making them prove it with traffic
-// asks a question that was answered.
+// The n=1 half rests on the argument `CREATE PATTERN` settled first, and
+// keeps it now that the pattern half is gone (withdrawn 2026-08-31;
+// `TrailRecorder` has one threshold, n=2, for every pattern): a declaration
+// *is* the evidence that waiting exists to gather. An operator who wrote
+// `CABIN` on the column has already said it is probed by value, and making
+// them prove it with traffic asks a question that was answered.
 inline constexpr std::uint8_t kCabinPolicyEnabled = 3;
 
 // The policy a column carries when nothing said otherwise - including every
@@ -535,16 +535,20 @@ struct SysPatternRow {
 
     // Policy bits. Today only kPatternPinned, which says what retention may
     // do to this pattern's waystones
-    // (docs/spec/create-pattern-user-defined-patterns-v1.md section 4.1).
+    // (docs/spec/create-pattern-user-defined-patterns-v1.md section 4.1,
+    // withdrawn). **Nothing writes it**, and nothing reads it either -
+    // retention is unbuilt - so every row carries 0.
     std::uint16_t flags;
 
-    // Who created this row: kOriginAuto or kOriginUser.
+    // Who created this row: kOriginAuto or kOriginUser. **Every row is
+    // kOriginAuto**, since withdrawing declared patterns took away the only
+    // writer of the other value.
     //
     // **Separate from `flags` on purpose.** Origin is provenance and
-    // pinning is policy, and they move independently: an operator may pin
-    // an auto-registered pattern without re-declaring it, and a declared
-    // pattern may be created unpinned. Folding pinning into origin would
-    // make both of those unspellable.
+    // pinning is policy, and they moved independently: an operator could
+    // pin an auto-registered pattern without re-declaring it, and a
+    // declared pattern could be created unpinned. Folding pinning into
+    // origin would have made both of those unspellable.
     //
     // The field order below is not cosmetic. `flags` (u16) sits before
     // `origin` (u8) because `dir_depth` ends the row at 37: a u16 next pads
@@ -583,19 +587,29 @@ static_assert(offsetof(SysPatternRow, flags) == SysPatternRow::kFlagsOffset);
 static_assert(offsetof(SysPatternRow, origin) == SysPatternRow::kOriginOffset);
 static_assert(SysPatternRow::kOnDiskSize == 41);
 
-// Who wrote a sys.patterns row. Persisted, so the numbers are frozen.
+// Who wrote a sys.patterns row. Persisted, so the numbers are frozen -
+// which is the whole reason both are still here after user-declared
+// patterns were withdrawn on 2026-08-31. `origin` is a `u8` at offset 37
+// because `dir_depth` ends the row there and a `u16` would pad, so dropping
+// it would move the on-disk layout for a field nothing pays for; and the
+// concept is not this feature's alone - `SysCabinRow` mirrors it below with
+// kCabinOriginAuto/kCabinOriginUser.
 //
-// The distinction is lifecycle policy, never the trust model: a replayed
-// entry is validated identically whatever its origin, for the same reason
-// the engine keeps one evaluator and one step-kind table. What origin
-// decides is recording probation (a declaration *is* the evidence n=2 waits
-// for, so a user pattern records from its first execution) and what a
-// fingerprint version bump does to the row - an auto row holds only a hash
-// and retires, a user row re-fingerprints from its stored source text.
+// **Only kOriginAuto is ever written now.** What the distinction decided
+// while it had a writer, kept because a re-designed declaration would
+// decide the same things: recording probation (a declaration *is* the
+// evidence n=2 waits for, so a user pattern recorded from its first
+// execution) and what a fingerprint version bump does to the row - an auto
+// row holds only a hash and retires, a user row re-fingerprinted from its
+// stored source text. It was never the trust model: a replayed entry is
+// validated identically whatever its origin, for the same reason the engine
+// keeps one evaluator and one step-kind table.
 inline constexpr std::uint8_t kOriginAuto = 0;
 inline constexpr std::uint8_t kOriginUser = 1;
 
-// `flags` bit 0: retention may not evict this pattern's waystones.
+// `flags` bit 0: retention may not evict this pattern's waystones. **No
+// writer since 2026-08-31** - `CREATE PATTERN` was the only one - and no
+// reader either, because retention is unbuilt.
 //
 // A policy promise, not a correctness requirement - invariant 8 still holds
 // for a pinned pattern, so a manual purge remains legal and costs

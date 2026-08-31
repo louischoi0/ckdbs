@@ -147,9 +147,11 @@ struct MountRecovery {
 
     // Var-heap slots this mount collected because no row pointed at them
     // (H7, `exec/varheap_sweep.hpp`). The leak it exists for is a
-    // rolled-back `CREATE PATTERN`'s spilled body text: `LogChainInsert`
+    // rolled-back `CREATE ASSERTION`'s spilled body text: `LogChainInsert`
     // logs its spills under `kNoTxnId`, so there is no transaction to chain
-    // an undo record to and no compensation runs.
+    // an undo record to and no compensation runs. A rolled-back `CREATE
+    // PATTERN`'s body leaked the same way until declared patterns were
+    // withdrawn on 2026-08-31.
     //
     // **Not a leak count.** `varheap::PageRelease` is idempotent and cannot
     // tell a live slot it is killing from a tombstone it is rewriting, so

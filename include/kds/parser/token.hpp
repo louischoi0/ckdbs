@@ -118,25 +118,29 @@ enum class TokenType {
     // what the client actually typed while a comparison stays case
     // insensitive.
     //
-    // Accepted by exactly one production - the body of `CREATE PATTERN`
-    // (docs/spec/create-pattern-user-defined-patterns-v1.md section 3.1).
-    // Everywhere else the parser refuses it with a position; the token is
-    // *reserved* for the extended protocol's named binds (D4), and nothing
-    // wires that yet.
+    // Accepted by **no** production. It was accepted by exactly one - the
+    // body of `CREATE PATTERN`
+    // (docs/spec/create-pattern-user-defined-patterns-v1.md section 3.1) -
+    // until the operator withdrew declared patterns on 2026-08-31, so the
+    // parser now refuses `$x` with a position wherever it is written. The
+    // token stays *reserved* for the extended protocol's named binds (D4),
+    // and nothing wires that yet.
     //
-    // A separate type from kParam rather than a spelling of it, because the
-    // two differ in what the parser does with them (`?` is refused
-    // everywhere, `$x` is accepted in a declared body) while agreeing in
-    // what the fingerprint does with them (both are ShapeTag::kValue). One
-    // type for both would collapse a grammar distinction to buy a hash
-    // distinction that does not exist.
+    // Still a separate type from kParam rather than a spelling of it. The
+    // two agree in what the fingerprint does with them (both are
+    // ShapeTag::kValue) and differ in what a client is told - `?` is a
+    // placeholder with no BIND stage behind it, `$x` is a name - which is
+    // the distinction the two refusal messages carry. Folding them together
+    // would buy nothing and lose that.
     //
-    // **The sigil is what makes the feature possible at all.** Identifiers
-    // are case-folded, so a parameter named `a` and an alias written
-    // `AS a` would collide, and "value position" cannot disambiguate them
-    // because a join predicate puts columns in value position too
+    // **The sigil is why a re-designed declaration grammar would be
+    // possible at all**, and is recorded here because it is the one part of
+    // the withdrawn feature that lived in the lexer. Identifiers are
+    // case-folded, so a parameter named `a` and an alias written `AS a`
+    // would collide, and "value position" cannot disambiguate them because
+    // a join predicate puts columns in value position too
     // (`ON t.id = a.id`). Removing the ambiguity at the token level is what
-    // means no collision check against aliases or column names is needed
+    // meant no collision check against aliases or column names was needed
     // anywhere above.
     kNamedParam,
 

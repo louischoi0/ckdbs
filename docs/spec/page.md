@@ -161,8 +161,9 @@ re-stamps from it; `CREATE TABLE` and `CREATE INDEX` issue the oid *before*
 the first page so roots and backfill-split pages stamp from birth (the
 index oid is pre-issued via `IndexDef::index_oid`); FPI-created pages carry
 the stamp inside the image for free. Catalog-core fixed pages and their
-overflow stay 0 (the catalog class); `sys.pattern_defs`/`sys.assertions`
-chains stamp their well-known oids because `ChainInsert` grows them. Tests:
+overflow stay 0 (the catalog class); the `sys.assertions` chain stamps
+its well-known oid because `ChainInsert` grows it, as `sys.pattern_defs`'
+did until that relation was withdrawn on 2026-08-31. Tests:
 header round-trip and stamp, payload owner / legacy-through-the-envelope /
 shorter-than-legacy, redo stamp, chain-growth stamp, split stamp.
 

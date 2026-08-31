@@ -16,8 +16,9 @@
 // pattern. That is the seam spec section 1 asks for - "Waystone lives
 // outside the executor" - and it is what keeps the *dependency arrow*
 // pointing one way: `stats/` already depends on `exec/`
-// (stats/pattern_defs.cpp reads rows through exec/row_codec.hpp), so an
-// executor that included a Waystone header would close a cycle.
+// (stats/access_stats.hpp and stats/relayout_planner.hpp both include
+// exec/step_chain.hpp), so an executor that included a Waystone header
+// would close a cycle.
 //
 // The conversion to a `WaystoneEntry` happens in stats/trail_store.hpp,
 // which is the layer that owns the format.

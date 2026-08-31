@@ -75,6 +75,8 @@ the owner's workplan.
   **closed 2026-08-19, the same day it was named**: `sys.pattern_defs`
   and `sys.assertions` write through `exec/wal_row_log.hpp` now, and an
   acknowledged `CREATE ASSERTION` survives a crash and **enforces**.
+  (`sys.pattern_defs` was withdrawn with declared patterns on 2026-08-31;
+  `sys.assertions` is the relation the mechanism serves.)
   Proving it exposed two pre-existing holes, both closed: redo
   mis-formatted `kCabinBound` bodies, and every transactionless DDL
   statement (pattern, assertion, cabin, ALTER) had no commit record for
@@ -705,7 +707,8 @@ still waits on its own gate, so:
   fail without the fix.
   **The residual this leaves, named**: four catalog relations are written
   with **no** `BumpVersion` and therefore no broadcast — `sys.patterns`,
-  `sys.pattern_defs`, `sys.access_stats` and `sys.assertions`. Core 0 can
+  `sys.access_stats` and `sys.assertions` (and `sys.pattern_defs`, until
+  it was withdrawn on 2026-08-31, which makes it three). Core 0 can
   grow any of them onto an overflow page and tell no peer. It is safe only
   because a peer's dispatcher is built with no recorder, no replay, no
   access statistics and no cabins, and its assertion registry is never
@@ -840,6 +843,29 @@ still waits on its own gate, so:
   permitted by the row-id sequence.
 
 ## Concurrency and multicore
+
+- **`placement = rotate` assigns owners from a count of the relations that
+  exist, catalog relations included — so adding or removing a bootstrap
+  relation moves every rotated relation's owner core** (found 2026-08-31,
+  by work order PD's removal of `sys.pattern_defs`).
+  `AssignOwnerCore(policy, creating_core, core_count, relation_seq)`
+  (`include/kds/catalog/core_placement.hpp`) takes `relation_seq` from
+  `ScanAll<SysTableRow>` — *how many relations already exist* — and
+  `catalog.cpp` says so, with the reason: an oid counts objects ever
+  created, where placement wants relations that exist now. What the reason
+  does not say is that the count starts at the bootstrap relations, so a
+  change to the bootstrap set is a change to placement. Withdrawing one
+  relation shifted the first user relation on a fresh database from core 1
+  to core 2, and two `CoreRuntimeTest` fan-in fixtures that had written
+  their second owner down as `2` failed on it. **Nothing is wrong with the
+  placement** — rotation is an exercise mode and any assignment satisfies
+  it — but two consequences are worth naming before the mover exists: a
+  test or a benchmark that pins an owner core by number is pinned to the
+  bootstrap catalog's size, and an existing database keeps whatever
+  assignment its relations were created under, so the same schema built by
+  two builds can be laid out differently. The fixtures now read the owner
+  off the relation instead of writing it down; nothing in the engine reads
+  a rotated owner by number.
 
 - **A spread relation is readable up to 64 ranges, and a range is a lease
   block** (R4, 2026-08-29,
@@ -1673,8 +1699,10 @@ still waits on its own gate, so:
   var-heap value is immutable per version — but it means a
   shared-nothing violation is invisible in the configuration every
   measurement is taken in, and a test can only catch a missing fault grant
-  in Debug. That is how `sys.pattern_defs`' missing grant stayed latent, and
-  it is why CB2's tests assert both arms rather than one.
+  in Debug. That is how `sys.pattern_defs`' missing grant stayed latent —
+  the relation was withdrawn on 2026-08-31 but the store property that hid
+  it was never about that relation — and it is why CB2's tests assert both
+  arms rather than one.
   The original scoping note follows:
   a peer cannot issue a **transaction id** at all (`TrxIdSequence`
   constructs spent, and a peer's persist callback refuses), two catalog
@@ -1857,11 +1885,14 @@ still waits on its own gate, so:
   from the general supply — so a peer faulting one is refused `may not fault
   page N`. Found by PW1c-6c, whose mount has to read `sys.assertions`'
   declarations, and closed *for that relation only* by granting the mount read
-  rights over exactly the pages the rows name (`exec::AssertionSpillPages`,
+  rights over exactly the pages the rows name (`exec::CatalogSpillPages`,
   page by page — an extent grant would cover pages the core owns and cost it
-  PW1c-7's stamp-claimed write rights, which a test proved). `sys.pattern_defs`
-  has the same shape and no peer reader today; a general close would put
-  catalog var-heap pages in the reserved low range, which is a format change.
+  PW1c-7's stamp-claimed write rights, which a test proved). CB2 generalised
+  that from the assertion catalog to a named list of var-heap catalog
+  relations, which held `sys.pattern_defs` too until declared patterns were
+  withdrawn on 2026-08-31 and is `sys.assertions` alone again. A general
+  close would put catalog var-heap pages in the reserved low range, which is
+  a format change and stays unbuilt.
 
 ## Storage and key modes
 
@@ -2239,13 +2270,13 @@ All fixed by `b11cc81`; the suite is green.
   closed question rather than a race — and `SHOW META`'s recovery block
   gains `varheap_slots_swept`.
 
-  **Scoped to the two relations that take the `kNoTxnId` path**, named in a
-  constant rather than discovered: `sys.pattern_defs` and the assertion
-  catalog are `exec::LogChainInsert`'s only callers, and every other
-  relation's spills are released by the rollback path, so sweeping them
-  would put a second authority over bytes `varheap_release.hpp` already
-  owns. Adding a third `LogChainInsert` caller has to be a decision to add
-  it here too.
+  **Scoped to the relations that take the `kNoTxnId` path**, named in a
+  constant rather than discovered: the assertion catalog is
+  `exec::LogChainInsert`'s only caller since `sys.pattern_defs` was
+  withdrawn on 2026-08-31, and every other relation's spills are released
+  by the rollback path, so sweeping them would put a second authority over
+  bytes `varheap_release.hpp` already owns. Adding another
+  `LogChainInsert` caller has to be a decision to add it to the list too.
 
   Two things the row states rather than over-claims. **`varheap_slots_swept`
   is not a leak count**: `varheap::PageRelease` is idempotent and cannot

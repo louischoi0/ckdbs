@@ -535,22 +535,11 @@ TEST_F(Rv3CrashTest, ACommittedCreateAssertionEnforcesAfterACrash) {
         << "the recovered assertion is listed but not enforcing: " << refused;
 }
 
-// The pattern twin: advisory (invariant 8), so what a crash used to cost
-// was a re-learned pattern - but the definition is a durable declaration
-// the operator made, and it survives like one now.
-TEST_F(Rv3CrashTest, ACommittedCreatePatternSurvivesACrash) {
-    MakeStrict();
-    ASSERT_EQ(Run("CREATE TABLE t (id int64, v int64)").substr(0, 7), "CREATED");
-    ASSERT_EQ(Run("CREATE PATTERN watch($k int64) OF SELECT v FROM t WHERE id = $k")
-                  .rfind("ERR", 0),
-              std::string::npos);
-
-    instance_->Crash();
-    Status rebooted = instance_->Reboot();
-    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
-    EXPECT_NE(Run("SHOW PATTERNS").find("watch"), std::string::npos)
-        << "an acknowledged CREATE PATTERN vanished across the crash";
-}
+// `ACommittedCreatePatternSurvivesACrash` stood here - the pattern twin of
+// the assertion case above, proving RV3 logged a declaration's catalog row.
+// It went with declared patterns on 2026-08-31; the assertion case is the
+// surviving cover for the same mechanism, which is the row log rather than
+// the statement.
 
 // The SLOT_RETIRE half of the same remainder: a dropped declaration must
 // stay dropped, or a crash resurrects an assertion the operator removed -
@@ -562,10 +551,6 @@ TEST_F(Rv3CrashTest, ADroppedDeclarationStaysDroppedAcrossACrash) {
                   .substr(0, 7),
               "CREATED");
     ASSERT_EQ(Run("DROP ASSERTION cap").rfind("ERR", 0), std::string::npos);
-    ASSERT_EQ(Run("CREATE PATTERN watch($k int64) OF SELECT id FROM trades WHERE id = $k")
-                  .rfind("ERR", 0),
-              std::string::npos);
-    ASSERT_EQ(Run("DROP PATTERN watch").rfind("ERR", 0), std::string::npos);
 
     instance_->Crash();
     Status rebooted = instance_->Reboot();
@@ -573,8 +558,6 @@ TEST_F(Rv3CrashTest, ADroppedDeclarationStaysDroppedAcrossACrash) {
 
     EXPECT_EQ(Run("SHOW ASSERTIONS").find("cap"), std::string::npos)
         << "a dropped assertion resurrected across the crash";
-    EXPECT_EQ(Run("SHOW PATTERNS").find("watch"), std::string::npos)
-        << "a dropped pattern resurrected across the crash";
     // And the dropped assertion must not refuse: two rows into one group
     // crosses its old bound of 1, which only a resurrected cap would mind.
     ASSERT_EQ(Run("INSERT INTO trades VALUES (7)").substr(0, 8), "INSERTED");
@@ -721,8 +704,7 @@ TEST(SimWorkload, TheGeneratedStreamCoversEveryV2Shape) {
     for (const Op::Kind kind :
          {Op::Kind::kInsert, Op::Kind::kUpdate, Op::Kind::kDelete, Op::Kind::kSelectPk,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kBegin,
-          Op::Kind::kCommit, Op::Kind::kRollback, Op::Kind::kCreateCabin,
-          Op::Kind::kCreatePattern}) {
+          Op::Kind::kCommit, Op::Kind::kRollback, Op::Kind::kCreateCabin}) {
         EXPECT_GT(seen[kind], 0) << "the stream never generates " << OpKindName(kind);
     }
 
@@ -792,11 +774,13 @@ TEST(SimLoop, ThePairingComparatorDiscriminates) {
                              "INSERTED oid=4000 id=8 page=134 slot=0"))
         << "a differing id passed as the same answer";
 
-    Op pattern;
-    pattern.kind = Op::Kind::kCreatePattern;
-    EXPECT_TRUE(SameOutcome(pattern, "CREATED PATTERN name=p0 pattern_id=0x1 dir_depth=1",
-                            "ADOPTED PATTERN name=p0 pattern_id=0x1 dir_depth=1"));
-    EXPECT_FALSE(SameOutcome(pattern, "CREATED PATTERN name=p0", "ERR nope"));
+    // An advisory declaration is compared on acceptance alone: the reply
+    // reports advisory state on purpose, so only ERR-ness may differ.
+    Op cabin;
+    cabin.kind = Op::Kind::kCreateCabin;
+    EXPECT_TRUE(SameOutcome(cabin, "CREATED CABIN on=t(v) cabin_id=1",
+                            "CREATED CABIN on=t(v) cabin_id=1\\nWARN no observed filter"));
+    EXPECT_FALSE(SameOutcome(cabin, "CREATED CABIN on=t(v) cabin_id=1", "ERR nope"));
 }
 
 // ---- SIM07: the plan, the case file, the minimizer ------------------------

@@ -684,19 +684,14 @@ public:
     // as registered, so a version bump leaves every shape re-learnable
     // rather than permanently blocked.
     //
-    // `origin` and `flags` (rows.hpp) default to what auto-registration
-    // wants - an unpinned kOriginAuto row - so the observing path never has
-    // to name them. `CREATE PATTERN` passes kOriginUser and, by default,
-    // kPatternPinned: declaring a pattern and then letting retention evict
-    // it silently would defeat the declaration.
-    //
-    // The row is always written with **no waystone directory**. A declared
-    // pattern's `expected_instances` becomes a depth through the one writer
-    // of that pair, SetPatternWaystoneRoot(), immediately after.
+    // The row is written kOriginAuto, unpinned, and with **no waystone
+    // directory** - the directory arrives through the one writer of that
+    // pair, SetPatternWaystoneRoot(), when the first trail is recorded.
+    // `origin` and `flags` were parameters until 2026-08-31: `CREATE
+    // PATTERN` passed kOriginUser and kPatternPinned, and withdrawing
+    // declared patterns left one caller and one value for each.
     StatusOr<const PatternAccess*> RegisterPattern(std::uint64_t pattern_id,
-                                                    std::uint8_t stmt_class,
-                                                    std::uint8_t origin = kOriginAuto,
-                                                    std::uint16_t flags = 0);
+                                                    std::uint8_t stmt_class);
 
     // Points a pattern at its waystone directory, writing root and depth as
     // one unit.
@@ -719,23 +714,13 @@ public:
     // directory is the caller's business: this writes the row.
     Status SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root, std::uint8_t depth);
 
-    // Rewrites a pattern's lifecycle policy - who owns it, and whether
-    // retention may evict its waystones. This is what `CREATE PATTERN`
-    // calls when it finds an auto-registered row for the shape being
-    // declared: the pattern is *adopted*, not replaced.
-    //
-    // **`waystone_root` and `dir_depth` are not touched**, which is the
-    // whole point of adopting rather than re-registering. The trails
-    // already recorded under this pattern_id are trails for the same shape,
-    // and throwing them away to honour a declaration would make declaring a
-    // hot pattern a performance regression.
-    //
-    // Updates the cached PatternAccess in place, exactly as
-    // SetPatternWaystoneRoot() does and for the reason catalog_cache.hpp
-    // gives. Fails with NotFound if no current-version row carries
-    // `pattern_id`, and InvalidArgument for an origin that is neither
-    // kOriginAuto nor kOriginUser.
-    Status SetPatternOrigin(std::uint64_t pattern_id, std::uint8_t origin, std::uint16_t flags);
+    // A `SetPatternOrigin()` stood here - the in-place rewrite of a
+    // pattern's `origin` and `flags`, which `CREATE PATTERN` called to
+    // *adopt* an auto-registered row rather than replace it. It went with
+    // declared patterns on 2026-08-31: every row is `kOriginAuto` now and
+    // nothing writes `kPatternPinned`. The two fields stay on disk
+    // (rows.hpp says why), so a re-designed declaration would restore a
+    // writer rather than change the row.
 
     // Records that a pattern was executed: bumps `use_count` and stamps
     // `last_seen`. The trail recorder's catalog half.
@@ -755,22 +740,10 @@ public:
     // Fails with NotFound when no current-version row carries `pattern_id`.
     Status TouchPattern(std::uint64_t pattern_id, std::uint64_t last_seen);
 
-    // Removes a pattern's sys.patterns row. `DROP PATTERN`'s catalog half.
-    //
-    // **Retires the slot rather than delete-marking it.** A delete-mark is
-    // filtered by a reader's snapshot, and catalog reads have no snapshot -
-    // so a marked row would still be found by every lookup here, and
-    // re-registering the same shape would fail against a row nobody can
-    // see. This is the first path in the engine that removes a catalog row;
-    // when a transaction manager exists it is one of the places that will
-    // need revisiting, because a retire is not rollback-able.
-    //
-    // The waystone tree under the row's root is **not** freed. Nothing
-    // reclaims pages yet, and invariant 8 makes leaving it safe: an orphaned
-    // trail can cost space, never an answer.
-    //
-    // Fails with NotFound when no current-version row carries `pattern_id`.
-    Status RetirePattern(std::uint64_t pattern_id);
+    // A `RetirePattern()` stood here - `DROP PATTERN`'s catalog half, and
+    // the first path in the engine that removed a catalog row. It went with
+    // declared patterns on 2026-08-31; `DropCabin()` below carries the
+    // retire-rather-than-delete-mark argument it used to state.
 
     // Every sys.patterns row, in page order.
     //
@@ -880,10 +853,12 @@ public:
     StatusOr<std::uint64_t> CreateCabin(Oid rel_oid, std::uint16_t col_pos,
                                         std::uint8_t origin = kCabinOriginUser);
 
-    // Removes a Cabin's row. Retires the slot rather than delete-marking it,
-    // for the reason RetirePattern() records: catalog reads have no snapshot
-    // to filter a mark against, so a marked row would still be found by
-    // every lookup here.
+    // Removes a Cabin's row. **Retires the slot rather than delete-marking
+    // it**, and the .cpp states the argument in full: catalog reads have no
+    // snapshot to filter a mark against, so a marked row would still be
+    // found by every lookup here and a re-created Cabin would collide with
+    // a row nobody can see. A retire is not rollback-able, which is why the
+    // transactional removers delete-mark instead (DT5).
     //
     // The observed sets are **not** this function's to drop - they live in a
     // core-local runtime store that the catalog cannot see. The caller drops
@@ -1211,18 +1186,13 @@ private:
     StatusOr<std::uint64_t> RetireDeleteMarksBelow(std::uint64_t horizon,
                                                    std::uint64_t* remaining_out = nullptr);
 
-    // Phase 5 of Bootstrap(): creates sys.pattern_defs as an ordinary
-    // row-codec relation - fixed root page, var-heap chain, four
-    // sys.columns rows at fixed oids. Split out because it is the one
-    // bootstrap relation that is not just a page and two rows, and folding
-    // it into Bootstrap() would bury the reason it differs.
-    Status BootstrapPatternDefs();
-
-    // Phase 6 of Bootstrap(): creates sys.assertions, the *second* row-codec
-    // catalog relation (docs/spec/assertion.md §8.2, workplan AST03). Same
-    // shape as the phase above it and for the same reason - it stores the
-    // declaration's text verbatim - so the two read as one pattern rather
-    // than as a special case and a copy of it.
+    // Phase 5 of Bootstrap(): creates sys.assertions as an ordinary
+    // row-codec relation - fixed root page, var-heap chain, six sys.columns
+    // rows at fixed oids (docs/spec/assertion.md §8.2, workplan AST03).
+    // Split out because it is the one bootstrap relation that is not just a
+    // page and two rows, and folding it into Bootstrap() would bury the
+    // reason it differs. `BootstrapPatternDefs()` stood beside it in the
+    // same shape until 2026-08-31, when declared patterns were withdrawn.
     Status BootstrapAssertions();
 
     // `cabin_policy` is one of the `kCabinPolicy*` values (rows.hpp) and
@@ -1248,11 +1218,11 @@ private:
     // lives in the cache.
     StatusOr<const std::vector<SysTypeRow>*> EnsureTypes();
 
-    // The shared in-place rewrite behind SetPatternWaystoneRoot() and
-    // SetPatternOrigin(): finds the current-version sys.patterns row for
+    // The in-place rewrite behind SetPatternWaystoneRoot() and
+    // TouchPattern(): finds the current-version sys.patterns row for
     // `pattern_id`, hands it to `mutate`, and writes it back over the same
-    // slot. One scan and one version filter for both writers, so the two
-    // cannot come to disagree about which row is "this pattern".
+    // slot. One scan and one version filter for every writer, so no two can
+    // come to disagree about which row is "this pattern".
     //
     // Does not touch the cache - each caller publishes its own field set,
     // because a blanket "re-read the row into the cache" would republish

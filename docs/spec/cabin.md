@@ -425,10 +425,11 @@ covers half a rule leaves the rule broken.
 Distinct trust classes, cooperative operation; none replaces another:
 
 - **Patterns nominate.** Which columns are worth observing is not
-  guessed from raw traffic: pattern definitions (user-declared via
-  CREATE PATTERN, or auto-registered) name the filtered columns, and a
-  pattern's tracking level bounds how aggressively its columns may
-  materialize cabins `[PROPOSED]`.
+  guessed from raw traffic: an auto-registered pattern's shape names the
+  filtered columns, and a pattern's tracking level bounds how
+  aggressively its columns may materialize cabins `[PROPOSED]`. A
+  user-declared pattern was the other source until `CREATE PATTERN` was
+  withdrawn on 2026-08-31; the observed shape is now the only one.
 - **Waystone senses.** Per-instance `use_count` says how often a value
   recurs; the recording scan measures its exact cardinality. Together
   they are the promotion signal: `cold → trail (advisory, free) →
@@ -477,10 +478,12 @@ answers are the operator's, the engine's, and nobody's.
 
 **`enabled` implies n=1, not just creation.** A declared Cabin observes a
 value on its first selection where an engine-created one waits for the
-second. This is the rule `CREATE PATTERN` already settled (spec
+second. This is the rule `CREATE PATTERN` settled first (spec
 `create-pattern` §7: n=1 for a declared pattern, n=2 for an auto-observed
-one) and it rests on the same argument — *a declaration is the evidence
-that waiting exists to gather*. An operator who wrote `CABIN` on a column
+one) on the same argument — *a declaration is the evidence that waiting
+exists to gather*. That statement was withdrawn on 2026-08-31 and the
+trail recorder now has one threshold, so the Cabin is where the split
+survives, still resting on the same argument. An operator who wrote `CABIN` on a column
 has already said it is probed by value; asking traffic to prove it again
 asks a question that was answered.
 

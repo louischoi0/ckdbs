@@ -16,7 +16,6 @@
 #include "kds/sched/scheduler.hpp"       // SHOW META's group accounting (sched.md 4)
 
 #include "kds/stats/optimizer_signals.hpp"
-#include "kds/stats/pattern_defs.hpp"
 #include "kds/stats/relayout_planner.hpp"
 #include "kds/stats/trail_store.hpp"
 
@@ -966,9 +965,6 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // surfacing as a rule-5 stamp mismatch at the next mount.
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
-        if (IEquals(sub, "PATTERN")) {
-            return HandleCreatePattern(Trim(line));
-        }
         if (IEquals(sub, "CABIN")) {
             return HandleCabin(Trim(line));
         }
@@ -1000,13 +996,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
-        // Patterns, cabins and indexes can be dropped - there is still no
-        // DROP TABLE, and the catalog is append-only apart from these three
-        // paths. Routed by name so `DROP TABLE t` gets the parser's truthful
-        // refusal with a position rather than "unknown DROP target".
-        if (IEquals(sub, "PATTERN")) {
-            return HandleDropPattern(Trim(line));
-        }
+        // Cabins, indexes, assertions and tables can be dropped, and the
+        // catalog is append-only apart from those paths. Routed by name so
+        // an unroutable object gets a truthful refusal rather than a syntax
+        // error pointing at its name. `PATTERN` was one of these until
+        // 2026-08-31, when the operator withdrew declared patterns.
         if (IEquals(sub, "CABIN")) {
             return HandleCabin(Trim(line));
         }
@@ -1019,8 +1013,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "TABLE")) {
             return HandleDropTable(Trim(line), session);
         }
-        return {"ERR only DROP TABLE, DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION "
-                "are supported",
+        return {"ERR only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported",
                 false};
     }
     if (IEquals(cmd, "INSERT")) {
@@ -1559,19 +1552,13 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         return {"ERR " + rows.status().message(), false};
     }
 
-    // The declarations, joined in by pattern_id so a declared pattern
-    // prints its name instead of a bare hash. Read once for the whole
-    // listing rather than probed per row: the join is over tens of rows on
-    // an inspection path, and a probe per pattern would rescan the relation
-    // once per pattern.
+    // A `name=` column stood here until 2026-08-31, joined in from
+    // `sys.pattern_defs` by pattern_id so a *declared* pattern printed its
+    // name instead of a bare hash. The operator withdrew declared patterns
+    // and the relation is gone, so every pattern prints as hex - which is
+    // exactly what an auto-registered one always did, since a pattern
+    // observed from traffic has no name to print.
     //
-    // An auto-registered pattern has no definition and keeps printing as
-    // hex - deliberately, since it has no name to print.
-    auto defs = stats::ListPatternDefs(catalog_, page_store_);
-    if (!defs.ok()) {
-        return {"ERR " + defs.status().message(), false};
-    }
-
     // Same one-line-per-response contract as DESCRIBE and SHOW PAGE: a
     // count line, then one "\n"-escaped section per pattern, never a raw
     // newline byte.
@@ -1585,15 +1572,12 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         os << "\\n" << "pattern_id=0x" << std::hex << row.pattern_id << std::dec
            << " oid=" << row.oid;
 
-        for (const stats::PatternDef& def : defs.value()) {
-            if (def.pattern_id != row.pattern_id) continue;
-            os << " name=" << def.name << " params=" << def.param_count;
-            break;
-        }
-
-        // Origin and pinning are separate fields and are printed separately:
-        // an auto pattern can be pinned and a declared one can be unpinned,
-        // and collapsing them into one word would make both unreadable.
+        // Origin and pinning are separate fields and are printed
+        // separately, which is how the row stores them (rows.hpp). Both
+        // read the same on every row today - `auto` and `no` - because
+        // withdrawing declared patterns took away the only writer of
+        // kOriginUser and of kPatternPinned; the fields stay on disk and
+        // this prints what they hold rather than what it assumes.
         os << " origin=" << (row.origin == catalog::kOriginUser ? "user" : "auto")
            << " pinned=" << ((row.flags & catalog::kPatternPinned) != 0 ? "yes" : "no")
            << " class=" << static_cast<int>(row.stmt_class)
@@ -2080,85 +2064,6 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
         }
     }
 
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleCreatePattern(std::string_view line) {
-    // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
-    if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
-    }
-    if (!std::holds_alternative<parser::CreatePatternStmt>(parsed.value())) {
-        return {"ERR expected a CREATE PATTERN statement", false};
-    }
-    const auto& stmt = std::get<parser::CreatePatternStmt>(parsed.value());
-
-    auto result = exec::CreatePattern(catalog_, page_store_, wal_, stmt);
-    if (!result.ok()) {
-        return {"ERR " + result.status().message(), false};
-    }
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
-
-    std::ostringstream os;
-    // The pattern_id in hex, because that is what ANALYZE prints for a
-    // matching statement - which makes "I declared it, why doesn't traffic
-    // match" answerable by comparing two numbers rather than by guessing.
-    os << (result.value().adopted ? "ADOPTED PATTERN" : "CREATED PATTERN")
-       << " name=" << stmt.name << " pattern_id=0x" << std::hex << result.value().pattern_id
-       << std::dec << " dir_depth=" << static_cast<int>(result.value().dir_depth)
-       << " params=" << result.value().param_count;
-
-    // Warnings ride the success response as "\n"-escaped sections, the same
-    // one-line-per-reply contract every other multi-part response here uses:
-    // the declaration succeeded, and a one-line protocol has no side channel
-    // to put a caveat in.
-    for (const std::string& warning : result.value().warnings) {
-        os << "\\n" << "WARN " << warning;
-    }
-
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "declared pattern '" + stmt.name + "'" +
-                              (result.value().adopted ? " (adopted an auto row)" : ""));
-    }
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
-    // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
-    if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
-    }
-    if (!std::holds_alternative<parser::DropPatternStmt>(parsed.value())) {
-        return {"ERR expected a DROP PATTERN statement", false};
-    }
-    const auto& stmt = std::get<parser::DropPatternStmt>(parsed.value());
-
-    auto pattern_id = exec::DropPattern(catalog_, page_store_, wal_, stmt.name);
-    if (!pattern_id.ok()) {
-        return {"ERR " + pattern_id.status().message(), false};
-    }
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
-
-    std::ostringstream os;
-    os << "DROPPED PATTERN name=" << stmt.name << " pattern_id=0x" << std::hex
-       << pattern_id.value() << std::dec;
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "dropped pattern '" + stmt.name + "'");
-    }
     return {os.str(), false};
 }
 
@@ -6836,11 +6741,10 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         os << " sorted=" << sorter_.rows().size();
     }
 
-    // The statement's own pattern_id, in the same hex CREATE PATTERN
-    // returns. This is what closes the "I declared it, why doesn't traffic
-    // match" loop: an operator compares the number here against the one the
-    // declaration printed, and equality *is* the answer - no trail recorder
-    // has to exist for that comparison to be meaningful.
+    // The statement's own pattern_id, in the same hex `SHOW PATTERNS`
+    // lists a row under. That is what makes "which observed pattern did
+    // this statement match" answerable by comparing two numbers - no trail
+    // recorder has to exist for the comparison to be meaningful.
     //
     // Taken from the instance the caller already identified - which came
     // from the parse, not from a second lex of `sql`.

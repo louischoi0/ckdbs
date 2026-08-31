@@ -161,7 +161,7 @@ namespace kds::parser {
 // "already fingerprintable" means *already storable* - a statement that
 // lexes but cannot parse produces a hash, but that hash can never reach
 // `sys.patterns`, because nothing records a statement that does not
-// execute and a CREATE PATTERN body must itself parse. Fusing
+// execute. Fusing
 // `12.34`'s three tokens into one moved the hash of exactly such
 // statements and nothing else, so the version did not move. The claim a
 // change like it must argue: the only token sequences whose hashing
@@ -236,10 +236,10 @@ struct Fingerprint {
 // **This lexes `sql` from scratch.** On the statement path that is a second
 // lex on top of the parser's own - see `FingerprintAccumulator` below, which
 // is how the parser avoids it. This entry point remains for callers with a
-// string and no parse: the golden corpus, which fingerprints statements that
-// deliberately do not parse, and `CREATE PATTERN`, which fingerprints a
-// *substring* of the statement it just parsed (its body) and is not on any
-// hot path.
+// string and no parse - today that is the golden corpus alone, which
+// fingerprints statements that deliberately do not parse. `CREATE PATTERN`
+// was the other caller, fingerprinting a *substring* of the statement it had
+// just parsed, until it was withdrawn on 2026-08-31.
 std::optional<Fingerprint> FingerprintOf(std::string_view sql);
 
 // ---- The same reduction, driven by someone else's token stream -----------

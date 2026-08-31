@@ -673,7 +673,8 @@ TEST(CabinContractTest, ColumnPolicyDecidesWhoMayCreateACabin) {
 TEST(CabinContractTest, ADeclaredCabinObservesOnFirstSelection) {
     // C7's n=1 half. A `CABIN` column's values are observed on their first
     // selection, where an engine-created Cabin would wait for the second -
-    // the same split `CREATE PATTERN` settled, on the same argument.
+    // the split `CREATE PATTERN` settled first, on the same argument, and
+    // which this is the surviving side of since that was withdrawn.
     Instance db(/*cabins=*/true);
     ASSERT_EQ(db.Run("CREATE TABLE d (id int64, sym varchar CABIN, qty int64)").substr(0, 7),
               "CREATED");

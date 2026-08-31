@@ -29,12 +29,39 @@ the reserved range is not readable by a peer through
 `MayFault`'s `page_id < system_page_limit_` arm
 (`device_page_store.cpp:656`). Today the only peer-readable catalog
 var-heap is `sys.assertions`, reached by granting the individual pages a
-row names (`exec::AssertionSpillPages`) — deliberately not an extent
+row names (`exec::CatalogSpillPages`) — deliberately not an extent
 grant, because an extent would cover pages that core owns and cost it the
 stamp-claimed write rights of PW1c-7. CR1 does **not** ratify the
 page-at-a-time workaround as the general mechanism; CR3 is what governs.
 `sys.pattern_defs` has the same shape and no peer reader today, so it is
 the first place CR3 will be exercised.
+
+> **Amended 2026-08-31, after CB0-CB3 and after work order PD.** The last
+> sentence is spent, in both halves. CB0-CB3 *did* exercise it — the
+> grant was built over a named list of var-heap catalog relations
+> (`exec::kVarHeapCatalogRelations`), `sys.pattern_defs` included, and
+> `AssertionSpillPages` was merged into `exec::CatalogSpillPages` rather
+> than copied. Then work order PD withdrew user-declared patterns and
+> removed the relation, which leaves that list holding `sys.assertions`
+> alone.
+>
+> So the position now: **CR1 is ratified and built, and the mechanism is
+> a list of one.** It is deliberately still a list — the next catalog
+> relation that gains a var-heap joins it, and collapsing it to a
+> constant would put both consumers (the mount sweep and the peer grant)
+> back to naming the relation themselves, which is exactly the
+> duplication CB2 removed. What is *not* exercised is CR3's format
+> change: CB1 established that every reader of a catalog var-heap is a
+> DDL or a `SHOW`, never per-statement, so the page-at-a-time grant was
+> enough and the reserved-sub-range candidate was never needed. It stays
+> available and unbuilt.
+>
+> CB0's other finding outlives its subject and is recorded in
+> `known-gaps.md`: the read-side `MayFault` consult is `#ifndef NDEBUG`,
+> so in a release build a peer faults another core's page and answers
+> correctly — a missing grant is invisible in the configuration every
+> measurement is taken in. That is a property of the store, not of the
+> relation that revealed it.
 
 ## CR2 — DDL executes on core 0; a peer sends and waits
 

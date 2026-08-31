@@ -7,6 +7,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/stats/cabin_store.hpp"
+#include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
@@ -174,19 +175,33 @@ TEST_F(AlterTableTest, CollisionsAndAbsencesRefuse) {
     Ok("SELECT x FROM b");
 }
 
-// AL3: a declared pattern whose source text names the old name is
-// *allowed to die* - it breaks nothing, answers nothing, and the new
-// name's traffic registers fresh shapes on the ordinary path. This is
-// invariant 8 doing its job: everything pattern-shaped is advisory, so a
-// rename may orphan it freely where an assertion (AL4) may not be.
-TEST_F(AlterTableTest, ADeclaredPatternDiesQuietlyWithTheOldName) {
+// AL3: a pattern whose shape names the old name is *allowed to die* - it
+// breaks nothing, answers nothing, and the new name's traffic registers
+// fresh shapes on the ordinary path. This is invariant 8 doing its job:
+// everything pattern-shaped is advisory, so a rename may orphan it freely
+// where an assertion (AL4) may not be.
+//
+// The pattern is registered the only way one can be since declared patterns
+// were withdrawn (2026-08-31): by traffic, on the second sighting. That
+// needs a recorder, so this test builds a second dispatcher over the same
+// store rather than giving the whole fixture one - recording on every test
+// in this file would be a change to what they measure.
+TEST_F(AlterTableTest, AnOrphanedPatternDiesQuietlyWithTheOldName) {
     Ok("CREATE TABLE t (id int64, v varchar)");
     Ok("INSERT INTO t VALUES ('one')");
-    Ok("CREATE PATTERN watch($k int64) OF SELECT v FROM t WHERE id = $k");
+
+    stats::TrailRecorder recorder(boot_->catalog, store_);
+    CommandDispatcher recording(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                                /*clock=*/nullptr, /*wal=*/nullptr,
+                                wal::DurabilityClass::kGroup, exec::Budget(), &recorder);
+    recording.Dispatch("SELECT v FROM t WHERE id = 1");
+    recording.Dispatch("SELECT v FROM t WHERE id = 1");
+    ASSERT_NE(Run("SHOW PATTERNS").find("patterns=1"), std::string::npos)
+        << "the shape has to be registered before the rename can orphan it";
 
     EXPECT_EQ(Run("ALTER TABLE t RENAME TO u"), "RENAMED TABLE t TO u");
 
-    // The orphaned declaration is still listed and still harmless.
+    // The orphaned row is still listed and still harmless.
     const std::string patterns = Run("SHOW PATTERNS");
     EXPECT_NE(patterns.rfind("ERR", 0), 0u) << patterns;
     EXPECT_NE(patterns.find("patterns=1"), std::string::npos) << patterns;
@@ -195,9 +210,6 @@ TEST_F(AlterTableTest, ADeclaredPatternDiesQuietlyWithTheOldName) {
     // is a different shape, so the dead pattern is never consulted for it.
     EXPECT_EQ(Run("SELECT v FROM t WHERE id = 1").rfind("ERR", 0), 0u);
     EXPECT_EQ(Run("SELECT v FROM u WHERE id = 1"), "v\\none");
-
-    // A fresh declaration against the new name is the specified recovery.
-    Ok("CREATE PATTERN watch2($k int64) OF SELECT v FROM u WHERE id = $k");
 }
 
 // AL6: admitted inside an explicit transaction with CREATE TABLE's

@@ -70,9 +70,10 @@ private:
 
 Status EncodeValue(std::vector<std::byte>& out, const parser::AstValue& v) {
     if (v.type == parser::ValueType::kParam) {
-        return Status::Unsupported(
-            "a $param cannot ship in a step descriptor; a declared pattern's body never "
-            "executes");
+        // Unreachable since declared patterns were withdrawn (ast.hpp).
+        // Refused rather than encoded, because the wire form is what a peer
+        // trusts: a placeholder that shipped would arrive as a value.
+        return Status::Unsupported("a $param has no value and cannot ship in a step descriptor");
     }
     PutU8(out, static_cast<std::uint8_t>(v.type));
     PutInt<std::int64_t>(out, v.int_val);

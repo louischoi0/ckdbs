@@ -262,8 +262,10 @@ like `durability`.
 - **Cabin**: a `kCabinProbe` step under a fold serves exactly as under a
   stream; the residual re-check the fold's rows passed through is the same
   one §4 of `cabin.md` requires.
-- **Patterns**: `CREATE PATTERN … OF SELECT COUNT(*) …` is legal; the body
-  compiles and fingerprints as any body does.
+- **Patterns**: an aggregated statement fingerprints and registers as any
+  other does. `CREATE PATTERN … OF SELECT COUNT(*) …` was legal and
+  compiled its body the same way, until that statement was withdrawn on
+  2026-08-31.
 - **Class / access stats**: AG14 — unchanged; `RecordChainAccess` sees the
   same chain.
 - **Cross-core (reservation)**: AG-M is the contract. When CC ships

@@ -1,16 +1,58 @@
 # CREATE PATTERN — user-declared patterns (spec, v1)
 
-Status: **DECIDED — steps 1-4 of §8 built (2026-08-02).** The declaration
-grammar, the catalog, the validation chain and the introspection surface
-all run; step 5 (the recorder/retention hooks) waits on subsystems that do
-not exist. Two things landed differently from the text below and the
-sections say so where it matters: `sys.pattern_defs` gained a `param_count`
-column and stores the **whole `CREATE PATTERN` statement** as its
-`source_text` (§4.2), and the token for `$name` is `kNamedParam` because
-`kParam` was already taken by `?` (§3.1).
-Depends on: fingerprint (P01–P02, done), sys.patterns catalog (done),
-waystone directory + page format (done), trail recorder/replayer (not built).
-Related docs: waystone-concpets.md, parser blueprint, V0 fixed-width tuple rule.
+Status: **WITHDRAWN 2026-08-31 (operator). The code is removed; this file
+is kept as the design record a re-design starts from.**
+
+A pattern is, for now, **a fingerprint-identified case tracked by
+statistics** — one concept. The declaration path below duplicated it with
+a second model (a name, a stored source text, a `sys.pattern_defs` row,
+an `origin` that changed recording policy), and carrying two models of
+one thing was the cost the operator declined to keep paying. The DDL is
+withdrawn and will be re-designed later; nothing here is a claim about
+what the re-design will look like.
+
+**What was removed** (work order `instructions/v2.7.0/pd-remove-declared-patterns.md`):
+`sys.pattern_defs` and its bootstrap, `CREATE PATTERN` / `DROP PATTERN`
+parse-dispatch-execute, `src/exec/pattern_ddl.cpp`,
+`src/stats/pattern_defs.cpp`, and `SHOW PATTERNS`' name column. What was
+**not** removed: `sys.patterns`, the fingerprint, the waystone directory,
+the trail recorder and replay — §7's sentence that *"declared and auto
+rows are found by the same lookup. There is no 'declared pattern matcher'"*
+is why.
+
+**That sentence was re-verified in code before anything was deleted**, not
+trusted as a spec sentence, and here is what the check was. Only two
+translation units outside the feature ever included
+`stats/pattern_defs.hpp`: `exec/pattern_ddl.cpp` (the feature itself) and
+`server/command_dispatcher.cpp`, at exactly one call — `SHOW PATTERNS`'
+name join. `kSysPatternDefsTable` was named only by that header's
+implementation, by bootstrap, by `exec/catalog_spills.hpp`'s list and by
+tests. The whole matching path reads elsewhere: `TrailRecorder` reaches
+`Catalog::FindPattern` / `RegisterPattern`, both of which walk
+`kCatalogPagePatterns`; the waystone root and depth are `SysPatternRow`
+fields; the dispatcher's replay lookup is another `FindPattern`. The one
+place the two models actually touched was `TrailRecorder::WouldRecord`,
+which read `origin` off the *`sys.patterns`* row to choose n=1 or n=2 —
+never a join to the definitions relation — and it now has a single
+threshold. The golden corpus is the second half of the proof: regenerating
+it moved **no** `pattern_id` and **no** `arg_hash`, only verdicts, so
+`kFingerprintVersion` stands and no stored waystone is retired by the
+removal. `SysPatternRow`'s
+`origin` and `flags` also stay: `origin` is a `u8` at offset 37 because
+`dir_depth` ends the row there, so removing it would be an on-disk format
+change, and the concept is not local to this feature (`SysCabinRow`
+mirrors it). Every row is `kOriginAuto` now and nothing writes
+`kPatternPinned`.
+
+**Read the rest of this file as a proposal, not as built behaviour.**
+Every "Status: DECIDED" and every §8 step below describes what once ran;
+none of it runs today. The two amendments the build made to the text are
+kept because a re-design needs them: `sys.pattern_defs` gained a
+`param_count` column and stored the **whole `CREATE PATTERN` statement**
+as `source_text` (§4.2), and the token for `$name` is `kNamedParam`
+because `kParam` was already taken by `?` (§3.1). `kNamedParam` still
+lexes and is now accepted by no production — it stays reserved for the
+extended protocol's named binds (D4).
 
 ---
 

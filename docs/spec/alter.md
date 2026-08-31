@@ -59,13 +59,14 @@ A fingerprint hashes the statement's tokens, names included. After
 stored patterns and their Waystone trails for old-name statements simply
 stop matching. That costs replay speed and nothing else — invariant 8 is
 the whole reason this is acceptable — and it is self-healing: new-name
-traffic registers new patterns on the ordinary n=2 path. A declared
-pattern (`sys.pattern_defs`) keeps its old-name `source_text`; boot-time
-re-registration of such a pattern fails its relation-resolution check and
-the pattern is skipped, which is a performance event, logged, never an
-error. **No pattern migration is attempted**: rewriting stored SQL text
-would make the catalog a second parser, and a wrong rewrite is a wrong
-canon forever.
+traffic registers new patterns on the ordinary n=2 path. **No pattern
+migration is attempted**, and since 2026-08-31 there is nothing that
+could be migrated: a declared pattern kept its old-name `source_text` in
+`sys.pattern_defs` and was skipped at boot-time re-registration when its
+relation no longer resolved, and both the relation and the statement were
+withdrawn with the feature. The reason the rewrite was refused holds for
+any revival — rewriting stored SQL text would make the catalog a second
+parser, and a wrong rewrite is a wrong canon forever.
 
 ## 4. AL4 — Assertions RESTRICT a rename
 

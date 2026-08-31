@@ -31,7 +31,7 @@ and only one issues what §1 of the invariant describes:
 |---|---|
 | `src/server/command_dispatcher.cpp:819` | a user tuple's pk — the Keystone id |
 | `src/catalog/catalog.cpp:838` (`RegisterPattern`) | an **oid** for a `sys.patterns` row: a body field, not a Keystone word |
-| `src/stats/pattern_defs.cpp:172` | a real Keystone id, for a `sys.pattern_defs` row |
+| `src/exec/assertion_catalog.cpp` (`InsertAssertion`) | a real Keystone id, for a `sys.assertions` row. `src/stats/pattern_defs.cpp:172` was this row's example until `sys.pattern_defs` was withdrawn on 2026-08-31 |
 
 So **"issue-once" already names two id spaces with one implementation.**
 The invariant document should say which one K1 binds. The audit's

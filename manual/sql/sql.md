@@ -16,7 +16,7 @@ dispatcher's own commands):
 
 | Class | Statements |
 |---|---|
-| DDL | `CREATE TABLE`, `CREATE INDEX` / `DROP INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN`, `CREATE PATTERN` / `DROP PATTERN` |
+| DDL | `CREATE TABLE`, `CREATE INDEX` / `DROP INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
 | DML | `INSERT`, `UPDATE`, `DELETE` |
 | Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
 | Transactions | `BEGIN`/`START`, `COMMIT`, `ROLLBACK`/`ABORT`, `SET ISOLATION LEVEL` |
@@ -26,8 +26,7 @@ dispatcher's own commands):
 `DROP TABLE` and `ALTER TABLE` exist and are **catalog-only** (see their
 sections): a drop tombstones the oid and orphans the pages — no space is
 reclaimed — and a rename edits a label. The catalog is append-only apart
-from those, `DROP PATTERN`, `DROP CABIN`, `DROP INDEX` and
-`DROP ASSERTION`.
+from those, `DROP CABIN`, `DROP INDEX` and `DROP ASSERTION`.
 
 ---
 
@@ -290,23 +289,17 @@ DROP CABIN ON accounts(owner);
 - `SHOW CABINS` lists them. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
 
-### CREATE PATTERN / DROP PATTERN (built)
+### CREATE PATTERN / DROP PATTERN — withdrawn
 
-```sql
-CREATE PATTERN hot_account ($acct int64) WITH (pinned = on)
-    OF SELECT * FROM accounts WHERE id = $acct;
-DROP PATTERN hot_account;
-```
+These statements existed and were removed on 2026-08-31. **A pattern is a
+case the engine identifies by fingerprint and tracks by statistics**; there
+is no way to declare one, and nothing replaces the grammar. `SHOW PATTERNS`
+lists what traffic registered, each row identified by its hex `pattern_id`.
 
-- Parameters are `$`-sigiled and their type annotation is **mandatory**
-  (inference was rejected: it would make the contract depend on predicate
-  order).
-- `()` is legal — a pattern with exactly one instance.
-- `WITH` comes **before** `OF` so the body runs to end of statement.
-- The body must be a SELECT. `$params` are legal only inside a pattern body;
-  anywhere else the token is reserved and refused by name.
-- A declaration is not an execution: the body is type-checked and
-  fingerprinted, never run.
+`CREATE PATTERN ...` now answers the ordinary refusal for an unknown
+`CREATE` target, and `$name` parameters are refused wherever they are
+written — the token stays reserved for a future extended protocol's named
+binds.
 
 ---
 

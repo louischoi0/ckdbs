@@ -84,7 +84,8 @@ crash-durable, which the first sentence above already says.
 ## DT6 — Grammar
 
 `DROP TABLE <name>`. `TABLE` after `DROP` stops being the parser's
-"only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION" refusal
+"only DROP ... is supported" target-list refusal (which listed `DROP
+PATTERN` when this was written and does not since 2026-08-31)
 and parses; everything else about DROP is untouched. Nothing is
 reserved; `DROP` is not a patternable head, so corpus lines carry `-`
 hashes. Refusals: unknown name `NotFound`; a `sys.*` relation refused;

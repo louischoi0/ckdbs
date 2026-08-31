@@ -26,9 +26,11 @@
 //    walk it would fall back to anyway (`ShippedForm` below), so this
 //    refusal is the backstop for a caller that skipped the sanctioned
 //    route, not the policy;
-//  - a **kParam literal**: a declared pattern's body never executes
-//    (spec-create-pattern §3), so a param in a shipped step is a defect
-//    upstream, not a value to encode.
+//  - a **kParam literal**: a placeholder with no value in it. Nothing
+//    constructs one since declared patterns were withdrawn
+//    (parser/ast.hpp), so one in a shipped step is a defect upstream, not
+//    a value to encode - and the kind's number is why the enumerator was
+//    kept rather than removed, since this codec ships it by value.
 //
 // The encoding is explicit little-endian append/read - no struct memcpy,
 // because this payload holds variable-length fields (string literals, the

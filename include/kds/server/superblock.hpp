@@ -65,10 +65,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // Either alone is the same breakage as the 4 -> 5 case; the second is worse,
 // because the missing relation is not a size mismatch anyone would recognize
 // - the first CREATE PATTERN would simply fail to find a table that every
-// build after this one creates at bootstrap.
+// build after this one creates at bootstrap. **Read as history**: declared
+// patterns were withdrawn on 2026-08-31 and bootstrap no longer creates
+// `sys.pattern_defs`, so a v6-era file has a relation this build does not.
+// That is a *removal*, which needed no bump - no pre-release compatibility
+// is owed and an existing directory is re-initialized - and the two row
+// bytes stayed exactly so this line would not have to be undone.
 // 6 -> 7: bootstrap gained `sys.access_stats` on a fixed page id a
 // pre-existing file does not have. Same shape of breakage as 5 -> 6's
-// sys.pattern_defs: the file would mount and then fail on the first access
+// second half: the file would mount and then fail on the first access
 // the statistics path tried to record, naming a table that every build
 // after this one creates at bootstrap.
 // 7 -> 8: bootstrap gained `sys.cabins` (docs/spec/cabin.md §10) on a fixed

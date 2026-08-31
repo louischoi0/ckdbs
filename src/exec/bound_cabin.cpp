@@ -44,6 +44,10 @@ std::string EncodeGroupKey(const std::vector<parser::AstValue>& values) {
                 AppendU64(out, static_cast<std::uint64_t>(v.int_val));
                 break;
             case parser::ValueType::kStr:
+            // kParam borrows `str_val` and is encoded through the same arm.
+            // Nothing constructs one since declared patterns were withdrawn
+            // (ast.hpp); it shares the arm rather than getting one of its
+            // own because the two have identical bytes to offer.
             case parser::ValueType::kParam:
                 // **Length-prefixed**, which is what stops `('a','bc')` and
                 // `('ab','c')` from encoding identically - the same rule the

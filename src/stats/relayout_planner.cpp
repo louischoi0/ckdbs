@@ -192,11 +192,18 @@ StatusOr<std::vector<RelationReport>> PlanAllRelations(catalog::Catalog& catalog
     std::vector<RelationReport> reports;
     reports.reserve(tables.value().size());
     for (const catalog::SysObjectRow& object : tables.value()) {
-        // Catalog relations (`sys.pattern_defs`, `sys.assertions` - the two
-        // stored in user tuple format, which is why ListTables carries
-        // them) are outside the mover's jurisdiction, not gated: the bare
-        // report skips them. Ask by name to see one - the named form
-        // answers with the reason instead of plans.
+        // Catalog relations are outside the mover's jurisdiction, not
+        // gated: the bare report skips them. Ask by name to see one - the
+        // named form answers with the reason instead of plans.
+        //
+        // **Every** catalog relation is here to skip, not just the ones
+        // stored in user tuple format: bootstrap writes a `sys.objects` row
+        // for each, and `ListTables()` filters on `type_oid == kTypeTable`
+        // alone. The comment here named `sys.pattern_defs` and
+        // `sys.assertions` as though those two were why the listing carried
+        // catalog rows at all, which was never the reason - and the first
+        // of them was withdrawn on 2026-08-31, which is what made the
+        // wrong reason visible.
         if (object.oid < catalog::kUserOidStart) continue;
         auto report = ReportFor(catalog, object, stats.value(), clock, half_life_ns);
         // An object the catalog cannot resolve into a table (no columns -

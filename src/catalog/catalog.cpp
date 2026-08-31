@@ -542,7 +542,7 @@ Status Catalog::Bootstrap() {
         {kSysPatternsTable, "patterns", kCatalogPagePatterns},
         // sys.access_stats is a fixed-offset typed row like the six above,
         // so it needs nothing beyond a page and its two catalog rows -
-        // unlike sys.pattern_defs, which stores text and therefore had to
+        // unlike sys.assertions, which stores text and therefore had to
         // become a real row-codec relation in phase 5.
         {kSysAccessStatsTable, "access_stats", kCatalogPageAccessStats},
         // sys.cabins, same shape again: a page and its two catalog rows.
@@ -646,127 +646,31 @@ Status Catalog::Bootstrap() {
         }
     }
 
-    // Phase 5: sys.pattern_defs, the one catalog relation stored in
-    // ordinary user tuple format (well_known.hpp explains why). It is built
-    // here by hand rather than through CreateTable() for two reasons:
-    // CreateTable() takes its oids from GenerateUserOid(), which is
-    // in-memory at bootstrap time and could not recover a position from the
-    // very pages being built, and it roots the relation on a
-    // dynamically allocated page, which nothing could find at bootstrap
-    // without first reading the catalog it is part of.
+    // Phase 5: sys.assertions, the one catalog relation stored in ordinary
+    // user tuple format (well_known.hpp explains why). It is built here by
+    // hand rather than through CreateTable() for two reasons: CreateTable()
+    // takes its oids from GenerateUserOid(), which is in-memory at bootstrap
+    // time and could not recover a position from the very pages being built,
+    // and it roots the relation on a dynamically allocated page, which
+    // nothing could find at bootstrap without first reading the catalog it
+    // is part of.
     //
-    // It must come after phase 4: BuildPatternDefsSchema() names its column
-    // types by the type_val tags phase 4 just registered.
-    if (Status s = BootstrapPatternDefs(); !s.ok()) return s;
-
-    // Phase 6: sys.assertions, the second relation of that kind and for the
-    // same reason - it stores a declaration's text verbatim (AS10), which is
-    // what lets an assertion's GROUP BY list have no cap at all.
+    // It must come after phase 4: AssertionsSchema() names its column types
+    // by the type_val tags phase 4 just registered.
+    //
+    // `sys.pattern_defs` was phase 5 and had this shape for the same
+    // reasons, until the operator withdrew user-declared patterns on
+    // 2026-08-31 and bootstrap stopped creating it.
     if (Status s = BootstrapAssertions(); !s.ok()) return s;
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-        // + 2: sys.pattern_defs (phase 5) and sys.assertions (phase 6) are
-        // bootstrapped outside the array. The line said "+ 1" from AST03
-        // to 2026-08-27, under-counting by one.
-        log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size() + 2) +
+        // + 1: sys.assertions (phase 5) is bootstrapped outside the array.
+        // The line said "+ 2" while sys.pattern_defs was bootstrapped
+        // beside it, and "+ 1" from AST03 to 2026-08-27, when it
+        // under-counted by one.
+        log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size() + 1) +
                                   " system tables and " + std::to_string(kTypes.size()) +
                                   " types on the fixed catalog pages");
-    }
-    return Status::OK();
-}
-
-namespace {
-
-Schema PatternDefsSchema() {
-    // Five columns. The first is not in the spec's list and has to be:
-    // every relation's first column is its system-generated Keystone pk
-    // (invariant 11), and a relation stored in user tuple format is a
-    // relation that has one.
-    //
-    // `param_count` is the declaration's **materialized arity** - the number
-    // of value slots the body has, per spec section 3.3. Stored rather than
-    // recomputed because recomputing it means re-fingerprinting the source
-    // text, and the two could then disagree for a row written by an older
-    // build. There is deliberately **no sibling relation for the parameters
-    // themselves**: their names and types are recoverable from
-    // `source_text`, which is the canon, and a second relation would be a
-    // second thing to keep consistent with it.
-    //
-    // `name` and `source_text` are varchar, so the relation can spill and
-    // gets a var-heap chain. A declaration longer than one var-heap page
-    // (8144 bytes) is refused at CREATE PATTERN rather than chained - the
-    // spilled-value size cap is still open, and this feature does not settle
-    // it.
-    Schema schema;
-    auto column = [](Oid oid, std::uint32_t pos, std::string_view name, std::uint32_t type_val,
-                     std::uint32_t len) {
-        SysColumnRow col{};
-        col.oid = oid;
-        col.rel_id = kSysPatternDefsTable;
-        col.pos = pos;
-        SetName(col.name, name);
-        col.type_val = type_val;
-        col.len = len;
-        col.notnull = true;
-        return col;
-    };
-    schema.columns.push_back(column(kSysPatternDefsColumnOidBase + 0, 0, "id", kTypeValInt64, 8));
-    schema.columns.push_back(
-        column(kSysPatternDefsColumnOidBase + 1, 1, "pattern_id", kTypeValUint64, 8));
-    schema.columns.push_back(
-        column(kSysPatternDefsColumnOidBase + 2, 2, "param_count", kTypeValInt32, 4));
-    schema.columns.push_back(
-        column(kSysPatternDefsColumnOidBase + 3, 3, "name", kTypeValVarchar, 0));
-    schema.columns.push_back(
-        column(kSysPatternDefsColumnOidBase + 4, 4, "source_text", kTypeValVarchar, 0));
-    return schema;
-}
-
-}  // namespace
-
-Status Catalog::BootstrapPatternDefs() {
-    const Schema schema = PatternDefsSchema();
-
-    // Refused here rather than at the first CREATE PATTERN, for the reason
-    // CreateTable() gives: a relation whose row size cannot be computed is
-    // one no row could ever be written to, and finding that out at bootstrap
-    // is finding it out before there is anything to lose. It also proves the
-    // schema above is expressible under whatever inline_cell_width this
-    // instance pinned.
-    if (auto layout = RowLayout::Build(schema, inline_cell_width_); !layout.ok()) {
-        return layout.status();
-    }
-
-    auto created = store_.CreateAt(kCatalogPagePatternDefs);
-    if (!created.ok()) return created.status();
-    // min_key 0: like the other catalog pages, this relation is scanned in
-    // full - by name or by pattern_id, never by key range. Stamped with the
-    // relation's own oid (page.md §2a), unlike the fixed catalog core:
-    // this chain grows through ChainInsert, which stamps, so the root must
-    // agree with the pages that follow it.
-    auto root = heap::PageView::CreateEmpty(created.value().bytes(), 0, kSysPatternDefsTable);
-    if (!root.ok()) return root.status();
-
-    auto varheap_root = varheap::CreateChain(store_, kSysPatternDefsTable);
-    if (!varheap_root.ok()) return varheap_root.status();
-
-    if (Status s = InsertObjectRow(kSysPatternDefsTable, kNamespaceSys, kTypeTable,
-                                    "pattern_defs");
-        !s.ok()) {
-        return s;
-    }
-    if (Status s = InsertRelationRow(kSysPatternDefsTable, kNamespaceSys, "pattern_defs",
-                                      kCatalogPagePatternDefs, ClusteredType::kHeap,
-                                      varheap_root.value());
-        !s.ok()) {
-        return s;
-    }
-    for (const auto& col : schema.columns) {
-        if (Status s = InsertColumnRow(col.oid, kSysPatternDefsTable, col.pos,
-                                        NameView(col.name), col.type_val, col.len, col.notnull);
-            !s.ok()) {
-            return s;
-        }
     }
     return Status::OK();
 }
@@ -785,8 +689,7 @@ Schema AssertionsSchema() {
     //
     // Subtracted: nothing stores the parsed declaration. The group columns,
     // the aggregate, the operator and the bound are all recoverable from
-    // `source_text` by re-parsing it, which is the sys.pattern_defs model
-    // AS10 names - and it is what lets the GROUP BY list be uncapped, since a
+    // `source_text` by re-parsing it, which is the model AS10 names - and it is what lets the GROUP BY list be uncapped, since a
     // longer list costs text rather than a wider row. A decoded sibling table
     // would be a second copy that can drift from the canon.
     //
@@ -833,9 +736,9 @@ Status Catalog::BootstrapAssertions() {
     const Schema schema = AssertionsSchema();
 
     // Refused at bootstrap rather than at the first CREATE ASSERTION, for
-    // BootstrapPatternDefs()' reason: a relation whose row size cannot be
-    // computed is one no row could ever be written to, and it also proves the
-    // schema is expressible under whatever inline_cell_width this instance
+    // CreateTable()'s reason: a relation whose row size cannot be computed
+    // is one no row could ever be written to, and it also proves the schema
+    // is expressible under whatever inline_cell_width this instance
     // pinned.
     if (auto layout = RowLayout::Build(schema, inline_cell_width_); !layout.ok()) {
         return layout.status();
@@ -844,8 +747,10 @@ Status Catalog::BootstrapAssertions() {
     auto created = store_.CreateAt(kCatalogPageAssertions);
     if (!created.ok()) return created.status();
     // min_key 0: scanned in full, by name or by target_oid, never by key
-    // range - like every other catalog page. Stamped for the reason
-    // pattern_defs' root is: this chain grows through ChainInsert.
+    // range - like every other catalog page. Stamped with the relation's
+    // own oid (page.md §2a), unlike the fixed catalog core: this chain
+    // grows through ChainInsert, which stamps, so the root must agree with
+    // the pages that follow it.
     auto root = heap::PageView::CreateEmpty(created.value().bytes(), 0, kSysAssertionsTable);
     if (!root.ok()) return root.status();
 
@@ -1860,7 +1765,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     }
 
     // 2. Everything the relation owns retires (DT3's "dependents out").
-    //    Retired, not delete-marked - RetirePattern() states the argument:
+    //    Retired, not delete-marked - DropCabin() states the argument:
     //    catalog reads have no snapshot to filter a mark against. Each
     //    sweep loops ForFirstRow until nothing matches, because a relation
     //    owns many columns and may own several indexes and cabins.
@@ -2645,13 +2550,7 @@ StatusOr<const PatternAccess*> Catalog::FindPattern(std::uint64_t pattern_id) {
 }
 
 StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id,
-                                                         std::uint8_t stmt_class,
-                                                         std::uint8_t origin,
-                                                         std::uint16_t flags) {
-    if (origin != kOriginAuto && origin != kOriginUser) {
-        return Status::InvalidArgument("catalog: unknown pattern origin");
-    }
-
+                                                         std::uint8_t stmt_class) {
     // Read the page, not the cache: absences are never cached, so a cache
     // miss says nothing about whether the row exists. A row left behind by
     // an older revision does not count as existing - GetSysPatternRow()
@@ -2674,15 +2573,17 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
     row.waystone_root = kInvalidPageId;
     row.use_count = 0;
     row.stmt_class = stmt_class;
-    // No directory until one is built. A declared pattern gets its
-    // directory immediately afterwards, through SetPatternWaystoneRoot(),
-    // because `expected_instances` is a pre-sizing knob and pre-sizing a
-    // directory that does not exist yet means nothing; an auto pattern
-    // waits for its first trail. Either way this row is written with no
-    // directory, so the root/depth pair is only ever set by its one writer.
+    // No directory until one is built: a pattern waits for its first trail,
+    // so the root/depth pair is only ever set by its one writer,
+    // SetPatternWaystoneRoot().
     row.dir_depth = 0;
-    row.origin = origin;
-    row.flags = flags;
+    // Every pattern is observed, and none is pinned. These were arguments
+    // until 2026-08-31, when declared patterns were withdrawn and left
+    // registration with one caller and one value for each; the fields stay
+    // on disk (rows.hpp says why) and are written explicitly rather than
+    // left to a zeroed struct, so the row says what it means.
+    row.origin = kOriginAuto;
+    row.flags = 0;
 
     if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPagePatterns, row, kBootstrapXid); !s.ok()) {
         return s;
@@ -2747,31 +2648,6 @@ Status Catalog::SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root,
     return Status::OK();
 }
 
-Status Catalog::SetPatternOrigin(std::uint64_t pattern_id, std::uint8_t origin,
-                                  std::uint16_t flags) {
-    if (origin != kOriginAuto && origin != kOriginUser) {
-        return Status::InvalidArgument("catalog: unknown pattern origin");
-    }
-
-    Status s = MutatePatternRow(pattern_id, [origin, flags](SysPatternRow& row) {
-        row.origin = origin;
-        row.flags = flags;
-    });
-    if (!s.ok()) return s;
-
-    // **`waystone_root` and `dir_depth` are deliberately untouched.** This
-    // is the adoption path, and adopting an auto-registered pattern must
-    // not throw away a warm cache: the trails recorded under it are still
-    // trails for the same shape, and the directory that indexes them is
-    // still the right depth for the traffic that built it.
-    cache_.UpdatePatternOrigin(pattern_id, origin, flags);
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("catalog", "pattern " + std::to_string(pattern_id) + " origin=" +
-                                   std::to_string(origin) + " flags=" + std::to_string(flags));
-    }
-    return Status::OK();
-}
-
 Status Catalog::TouchPattern(std::uint64_t pattern_id, std::uint64_t last_seen) {
     return MutatePatternRow(pattern_id, [last_seen](SysPatternRow& row) {
         // Saturating, not wrapping: a use_count that rolled over would make
@@ -2782,35 +2658,6 @@ Status Catalog::TouchPattern(std::uint64_t pattern_id, std::uint64_t last_seen) 
     });
     // No cache update: heat is not a cached fact (catalog.hpp), so there is
     // nothing to keep coherent.
-}
-
-Status Catalog::RetirePattern(std::uint64_t pattern_id) {
-    auto acted = ForFirstRow<SysPatternRow>(
-        store_, kCatalogPagePatterns,
-        [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
-            const heap::PageView::Tuple&) -> StatusOr<bool> {
-        if (row.pattern_id != pattern_id) return false;
-        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) return false;
-
-        if (Status s = RetireLogged(wal_, store_, page, page_id, i, kBootstrapXid); !s.ok()) {
-            return s;
-        }
-
-        // The cache holds an entry keyed on this pattern_id, and it is now
-        // a fact about a row that no longer exists. There is no
-        // "UpdatePattern..." for removal, so this drops everything - which
-        // is heavier than the in-place updates beside it and deliberately
-        // so: a dangling PatternAccess would outlive its row, and DROP is
-        // rare enough that one re-scan costs nothing worth protecting.
-        BumpVersion("sys.patterns retire");
-        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-            log_->Debug("catalog", "retired pattern " + std::to_string(pattern_id));
-        }
-        return true;
-    });
-    if (!acted.ok()) return acted.status();
-    if (!acted.value()) return Status::NotFound("no sys.patterns row for this pattern_id");
-    return Status::OK();
 }
 
 Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
@@ -2977,10 +2824,14 @@ Status Catalog::DropCabin(std::uint64_t cabin_id) {
             const heap::PageView::Tuple&) -> StatusOr<bool> {
         if (row.cabin_id != cabin_id) return false;
 
-        // Retired, not delete-marked - RetirePattern() states the argument,
-        // and it is the same one: a catalog read has no snapshot to filter a
-        // mark against, so a marked row would still be found by every lookup
-        // and a re-created Cabin would collide with a row nobody can see.
+        // **Retired, not delete-marked**, and this is where the argument
+        // lives (catalog.hpp restates it for the two other removers): a
+        // catalog read has no snapshot to filter a mark against, so a marked
+        // row would still be found by every lookup and a re-created Cabin
+        // would collide with a row nobody can see. `RetirePattern()` was the
+        // first path in the engine to remove a catalog row and carried the
+        // argument until 2026-08-31, when withdrawing declared patterns left
+        // it with no caller.
         if (Status s = RetireLogged(wal_, store_, page, page_id, i, kBootstrapXid); !s.ok()) {
             return s;
         }
@@ -3397,8 +3248,8 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
                 return false;
             }
 
-            // Retired outside a transaction - DropCabin() and
-            // RetirePattern() state that argument and it still holds.
+            // Retired outside a transaction - DropCabin() states that
+            // argument and it still holds.
             // **Inside one, delete-marked**, which a rollback can clear
             // (DT5's mechanism).
             //

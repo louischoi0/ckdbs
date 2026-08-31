@@ -166,10 +166,13 @@ TEST_F(KeystoneIdTest, TheAllocatorAlsoIssuesCatalogOidsAndCatalogKeystones) {
     // issues what §1 describes. This pins the other two so the findings
     // note's claim is checkable rather than asserted:
     //
-    //   - kSysPatternsTable    -> an **oid** for a sys.patterns row
-    //                             (`RegisterPattern`): a body field, not a
-    //                             Keystone word.
-    //   - kSysPatternDefsTable -> a real Keystone id, for a row-codec row.
+    //   - kSysPatternsTable   -> an **oid** for a sys.patterns row
+    //                            (`RegisterPattern`): a body field, not a
+    //                            Keystone word.
+    //   - kSysAssertionsTable -> a real Keystone id, for a row-codec row.
+    //                            (`kSysPatternDefsTable` was the case this
+    //                            test used until declared patterns were
+    //                            withdrawn on 2026-08-31.)
     //
     // K1 is therefore already a claim about two id spaces with one
     // implementation, which is what makes "issue-once" ambiguous until the
@@ -182,9 +185,9 @@ TEST_F(KeystoneIdTest, TheAllocatorAlsoIssuesCatalogOidsAndCatalogKeystones) {
     ASSERT_TRUE(oid_b.ok()) << oid_b.status().message();
     EXPECT_EQ(oid_b.value(), oid_a.value() + 1);
 
-    // Separate sequences: issuing a sys.pattern_defs Keystone does not
+    // Separate sequences: issuing a sys.assertions Keystone does not
     // disturb the sys.patterns oid stream.
-    auto def_id = cat.AllocateRowId(catalog::kSysPatternDefsTable);
+    auto def_id = cat.AllocateRowId(catalog::kSysAssertionsTable);
     ASSERT_TRUE(def_id.ok()) << def_id.status().message();
     auto oid_c = cat.AllocateRowId(catalog::kSysPatternsTable);
     ASSERT_TRUE(oid_c.ok());

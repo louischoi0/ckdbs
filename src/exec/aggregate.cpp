@@ -173,14 +173,14 @@ Status Aggregator::EncodeValue(const parser::AstValue& value, std::string& out) 
         }
 
         case parser::ValueType::kParam:
-            // A declared pattern's `$name`. A chain compiled from a pattern
-            // body exists to be type-checked and fingerprinted, never run,
-            // so reaching a fold with one means something executed a body -
-            // refused explicitly here as it is on every other consuming
-            // path (row_codec.cpp, step_vm.cpp).
-            return Status::InvalidArgument(
-                "a pattern parameter '$" + value.param_name() +
-                "' has no value; a declared pattern's body is never executed");
+            // A value position with nothing bound to it. Unreachable since
+            // declared patterns were withdrawn (ast.hpp), and refused
+            // explicitly rather than folded, as it is on every other
+            // consuming path (row_codec.cpp, step_vm.cpp): a placeholder
+            // grouped as if it were a value would put every row in one
+            // group.
+            return Status::InvalidArgument("a parameter '$" + value.param_name() +
+                                            "' has no value to group by");
     }
     return Status::InvalidArgument("unknown value kind in a grouping key");
 }

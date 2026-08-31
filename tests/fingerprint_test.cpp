@@ -281,15 +281,21 @@ TEST(FingerprintTest, AnEmptyArgumentStreamHasAFixedHash) {
     EXPECT_EQ(fp.arg_hash, 14695981039346656037ull);
 }
 
-// ---- CREATE PATTERN: the $param fold (spec section 3.2) -------------------
+// ---- The $param fold (spec section 3.2, kept past the withdrawal) --------
 
-// The done-condition of step 1 of the spec's implementation order, and the
-// single property the whole feature rests on. A declaration's body never
-// executes; live traffic does, and it carries no declaration. If a declared
-// `$param` hashed as anything but the marker a literal and a `?` share, a
-// declared pattern would match nothing that ever runs - and it would fail
-// *silently*, since there is no error to report when two hashes simply
-// differ.
+// This was the done-condition of step 1 of the declared-pattern spec's
+// implementation order, and the single property that feature rested on: a
+// declaration's body never executed, live traffic did and carried no
+// declaration, so a `$param` that hashed as anything but the marker a
+// literal and a `?` share would have made every declared pattern match
+// nothing, *silently*.
+//
+// Declared patterns were withdrawn on 2026-08-31 and `$x` now parses
+// nowhere, so nothing depends on the fold any more. The test stays because
+// what it pins has outlived its reason: the three spellings still reduce to
+// one pattern_id, which is what makes the removal hash-neutral - no stored
+// waystone was retired by it - and it is what a re-designed placeholder
+// would have to preserve.
 TEST(FingerprintTest, ADeclaredParamHashesAsAValueSoAllThreeFormsAreOnePattern) {
     const Fingerprint declared =
         Must("SELECT id FROM account AS a WHERE a.flag = $flag AND a.name = $name");

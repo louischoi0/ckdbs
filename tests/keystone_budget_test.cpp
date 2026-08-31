@@ -158,10 +158,11 @@ TEST_F(KeystoneBudgetSurfaceTest, ShowBudgetListsEveryRelationIncludingTheCatalo
     const std::string out = Run("SHOW BUDGET");
     EXPECT_EQ(out.substr(0, 10), "relations=") << out;
     EXPECT_NE(out.find("rel=acct issued=0"), std::string::npos) << out;
-    // The two catalog relations that genuinely issue ids. Hiding them would
-    // hide the only consumption an operator does not control.
+    // Catalog relations that genuinely issue ids. Hiding them would hide
+    // the only consumption an operator does not control. `pattern_defs` was
+    // one of these until declared patterns were withdrawn on 2026-08-31.
     EXPECT_NE(out.find("rel=patterns "), std::string::npos) << out;
-    EXPECT_NE(out.find("rel=pattern_defs "), std::string::npos) << out;
+    EXPECT_NE(out.find("rel=assertions "), std::string::npos) << out;
     // The threshold is stated, so the listing explains its own warn column.
     EXPECT_NE(out.find("warn_at=90.000%"), std::string::npos) << out;
     EXPECT_NE(out.find("warning=0"), std::string::npos) << out;

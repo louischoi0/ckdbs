@@ -83,18 +83,20 @@ TEST(ShowRelayoutTest, TheBareFormListsShapesPlansAndGates) {
     EXPECT_NE(report.find("plans=none reason=btree-outside-v1-mover-scope"), std::string::npos)
         << report;
 
-    // Catalog relations stored in user tuple format (`pattern_defs`,
-    // `assertions`) are outside the mover's jurisdiction, and the bare
+    // Catalog relations are outside the mover's jurisdiction, and the bare
     // report skips them rather than listing gates that can never open.
-    EXPECT_EQ(report.find("rel=pattern_defs"), std::string::npos) << report;
+    // Two spellings, because the skip is by oid and not by storage format:
+    // `assertions` is the one stored in user tuple format, `patterns` is a
+    // typed-row one, and neither may appear.
     EXPECT_EQ(report.find("rel=assertions"), std::string::npos) << report;
+    EXPECT_EQ(report.find("rel=patterns"), std::string::npos) << report;
 }
 
 TEST(ShowRelayoutTest, ACatalogRelationAskedByNameAnswersWithTheReason) {
     Instance db;
     Load(db);
 
-    const std::string report = db.Run("SHOW RELAYOUT pattern_defs");
+    const std::string report = db.Run("SHOW RELAYOUT assertions");
     EXPECT_NE(report.find("plans=none reason=catalog-relation-outside-mover-jurisdiction"),
               std::string::npos)
         << report;

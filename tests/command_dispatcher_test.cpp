@@ -12,6 +12,7 @@
 
 #include "kds/base/log.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
@@ -379,25 +380,37 @@ TEST_F(CommandDispatcherTest, UnknownCommandIsErrorNotCrash) {
 
 TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // `DROP` became a statement head with CREATE PATTERN, so it no longer
-    // falls into "unknown command" - and it should not. There is still no
-    // DROP TABLE, and naming what DROP does take beats a generic refusal
-    // that leaves a client unsure whether the word was recognized. The list
-    // in the message is the whole of what exists, so it grows with the
-    // targets: CABIN joined it with the Cabin feature (docs/spec/cabin.md),
-    // INDEX with the index grammar (docs/spec/index.md §10), ASSERTION with
-    // the assertion catalog (docs/spec/assertion.md §8.3, AST03). This test
-    // is meant to be edited when one is added - that is what pins the list to
-    // reality rather than to whatever it happened to say.
+    // falls into "unknown command" - and it should not. Naming what DROP
+    // does take beats a generic refusal that leaves a client unsure whether
+    // the word was recognized. The list in the message is the whole of what
+    // exists, so it moves with the targets: CABIN joined it with the Cabin
+    // feature (docs/spec/cabin.md), INDEX with the index grammar
+    // (docs/spec/index.md §10), ASSERTION with the assertion catalog
+    // (docs/spec/assertion.md §8.3, AST03). This test is meant to be edited
+    // when one moves - that is what pins the list to reality rather than to
+    // whatever it happened to say.
     //
     // `DROP TABLE` joined the list with docs/spec/drop-table.md (DT01) -
     // the edit this comment scheduled - and the RESTRICT hook AST03 could
     // not wire finally has its DDL. An unknown table now answers NotFound
-    // from resolution, not a target-list refusal.
+    // from resolution, not a target-list refusal. `DROP PATTERN` **left**
+    // the list on 2026-08-31, when the operator withdrew declared patterns:
+    // the first edit this comment scheduled in the shrinking direction.
+    //
+    // The dispatcher and the parser each carry this sentence, and they must
+    // agree - the dispatcher answers `DROP EVERYTHING` first, the parser
+    // answers it for a caller that reaches `parser::Parse` directly.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
-              "ERR only DROP TABLE, DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION "
-              "are supported");
+              "ERR only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported");
     EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no table with this name");
+
+    const auto parsed = parser::Parse("DROP EVERYTHING");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_NE(parsed.status().message().find(
+                  "only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported"),
+              std::string::npos)
+        << parsed.status().message();
 }
 
 TEST_F(CommandDispatcherTest, EmptyLineIsError) {
@@ -936,17 +949,28 @@ TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE r (id int64, a int64, b int64)").response.substr(0, 7),
               "CREATED");
+
+    // Registered from **real fingerprints**, taken of real statements: what
+    // this test needs is ids that use the full 64-bit range, and inventing
+    // numbers would prove nothing about the ones the engine actually
+    // stores. The declarations that used to mint these rows went with
+    // `CREATE PATTERN` on 2026-08-31, and the auto route cannot stand in -
+    // a FilterScan collects no trail, so traffic on these shapes registers
+    // nothing (stats/trail_recorder.hpp).
+    //
     // Distinct bodies, because a pattern_id is the fingerprint of the shape
     // and identical shapes would collide into one row.
-    const char* wheres[] = {"id = $x", "a = $x", "b = $x", "a > $x", "b > $x", "a < $x",
-                            "b < $x", "a >= $x", "b >= $x", "a != $x", "b != $x",
-                            "id > $x", "id < $x", "id >= $x"};
+    const char* wheres[] = {"id = 1", "a = 1", "b = 1", "a > 1", "b > 1", "a < 1",
+                            "b < 1", "a >= 1", "b >= 1", "a != 1", "b != 1",
+                            "id > 1", "id < 1", "id >= 1"};
     int made = 0;
     for (const char* where : wheres) {
-        const std::string reply =
-            d.Dispatch("CREATE PATTERN p" + std::to_string(made) + " ($x int64) OF SELECT a "
-                       "FROM r WHERE " + where).response;
-        if (reply.substr(0, 4) != "ERR ") ++made;
+        const auto fp = parser::FingerprintOf(std::string("SELECT a FROM r WHERE ") + where);
+        ASSERT_TRUE(fp.has_value()) << where;
+        if (boot_->catalog.RegisterPattern(fp->pattern_id, catalog::kStmtClassUnclassified)
+                .ok()) {
+            ++made;
+        }
     }
     ASSERT_GT(made, 0) << "the fixture must register patterns to have ids to compare";
 

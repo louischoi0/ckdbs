@@ -358,15 +358,14 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             it.oracle.CreateTable(op.table);
             break;
         case Op::Kind::kCreateCabin:
-        case Op::Kind::kCreatePattern:
-            // Advisory declarations: they may not change a single result,
+            // An advisory declaration: it may not change a single result,
             // which is what the toggle pairing proves. Here the only
-            // assertion is that they are accepted — and **ADOPTED is an
-            // acceptance**: with recording on, the shape has usually been
-            // auto-registered already, so the declaration adopts that
-            // pattern instead of minting one. Same id, same directory; the
-            // verb is the dispatcher reporting which it did.
-            if (reply.rfind("CREATED", 0) != 0 && reply.rfind("ADOPTED", 0) != 0) {
+            // assertion is that it is accepted. `CREATE PATTERN` shared
+            // this arm - and needed the `ADOPTED` reply admitted beside
+            // `CREATED`, since with recording on the shape had usually been
+            // auto-registered already - until the operator withdrew
+            // declared patterns on 2026-08-31.
+            if (reply.rfind("CREATED", 0) != 0) {
                 Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
                 return false;
             }
@@ -802,17 +801,15 @@ bool ScanAgreesWithOracle(SimInstance& instance, const Oracle& oracle, std::stri
 //   id is identity (invariant 11) and every later statement names rows by
 //   it.
 //
-//   **Declarations — acceptance only.** `CREATE PATTERN` answers CREATED
-//   or **ADOPTED** depending on whether the recorder had already
-//   auto-registered the shape, and `CREATE CABIN` appends a WARN when the
-//   access statistics hold no filter on the column. Both replies report
+//   **Declarations — acceptance only.** `CREATE CABIN` appends a WARN when
+//   the access statistics hold no filter on the column, which reports
 //   advisory state *on purpose*: that is what a declaration's reply is
-//   for. Neither is a row anyone reads.
+//   for. It is not a row anyone reads. `CREATE PATTERN` was the other
+//   declaration here until 2026-08-31.
 bool SameOutcome(const Op& op, const std::string& bare, const std::string& full) {
     switch (op.kind) {
         case Op::Kind::kCreateTable:
         case Op::Kind::kCreateCabin:
-        case Op::Kind::kCreatePattern:
             return IsErr(bare) == IsErr(full);
         case Op::Kind::kInsert:
             return ParseInsertedId(bare) == ParseInsertedId(full);

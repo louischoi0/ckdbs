@@ -228,10 +228,11 @@ an unlogged dispatcher would have leaked every value a rolled-back UPDATE
 spilled. The collector's condition is now `wal_ != nullptr || scope.txn != nullptr`.
 
 **A stated gap, not closed by phase B**: a spill logged with `kNoTxnId` —
-`LogChainInsert`'s path, used by `sys.pattern_defs` and the assertion
-catalog — has no transaction to chain an undo record to, so a rolled-back
-`CREATE PATTERN`'s spilled body text still leaks. It leaked before this
-work too; VC-C7's mount-time sweep is what would collect it.
+`LogChainInsert`'s path, used by the assertion catalog and, until
+2026-08-31, by `sys.pattern_defs` — has no transaction to chain an undo
+record to, so a rolled-back `CREATE ASSERTION`'s spilled body text still
+leaks. It leaked before this work too; VC-C7's mount-time sweep is what
+would collect it.
 
 ### Phase B's review, and what it changed
 

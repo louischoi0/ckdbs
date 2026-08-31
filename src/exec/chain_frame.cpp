@@ -50,17 +50,17 @@ StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPr
 
 StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
                                 const StepPredicate& pred, const ChainFrame& frame) {
-    // A chain compiled from a declared pattern's body carries `$param`
-    // placeholders and must never be executed - nothing binds them, so
-    // any verdict here would answer a statement nobody wrote.
+    // A `$param` is a value position with nothing bound to it. Nothing
+    // constructs one since declared patterns were withdrawn (ast.hpp), so
+    // this arm is unreachable; it stays because the enumerator does, and
+    // because what it prevents is a wrong answer rather than an error.
     //
     // Checked once, here, because every residual conjunct in the engine
     // is evaluated through this body; the other way a value reaches a
     // comparison is a probe key, guarded at KeyFromOperand(). Corruption
-    // rather than a quiet false: this is reachable only through a
-    // defect - it sits beside the other malformed-chain checks here -
-    // and a false would turn that defect into a query that silently
-    // returns nothing.
+    // rather than a quiet false: it sits beside the other malformed-chain
+    // checks here, and a false would turn the defect that produced it into
+    // a query that silently returns nothing.
     if (pred.rhs.kind == OperandKind::kLiteral &&
         pred.rhs.literal.type == parser::ValueType::kParam) {
         return Status::Corruption(

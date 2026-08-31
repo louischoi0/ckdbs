@@ -153,8 +153,9 @@ struct CabinKeyHash {
 // Two kinds are refused, for one reason each. **kNull**: `WHERE c = NULL` is
 // not an equality any SQL evaluates to true, so a set keyed on NULL would
 // answer a predicate that never matches - and NULLs are not storable today
-// regardless. **kParam**: a declared pattern's `$x` is a value *position*
-// with no value in it, and nothing ever binds one on an execute path.
+// regardless. **kParam**: a `$x` is a value *position* with no value in it,
+// and nothing constructs one since declared patterns were withdrawn
+// (parser/ast.hpp) - the arm is unreachable and kept with the enumerator.
 std::optional<CabinKey> MakeValueKey(const parser::AstValue& value);
 
 // The key for `value` in `cabin_id`, or nullopt for a zero cabin_id or a
@@ -189,10 +190,11 @@ public:
     // one-shot value should not buy.
     //
     // `n = 1` for a **declared** Cabin - `CREATE CABIN`, or a `CABIN` clause
-    // on the column at CREATE TABLE. Same rule TrailRecorder applies to a
-    // declared pattern, same argument: the declaration *is* the evidence
-    // n=2 waits for, and an operator who wrote `CABIN` on a column has
-    // already said it is probed by value.
+    // on the column at CREATE TABLE. The argument is the one TrailRecorder
+    // applied to a declared pattern until those were withdrawn on
+    // 2026-08-31: the declaration *is* the evidence n=2 waits for, and an
+    // operator who wrote `CABIN` on a column has already said it is probed
+    // by value. This is where it still has a declaration to rest on.
     static constexpr std::uint8_t kAutoRecordThreshold = 2;
     static constexpr std::uint8_t kDeclaredRecordThreshold = 1;
 

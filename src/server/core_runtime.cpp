@@ -382,13 +382,18 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // rights (`exec::CatalogSpillPages` carries the argument and the test
     // that proved it).
     //
-    // **Every catalog relation with a var-heap, not the assertion catalog
-    // alone** (CB2, `crosscore.md` CC12/CR1). `sys.pattern_defs` has the
-    // same shape and had no peer reader, so its failure was latent - and
-    // latent twice over, because the read-side `MayFault` check is a Debug
-    // one: a release build faulted core 0's page and answered, so nothing
-    // reported the violation. `SHOW PATTERNS` and `CREATE PATTERN`'s
-    // duplicate-name probe are the two readers that reach it.
+    // **Every catalog relation with a var-heap, by list** (CB2,
+    // `crosscore.md` CC12/CR1). The list is `sys.assertions` alone since
+    // `sys.pattern_defs` went with declared patterns on 2026-08-31, and it
+    // stays a list because the next catalog relation to gain a var-heap
+    // joins it by CR1 rather than by a second grant here.
+    //
+    // What CB0 found while `sys.pattern_defs` was on it, kept because it is
+    // a property of the store rather than of that relation: the read-side
+    // `MayFault` check is a Debug one, so a release build faults another
+    // core's page and answers, and a *missing* grant here is invisible in
+    // the configuration every measurement is taken in
+    // (`known-gaps.md`).
     if (is_peer) {
         if (auto spills = exec::CatalogSpillPages(*runtime->catalog_, *runtime->store_,
                                                   exec::kVarHeapCatalogRelations);

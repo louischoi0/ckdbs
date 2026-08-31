@@ -557,10 +557,10 @@ struct TableAccess {
 // only when the directory deepens, through the single writer
 // Catalog::SetPatternWaystoneRoot(), which updates this entry in place so
 // the cache stays coherent without a global invalidation. The lifecycle
-// policy - `origin`, `flags` - changes only when an operator declares or
-// adopts a pattern, through the one other in-place writer
-// Catalog::SetPatternOrigin(). All three pass this header's test: nothing
-// here moves without an explicit DDL-shaped call.
+// policy - `origin`, `flags` - has **no** writer since declared patterns
+// were withdrawn on 2026-08-31: every registration passes kOriginAuto and
+// nothing sets kPatternPinned. All three still pass this header's test:
+// nothing here moves without an explicit DDL-shaped call.
 struct PatternAccess {
     Oid oid = 0;
     std::uint64_t pattern_id = 0;
@@ -571,15 +571,15 @@ struct PatternAccess {
 
     // Who created the row (kOriginAuto / kOriginUser) and its policy bits
     // (kPatternPinned), both in rows.hpp. Cached because the trail recorder
-    // reads origin on the statement path to decide whether this pattern
-    // records from its first execution or waits for n=2, and re-reading the
-    // catalog page per execution to answer that would cost more than the
-    // recording does.
+    // reads origin on the statement path, and re-reading the catalog page
+    // per execution to answer that would cost more than the recording does.
+    //
+    // Both read constant today - kOriginAuto and 0 - because withdrawing
+    // declared patterns took away their only writer. They are cached rather
+    // than dropped for the reason rows.hpp keeps them on disk: the fields
+    // are the row's, not this feature's.
     std::uint8_t origin = kOriginAuto;
     std::uint16_t flags = 0;
-
-    bool pinned() const noexcept { return (flags & kPatternPinned) != 0; }
-    bool user_declared() const noexcept { return origin == kOriginUser; }
 
     // Same rule as SysPatternRow's: depth is the authority, never the
     // root. Restated rather than shared because a caller holding a

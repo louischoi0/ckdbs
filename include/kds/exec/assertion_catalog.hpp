@@ -26,7 +26,8 @@ class WalManager;
 // One row per assertion, holding the **declaration verbatim** and four fixed
 // fields. The parsed form - the group columns, the aggregate, the operator,
 // the bound - is *not* stored: it is recovered by re-parsing `source_text`,
-// which is the `sys.pattern_defs` model AS10 names. Two things follow.
+// which is the model AS10 names after `sys.pattern_defs` (withdrawn
+// 2026-08-31, and this relation is now its only user). Two things follow.
 //
 // The `GROUP BY` list needs no cap, because a longer list costs text rather
 // than a wider catalog row; §3 declares none and this layer invents none.
@@ -36,14 +37,15 @@ class WalManager;
 //
 // ---- Why this is not in catalog/ ----------------------------------------
 //
-// `sys.assertions` is the second catalog relation stored in ordinary user
+// `sys.assertions` is the one catalog relation stored in ordinary user
 // tuple format - a Keystone word, tagged cells, a var-heap for values too
 // long to inline - because a declaration's text is neither fixed-width nor
 // small. Reading such a row needs `exec::DecodeRowInto`, and `exec/` depends
 // on `catalog/`, so these readers cannot live on `Catalog` without a
-// dependency cycle. `stats/pattern_defs.hpp` is the same file for the same
-// reason; this one lives in `exec/` because an assertion is a constraint,
-// which is where `fk_check.hpp` and `index_ddl.hpp` already are.
+// dependency cycle. `stats/pattern_defs.hpp` was the same file for the same
+// reason until declared patterns were withdrawn; this one lives in `exec/`
+// because an assertion is a constraint, which is where `fk_check.hpp` and
+// `index_ddl.hpp` already are.
 //
 // ---- Two rules every function below honours ------------------------------
 //
@@ -138,8 +140,8 @@ StatusOr<std::optional<AssertionDef>> FindAssertionByName(catalog::Catalog& cata
 // **This is the RESTRICT predicate** (AS10, §8.3): dropping a relation with a
 // non-empty answer here must fail rather than leave a constraint pointing at
 // nothing. The hook itself is not wired, because **there is no DROP TABLE in
-// this engine** - the catalog is append-only apart from DROP PATTERN, DROP
-// CABIN, DROP INDEX and now DROP ASSERTION. This function is the whole of
+// this engine** - the catalog is append-only apart from DROP CABIN, DROP
+// INDEX and now DROP ASSERTION. This function is the whole of
 // what the hook needs, and is tested as such; wiring it is a one-line call at
 // the site that does not exist yet.
 StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catalog,

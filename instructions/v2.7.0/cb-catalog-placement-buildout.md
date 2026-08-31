@@ -39,9 +39,11 @@ is decided here; CB7 measures them.
 
 ## Scope
 
-**In.** CB0-CB3: `sys.pattern_defs`' var-heap, CR1's first exercise.
-CB4-CB6: DDL dispatch to core 0 under CR5. CB7-CB8: batched, unlogged
-peer statistics under CR6-CR8. CB9: the rule text CR6 requires.
+**In.** CB0-CB3: `sys.pattern_defs`' var-heap, CR1's first exercise
+(built 2026-08-30; the relation was removed the next day by work order
+PD, and the §CB0-CB3 banner below says what survives). CB4-CB6: DDL
+dispatch to core 0 under CR5. CB7-CB8: batched, unlogged peer statistics
+under CR6-CR8. CB9: the rule text CR6 requires.
 
 **Out.** The mover. `sys.ranges`' write path. Reclamation of anything.
 Migrating any other catalog relation out of the reserved range — CR3
@@ -58,6 +60,31 @@ which the earlier scoping did.
 ---
 
 ## CB0-CB3 — CR1 on `sys.pattern_defs`
+
+> **Built 2026-08-30 (`1394fce`), and its subject removed 2026-08-31.**
+> Work order PD withdrew user-declared patterns and deleted
+> `sys.pattern_defs`, so the relation these four rows were written
+> against no longer exists. Two things to read the rows below with:
+>
+> - **What CB0-CB3 built survives the removal.** CB2 merged
+>   `AssertionSpillPages` and `varheap_sweep.cpp`'s private
+>   `ReferencedSpills` into `exec/catalog_spills.hpp`, and made
+>   `CoreRuntime::Open` grant over the named list
+>   `exec::kVarHeapCatalogRelations` rather than over the assertion
+>   catalog alone. PD takes `sys.pattern_defs` off that list; the list,
+>   the shared walk and the grant all stay, and `sys.assertions` is what
+>   they now cover. CB3's `well_known.hpp` amendments stay too — the
+>   placement rule they record is CR1's, not this relation's.
+> - **PD's own draft said CB0-CB3 were "withdrawn" and CR1 "unexercised".**
+>   That was drafted against `main` at `6b5b368`, before these rows
+>   landed, and both halves are wrong as of `1394fce`: they were built,
+>   and CR1 is exercised — by `sys.assertions`, through the mechanism
+>   CB1 chose. The ratification (`r1-catalog-placement-ratification.md`)
+>   carries the corrected statement.
+>
+> CB0's finding is the part that had nothing to do with the relation and
+> is kept in `known-gaps.md`: the read-side `MayFault` consult is
+> Debug-only, so a missing fault grant is invisible in a release build.
 
 **CB0. Establish what a peer actually hits.** `sys.assertions` reaches
 its var-heap through `exec::AssertionSpillPages`, granting the individual

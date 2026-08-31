@@ -136,23 +136,15 @@ public:
     void UpdatePatternWaystone(std::uint64_t pattern_id, PageId root,
                                std::uint8_t depth) noexcept;
 
-    // The same in-place update for a pattern's lifecycle policy, when
-    // CREATE PATTERN adopts an auto-registered row. Identical argument, and
-    // the same no-op on a miss: origin and pinning belong to one pattern
-    // and are read by nothing else, so a global drop would dangle every
-    // other held pointer for nothing.
-    void UpdatePatternOrigin(std::uint64_t pattern_id, std::uint8_t origin,
-                             std::uint16_t flags) noexcept;
-
     // Points a cached relation's index at a new root page, in place.
     //
-    // **The third in-place update, and the one that had to exist.** An index
+    // **The second in-place update, and the one that had to exist.** An index
     // root moves when a split grows the tree, which happens inside an
     // ordinary INSERT - so a global drop here would dangle the
     // `const TableAccess*` the running statement is holding, and a
     // multi-row UPDATE would be holding it across every later row. That is
     // precisely the collateral damage the deleted per-relation Waystone
-    // caused, and the reason the two updates above exist.
+    // caused, and the reason the update above exists.
     //
     // The fact qualifies by the same test they do: a root belongs to one
     // index and is read by nothing else, so dropping every cached relation

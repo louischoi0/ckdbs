@@ -120,10 +120,10 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                                   "': a NULL reached the cell encoder; EncodeRow's driver owns "
                                   "NULL handling");
     }
-    // A declared pattern's `$param` has no value to encode, and never will:
-    // a declaration is not an execution. Refused by name rather than left to
-    // fall through to "expects an integer", which would send whoever hit it
-    // looking for a type error that is not there.
+    // A `$param` has no value to encode. Unreachable since declared
+    // patterns were withdrawn (ast.hpp), and refused by name rather than
+    // left to fall through to "expects an integer", which would send
+    // whoever hit it looking for a type error that is not there.
     if (val.type == parser::ValueType::kParam) {
         return Status::Corruption("column '" + NameOf() + "': parameter '$" +
                                   val.param_name() + "' has no bound value to store");
@@ -612,8 +612,8 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
 // satisfied by any row, and answering it with zero rows would hide the
 // typo behind a plausible-looking empty result.
 Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& val) {
-    // A parameter is never evaluated - a declared pattern's body is
-    // type-checked and fingerprinted, never run - and NULL matches nothing
+    // A parameter is never evaluated - nothing constructs one since
+    // declared patterns were withdrawn (ast.hpp) - and NULL matches nothing
     // whatever its type. Neither has a value to coerce.
     if (val.type == parser::ValueType::kParam || val.type == parser::ValueType::kNull) {
         return Status::OK();
@@ -1116,10 +1116,10 @@ std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value) {
             // Carries its own scale like the narrow kind, so it too
             // ignores `type_val` and renders itself.
             return FormatDecimalWide(Int128FromHalves(value.dec_hi, value.int_val), value.scale);
-        // Rendered as written, sigil restored. Only a plan printed from a
-        // declared pattern's body reaches this - no row ever holds one - and
-        // printing `$flag` is what makes such a plan readable back against
-        // the declaration it came from.
+        // Rendered as written, sigil restored. No row ever holds one and
+        // nothing constructs one since declared patterns were withdrawn
+        // (ast.hpp); the arm stays so a plan render can never print a
+        // placeholder as `NULL`, which is what the default below would do.
         case parser::ValueType::kParam:
             return "$" + value.param_name();
         case parser::ValueType::kNull:

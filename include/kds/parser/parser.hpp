@@ -59,11 +59,6 @@ private:
     StatusOr<UpdateStmt> ParseUpdate();
     StatusOr<DeleteStmt> ParseDelete();
 
-    // `CREATE PATTERN <name> (<params>) [WITH (...)] OF <select>`. The
-    // leading `CREATE PATTERN` is already consumed.
-    StatusOr<CreatePatternStmt> ParseCreatePattern();
-    StatusOr<DropPatternStmt> ParseDropPattern();
-
     // `{CREATE | DROP} CABIN ON <table>(<column>)`, with the leading two
     // words already consumed. One production for both, since they differ
     // only in `drop` - see CabinStmt (ast.hpp).
@@ -91,11 +86,6 @@ private:
     // truncations (docs/spec/index.md §13).
     Status ParseDeclaredColumnList(std::vector<IndexColumnRef>& out, const char* what,
                                    std::size_t cap);
-
-    // The two bracketed lists of a declaration, split out only because
-    // ParseCreatePattern is otherwise three loops in a row.
-    Status ParsePatternParams(CreatePatternStmt& stmt);
-    Status ParsePatternOptions(CreatePatternStmt& stmt);
 
     // `depth` is how many query blocks enclose this one: 0 at the top
     // level, +1 per predicate-position subquery. Carried as a parameter
@@ -187,15 +177,6 @@ private:
 
     Lexer lexer_;
 
-    // Where a `$param` is legal, and where its occurrences are recorded.
-    //
-    // Non-null for exactly the span of a CREATE PATTERN body and null
-    // everywhere else, which is how spec section 3.1 is enforced: the token
-    // exists and fingerprints, but no other production accepts it. A
-    // pointer rather than a bool because the two facts are one - a `$x` is
-    // legal precisely where there is a declaration to record it against -
-    // and splitting them is how they come to disagree.
-    std::vector<ParamUse>* param_uses_ = nullptr;
 };
 
 // Convenience free function: Parser(sql).Parse().

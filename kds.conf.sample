@@ -247,9 +247,10 @@ kwp_port = 0
 # Whether a successful SELECT records where it found its rows, so a repeated
 # query pattern can later look instead of search (docs/spec/waystone-concpets.md).
 #
-# What it costs: one waystone page per pattern *instance* that executes twice
-# (once, for a pattern declared with CREATE PATTERN - a declaration is the
-# evidence the second execution would otherwise supply). Trails are unlogged,
+# What it costs: one waystone page per pattern *instance* that executes
+# twice. (`CREATE PATTERN` lowered that to one execution for a declared
+# pattern until it was withdrawn on 2026-08-31; there is one threshold
+# now.) Trails are unlogged,
 # so a crash loses whatever the last checkpoint did not carry, which costs
 # future replays and never results.
 #

@@ -321,7 +321,9 @@ five-way comparison, generalized.
 pk and by a non-key predicate, each assigning either the column a Cabin and
 an index are keyed on or the varchar that may spill — `BEGIN`/`COMMIT`/
 `ROLLBACK` with the isolation level drawn per transaction, and `CREATE
-CABIN` / `CREATE PATTERN`. The oracle learned transactions as a pending
+CABIN` (`CREATE PATTERN` was drawn beside it until declared patterns were
+withdrawn on 2026-08-31; its three rolls in a hundred went to data ops so
+the transaction rate did not move with it). The oracle learned transactions as a pending
 write-set, and the loop compares the engine's own `UPDATED <n>` /
 `DELETED <n>` against the oracle's count of the matching rows, which is
 the sharpest single assertion in the harness.
@@ -343,11 +345,12 @@ silently skipped:
   come out of the same free map, so a trail shifts the next user page —
   invariant 8 promises the state cannot change what a query answers, never
   that the free map allocates identically); acceptance only for a
-  declaration, because `CREATE PATTERN` answers CREATED or **ADOPTED**
-  depending on whether the recorder had already auto-registered the shape
-  and `CREATE CABIN` appends a WARN when the access statistics hold no
-  filter on the column. Both of those were found by the pairing, and both
-  are replies reporting advisory state on purpose.
+  declaration, because `CREATE CABIN` appends a WARN when the access
+  statistics hold no filter on the column — a reply reporting advisory
+  state on purpose, and found by the pairing. `CREATE PATTERN` was the
+  other case, answering CREATED or **ADOPTED** depending on whether the
+  recorder had already auto-registered the shape; it went with declared
+  patterns on 2026-08-31.
 
 **What it found in the engine: one wrong answer**, and it was fixed the
 next day. A Cabin entry set banked inside a transaction outlived the

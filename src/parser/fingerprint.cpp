@@ -141,19 +141,19 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         case TokenType::kKeyword:
         case TokenType::kIdent: out = ShapeTag::kIdent; return true;
         // The convergence point: an int literal, a string literal, a `?`
-        // and a declared `$param` all emit the same marker, which is what
-        // makes `WHERE id = 42`, `WHERE id = ?` and `WHERE id = $x` one
-        // pattern.
+        // and a `$param` all emit the same marker, which is what makes
+        // `WHERE id = 42`, `WHERE id = ?` and `WHERE id = $x` one pattern.
         //
-        // The last of those is the whole of CREATE PATTERN
+        // The last of those was the whole of `CREATE PATTERN`
         // (docs/spec/create-pattern-user-defined-patterns-v1.md section
-        // 3.2). A declaration's body never runs; live traffic does, and it
-        // carries no declaration. So if a `$param` hashed as anything else
-        // - an identifier, or a marker of its own - a declared pattern
-        // would match nothing that ever executes and the feature would be
-        // silently dead. Neither the parameter's *name* nor its declared
-        // *type* enters the stream here, for the same reason: live traffic
-        // has neither to contribute.
+        // 3.2, withdrawn 2026-08-31): a declaration's body never ran, live
+        // traffic did, and live traffic carries no declaration - so a
+        // `$param` that hashed as anything else would have made every
+        // declared pattern match nothing. Neither the parameter's *name*
+        // nor its type entered the stream, for the same reason. The arm
+        // stays where it is: the token still lexes, it is reserved for the
+        // extended protocol's named binds (D4), and moving it would change
+        // hashes for no gain.
         // kNumLit is in the group by the phase-2 rule (types.md TY3):
         // a bare `12.34` *is* the quoted `'12.34'`, so it must land where
         // every other bindable literal lands or the two spellings of one
@@ -166,10 +166,9 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         // statement's hash. `kFingerprintVersion` stays 1 anyway, because
         // the bump rule protects what is *stored*, and no such hash was
         // ever storable: int-dot-int parses in no production, a statement
-        // that cannot parse cannot execute, recording happens only on the
-        // execution path, and a CREATE PATTERN body must itself parse. A
-        // hash that can never reach `sys.patterns` has no on-disk meaning
-        // to preserve.
+        // that cannot parse cannot execute, and recording happens only on
+        // the execution path. A hash that can never reach `sys.patterns`
+        // has no on-disk meaning to preserve.
         case TokenType::kIntLit:
         case TokenType::kNumLit:
         case TokenType::kStrLit:

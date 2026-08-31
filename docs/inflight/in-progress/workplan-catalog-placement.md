@@ -8,13 +8,26 @@ by the ratification `instructions/v2.7.0/r1-catalog-placement-ratification.md`
 
 Worked in worktree `cr-catalog-placement`.
 
+> **CB0-CB3's subject was removed the day after they landed.** Work order
+> `instructions/v2.7.0/pd-remove-declared-patterns.md` withdrew
+> user-declared patterns on 2026-08-31, and `sys.pattern_defs` went with
+> them. Read §1-§2 below as the record of a finding rather than as a
+> description of live code: **the mechanism survives and its subject does
+> not.** `exec/catalog_spills.hpp`, the merged walk and
+> `CoreRuntime::Open`'s grant over `kVarHeapCatalogRelations` are all
+> still there; the list now holds `sys.assertions` alone, which is the
+> relation CB2's merge was extracted *from*. CB0's finding — that the
+> read-side `MayFault` consult is Debug-only, so a missing grant is
+> invisible in a release build — was never about this relation and is in
+> `known-gaps.md`.
+
 ## Where to pick this up
 
 | Row | Subject | State |
 |---|---|---|
-| CB0 | What a peer hits on a spilled `sys.pattern_defs` definition | **Done** — §1, and the finding is not the one the order expected |
+| CB0 | What a peer hits on a spilled `sys.pattern_defs` definition | **Done** — §1, and the finding is not the one the order expected. Subject removed 2026-08-31 (see the banner) |
 | CB1 | Mechanism: page-at-a-time grant vs a reserved sub-range | **Done** — the grant, on the order's own three grounds, with the frequency premise checked (§1a) |
-| CB2 | Build it for `sys.pattern_defs` | **Done** — and it removed two copies of one walk rather than adding a third (§2) |
+| CB2 | Build it for `sys.pattern_defs` | **Done** — and it removed two copies of one walk rather than adding a third (§2), which is why the removal of its subject cost nothing |
 | CB3 | `well_known.hpp` says the placement is a rule | **Done** |
 | CB4 | The peer DDL guard becomes a route | **Done** — §3 |
 | CB5 | Autocommit only; a DDL in a transaction still refuses and poisons | **Done** — §3 |

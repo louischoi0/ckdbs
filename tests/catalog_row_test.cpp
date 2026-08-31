@@ -121,6 +121,10 @@ TEST(SysPatternRowTest, OnDiskLayoutIsPinned) {
     // lose. Little-endian, packed, 41 bytes since CREATE PATTERN appended
     // `flags` and `origin` (the superblock version moved with it, which is
     // what stops an older file from mounting and then misreading this row).
+    // **Still 41 after that feature was withdrawn on 2026-08-31**: the two
+    // fields stay because `origin` sits at offset 37 where `dir_depth` ends
+    // it, so removing it would move the layout this test exists to hold
+    // still. Only kOriginAuto is written now; the codec round-trips both.
     SysPatternRow row{};
     row.pattern_id = 0x1122334455667788ull;
     row.dir_depth = 0x2A;

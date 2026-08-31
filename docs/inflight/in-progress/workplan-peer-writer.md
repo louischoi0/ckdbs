@@ -794,8 +794,12 @@ that walk is what lets the store claim its own stamp.
   over-enforcing until its next mount. Fail-closed both ways, and a remount
   clears it.
 - **The catalog var-heap is not in the peer-readable range.** The mount's
-  page-exact grant closes it for `sys.assertions`; `sys.pattern_defs` has the
-  same shape and no reader on a peer today.
+  page-exact grant closes it, and CB2 generalised the grant from
+  `sys.assertions` to a named list (`exec::kVarHeapCatalogRelations`).
+  `sys.pattern_defs` was the list's other entry until declared patterns
+  were withdrawn on 2026-08-31, so the list is `sys.assertions` alone —
+  still a list, because the next catalog relation with a var-heap joins it
+  rather than getting a second grant.
 
 | # | Task | Gate |
 |---|---|---|
