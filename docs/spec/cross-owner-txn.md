@@ -311,6 +311,67 @@ has no such bound.
 | `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is one of `txn::kMaxTrackedLiveTxns`, which local clients share — so without it a coordinator storm would refuse an unrelated connection's `BEGIN` with nothing naming the cause |
 | wire sizing | `txn_2pc_service.hpp` | 24 bytes per request leg, 256 for the participant reply, against a 1,024-byte ring slot — asserted against `kCoreRingPayloadBytes`, never the literal (D6) |
 
+### 5a. Measured sizing — what the protocol costs, in parts
+
+Measured 2026-08-31 at `951a91a` by work order XD
+(`instructions/v2.7.1/measurement-xd.md`), on scenario 2 over a real
+ring; the file is
+`bench/v2.7.0/results-xd-commit-decomposition-v2.7.0-2-g951a91a.md`, and
+R6-B (`bench/v2.5.0/results-r6b-cross-owner-cost-*.md`) is the prior
+number every ratio here is stated against.
+
+**The commit is three device syncs, and the class does not change that
+except in one leg.** Counted from outside the process with `SHOW META`'s
+`wal_syncs`, per core, over 20 transactions per arm:
+
+| durability class | one-owner commit | cross-owner commit |
+|---|---:|---:|
+| `strict` | 1.00 sync | **3.00** — 2 on the participant, 1 on the coordinator |
+| `group` | 1.00 sync | **3.00** |
+| `relaxed` | 0.00 sync | **2.00** |
+
+The chain is §2's, and **two of its three legs are unconditional on the
+durability class by construction**: the participant's prepare
+(`shipped_statement_executor.cpp`, `RequestDurable` then a park — the
+promise is made after the record is durable, never at the append) and the
+coordinator's decide (`command_dispatcher.cpp`, whose comment states it —
+*"whatever the durability class"*, because `relaxed`'s window is a promise
+about this stream's own recent commits, not about a record another core is
+about to act on). Only the third leg, the participant's own local COMMIT,
+rides the class — which is why `relaxed` shows 2 and not 3, and why **the
+cross-owner increment is +2 syncs in all three classes**.
+
+**At one transaction the legs are additive, with no batching discount.**
+On ext4 the two extra legs cost ~1,002 µs each against a 925.9 µs local
+sync on the same device, and the ratio to a one-owner commit is
+**3.077× under `strict`** (median of three repeats) and **3.111× under
+`group`** — close to the naive 3-syncs-over-1 reading. R6-B's 1.975× is not
+in conflict: it prices a shape that ships one row per participant, where
+scenario 2 ships every one of a booking's 6-8 statements individually, so
+the two bracket what a transaction pays by how much of it is shipped.
+
+**Concurrency shares the device but not the queue.** As bookers rise 1 → 8
+under `group`, syncs per booking fall 3.00 → 2.45-2.50 — the three legs'
+`RequestDurable`s do ride the same drain — while the commit's own p50
+*rises* 2.93 ms → 4.83-5.01 ms (the two b = 8 cells), because the legs
+are sequential within a
+transaction and core 0's foreground occupancy climbs behind them (2.6% →
+5.6% of reactor wall time). Batching is a throughput property here, never
+a latency one.
+
+**It is a device cost.** Moving only the WAL segments to tmpfs — durability
+semantics and code paths untouched, the data file left on ext4 — collapses
+the cross-owner increment **51-62×**, from 1,988.7 µs to 38.0 µs at one
+booker and 3,743.9 µs to 60.4 µs at eight. The ~40 µs residue is the ring
+hop and the parks. Those numbers are a probe of where the mass sits and are
+never engine numbers.
+
+**What this sizing is *not* evidence about**: the read-only-participant
+reply of §8. Scenario 2's booking writes to its participant on four
+statements, so no participant of it can ever answer read-only; that lever
+is priced by `bench/v2.5.0/results-rr-read-half-*.md`'s read-half
+workload and by nothing here.
+
 ---
 
 ## 6. Observability
@@ -327,6 +388,7 @@ structurally impossible.
 | `shipped_join_refusals` | statements that could only join a context and found none — §2a, the other side of the line above. **A subset of `shipped_enrolment_refusals`**, not a count beside it: every refusal the enrolment path returns is counted there too, so the two are never summed |
 | `txn_watermark_refusals` | transactions refused because a participant answered from a different snapshot than the one they had been reading it at (§3) |
 | `txn_in_doubt`, `_asks`, `_committed`, `_aborted`, `_unresolved` | the in-doubt population and what became of it. `txn_in_doubt_unresolved` is the one number naming a transaction nothing at runtime can finish |
+| `wal_syncs`, `wal_interval_syncs` | not this protocol's counters, but the ones its cost is read from (XD0, 2026-08-31, `docs/spec/client-manual.md`). Every device sync this core performed, and the D3 idle tick within it; `wal_syncs - wal_interval_syncs` is the part somebody was parked on. Cumulative from mount, so a reading is a before/after delta, and §5a's per-transaction sync counts are exactly this field divided by the transactions between two readings |
 
 ---
 
