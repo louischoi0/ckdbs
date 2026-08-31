@@ -2184,6 +2184,62 @@ still waits on its own gate, so:
   rows on the ship wire, which is the same problem the cross-core *fan-in*
   already solved (`FinishRemoteReads` decodes real values), so the shape
   exists and only shipping has not adopted it.
+
+  **Surveyed 2026-08-31 (work order XF, row XF0):
+  `docs/inflight/blocked/workplan-shipped-read-typed.md`, with the ask at
+  `instructions/v2.7.1/ratification-xf0.md`.** Three things the survey
+  found that this entry did not say. **(1) "Typed rows on the ship wire"
+  cannot be built as written** — the ship reply is one ring slot, 992
+  bytes after its header (`statement_ship_service.hpp:261-263`), so it
+  cannot carry a result set at all; the rows have to cross on something
+  that batches, and the survey proposes the step edge that already does.
+  **(2) The refusal is wider than "a foreign read"**: the typed
+  remote-step route already serves a *star* read of a foreign relation, so
+  what is refused is a **projection or fold with one stage**, **every read
+  inside an explicit transaction** (the routing gates at
+  `command_dispatcher.cpp:7277` and `:7362`), and anything sorted or
+  quota'd — which is why scenario 2's booking, a projected read inside a
+  transaction, cannot run under `peer_listeners = on`. **(3) Closing it
+  moves the cap rather than removing it**: a batch is one ring message, so
+  the 992-byte bound on the whole reply becomes a ~1,000-byte bound on the
+  widest *row*, which is the wide-row entry above and `crosscore.md` §9's
+  ring sizing.
+
+- **A statement that fails leaves its portal behind, and a `C_CLOSE`
+  pipelined with it is dropped** (found 2026-08-31 by XE while measuring;
+  registered nowhere until now, which is why it was found by being stopped
+  by it). `OnStatementComplete`'s error arm resets the sink and clears the
+  running name without erasing the portal
+  (`src/server/kwp_session.cpp:709-715`), and the client's own `C_CLOSE`
+  cannot repair it when it rode the same batch: a refusal arms
+  `skipping_to_sync_` (`:330-338`) and the skip loop discards every
+  non-`C_SYNC` frame (`:388-394`). So the close is dropped on exactly the
+  statements that most needed it, and the cut commit's comment claiming
+  portals are "closed on both arms" is wrong on the arm that errors.
+
+  **What a client sees, stated precisely because XE's own summary
+  overstated it.** The session is *not* closed — `ErrorFromStatus` sets
+  `Severity::kError` and "an engine failure never closes the connection"
+  (`src/wire/error_registry.cpp:90-93`) — and the leak is *not* permanent:
+  `TcpServer` sweeps every `kPortalIdleTimeoutNs / 4` = 15 s
+  (`src/server/tcp_server.cpp:180-187`) and erases any portal idle for
+  60 s. What happens instead is that at `kMaxSessionPortals` (64) every
+  further `C_BIND` is refused before it inserts (`:549-556`), so the table
+  stops growing and the sweep frees about one slot per 60 s: a retry loop
+  then runs at one statement per portal-lifetime, indefinitely. The
+  refusal is `RESOURCE_EXHAUSTED` with `retryable = 0`, because
+  `IsRetryable` is one code wide (`base/status.hpp:156`, `protocol.md`
+  §11) — so it is the *statement* refused non-retryably, not the session
+  killed and not a retryable backoff.
+
+  **Worked around in the client, not the server, and the workaround has a
+  price**: `tools/kwp.py` now sends `C_CLOSE` as its own frame after the
+  statement's `S_READY` (`tools/kwp.py:387-397`), costing **+11.1 µs p50 /
+  +12.3 µs mean per statement** on the success path (XE §3's isolation
+  cell). Every driver reproducing that shape pays it. **Referred, not
+  decided**: `instructions/v2.7.1/ratification-xf5.md` prices the three
+  options and the sibling retryability question. Owner:
+  `docs/spec/protocol.md` §5 and §7.
 - **Nothing bounds an idle authenticated session.** KW-D3 set the
   *portal*-idle timeout at 60 s, which bounds how long an unread result set
   holds memory. A connection that completed its handshake and then sits
