@@ -1,0 +1,84 @@
+{
+  "label": "xf4-group-b8-timers-r1",
+  "cores": 2,
+  "durability": "group",
+  "concurrency": 8,
+  "txns": 4000,
+  "owners": {
+    "t0": "1",
+    "t1": "1"
+  },
+  "participants": 1,
+  "committed": 4000,
+  "errors": 0,
+  "retries": 10,
+  "first_error": null,
+  "run_elapsed_s": 5.532,
+  "tps": 723.0605391535835,
+  "commit": {
+    "phase": "commit",
+    "detail": "",
+    "ops": 4000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.53204,
+    "qps": 723.1,
+    "mean_us": 5725.7,
+    "p0_us": 3198.4,
+    "p25_us": 4573.8,
+    "p50_us": 4900.0,
+    "p95_us": 9163.4,
+    "p99_us": 13485.1,
+    "max_us": 24262.9
+  },
+  "total_wal_syncs_delta": 4472,
+  "syncs_per_commit": 1.118,
+  "commit_legs": {
+    "0": {
+      "xowner_commit": {
+        "n": 4000,
+        "total_us": 22532160,
+        "mean_us": 5633.0,
+        "max_us": 24141
+      },
+      "xowner_decide": {
+        "n": 4000,
+        "total_us": 7031269,
+        "mean_us": 1757.8,
+        "max_us": 19123
+      },
+      "xowner_decision": {
+        "n": 4000,
+        "total_us": 4907414,
+        "mean_us": 1226.9,
+        "max_us": 7598
+      },
+      "xowner_prepare": {
+        "n": 4000,
+        "total_us": 10589244,
+        "mean_us": 2647.3,
+        "max_us": 19091
+      }
+    },
+    "1": {
+      "xowner_part_ack": {
+        "n": 4010,
+        "total_us": 1178431,
+        "mean_us": 293.9,
+        "max_us": 8455
+      },
+      "xowner_part_durable": {
+        "n": 4000,
+        "total_us": 5869095,
+        "mean_us": 1467.3,
+        "max_us": 10438
+      },
+      "xowner_part_prepare": {
+        "n": 4000,
+        "total_us": 4747468,
+        "mean_us": 1186.9,
+        "max_us": 8468
+      }
+    }
+  }
+}
