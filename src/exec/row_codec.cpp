@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <charconv>
+#include <cstring>
 #include <limits>
 #include <cstdint>
 #include <string>
@@ -425,6 +426,23 @@ bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
     return false;
 }
 
+// Copies value bytes into a slot the caller already owns, reusing that
+// slot's capacity: one memcpy, no allocation once the frame has settled.
+//
+// This is what "assigning rather than appending" below actually requires.
+// Building a std::string and move-assigning it looks like an assign and is
+// not one: the move frees the slot's buffer and adopts a fresh one, so any
+// value past libstdc++'s 15-byte SSO cost a malloc and a free per string
+// column per decoded row - on every scan, and twice per row an UPDATE
+// rejects (OPT-002, docs/inflight/in-progress/cip-path-optimizer.md).
+void AssignBytes(std::string& out, std::span<const std::byte> bytes) {
+    if (bytes.empty()) {
+        out.clear();
+        return;
+    }
+    out.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
 }  // namespace
 
 // Decodes one column from its cell into a slot the caller already owns.
@@ -485,14 +503,21 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::OK();
         }
         case kTypeValChar: {
-            std::string s;
-            for (std::size_t i = 0; i < cell.size(); ++i) {
-                auto b = static_cast<unsigned char>(cell[i]);
-                if (b == 0) break;
-                s.push_back(static_cast<char>(b));
+            // Read back to the first NUL and no further - a char(N) cell is
+            // N bytes whatever the value's length, and the padding is not
+            // part of the value (see the char(N) note at the top of this
+            // file). memchr finds the terminator in one pass instead of
+            // testing and pushing a byte at a time.
+            std::size_t len = cell.size();
+            if (!cell.empty()) {
+                const void* nul = std::memchr(cell.data(), 0, cell.size());
+                if (nul != nullptr) {
+                    len = static_cast<std::size_t>(static_cast<const std::byte*>(nul) -
+                                                   cell.data());
+                }
             }
             out.type = parser::ValueType::kStr;
-            out.str_val = std::move(s);
+            AssignBytes(out.str_val, cell.first(len));
             out.raw_int_text.clear();
             return Status::OK();
         }
@@ -529,12 +554,8 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
                                                decoded.value().len});
                 return Status::OK();
             }
-            std::string s(decoded.value().bytes.size(), '\0');
-            for (std::size_t i = 0; i < decoded.value().bytes.size(); ++i) {
-                s[i] = static_cast<char>(static_cast<unsigned char>(decoded.value().bytes[i]));
-            }
             out.type = parser::ValueType::kStr;
-            out.str_val = std::move(s);
+            AssignBytes(out.str_val, decoded.value().bytes);
             out.raw_int_text.clear();
             return Status::OK();
         }
@@ -1059,12 +1080,8 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
                 " bytes in the var-heap but the tuple's cell says " + std::to_string(spill.len));
         }
 
-        std::string text(bytes.value().size(), '\0');
-        for (std::size_t i = 0; i < bytes.value().size(); ++i) {
-            text[i] = static_cast<char>(static_cast<unsigned char>(bytes.value()[i]));
-        }
         out[spill.column].type = parser::ValueType::kStr;
-        out[spill.column].str_val = std::move(text);
+        AssignBytes(out[spill.column].str_val, bytes.value());
         out[spill.column].raw_int_text.clear();
     }
     return Status::OK();
