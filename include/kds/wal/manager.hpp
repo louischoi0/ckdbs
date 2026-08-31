@@ -179,16 +179,28 @@ public:
         return by_stream > by_writer ? by_stream : by_writer;
     }
 
-    // Starts the WAL writer thread, which from then on performs every sync.
+    // Starts the WAL writer thread, which from then on performs the syncs
+    // **nobody is waiting on** - D3's loss-window tick in DrainOnce(), and
+    // nothing else. Every waited-on sync stays on the reactor, by the
+    // decision Sync() states: a parked committer, a client's SYNC and the
+    // checkpoint gate all pay a hand-off if their sync is handed away.
     //
     // Off by default and started by the server, deliberately: a test or a
     // tool that drives a WalManager on one thread wants its syncs to have
     // happened by the time the call returns, and a thread would turn every
-    // such assertion into a wait. The server starts one because its reactor
-    // must not block on a device (bench/results-latency-matrix.md).
+    // such assertion into a wait. The server starts one because the idle
+    // tick must not block its reactor (bench/results-latency-matrix.md).
     void StartWriter();
 
-    bool has_writer() const noexcept { return writer_ != nullptr; }
+    // The writer thread's own device syncs and failures; 0 where no writer
+    // was started (XD0, `instructions/v2.7.1/measurement-xd.md`). The
+    // other half of this core's device cost - `stats().syncs` is the rest.
+    std::uint64_t writer_syncs() const noexcept {
+        return writer_ != nullptr ? writer_->syncs() : 0;
+    }
+    std::uint64_t writer_sync_failures() const noexcept {
+        return writer_ != nullptr ? writer_->failures() : 0;
+    }
     Status EnsureDurable(Lsn lsn) override;
 
     // Appends one record and returns its LSN. A full ring is drained
@@ -279,8 +291,10 @@ private:
 
     std::unique_ptr<WalStream> stream_;
 
-    // Null until StartWriter(). When set, it is the only thing that calls
-    // the device's Sync(), and this manager never does.
+    // Null until StartWriter(). When set, it takes D3's loss-window tick
+    // and nothing else - every waited-on sync stays on the reactor, in
+    // Sync(). This comment claimed the opposite until XD0 read the code
+    // (`instructions/v2.7.1/measurement-xd.md`).
     std::unique_ptr<WalWriter> writer_;
     const sched::Clock& clock_;
     WalManagerConfig config_;

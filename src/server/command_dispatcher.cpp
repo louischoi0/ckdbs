@@ -1177,6 +1177,50 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " undo_pages_recycled=" << txn_->undo().PagesRecycled();
     }
 
+    // **The device syncs this core performed** (XD0,
+    // `instructions/v2.7.1/measurement-xd.md`). Read-only surfacing of two
+    // counters that already increment - `WalStats::syncs` at
+    // `src/wal/manager.cpp:110` and `WalWriter::syncs_` at
+    // `src/wal/writer.cpp:98` - so no atomic and no path is added, and
+    // `cores = 1` behaves exactly as before.
+    //
+    // **`wal_syncs` is the total, and it is not the writer's number.** The
+    // order that asked for this said "from `Writer::syncs()`"; the source
+    // says otherwise, and the reading would have been ~0 on every cell it
+    // was wanted for. `WalManager::Sync()` performs every sync a caller is
+    // parked on - a commit's, a prepare's `RequestDurable`, a client
+    // `SYNC`, the checkpoint gate - on the reactor itself, and only D3's
+    // loss-window tick is handed to the writer thread (`manager.cpp:249`).
+    // A peer core has no writer thread at all (`core_runtime.cpp:120`
+    // never calls `StartWriter`; `expeditor.cpp` does, for core 0 alone),
+    // so on cores >= 1 the writer's counter is structurally zero while
+    // every sync the core takes sits in the manager's.
+    //
+    // Hence three fields, and the middle one is the **interval** tick
+    // rather than the writer's count, so one reading rule holds on every
+    // core: `wal_syncs - wal_interval_syncs` is the part somebody was
+    // parked on. `interval_syncs` increments on both of D3's paths -
+    // handed to the writer (`manager.cpp:250`) and taken inline where
+    // there is no writer (`:256`) - where the writer's own count is
+    // structurally 0 on every peer and would read there as *"every sync
+    // was waited on"* when under `relaxed` none was.
+    //
+    // The one drift, stated because a row will divide by these: on core 0
+    // `interval_syncs` counts *requests* and the writer counts
+    // *completions*, so the two differ by the sync in flight and by any
+    // pair the writer coalesced (it reads `requested_` once per wake,
+    // `writer.cpp:66-73`). Bounded and small; a peer has neither term.
+    //
+    // Absent where the dispatcher has no WAL - the absent-rather-than-
+    // zeroed rule - which is an in-process dispatcher, never a served core.
+    if (wal_ != nullptr) {
+        const wal::WalStats& wal_stats = wal_->stats();
+        os << " wal_syncs=" << (wal_stats.syncs + wal_->writer_syncs())
+           << " wal_interval_syncs=" << wal_stats.interval_syncs
+           << " wal_sync_failures="
+           << (wal_stats.sync_failures + wal_->writer_sync_failures());
+    }
+
     // A peer's lease refills and what each cost (lease_refill_stats.hpp):
     // requests and grants per kind, and the three legs' maxima - submit to
     // grant received (the ring and core 0), grant received to the parked
