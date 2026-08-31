@@ -85,7 +85,7 @@ protected:
         // decide leg's commit take the group committer rather than an
         // inline sync.
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_,
-                            wal_.get(), wal::DurabilityClass::kGroup, exec::Budget(),
+                            wal_.get(), Durability(), exec::Budget(),
                             /*recorder=*/nullptr, /*replay_enabled=*/false,
                             /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
         scheduler_.emplace(clock_, io_);
@@ -94,6 +94,12 @@ protected:
 
         ASSERT_EQ(Local("CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
     }
+
+    // `group` by default, because that is what a server runs and what makes
+    // the decide leg's commit take the group committer rather than an
+    // inline sync. Overridden by the strict fixture below, which is XE1's
+    // control: the ack timing this order moved is D2's alone.
+    virtual wal::DurabilityClass Durability() const { return wal::DurabilityClass::kGroup; }
 
     std::string Local(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
     std::string Rows() { return Local("SELECT * FROM t"); }
@@ -113,6 +119,15 @@ protected:
     void Pump(const std::shared_ptr<Answer>& answer, int turns = 64) {
         for (int i = 0; i < turns && !answer->answered; ++i) {
             (void)wal_->DrainOnce();
+            scheduler_->RunOnce();
+        }
+    }
+
+    // The reactor's turn **without** the drain, which is the instrument
+    // XE1's contract is read with: nothing here can make a record durable,
+    // so an answer that arrives is an answer that did not wait for one.
+    void PumpNoDrain(const std::shared_ptr<Answer>& answer, int turns = 64) {
+        for (int i = 0; i < turns && !answer->answered; ++i) {
             scheduler_->RunOnce();
         }
     }
@@ -173,6 +188,43 @@ protected:
         });
         Pump(answer);
         return *answer;
+    }
+
+    // `Decide`, with the drain withheld. It also records what the executor
+    // and the log said **at the moment the ack was produced** rather than
+    // afterwards, which is the only way to test what precedes a reply
+    // rather than what merely follows it (XE3).
+    struct AckSnapshot {
+        Answer answer;
+        std::size_t enrolled_at_ack = 0;
+        std::size_t in_doubt_at_ack = 0;
+        std::uint64_t committed_at_ack = 0;
+        wal::Lsn appended_at_ack = 0;
+        wal::Lsn durable_at_ack = 0;
+    };
+
+    AckSnapshot DecideNoDrain(TxnDecision decision,
+                              std::uint64_t transaction_id = kCoordinatorTxn) {
+        Txn2pcServer::DecideAsk ask;
+        ask.coordinator = kCoordinator;
+        ask.session_id = kSession;
+        ask.transaction_id = transaction_id;
+        ask.decision = decision;
+        ask.retry = false;
+        AckSnapshot snap;
+        auto answer = std::make_shared<Answer>();
+        executor_->DecideSeam()(ask, [this, &snap, answer](const Status& status) {
+            snap.enrolled_at_ack = executor_->enrolled();
+            snap.in_doubt_at_ack = executor_->in_doubt();
+            snap.committed_at_ack = executor_->decides_committed();
+            snap.appended_at_ack = wal_->appended_lsn();
+            snap.durable_at_ack = wal_->durable_lsn();
+            answer->answered = true;
+            answer->status = status;
+        });
+        PumpNoDrain(answer);
+        snap.answer = *answer;
+        return snap;
     }
 
     // Every record the *device* holds, read back through the device rather
@@ -293,6 +345,86 @@ TEST_F(Txn2pcParticipantTest, CommitAppliesTheTransactionAndReleasesTheContext) 
     EXPECT_EQ(executor_->decides_committed(), 1u);
     EXPECT_EQ(executor_->enrolled(), 0u);
     EXPECT_EQ(executor_->in_doubt(), 0u);
+    EXPECT_NE(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+// ---- XE1: the ack is at the COMMIT append under D2 --------------------------
+//
+// `instructions/v2.7.1/workorder-xd.md` XE3, enacting
+// `instructions/v2.7.1/ratification-xd1.md`. The contract is
+// `docs/spec/cross-owner-txn.md` section 2: a participant's own terminal
+// record is a redo shortcut, not part of what the client is promised, so
+// under D2 it acknowledges the decide when the record is appended and lets
+// the next drain carry it.
+//
+// **The instrument is the drain, withheld.** `PumpNoDrain` turns the
+// reactor and nothing else, and nothing else in this fixture can make a
+// record durable - so an ack that arrives under it is an ack that did not
+// wait for one. Before XE1 this test runs out its turn limit rather than
+// failing an expectation, which is why the answered check comes first.
+
+TEST_F(Txn2pcParticipantTest, UnderGroupTheDecideIsAcknowledgedWithItsCommitStillInTheRing) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+    const wal::Lsn durable_before = wal_->durable_lsn();
+
+    const AckSnapshot snap = DecideNoDrain(TxnDecision::kCommit);
+    ASSERT_TRUE(snap.answer.answered) << "the decide was not acknowledged without a drain";
+    EXPECT_TRUE(snap.answer.status.ok()) << snap.answer.status.message();
+
+    // The whole of XE1, stated as the log saw it: bytes were appended past
+    // the durable point and the ack went out anyway.
+    EXPECT_GT(snap.appended_at_ack, snap.durable_at_ack)
+        << "nothing was left unsynced, so this cell proves nothing about ack timing";
+    EXPECT_EQ(snap.durable_at_ack, durable_before)
+        << "the durable point moved without a drain, which this fixture cannot do";
+
+    // And the drain still carries it - the record is not orphaned by the
+    // early ack, it is deferred. `Commit(kGroup)` registered it with the
+    // group at the append, so one tick is enough with nobody parked.
+    (void)wal_->DrainOnce();
+    EXPECT_GE(wal_->durable_lsn(), snap.appended_at_ack)
+        << "the deferred COMMIT never reached the device";
+}
+
+TEST_F(Txn2pcParticipantTest, TheEarlierAckDoesNotMoveTheBookkeepingItFollows) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+    ASSERT_EQ(executor_->in_doubt(), 1u);
+
+    // Read *inside* the reply callback, so these are the values a
+    // coordinator's ack is concurrent with rather than values settled
+    // afterwards. Every one of them was already true before XE1; the point
+    // of the cell is that moving the ack earlier did not drag them with it.
+    const AckSnapshot snap = DecideNoDrain(TxnDecision::kCommit);
+    ASSERT_TRUE(snap.answer.answered);
+    EXPECT_EQ(snap.enrolled_at_ack, 0u) << "the context outlived its own ack";
+    EXPECT_EQ(snap.in_doubt_at_ack, 0u) << "the transaction was still in doubt at its ack";
+    EXPECT_EQ(snap.committed_at_ack, 1u) << "the counter trailed the ack it describes";
+    EXPECT_NE(Rows().find(",7"), std::string::npos) << Rows();
+}
+
+// **The control**, and the reason the fixture's class is a virtual: under
+// D1 the sync happens *inside* `WalManager::Commit` before it returns
+// (`wal/manager.cpp`), so there is no post-append wait for XE1 to move and
+// the record is on the device by the time the ack is written. Same seam,
+// same instrument, opposite reading - which is what makes the D2 cell above
+// a statement about D2 rather than about this fixture.
+class Txn2pcParticipantStrictTest : public Txn2pcParticipantTest {
+protected:
+    wal::DurabilityClass Durability() const override { return wal::DurabilityClass::kStrict; }
+};
+
+TEST_F(Txn2pcParticipantStrictTest, UnderStrictTheCommitIsAlreadyDurableWhenTheDecideIsAcked) {
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
+    ASSERT_TRUE(Prepare().status.ok());
+
+    const AckSnapshot snap = DecideNoDrain(TxnDecision::kCommit);
+    ASSERT_TRUE(snap.answer.answered)
+        << "strict's decide needs no drain either, and did not get one";
+    EXPECT_TRUE(snap.answer.status.ok()) << snap.answer.status.message();
+    EXPECT_EQ(snap.durable_at_ack, snap.appended_at_ack)
+        << "strict acknowledged a decide with bytes still unsynced";
     EXPECT_NE(Rows().find(",7"), std::string::npos) << Rows();
 }
 
