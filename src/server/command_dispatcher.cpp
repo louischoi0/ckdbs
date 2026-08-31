@@ -249,9 +249,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // the synchronous half, which takes no suspension point, so it never
     // spans a park and never describes another statement.
     may_park_ = true;
-    commit_ack_ = commit_ack;
-    *out = DispatchAndStage(line, session);
-    commit_ack_ = CommitAck::kWhenDurable;
+    {
+        // **RAII, unlike `may_park_` above, and the asymmetry is the point.**
+        // A leaked `may_park_` grants a parking allowance; a leaked
+        // `commit_ack_` silently drops a client's durability wait. The
+        // window below provably takes no suspension point - `DispatchAndStage`
+        // is not a coroutine, and nothing in this file pumps a scheduler or a
+        // ring - so a hand-placed pair would be correct today and silently
+        // wrong the day an early `co_return` or a `co_await` appears between
+        // them. The guard makes the property structural rather than reviewed.
+        const CommitAckScope stamped(*this, commit_ack);
+        *out = DispatchAndStage(line, session);
+    }
     may_park_ = false;
 
     // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
@@ -309,6 +318,15 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                                        std::to_string(block.trx_id) +
                                        " was decided, and is running it again");
             }
+            // **The re-run is deliberately not re-stamped**, so it
+            // executes under `kWhenDurable` (`CommitAck`). Unreachable
+            // rather than merely unlikely: `in_doubt_blocker_` is set only
+            // by `CheckWriteConflictBlocking` on a write path, and the one
+            // caller that stamps `kAtAppend` dispatches the literal
+            // `COMMIT`, which writes no row and takes no conflict. And the
+            // direction is the safe one - a re-run would wait for
+            // durability that a decide no longer waits for, never the
+            // reverse - which is why this is a comment and not a fix.
             may_park_ = true;
             *out = DispatchAndStage(line, session);
             may_park_ = false;
@@ -8549,19 +8567,12 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
     // LogInsert() takes it: kGroup staged the commit for the next drain,
     // and the acknowledgement means "durable".
     //
-    // **Except for a cross-owner participant applying a decide**
-    // (`commit_ack_ == kAtAppend`, `cross-owner-txn.md` §2). Its
-    // acknowledgement is owed to a coordinator whose decision record is
-    // already durable and which already answers the client from that record
-    // with or without this ack, so staging the wait here would serialize a
-    // third device sync behind the two the protocol needs. The record still
-    // becomes durable on the next drain and needs nothing from this line:
-    // `WalManager::Commit(kGroup)` registered it with the group at the
-    // append, and `DrainOnce` syncs a pending group commit whether or not
-    // anybody is parked on it (`wal/manager.cpp`). This is the whole of the
-    // XE1 change, and it is a **D2 branch by construction** - `kStrict`
-    // synced inside `Commit` before it returned and `kRelaxed` never
-    // staged, so neither class reaches this statement at all.
+    // **Except for a cross-owner participant applying a decide** - the
+    // contract, and why it is sound, are on `CommitAck`. What belongs here
+    // is why there is no second branch: this is a **D2 site by
+    // construction**, because `kStrict` synced inside `Commit` before it
+    // returned and `kRelaxed` stages nothing, so neither class reaches this
+    // statement at all and neither can be changed by the flag.
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
         commit_ack_ == CommitAck::kWhenDurable && !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();

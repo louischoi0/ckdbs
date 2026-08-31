@@ -81,9 +81,6 @@ protected:
         ids_.emplace(boot_->superblock);
         undo_.emplace(store_, wal_.get());
         txns_.emplace(*ids_, *undo_, store_, wal_.get());
-        // `group`, because that is what a server runs and what makes the
-        // decide leg's commit take the group committer rather than an
-        // inline sync.
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_,
                             wal_.get(), Durability(), exec::Budget(),
                             /*recorder=*/nullptr, /*replay_enabled=*/false,
@@ -111,30 +108,49 @@ protected:
         // RR0 / D3: what the participant reported it is reading at, 0 where
         // it reported nothing.
         std::uint64_t watermark = 0;
+
+        // What the executor and the log said **at the moment this answer
+        // was produced** (XE3). Filled by every seam callback below, because
+        // the only way to test what precedes a reply rather than what merely
+        // follows it is to read it from inside the reply.
+        std::size_t enrolled_at_ack = 0;
+        std::size_t in_doubt_at_ack = 0;
+        std::uint64_t committed_at_ack = 0;
+        wal::Lsn appended_at_ack = 0;
+        wal::Lsn durable_at_ack = 0;
     };
 
     // The reactor's turn, plus the drain a reactor's post-task hook runs:
     // a prepare parks on `IsDurable`, and nothing makes a record durable
     // without one (`WalManager::DrainOnce`).
-    void Pump(const std::shared_ptr<Answer>& answer, int turns = 64) {
+    //
+    // **`drain = false` is the instrument XE1's contract is read with**:
+    // nothing else in this fixture can make a record durable, so an answer
+    // that arrives without the drain is an answer that did not wait for one.
+    void Pump(const std::shared_ptr<Answer>& answer, bool drain = true, int turns = 64) {
         for (int i = 0; i < turns && !answer->answered; ++i) {
-            (void)wal_->DrainOnce();
+            if (drain) (void)wal_->DrainOnce();
             scheduler_->RunOnce();
         }
     }
 
-    // The reactor's turn **without** the drain, which is the instrument
-    // XE1's contract is read with: nothing here can make a record durable,
-    // so an answer that arrives is an answer that did not wait for one.
-    void PumpNoDrain(const std::shared_ptr<Answer>& answer, int turns = 64) {
-        for (int i = 0; i < turns && !answer->answered; ++i) {
-            scheduler_->RunOnce();
-        }
+    // Stamped into an `Answer` from inside a seam callback. Shared with the
+    // callback rather than captured by reference: a seam keeps the lambda
+    // and may call it after the turn limit gave up - which is exactly what
+    // a *failing* cell does - so a pointer into a helper's frame would be
+    // written through after that frame is gone.
+    void StampAck(Answer& answer) {
+        answer.enrolled_at_ack = executor_->enrolled();
+        answer.in_doubt_at_ack = executor_->in_doubt();
+        answer.committed_at_ack = executor_->decides_committed();
+        answer.appended_at_ack = wal_->appended_lsn();
+        answer.durable_at_ack = wal_->durable_lsn();
     }
 
     Answer Ship(const std::string& sql, std::uint64_t sequence, bool in_txn = true,
                 bool join = false,
-                std::optional<txn::IsolationLevel> isolation = std::nullopt) {
+                std::optional<txn::IsolationLevel> isolation = std::nullopt,
+                bool drain = true) {
         StatementShipServer::ShippedStatement statement;
         statement.requester = kCoordinator;
         statement.session_id = kSession;
@@ -147,15 +163,27 @@ protected:
 
         auto answer = std::make_shared<Answer>();
         executor_->Seam()(std::move(statement),
-                          [answer](const Status& status, std::string_view text,
-                                   std::uint64_t watermark) {
+                          [this, answer](const Status& status, std::string_view text,
+                                         std::uint64_t watermark) {
+                              StampAck(*answer);
                               answer->answered = true;
                               answer->status = status;
                               answer->text.assign(text);
                               answer->watermark = watermark;
                           });
-        Pump(answer);
+        last_ship_ = answer;
+        Pump(answer, drain);
         return *answer;
+    }
+
+    // Resumes whatever `Ship` last left unanswered, with the drain this
+    // time. A second `Ship` on the same session cannot do this - the
+    // executor refuses one while a statement is still running for that
+    // session, which is its own rule and not this fixture's - so a cell
+    // that withholds the drain has to finish the statement it started.
+    Answer FinishLastShip() {
+        Pump(last_ship_);
+        return *last_ship_;
     }
 
     Answer Prepare(std::uint64_t transaction_id = kCoordinatorTxn,
@@ -174,7 +202,8 @@ protected:
     }
 
     Answer Decide(TxnDecision decision, std::uint64_t transaction_id = kCoordinatorTxn,
-                  std::uint64_t session_id = kSession, bool retry = false) {
+                  std::uint64_t session_id = kSession, bool retry = false,
+                  bool drain = true) {
         Txn2pcServer::DecideAsk ask;
         ask.coordinator = kCoordinator;
         ask.session_id = session_id;
@@ -182,49 +211,13 @@ protected:
         ask.decision = decision;
         ask.retry = retry;
         auto answer = std::make_shared<Answer>();
-        executor_->DecideSeam()(ask, [answer](const Status& status) {
+        executor_->DecideSeam()(ask, [this, answer](const Status& status) {
+            StampAck(*answer);
             answer->answered = true;
             answer->status = status;
         });
-        Pump(answer);
+        Pump(answer, drain);
         return *answer;
-    }
-
-    // `Decide`, with the drain withheld. It also records what the executor
-    // and the log said **at the moment the ack was produced** rather than
-    // afterwards, which is the only way to test what precedes a reply
-    // rather than what merely follows it (XE3).
-    struct AckSnapshot {
-        Answer answer;
-        std::size_t enrolled_at_ack = 0;
-        std::size_t in_doubt_at_ack = 0;
-        std::uint64_t committed_at_ack = 0;
-        wal::Lsn appended_at_ack = 0;
-        wal::Lsn durable_at_ack = 0;
-    };
-
-    AckSnapshot DecideNoDrain(TxnDecision decision,
-                              std::uint64_t transaction_id = kCoordinatorTxn) {
-        Txn2pcServer::DecideAsk ask;
-        ask.coordinator = kCoordinator;
-        ask.session_id = kSession;
-        ask.transaction_id = transaction_id;
-        ask.decision = decision;
-        ask.retry = false;
-        AckSnapshot snap;
-        auto answer = std::make_shared<Answer>();
-        executor_->DecideSeam()(ask, [this, &snap, answer](const Status& status) {
-            snap.enrolled_at_ack = executor_->enrolled();
-            snap.in_doubt_at_ack = executor_->in_doubt();
-            snap.committed_at_ack = executor_->decides_committed();
-            snap.appended_at_ack = wal_->appended_lsn();
-            snap.durable_at_ack = wal_->durable_lsn();
-            answer->answered = true;
-            answer->status = status;
-        });
-        PumpNoDrain(answer);
-        snap.answer = *answer;
-        return snap;
     }
 
     // Every record the *device* holds, read back through the device rather
@@ -259,6 +252,8 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
     std::optional<sched::Scheduler> scheduler_;
     std::optional<ShippedStatementExecutor> executor_;
+    // The last `Ship`'s answer, for `FinishLastShip`.
+    std::shared_ptr<Answer> last_ship_;
 };
 
 TEST_F(Txn2pcParticipantTest, PrepareLogsTheCoordinatorsIdentityUnderThisCoresOwnTransaction) {
@@ -368,23 +363,45 @@ TEST_F(Txn2pcParticipantTest, UnderGroupTheDecideIsAcknowledgedWithItsCommitStil
     ASSERT_TRUE(Prepare().status.ok());
     const wal::Lsn durable_before = wal_->durable_lsn();
 
-    const AckSnapshot snap = DecideNoDrain(TxnDecision::kCommit);
-    ASSERT_TRUE(snap.answer.answered) << "the decide was not acknowledged without a drain";
-    EXPECT_TRUE(snap.answer.status.ok()) << snap.answer.status.message();
+    const Answer acked = Decide(TxnDecision::kCommit, kCoordinatorTxn, kSession,
+                                /*retry=*/false, /*drain=*/false);
+    ASSERT_TRUE(acked.answered) << "the decide was not acknowledged without a drain";
+    EXPECT_TRUE(acked.status.ok()) << acked.status.message();
 
     // The whole of XE1, stated as the log saw it: bytes were appended past
     // the durable point and the ack went out anyway.
-    EXPECT_GT(snap.appended_at_ack, snap.durable_at_ack)
+    EXPECT_GT(acked.appended_at_ack, acked.durable_at_ack)
         << "nothing was left unsynced, so this cell proves nothing about ack timing";
-    EXPECT_EQ(snap.durable_at_ack, durable_before)
+    EXPECT_EQ(acked.durable_at_ack, durable_before)
         << "the durable point moved without a drain, which this fixture cannot do";
 
     // And the drain still carries it - the record is not orphaned by the
     // early ack, it is deferred. `Commit(kGroup)` registered it with the
     // group at the append, so one tick is enough with nobody parked.
     (void)wal_->DrainOnce();
-    EXPECT_GE(wal_->durable_lsn(), snap.appended_at_ack)
+    EXPECT_GE(wal_->durable_lsn(), acked.appended_at_ack)
         << "the deferred COMMIT never reached the device";
+}
+
+// **The blast radius, which is the cell that would catch the flag leaking.**
+// `CommitAck` is stamped per statement, and the same participant session also
+// runs ordinary shipped autocommit writes whose D2 acknowledgement still means
+// "durable". So this one is the negative: with the drain withheld it must
+// **not** answer. Nothing but the code's structure prevents that regression,
+// which is exactly why it is worth a cell.
+TEST_F(Txn2pcParticipantTest, AnOrdinaryShippedWriteStillWaitsForDurabilityBeforeItAnswers) {
+    const Answer autocommit = Ship("INSERT INTO t VALUES (8)", 1, /*in_txn=*/false,
+                                   /*join=*/false, /*isolation=*/std::nullopt,
+                                   /*drain=*/false);
+    EXPECT_FALSE(autocommit.answered)
+        << "an autocommit shipped write answered with its commit still in the ring";
+
+    // And it is the drain it was waiting for, not something else that
+    // broke: give the **same** statement one and it completes.
+    const Answer drained = FinishLastShip();
+    ASSERT_TRUE(drained.answered) << "the write never answered even with the drain";
+    EXPECT_TRUE(drained.status.ok()) << drained.status.message();
+    EXPECT_NE(Rows().find(",8"), std::string::npos) << Rows();
 }
 
 TEST_F(Txn2pcParticipantTest, TheEarlierAckDoesNotMoveTheBookkeepingItFollows) {
@@ -396,11 +413,12 @@ TEST_F(Txn2pcParticipantTest, TheEarlierAckDoesNotMoveTheBookkeepingItFollows) {
     // coordinator's ack is concurrent with rather than values settled
     // afterwards. Every one of them was already true before XE1; the point
     // of the cell is that moving the ack earlier did not drag them with it.
-    const AckSnapshot snap = DecideNoDrain(TxnDecision::kCommit);
-    ASSERT_TRUE(snap.answer.answered);
-    EXPECT_EQ(snap.enrolled_at_ack, 0u) << "the context outlived its own ack";
-    EXPECT_EQ(snap.in_doubt_at_ack, 0u) << "the transaction was still in doubt at its ack";
-    EXPECT_EQ(snap.committed_at_ack, 1u) << "the counter trailed the ack it describes";
+    const Answer acked = Decide(TxnDecision::kCommit, kCoordinatorTxn, kSession,
+                                /*retry=*/false, /*drain=*/false);
+    ASSERT_TRUE(acked.answered);
+    EXPECT_EQ(acked.enrolled_at_ack, 0u) << "the context outlived its own ack";
+    EXPECT_EQ(acked.in_doubt_at_ack, 0u) << "the transaction was still in doubt at its ack";
+    EXPECT_EQ(acked.committed_at_ack, 1u) << "the counter trailed the ack it describes";
     EXPECT_NE(Rows().find(",7"), std::string::npos) << Rows();
 }
 
@@ -419,11 +437,12 @@ TEST_F(Txn2pcParticipantStrictTest, UnderStrictTheCommitIsAlreadyDurableWhenTheD
     ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
     ASSERT_TRUE(Prepare().status.ok());
 
-    const AckSnapshot snap = DecideNoDrain(TxnDecision::kCommit);
-    ASSERT_TRUE(snap.answer.answered)
+    const Answer acked = Decide(TxnDecision::kCommit, kCoordinatorTxn, kSession,
+                                /*retry=*/false, /*drain=*/false);
+    ASSERT_TRUE(acked.answered)
         << "strict's decide needs no drain either, and did not get one";
-    EXPECT_TRUE(snap.answer.status.ok()) << snap.answer.status.message();
-    EXPECT_EQ(snap.durable_at_ack, snap.appended_at_ack)
+    EXPECT_TRUE(acked.status.ok()) << acked.status.message();
+    EXPECT_EQ(acked.durable_at_ack, acked.appended_at_ack)
         << "strict acknowledged a decide with bytes still unsynced";
     EXPECT_NE(Rows().find(",7"), std::string::npos) << Rows();
 }

@@ -1801,11 +1801,29 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
     // Where the statement now in flight owes a D2 commit's acknowledgement
-    // (see `CommitAck`). A member for `may_park_`'s reason and with its
-    // lifetime - stamped by `DispatchAsync` around the synchronous half,
-    // which takes no suspension point, so it never spans a park and never
-    // describes another statement.
+    // (see `CommitAck`). A member for `may_park_`'s reason; unlike it, the
+    // stamp is scoped, because leaking this one drops a durability wait
+    // rather than granting a parking allowance.
     CommitAck commit_ack_ = CommitAck::kWhenDurable;
+
+    // The stamp, and the whole of its lifetime. Restores rather than
+    // assigning the default, so a nested dispatch would compose - there is
+    // none today, and a guard that assumed so would be the kind of thing
+    // that stops being true quietly.
+    class CommitAckScope {
+    public:
+        CommitAckScope(CommandDispatcher& owner, CommitAck ack) noexcept
+            : owner_(owner), saved_(owner.commit_ack_) {
+            owner_.commit_ack_ = ack;
+        }
+        ~CommitAckScope() { owner_.commit_ack_ = saved_; }
+        CommitAckScope(const CommitAckScope&) = delete;
+        CommitAckScope& operator=(const CommitAckScope&) = delete;
+
+    private:
+        CommandDispatcher& owner_;
+        CommitAck saved_;
+    };
     // The next `Session::ship_id()` this core mints. From 1, because 0 is
     // "never shipped"; per core, and paired with the arrival core in the
     // owner's record, which is what makes it unique instance-wide.

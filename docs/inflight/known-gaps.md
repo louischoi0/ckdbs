@@ -641,6 +641,23 @@ delete-mark purge (`ddl-transactional.md` §5d) and the undo purge
 the log's own growth, so this run's chain plateaus). Everything else
 still waits on its own gate, so:
 
+- **A cross-owner participant's decide is the one committed transaction
+  whose `ASSERT_COMMIT` records may be lost** — found 2026-08-31 by the
+  XE1 review (worktree `measure-v2.7.1`), **source-read, benign, and
+  recorded so it is not a surprise later**. Since XE1 the participant
+  acknowledges at the COMMIT append under D2, so the records
+  `AssertionEnforcer::CommitTxn` appends inside that commit
+  (`src/exec/assertion_check.cpp`) can be lost to a crash while the
+  transaction still resolves to COMMIT through its coordinator's stream.
+  A recovered instance then holds committed entries still carrying
+  `kEntryReserved`. **Nothing is corrupt**: `AttachEntriesFromPages`
+  (`src/exec/assertion_recover.cpp`) skips only orphaned entries and
+  attributes by `group_id`, so the aggregate is right, and `reserved()`'s
+  only other consumer is `assertion_replay.cpp`'s RESERVE-vs-BUILD type
+  check, which never re-reads these. The flag is residue; the aggregate
+  is not. What would make it a defect is giving `reserved` a meaning that
+  a committed transaction's entry must not carry.
+
 - **WAL segment recycling, when it is built, must not recycle a
   coordinator's decision out from under an unresolved participant** —
   found 2026-08-31 by XD1's source read (worktree `measure-v2.7.1` at
