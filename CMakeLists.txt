@@ -209,6 +209,16 @@ if(KDS_BUILD_BENCH)
     # two dispatchers differing only in core_id - see the file header.
     add_executable(kds_crosscore_bench bench/crosscore_pipeline_bench.cpp)
     target_link_libraries(kds_crosscore_bench PRIVATE kds)
+
+    # A fifth, priced for the same reason the fourth is a loopback: DA-b
+    # (`instructions/v2.7.0/ratification-da.md`) asks whether 255 fan-in
+    # stages are affordable in session-core state, and this host's
+    # CoreRuntime count cannot drive a live fan-in past two ranges to find
+    # out. SessionStepClient's per-tag state does not depend on how many
+    # ranges a relation has, so this prices it directly - see the file
+    # header for what it does and does not cover.
+    add_executable(kds_session_step_state_bench bench/session_step_state_bench.cpp)
+    target_link_libraries(kds_session_step_state_bench PRIVATE kds)
 endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the

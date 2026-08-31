@@ -765,6 +765,8 @@ python3 bench/run_pw6.py --workdir $HOME/mcbench-pw6/run --report
 | `pg_cabin_optimizer_benchmark.py` | the improve case's twin: same relations, rows and probes (imported from the ckdbs driver), against the port-15433 cluster at defaults. Deliberately has nothing to switch on — at defaults PostgreSQL seq-scans the hot shape forever, which is the honest baseline for a structure the engine declares for itself; `EXPLAIN (ANALYZE, BUFFERS)` per size is captured as evidence of the plan |
 | `bench/keystone_alloc_bench.cpp` | the id allocator, in-process — no client, no socket |
 | `bench/txn_layers_bench.cpp` | the transaction layers' cost, in-process |
+| `bench/crosscore_pipeline_bench.cpp` | the cross-core step pipeline, priced against local execution — in-process, two dispatchers over one built dataset, no socket (a peer-owned relation cannot be populated or fanned into over the wire, per the file header) |
+| `bench/session_step_state_bench.cpp` | DA-b (`instructions/v2.7.0/ratification-da.md`): `SessionStepClient`'s per-tag state cost — one park-predicate poll and one `CloseAll` teardown, at N = 1..255 tags — in-process loopback, no socket. Prices the two O(N²) candidates the order named, in isolation from the range-count limit a low-core host imposes; see the file header for exactly what it does and does not cover |
 
 ## The cross-core probes — statement shipping, and the pretask series it grew from
 

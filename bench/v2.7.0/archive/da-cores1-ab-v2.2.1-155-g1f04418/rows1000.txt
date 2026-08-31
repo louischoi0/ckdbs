@@ -1,0 +1,439 @@
+
+cell                               rep        ips   wall s   placed   next_id   burnt  retries
+--------------------------------------------------------------------------------------------
+C-concentrated-group-k1              0        776     1.29     1000      1001       0        0
+S-spread-group-k1                    0        770     1.30     1000      1001       0        0
+C-concentrated-relaxed-k1            0      38936     0.03     1000      1001       0        0
+S-spread-relaxed-k1                  0      37378     0.03     1000      1001       0        0
+C-concentrated-group-k1              1        788     1.27     1000      1001       0        0
+S-spread-group-k1                    1        782     1.28     1000      1001       0        0
+C-concentrated-relaxed-k1            1      36433     0.03     1000      1001       0        0
+S-spread-relaxed-k1                  1      34775     0.03     1000      1001       0        0
+C-concentrated-group-k1              2        960     1.04     1000      1001       0        0
+S-spread-group-k1                    2        955     1.05     1000      1001       0        0
+C-concentrated-relaxed-k1            2      32481     0.03     1000      1001       0        0
+S-spread-relaxed-k1                  2      37067     0.03     1000      1001       0        0
+
+  k durability  concentrated     spread     S/C  reps
+------------------------------------------------------
+  1 group                788        782   0.992     3
+  1 relaxed            36433      37067   1.017     3
+
+{
+  "summary": [
+    {
+      "k": 1,
+      "durability": "group",
+      "concentrated_ips": 788.2403500488999,
+      "spread_ips": 781.5983345626315,
+      "ratio": 0.9915736164916495,
+      "reps": 3
+    },
+    {
+      "k": 1,
+      "durability": "relaxed",
+      "concentrated_ips": 36433.125597046834,
+      "spread_ips": 37066.613448198405,
+      "ratio": 1.0173876888345512,
+      "reps": 3
+    }
+  ],
+  "cells": [
+    {
+      "tag": "C-concentrated-group-k1-r0",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 1.2881600139990041,
+      "inserts_per_s": 776.3010721746973,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12530.23986485,
+          "ended": 12531.528024864,
+          "p50_us": 1225.2440001248033,
+          "mean_us": 1287.7721690092585,
+          "p99_us": 3209.791999324807
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "C-concentrated-group-k1",
+      "rep": 0,
+      "durability": "group",
+      "arm": "C-concentrated",
+      "range_size_ids": 0
+    },
+    {
+      "tag": "S-spread-group-k1-r0",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 1.2980392099998426,
+      "inserts_per_s": 770.3927526196387,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12532.247222982,
+          "ended": 12533.545262192,
+          "p50_us": 1226.3054995855782,
+          "mean_us": 1297.5917140374804,
+          "p99_us": 3265.5060003889957
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "S-spread-group-k1",
+      "rep": 0,
+      "durability": "group",
+      "arm": "S-spread",
+      "range_size_ids": 65536
+    },
+    {
+      "tag": "C-concentrated-relaxed-k1-r0",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 0.025683452000521356,
+      "inserts_per_s": 38935.57610478921,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12534.565358708,
+          "ended": 12534.59104216,
+          "p50_us": 24.415999178017955,
+          "mean_us": 25.57052898373513,
+          "p99_us": 43.244999687885866
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "C-concentrated-relaxed-k1",
+      "rep": 0,
+      "durability": "relaxed",
+      "arm": "C-concentrated",
+      "range_size_ids": 0
+    },
+    {
+      "tag": "S-spread-relaxed-k1-r0",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 0.026753939999252907,
+      "inserts_per_s": 37377.67222427518,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12536.813856676,
+          "ended": 12536.840610616,
+          "p50_us": 24.321500859514344,
+          "mean_us": 26.633800036506727,
+          "p99_us": 41.972998587880284
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "S-spread-relaxed-k1",
+      "rep": 0,
+      "durability": "relaxed",
+      "arm": "S-spread",
+      "range_size_ids": 65536
+    },
+    {
+      "tag": "C-concentrated-group-k1-r1",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 1.2686485790000006,
+      "inserts_per_s": 788.2403500488999,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12539.068170682,
+          "ended": 12540.336819261,
+          "p50_us": 1227.8444992261939,
+          "mean_us": 1268.2424729937338,
+          "p99_us": 2788.5809995495947
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "C-concentrated-group-k1",
+      "rep": 1,
+      "durability": "group",
+      "arm": "C-concentrated",
+      "range_size_ids": 0
+    },
+    {
+      "tag": "S-spread-group-k1-r1",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 1.2794295430012426,
+      "inserts_per_s": 781.5983345626315,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12541.187742768,
+          "ended": 12542.467172311,
+          "p50_us": 1221.6049999551615,
+          "mean_us": 1279.0691549853364,
+          "p99_us": 2973.267999550444
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "S-spread-group-k1",
+      "rep": 1,
+      "durability": "group",
+      "arm": "S-spread",
+      "range_size_ids": 65536
+    },
+    {
+      "tag": "C-concentrated-relaxed-k1-r1",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 0.02744754899867985,
+      "inserts_per_s": 36433.125597046834,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12543.197062384,
+          "ended": 12543.224509933,
+          "p50_us": 24.106000637402758,
+          "mean_us": 27.332804978868808,
+          "p99_us": 70.13499998720363
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "C-concentrated-relaxed-k1",
+      "rep": 1,
+      "durability": "relaxed",
+      "arm": "C-concentrated",
+      "range_size_ids": 0
+    },
+    {
+      "tag": "S-spread-relaxed-k1-r1",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 0.02875622999999905,
+      "inserts_per_s": 34775.07308851101,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12544.476522306,
+          "ended": 12544.505278536,
+          "p50_us": 24.51699947414454,
+          "mean_us": 28.639698008191772,
+          "p99_us": 73.95099964924157
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "S-spread-relaxed-k1",
+      "rep": 1,
+      "durability": "relaxed",
+      "arm": "S-spread",
+      "range_size_ids": 65536
+    },
+    {
+      "tag": "C-concentrated-group-k1-r2",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 1.0413994259997708,
+      "inserts_per_s": 960.2463522005246,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12545.882677051,
+          "ended": 12546.924076477,
+          "p50_us": 979.6499989533913,
+          "mean_us": 1041.1915309432516,
+          "p99_us": 2842.851001332747
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "C-concentrated-group-k1",
+      "rep": 2,
+      "durability": "group",
+      "arm": "C-concentrated",
+      "range_size_ids": 0
+    },
+    {
+      "tag": "S-spread-group-k1-r2",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 1.0470220359984523,
+      "inserts_per_s": 955.0897360497178,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12547.450793911,
+          "ended": 12548.497815947,
+          "p50_us": 976.925999566447,
+          "mean_us": 1046.7895889978536,
+          "p99_us": 3087.057999437093
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "S-spread-group-k1",
+      "rep": 2,
+      "durability": "group",
+      "arm": "S-spread",
+      "range_size_ids": 65536
+    },
+    {
+      "tag": "C-concentrated-relaxed-k1-r2",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 0.03078741799981799,
+      "inserts_per_s": 32480.801085882285,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12549.124797052,
+          "ended": 12549.15558447,
+          "p50_us": 32.27400065952679,
+          "mean_us": 30.674060983074018,
+          "p99_us": 49.3240004288964
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "C-concentrated-relaxed-k1",
+      "rep": 2,
+      "durability": "relaxed",
+      "arm": "C-concentrated",
+      "range_size_ids": 0
+    },
+    {
+      "tag": "S-spread-relaxed-k1-r2",
+      "cores": 1,
+      "rows_per_core": 1000,
+      "rows_placed": 1000,
+      "rows_counted": "count(*)\\n1000",
+      "next_id": 1001,
+      "ids_burnt": 0,
+      "wall_s": 0.026978456000506412,
+      "inserts_per_s": 37066.613448198405,
+      "connection_attempts": 1,
+      "per_core": {
+        "0": {
+          "rows": 1000,
+          "retries": 0,
+          "retries_before_first_row": 0,
+          "connection_attempts": 1,
+          "began": 12551.36708455,
+          "ended": 12551.394063006,
+          "p50_us": 24.65699981257785,
+          "mean_us": 26.85610900334723,
+          "p99_us": 46.7610007035546
+        }
+      },
+      "errors": {},
+      "rowid_refills": {},
+      "range_split_declines": {},
+      "cell": "S-spread-relaxed-k1",
+      "rep": 2,
+      "durability": "relaxed",
+      "arm": "S-spread",
+      "range_size_ids": 65536
+    }
+  ]
+}

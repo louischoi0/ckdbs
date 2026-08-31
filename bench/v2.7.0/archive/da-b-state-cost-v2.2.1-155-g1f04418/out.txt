@@ -1,0 +1,38 @@
+DA-b: SessionStepClient state cost, in isolation from the two-range ceiling (loopback, no wire).
+N tags open in order 1..N; 'poll' = one WaitUntil-predicate pass over all N tags (park predicate shape); 'close' = CloseAll's teardown shape (Close per tag, open order).
+
+    N      open_us    open_us/tag        poll_us    poll_us/tag       close_us     close_us/tag
+    1         4.05         4.0460           0.00         0.0027           0.23           0.2300
+    2         6.17         3.0845           0.00         0.0023           0.32           0.1605
+    4        10.51         2.6265           0.01         0.0023           0.45           0.1128
+    8        20.63         2.5789           0.02         0.0027           0.79           0.0989
+   16        40.81         2.5507           0.07         0.0041           1.62           0.1014
+   32        81.99         2.5623           0.21         0.0065           5.08           0.1587
+   64       166.01         2.5939           0.72         0.0112          17.94           0.2803
+  128       334.45         2.6129           2.95         0.0231          68.44           0.5347
+  200       531.49         2.6574           6.93         0.0346         165.40           0.8270
+  255       689.87         2.7054          10.90         0.0427         268.28           1.0521
+
+Percentiles over 21 independent rebuild+open+poll+close cycles per N (rule 6; n=21 per cell, so p99 collapses to the max):
+    N |  poll_p0 poll_p25 poll_p50 poll_p95 poll_p99 | close_p0 close_p25 close_p50 close_p95 close_p99
+    1 |    0.003    0.003    0.003    0.003    0.004 |     0.14     0.19     0.23     0.44     0.60
+    2 |    0.005    0.005    0.005    0.005    0.005 |     0.19     0.30     0.32     0.53     0.57
+    4 |    0.009    0.009    0.009    0.009    0.009 |     0.31     0.42     0.45     0.74     0.95
+    8 |    0.022    0.022    0.022    0.022    0.022 |     0.62     0.72     0.79     1.11     1.20
+   16 |    0.066    0.066    0.066    0.066    0.075 |     1.46     1.57     1.62     1.79     2.54
+   32 |    0.207    0.209    0.209    0.211    0.211 |     4.93     5.03     5.08     5.36     5.46
+   64 |    0.697    0.711    0.718    0.726    0.761 |    17.72    17.86    17.94    18.56    25.79
+  128 |    2.721    2.785    2.954    2.985    3.021 |    68.02    68.25    68.44    76.34    77.68
+  200 |    6.646    6.679    6.929    6.980    7.268 |   164.63   165.13   165.40   172.01   175.48
+  255 |   10.763   10.884   10.900   11.910   13.027 |   267.21   267.90   268.28   277.46   278.44
+
+Scaling check (quadratic predicts poll_us(b)/poll_us(a) ~= (b/a)^2):
+  N    1 ->    2: n_ratio=2.00  poll_ratio=1.70 (n^2=4.00)  close_ratio=1.40 (n^2=4.00)
+  N    2 ->    4: n_ratio=2.00  poll_ratio=2.00 (n^2=4.00)  close_ratio=1.40 (n^2=4.00)
+  N    4 ->    8: n_ratio=2.00  poll_ratio=2.35 (n^2=4.00)  close_ratio=1.75 (n^2=4.00)
+  N    8 ->   16: n_ratio=2.00  poll_ratio=3.04 (n^2=4.00)  close_ratio=2.05 (n^2=4.00)
+  N   16 ->   32: n_ratio=2.00  poll_ratio=3.16 (n^2=4.00)  close_ratio=3.13 (n^2=4.00)
+  N   32 ->   64: n_ratio=2.00  poll_ratio=3.43 (n^2=4.00)  close_ratio=3.53 (n^2=4.00)
+  N   64 ->  128: n_ratio=2.00  poll_ratio=4.11 (n^2=4.00)  close_ratio=3.82 (n^2=4.00)
+  N  128 ->  200: n_ratio=1.56  poll_ratio=2.35 (n^2=2.44)  close_ratio=2.42 (n^2=2.44)
+  N  200 ->  255: n_ratio=1.27  poll_ratio=1.57 (n^2=1.63)  close_ratio=1.62 (n^2=1.63)
