@@ -157,7 +157,10 @@ Two things follow, and both are contracts rather than observations:
   append**, not after its own `fdatasync`. The append registers the commit
   with the group, so the next drain syncs it whether or not anybody is
   parked; what the old wait removed was a serialization, not a durability.
-  This takes the chain from three device syncs to two.
+  This takes the chain from three **waited** syncs to two. The third still
+  happens — measured at 3.00-3.01 syncs per cross-owner commit before and
+  after (§5a) — so `wal_syncs` does not move and was never the number to
+  read: what changed is whether the transaction waits for it.
 - **D1 `strict` is unchanged and keeps three.** Its sync happens *inside*
   the commit call, before it returns, so there is no post-append wait to
   move; buying the same saving there would mean committing a participant's
@@ -435,6 +438,28 @@ the cross-owner increment **51-62×**, from 1,988.7 µs to 38.0 µs at one
 booker and 3,743.9 µs to 60.4 µs at eight. The ~40 µs residue is the ring
 hop and the parks. Those numbers are a probe of where the mass sits and are
 never engine numbers.
+
+**And what moving the third leg off the ack was worth** (XE4,
+2026-08-31, `bench/v2.7.0/results-xe-ack-at-append-v2.7.0-17-ge310f8e.md`
+§4.3, `e310f8e`) — the enactment of the contract in §2, measured against
+the engine immediately before it, three repeats per arm on a
+cross-owner commit loop:
+
+| shape | commit p50 before | after | delta |
+|---|---:|---:|---:|
+| one connection, serial | 2,718.3 µs | 2,629.9 µs | **−3.3%, inside the 16.4% floor** |
+| eight concurrent | 5,761.2 µs | 4,272.2 µs | **−25.9%** |
+
+**Serially there is nothing to gain, and the reason is structural**: the
+deferred sync is still in flight when the same connection's next
+transaction asks its prepare for durability, so the wait leaves the ack
+and returns on the next iteration's critical path. A closed serial loop
+pays the same chain wherever the wait sits. **Under concurrency the saving
+is real and grows** — which reverses the prediction that it would shrink
+as the drain-sharing discount absorbed the third leg. Both arms do show
+that discount (syncs per commit 3.00 → 1.76 before, 3.00 → 1.45 after),
+so sharing the device and shortening a transaction's own chain remain the
+two different things §5a's concurrency paragraph already separated.
 
 **What this sizing is *not* evidence about**: the read-only-participant
 reply of §8. Scenario 2's booking writes to its participant on four

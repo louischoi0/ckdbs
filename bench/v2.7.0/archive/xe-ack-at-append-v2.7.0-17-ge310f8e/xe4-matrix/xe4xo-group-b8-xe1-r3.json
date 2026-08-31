@@ -1,0 +1,36 @@
+{
+  "label": "xe4xo-group-b8-xe1-r3",
+  "cores": 2,
+  "durability": "group",
+  "concurrency": 8,
+  "txns": 4000,
+  "owners": {
+    "t0": "1",
+    "t1": "1"
+  },
+  "participants": 1,
+  "committed": 4000,
+  "errors": 0,
+  "retries": 13,
+  "first_error": null,
+  "run_elapsed_s": 4.8201,
+  "tps": 829.8638869753981,
+  "commit": {
+    "phase": "commit",
+    "detail": "",
+    "ops": 4000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.820068,
+    "qps": 829.9,
+    "mean_us": 4408.6,
+    "p0_us": 2269.2,
+    "p25_us": 3620.7,
+    "p50_us": 4148.4,
+    "p95_us": 6659.7,
+    "p99_us": 7848.1,
+    "max_us": 9659.5
+  },
+  "total_wal_syncs_delta": 5819,
+  "syncs_per_commit": 1.45475
+}

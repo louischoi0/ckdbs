@@ -96,6 +96,20 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 from multicore_benchmark import Conn, field  # noqa: E402
+# XE2 (2026-08-31, against `eecda94` "Milestone KW: KWP/1 is the protocol
+# the server speaks", which this worktree's branch merged in): the default
+# `port` now speaks KWP/1, which installs a `result_sink`, and
+# `CommandDispatcher::ShipStatement` refuses a shipped *read* to a session
+# that has one (`command_dispatcher.cpp` sec.4256-4262, "a shipped read
+# cannot answer a typed client" - `known-gaps.md`'s own documented gap).
+# Every count this file takes is exactly such a read - `after` is a core-0
+# session counting a row on a peer-owned relation - so counting over `Conn`
+# now refuses instead of answering. The documented route around it is the
+# **newline debug surface** the refusal message itself names
+# (`debug_text_port`, `protocol.md` sec.12): no result sink is installed
+# over it, so the ship answers as rendered text exactly as it always did.
+# `TextConnection` is `ckdbs_cli.py`'s client for that surface.
+from ckdbs_cli import TextConnection  # noqa: E402
 
 # name -> rows expected in *each* relation after the restart.
 MATRIX = [
@@ -117,6 +131,19 @@ MATRIX = [
     # records; the expected count is 1 either way, which is the point.
     ('participant.decide_applied_preack', 1),
     ('participant.decide_applied_preack:2', 1),
+    # XE2 (`instructions/v2.7.1/workorder-xd.md`): the window XE1 opened.
+    # Under D2 the ack now precedes durability - the participant's COMMIT
+    # is appended and the coordinator is told before the record is synced,
+    # riding the next drain instead of a park. A crash here leaves the same
+    # shape `decide_applied_preack` does: a durable `TXN_PREPARE` with no
+    # decision in *this* stream (the append is not yet durable, only
+    # written), resolved from the coordinator's stream, which has held the
+    # decision as durable since before the decide was even sent
+    # (`cross-owner-txn.md` sec2c's fourth outcome). Expected count: 1,
+    # same as its sibling - this is what "the wait bought no durability
+    # promise" means as a testable claim, not just an argued one.
+    ('participant.decide_acked_predurable', 1),
+    ('participant.decide_acked_predurable:2', 1),
 ]
 
 TAG = 'kill'
@@ -140,8 +167,37 @@ def write_conf(workdir, port, cores, placement='rotate'):
                 # `info` so the resolver's own verdict line is readable: a
                 # cell that only counted rows would be inferring which
                 # mechanism produced them.
-                f"log_file = s.log\nlog_dir = {workdir}\nlog_level = info\n")
+                f"log_file = s.log\nlog_dir = {workdir}\nlog_level = info\n"
+                # The counting route (see the import comment above):
+                # confirmed single-listener, always core 0, never the
+                # `peer_listeners`-style multi-core `SO_REUSEPORT` set, so a
+                # client aimed here needs no `session_on_core` retry.
+                f"debug_text_port = {debug_text_port(port)}\n")
     return conf
+
+
+def debug_text_port(port):
+    """The newline-surface port paired with a cell's KWP `port` - one fixed
+    offset, safe because every cell in this probe tears its server down
+    before the next reuses the same `port` (`stop_proc`'s own docstring)."""
+    return port + 1
+
+
+class TextConn(TextConnection):
+    """`TextConnection` plus the `.cmd()` name this file's helpers
+    (`tagged_rows`, the `writable_after` probe) already call on a `Conn`."""
+
+    def cmd(self, line):
+        return self.send_command(line)
+
+
+def after_conn(args):
+    """The counting connection every restart reads through: the newline
+    surface, always core 0 (confirmed - `debug_text_port` is one listener,
+    never `peer_listeners`'s multi-core `SO_REUSEPORT` set), so no
+    `session_on_core` retry is needed the way the KWP setup connection
+    needs one."""
+    return TextConn('127.0.0.1', debug_text_port(args.port))
 
 
 def stop_proc(proc):
@@ -191,6 +247,34 @@ def session_on_core(port, core, spare, tries=128):
             return c
         spare.append(c)
     raise RuntimeError(f'no session landed on core {core}')
+
+
+def indoubt_health(port, owner_cores, spare):
+    """H-XE3's falsifier, read rather than assumed: `shipped_enrolment_expiries`
+    (a coordinator abandoned an enrolled participant) and
+    `txn_in_doubt_unresolved` (a row still held for a coordinator this
+    core can no longer ask) must be 0 on every participant core after the
+    restart. Both fields are local to whichever core answers `SHOW META`,
+    not shipped, so an ordinary `session_on_core` landing (no relation
+    read, so no KWP refusal) answers them directly. `txn_in_doubt_unresolved`
+    is printed only when non-zero (`command_dispatcher.cpp`'s "absent
+    rather than zeroed" rule for that block) - its absence from the reply
+    *is* the 0 reading, not a missing one."""
+    out = {}
+    for core in sorted(set(owner_cores)):
+        c = session_on_core(port, core, spare)
+        meta = c.cmd('SHOW META')
+        expiries = None
+        for tok in meta.split():
+            if tok.startswith('shipped_enrolment_expiries='):
+                expiries = int(tok.split('=', 1)[1])
+        unresolved = 0
+        for tok in meta.split():
+            if tok.startswith('txn_in_doubt_unresolved='):
+                unresolved = int(tok.split('=', 1)[1])
+        out[str(core)] = {'shipped_enrolment_expiries': expiries,
+                          'txn_in_doubt_unresolved': unresolved}
+    return out
 
 
 def cross_owner_txn(conn, a, b, tag, tries=40):
@@ -326,7 +410,8 @@ def run_cell(arm, expected, args):
         if not up:
             out['hang'] = f'restart: {why}'
             return out
-        after = session_on_core(args.port, 0, spare)
+        after = after_conn(args)
+        spare.append(after)  # closed by the `finally` below either way
         counts, raws = {}, {}
         for t in ('t0', 't1'):
             counts[t], raws[t] = tagged_rows(after, t, TAG)
@@ -336,6 +421,10 @@ def run_cell(arm, expected, args):
         for t in ('t0', 't1'):
             seed[t], _ = tagged_rows(after, t, 'before')
         out['seed_counts'] = seed
+        # H-XE3's falsifier, checked rather than assumed: both counters
+        # must read 0 on every participant core after the restart.
+        out['indoubt_health'] = indoubt_health(args.port, out.get('owners', {}).values(),
+                                               spare)
 
         # **Which mechanism produced those rows**, read rather than
         # inferred: the resolver logs one line per prepared transaction it
@@ -434,7 +523,18 @@ def run_fastpath_cell(name, cores, args):
             counts[t], _ = tagged_rows(c0, t, TAG)
         out['counts'] = counts
         out['alive'] = proc.poll() is None
-        c0.cmd('STOP')
+        # STOP over the newline surface, not `c0` (KWP): a KWP `STOP` is
+        # known-unreachable (the import comment's milestone,
+        # `known-gaps.md`'s "STOP is reachable only on the debug port"),
+        # and taking that as a `ConnectionError` here would clobber a
+        # `txn_reply`/`counts` this try block already recorded correctly -
+        # exactly the false ENTERED this line used to produce.
+        try:
+            stopper = after_conn(args)
+            stopper.cmd('STOP')
+            stopper.close()
+        except (ConnectionError, OSError):
+            pass
         try:
             proc.wait(timeout=args.mount_timeout)
         except subprocess.TimeoutExpired:
@@ -450,6 +550,184 @@ def run_fastpath_cell(name, cores, args):
         stop_proc(proc)
     stderr = open(os.path.join(workdir, 's.stderr')).read()
     out['crash_line'] = "crash point 'coordinator.before_prepare' fired" in stderr
+    return out
+
+
+def run_checkpoint_gap_cell(args):
+    """XE2's one targeted cell beyond the matrix's shape: the same
+    `participant.decide_acked_predurable` point, with the checkpointer
+    forced to cycle continuously around it, testing the spec's checkpoint
+    argument (`cross-owner-txn.md` sec2c) rather than assuming it: a
+    checkpoint's `CHECKPOINT_END` necessarily carries whatever was appended
+    before it, because `Checkpointer::Complete()` durability-waits on it
+    through `WalManager::EnsureDurable`, which is the *same* `Sync()` an
+    ordinary drain calls (`wal/manager.cpp:153` vs `:225-231`) - not a
+    second, weaker mechanism.
+
+    **What this cell can and cannot show, said plainly rather than
+    implied.** The literal window the order names - a checkpoint
+    interposed between the ack and the drain, before the kill - is empty
+    by construction on this reactor, confirmed by source read rather than
+    assumed: under `kAtAppend` the append
+    (`WalManager::Commit`'s `++pending_group_commits_`, a plain increment,
+    no I/O, `wal/manager.cpp:203-205`) and the crash
+    (`shipped_statement_executor.cpp:889-900`, ack then immediately
+    `CrashPointHit`) run inside one `CoroTask::Poll()` with no `co_await`
+    between them - `on_done_` fires synchronously in the same `Poll()`
+    that ran the coroutine to completion (`include/kds/sched/coro.hpp`,
+    the `if (!handle_.done()) ... if (on_done_) on_done_(...)` sequence).
+    Nothing - ordinary drain or checkpoint alike - can run between two
+    calls in the same synchronous stack frame; a fuzzy checkpoint is
+    furthermore multi-tick by design (`checkpointer.hpp`: "spreads across
+    reactor iterations"), so it could not complete inside a zero-width gap
+    even if one existed. So this cell does not, and structurally cannot,
+    race a checkpoint into that exact window - no facility XE1 added makes
+    that constructible without a second crash point the order did not ask
+    for. What it *does* test, empirically: with the checkpointer actively
+    cycling throughout the whole scenario (`checkpoint_interval_ms` short
+    enough for several cycles to land on both peer cores before the
+    targeted transaction even begins, confirmed from the log), the outcome
+    at this crash point is unchanged - still COMMIT on both relations,
+    same as the plain `decide_acked_predurable` cell with no checkpointer
+    running at all. That the two agree is the corroborating evidence the
+    source argument predicts; it is not a substitute for the source
+    argument, which is what actually proves the gap is safe.
+    """
+    out = {'point': 'checkpoint.decide_acked_predurable_gap', 'kind': 'kill',
+           'expected_rows': 1}
+    arm = 'participant.decide_acked_predurable'
+    workdir = os.path.join(args.workdir, 'checkpoint-gap')
+    shutil.rmtree(workdir, ignore_errors=True)
+    os.makedirs(workdir, exist_ok=True)
+    conf = os.path.join(workdir, 's.conf')
+    checkpoint_interval_ms = 20
+    pre_txn_delay_s = 0.5
+    with open(conf, 'w') as f:
+        f.write(f"data_file = {os.path.join(workdir, 's.db')}\n"
+                f"port = {args.port}\ncores = {args.cores}\n"
+                f"placement = rotate\npeer_listeners = on\n"
+                f"log_file = s.log\nlog_dir = {workdir}\nlog_level = debug\n"
+                f"checkpoint_interval_ms = {checkpoint_interval_ms}\n"
+                f"debug_text_port = {debug_text_port(args.port)}\n")
+    out['checkpoint_interval_ms'] = checkpoint_interval_ms
+    server = os.path.join(ROOT, args.build_dir, 'kds_server')
+    spare = []
+    proc = start(conf, workdir, server, arm=arm)
+    try:
+        up, why = wait_up(args.port, proc, args.mount_timeout)
+        if not up:
+            out['error'] = f'first mount: {why}'
+            return out
+        c0 = session_on_core(args.port, 0, spare)
+        for t in ('t0', 't1'):
+            created = c0.cmd(f'CREATE TABLE {t} (id int64, tag varchar, n int64) BTREE')
+            if created.startswith('ERR'):
+                out['error'] = f'CREATE {t}: {created[:200]}'
+                return out
+        owners = {t: field(c0.cmd(f'DESCRIBE {t}'), 'owner_core') for t in ('t0', 't1')}
+        out['owners'] = owners
+        if owners['t0'] == owners['t1'] or 0 in owners.values():
+            out['vacuous'] = f'relations did not land on two peer cores: {owners}'
+            return out
+        for t in ('t0', 't1'):
+            for _ in range(40):
+                r = c0.cmd(f"INSERT INTO {t} VALUES ('before', 0)")
+                if not (r.startswith('ERR') and 'retryable=1' in r):
+                    break
+                time.sleep(0.05)
+            if r.startswith('ERR'):
+                out['error'] = f'seed insert into {t}: {r[:200]}'
+                return out
+        # Several checkpoint cycles on both peer cores before the targeted
+        # transaction even begins - not to place one inside the (empty,
+        # per the docstring) gap, but so the checkpointer is genuinely live
+        # and active around the crash rather than merely configured.
+        time.sleep(pre_txn_delay_s)
+        out['pre_txn_delay_s'] = pre_txn_delay_s
+        out['txn_reply'] = cross_owner_txn(c0, 't0', 't1', TAG)
+    except (ConnectionError, OSError) as e:
+        out['txn_reply'] = ('connection', f'{type(e).__name__}: {e}')
+    finally:
+        for c in spare:
+            c.close()
+        if 'error' in out or 'vacuous' in out:
+            stop_proc(proc)
+    if 'error' in out or 'vacuous' in out:
+        return out
+
+    try:
+        proc.wait(timeout=args.mount_timeout)
+    except subprocess.TimeoutExpired:
+        out['error'] = 'the armed instance did not die at its point'
+        proc.kill()
+        proc.wait(timeout=10)
+        return out
+    out['killed_rc'] = proc.returncode
+    stderr = open(os.path.join(workdir, 's.stderr')).read()
+    out['crash_line'] = f"crash point '{arm}' fired" in stderr
+    if proc.returncode != -9:
+        out['error'] = f'died rc={proc.returncode}, not SIGKILL'
+        return out
+    if not out['crash_line']:
+        out['error'] = 'the process died without reaching its crash point'
+        return out
+
+    # The empirical half: how many checkpoints this core's checkpointer
+    # completed and published *before* the kill. Preserved to a separate
+    # file first, since the restart reopens the same log path.
+    prelog_path = os.path.join(workdir, 's.log')
+    prelog = open(prelog_path).read() if os.path.exists(prelog_path) else ''
+    if os.path.exists(prelog_path):
+        shutil.copy(prelog_path, os.path.join(workdir, 's.log.prerestart'))
+    anchors_before_kill = [ln for ln in prelog.splitlines() if 'anchor published' in ln]
+    out['checkpoints_before_kill'] = len(anchors_before_kill)
+    out['checkpoints_before_kill_sample'] = anchors_before_kill[:3]
+
+    # ---- The restart, unarmed - exactly `run_cell`'s second half --------
+    t_mount = time.time()
+    proc = start(conf, workdir, server, arm=None)
+    spare = []
+    try:
+        up, why = wait_up(args.port, proc, args.mount_timeout)
+        out['mount_s'] = round(time.time() - t_mount, 2)
+        if not up:
+            out['hang'] = f'restart: {why}'
+            return out
+        after = after_conn(args)
+        spare.append(after)  # closed by the `finally` below either way
+        counts, raws = {}, {}
+        for t in ('t0', 't1'):
+            counts[t], raws[t] = tagged_rows(after, t, TAG)
+        out['counts'] = counts
+        out['count_replies'] = raws
+        seed = {}
+        for t in ('t0', 't1'):
+            seed[t], _ = tagged_rows(after, t, 'before')
+        out['seed_counts'] = seed
+        out['indoubt_health'] = indoubt_health(args.port, out.get('owners', {}).values(),
+                                               spare)
+        writable = {}
+        for t in ('t0', 't1'):
+            for _ in range(60):
+                r = after.cmd(f"INSERT INTO {t} VALUES ('after', -1)")
+                if not (r.startswith('ERR') and 'retryable=1' in r):
+                    break
+                time.sleep(0.05)
+            writable[t] = (not r.startswith('ERR'), r[:160])
+        out['writable_after'] = writable
+        after.cmd('STOP')
+        try:
+            proc.wait(timeout=args.mount_timeout)
+        except subprocess.TimeoutExpired:
+            out['hang'] = 'STOP did not settle'
+            proc.kill()
+            proc.wait(timeout=10)
+    except (ConnectionError, OSError) as e:
+        out['error'] = f'the restarted instance died under the count: {type(e).__name__}: {e}'
+    finally:
+        for c in spare:
+            c.close()
+        stop_proc(proc)
     return out
 
 
@@ -552,6 +830,13 @@ def kill_verdict(cell):
         return 'ERROR'
     if not all(ok for ok, _ in (cell.get('writable_after') or {}).values()):
         return 'STUCK'
+    # H-XE3's falsifier: an abandoned enrolment or a row nothing at runtime
+    # can finish, on any checked core.
+    for health in (cell.get('indoubt_health') or {}).values():
+        if health.get('shipped_enrolment_expiries') not in (0, None):
+            return 'INDOUBT'
+        if health.get('txn_in_doubt_unresolved') != 0:
+            return 'INDOUBT'
     return 'PASS'
 
 
@@ -572,6 +857,8 @@ def main():
 
     plan = [(arm, lambda a=arm, e=exp: run_cell(a, e, args)) for arm, exp in MATRIX]
     plan.append(('resolution.coordinator_stream_gone', lambda: run_stream_gone_cell(args)))
+    plan.append(('checkpoint.decide_acked_predurable_gap',
+                 lambda: run_checkpoint_gap_cell(args)))
     plan += [('fastpath.local_only', lambda: run_fastpath_cell('fastpath.local_only',
                                                                args.cores, args)),
              ('fastpath.cores1', lambda: run_fastpath_cell('fastpath.cores1', 1, args))]
@@ -593,8 +880,10 @@ def main():
             label = name if args.repeat == 1 else f'{name}  (pass {attempt + 1})'
             print(f"{cell['verdict']:8s} {label}")
             for key in ('owners', 'txn_reply', 'killed_rc', 'counts', 'seed_counts',
-                        'mount_s', 'resolutions', 'mixed', 'writable_after', 'alive',
-                        'crash_line', 'removed', 'mounted', 'why', 'refused_by',
+                        'indoubt_health', 'mount_s', 'resolutions', 'mixed',
+                        'writable_after', 'alive', 'crash_line', 'removed', 'mounted',
+                        'why', 'refused_by', 'checkpoint_interval_ms', 'pre_txn_delay_s',
+                        'checkpoints_before_kill', 'checkpoints_before_kill_sample',
                         'error', 'hang', 'vacuous'):
                 if key in cell:
                     print(f'    {key} = {cell[key]}')

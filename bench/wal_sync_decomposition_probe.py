@@ -319,7 +319,21 @@ def main():
 
         for rd in reader_of.values():
             rd.close()
-        client("STOP")
+        # XE2/XE4 (2026-08-31, against `eecda94` "Milestone KW: KWP/1 is
+        # the protocol the server speaks"): `STOP` is now reachable only on
+        # the newline debug surface (`known-gaps.md`'s own documented
+        # gap), so a KWP `client` - every measurement above this line
+        # already ran over one - gets its socket closed rather than a
+        # reply. All the measurement this cell exists for is already
+        # collected by this point; letting that exception propagate would
+        # skip the `--json` write below over nothing this cell is
+        # measuring. The `finally` block force-terminates the process
+        # either way, so a courtesy shutdown that the wire cannot carry
+        # costs nothing to skip.
+        try:
+            client("STOP")
+        except (ConnectionError, OSError):
+            pass
         client.close()
     finally:
         try:

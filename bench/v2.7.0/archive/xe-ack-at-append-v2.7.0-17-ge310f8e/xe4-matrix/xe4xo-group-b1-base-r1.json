@@ -1,0 +1,36 @@
+{
+  "label": "xe4xo-group-b1-base-r1",
+  "cores": 2,
+  "durability": "group",
+  "concurrency": 1,
+  "txns": 2000,
+  "owners": {
+    "t0": "1",
+    "t1": "1"
+  },
+  "participants": 1,
+  "committed": 2000,
+  "errors": 0,
+  "retries": 3,
+  "first_error": null,
+  "run_elapsed_s": 7.2646,
+  "tps": 275.30760552371584,
+  "commit": {
+    "phase": "commit",
+    "detail": "",
+    "ops": 2000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 7.264601,
+    "qps": 275.3,
+    "mean_us": 3138.4,
+    "p0_us": 2003.9,
+    "p25_us": 2922.6,
+    "p50_us": 3138.8,
+    "p95_us": 3728.9,
+    "p99_us": 3960.5,
+    "max_us": 15160.3
+  },
+  "total_wal_syncs_delta": 6004,
+  "syncs_per_commit": 3.002
+}

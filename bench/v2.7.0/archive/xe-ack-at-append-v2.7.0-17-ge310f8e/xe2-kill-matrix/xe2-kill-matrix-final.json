@@ -1,0 +1,2153 @@
+[
+  {
+    "point": "coordinator.before_prepare",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.29,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=1"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.prepare_logged_predurable",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.32,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.prepare_logged_predurable:2",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.prepare_durable_prereply",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.prepare_durable_prereply:2",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.37,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "coordinator.prepared_predecide",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "coordinator.decided_presend",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.decide_applied_preack",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.decide_applied_preack:2",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.34,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.decide_acked_predurable",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "participant.decide_acked_predurable:2",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "resolution.coordinator_stream_gone",
+    "kind": "resolution",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "removed": "wal-0-0.log",
+    "mounted": false,
+    "why": "exited rc=1 before listening",
+    "refused_by": "analysis (anchor check, one layer above the resolver)",
+    "stderr_tail": "ck version 16\nlogging to /home/ubuntu/bench-xe/kill/coordinator.decided_presend/s.log at level INFO\nlistening on 127.0.0.1:24100\nkds: crash point 'coordinator.decided_presend' fired; SIGKILL\nstartup failed: recovery of core 0: analysis: wal analysis: core 0's stream ends at lsn 4096, before the durable point 4336 its checkpoint anchor was published with - records the anchor depends on are missing\n",
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "checkpoint.decide_acked_predurable_gap",
+    "kind": "kill",
+    "expected_rows": 1,
+    "checkpoint_interval_ms": 20,
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "pre_txn_delay_s": 0.5,
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "checkpoints_before_kill": 111,
+    "checkpoints_before_kill_sample": [
+      "1788168076 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4336 segment=0",
+      "1788168077 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0",
+      "1788168077 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0"
+    ],
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "fastpath.local_only",
+    "kind": "fastpath",
+    "cores": 3,
+    "owners": {
+      "t0": 0,
+      "t1": 0
+    },
+    "txn_reply": [
+      "COMMIT",
+      "COMMIT"
+    ],
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "alive": true,
+    "crash_line": false,
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "fastpath.cores1",
+    "kind": "fastpath",
+    "cores": 1,
+    "owners": {
+      "t0": 0,
+      "t1": 0
+    },
+    "txn_reply": [
+      "COMMIT",
+      "COMMIT"
+    ],
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "alive": true,
+    "crash_line": false,
+    "verdict": "PASS",
+    "pass_no": 1
+  },
+  {
+    "point": "coordinator.before_prepare",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.3,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=1"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.prepare_logged_predurable",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.3,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=1"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.prepare_logged_predurable:2",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.32,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.prepare_durable_prereply",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.prepare_durable_prereply:2",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "coordinator.prepared_predecide",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "coordinator.decided_presend",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.decide_applied_preack",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.decide_applied_preack:2",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.decide_acked_predurable",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "participant.decide_acked_predurable:2",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "resolution.coordinator_stream_gone",
+    "kind": "resolution",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "removed": "wal-0-0.log",
+    "mounted": false,
+    "why": "exited rc=1 before listening",
+    "refused_by": "analysis (anchor check, one layer above the resolver)",
+    "stderr_tail": "ck version 16\nlogging to /home/ubuntu/bench-xe/kill/coordinator.decided_presend/s.log at level INFO\nlistening on 127.0.0.1:24100\nkds: crash point 'coordinator.decided_presend' fired; SIGKILL\nstartup failed: recovery of core 0: analysis: wal analysis: core 0's stream ends at lsn 4096, before the durable point 4336 its checkpoint anchor was published with - records the anchor depends on are missing\n",
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "checkpoint.decide_acked_predurable_gap",
+    "kind": "kill",
+    "expected_rows": 1,
+    "checkpoint_interval_ms": 20,
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "pre_txn_delay_s": 0.5,
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "checkpoints_before_kill": 108,
+    "checkpoints_before_kill_sample": [
+      "1788168110 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4336 segment=0",
+      "1788168111 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0",
+      "1788168111 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0"
+    ],
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "fastpath.local_only",
+    "kind": "fastpath",
+    "cores": 3,
+    "owners": {
+      "t0": 0,
+      "t1": 0
+    },
+    "txn_reply": [
+      "COMMIT",
+      "COMMIT"
+    ],
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "alive": true,
+    "crash_line": false,
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "fastpath.cores1",
+    "kind": "fastpath",
+    "cores": 1,
+    "owners": {
+      "t0": 0,
+      "t1": 0
+    },
+    "txn_reply": [
+      "COMMIT",
+      "COMMIT"
+    ],
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "alive": true,
+    "crash_line": false,
+    "verdict": "PASS",
+    "pass_no": 2
+  },
+  {
+    "point": "coordinator.before_prepare",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.3,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=1"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.prepare_logged_predurable",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.3,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=1"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=1"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.prepare_logged_predurable:2",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=1"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.prepare_durable_prereply",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.37,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.prepare_durable_prereply:2",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "coordinator.prepared_predecide",
+    "expected_rows": 0,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 0,
+      "t1": 0
+    },
+    "count_replies": {
+      "t0": "count(*)\\n0",
+      "t1": "count(*)\\n0"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "coordinator.decided_presend",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)",
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.decide_applied_preack",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.decide_applied_preack:2",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.decide_acked_predurable",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.35,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 1: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)",
+      "core 2: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": false,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "participant.decide_acked_predurable:2",
+    "expected_rows": 1,
+    "kind": "kill",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "mount_s": 0.33,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "resolutions": [
+      "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"
+    ],
+    "mixed": true,
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "resolution.coordinator_stream_gone",
+    "kind": "resolution",
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "removed": "wal-0-0.log",
+    "mounted": false,
+    "why": "exited rc=1 before listening",
+    "refused_by": "analysis (anchor check, one layer above the resolver)",
+    "stderr_tail": "ck version 16\nlogging to /home/ubuntu/bench-xe/kill/coordinator.decided_presend/s.log at level INFO\nlistening on 127.0.0.1:24100\nkds: crash point 'coordinator.decided_presend' fired; SIGKILL\nstartup failed: recovery of core 0: analysis: wal analysis: core 0's stream ends at lsn 4096, before the durable point 4336 its checkpoint anchor was published with - records the anchor depends on are missing\n",
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "checkpoint.decide_acked_predurable_gap",
+    "kind": "kill",
+    "expected_rows": 1,
+    "checkpoint_interval_ms": 20,
+    "owners": {
+      "t0": 2,
+      "t1": 1
+    },
+    "pre_txn_delay_s": 0.5,
+    "txn_reply": [
+      "connection",
+      "ConnectionError: server closed the connection"
+    ],
+    "killed_rc": -9,
+    "crash_line": true,
+    "checkpoints_before_kill": 108,
+    "checkpoints_before_kill_sample": [
+      "1788168144 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4336 segment=0",
+      "1788168145 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0",
+      "1788168145 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0"
+    ],
+    "mount_s": 0.36,
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "count_replies": {
+      "t0": "count(*)\\n1",
+      "t1": "count(*)\\n1"
+    },
+    "seed_counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "indoubt_health": {
+      "1": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      },
+      "2": {
+        "shipped_enrolment_expiries": 0,
+        "txn_in_doubt_unresolved": 0
+      }
+    },
+    "writable_after": {
+      "t0": [
+        true,
+        "INSERTED oid=4000 id=65537 page=257 slot=2"
+      ],
+      "t1": [
+        true,
+        "INSERTED oid=4004 id=65537 page=261 slot=2"
+      ]
+    },
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "fastpath.local_only",
+    "kind": "fastpath",
+    "cores": 3,
+    "owners": {
+      "t0": 0,
+      "t1": 0
+    },
+    "txn_reply": [
+      "COMMIT",
+      "COMMIT"
+    ],
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "alive": true,
+    "crash_line": false,
+    "verdict": "PASS",
+    "pass_no": 3
+  },
+  {
+    "point": "fastpath.cores1",
+    "kind": "fastpath",
+    "cores": 1,
+    "owners": {
+      "t0": 0,
+      "t1": 0
+    },
+    "txn_reply": [
+      "COMMIT",
+      "COMMIT"
+    ],
+    "counts": {
+      "t0": 1,
+      "t1": 1
+    },
+    "alive": true,
+    "crash_line": false,
+    "verdict": "PASS",
+    "pass_no": 3
+  }
+]

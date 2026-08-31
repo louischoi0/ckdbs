@@ -1,5 +1,26 @@
 # Ratification ask XD1 — the participant's ack, and the third durable sync
 
+> **RATIFIED AND ENACTED 2026-08-31.** The operator accepted all three
+> questions in §"What the operator is being asked" and directed the
+> enactment, `instructions/v2.7.1/workorder-xd.md` (work order XE). Built
+> at **`8e76417`** (spec amendments and the code), tested at `f979cd1`,
+> reviewed and hardened at `e310f8e`; the contract is now
+> `docs/spec/cross-owner-txn.md` §2, §2c and §4, and the retention
+> obligation is indexed at `wal.md` §15. **This file is kept as the
+> argument the decision was made on, not as an open ask.**
+>
+> **What the enactment measured, and it is not what this ask predicted.**
+> §"What it would be worth" guessed a third of the b=1 chain, ~1 ms.
+> Measured (`bench/v2.7.0/results-xe-ack-at-append-v2.7.0-17-ge310f8e.md`
+> §4.3): **serially there is no saving to resolve** — 88 µs of p50, inside
+> a 16.4% noise floor — because the deferred sync is still in flight when
+> the same connection's next transaction asks its prepare for durability,
+> so the wait leaves the ack and comes back one iteration later. **Under
+> eight concurrent coordinators the saving is real and larger, 25.9% of
+> commit p50.** The estimate was wrong in both directions at once, and the
+> reason is that it counted syncs in a chain without asking what else was
+> running while one of them drained.
+
 Drafted 2026-08-31 by CLA on the worktree `measure-v2.7.1` at `3c42d74`
 (`v2.7.0-1-g3c42d74`), as row XD1 of
 `instructions/v2.7.1/measurement-xd.md`. **Nothing is built under this

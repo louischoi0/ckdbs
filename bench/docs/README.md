@@ -942,18 +942,49 @@ python3 bench/txn_2pc_cost_probe.py --arm xowner --participants 2 --json out.jso
 ```
 
 `bench/txn_2pc_kill_matrix_probe.py` — **whether a kill −9 anywhere in the
-protocol can tear a transaction.** Six crash points across both sides of
+protocol can tear a transaction.** Seven crash points across both sides of
 the wire (`base::CrashPointHit`, armed by config and inert unless named),
-twelve cells with the ordinal siblings, `--repeat` passes each. Four cells
-expect **0** committed on both relations — a 1 there is a transaction
-nobody decided — and two expect **1**, where a 0 is a decision made
-durable and then not carried out. In all twelve, **unequal counts between
-the two relations are a torn transaction**, which is the failure two-phase
-commit exists to make impossible. Both sides of the wire are threads of one
-process, so a kill takes the coordinator and its participants down
-together; that is why the matrix is six points rather than eight. The
+eleven `MATRIX` cells with the ordinal siblings plus the resolution, the
+checkpoint-gap and the two `fastpath` cells (fifteen total),
+`--repeat` passes each. Four points expect **0** committed on both
+relations — a 1 there is a transaction nobody decided — and three expect
+**1**, where a 0 is a decision made durable and then not carried out. In
+every `MATRIX` cell, **unequal counts between the two relations are a torn
+transaction**, which is the failure two-phase commit exists to make
+impossible. Both sides of the wire are threads of one process, so a kill
+takes the coordinator and its
+participants down together; that is why the matrix is six *named* points
+(the seventh, `participant.decide_acked_predurable`, is XE1's new window
+on the existing `decide_applied_preack` line) rather than eight. The
 `fastpath.*` cells are the control: a one-owner transaction and a
 `cores = 1` instance must be untouched.
+
+**XE2 (2026-08-31)** added `participant.decide_acked_predurable` (both
+ordinals, expected count 1 like its `decide_applied_preack` sibling — the
+window XE1 opened when the participant's ack moved to precede durability
+under D2) and one cell beyond the matrix's shape,
+`checkpoint.decide_acked_predurable_gap`: the same point with the
+checkpointer forced to cycle continuously, testing the spec's checkpoint
+argument (`cross-owner-txn.md` §2c) rather than assuming it. Its own
+docstring states plainly what it can and cannot show — the literal window
+(a checkpoint interposed between the ack and the drain) is empty by
+construction on this reactor (source-verified: the append and the crash
+run inside one `CoroTask::Poll()` with no intervening tick), so this cell
+corroborates rather than races it. Every restart also checks
+`shipped_enrolment_expiries` and `txn_in_doubt_unresolved` on each
+participant core (`indoubt_health`), verdict `INDOUBT` if either is
+non-zero.
+
+**Counting now goes over the newline debug surface, not KWP** (2026-08-31,
+against `eecda94` "Milestone KW: KWP/1 is the protocol the server
+speaks"): a typed client's shipped read is refused
+(`command_dispatcher.cpp`, `known-gaps.md`'s own documented gap), which is
+exactly what counting a peer-owned relation's rows after a restart is —
+so every restart's counting connection is `debug_text_port` (`+1` on the
+cell's own `port`, one listener, always core 0), and `STOP` goes over it
+too (KWP's own `STOP` is unreachable, the same gap). `write_conf` opens
+`debug_text_port` unconditionally now; nothing about the crash points or
+the kill mechanics changed.
 
 ```bash
 python3 bench/txn_2pc_kill_matrix_probe.py --build-dir build-release --repeat 3 --json m.json
@@ -1009,6 +1040,77 @@ bench/wal_sync_decomposition_probe.py --server /path/to/kds_server-<sha> \
 ```
 
 Results: `bench/v2.7.0/results-xd-commit-decomposition-*.md`.
+
+### The XE ack-at-append probes (2026-08-31)
+
+**`instructions/v2.7.1/workorder-xd.md`'s XE4 asks for this same driver's
+`peer_listeners = on` cells; they cannot run today, and the reason is
+named here because it changes how every driver in this file behaves, not
+only this one.** `eecda94` ("Milestone KW: KWP/1 is the protocol the
+server speaks") landed on `main` the same day as XE1, ahead of it. Under
+KWP/1 every session carries a result sink, and `CommandDispatcher::
+ShipStatement` refuses a shipped **read** to a session that has one
+(`command_dispatcher.cpp`, "a shipped read cannot answer a typed client" —
+`known-gaps.md`'s own documented gap). Scenario 2's every booking opens
+with exactly such a read (`book_once`'s cargo lookup,
+`tools/scenario2_freight.py`), so a booker whose connection lands on a
+peer core — the whole premise of a cross-owner cell — cannot execute one
+at all, on the pre-XE1 binary, the XE1 binary or current HEAD alike. This
+is orthogonal to and predates XE1; it is not a regression this order's
+own change caused. Two narrower, unrelated defects in the shared client
+library were found and fixed getting this far, both still worth naming
+because every driver in this file depends on the same code:
+
+- **`tools/kwp.py`'s `execute()` leaked a portal on any statement that
+  errored with `max_rows == 0`** (the common case). The intended fix
+  ("close it on both arms," landed with the milestone) bundled `C_CLOSE`
+  into the same batch as the failing `PARSE`/`BIND`/`EXECUTE`, and the
+  server's own §5 skip-to-sync discards every frame after an error up to
+  the next `C_SYNC` — silently dropping that same-batch close. A session
+  that errors 64 times (a completely ordinary rate under any workload with
+  real conflicts) then refuses every further statement, permanently.
+  Fixed by never bundling `C_CLOSE`: it is now always its own frame, sent
+  after the statement's own `S_READY` has already been read, which is the
+  one guarantee `C_SYNC` gives regardless of how the statement went.
+- **A KWP `client("STOP")` closes the socket rather than replying**
+  (`known-gaps.md`: "`STOP` is reachable only on the debug port"), which
+  was propagating out of `wal_sync_decomposition_probe.py`'s `main()`
+  uncaught and skipping the `--json` write below it — every cell's
+  measurement work had already finished by that line. Fixed by catching
+  `ConnectionError`/`OSError` around that one call; the driver's own
+  `finally` block already force-terminates the process regardless.
+
+`bench/xe4_crossowner_commit_probe.py` — **the substitute this order's
+`pl` cells actually run against**: a cross-owner **commit alone**, no
+reads anywhere in the measured path, so nothing here can hit the refusal
+above. `BEGIN`; one `INSERT` (id omitted — a caller-supplied pk is refused
+on a peer core, `workplan-peer-writer.md` §7a) into each of two relations
+under `placement = rotate`; `COMMIT`, timed by itself. `--cores 2` puts
+both relations on the *same* single peer core (`rotate` has nowhere else
+to put the second), which is a **one-participant** cross-owner shape —
+XD's own scenario-2 booking is also one-participant, since every relation
+it declares is core 0's — so `syncs_per_commit` is directly comparable to
+XD's "3.00 syncs/booking" model; measured here at 3.00-3.01 on `group` and
+`strict` at `--concurrency 1`, 2.02 on `relaxed`, matching the model
+exactly. `--concurrency N` runs `N` coordinator connections (each
+guaranteed onto core 0 the same way `session_on_core` does) concurrently,
+each running its own share of `--txns`; a `TXN_CONFLICT retryable=1` (the
+row-id lease grant's own cadence, unrelated to the protocol under test) is
+retried in place rather than counted, so `--txns` is a **committed**
+count, not an attempted one (rule 7). **What this file is not**: it does
+not exercise the per-statement shipping cost a real booking pays for
+every one of its 6-8 statements, only the last of them — `COMMIT`, the
+leg XE1 changed — so its absolute latencies are a lower bound on a real
+booking's cross-owner ratio, read beside `results-xd-commit-decomposition`,
+never in place of it.
+
+```bash
+python3 bench/xe4_crossowner_commit_probe.py --server /path/to/kds_server-<sha> \
+    --workdir ~/bench-xe/xowner --label xe4xo-group-b8 --port 15960 \
+    --cores 2 --durability group --concurrency 8 --txns 4000 --json out.json
+```
+
+Results: `bench/v2.7.0/results-xe-ack-at-append-*.md`.
 
 ### The R6-R read-half probes (RR2, 2026-08-28)
 

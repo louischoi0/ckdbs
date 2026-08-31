@@ -48,6 +48,20 @@ source read, confirmed in situ at this commit, not re-derived. XD7 (the
 scenario-2 file's correction) is the operator's to write; this file states
 what the numbers do to that sentence and stops there.
 
+> **Forward note, 2026-08-31.** XD1's verdict was ratified and enacted:
+> a participant now acknowledges a decide at its COMMIT **append** under
+> D2, and the chain's *waited* syncs go from three to two while the three
+> performed syncs stay (`docs/spec/cross-owner-txn.md` §2, §5a). What that
+> was worth is `bench/v2.7.0/results-xe-ack-at-append-v2.7.0-17-ge310f8e.md`,
+> and it corrects an expectation this file's own §4 arithmetic invited:
+> the additive model that made the two extra legs cost ~1,002 µs each at
+> b = 1 is right about the *chain* and does not license the inference that
+> removing a leg's wait removes its latency. Serially it does not — the
+> deferred sync returns on the next transaction's critical path, and the
+> b = 1 saving is 88 µs inside a 16.4% floor. At b = 8 it is 25.9%. This
+> file's numbers stand; the inference to guard against is that a sync
+> counted is a sync waited for.
+
 ## 1. Provenance
 
 | | |

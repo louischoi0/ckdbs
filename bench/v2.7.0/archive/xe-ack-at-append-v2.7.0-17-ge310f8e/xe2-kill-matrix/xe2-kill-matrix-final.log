@@ -1,0 +1,504 @@
+PASS     coordinator.before_prepare  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.29
+    resolutions = []
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=1')}
+    crash_line = True
+PASS     participant.prepare_logged_predurable  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.32
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.prepare_logged_predurable:2  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.prepare_durable_prereply  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.prepare_durable_prereply:2  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.37
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     coordinator.prepared_predecide  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     coordinator.decided_presend  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_applied_preack  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_applied_preack:2  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.34
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_acked_predurable  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_acked_predurable:2  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     resolution.coordinator_stream_gone  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    crash_line = True
+    removed = wal-0-0.log
+    mounted = False
+    why = exited rc=1 before listening
+    refused_by = analysis (anchor check, one layer above the resolver)
+PASS     checkpoint.decide_acked_predurable_gap  (pass 1)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+    checkpoint_interval_ms = 20
+    pre_txn_delay_s = 0.5
+    checkpoints_before_kill = 111
+    checkpoints_before_kill_sample = ['1788168076 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4336 segment=0', '1788168077 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0', '1788168077 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0']
+PASS     fastpath.local_only  (pass 1)
+    owners = {'t0': 0, 't1': 0}
+    txn_reply = ('COMMIT', 'COMMIT')
+    counts = {'t0': 1, 't1': 1}
+    alive = True
+    crash_line = False
+PASS     fastpath.cores1  (pass 1)
+    owners = {'t0': 0, 't1': 0}
+    txn_reply = ('COMMIT', 'COMMIT')
+    counts = {'t0': 1, 't1': 1}
+    alive = True
+    crash_line = False
+PASS     coordinator.before_prepare  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.3
+    resolutions = []
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=1')}
+    crash_line = True
+PASS     participant.prepare_logged_predurable  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.3
+    resolutions = []
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=1')}
+    crash_line = True
+PASS     participant.prepare_logged_predurable:2  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.32
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.prepare_durable_prereply  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.prepare_durable_prereply:2  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     coordinator.prepared_predecide  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     coordinator.decided_presend  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_applied_preack  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_applied_preack:2  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_acked_predurable  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_acked_predurable:2  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     resolution.coordinator_stream_gone  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    crash_line = True
+    removed = wal-0-0.log
+    mounted = False
+    why = exited rc=1 before listening
+    refused_by = analysis (anchor check, one layer above the resolver)
+PASS     checkpoint.decide_acked_predurable_gap  (pass 2)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+    checkpoint_interval_ms = 20
+    pre_txn_delay_s = 0.5
+    checkpoints_before_kill = 108
+    checkpoints_before_kill_sample = ['1788168110 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4336 segment=0', '1788168111 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0', '1788168111 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0']
+PASS     fastpath.local_only  (pass 2)
+    owners = {'t0': 0, 't1': 0}
+    txn_reply = ('COMMIT', 'COMMIT')
+    counts = {'t0': 1, 't1': 1}
+    alive = True
+    crash_line = False
+PASS     fastpath.cores1  (pass 2)
+    owners = {'t0': 0, 't1': 0}
+    txn_reply = ('COMMIT', 'COMMIT')
+    counts = {'t0': 1, 't1': 1}
+    alive = True
+    crash_line = False
+PASS     coordinator.before_prepare  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.3
+    resolutions = []
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=1')}
+    crash_line = True
+PASS     participant.prepare_logged_predurable  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.3
+    resolutions = []
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=1'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=1')}
+    crash_line = True
+PASS     participant.prepare_logged_predurable:2  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=1')}
+    crash_line = True
+PASS     participant.prepare_durable_prereply  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.37
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.prepare_durable_prereply:2  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     coordinator.prepared_predecide  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 0, 't1': 0}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to ABORT (its coordinator's stream holds no decision, so nothing committed anywhere)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     coordinator.decided_presend  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)", "core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_applied_preack  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 1: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_applied_preack:2  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_acked_predurable  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.35
+    resolutions = ["core 1: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)", "core 2: transaction 4, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = False
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     participant.decide_acked_predurable:2  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.33
+    resolutions = ["core 2: transaction 4100, prepared for core 0's session 1 transaction 8200, resolves to COMMIT (its coordinator's decision)"]
+    mixed = True
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+PASS     resolution.coordinator_stream_gone  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    crash_line = True
+    removed = wal-0-0.log
+    mounted = False
+    why = exited rc=1 before listening
+    refused_by = analysis (anchor check, one layer above the resolver)
+PASS     checkpoint.decide_acked_predurable_gap  (pass 3)
+    owners = {'t0': 2, 't1': 1}
+    txn_reply = ('connection', 'ConnectionError: server closed the connection')
+    killed_rc = -9
+    counts = {'t0': 1, 't1': 1}
+    seed_counts = {'t0': 1, 't1': 1}
+    indoubt_health = {'1': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}, '2': {'shipped_enrolment_expiries': 0, 'txn_in_doubt_unresolved': 0}}
+    mount_s = 0.36
+    writable_after = {'t0': (True, 'INSERTED oid=4000 id=65537 page=257 slot=2'), 't1': (True, 'INSERTED oid=4004 id=65537 page=261 slot=2')}
+    crash_line = True
+    checkpoint_interval_ms = 20
+    pre_txn_delay_s = 0.5
+    checkpoints_before_kill = 108
+    checkpoints_before_kill_sample = ['1788168144 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4336 segment=0', '1788168145 INFO [checkpoint] anchor published: core=1 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0', '1788168145 INFO [checkpoint] anchor published: core=2 checkpoint_lsn=4096 redo_start=4096 durable_lsn=4176 segment=0']
+PASS     fastpath.local_only  (pass 3)
+    owners = {'t0': 0, 't1': 0}
+    txn_reply = ('COMMIT', 'COMMIT')
+    counts = {'t0': 1, 't1': 1}
+    alive = True
+    crash_line = False
+PASS     fastpath.cores1  (pass 3)
+    owners = {'t0': 0, 't1': 0}
+    txn_reply = ('COMMIT', 'COMMIT')
+    counts = {'t0': 1, 't1': 1}
+    alive = True
+    crash_line = False
+
+asymmetric participant states reached at: participant.decide_acked_predurable:2, participant.decide_applied_preack, participant.decide_applied_preack:2, participant.prepare_logged_predurable, participant.prepare_logged_predurable:2
+45/45 cells PASS

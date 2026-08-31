@@ -1,0 +1,36 @@
+{
+  "label": "xe4xo-group-b8-base-r2",
+  "cores": 2,
+  "durability": "group",
+  "concurrency": 8,
+  "txns": 4000,
+  "owners": {
+    "t0": "1",
+    "t1": "1"
+  },
+  "participants": 1,
+  "committed": 4000,
+  "errors": 0,
+  "retries": 10,
+  "first_error": null,
+  "run_elapsed_s": 6.6372,
+  "tps": 602.662676008628,
+  "commit": {
+    "phase": "commit",
+    "detail": "",
+    "ops": 4000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 6.637212,
+    "qps": 602.7,
+    "mean_us": 6012.7,
+    "p0_us": 2915.1,
+    "p25_us": 4871.5,
+    "p50_us": 5761.2,
+    "p95_us": 8650.8,
+    "p99_us": 10087.2,
+    "max_us": 22261.2
+  },
+  "total_wal_syncs_delta": 7070,
+  "syncs_per_commit": 1.7675
+}

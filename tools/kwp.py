@@ -377,21 +377,27 @@ class Connection:
             else:
                 b.u32(len(value)).raw(value)
 
-        # **One write, four frames.** Pipelining is what §5 offers and this
+        # **One write, three frames.** Pipelining is what §5 offers and this
         # is the shape it is for: PARSE, BIND, EXECUTE and the `C_SYNC`
         # barrier go out together, and the client then reads to `S_READY`
         # whichever way the statement went. Sending them separately costs a
         # syscall each and, on a connection without TCP_NODELAY, a delayed
         # ACK between them.
         #
-        # `C_CLOSE` rides along **only when nothing can suspend**: with a
-        # `max_rows` quota the portal still has rows to give, and closing it
-        # in the same batch would discard them.
+        # **`C_CLOSE` never rides in this batch** (2026-08-31, XE4 -
+        # measured, not theorised: this was tried and leaked). §5's own
+        # skip-to-sync is why: a `C_CLOSE` queued right after a `PARSE`,
+        # `BIND` or `EXECUTE` that itself errors arrives while the server
+        # is already discarding frames up to the next `C_SYNC`
+        # (`kwp_session.cpp`'s `skipping_to_sync_`, "discarded, silently")
+        # - so a same-batch close is dropped on exactly the statements that
+        # most need it closed, and the portal leaks anyway. The trailing
+        # close below, sent as its own frame *after* this batch's `S_READY`
+        # has already been read, always lands on a session that has left
+        # skip-to-sync - the one guarantee `C_SYNC` gives.
         batch = frame(C_PARSE, _Writer().s("").text(sql).take())
         batch += frame(C_BIND, b.take())
         batch += frame(C_EXECUTE, _Writer().s(portal).u32(max_rows).take())
-        if max_rows == 0:
-            batch += frame(C_CLOSE, _Writer().u8(2).s(portal).take())
         batch += frame(C_SYNC)
         self.sock.sendall(batch)
 
@@ -431,18 +437,18 @@ class Connection:
             ftype, _, _ = self._recv_frame()
             if ftype == S_READY:
                 break
-        # **The portal is closed on both arms.** It used to be closed only
-        # after a success, so a client that provoked 64 errors on one
-        # connection hit `kMaxSessionPortals` and every later `C_BIND` was
-        # refused - a leak that turns one bad statement into a dead session.
-        # The batch above already closed it where nothing could suspend.
-        if max_rows != 0:
-            self._send(C_CLOSE, _Writer().u8(2).s(portal).take())
-            self._send(C_SYNC)
-            while True:
-                ftype, _, _ = self._recv_frame()
-                if ftype == S_READY:
-                    break
+        # **Always closed, unconditionally, as its own frame.** Not "on
+        # both arms" any more - the arm that bundled `C_CLOSE` into the
+        # first batch was the leaking one (see the comment above the
+        # batch), so there is now exactly one way this method closes a
+        # portal: after this statement's own `S_READY`, whether it carried
+        # a success or an `S_ERROR`.
+        self._send(C_CLOSE, _Writer().u8(2).s(portal).take())
+        self._send(C_SYNC)
+        while True:
+            ftype, _, _ = self._recv_frame()
+            if ftype == S_READY:
+                break
         if error is not None:
             raise error
         return fields, rows, tag, affected
