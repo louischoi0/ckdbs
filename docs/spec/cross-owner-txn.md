@@ -116,7 +116,10 @@ deadline, `Status::FromWire` (D4).
 2. **Decide.** Every participant prepared ⇒ the coordinator commits **in
    its own stream**, and that `COMMIT` **is the decision**. Any refusal or
    timeout ⇒ abort. Either way it then tells the participants, and waits
-   for their acknowledgements.
+   for their acknowledgements. A participant applies the decision as its
+   own ordinary local COMMIT or ROLLBACK, and **under D2 `group` it
+   acknowledges at the append**, its own record's durability riding the
+   next drain — see the contract below.
 
 **The decision lives in exactly one stream**, and that is the whole design.
 LSNs are stream-local and are never compared across cores
@@ -135,6 +138,37 @@ mount.
 **A prepared transaction takes no further statement.** Prepare is a promise
 that everything the transaction wrote is durable; a statement admitted
 after it would write rows the record does not cover.
+
+**The transaction's durability point is the coordinator's decision
+record, and a participant's own terminal record is a redo shortcut.**
+Ratified 2026-08-31 (`instructions/v2.7.1/ratification-xd1.md`, enacted by
+`instructions/v2.7.1/workorder-xd.md`), and it states what the protocol
+already practiced rather than relaxing anything. Once the decision is
+durable in the coordinator's stream, the outcome is fixed and reachable
+everywhere: a participant whose own COMMIT survived is a winner by redo,
+and one whose COMMIT was lost holds a durable `TXN_PREPARE` and resolves
+to the same answer against that stream (§2c). Both routes end at the same
+outcome, so the participant's record is what makes recovery *cheap*, never
+what makes it *correct*.
+
+Two things follow, and both are contracts rather than observations:
+
+- **Under D2 `group` a participant acknowledges a decide at its COMMIT
+  append**, not after its own `fdatasync`. The append registers the commit
+  with the group, so the next drain syncs it whether or not anybody is
+  parked; what the old wait removed was a serialization, not a durability.
+  This takes the chain from three device syncs to two.
+- **D1 `strict` is unchanged and keeps three.** Its sync happens *inside*
+  the commit call, before it returns, so there is no post-append wait to
+  move; buying the same saving there would mean committing a participant's
+  half at a class the session did not ask for. **D3 `relaxed` never took
+  this wait** and is likewise unchanged.
+
+What is *not* licensed by this: a participant may still not acknowledge a
+**prepare** before its record is durable (step 1's rule stands — the
+promise is the durability), and the coordinator may still not answer a
+client before its own decision record is durable. Those two waits are the
+protocol; only the third was bookkeeping.
 
 ### 2a. A context is joined, never re-opened
 
@@ -198,6 +232,30 @@ message and no refusal anywhere. `docs/spec/wal.md` §11-3 carries it.
 
 The price is the standard one: an in-doubt transaction pins the log, and
 §2b's ceiling is what bounds how much.
+
+**The retention obligation, in force from 2026-08-31.** Resolution takes
+*no decision found ⇒ ABORT* and scans the coordinator's stream whole from
+LSN 0, because no sound lower bound exists — a bound from this stream's
+LSNs would be the cross-stream comparison guideline 3 forbids, and one
+from the coordinator's checkpoint would assume the decision sits above it.
+That answer is sound only while the decision is still *in* that stream, so:
+
+> **A coordinator's stream may not recycle a segment holding a decision
+> until every participant of that transaction has made its own terminal
+> record durable.** A pre-durable acknowledgement does not discharge this:
+> either the ack carries the participant's durable point, or retention is
+> floored by something other than the acks.
+
+Stated **before** the policy it constrains, deliberately. Nothing recycles
+a WAL segment today (`wal.md` §11 is `[PROPOSED]` and retention is an open
+item in §15), so there is no hole to fix — and the code that would open one
+is not the code that would look wrong: a retention policy written against a
+core's own checkpoint alone is locally correct and silently recovers
+another core's committed transaction as aborted. Until D2's ack moved to
+the append (§2), the acknowledgement itself proved a participant's half was
+durable and a policy could have keyed on it; it no longer does, which is
+why the rule is written down rather than inherited.
+`instructions/v2.7.1/ratification-xd1.md` carries the argument.
 
 ---
 
@@ -299,6 +357,18 @@ has no such bound.
   it.
 - A `ROLLBACK` tells the participants too, so their contexts end at the
   client's word rather than at the idle ceiling.
+- **The client's answer has never depended on participant
+  acknowledgements**, and since 2026-08-31 that is stated rather than left
+  implied. The coordinator answers from its own decision record: where a
+  participant does not acknowledge, the coordinator logs a line and the
+  client is still told `COMMIT`, because the decision is durable and the
+  transaction is settled — the unacknowledged participant is holding locks
+  in doubt (§2b), which is a liveness fact about that core and not an
+  outcome the client is owed. So an acknowledgement is a **release
+  signal**, never a durability proof, and moving D2's ack to the COMMIT
+  append (§2) does not weaken anything the client is promised. What the
+  durability class still governs, exactly as for a one-owner transaction,
+  is when the **decision** reaches the platter before the client hears it.
 
 ---
 

@@ -697,7 +697,35 @@ public:
     // (parser-v2.md's zero-copy tokens). The caller must keep the statement
     // text alive until the coroutine finishes, which is why `TcpServer`
     // copies each line out of its inbox before dispatching one.
-    sched::Coro DispatchAsync(std::string_view line, Session* session, DispatchOutcome* out);
+    // **When a D2 commit inside this dispatch owes its acknowledgement**
+    // (`docs/spec/cross-owner-txn.md` §2, ratified 2026-08-31 by
+    // `instructions/v2.7.1/ratification-xd1.md`, enacted by
+    // `instructions/v2.7.1/workorder-xd.md`).
+    //
+    // `kWhenDurable` is every client-facing path and the default: a client
+    // told `COMMIT` under `group` has been told the record is on the
+    // platter, and the wait is what makes that true.
+    //
+    // `kAtAppend` has exactly one caller - a cross-owner **participant**
+    // applying a decide it was told. Its acknowledgement goes to the
+    // coordinator, which has already made *the decision* durable in its own
+    // stream and already answers the client from that record alone, with or
+    // without this ack. So the participant's own record is a redo shortcut,
+    // and waiting for it before acking serialized a third device sync
+    // behind two that the protocol genuinely needs.
+    //
+    // **D1 and D3 are unreachable by this**, by construction rather than by
+    // a second branch: `kStrict` synced inside `WalManager::Commit` before
+    // it returned and `kRelaxed` waits for nothing, so neither ever stages
+    // a `pending_commit_lsn_` for this to suppress. The one site that reads
+    // it says so.
+    enum class CommitAck {
+        kWhenDurable,
+        kAtAppend,
+    };
+
+    sched::Coro DispatchAsync(std::string_view line, Session* session, DispatchOutcome* out,
+                              CommitAck commit_ack = CommitAck::kWhenDurable);
 
     // The level a fresh session starts at (`isolation`). TcpServer stamps
     // it on each connection's session at accept.
@@ -1772,6 +1800,12 @@ private:
     // per core (sched.md §3), which is what makes a member the right place
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
+    // Where the statement now in flight owes a D2 commit's acknowledgement
+    // (see `CommitAck`). A member for `may_park_`'s reason and with its
+    // lifetime - stamped by `DispatchAsync` around the synchronous half,
+    // which takes no suspension point, so it never spans a park and never
+    // describes another statement.
+    CommitAck commit_ack_ = CommitAck::kWhenDurable;
     // The next `Session::ship_id()` this core mints. From 1, because 0 is
     // "never shipped"; per core, and paired with the arrival core in the
     // owner's record, which is what makes it unique instance-wide.

@@ -242,6 +242,7 @@ What remains outstanding is carried in `docs/spec/txn.md` §9: undo retention po
 - **Undo retention policy** and `SnapshotTooOld` surfacing (error class, retryability) — undo-based MVCC's structural trade, owned by `docs/spec/txn.md` §9 but constraining WAL segment and undo recycling here.
 - 48-bit `trx_id` wraparound and epoch handling. Exhaustion is `OutOfRange`, never wrapped (`docs/spec/txn.md` §9).
 - Archive hook transport (filesystem copy vs pluggable).
+- **Segment retention and recycling** — open, and it now carries one rule that is *not* open. A cross-owner participant is resolved at mount by reading its **coordinator's** stream whole, and an absent decision there reads as ABORT, so: **a coordinator's stream may not recycle a segment holding a decision until every participant of that transaction has made its own terminal record durable**, and a pre-durable acknowledgement does not discharge it (`docs/spec/cross-owner-txn.md` §2c, ratified 2026-08-31, `instructions/v2.7.1/ratification-xd1.md`). Written here because whoever builds retention will be reading this list and not that spec, and because the policy that would break it — retention keyed on a core's own checkpoint — is locally correct and fails silently, as a committed transaction recovered as aborted.
 
 ## 16. Testing Requirements
 

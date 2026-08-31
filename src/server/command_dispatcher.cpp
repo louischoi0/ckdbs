@@ -234,7 +234,7 @@ Status StatusFromErrorReply(std::string_view reply) {
 constexpr bool kWritePathEnforcesAssertions = true;
 
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
-                                             DispatchOutcome* out) {
+                                             DispatchOutcome* out, CommitAck commit_ack) {
     // Today this never suspends: every statement runs on the core that owns
     // its relations, or is refused (core_affinity.hpp). The coroutine is
     // here so that when a step *can* reach another core, the suspension
@@ -249,7 +249,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // the synchronous half, which takes no suspension point, so it never
     // spans a park and never describes another statement.
     may_park_ = true;
+    commit_ack_ = commit_ack;
     *out = DispatchAndStage(line, session);
+    commit_ack_ = CommitAck::kWhenDurable;
     may_park_ = false;
 
     // ---- R6-5: D5's bounded wait on an in-doubt row ---------------------
@@ -8546,8 +8548,22 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
     // The durability wait the client is owed, for the same reason
     // LogInsert() takes it: kGroup staged the commit for the next drain,
     // and the acknowledgement means "durable".
+    //
+    // **Except for a cross-owner participant applying a decide**
+    // (`commit_ack_ == kAtAppend`, `cross-owner-txn.md` §2). Its
+    // acknowledgement is owed to a coordinator whose decision record is
+    // already durable and which already answers the client from that record
+    // with or without this ack, so staging the wait here would serialize a
+    // third device sync behind the two the protocol needs. The record still
+    // becomes durable on the next drain and needs nothing from this line:
+    // `WalManager::Commit(kGroup)` registered it with the group at the
+    // append, and `DrainOnce` syncs a pending group commit whether or not
+    // anybody is parked on it (`wal/manager.cpp`). This is the whole of the
+    // XE1 change, and it is a **D2 branch by construction** - `kStrict`
+    // synced inside `Commit` before it returned and `kRelaxed` never
+    // staged, so neither class reaches this statement at all.
     if (wal_ != nullptr && effective_durability_ == wal::DurabilityClass::kGroup &&
-        !wal_->IsDurable(committed.value())) {
+        commit_ack_ == CommitAck::kWhenDurable && !wal_->IsDurable(committed.value())) {
         pending_commit_lsn_ = committed.value();
     }
     // The record's LSN whatever the class, for the caller that needs the

@@ -3,7 +3,8 @@
 #include <functional>
 #include <utility>
 
-#include "kds/base/crash_point.hpp"  // RP7: the participant's two kill points
+#include "kds/base/crash_point.hpp"  // RP7: the participant's three kill points
+#include "kds/server/command_dispatcher.hpp"  // XE1: CommitAck on the decide
 #include "kds/sched/coro.hpp"
 #include "kds/wal/log_txn_prepare.hpp"
 
@@ -834,10 +835,22 @@ void ShippedStatementExecutor::StartDecision(
     static constexpr std::string_view kCommit = "COMMIT";
     static constexpr std::string_view kRollback = "ROLLBACK";
     const DedupKey key = it->first;
+    // **`kAtAppend`, and only on the commit arm** (XE1,
+    // `instructions/v2.7.1/workorder-xd.md`; the contract is
+    // `cross-owner-txn.md` §2). Under D2 this core acknowledges the decide
+    // when its COMMIT record is appended, not when it is on the platter -
+    // the coordinator's decision is already durable in its own stream and
+    // is what recovery resolves this half against either way, so the wait
+    // was a serialization and not a durability. A ROLLBACK stages no commit
+    // and has no wait to move, so it keeps the default rather than being
+    // handed a flag that would mean nothing there.
+    const CommandDispatcher::CommitAck ack = commit
+                                                 ? CommandDispatcher::CommitAck::kAtAppend
+                                                 : CommandDispatcher::CommitAck::kWhenDurable;
     scheduler_.Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground,
         dispatcher_.DispatchAsync(commit ? kCommit : kRollback, &context.session,
-                                  &context.decision_out),
+                                  &context.decision_out, ack),
         [this, key](const Status&) { FinishDecision(key); }));
 }
 
@@ -866,16 +879,31 @@ void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
         enrolled_.erase(it);
         // RP7's sixth protocol point, and the only one that leaves the
         // transaction **partly published**: this participant's half is
-        // durably committed (`DispatchAsync` parked on `IsDurable` before
-        // this callback ran) and the coordinator has not been acknowledged.
-        // At ordinal 1 the *other* participant is still merely prepared, so
-        // a restart has to reach the same answer by two different routes -
+        // applied and the coordinator has not been acknowledged. At
+        // ordinal 1 the *other* participant is still merely prepared, so a
+        // restart has to reach the same answer by two different routes -
         // redo for this half, resolution against the coordinator's stream
         // for the other. That is the state in-doubt resolution exists for,
         // and the only one in which a wrong recovery tears a transaction
         // rather than rolling it back.
+        //
+        // **"Applied" no longer means "durable" here** (XE1): under D2 the
+        // record is appended and rides the next drain, so this point may
+        // now be reached with the COMMIT still in the ring. That does not
+        // change what a crash here has to resolve to - it changes which of
+        // the two routes above answers, from redo to resolution, and both
+        // give COMMIT (`cross-owner-txn.md` §2, §2c).
         base::CrashPointHit("participant.decide_applied_preack");
         if (reply) reply(Status::OK());
+        // The **new** window XE1 opens, and the only one it opens: the
+        // coordinator has been acknowledged and this core's COMMIT record
+        // may still be in the ring. A crash here leaves a durable
+        // `TXN_PREPARE` with no decision in this stream, which §2c's
+        // fourth-outcome resolution answers from the coordinator's stream -
+        // where the decision has been durable since before the decide was
+        // sent. Named so `bench/txn_2pc_kill_matrix_probe.py` can stop the
+        // process inside it rather than racing it.
+        base::CrashPointHit("participant.decide_acked_predurable");
         return;
     }
 
