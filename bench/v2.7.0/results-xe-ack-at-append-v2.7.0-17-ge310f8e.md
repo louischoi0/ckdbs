@@ -453,3 +453,134 @@ quantity every table here measures is a fixed transaction's own
 commit-protocol cost, not a function of relation size, matching
 `results-xd-commit-decomposition` §9's own statement of the same fact for
 the same reason.
+
+---
+
+## Addendum, 2026-08-31 — XF3's confirming repeat: the saving reproduces, its size does not
+
+**Added by work order XF row XF3** (`instructions/v2.7.1/workorder-xf.md`),
+which §6 of this file asked for in its own words: *"a mechanism this
+surprising (opposite the stated prediction) is exactly the kind of result
+worth a confirming run before it is treated as settled engine
+behaviour."*
+
+**Verdict in one line: the b=8 saving is real, resolvable and in the same
+direction — and it is 16.6% here against 25.9% there, so what reproduces
+is the mechanism, not the magnitude.**
+
+### A3.1 Provenance, and the one thing that could not be reproduced
+
+| | |
+|---|---|
+| Date/time (UTC) | 2026-08-31, 13:49-13:51 |
+| Worktree | `xf` (`/home/cdkbs/ckdbs/.claude/worktrees/xf`), branch `xf-shipped-read` at **`04403a1`** (`git describe --tags` → **`v2.7.0-22-g04403a1`**) — the tree the harness and the driver came from; no engine code of this tree was measured |
+| Arms | rebuilt from their own commits, **not** §1's binaries: `kds_server-base` from **`85d2bda`** (`8e76417~1`, pre-XE1), `sha256` `6945f64e0f2019e3…`; `kds_server-xe1` from **`8e76417`**, `sha256` `ebe0ee2cce7923bd…`. Each built from a clean `git archive` of its own commit into its own tree, `CMAKE_BUILD_TYPE=Release`, and **copied out of its build tree before the first cell** (ck-tester rule 5) |
+| Arm verification | `strings kds_server-base \| grep -c decide_acked_predurable` → **0**; the same on `kds_server-xe1` → **1**. The identical check §1 used, and it separates the arms by the crash point XE1 introduced rather than by trust |
+| Driver | `bench/xe4_crossowner_commit_probe.py`, unmodified, `--cores 2 --durability group --concurrency 8 --txns 4000` — byte-identical arguments to §4.3's `group, pl, b=8` cells |
+| Harness | `archive/…/xf3-confirm/run_xf3.sh`. **Arms interleaved** (base r1, xe1 r1, base r2, …) rather than run as two per-arm blocks, which is what `run_xe4_matrix2.sh` did and what CLAUDE.md's interleaved-A/B rule asks for |
+| Repeats | **three per arm, not one.** The order asked for "one additional full repeat"; a single repeat on a machine with no floor of its own is a number with no error bar, so this took three and established the floor here (A3.2) |
+| Device | `/dev/root`, **ext4**, 259 GB, 32% used — `df -T` checked on the actual workdir, not assumed. Never tmpfs |
+| Host | 8 logical CPUs = 4 physical × 2 threads, **AMD EPYC 9V74**, Ubuntu, **Linux 6.17.0-1022-azure** |
+| Host quiet | `uptime` gated by `bench/wait_quiet.sh` before every cell (1-min load < 0.70); the gate held the first cell for ~2 minutes while this session's own builds decayed. **One unrelated process was resident throughout and is named rather than omitted**: an unrelated `kds_server` on port 15432 belonging to another checkout, measured at **0.8% CPU** over its lifetime. It is small; it is not zero |
+| Raw output | `bench/v2.7.0/archive/xe-ack-at-append-v2.7.0-17-ge310f8e/xf3-confirm/` — six JSON summaries, the run log, and the harness |
+
+**The one thing that could not be reproduced, stated before any number is
+read.** The order asked for "same binaries by hash, same harness, fresh
+files". **The binaries by hash were not available and the host is not the
+same machine** — §1 ran on `/home/ubuntu`, Linux 7.0.0-1011-aws; this ran
+on an Azure AMD EPYC box. The CPU topology (8 logical / 4 physical), the
+filesystem (ext4) and the device class match; the machine does not. So
+this is **an independent replication, not the fourth repeat of the same
+three**, and every absolute latency below is a different device's.
+
+That has a direct consequence for how H-XF2 can be read, and it is not a
+detail: the hypothesis's criterion — *"lands within the established floors
+(base 12.0%, xe1 8.9%) of the recorded medians"* — is an **absolute**
+comparison, and an absolute comparison across two machines tests the
+machines, not the change. It is reported below anyway, because refusing to
+report it would hide that it fails; but the reading that carries weight is
+the **within-host delta**, which is what an A/B is for.
+
+### A3.2 The cells: three repeats each, and this host's own floor
+
+**Commit-latency distribution** (µs, median of 3 repeats' own summaries;
+ops = 4,000/repeat; 0 uncounted errors on all six cells, 5-14 in-place
+`TXN_CONFLICT` retries per cell — the row-id lease grant's own cadence,
+the same transient §4.3 counted the same way):
+
+| cell | p0 | p25 | p50 | p95 | p99 | mean | max | TPS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `group, pl, b=8` base | 3,435.3 | 5,697.4 | 6,516.3 | 11,411.0 | 16,804.1 | 7,187.3 | 33,879.2 | 521.8 |
+| `group, pl, b=8` xe1 | 3,314.0 | 4,618.8 | 5,434.4 | 9,398.0 | 12,973.8 | 5,813.8 | 23,553.5 | 666.1 |
+| **Δ** | **−3.53%** | **−18.93%** | **−16.60%** | **−17.64%** | **−22.79%** | **−19.11%** | **−30.48%** | **+27.66%** |
+
+**Noise floor, this host, this shape** (peak-to-peak / median across the 3
+repeats): p50 **base 3.11%, xe1 4.69%**; TPS **base 4.70%, xe1 5.67%**.
+
+**Both floors are three to four times tighter than §4.3's** (12.03% /
+8.89%) — this host is slower in absolute terms and markedly steadier. That
+is worth stating on its own: §4.3's 12% spread was wide enough that the
+finding rested on the delta being several times it, and here the same
+finding rests on a delta *five times* the floor.
+
+**The wait breakdown.** `syncs_per_commit` **1.560 → 1.240** (−20.5%),
+against §4.3's 1.76 → 1.45 (−17.6%). Same direction, same magnitude of
+discount, at a lower absolute level on both arms — XD2's batching discount
+reproduced on a second machine, and the counter still says what §4.3 said
+it says: *the record syncs every time; what moved is when something waits
+for it*.
+
+### A3.3 H-XF2, read against its own criterion and against the useful one
+
+**As literally stated, H-XF2 fails.** This host's base p50 median sits
+**+13.11%** from §4.3's recorded base median (6,516.3 against 5,761.2),
+just outside the 12.0% floor the hypothesis named, and the xe1 median sits
+**+27.20%** out (5,434.4 against 4,272.2), well outside 8.9%. Reported
+first and plainly, because the hypothesis was written that way.
+
+**It fails for a reason that is not about the engine.** Both arms moved
+outward together, and the arm that moved further is the faster one — which
+is what a different device looks like, not what a non-reproducing effect
+looks like. A hypothesis whose criterion compares absolutes across
+machines cannot separate the two, and this addendum says so rather than
+scoring it.
+
+**On the criterion that can be evaluated — the within-host A/B — the
+finding reproduces, and the mechanism claim stands.** The delta is
+**−16.60% of commit p50** and **+27.66% of TPS**, in the same direction as
+§4.3's −25.85% / +33.32%, and it clears both arms' own floors by roughly
+5×. §4.3's headline claim — *at eight concurrent coordinators the
+ack-at-append saving is real and large, reversing H-XE2's prediction that
+it would shrink under load* — is confirmed on a second machine, on
+independently rebuilt binaries, with the arms interleaved.
+
+**What does not reproduce is the size, and the gap is not small.** 16.6%
+against 25.9% is two thirds of the reported effect. Anyone quoting a
+number for this change should quote a **range** — *16-26% of commit p50 at
+eight concurrent coordinators, device-dependent* — and not either endpoint
+as the value. That is this addendum's actual contribution: §4.3 measured
+the effect once and could not know which part of it was the device;
+two hosts now say most of it is the change and a meaningful part of it is
+not.
+
+**One shape in the distribution is worth naming**, because it is where the
+two hosts agree most. The saving is **smallest at p0** (−3.5%) and grows
+monotonically through the tail (p25 −18.9%, p95 −17.6%, p99 −22.8%, max
+−30.5%). A commit that had nothing to wait for saves nothing — there was
+no queued drain to leave — and a commit deep in the tail is exactly one
+that was queued behind others. That is the same reading §5 offered from
+§4.3's numbers, now visible directly in the percentile shape rather than
+inferred from the median alone. **It is still not proof**: it remains
+consistent with both mechanisms §5 named, and separating them is XF4's
+per-leg timers, not this addendum's.
+
+### A3.4 What this addendum does not answer
+
+The b=1 non-finding was not re-run — §6 asked for a repeat of the b=8 pair
+and this is that. The `pl` shape XE4 actually asked for, a real scenario-2
+booking, is still blocked by §4.1's shipped-read refusal; XF0's survey
+(`docs/inflight/blocked/workplan-shipped-read-typed.md`) and its ratification
+ask are what stand in front of closing it, and XF2 is the measurement that
+reopens when it does. The per-leg timers are still unbuilt, so §A3.3's
+percentile-shape reading is still an inference from totals — the fourth
+file to say so.

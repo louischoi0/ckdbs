@@ -1,0 +1,36 @@
+{
+  "label": "xf3-group-b8-base-r2",
+  "cores": 2,
+  "durability": "group",
+  "concurrency": 8,
+  "txns": 4000,
+  "owners": {
+    "t0": "1",
+    "t1": "1"
+  },
+  "participants": 1,
+  "committed": 4000,
+  "errors": 0,
+  "retries": 5,
+  "first_error": null,
+  "run_elapsed_s": 7.9043,
+  "tps": 506.0513116756994,
+  "commit": {
+    "phase": "commit",
+    "detail": "",
+    "ops": 4000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 7.904337,
+    "qps": 506.1,
+    "mean_us": 7262.4,
+    "p0_us": 3435.3,
+    "p25_us": 5798.4,
+    "p50_us": 6705.3,
+    "p95_us": 11458.2,
+    "p99_us": 15007.8,
+    "max_us": 23448.9
+  },
+  "total_wal_syncs_delta": 6443,
+  "syncs_per_commit": 1.61075
+}
