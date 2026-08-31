@@ -1138,11 +1138,14 @@ void CoreRuntime::MaybeRefillRowIds() {
     // the relation an assertion should decline. Core 0 re-checks what its
     // catalog can see and may still decline; the ids arrive either way.
     //
-    // **Armed by default since DA1** (`range_size_ids`, range_alloc.hpp):
-    // RD6 made a range its own chain, which is what had forced the key off
-    // - a directory row before that would have described a partition no
-    // insert or read honoured. `kRangeSizeOff` is still the off-switch, and
-    // a `CoreRuntime` built by hand takes it (core_runtime.hpp).
+    // **Off by default since the 2026-08-31 operator amendment**
+    // (`range_size_ids`, range_alloc.hpp), which reverses DA1's arming:
+    // spreading is a per-relation option the user decides, so nothing
+    // spreads until something asks. RD6 made a range its own chain, which
+    // is what had forced the key off before that - a directory row would
+    // have described a partition no insert or read honoured. A
+    // `CoreRuntime` built by hand takes `kRangeSizeOff` too
+    // (core_runtime.hpp).
     const bool ranges_on = config_.range_size_ids != kRangeSizeOff;
     bool open_range = false;
     if (ranges_on && dispatcher_.has_value()) {
