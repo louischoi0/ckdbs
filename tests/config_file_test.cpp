@@ -129,6 +129,31 @@ TEST(ExpeditorConfigTest, DefaultsAreUsedForKeysTheFileOmits) {
     EXPECT_EQ(config.log_file, "kdb.log");
 }
 
+TEST(ExpeditorConfigTest, TheTwoRatifiedDefaultsAreWhatAnOmittedKeyLeaves) {
+    // **DA1 and DA2's values, asserted where they ship from.** Both are
+    // defaults on `Expeditor::Config`, and `Expeditor::Config` is
+    // instantiated nowhere else in the suite - so without this test the
+    // engine's shipped `range_size_ids` and `placement` have no coverage at
+    // all and a re-edit of either initialiser passes 3,000 green tests.
+    //
+    // The pair is asserted together because they were ratified together and
+    // DA1's sweep was run under DA2's policy: a `range_size_ids` value read
+    // off a run of `rotate` would not be the number DA1 took.
+    Expeditor::Config config;
+    ASSERT_TRUE(config.ApplyFile(ParseOk("port = 6000\n")).ok());
+    EXPECT_EQ(config.range_size_ids, kRangeSizeIdsDefault)
+        << "DA1 ships range_size_ids armed at 65,536";
+    EXPECT_EQ(config.range_size_ids, 65536u) << "the value, not just the name";
+    EXPECT_EQ(config.placement, catalog::PlacementPolicy::kCreatingCore)
+        << "DA2 ships creating-core placement";
+
+    // `kRangeSizeOff` stays reachable and is what returns the pre-DA1
+    // engine, which is the whole of the off-switch's contract.
+    Expeditor::Config off;
+    ASSERT_TRUE(off.ApplyFile(ParseOk("range_size_ids = 0\n")).ok());
+    EXPECT_EQ(off.range_size_ids, kRangeSizeOff);
+}
+
 TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {
     Expeditor::Config config;
     ASSERT_TRUE(config

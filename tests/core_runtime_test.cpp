@@ -2033,6 +2033,75 @@ TEST_F(CoreRuntimeTest, AFanInOverInterleavedOwnershipStillAnswersInRangeOrder) 
     EXPECT_EQ(client->open_reads(), 0u) << "a fan-in left a stage open";
 }
 
+TEST_F(CoreRuntimeTest, AFanInWiderThanTheCeilingIsRefusedRatherThanAnsweredShort) {
+    // **The ceiling as a refusal, which is the half that had no test.** The
+    // wire's own guard cannot be it: the STEP_OPEN upstream count is one
+    // byte, so since DA3 raised `kMaxFanInUpstreams` to 255 the byte cannot
+    // spell a count above the ceiling and the decoder's check is
+    // unreachable. The ceiling that binds is the *dispatcher's stage
+    // count*, which is not a wire quantity at all - each stage is its own
+    // pipeline carrying zero upstreams - and refusing there is what keeps a
+    // relation too wide to fan in from being read as the stages that did
+    // fit.
+    //
+    // One range past the ceiling, alternating owners so every range is its
+    // own run (`crosscore.md` section 6b's interleave, which is what
+    // spreading produces).
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/3);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "toowide", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    auto owner = catalog2.InitTableAccess(oid.value());
+    ASSERT_TRUE(owner.ok()) << owner.status().message();
+    const std::uint32_t own_core = owner.value()->owner_core;
+    const std::uint32_t other_core = own_core == 1 ? 2 : 1;
+
+    // The lo = 0 range exists implicitly and is the owner's, so opening
+    // `kMaxFanInUpstreams` more with strictly alternating owners leaves
+    // `kMaxFanInUpstreams + 1` runs - one past the ceiling, and the
+    // smallest relation that is.
+    for (std::size_t i = 1; i <= kMaxFanInUpstreams; ++i) {
+        const std::uint64_t lo = static_cast<std::uint64_t>(i) * 4096;
+        const std::uint32_t core = (i % 2 == 1) ? other_core : own_core;
+        auto head = catalog2.CreateRangeEntryPage(oid.value(), lo);
+        ASSERT_TRUE(head.ok()) << head.status().message();
+        ASSERT_TRUE(catalog2.OpenRangeRows(oid.value(), lo, core, head.value()).ok());
+    }
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto ranges = catalog2.RangesOf(oid.value());
+    ASSERT_TRUE(ranges.ok()) << ranges.status().message();
+    ASSERT_EQ(ranges.value().size(), kMaxFanInUpstreams + 1);
+
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    runtime.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+
+    // A client must exist for the route to be considered at all; nothing is
+    // ever sent through it, because the refusal is decided before the first
+    // stage opens - which is the property under test.
+    SessionStepClient client(
+        /*core_id=*/0, [](std::uint32_t, sched::RingMessageKind, std::vector<std::byte>) {
+            ADD_FAILURE() << "a refused fan-in opened a stage";
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&client);
+
+    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM toowide");
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("above the fan-in ceiling of"), std::string::npos)
+        << out.response;
+    EXPECT_NE(out.response.find(std::to_string(kMaxFanInUpstreams)), std::string::npos)
+        << out.response;
+    EXPECT_EQ(client.open_reads(), 0u) << "a refused fan-in left a stage open";
+}
+
 // ---- R4-R/RR5: the equivalence case that did not exist until RR1 --------
 //
 // **A relation the reading core *owns* but does not wholly hold**, which

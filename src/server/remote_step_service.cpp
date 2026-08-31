@@ -186,6 +186,9 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
 
     const std::uint8_t upstream_count = std::uint8_t(rest.front());
     rest = rest.subspan(1);
+    // Unreachable at DA3's 255, where the byte cannot spell a count above
+    // the ceiling; kept plain because it costs nothing there and stays live
+    // if the ceiling ever comes back down.
     if (upstream_count > kMaxFanInUpstreams) {
         return Status::InvalidArgument("STEP_OPEN envelope carries " +
                                        std::to_string(upstream_count) +

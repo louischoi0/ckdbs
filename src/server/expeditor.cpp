@@ -371,8 +371,9 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     if (file.Has("range_size_ids")) {
         auto v = file.GetUint("range_size_ids");
         if (!v.ok()) return v.status();
-        // No zero check: 0 is `kRangeSizeOff`, the default and the only
-        // value that is correct until RD6 makes a range its own chain.
+        // No zero check: 0 is `kRangeSizeOff`, the off-switch an operator
+        // sets to get the pre-DA1 engine back; the shipped default is
+        // `kRangeSizeIdsDefault`.
         // One key sizes the range and the row-id lease grant, because
         // `workplan-range-directory.md`'s D6 makes them one quantity; the
         // semantics have one home, in `server/range_alloc.hpp`.

@@ -80,17 +80,23 @@ inline constexpr std::uint32_t kSystemCore = 0;
 // (docs/rules/keystoneid-k0-findings.md), so a placement keyed on one would
 // re-walk the same rotation after every restart.
 // Which placement rule CreateTable applies (workplan P6c, config key
-// `placement`). `kCreatingCore` is the default and the mode a
-// statement-serving instance should run until the step pipeline is
-// finished: rotation places relations on cores that CAN fault their pages
-// (CC7's flush-then-grant handoff, P6b) and, since P4a-P4c (2026-08-10),
-// CAN serve exactly one statement shape - a single-step star SELECT with
-// no aggregate, no quota, no sub-chain and a descriptor-encodable step,
-// opened on the owning core and streamed back under credit. Every other
-// shape still meets core 0's retryable affinity refusal, so rotation is
-// one shape wide rather than useless. `kRotate` stays an exercise mode
-// and becomes the real policy when P4d wires multi-step pipelines and
-// converts the executor.
+// `placement`).
+//
+// **`kCreatingCore` is the ratified default** - DA2, 2026-08-31,
+// `instructions/v2.7.0/ratification-da.md` - and the ground is a
+// measurement rather than an unfinished pipeline. The pipeline argument
+// this comment used to carry is spent: P4d wired multi-step pipelines,
+// statement shipping (SS2) carries an autocommit single-relation statement
+// to its owner, and R4-R/RS gave a spread relation a read surface from
+// every core, so rotation is no longer one shape wide. What decides it now
+// is `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §6:
+// **rotation's crossover is a step at the first core to take a second
+// session, and past it rotation is negative at seven writer cores
+// (0.51x)**.
+//
+// `kRotate` is **not** deleted and not an exercise mode either - it stays a
+// configurable placement, and §6a's gates are unchanged. DA2 settles which
+// one ships, not which ones exist.
 enum class PlacementPolicy : std::uint8_t { kCreatingCore, kRotate };
 
 constexpr std::uint32_t AssignOwnerCore(PlacementPolicy policy, std::uint32_t creating_core,

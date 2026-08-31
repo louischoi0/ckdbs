@@ -261,6 +261,13 @@ makes no ordering promise it did not make before — but a caller relying on
 "higher id, inserted later" loses it here, which is why it is written down
 rather than left as a property of the allocator.
 
+**`range_size_ids` is armed by default since 2026-08-31** (DA1,
+`instructions/v2.7.0/ratification-da.md`, value 65,536), so the condition
+above is now met by configuration on every instance and the remaining
+question is only whether a second core has taken a block — which needs a
+multi-core instance and a peer writing a relation it does not own. A
+single-core instance still never produces the case.
+
 ## 5. Indexing
 
 - A relation is stored either as a **heap chain** (§3.1b) or as a **clustered B+ tree** on the Keystone pk, chosen at `CREATE TABLE` and by nothing else — the key mode used to force `BTREE` and no longer exists (§4.1). On a btree relation the tree *is* the storage, and a descent is authoritative: a miss means the row does not exist, and no scan follows. That authority is what admits a caller-named key **below** the relation's high-water mark, which is the one thing a heap relation refuses. A heap relation has no pk index at all, so a point lookup scans the chain.

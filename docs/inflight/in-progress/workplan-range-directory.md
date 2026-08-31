@@ -395,7 +395,7 @@ ceiling. Full derivation with every site:
 | **D3** | **Range policy** — when to split, when to merge, the migration trigger | `physical-optimizer.md` Part III (unwritten) | Nothing. RD6 exposes the API; policy has no caller here |
 | **D4** | **Fan-in identity in the pipeline tag** (§5). Inside CLA's latitude; listed because it grows a wire form | this plan | RD7 |
 | **D5** | Whether a **peer session** may open a multi-range read. `SessionStepClient` is built **on core 0 only** (`expeditor.hpp:660`, `expeditor.cpp:1374`); `CoreRuntime` never builds one | `crosscore.md` §2, PW5 | Nothing — inherited. Named so RD9's file does not read as general |
-| **D6** | **The basic range size** (§2a) — extent hypothesis against `kRowIdLeasePerGrant`, different units. **The static half is computed at §10b (RA5)**: rows-per-range for both units at the benches' three bulk-relation widths, with the envelope and the W = 102/103 crossover | operator, on RD9's numbers | Nothing; RD5 builds it as one swept constant |
+| **D6** | ~~**The basic range size** (§2a)~~ — **taken 2026-08-31 as DA1: `range_size_ids` = 65,536, armed by default** (`instructions/v2.7.0/ratification-da.md`), on R4-M's re-run of RD9(b) at k = 4 under `placement = creating`. The extent hypothesis lost to the lease-grant unit, and the value came from the top of the swept range rather than its throughput optimum: 65,536 gives up 9% of the group arm's gain against 4,096 (1.339 vs 1.470) for 16× the read ceiling, and the relaxed arm prefers it (1.031, the sweep's high). **The per-core id-space stripe — the reversal that removes the ceiling instead of raising it — stays open**, and DA1 does not pre-empt it | operator, on RD9's numbers | Nothing; RD5 builds it as one swept constant |
 
 ---
 
@@ -1390,6 +1390,15 @@ rather than answering partially, and the step VM's walk faults pages this
 core may not hold. **RB4 is what makes a multi-owner relation readable,
 and RB5's equivalence is what proves it**; the default is theirs to raise,
 not RD6's.
+
+**Raised 2026-08-31, and by neither of them.** RB4/RB5 made a multi-owner
+relation readable from a core-0 session; R4-R/RS made it readable from
+every core, and R4 supplied the producer that opens a second range without
+a hand-written fixture. The default then moved on an operator
+ratification — **DA1**, `instructions/v2.7.0/ratification-da.md` —
+to **65,536**, which is D6's value. `kRangeSizeOff` stays the off-switch,
+and `server/range_alloc.hpp`'s `kRangeSizeIdsDefault` carries the sweep
+the number rests on.
 
 ### 14e. What RB3's review caught, and the one instance it leaves open
 
