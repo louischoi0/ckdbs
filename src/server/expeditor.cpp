@@ -1296,6 +1296,14 @@ Status Expeditor::Serve() {
             dispatcher->SetTxn2pc(nullptr);
             dispatcher->SetIndexBuilds(nullptr);
             dispatcher->SetAssertionBuilds(nullptr);
+            // AX's client is the same shape of borrow and is withdrawn on
+            // the same terms: a `CREATE INDEX` through the public
+            // `dispatcher()` accessor after `Serve` returned would send a
+            // quiesce on a destroyed reactor. Withdrawn leaves the
+            // pre-AX behaviour - the relation stays split and the catalog
+            // refuses - which is the right answer for a dispatcher with no
+            // reactor to park on.
+            dispatcher->SetRangeCoalesces(nullptr);
             // R6-5's borrow runs the other way - the executor asks through
             // the 2PC server, and that server is a *member*, so it outlives
             // this function's `scheduler` while holding it by reference.
@@ -1529,6 +1537,22 @@ Status Expeditor::Serve() {
         assertion_builds_.emplace(scheduler, *transport_, clock_, &*logger_);
         if (Status s = assertion_builds_->RegisterReplyReceiver(); !s.ok()) return s;
         dispatcher_->SetAssertionBuilds(&*assertion_builds_);
+
+        // Core 0's coalesce client (AX, §6c): an auxiliary DDL on a split
+        // relation merges it back to one range first, and this is what
+        // sends the legs and holds the waiters. The same shape and the same
+        // ordering rule - registered before the dispatcher learns about it,
+        // so a reply cannot beat its receiver.
+        //
+        // **Multi-core only, and structurally so**: a `cores = 1` instance
+        // opens no range at any `range_size_ids`, because nothing holds a
+        // lease and `OpenRangeOnSystemCore` has no caller
+        // (`range_alloc.hpp`). So this whole block being inside the
+        // multi-core arm is not a restriction on AX; it is where the split
+        // relations are.
+        coalesces_.emplace(scheduler, *transport_, clock_, &*logger_);
+        if (Status s = coalesces_->RegisterReplyReceivers(); !s.ok()) return s;
+        dispatcher_->SetRangeCoalesces(&*coalesces_);
 
         // **Core 0's two halves of statement shipping** (SS1/SS3): the
         // owner's, because a peer ships core 0 every statement against a

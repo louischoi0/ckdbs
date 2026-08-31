@@ -4,6 +4,7 @@
 
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
+#include "kds/server/range_coalesce_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
 #include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
 #include "kds/server/txn_2pc_service.hpp"  // R6-3: the coordinator's two phases
@@ -533,6 +534,51 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         };
         co_await sched::WaitUntil{&finished};
         *out = FinishRemoteReads(tags, render);
+    }
+
+    if (out->pending_coalesce.has_value() && coalesces_ != nullptr) {
+        // **AX's two parks, and then the statement** (§6c). The merge is
+        // its own phase (AX-D5), so what follows it is not a `Finish*` that
+        // writes the outcome but a re-dispatch of the whole line - the
+        // in-doubt block's shape above, for the same reason: the statement
+        // has not run at all yet, and by the time it does the relation is
+        // one range and takes the ordinary local path.
+        //
+        // Park one: every quiesce leg. One `WaitUntil` over a predicate
+        // that ands them, never k sequential parks - the legs go to
+        // different cores and k parks would serialise them behind whichever
+        // the loop named first (the remote read's rule, RD7).
+        PendingCoalesce pending = std::move(*out->pending_coalesce);
+        out->pending_coalesce.reset();
+        const std::function<bool()> quiesced = [this, ids = pending.quiesce_ids] {
+            for (std::uint64_t id : ids) {
+                if (!coalesces_->Settled(id)) return false;
+            }
+            return true;
+        };
+        co_await sched::WaitUntil{&quiesced};
+        *out = FinishCoalesceQuiesce(pending);
+
+        if (out->pending_coalesce.has_value()) {
+            // Park two: the absorb. Whether it ran is the reply's to say;
+            // a deadline here leaves the relation split, which §6c makes a
+            // state the engine serves rather than one to repair.
+            out->pending_coalesce.reset();
+            const std::function<bool()> absorbed = [this, id = pending.absorb_id] {
+                return coalesces_->Settled(id);
+            };
+            co_await sched::WaitUntil{&absorbed};
+            *out = FinishCoalesceAbsorb(pending);
+            if (out->response.empty() && !out->should_stop) {
+                // The merge finished; now the statement, on a relation that
+                // is one range. `may_park_` around the re-dispatch is the
+                // in-doubt block's handling, and it is what lets the DDL
+                // itself take a park of its own.
+                may_park_ = true;
+                *out = DispatchAndStage(line, session);
+                may_park_ = false;
+            }
+        }
     }
 
     if (out->pending_index_build.has_value() && index_builds_ != nullptr) {
@@ -1458,6 +1504,18 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " index_build_window_age_max_us=" << oldest_ns / 1000;
     }
 
+    // AX6: what coalescing has cost this core. **Absent until the first
+    // run**, the absent-rather-than-zeroed rule - a zero here would say
+    // "this instance coalesces and has not yet had to", where the truth on
+    // almost every instance is that no relation has ever split. The
+    // duration is the merge's own wall time, statement-inclusive of both
+    // parks, which is what AX8 divides by `coalesce_pages_moved`.
+    if (coalesce_counters_.runs > 0) {
+        os << " coalesce_runs=" << coalesce_counters_.runs
+           << " coalesce_pages_moved=" << coalesce_counters_.pages_moved
+           << " coalesce_us_total=" << coalesce_counters_.us_total;
+    }
+
     // The last recovery, for the operator who has to answer "what did the
     // restart do" (RC09, `docs/spec/wal.md` §13). Absent rather than zeroed when no
     // report is installed - a dispatcher built without one (every socket-free
@@ -2111,6 +2169,17 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     }
     const parser::IndexStmt stmt = std::get<parser::IndexStmt>(std::move(parsed.value()));
 
+    // **Before the foreign-build arm** (AX, §6c): a split relation has no
+    // single owner, so `owner_core` names one core while its ranges are
+    // several cores'. The merge is what makes that question answerable, so
+    // it runs first and the statement is dispatched again afterwards. A
+    // DROP needs none of it - a split relation carries no index to drop.
+    if (!stmt.drop) {
+        if (auto coalescing = BeginCoalesce(stmt.table_name); coalescing.has_value()) {
+            return std::move(*coalescing);
+        }
+    }
+
     // A relation another core owns has its index built *there* (§7c,
     // decided 2026-08-25: the owner builds - `Backfill` here would read
     // the device's stale image and miss every row the owner holds), which
@@ -2249,6 +2318,144 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                   result.value().warnings),
                 false};
     });
+}
+
+std::optional<DispatchOutcome> CommandDispatcher::BeginCoalesce(std::string_view table_name) {
+    // Nothing armed is the pre-AX engine exactly: the relation stays split
+    // and `RefuseAuxiliaryOnSplitRelation` answers inside the catalog, as
+    // it always did. That is a fixture with no ring, and it is also every
+    // caller AX-D12 keeps out - the Cabin optimizer's automatic path never
+    // reaches this function at all.
+    if (coalesces_ == nullptr) return std::nullopt;
+
+    // Unfiltered, like the foreign-build arm's read above and for its
+    // reason: this is a question about physical pages, not about what a
+    // view can see, and an unresolvable name falls through to the
+    // statement's own refusal with its own byte position.
+    auto rel_oid = catalog_.FindTableOidByName(std::string(table_name));
+    if (!rel_oid.ok()) return std::nullopt;
+    auto access = catalog_.InitTableAccess(rel_oid.value());
+    if (!access.ok()) return std::nullopt;
+    if (access.value()->ranges.size() <= 1) return std::nullopt;  // the ordinary relation
+
+    // §6c's census, run on core 0 before anything is quiesced. It is the
+    // *absorber* this pass is for; the exact page lists are the absorber's
+    // own census, taken after the flushes, and this one is allowed to be
+    // short by a dirty tail page for exactly that reason.
+    auto plan = PlanCoalesce(catalog_, page_store_, rel_oid.value());
+    if (!plan.ok()) return DispatchOutcome{ErrorReply(plan.status()), false};
+
+    PendingCoalesce pending;
+    pending.rel_oid = rel_oid.value();
+    pending.absorber = plan.value().absorber;
+    pending.pages_to_move = plan.value().pages_to_move;
+    pending.table_name = std::string(table_name);
+    pending.started_ns = NowNs();
+
+    // One quiesce per **range**, not per core: a quiesce names a range's
+    // chain, and a core owning three of them has three chains to flush and
+    // three sets of departure records to write. The absorber's own ranges
+    // are skipped - it is not departing from them, and asking it to revoke
+    // its own write rights would take back exactly what step 4 needs.
+    for (const CoalesceSegment& segment : plan.value().segments) {
+        if (segment.owner_core == pending.absorber) continue;
+        const std::uint64_t request_id = next_remote_request_++;
+        if (Status s = coalesces_->Quiesce(segment.owner_core, request_id, pending.rel_oid,
+                                           segment.lo, segment.hi, segment.entry_page,
+                                           pending.absorber);
+            !s.ok()) {
+            // Legs already sent are abandoned rather than recalled: a
+            // quiesce that lands after this refusal has flushed a range and
+            // given up rights over it, which is a state the engine serves
+            // (§6c) and which the next attempt re-derives.
+            return DispatchOutcome{ErrorReply(s), false};
+        }
+        pending.quiesce_ids.push_back(request_id);
+    }
+
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "coalescing '" + pending.table_name + "' (oid " +
+                              std::to_string(pending.rel_oid) + ") from " +
+                              std::to_string(plan.value().segments.size()) +
+                              " ranges into core " + std::to_string(pending.absorber) + ": " +
+                              std::to_string(pending.pages_to_move) +
+                              " page(s) to move before the DDL runs (crosscore.md §6c)");
+    }
+    DispatchOutcome out;
+    out.pending_coalesce = std::move(pending);
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::FinishCoalesceQuiesce(PendingCoalesce& pending) {
+    // Every leg's verdict, and **the first refusal wins whole**: a merge
+    // with one range unflushed would hand the absorber an image the
+    // departing core still holds newer bytes for.
+    for (std::uint64_t id : pending.quiesce_ids) {
+        const RangeCoalesceOutcome* reply = coalesces_->Find(id);
+        Status verdict = Status::OK();
+        if (reply == nullptr || !reply->arrived) {
+            verdict = Status::UnknownOutcome(
+                "coalesce of '" + pending.table_name +
+                "': a range's owner did not answer within the deadline; the relation is "
+                "unchanged and the statement can be run again (docs/spec/crosscore.md §6c)");
+        } else {
+            verdict = reply->status;
+        }
+        if (!verdict.ok()) {
+            for (std::uint64_t close : pending.quiesce_ids) coalesces_->Close(close);
+            return {ErrorReply(verdict), false};
+        }
+    }
+    for (std::uint64_t id : pending.quiesce_ids) coalesces_->Close(id);
+
+    pending.absorb_id = next_remote_request_++;
+    if (Status s = coalesces_->Absorb(pending.absorber, pending.absorb_id, pending.rel_oid);
+        !s.ok()) {
+        return {ErrorReply(s), false};
+    }
+    // Returned still pending: the caller parks again, on the absorb.
+    DispatchOutcome out;
+    out.pending_coalesce = pending;
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::FinishCoalesceAbsorb(const PendingCoalesce& pending) {
+    const RangeCoalesceOutcome* reply = coalesces_->Find(pending.absorb_id);
+    Status verdict = Status::OK();
+    std::uint32_t moved = 0;
+    if (reply == nullptr || !reply->arrived) {
+        verdict = Status::UnknownOutcome(
+            "coalesce of '" + pending.table_name +
+            "': core " + std::to_string(pending.absorber) +
+            " did not answer within the deadline; the relation is left split and the statement "
+            "can be run again (docs/spec/crosscore.md §6c)");
+    } else {
+        verdict = reply->status;
+        moved = reply->pages;
+    }
+    coalesces_->Close(pending.absorb_id);
+    if (!verdict.ok()) return {ErrorReply(verdict), false};
+
+    // §6c step 5, and the last thing the merge does. **After** the
+    // absorber's reply, never before: the contraction is what makes the
+    // concatenated chain the relation, and a contraction over links the
+    // device does not hold is the one state that loses rows.
+    if (Status s = catalog_.ContractRangeRows(pending.rel_oid, pending.absorber); !s.ok()) {
+        return {ErrorReply(s), false};
+    }
+    ++coalesce_counters_.runs;
+    coalesce_counters_.pages_moved += moved;
+    // Charged only on the arm that finished: a merge that failed a leg
+    // moved no pages and would make the per-page figure AX8 reports a
+    // ratio over two different populations.
+    const std::uint64_t now_ns = NowNs();
+    if (now_ns > pending.started_ns) {
+        coalesce_counters_.us_total += (now_ns - pending.started_ns) / 1000;
+    }
+    // An empty response and no error: the caller reads that as "run the
+    // statement now", which is AX-D5's two-phase shape - the merge was its
+    // own phase and the DDL has not started.
+    return {};
 }
 
 DispatchOutcome CommandDispatcher::BeginForeignIndexBuild(const parser::IndexStmt& stmt,
@@ -2485,6 +2692,18 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
     }
     const auto& stmt = std::get<parser::CabinStmt>(parsed.value());
+
+    // AX, §6c: the explicit `CREATE CABIN` coalesces, where the Cabin
+    // optimizer's automatic path - which reaches `Catalog::CreateCabin`
+    // through `exec::CreateCabin` and never through this handler - keeps
+    // the refusal and its decline counter (AX-D12). That the carve-out
+    // needs no test here is the point of putting the trigger in the
+    // dispatcher rather than in the catalog call both paths share.
+    if (!stmt.drop) {
+        if (auto coalescing = BeginCoalesce(stmt.table_name); coalescing.has_value()) {
+            return std::move(*coalescing);
+        }
+    }
 
     // One handler for both, because the two statements share a parse and a
     // reply shape and differ only in which catalog call they reach - the same
@@ -2733,6 +2952,16 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         return {"ERR expected a CREATE ASSERTION or DROP ASSERTION statement", false};
     }
     const auto& stmt = std::get<parser::AssertionStmt>(parsed.value());
+
+    // AX, §6c, and before the foreign-build arm for `HandleIndex`'s
+    // reason: a split relation has no single owner to send the build to.
+    // A DROP names no relation at all (`table_name` is CREATE-only), so it
+    // never asks.
+    if (!stmt.drop) {
+        if (auto coalescing = BeginCoalesce(stmt.table_name); coalescing.has_value()) {
+            return std::move(*coalescing);
+        }
+    }
 
     // A relation another core owns has its Bound Cabin built *there*
     // (PW1c-6c): the cabin is appended to by every write to the relation,
@@ -3538,6 +3767,33 @@ DispatchOutcome CommandDispatcher::HandleShowFkeys() {
 
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                         Session& session) {
+    // **AX's fourth trigger, and the only one outside its own handler**
+    // (§6c): a foreign key gates the *parent* against splitting, so a
+    // `CREATE TABLE ... REFERENCES p` where `p` is split has to coalesce
+    // `p` first. It runs **before** `InDdlStatement`, because AX-D5 puts
+    // the merge outside the DDL transaction - a page handoff has no
+    // compensation, so a merge inside the scope would be a thing the
+    // rollback could not undo.
+    //
+    // That costs a second parse of the line, paid on `CREATE TABLE` alone
+    // and only to read the `REFERENCES` names. Stated rather than hidden:
+    // the alternative is hoisting the parse out of the scope, which moves
+    // every refusal in this handler across the transaction boundary for
+    // one rare statement's benefit. The child relation is being created
+    // and cannot be split, so it is never asked about.
+    if (coalesces_ != nullptr) {
+        if (auto peek = parser::Parse(line); peek.ok()) {
+            if (auto* create = std::get_if<parser::CreateTableStmt>(&peek.value())) {
+                for (const parser::ColumnDef& col : create->columns) {
+                    if (col.references_table.empty()) continue;
+                    if (auto coalescing = BeginCoalesce(col.references_table);
+                        coalescing.has_value()) {
+                        return std::move(*coalescing);
+                    }
+                }
+            }
+        }
+    }
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         // H6 step 2: the parse leg. One of `observability.md` §10's three
     // request-level spans, and the cheapest to attribute wrongly - a

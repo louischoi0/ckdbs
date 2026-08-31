@@ -25,6 +25,7 @@
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/range_alloc.hpp"
+#include "kds/server/range_coalesce_service.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
@@ -400,6 +401,12 @@ public:
         return assertion_builds_.has_value() ? &*assertion_builds_ : nullptr;
     }
 
+    // AX's peer half, exposed on the same terms: a test drives a leg and
+    // reads what the core did. Null before AttachTransport.
+    RangeCoalesceServer* coalesces() noexcept {
+        return coalesces_.has_value() ? &*coalesces_ : nullptr;
+    }
+
     // This core's half of statement shipping (SS3), exposed for the same
     // reason: a test drives a shipped statement and reads what the owner
     // did with it. Null before AttachTransport.
@@ -541,6 +548,15 @@ private:
     // off. It borrows the catalog, store, WAL, transaction manager and the
     // dispatcher's registry, all declared below; references only.
     std::optional<AssertionBuildServer> assertion_builds_;
+
+    // AX (`range_coalesce_service.hpp`): the peer's half of a coalesce,
+    // armed at AttachTransport on **every** core including core 0 - unlike
+    // the two above, which are peers-only. Core 0 owns the `lo = 0` range
+    // of every relation created on it, so it is an ordinary departing
+    // owner; and `placement = creating` makes it an ordinary absorber too.
+    // A self-addressed message is a ring send to itself, which is what
+    // keeps the driver from needing a "was it me" branch at every leg.
+    std::optional<RangeCoalesceServer> coalesces_;
 
     // The two objects this core's checkpointer borrows (PW3). Built at
     // `AttachTransport`, not at `Open`: the anchor publishes over the ring,

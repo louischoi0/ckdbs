@@ -48,6 +48,14 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kTxnDecideReply: return "TXN_DECIDE_REPLY";
         case RingMessageKind::kTxnResolveRequest: return "TXN_RESOLVE_REQUEST";
         case RingMessageKind::kTxnResolveReply: return "TXN_RESOLVE_REPLY";
+        // CR7's kind had no name here and fell through to "unknown"; added
+        // with AX's four rather than left, since a log line naming the
+        // wrong thing is what this table exists to prevent.
+        case RingMessageKind::kAccessStatsBatch: return "ACCESS_STATS_BATCH";
+        case RingMessageKind::kRangeQuiesceRequest: return "RANGE_QUIESCE_REQUEST";
+        case RingMessageKind::kRangeQuiesceReply: return "RANGE_QUIESCE_REPLY";
+        case RingMessageKind::kRangeAbsorbRequest: return "RANGE_ABSORB_REQUEST";
+        case RingMessageKind::kRangeAbsorbReply: return "RANGE_ABSORB_REPLY";
     }
     return "unknown";
 }

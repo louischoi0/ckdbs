@@ -54,6 +54,8 @@ add_library(kds
     src/server/extent_lease_service.cpp
     src/server/row_id_lease_service.cpp
     src/server/range_alloc.cpp
+    src/server/range_coalesce.cpp
+    src/server/range_coalesce_service.cpp
     src/server/relation_grant_service.cpp
     src/server/index_build_service.cpp
     src/server/assertion_build_service.cpp

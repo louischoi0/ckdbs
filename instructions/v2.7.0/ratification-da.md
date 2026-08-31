@@ -282,3 +282,23 @@ the decision is permanent** - index-then-write keeps the relation
 unsplittable through `RangeEligible`'s gate, write-then-index is refused
 for the life of the relation, and under DA1 the second order is what an
 ordinary session produces. `cores = 1` meets none of it.
+
+### Amended 2026-08-31: that consequence is decided, and it is AX
+
+The paragraph above was written the day DA1 was enacted and is kept as
+written, because it is what the enactment's review found. The operator
+then ruled the non-recovering refusal a **defect rather than a
+constraint** and ratified the fix the same day:
+`instructions/v2.7.0/ratification-ax.md` (AX-D1 through AX-D6, AX-D12),
+built to `instructions/v2.7.0/ax-coalesce-on-auxiliary-ddl.md` and
+specified as `docs/spec/crosscore.md` §6c.
+
+So the two documents cite each other rather than disagreeing: DA1 armed
+spreading and the arming had this cost; AX removes it, by coalescing the
+relation back to one range synchronously when an **explicit** auxiliary
+DDL names it. What survives of the paragraph above is that the Cabin
+optimizer's automatic path still meets the refusal (AX-D12), and that a
+coalesced relation forgoes spreading's gain for as long as its auxiliary
+lives (AX-D6) - so **DA1's 1.51× and an auxiliary are mutually exclusive
+on one relation until R5**, which is a real limit on what DA1 buys and is
+stated here rather than left in AX's file alone.

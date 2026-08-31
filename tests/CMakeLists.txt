@@ -74,6 +74,7 @@ add_executable(kds_tests
     range_eligible_test.cpp
     range_directory_test.cpp
     range_alloc_test.cpp
+    range_coalesce_test.cpp
     range_chain_test.cpp
     access_stats_test.cpp
     decay_test.cpp

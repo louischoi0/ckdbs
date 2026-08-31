@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -54,6 +55,31 @@
 
 namespace kds::server {
 
+// How many pages one acquisition call is handed. The sequence it drives
+// (PL §9 rule 6: fault, acquisition record, restamp, flush) holds a frame
+// per page for the length of the call, so a whole relation in one call
+// would pin the relation. Not a tuning knob and deliberately not a config
+// key - it bounds a working set, and the number that matters is the
+// eviction budget, which is already a key (`buffer_pool_frames`).
+inline constexpr std::size_t kAdmitChunkPages = 64;
+
+// The page-level walk of one range's chain, bounded by the range: follow
+// `next_page_id` from `head` and stop at the first page whose `min_key`
+// reaches `hi`.
+//
+// **A page walk and not a `ChainVisit`, because an empty page is a page.**
+// The visiting forms call their callback per *slot*, so a range whose head
+// is still empty - which every range's head is at birth
+// (`Catalog::CreateRangeEntryPage`) - would be named by nothing. A merge
+// that missed it would leave a page owned by the departed core,
+// unreachable from the absorber's rights and stamped by a stream that no
+// longer routes to it.
+//
+// Appends to `out`; the caller clears. Fails Corruption if `head` itself
+// is at or above `hi`, which is a directory and a chain that disagree.
+Status CollectRangePages(storage::PageStore& store, PageId head, std::uint64_t hi,
+                         std::vector<PageId>& out);
+
 // One range as the merge sees it: where its chain starts and ends, whose
 // core holds it, and every page in it.
 struct CoalesceSegment {
@@ -103,7 +129,7 @@ struct CoalescePlan {
 // Refuses `InvalidArgument` on a relation with fewer than two ranges -
 // there is nothing to merge, and a caller that reached here without
 // asking has a bug the merge would otherwise hide by doing nothing.
-StatusOr<CoalescePlan> PlanCoalesce(catalog::Catalog& catalog, storage::DevicePageStore& store,
+StatusOr<CoalescePlan> PlanCoalesce(catalog::Catalog& catalog, storage::PageStore& store,
                                     catalog::Oid rel_oid);
 
 // §6c step 4, run **on the absorber**: acquire every page of every

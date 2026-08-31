@@ -32,6 +32,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/server/core_affinity.hpp"
 #include "kds/server/range_alloc.hpp"
+#include "kds/server/range_coalesce.hpp"
 #include "kds/stats/trace.hpp"
 #include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/session.hpp"
@@ -154,6 +155,7 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 };
 
 class IndexBuildClient;
+class RangeCoalesceClient;
 class AssertionBuildClient;
 class StatementShipClient;
 class ShippedStatementExecutor;
@@ -174,6 +176,38 @@ struct PendingIndexBuild {
     catalog::Catalog::IndexDef def;
     std::string table_name;       // the reply line
     std::string key_column_name;  // the Cabin warning
+};
+
+// A split relation being coalesced before an auxiliary DDL builds on it
+// (`docs/spec/crosscore.md` §6c, AX). Carried by value across the two
+// parks the merge takes - the quiesce legs, then the absorb - for
+// `PendingIndexBuild`'s reason.
+//
+// **The statement is not in here, and that is the shape rather than an
+// omission.** AX-D5 makes the merge a *separate* phase that completes
+// before the DDL transaction begins, so what follows a finished merge is
+// not "resume the statement" but "run the statement, on a relation that is
+// now one range" - which is the in-doubt block's re-dispatch
+// (`DispatchAndStage(line, session)`) and not a `Finish*` that writes an
+// outcome. The residue clause falls straight out of it: a DDL that then
+// fails leaves the relation merged, because the merge was its own phase.
+struct PendingCoalesce {
+    catalog::Oid rel_oid = 0;
+    std::uint32_t absorber = 0;
+    // One per departing range's owner, deduplicated: a core owning three
+    // of the relation's ranges is quiesced once per range, because a
+    // quiesce names a range and not a relation.
+    std::vector<std::uint64_t> quiesce_ids;
+    std::uint64_t absorb_id = 0;
+    // Pages the plan expects to move - what AX6's counters record and AX8
+    // divides its microseconds by.
+    std::uint64_t pages_to_move = 0;
+    std::string table_name;  // the refusal line, when a leg fails
+    // When the merge began, for AX6's duration. The merge's own wall time
+    // and not the statement's: AX-D5 makes them two phases, and charging
+    // the build to the merge would put an index's backfill in the number
+    // AX8 divides by pages moved.
+    std::uint64_t started_ns = 0;
 };
 
 // A peer-owned relation's `CREATE ASSERTION` between its two phases on core
@@ -321,6 +355,16 @@ struct DispatchOutcome {
     // two paths differ exactly as the index build's do - `DispatchAsync()`
     // parks, the synchronous `Dispatch()` abandons and tells the owner.
     std::optional<PendingAssertionBuild> pending_assertion_build = std::nullopt;
+
+    // An auxiliary DDL whose relation is split (AX, §6c): the merge has
+    // been started and the statement has **not run at all** yet.
+    // `DispatchAsync()` parks on the quiesce legs, then on the absorb,
+    // contracts the directory, and re-dispatches the line - the in-doubt
+    // block's re-run, and for the same reason: what follows is the whole
+    // statement, not a resumed half of one. The synchronous `Dispatch()`
+    // has no reactor to receive a reply on and refuses instead, which
+    // leaves the relation split and the statement re-runnable.
+    std::optional<PendingCoalesce> pending_coalesce = std::nullopt;
 
     // A statement shipped to its owner core (SS2): the reply is not in
     // `response` yet. `DispatchAsync()` parks on the owner's answer under
@@ -906,6 +950,28 @@ private:
     DispatchOutcome FinishIndexBuild(const PendingIndexBuild& build, Session& session);
     DispatchOutcome HandleShowIndexes(Session& session);
 
+    // ---- AX: coalesce before an auxiliary DDL (§6c) --------------------
+    //
+    // **One entry point for all four auxiliary DDLs**, asked before the
+    // statement does anything at all: `CREATE INDEX`, `CREATE CABIN`,
+    // `CREATE ASSERTION` and a `CREATE TABLE` whose foreign key names a
+    // split relation on either side. `std::nullopt` is the answer on every
+    // ordinary relation - unsplit, or split with no client armed - and
+    // means "carry on"; an outcome means the merge has begun and the
+    // statement has not run.
+    //
+    // Deliberately **not** inside `Catalog::CreateIndex` and its three
+    // siblings, where the refusal it displaces lives: the merge needs the
+    // ring and two parks, and the catalog has neither. The refusal stays
+    // there, reachable, for AX-D12's automatic Cabin path and for any
+    // caller that does not come through here.
+    std::optional<DispatchOutcome> BeginCoalesce(std::string_view table_name);
+    // §6c step 4: the absorb leg, sent once every quiesce has answered.
+    DispatchOutcome FinishCoalesceQuiesce(PendingCoalesce& pending);
+    // §6c step 5: the contraction. Answers an error, or an empty response
+    // meaning "the relation is one range now; run the statement".
+    DispatchOutcome FinishCoalesceAbsorb(const PendingCoalesce& pending);
+
     // `CREATE ASSERTION` / `DROP ASSERTION` (docs/spec/assertion.md §3,
     // workplan AST03). One handler for both, for HandleCabin's reason.
     //
@@ -1175,6 +1241,20 @@ public:
     // dispatcher never told refuses is a fixture with no reactor to park
     // on, not production.
     void SetIndexBuilds(IndexBuildClient* client) noexcept { index_builds_ = client; }
+
+    // Arms the coalesce (AX, §6c): an auxiliary DDL on a split relation
+    // merges it back to one range before it builds. Core 0 only, like the
+    // catalog write it ends in. A dispatcher never told leaves the
+    // relation split, so `RefuseAuxiliaryOnSplitRelation` answers exactly
+    // as it did before AX - which is what a fixture with no ring sees, and
+    // what AX-D12's automatic Cabin path sees on every instance.
+    // `client` must outlive the dispatcher.
+    void SetRangeCoalesces(RangeCoalesceClient* client) noexcept { coalesces_ = client; }
+
+    // AX6's counters, read by `SHOW META`. Absent until the first coalesce
+    // runs - the absent-rather-than-zeroed rule - which is why this is a
+    // value on the dispatcher rather than a field it always prints.
+    const CoalesceCounters& coalesce_counters() const noexcept { return coalesce_counters_; }
 
     // Arms the foreign arm of CREATE ASSERTION (PW1c-6c,
     // assertion_build_service.hpp), on the same terms and for the same
@@ -1686,6 +1766,10 @@ private:
     RelationGrantDemand* grant_demand_ = nullptr;
     // PW1c-6b-2's window; null on the same cores.
     const PendingIndexBuilds* pending_index_builds_ = nullptr;
+    // AX's client, core 0's; null wherever the split relation's auxiliary
+    // refusal still stands (see SetRangeCoalesces).
+    RangeCoalesceClient* coalesces_ = nullptr;
+    CoalesceCounters coalesce_counters_;
     // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
     // stands (see SetIndexBuilds).
     IndexBuildClient* index_builds_ = nullptr;

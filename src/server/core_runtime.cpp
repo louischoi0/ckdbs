@@ -575,6 +575,34 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // not be able to beat its receiver into existence.
     dispatcher_->SetRemoteReads(&*remote_reads_);
 
+    // AX's peer half (§6c steps 0-4), on **every** core, core 0 included:
+    // core 0 owns the `lo = 0` range of every relation created on it, so
+    // it is an ordinary departing owner, and under `placement = creating`
+    // it is an ordinary absorber too. The acquisition sequence PL §9 rule
+    // 6 requires is handed in as `AdmitWritePages` rather than
+    // reimplemented - a second copy of that ordering is a second place for
+    // it to drift, and the one here is the one the write grant already
+    // uses.
+    coalesces_.emplace(*catalog_, *store_, &*wal_, config_.core_id, *scheduler_, transport,
+                       [this](std::span<const PageId> pages) { return AdmitWritePages(pages); },
+                       log_);
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kRangeQuiesceRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                coalesces_->OnQuiesce(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kRangeAbsorbRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                coalesces_->OnAbsorb(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+
     // The owner's half of a peer-owned relation's CREATE INDEX (PW1c-6b-2,
     // index_build_service.hpp), peers only: core 0 builds its own
     // relations' indexes in the statement and never asks itself. The

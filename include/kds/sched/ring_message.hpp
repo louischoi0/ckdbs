@@ -196,6 +196,21 @@ enum class RingMessageKind : std::uint16_t {
     // stated here as well as at the send, because this enum is where a
     // reader looks to learn what a kind costs.
     kAccessStatsBatch = 39,
+
+    // AX, `docs/spec/crosscore.md` §6c: the two legs of a coalesce, both
+    // core 0 -> peer and both answered.
+    //
+    // **Quiesce** (step 0-2) asks a departing range's owner to stop
+    // writing the range, flush it, log its departure records and give up
+    // its write rights. **Absorb** (step 4) asks the absorbing core to
+    // acquire every page and link the chains. Both carry a relation oid
+    // and nothing page-shaped: the receiver reads `sys.ranges` itself, so
+    // the wire never has to carry a page list that a 992-byte reply and a
+    // 6-page grant could not hold anyway.
+    kRangeQuiesceRequest = 40,
+    kRangeQuiesceReply = 41,
+    kRangeAbsorbRequest = 42,
+    kRangeAbsorbReply = 43,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -232,6 +247,10 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kTxnResolveRequest:
         case RingMessageKind::kTxnResolveReply:
         case RingMessageKind::kAccessStatsBatch:
+        case RingMessageKind::kRangeQuiesceRequest:
+        case RingMessageKind::kRangeQuiesceReply:
+        case RingMessageKind::kRangeAbsorbRequest:
+        case RingMessageKind::kRangeAbsorbReply:
             return true;
         case RingMessageKind::kUnset:
             return false;

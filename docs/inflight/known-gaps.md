@@ -877,16 +877,40 @@ still waits on its own gate, so:
   1` meets none of them — the peer fan-out is gated on `cores > 1`, so
   nothing leases and no range opens.
 
-  **The one that does not recover is `RefuseAuxiliaryOnSplitRelation`**
+  **The one that did not recover was `RefuseAuxiliaryOnSplitRelation`**
   (`src/catalog/catalog.cpp`): on a relation with two or more ranges,
   `CREATE INDEX`, `CREATE CABIN` — **including the Cabin optimizer's
   automatic path**, which enacts through the same call — `CREATE
-  ASSERTION`, and an FK naming it on either side are all `Unsupported`.
-  Nothing merges ranges (the mover is R5, unbuilt), so **order now decides
-  and the decision is permanent**: index-then-write keeps the relation
-  unsplittable through `RangeEligible`'s gate, write-then-index is refused
+  ASSERTION`, and an FK naming it on either side were all refused.
+  Nothing merged ranges (the mover is R5, unbuilt), so **order decided and
+  the decision was permanent**: index-then-write kept the relation
+  unsplittable through `RangeEligible`'s gate, write-then-index was refused
   for the life of the relation. Under DA1 the second order is what an
-  ordinary session produces. `DROP TABLE` + recreate is the only way back.
+  ordinary session produces, and `DROP TABLE` + recreate was the only way
+  back.
+
+  **Decided a defect 2026-08-31 and fixed by AX** (`ratification-ax.md`
+  AX-D1, built at `6e2cecf` and after; `docs/spec/crosscore.md` §6c). The
+  four **explicit** statements now coalesce the relation back to one range
+  synchronously and then build: the per-range chains are concatenated in
+  `lo` order, every page is handed off to the core holding the most of
+  them (AX-D3), and the directory contracts to zero rows. Three things the
+  fix does **not** do, so this entry is not read wider than it is true:
+
+  - **The Cabin optimizer's automatic path still meets the refusal**
+    (AX-D12) and its decline still lands in §6a's counters — a background
+    controller may not start a large physical page movement.
+  - **No auxiliary lives on a split relation.** The five placement
+    `[OPEN]`s moved to R5 as the auxiliary placement decision group
+    (AX-D1) and none is decided.
+  - **A coalesced relation does not re-split** while its auxiliary lives
+    (AX-D6), so it forgoes spreading's 1.51× — the gain and the auxiliary
+    are now mutually exclusive per relation until R5.
+
+  Two costs the fix adds, both specified rather than discovered: DDL
+  latency proportional to pages moved (AX-D5), and a DDL that fails
+  *after* the merge leaves the relation merged, which is valid but
+  observable.
 
   The other nine, each a path that answered before and refuses now, all in
   `src/server/command_dispatcher.cpp` unless named otherwise:

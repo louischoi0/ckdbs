@@ -728,6 +728,10 @@ private:
     // above and armed beside it.
     std::optional<AssertionBuildClient> assertion_builds_;
 
+    // Core 0's side of AX's coalesce (`range_coalesce_service.hpp`), on the
+    // same terms as `index_builds_` above and armed beside it.
+    std::optional<RangeCoalesceClient> coalesces_;
+
     // **Core 0's two halves of statement shipping** (SS1/SS3), armed with
     // the transport for `index_builds_`' reason. Core 0 is an owner like
     // any other - a peer's client ships it the statements it owns - and an

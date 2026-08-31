@@ -706,10 +706,28 @@ executes on core 0 (CC12/CR2) and every catalog write is core 0's
    §9 rule 1: the record lives in the giver's stream).
 3. **Grant.** Exact-page fault and write rights to the absorber
    (PW1c-4's form, never extent-granular).
-4. **Link.** The absorber writes the predecessor chain's tail
-   `next_page_id` at the departing range's head, restamping per PL-C.
-   **On the absorber and after the grant**, because the link is a write
-   and the absorber is the only core entitled to make it.
+4. **Acquire, then link.** The absorber logs a `PAGE_HANDOFF` naming
+   itself per page and writes its LSN into the page's `page_lsn` and PL-C
+   stream stamp (PL §9 rule 6), then writes the predecessor chain's tail
+   `next_page_id` at the departing range's head. **On the absorber and
+   after the grant**, because both are writes and the absorber is the only
+   core entitled to make them.
+
+   **The restamp is the merge's, not the write grant's**, and that is a
+   correction rather than a duplication. The acquisition sequence the
+   grant path runs (`CoreRuntime::AdmitWritePages`) skips its restamp
+   when `MayWrite` is already true — sound where it was written, since a
+   page inside the core's own lease is already that core's — and
+   `MayWrite` is **unconditionally true on core 0**, which holds no lease.
+   Core 0 is also the *ordinary* absorber, since `placement = creating`
+   (DA2) puts the `lo = 0` range there on almost every relation. So a
+   merge that left the restamp to the grant would take a peer's pages
+   without restamping any of them, leaving the pages saying one stream
+   and `sys.tables` saying another — and after a restart the departed
+   core's `TryClaimByStamp` would take write rights over pages the
+   catalog no longer gives it, two writers held apart by nothing but
+   statement dispatch. CC7's cell states the obligation the merge is the
+   first to owe: keep them agreeing by **restamping and revoking**.
 
 Then once, for the relation:
 
@@ -730,7 +748,12 @@ state the engine already serves:
   ids ascend and a heap relation refuses a named key below the
   high-water mark (`docs/spec/heap-and-tuple.md` §4.1), so every insert
   lands in the **top** range, whose chain is never concatenated *into*
-  anything and whose tail is therefore still its own.
+  anything and whose tail is therefore still its own. And the fallback if
+  that ever stopped being true is a refusal rather than a wrong row: an
+  insert into a *lower* range's chain would walk the concatenation to the
+  relation's global tail, whose `min_key` is above the id, and
+  `ChainInsert` answers `OutOfRange` (invariant 3, enforced at the one
+  place tuples enter) instead of placing it where a reader would not look.
 - Crashing after step 5 leaves the merged relation, which is a
   one-range relation and the ordinary shape.
 
