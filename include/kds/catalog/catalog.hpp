@@ -1002,6 +1002,35 @@ public:
     Status OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner_core,
                          PageId entry_page);
 
+    // **The directory's other end** (`docs/spec/crosscore.md` §6c step 5,
+    // AX): every `sys.ranges` row of the relation is retired and
+    // `sys.tables.owner_core` becomes `absorber`, published once.
+    //
+    // The final state is **zero rows, not one**. A non-empty directory
+    // must partition the whole id space from `lo = 0` (CC9), so a
+    // one-range relation is represented by absence — the branch
+    // `TableAccess::ranges.empty()` reads and RD3's zero-cost invariant is
+    // taken from. A merged relation is indistinguishable from a
+    // never-split one at every read of the catalog, which is the property
+    // that lets the four auxiliary DDLs fall straight through to the build
+    // they always ran.
+    //
+    // **Non-transactional, and that is AX-D5 rather than an omission**:
+    // the merge completes *before* the DDL transaction begins, because a
+    // page handoff has no compensation and a contraction that rolled back
+    // with the DDL would restore a directory naming owners whose pages had
+    // already moved. `OpenRangeRows` writes these rows under
+    // `kBootstrapXid` and nothing undoes them; this removes them the same
+    // way. A DDL that then fails leaves the relation merged — valid, and
+    // specified.
+    //
+    // Core 0 only, like every catalog write. Callers are §6c's merge
+    // driver alone; this does not gate, does not check that the pages
+    // moved, and will happily contract a directory whose chains were never
+    // linked — the ordering that keeps those two agreeing is the driver's
+    // (`server/range_coalesce.hpp`).
+    Status ContractRangeRows(Oid rel_oid, std::uint32_t absorber);
+
     // The `trx_id` on these three is the row's MVCC stamp (DT2). It
     // defaults to `kBootstrapXid` because every caller that does not pass
     // one is bootstrap, and a bootstrap row must be visible to every read

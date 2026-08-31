@@ -682,6 +682,30 @@ void DevicePageStore::GrantWritePages(std::span<const PageId> pages) {
     }
 }
 
+void DevicePageStore::RevokeWritePages(std::span<const PageId> pages) {
+    // Cleared by hand rather than through a `FreeMapClear`, because the
+    // free map has no clear: an allocated id is never returned (id reuse
+    // is an open decision, `docs/spec/page.md`). These bitmaps only borrow
+    // the map's *addressing* - "identical addressing, different meaning",
+    // as the member's own comment puts it - and a right is exactly the
+    // kind of fact that is taken back. Putting a clear on the free map to
+    // serve this would hand every allocation path an operation the format
+    // does not admit.
+    for (PageId id : pages) {
+        RightsRegion& rights = RightsFor(id);
+        // Nothing granted into this region: nothing to take back. Not an
+        // error - a revoke names the pages of a range, and a core that
+        // never held rights over one is the ordinary case for the
+        // absorber's own ranges.
+        if (rights.write == nullptr) continue;
+        const std::uint32_t index = FreeMapBitIndexOf(id);
+        if (index >= kFreeMapBitsPerPage) continue;  // no bit holds the right
+        std::byte& byte = (*rights.write)[kPageBodyOffset + (index >> 3)];
+        byte = static_cast<std::byte>(static_cast<std::uint8_t>(byte) &
+                                      ~static_cast<std::uint8_t>(1u << (index & 7u)));
+    }
+}
+
 bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
     // Not addressable is the strongest form of never written. A failed read
     // answers "in use": refusing a CreateAt is the safe error.

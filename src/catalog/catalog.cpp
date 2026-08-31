@@ -1195,6 +1195,87 @@ Status Catalog::OpenRangeRows(Oid rel_oid, std::uint64_t lo, std::uint32_t owner
     return Status::OK();
 }
 
+Status Catalog::ContractRangeRows(Oid rel_oid, std::uint32_t absorber) {
+    // §6c step 5, and the only catalog write the merge makes. Two facts,
+    // one publication: every `sys.ranges` row of the relation goes, and
+    // `sys.tables.owner_core` becomes the absorber.
+    //
+    // **Retired, not delete-marked, and outside the DDL transaction.**
+    // AX-D5 puts the merge *before* the DDL transaction begins precisely
+    // because a page handoff has no compensation, so a contraction that
+    // rolled back with the DDL would restore a directory whose ranges'
+    // pages had already moved - a partition naming owners that no longer
+    // own. `OpenRangeRows` writes these rows under `kBootstrapXid` and
+    // nothing undoes them, and this is the same statement from the other
+    // end: the rows leave the same way they arrived.
+    //
+    // Ordered rows-then-owner, and the order is load-bearing in exactly
+    // one direction. A crash between them leaves zero rows and the old
+    // `owner_core`, which is a legal one-range relation owned by a core
+    // whose pages have moved - the absorber then cannot write and the old
+    // owner is dispatched to; wrong, and recoverable only by re-running
+    // the merge. The converse order leaves a *k*-row directory whose
+    // relation-level owner is the absorber, which routes writes to a core
+    // holding no top range - wrong in the same degree and with no
+    // re-running possible, since the directory still names the departed
+    // owners. Neither is a hybrid the walk misreads; the first is chosen
+    // because it is the one a re-run repairs.
+    for (;;) {
+        auto acted = ForFirstRow<SysRangeRow>(
+            store_, kCatalogPageRanges,
+            [&](SysRangeRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+                const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+                if (row.rel_oid != rel_oid) return false;
+                if (tuple.deleted) return false;
+                if (Status s = RetireLogged(wal_, store_, page, page_id, i, kBootstrapXid);
+                    !s.ok()) {
+                    return s;
+                }
+                return true;
+            });
+        if (!acted.ok()) return acted.status();
+        if (!acted.value()) break;
+    }
+
+    auto acted = ForFirstRow<SysTableRow>(
+        store_, kCatalogPageTables,
+        [&](SysTableRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.oid != rel_oid) return false;
+            // The absorber may already be the owner - the low range's core
+            // holding the most pages is the ordinary case - and then this
+            // is a write with nothing to say. Skipped rather than written,
+            // because a catalog page write is a WAL record and a device
+            // sync for a byte that does not change.
+            if (row.owner_core == absorber) return true;
+            row.owner_core = absorber;
+            const auto encoded = row.Encode();
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId,
+                                           tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) {
+        return Status::NotFound("sys.tables has no row for relation oid " +
+                                std::to_string(rel_oid) + "; its ranges were contracted against "
+                                "a relation that is not there");
+    }
+
+    // One publication for the pair, `OpenRangeRows`' rule from the other
+    // end: two bumps would announce a relation whose directory is gone but
+    // whose owner has not moved yet.
+    BumpVersion("sys.ranges contract");
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("catalog", "relation oid " + std::to_string(rel_oid) +
+                                  " coalesced to one range, absorbed by core " +
+                                  std::to_string(absorber));
+    }
+    return Status::OK();
+}
+
 Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
                                         std::uint64_t index_oid) {
     // A relation whose anchor predates PW2 has none, and there is then no

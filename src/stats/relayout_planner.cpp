@@ -276,7 +276,8 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
     // reported by `surveyed_ranges` below rather than by refusing the
     // whole survey. A partial survey that says it is partial is worth
     // more than none; one that does not say so is the defect.
-    const std::vector<PageId> heads = access.value()->WalkHeadsFor(core_id);
+    const std::vector<catalog::TableAccess::WalkSegment> heads =
+        access.value()->WalkHeadsFor(core_id);
     survey.surveyed_ranges = static_cast<std::uint32_t>(heads.size());
     survey.relation_ranges = static_cast<std::uint32_t>(
         access.value()->ranges.empty() ? 1 : access.value()->ranges.size());
@@ -300,9 +301,12 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
             }
         return storage::VisitControl::kContinue;
     };
-    for (PageId head : heads) {
-        Status walked = heap::ChainVisit(store, head, storage::PageAccess::kRead, visit,
-                                         ring.get());
+    for (const catalog::TableAccess::WalkSegment& segment : heads) {
+        // Bounded by the segment (§6c): a survey that walked past a
+        // coalesced boundary would count the successor's pages into this
+        // range's `chain_pages` and every density derived from it.
+        Status walked = heap::ChainVisit(store, segment.head, storage::PageAccess::kRead, visit,
+                                         ring.get(), segment.stop_at_min_key);
         if (!walked.ok()) return walked;
     }
 

@@ -373,6 +373,29 @@ public:
     // existing ceiling.
     void GrantWritePages(std::span<const PageId> pages);
 
+    // **The revoking half CC7 says the mover owes** (`docs/spec/crosscore.md`
+    // CC7: ownership after a restart is re-derived from the stamp, "which
+    // the mover must keep agreeing by restamping *and* revoking"; §6c step
+    // 0 is its first caller). Clears this core's write rights over exactly
+    // these pages - the PW1c-4 grant bit and the PW1c-7 stamp claim, which
+    // share one bitmap - and nothing else.
+    //
+    // **It cannot revoke a lease, and does not pretend to.** A page inside
+    // this core's leased id run stays writable, because the lease is a
+    // different claim with a different lifetime; a coalesce moves the
+    // pages of a range the *catalog* assigns elsewhere, and those are held
+    // by grant or claim, never by the departing core's lease - the lease
+    // issues ids, the catalog assigns pages (CC7). A caller that needs a
+    // leased page revoked is asking for lease revocation, which is R5's.
+    //
+    // **Memory-resident, like the grant it undoes.** The durable form of
+    // the fact is the page's own PL-C stamp, so a revoke that is not
+    // followed by the receiver's acquisition restamp is undone by the next
+    // fault - `TryClaimByStamp` re-claims a page whose stamp still names
+    // this core. That is why §6c's step 0 is ordered before the receiver's
+    // acquisition and not instead of it.
+    void RevokeWritePages(std::span<const PageId> pages);
+
     // Pages this store admitted from their stream stamp alone (PW1c-7).
     // A diagnostic, and what a test reads to see that a claim happened.
     std::uint64_t stamp_claims() const noexcept { return stamp_claims_; }

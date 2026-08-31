@@ -263,13 +263,13 @@ StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, Pag
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher) {
+    storage::ScanFetcher* fetcher, std::uint64_t stop_at_min_key) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
         // A bad `current` (an invalid head included) fails inside the
         // fetch, exactly as the inlined loop did.
-        auto next = ChainVisitOnePage(store, current, access, fn, fetcher);
+        auto next = ChainVisitOnePage(store, current, access, fn, fetcher, stop_at_min_key);
         if (!next.ok()) return next.status();
         if (next.value() == kInvalidPageId) return Status::OK();
         current = next.value();
@@ -279,7 +279,7 @@ Status ChainVisit(
 StatusOr<PageId> ChainVisitOnePage(
     storage::PageStore& store, PageId page_id, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher) {
+    storage::ScanFetcher* fetcher, std::uint64_t stop_at_min_key) {
     // Ring mode is a read path only (spec-eviction §5): a writer's walk
     // takes the ordinary route, because the ring never bypasses the
     // dirty protocol. The visitor's per-page discipline is what makes
@@ -309,6 +309,14 @@ StatusOr<PageId> ChainVisitOnePage(
     }
     const std::span<std::byte, kPageSize> page_bytes(page_data, kPageSize);
     PageView page(page_bytes);
+
+    // The range bound (crosscore.md §6c). Tested before any slot, because
+    // a page past the range holds no row this walk may emit - and tested
+    // on the page rather than on the link that reached it, so a caller
+    // stepping the loop itself pays no second fetch. The pin taken above
+    // is released on return, which is what makes "fetched then rejected"
+    // cost a fetch and nothing else.
+    if (page.min_key() >= stop_at_min_key) return kInvalidPageId;
 
     const std::uint16_t n = page.slot_count();
     for (std::uint16_t i = 0; i < n; ++i) {

@@ -256,6 +256,23 @@ struct TableAccess {
         PageId* tail_hint = nullptr;
     };
 
+    // One segment of a walk: where it starts, and where it stops.
+    //
+    // **The stop is new with AX** (`docs/spec/crosscore.md` §6c) and it is
+    // why this is a struct rather than the bare `PageId` it was. A
+    // per-range walk used to end at the chain's end because a range's
+    // chain ended where the range did; coalescing links those chains
+    // tail-to-head, so the extent of a range has to come from the
+    // directory - which states it - rather than from the chain's shape,
+    // which now only agrees by accident.
+    struct WalkSegment {
+        PageId head = kInvalidPageId;
+        // The range's exclusive `hi`, handed to the chain walk as its
+        // `stop_at_min_key`. `kIdSpaceEnd` on an unsplit relation and on
+        // the top range, where no page can reach it.
+        std::uint64_t stop_at_min_key = kIdSpaceEnd;
+    };
+
     // The entry pages this **core** must walk, in `lo` order (RD7).
     //
     // A stage of a fan-in covers the ranges it owns and no others: the
@@ -271,8 +288,8 @@ struct TableAccess {
     // relation opens one stage per maximal contiguous run of ranges on one
     // core, and a stage covers its run alone. `PkSpan::Whole()` - the
     // default and every pre-RD7 caller's meaning - is the whole relation.
-    std::vector<PageId> WalkHeadsFor(std::uint32_t core_id,
-                                     PkSpan span = PkSpan::Whole()) const;
+    std::vector<WalkSegment> WalkHeadsFor(std::uint32_t core_id,
+                                          PkSpan span = PkSpan::Whole()) const;
 
     // Whether every range is `core_id`'s - the question the dispatcher
     // asks before reading locally. True for an unsplit relation by

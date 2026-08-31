@@ -603,6 +603,215 @@ the tails; R3/R4 owns building the second. Consequences, stated now:
   relation gains nothing from them bounds the default's benefit, not
   who decides it.
 
+### 6c. Coalesce on Auxiliary DDL — the Merge, and What Bounds a Range's Walk (v2, AX)
+
+**Ratified 2026-08-31** (`instructions/v2.7.0/ratification-ax.md`,
+AX-D1 through AX-D6 and AX-D12; build order
+`instructions/v2.7.0/ax-coalesce-on-auxiliary-ddl.md`). §6a stops a
+relation with an auxiliary from splitting; `RefuseAuxiliaryOnSplitRelation`
+(`src/catalog/catalog.cpp`) is its converse and stops a split relation
+from gaining one. Both gates predate DA1, which armed
+`range_size_ids = 65,536` by default — so a range now opens on workload,
+an ordinary session meets the converse gate without choosing to, and
+because nothing merges ranges (the mover is R5) **write-then-index was
+refused for the life of the relation**. The operator ruled that a defect.
+This section is the fix: the auxiliary DDL **coalesces the relation back
+to one range** and then builds.
+
+**What it is not.** No auxiliary lives on a split relation as a result of
+this section. The five placement `[OPEN]`s — index per-range/global
+(`docs/spec/index.md` §13), Cabin under split/migration
+(`docs/spec/cabin.md` §11), assertion group-straddle
+(`docs/spec/assertion.md` §6.1), cross-core FK
+(`docs/spec/cross-owner-txn.md`), var-heap partition
+(`docs/spec/heap-and-tuple.md`) — are **moved to R5's schedule as the
+auxiliary placement decision group** (AX-D1) and none is decided or
+assumed here.
+
+#### The scope, which is narrow because §6a made it so
+
+A split relation is a **heap** relation: D1 of
+`workplan-range-directory.md` is not taken, so every btree relation is
+unsplittable. And §6a's forward gates mean a split relation is
+non-spilling, unindexed, un-cabined, FK-free and un-asserted — so the
+merge moves **heap pages and only heap pages**. No var-heap page, no
+index entry, no cabin entry set and no assertion registry can exist on
+the relation being merged. That is what makes a merge a chain operation
+rather than a rebuild.
+
+#### The mechanism: concatenation, not re-placement
+
+**A merge links the per-range chains tail-to-head in `lo` order and moves
+no tuple.** Ranges partition the id space and a heap range is its own
+chain with its own head (CC8); ids inside a range's chain ascend page by
+page (`include/kds/storage/heap/heap_chain.hpp`, the ordering property);
+and a range's head page carries `min_key = lo` by construction
+(`Catalog::CreateRangeEntryPage`). So range *i*'s last page holds ids
+strictly below range *i+1*'s `lo`, which is range *i+1*'s head's
+`min_key`: the concatenated chain is key-ordered page by page exactly as
+a never-split relation's is, `min_key` stays immutable (invariant 2), no
+tuple moves to a page whose `min_key` exceeds its pk (invariant 3), and
+the tail-page duplicate check stays O(1) pages.
+
+**`next_page_id` is still written once per page.** The chain layer's
+tail-hint safety argument — *a hint can be behind, never wrong*, because
+`next_page_id` goes `kInvalid` → the new tail exactly once and a page
+never leaves its chain — survives concatenation unchanged: the link
+writes the one field that was `kInvalid`, and every page a hint could
+name still reaches the current tail by walking forward.
+
+The **fallback** page-by-page re-placement H-AX1 named is therefore not
+taken, and the cost model is O(handoffs), not O(rows).
+
+#### What concatenation breaks, and the rule that repairs it
+
+A per-range walk used to end where the range ended, because the chain
+ended there. **Concatenation removes that coincidence**, and three walks
+rested on it: the step VM's page loop (`src/exec/step_vm.cpp`), the
+dispatcher's per-range visit (`src/server/command_dispatcher.cpp`) and
+the relayout survey (`src/stats/relayout_planner.cpp`). Each would have
+walked from a range's head straight through its successors' pages and
+then walked those successors again from their own heads — duplicate rows
+on a read, duplicate writes under UPDATE and DELETE.
+
+**So a range's walk is bounded by the range, never by the chain's end**:
+a walk that reaches a page whose `min_key >= hi` of the range it is
+walking has left that range and stops. The bound is exact — the only
+page that can carry `min_key == hi` is the successor range's head — it
+costs one comparison on a page already fetched, and it is asked **only
+where a directory exists**, so an unsplit relation's walk is the walk it
+always was and RD3's zero-cost invariant is untouched.
+
+This is a correctness sharpening independent of the merge: a range's
+extent is the directory's statement, and a walk that reads it from the
+chain's shape instead was true only by accident. It is also what makes
+the crash contract below hold by ordering alone.
+
+#### The sequence (AX-D4, **proposed** until AX7's crash matrix is green)
+
+Adapted from CC10's migration sequence. Core 0 drives, because DDL
+executes on core 0 (CC12/CR2) and every catalog write is core 0's
+(CC11). Per departing range, in ascending `lo` order:
+
+0. **Quiesce.** The range's current owner stops writing it: in-flight
+   work on that core finishes inside the leg's own task, the owner's
+   write rights over the range's pages are **revoked**, and its frames
+   are dropped. Revocation is new — CC7's cell records that the mover
+   "must keep them agreeing by restamping *and* revoking", and this is
+   the first caller of the revoking half.
+1. **Flush.** The owner writes its dirty frames of the range out, so the
+   absorber faults the rows and not an older image.
+2. **Durable handoff.** Core 0 logs a PL-B `PAGE_HANDOFF` per page to the
+   absorber and waits for durability (`docs/spec/page-lsn-cross-stream.md`
+   §9 rule 1: the record lives in the giver's stream).
+3. **Grant.** Exact-page fault and write rights to the absorber
+   (PW1c-4's form, never extent-granular).
+4. **Link.** The absorber writes the predecessor chain's tail
+   `next_page_id` at the departing range's head, restamping per PL-C.
+   **On the absorber and after the grant**, because the link is a write
+   and the absorber is the only core entitled to make it.
+
+Then once, for the relation:
+
+5. **Contract.** Every `sys.ranges` row of the relation is deleted and
+   `sys.tables.owner_core` is set to the absorber, in one catalog
+   transaction in core 0's stream, made durable, and published by the
+   version bump the catalog write already carries — which is step 5 of
+   CC10's sequence, the invalidation broadcast, arriving as it always
+   does.
+
+**Why this ordering is the crash contract.** Every prefix of it is a
+state the engine already serves:
+
+- Crashing before step 5 leaves the directory intact and some chains
+  concatenated. The bounded walk reads exactly the rows it read before
+  the merge began, because the bound stops each range's walk at its own
+  `hi` whether or not a link now runs past it. Inserts are unaffected:
+  ids ascend and a heap relation refuses a named key below the
+  high-water mark (`docs/spec/heap-and-tuple.md` §4.1), so every insert
+  lands in the **top** range, whose chain is never concatenated *into*
+  anything and whose tail is therefore still its own.
+- Crashing after step 5 leaves the merged relation, which is a
+  one-range relation and the ordinary shape.
+
+There is no state to repair at mount and nothing to roll back: a
+half-linked relation is a **legal split relation**, permanently, and a
+re-run of the merge re-links idempotently (setting a `next_page_id` to
+the value it already holds) and re-contracts. **This is H9's lesson
+applied rather than repeated** — the structure is published before its
+router, and the bound is what makes the published structure inert until
+the router changes.
+
+The **contraction is all-at-once** rather than range-at-a-time. The build
+order left the choice to AX7 with a proposal for range-at-a-time on the
+ground that every intermediate is then a state the engine serves; the
+bounded walk makes *every* intermediate that already, including the
+all-at-once one, so the argument no longer selects between them and the
+tie goes to the form with one durable catalog transaction instead of *k*.
+
+#### The absorber (AX-D3)
+
+**The core holding the most pages of the relation**, which minimises
+pages moved; on a tie the **lowest `core_id`**, for determinism and test
+reproducibility (CLA's proposal, accepted under the ratification's
+standing pattern; proposed, not measured). The absorber may differ from
+`sys.tables.owner_core`, so step 5 updates that column — one more catalog
+write inside the DDL's scope, in core 0's stream, CC11 unviolated.
+
+The surviving chain is headed by `desc_page_id` whatever the absorber is:
+the `lo = 0` directory row records `{lo = 0, owner_core, desc_page_id}`
+(`Catalog::OpenRangeRows`), so `desc_page_id` is the low range's head,
+and a merged relation with **zero directory rows** resolves through
+`sys.tables` — `desc_page_id` for the chain, `owner_core` for the core.
+
+#### The final directory state is zero rows
+
+Not one row. A non-empty directory must partition the whole id space from
+`lo = 0` (CC9), so a one-range relation is represented by **absence**,
+which is the shape `TableAccess::ranges.empty()` reads and the branch
+RD3's zero-cost invariant is taken from. A merged relation is
+indistinguishable from a never-split one at every read of the catalog.
+
+#### Two-phase, and the residue a failure leaves (AX-D5)
+
+The merge is **synchronous and completes before the DDL transaction
+begins**. It is not inside that transaction and cannot be: a page handoff
+is not undoable by the catalog transaction's compensation. So the
+statement is *merge, then build*, and **a DDL half that then fails leaves
+the relation merged.** That is a valid state — one range is always valid
+— but it is an observable side effect of a failed statement, and it is
+specified here rather than discovered: a `CREATE INDEX` that fails on a
+duplicate key, on a budget, or on any later refusal has still coalesced
+the relation, and the relation does not re-split.
+
+The cost that rides with it is **DDL latency proportional to pages
+moved**, accepted at ratification and measured by AX8.
+
+#### No re-split once an auxiliary exists (AX-D6)
+
+`RangeEligible` refuses a split on a relation carrying an auxiliary,
+exactly as before. So **spreading and auxiliaries are mutually exclusive
+on one relation** until R5: a coalesced relation forgoes spreading's
+measured gain (1.51× on the group arm at k = 5,
+`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`)
+for as long as its auxiliary lives. The line is drawn in the same place
+twice, deliberately — changing it *is* the auxiliary-under-a-boundary
+question AX-D1 moved to R5.
+
+#### Only an explicit statement coalesces (AX-D12)
+
+The trigger set is exactly the four explicit DDL callers of
+`RefuseAuxiliaryOnSplitRelation`: `CREATE INDEX`, `CREATE CABIN`,
+`CREATE ASSERTION`, and an FK naming the relation on either side. **The
+Cabin optimizer's automatic path keeps the refusal**, and its decline
+stays visible in §6a's decline counters. A synchronous merge is a large
+physical page movement, and an unattended background controller
+triggering one is against Part I's enact-through-named-gates discipline
+(`docs/spec/physical-optimizer.md`): physical change happens where the
+operator can see it. `RefuseAuxiliaryOnSplitRelation` therefore **stays**
+— callable, and called — rather than being deleted with its four
+converted callers.
+
 ## 7. Cancellation, Errors, Early Termination
 
 - `ORDER BY pk + LIMIT`: when the session core has framed the LIMIT-th row,

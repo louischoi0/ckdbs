@@ -5971,7 +5971,14 @@ Status CommandDispatcher::VisitRelation(
                     }
                 }
                 for (const catalog::RangeTarget& range : touched.value()) {
-                    if (Status s = heap::ChainVisit(page_store_, range.entry_page, page_access, fn);
+                    // Bounded by the range's own `hi` (§6c): once
+                    // coalescing links the per-range chains, a walk from
+                    // one head runs into the next range's pages, and this
+                    // visitor is UPDATE's and DELETE's - the rows past the
+                    // boundary would be written twice, once here and once
+                    // by the next iteration.
+                    if (Status s = heap::ChainVisit(page_store_, range.entry_page, page_access, fn,
+                                                    nullptr, range.hi);
                         !s.ok()) {
                         return s;
                     }

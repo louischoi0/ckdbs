@@ -1584,7 +1584,7 @@ private:
         // ranges it owns and no others, because the rest are another
         // stage's and the session concatenates them. One entry - the
         // relation's own head - for every unsplit relation.
-        std::vector<PageId> walk_heads;
+        std::vector<catalog::TableAccess::WalkSegment> walk_heads;
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -1858,9 +1858,20 @@ private:
             } else if (walk_heads.empty()) {
                 co_return Status::OK();  // split, and no range of ours: no rows
             } else {
-                cur = walk_heads.front();
+                cur = walk_heads.front().head;
             }
         }
+        // The segment's bound (§6c). Unsplit and btree walks are
+        // unbounded: `walk_heads` is filled only for a split heap
+        // relation, so this is `kUnboundedWalk` on every path RD3's
+        // zero-cost invariant covers. A **resumed** walk re-derives it
+        // from `range_index`, which the mark carried - the bound belongs
+        // to the segment, and a resume that took the first segment's
+        // bound would stop a later one at the wrong page.
+        const auto walk_bound = [&]() -> std::uint64_t {
+            if (range_index >= walk_heads.size()) return heap::kUnboundedWalk;
+            return walk_heads[range_index].stop_at_min_key;
+        };
 
         // ---- The page loop, owned by the coroutine (P4d-3) ---------------
         //
@@ -1888,7 +1899,8 @@ private:
             auto next = is_btree ? btree::BtreeVisitLeafPage(store_, cur,
                                                              storage::PageAccess::kRead, visit_fn)
                                  : heap::ChainVisitOnePage(store_, cur,
-                                                           storage::PageAccess::kRead, visit_fn);
+                                                           storage::PageAccess::kRead, visit_fn,
+                                                           nullptr, walk_bound());
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) {
@@ -1906,7 +1918,7 @@ private:
                 // kInvalidPageId).
                 if (!cut && !is_btree && range_index + 1 < walk_heads.size()) {
                     ++range_index;
-                    cur = walk_heads[range_index];
+                    cur = walk_heads[range_index].head;
                     continue;
                 }
                 // Both endings arrive here - the page primitives answer a

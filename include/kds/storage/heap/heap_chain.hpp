@@ -80,6 +80,30 @@ namespace kds::heap {
 // this header's public spelling.
 inline constexpr std::uint32_t kMaxChainPages = storage::kMaxPageWalkLength;
 
+// **The range bound on a walk** (`docs/spec/crosscore.md` §6c, AX): a page
+// whose `min_key` is at or above this belongs to a *later* range and the
+// walk stops before visiting it.
+//
+// Why a walk needs telling at all. Until AX a per-range walk ended where
+// the range ended, because a range's chain ended there - and that was a
+// coincidence of how ranges were made, not a property of ranges.
+// Coalescing links the per-range chains tail-to-head (§6c), so a walk from
+// range i's head now runs straight into range i+1's pages unless it is
+// told where range i stops. Told from the *directory*, which is what
+// states a range's extent, rather than from the chain's shape.
+//
+// Exact because a range's head page carries `min_key = lo`
+// (`Catalog::CreateRangeEntryPage`) and every later page of that chain
+// carries a higher one: the first page at or above `hi` is the successor's
+// head, and no page of this range can reach it.
+//
+// **A sentinel, not a quantity**: `~0` is above every 40-bit Keystone id,
+// so the default admits every page and an unbounded walk pays one
+// comparison it always fails. Deliberately not spelled `kIdSpaceEnd` -
+// that constant is the catalog's statement about the pk space and this
+// header does not depend on the catalog.
+inline constexpr std::uint64_t kUnboundedWalk = ~std::uint64_t{0};
+
 struct ChainInsertResult {
     PageId page_id;          // where the tuple actually landed
     std::uint16_t slot;      // slot index within that page
@@ -202,10 +226,13 @@ StatusOr<ChainAppendBatchResult> ChainAppendBatch(
 // flooding the pool. Null is the ordinary path, byte-identical to before
 // the parameter existed. Ignored for a write walk: the ring never
 // bypasses the dirty protocol.
+// `stop_at_min_key` bounds the walk to one range (kUnboundedWalk above);
+// a caller walking a whole relation leaves it alone.
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher = nullptr);
+    storage::ScanFetcher* fetcher = nullptr,
+    std::uint64_t stop_at_min_key = kUnboundedWalk);
 
 // One page of the walk ChainVisit makes: calls `fn` per slot of exactly
 // `page_id`, under the same visitor contract, and returns the page the
@@ -223,9 +250,17 @@ Status ChainVisit(
 // caller that suspends between pages must not pass one. The caller owns
 // the cycle guard the loop here applied (storage::CheckPageWalkBudget);
 // ChainVisit remains the whole-chain form and applies its own.
+//
+// `stop_at_min_key` is the range bound (kUnboundedWalk above). It is
+// tested on **this** page, before any slot is visited, and a page at or
+// above it answers kInvalidPageId - so a caller stepping the loop itself
+// gets the bound applied without a second fetch of the page's header.
+// The head of a range never trips it: a head carries `min_key = lo` and
+// the bound is that range's `hi`.
 StatusOr<PageId> ChainVisitOnePage(
     storage::PageStore& store, PageId page_id, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
-    storage::ScanFetcher* fetcher = nullptr);
+    storage::ScanFetcher* fetcher = nullptr,
+    std::uint64_t stop_at_min_key = kUnboundedWalk);
 
 }  // namespace kds::heap

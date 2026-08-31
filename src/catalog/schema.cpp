@@ -89,9 +89,13 @@ Status CheckKeystoneColumn(const Schema& schema) {
     return Status::OK();
 }
 
-std::vector<PageId> TableAccess::WalkHeadsFor(std::uint32_t core_id, PkSpan span) const {
-    if (ranges.empty()) return {desc_page_id};
-    std::vector<PageId> heads;
+std::vector<TableAccess::WalkSegment> TableAccess::WalkHeadsFor(std::uint32_t core_id,
+                                                                PkSpan span) const {
+    // An unsplit relation is one segment over the whole id space: no page
+    // can carry a `min_key` at `kIdSpaceEnd`, so the bound never fires and
+    // this is the walk it always was.
+    if (ranges.empty()) return {WalkSegment{desc_page_id, kIdSpaceEnd}};
+    std::vector<WalkSegment> heads;
     heads.reserve(ranges.size());
     for (const RangeTarget& range : ranges) {
         // Owned here **and** inside this stage's slice. Both halves are
@@ -101,7 +105,12 @@ std::vector<PageId> TableAccess::WalkHeadsFor(std::uint32_t core_id, PkSpan span
         // ownership interleaves.
         if (range.owner_core != core_id) continue;
         if (range.lo >= span.hi || span.lo >= range.hi) continue;
-        heads.push_back(range.entry_page);
+        // The range's own `hi`, not the span's: the span says which
+        // segments this stage covers, the range says where each one ends.
+        // Bounding by the span would cut the last segment short of rows
+        // the stage is responsible for whenever the span ends mid-range,
+        // which a pk predicate routinely does.
+        heads.push_back(WalkSegment{range.entry_page, range.hi});
     }
     return heads;
 }
