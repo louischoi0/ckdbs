@@ -53,6 +53,39 @@ real simplification and it is a *third* field on the outcome in a change
 that already added two; the session's two-sided read is documented and
 tested, and the cut is better taken on its own.
 
+### KW-D6's paired reading, which the decision made mandatory
+
+`bench/v2.7.0/results-kwp-cutover-v2.2.1-160-geecda94.md`. Both arms built
+from a clean `git archive` of their own commit — `04d53f4` before the cut,
+`eecda94` after — Release, one quiet host, `tools/benchmark.py` at 200,
+1,000 and 10,000 rows, each arm through **its own tree's** client.
+
+- **The write path shows no cutover cost.** `insert` and `update` are
+  fsync-bound under `durability = group` and sit inside the run's own 4.5%
+  noise floor at every size. A framing change cannot show up against a
+  1 ms fsync.
+- **The read path shows a real one, and it is entirely client-side**: a
+  flat ~35-46 us per statement plus ~4 us per row returned. That is 9-11x
+  on a full scan and +7.1% on a point select at 10,000 rows — the same
+  mechanism at two scales, and the reason reporting one row-set size would
+  have been true only of that size.
+- **The server got faster.** 223 us of engine time against 247 us on a
+  1,000-row scan, because it no longer formats a reply string. Every
+  microsecond the cutover cost moved from the server to the client.
+- **42% of the client-side delta is not the wire.** It is
+  `ckdbs_cli.ServerConnection`'s shim reproducing the newline protocol's
+  string shape so this repository's thirty drivers keep reading it - a
+  cost of the *tooling* choice, and one any client reproducing that shape
+  would pay.
+- **The Nagle stall does not appear.** The 23 qps / 42 ms per statement
+  this milestone's own history warns about is absent: p99 tops out at
+  170.3 us at 10,000 resident rows, four orders of magnitude below it.
+  `TCP_NODELAY` and the coalesced PARSE/BIND/EXECUTE/SYNC batch hold.
+
+And the sentence KW-D6 asked the results files to carry: **every `bench/`
+number before this one is a newline-protocol number**, measured through a
+different client surface, and must not be diffed against a KWP one.
+
 **What the milestone did not do**, stated where it will be looked for: no OUTER JOIN, no `IN (value list)`, no cursors, no sort spill, no index-served `ORDER BY`; `ALTER TABLE`, cabin, assertion and FK are no more transactional than they were; nothing is reclaimed. It does make portal suspension exist, which is the mechanism a cursor and a large result set both need.
 
 ---
