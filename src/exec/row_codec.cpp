@@ -997,23 +997,14 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
                      std::vector<PendingSpill>* spills) {
     if (spills != nullptr) spills->clear();
-    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
-    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
-    if (out.size() != schema.columns.size()) {
-        return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
-                                        " slot(s) for a schema of " +
-                                        std::to_string(schema.columns.size()) + " column(s)");
-    }
-
-    // Checked redundancy (invariant 13): the row size is a schema constant,
-    // so a stored payload of any other length is not a row this build can
-    // interpret - the slot's `length` and the header's `data_len` add no
-    // information the schema does not already give.
-    if (payload.size() != layout.row_size) {
-        return Status::Corruption("tuple payload is " + std::to_string(payload.size()) +
-                                   " bytes for a relation whose row size is " +
-                                   std::to_string(layout.row_size));
-    }
+    // The same four checks DecodeColumnsInto makes, through the same
+    // function - which is the point. Calling the two Status-returning
+    // checkers directly constructed and destroyed a Status per decoded row
+    // even when both passed, the cost AP02 removed from the sibling path
+    // and left standing here; and stating the checks twice invited the two
+    // statements of them to drift (OPT-004,
+    // docs/inflight/in-progress/cip-path-optimizer.md).
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
 
     auto id = RowKeystoneId(payload);
     if (!id.ok()) return id.status();
