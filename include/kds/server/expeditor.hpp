@@ -438,8 +438,37 @@ public:
 
         // RD5's `range_size_ids`; `server/range_alloc.hpp` owns what it
         // means, and `kRangeSizeIdsDefault` carries the sweep DA1 took the
-        // value on. `kRangeSizeOff` (0) is still the off-switch and is what
-        // an operator sets to get the pre-DA1 engine back.
+        // *size* on.
+        //
+        // **Ships OFF since the 2026-08-31 operator amendment, which
+        // reverses DA1's arming.** Insert spreading becomes a **per-relation
+        // option the user decides**, default off, and the two halves of it
+        // are now separate facts: *whether* a relation spreads is the
+        // relation's, and *how big a range is* stays this key. Until the
+        // relation-level flag exists (see below), "the user has not asked"
+        // is every relation, so the honest instance default is
+        // `kRangeSizeOff` and an operator who wants the DA1 engine sets
+        // `range_size_ids = 65536` explicitly.
+        //
+        // **What the amendment says about ids, and it is not new
+        // behaviour**: with spreading **off** a relation's pk is an
+        // identity *and* a sequence - monotonic and gapless in issue order,
+        // which is what one core issuing from one chain has always given.
+        // With it **on** the pk is an identity and nothing more: each core
+        // issues from its own leased block, so ids do not ascend in issue
+        // order across the relation (invariant 11's §4.1a amendment states
+        // the mechanism). What changes is that this stops being an
+        // emergent property of a configuration and becomes a **promise a
+        // relation carries**, which is why the switch belongs on the
+        // relation.
+        //
+        // **What is not built, named rather than implied**: the per-relation
+        // flag itself. It has no room on `SysTableRow` - every offset there
+        // is fixed and `Decode` refuses any size but the exact one - so it
+        // is a format-version event (superblock 15 -> 16, the
+        // `anchor_page_id` precedent), and it has no syntax, because
+        // `WITH (...)` table options are V11 and unbuilt
+        // (`docs/spec/parser-v2.md`). Neither is invented here.
         //
         // **Armed means armed on peers.** This field reaches a dispatcher
         // through `CoreRuntime::Open` alone (`core_runtime.cpp`'s
@@ -449,7 +478,7 @@ public:
         // pump it gates would record demand nothing could satisfy. At
         // `cores = 1` there is no other dispatcher, so this value reaches
         // none and no range ever opens.
-        std::uint64_t range_size_ids = kRangeSizeIdsDefault;
+        std::uint64_t range_size_ids = kRangeSizeOff;
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a

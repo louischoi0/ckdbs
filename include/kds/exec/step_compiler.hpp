@@ -95,4 +95,35 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 Status CompileAssignments(const catalog::TableAccess& access,
                           const std::vector<parser::Assignment>& assignments);
 
+// **The structure a shipped step lost, re-derived where it will run**
+// (work order SA, row SA-T1; the ratification is SA-R5).
+//
+// `ShippedForm` (`server/step_descriptor.cpp`) downgrades every
+// structure-served step to its walk before the descriptor is encoded,
+// because an index probe or a Cabin probe carries **core-local structure
+// state** - page ids and cabin ids the executing core did not mint. That
+// downgrade is correct and stays; what it costs is the descent, and the
+// executing core is the one place that can give it back. It compiles the
+// step again against **its own** `TableAccess` and serves whatever it can:
+// the same argument statement shipping makes for carrying text rather than
+// a plan, applied to the one part of a step that is core-local.
+//
+// The ladder inside is `Compile`'s, in `Compile`'s order, calling
+// `Compile`'s functions - index before Cabin, literal before correlated -
+// so it cannot drift from the planner's. **Declining is never wrong**: the
+// walk returns the identical rows, because the residual filters and this
+// touches only the access path.
+//
+// `outer` is the enclosing (`up = 1`) row's layout, which is a consuming
+// stage's forwarded upstream columns, and **null on a leaf stage** - where
+// the descriptor's own rule already guarantees no correlated form can
+// apply. Only a step that arrived as `kScan` is reconsidered; a `kRange`
+// or `kFilterScan` was the session's compiler's answer and re-deciding it
+// here would be a second planner rather than a restored one.
+//
+// The descriptor's refusal to *encode* a structure step stays as the
+// backstop for any caller outside this route (SA-R5).
+Step RestructureForExecutingCore(Step step, const catalog::TableAccess& access,
+                                 const catalog::Schema* outer);
+
 }  // namespace kds::exec

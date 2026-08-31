@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
@@ -353,7 +354,8 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
     const catalog::Schema& schema = access.value()->schema;
 
     if (!env.upstreams.empty()) {
-        OpenConsumingStage(head, env.upstreams, env.output, std::move(step.value()), schema);
+        OpenConsumingStage(head, env.upstreams, env.output, std::move(step.value()),
+                           *access.value());
         return;
     }
 
@@ -407,6 +409,17 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
         pred.lhs.rel_slot = 0;
         if (pred.rhs.kind == exec::OperandKind::kColumn) pred.rhs.column.rel_slot = 0;
     }
+    // **SA-T1: the descent the ship-time downgrade dropped, taken back
+    // here.** After the re-slotting and not before it - the ladder reads
+    // `rel_slot` to tell this step's own columns from an enclosing row's,
+    // and a step still carrying the session's slot numbers would have
+    // every conjunct classified as somebody else's.
+    //
+    // No `outer`: a leaf's references all resolve inside the step and its
+    // key is a literal (checked above), so no correlated form can apply and
+    // passing one would only invite the ladder to look for what cannot be
+    // there.
+    local = exec::RestructureForExecutingCore(std::move(local), *access.value(), nullptr);
     chain.steps.push_back(std::move(local));
 
     Pipeline pipe;
@@ -469,7 +482,9 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
 void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head,
                                           std::span<const StepOpenUpstream> ups,
                                           std::span<const StepOutputColumn> output,
-                                          exec::Step step, const catalog::Schema& schema) {
+                                          exec::Step step,
+                                          const catalog::TableAccess& access) {
+    const catalog::Schema& schema = access.schema;
     const std::uint32_t session = head.tag.session_core;
     if (!submit_) {
         SendError(head.tag, session,
@@ -562,10 +577,24 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head,
     // on every open that names none, which is every leaf read of an
     // unsplit relation and every open written before this row.
     chain.walk_span = catalog::PkSpan{head.range_lo, head.range_hi};
-    chain.steps.push_back(std::move(step));
 
     catalog::Schema input_schema;
     input_schema.columns = up.forwarded;
+
+    // **SA-T1, and this is the shape it was built for.** A consuming stage
+    // is the inner side of a cross-core join: the session compiled it to a
+    // correlated index or Cabin probe, `ShippedForm` downgraded it to the
+    // walk, and until this row the owner walked its whole relation once per
+    // forwarded row. The `outer` the ladder needs is exactly the upstream
+    // layout - the enclosing `up = 1` row the references above were just
+    // checked against - so the correlated arms can compare descriptors and
+    // set `key_from`.
+    //
+    // Built before the step is pushed, because the ladder reads the layout
+    // and the chain takes the step by value. Nothing else moves.
+    step = exec::RestructureForExecutingCore(std::move(step), access, &input_schema);
+    chain.steps.push_back(std::move(step));
+
     catalog::Schema output_schema;
     output_schema.columns.reserve(output.size());
     for (const StepOutputColumn& col : output) {

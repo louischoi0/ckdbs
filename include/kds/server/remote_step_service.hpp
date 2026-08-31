@@ -446,9 +446,14 @@ private:
     // the **same** layout and names the same `downstream_step` - they are
     // one step's stages - so the first decides the input schema and the
     // rest are checked against it rather than each building their own.
+    //
+    // Takes the **`TableAccess`**, not the schema it used to take: SA-T1's
+    // re-derivation needs this core's indexes and cabin mask, and the
+    // schema is one field of the thing that carries them. One parameter
+    // fewer, not one more.
     void OpenConsumingStage(const StepOpenHead& head, std::span<const StepOpenUpstream> ups,
                             std::span<const StepOutputColumn> output, exec::Step step,
-                            const catalog::Schema& schema);
+                            const catalog::TableAccess& access);
 
     // The streaming producer (P4d-4a): one coroutine per open pipeline,
     // owning the writer and the executor run. It re-finds its Pipeline by

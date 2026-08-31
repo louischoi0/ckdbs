@@ -130,28 +130,42 @@ TEST(ExpeditorConfigTest, DefaultsAreUsedForKeysTheFileOmits) {
 }
 
 TEST(ExpeditorConfigTest, TheTwoRatifiedDefaultsAreWhatAnOmittedKeyLeaves) {
-    // **DA1 and DA2's values, asserted where they ship from.** Both are
+    // **The shipped values, asserted where they ship from.** Both are
     // defaults on `Expeditor::Config`, and `Expeditor::Config` is
     // instantiated nowhere else in the suite - so without this test the
     // engine's shipped `range_size_ids` and `placement` have no coverage at
     // all and a re-edit of either initialiser passes 3,000 green tests.
     //
-    // The pair is asserted together because they were ratified together and
-    // DA1's sweep was run under DA2's policy: a `range_size_ids` value read
-    // off a run of `rotate` would not be the number DA1 took.
+    // **`range_size_ids` ships OFF since the 2026-08-31 operator
+    // amendment**, which reverses DA1's arming: insert spreading is a
+    // per-relation option the user decides, default off, so no relation
+    // spreads until one asks. This assertion changed with that amendment
+    // and it is *supposed* to - it is the guard DA1 put here precisely so
+    // the default could not move without somebody saying so, and this is
+    // somebody saying so.
+    //
+    // `kRangeSizeIdsDefault` is unchanged and is no longer a default: it is
+    // the **size** a range measures once something asks for one, which is
+    // still DA1's swept number and still the lease grant (D6). The two
+    // halves - whether, and how big - are different facts now, and only the
+    // first moved.
     Expeditor::Config config;
     ASSERT_TRUE(config.ApplyFile(ParseOk("port = 6000\n")).ok());
-    EXPECT_EQ(config.range_size_ids, kRangeSizeIdsDefault)
-        << "DA1 ships range_size_ids armed at 65,536";
-    EXPECT_EQ(config.range_size_ids, 65536u) << "the value, not just the name";
+    EXPECT_EQ(config.range_size_ids, kRangeSizeOff)
+        << "spreading ships off; a relation opts in, not an instance";
+    EXPECT_EQ(config.range_size_ids, 0u) << "the value, not just the name";
     EXPECT_EQ(config.placement, catalog::PlacementPolicy::kCreatingCore)
         << "DA2 ships creating-core placement";
 
-    // `kRangeSizeOff` stays reachable and is what returns the pre-DA1
-    // engine, which is the whole of the off-switch's contract.
-    Expeditor::Config off;
-    ASSERT_TRUE(off.ApplyFile(ParseOk("range_size_ids = 0\n")).ok());
-    EXPECT_EQ(off.range_size_ids, kRangeSizeOff);
+    // The DA1 engine stays reachable, explicitly, which is what an operator
+    // sets to get the measured configuration back - every
+    // `bench/v2.7.0/results-ratification-da-*` and scenario-2-cores number
+    // was taken under it, and they are now numbers for a configuration
+    // rather than for a default.
+    Expeditor::Config armed;
+    ASSERT_TRUE(armed.ApplyFile(ParseOk("range_size_ids = 65536\n")).ok());
+    EXPECT_EQ(armed.range_size_ids, kRangeSizeIdsDefault);
+    EXPECT_EQ(armed.range_size_ids, 65536u);
 }
 
 TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {

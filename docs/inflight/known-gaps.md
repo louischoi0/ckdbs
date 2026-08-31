@@ -928,8 +928,16 @@ still waits on its own gate, so:
   Nothing merges ranges (the mover is R5, unbuilt), so **order now decides
   and the decision is permanent**: index-then-write keeps the relation
   unsplittable through `RangeEligible`'s gate, write-then-index is refused
-  for the life of the relation. Under DA1 the second order is what an
-  ordinary session produces. `DROP TABLE` + recreate is the only way back.
+  for the life of the relation. `DROP TABLE` + recreate is the only way back.
+
+  **Reachability narrowed 2026-08-31 by the operator's amendment**, and
+  the defect is not fixed by it: spreading is now a per-relation option
+  shipping **off**, so "the second order is what an ordinary session
+  produces" — true under DA1 — is no longer true of the shipped engine.
+  Reaching this now takes a relation that asked to spread. **Work order
+  SA is what narrows the gate itself** (SA-T2 for the Cabin class,
+  SA-T3 for per-owner index builds, SA-T6 for FK), leaving UNIQUE and
+  the Bound Cabin as the named residue.
 
   The other nine, each a path that answered before and refuses now, all in
   `src/server/command_dispatcher.cpp` unless named otherwise:
@@ -951,13 +959,18 @@ still waits on its own gate, so:
     `range_split_decline_*` on `SHOW META`, `surveyed_ranges=n/m` on `SHOW
     RELAYOUT`).
 
-  **No test exercises a defaulted `Expeditor` end to end.** Every
+  **No test exercises a spreading `Expeditor` end to end.** Every
   `CoreRuntime` fixture sets `range_size_ids` explicitly, and
   `Expeditor::Config` is constructed only in `tests/config_file_test.cpp` —
-  so a green suite says nothing about the flip's behaviour. DA1's enactment
-  added the assertion that the two ratified defaults *are* what an omitted
-  key leaves (`ExpeditorConfigTest`), which closes the value question and
-  not the behaviour one.
+  so a green suite says nothing about the armed configuration's behaviour.
+  `ExpeditorConfigTest` closes the *value* question and not the behaviour
+  one, and it now pins `kRangeSizeOff` rather than DA1's 65,536: the
+  2026-08-31 amendment moved the default, and that assertion is the guard
+  that made the move visible instead of silent. **What the amendment does
+  not do is make this entry smaller** — an operator who sets
+  `range_size_ids = 65536` runs exactly the configuration nothing covers,
+  and every `bench/v2.7.0/results-ratification-da-*` number was taken
+  under it.
 
 - **A spread relation is readable up to 64 ranges, and a range is a lease
   block** (R4, 2026-08-29,
@@ -1728,11 +1741,30 @@ still waits on its own gate, so:
   consuming stage). The fix closes more than the entry named: a
   **`kCabinProbe`** on a peer-owned relation had hit the descriptor
   refusal since Cabins landed — long before `881f69a`, never recorded
-  here — and ships as its walk by the same route now. What remains open:
-  the peer runs the *walk*, not the structure — re-deriving the index or
-  Cabin from the peer's own catalog is the recorded improvement, and the
-  descriptor's refusal stays as the backstop for any caller that skips
-  the sanctioned route.
+  here — and ships as its walk by the same route now. ~~What remains open:
+  the peer runs the *walk*, not the structure~~ — **closed 2026-08-31 by
+  SA-T1** (work order SA, ratified as SA-R5):
+  `exec::RestructureForExecutingCore` compiles the arrived step again
+  against the **executing** core's own `TableAccess` and serves whatever
+  that core can — the literal index and Cabin arms on a leaf stage, and
+  the **correlated** arms on a consuming stage, where the enclosing row is
+  the forwarded upstream layout and the join inner is the shape that
+  wanted it. It is the compiler's own ladder in the compiler's own order,
+  not a second one, for the reason a second formatter is forbidden beside
+  it. The descriptor's refusal stays as the backstop for any caller that
+  skips the sanctioned route, and a step that arrived as anything but
+  `kScan` is left alone — re-deciding a `kRange` or a `kFilterScan` would
+  be a second planner disagreeing with the plan the session renders
+  against.
+
+  **What the cross-core suite could not have caught, stated because it is
+  the trap this class of change carries**: every pipeline test asserts the
+  rows are byte-identical to local execution, and they are identical
+  whether or not the descent came back — that is the whole point of the
+  downgrade. So the tests that hold this assert the **kind** on the round
+  trip (`ShippedStructureTest`), including that `ShippedForm` really
+  downgraded first and that a leaf stage with no enclosing row
+  **declines** the correlated arm rather than guessing.
 
 - **Cross-core execution is two shapes wide, and the second is a join.**
   P4a-P4c (2026-08-10) built the single-relation remote read; **P4d

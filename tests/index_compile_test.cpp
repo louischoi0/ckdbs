@@ -5,7 +5,10 @@
 
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/step_descriptor.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 // `kIndexProbe` / `kIndexRange` in the compiler (docs/spec/index.md §§8-9,
@@ -580,6 +583,176 @@ TEST_F(IndexCompileTest, TheSwappedWritingGetsALookupAndAnIndexedInnerSide) {
     // Same rows as the l-first writing, which is the equivalence the two
     // access kinds must not disturb.
     EXPECT_EQ(Run(swapped), Run("SELECT l.v FROM l JOIN u ON l.uid = u.id WHERE u.id = 3"));
+}
+
+// ---- SA-T1: the structure a shipped step lost, taken back where it runs --
+//
+// `ShippedForm` downgrades every structure-served step to its walk before
+// the descriptor is encoded, because an index probe carries page ids the
+// executing core did not mint. The executing core then walks a relation it
+// could have descended - `known-gaps.md`'s recorded improvement, promoted
+// to a task by SA-R5.
+//
+// **These tests exist because the cross-core suite cannot fail if the
+// re-derivation never fires.** Every pipeline test asserts the rows are
+// byte-identical to local execution, and they are identical *either way* -
+// the whole point of the downgrade is that a walk answers the same rows.
+// A green suite therefore says nothing about whether the descent came
+// back, which is the trap `CLAUDE.md` names against DA1's own default. So
+// these assert the **kind**, on the round trip the owner actually
+// performs: compile it, downgrade it as the wire does, re-derive it as the
+// executing core does.
+
+class ShippedStructureTest : public IndexCompileTest {
+protected:
+    // The `TableAccess` an executing core would resolve for `name` out of
+    // its own catalog - which is the whole input to the re-derivation.
+    const catalog::TableAccess& AccessFor(const std::string& name) {
+        auto oid = boot_->catalog.FindTableOidByName(name);
+        EXPECT_TRUE(oid.ok()) << oid.status().message();
+        auto access = boot_->catalog.InitTableAccess(oid.value());
+        EXPECT_TRUE(access.ok()) << access.status().message();
+        return *access.value();
+    }
+
+    // The last step of `sql`'s chain, downgraded exactly as the wire
+    // downgrades it and **normalised exactly as the two remote shapes
+    // arrive** (`OpenConsumingStage`'s fact 4): this step's own columns at
+    // `(up = 0, slot = 0)`, and any column of an earlier step - which on a
+    // consuming stage is the forwarded upstream row - at `(up = 1,
+    // slot = 0)`.
+    //
+    // Getting that mapping wrong is not a cosmetic test bug: it is the
+    // difference between "an equality against the enclosing row" and "an
+    // equality between two of my own columns", and the ladder answers the
+    // two differently. This helper had it wrong once and the correlated
+    // case passed for the wrong reason.
+    Step Downgraded(const std::string& sql) {
+        auto parsed = parser::Parse(sql);
+        EXPECT_TRUE(parsed.ok()) << parsed.status().message();
+        auto chain = Compile(boot_->catalog, std::get<parser::SelectStmt>(parsed.value()));
+        EXPECT_TRUE(chain.ok()) << chain.status().message();
+        if (!chain.ok() || chain.value().steps.empty()) return Step{};
+        const std::uint16_t own = static_cast<std::uint16_t>(chain.value().steps.size() - 1);
+        Step shipped = server::ShippedForm(chain.value().steps.back());
+        auto normalise = [own](ColumnRef& ref) {
+            if (ref.up != 0) return;  // already an enclosing chain's
+            if (ref.rel_slot == own) {
+                ref.rel_slot = 0;
+            } else {
+                ref.up = 1;
+                ref.rel_slot = 0;
+            }
+        };
+        if (shipped.key.has_value() && shipped.key->kind == OperandKind::kColumn) {
+            normalise(shipped.key->column);
+        }
+        for (StepPredicate& pred : shipped.residual) {
+            normalise(pred.lhs);
+            if (pred.rhs.kind == OperandKind::kColumn) normalise(pred.rhs.column);
+        }
+        return shipped;
+    }
+
+    // One step, through the wire's own downgrade and back.
+    Step RoundTrip(const std::string& sql, const std::string& relation,
+                   const catalog::Schema* outer = nullptr) {
+        return RestructureForExecutingCore(Downgraded(sql), AccessFor(relation), outer);
+    }
+};
+
+TEST_F(ShippedStructureTest, TheDowngradeIsRealAndTheReDerivationUndoesIt) {
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    ASSERT_EQ(KindOf("SELECT * FROM t WHERE a = 1"), "IndexProbe");
+
+    // The downgrade first, asserted on its own: a test that only checked
+    // the round trip would pass with `ShippedForm` doing nothing.
+    const Step shipped = Downgraded("SELECT * FROM t WHERE a = 1");
+    ASSERT_EQ(shipped.kind, AccessKind::kScan) << "ShippedForm did not downgrade";
+    EXPECT_FALSE(shipped.index.has_value());
+
+    // And back, against the executing core's own catalog.
+    const Step served = RoundTrip("SELECT * FROM t WHERE a = 1", "t");
+    EXPECT_EQ(served.kind, AccessKind::kIndexProbe);
+    ASSERT_TRUE(served.index.has_value());
+    // The shape the new kind implies is restored with it - `ShippedForm`
+    // cleared it, and a step whose kind and access shape disagree is the
+    // lie the descriptor refuses to put on the wire.
+    EXPECT_FALSE(served.access_columns.empty());
+}
+
+TEST_F(ShippedStructureTest, ARangeAndACabinComeBackToo) {
+    Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    Ok("CREATE CABIN ON t(c)");
+    EXPECT_EQ(RoundTrip("SELECT * FROM t WHERE a BETWEEN 2 AND 5", "t").kind,
+              AccessKind::kIndexRange);
+    EXPECT_EQ(RoundTrip("SELECT * FROM t WHERE c = 4", "t").kind, AccessKind::kCabinProbe);
+}
+
+TEST_F(ShippedStructureTest, TheCorrelatedFormsNeedTheEnclosingRowAndDeclineWithoutIt) {
+    // **The consuming stage's shape, which is the one the join inner
+    // takes.** `l.uid = u.id` is an equality against a column of the
+    // *enclosing* row, so the ladder can only reach it with a layout to
+    // resolve that column's descriptor against - a leaf stage has none,
+    // and passing none must decline rather than guess.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+
+    // **Deliberately no `WHERE` on the outer.** With one, equality
+    // propagation puts a *literal* on the inner (`l.uid = 3`) and the
+    // plain `IndexProbeOf` arm serves it - which is what the next test
+    // asserts, and which would make this one pass for the wrong reason.
+    const std::string join = "SELECT l.v FROM u JOIN l ON l.uid = u.id";
+    ASSERT_NE(Plan(join).find("step 1 IndexProbe"), std::string::npos) << Plan(join);
+
+    // With no enclosing layout - a leaf stage - the correlated arm is not
+    // even asked, and the step stays the walk it shipped as.
+    EXPECT_EQ(RoundTrip(join, "l").kind, AccessKind::kScan);
+
+    // With one, the descent comes back and keys itself per outer row.
+    const catalog::Schema outer = AccessFor("u").schema;
+    const Step served = RoundTrip(join, "l", &outer);
+    EXPECT_EQ(served.kind, AccessKind::kIndexProbe);
+    ASSERT_TRUE(served.index.has_value());
+    EXPECT_TRUE(served.index->key_from.has_value())
+        << "a correlated probe must name where its key comes from";
+}
+
+TEST_F(ShippedStructureTest, ALiteralPropagatedOntoTheInnerTakesThePlainArm) {
+    // The same join with a restriction on the outer. Equality propagation
+    // has already put `3` on the inner side at compile time, so the
+    // re-derivation serves it **without** an enclosing row - which is the
+    // arm that needs no `outer` at all, and the reason a leaf stage is
+    // still worth re-deriving.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+
+    const std::string join = "SELECT l.v FROM u JOIN l ON l.uid = u.id WHERE u.id = 3";
+    const Step served = RoundTrip(join, "l");
+    EXPECT_EQ(served.kind, AccessKind::kIndexProbe);
+    ASSERT_TRUE(served.index.has_value());
+    EXPECT_FALSE(served.index->key_from.has_value())
+        << "a compile-time key needs no per-row encode, so it must not defer one";
+}
+
+TEST_F(ShippedStructureTest, WhatTheReDerivationDeclinesToReconsider) {
+    Ok("CREATE TABLE t (id int64, a int64, b int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+
+    // A pk range was the session compiler's answer *ahead of* the index
+    // arms, and it ships as itself - reconsidering it here would be a
+    // second planner disagreeing with the plan the session renders against.
+    EXPECT_EQ(RoundTrip("SELECT * FROM t WHERE id BETWEEN 1 AND 5", "t").kind,
+              AccessKind::kRange);
+    // An unindexed equality is a filter scan on both cores, for the same
+    // reason: every structure arm already declined.
+    EXPECT_EQ(RoundTrip("SELECT * FROM t WHERE b = 1", "t").kind, AccessKind::kFilterScan);
+    // And a bare walk stays one.
+    EXPECT_EQ(RoundTrip("SELECT * FROM t", "t").kind, AccessKind::kScan);
 }
 
 }  // namespace

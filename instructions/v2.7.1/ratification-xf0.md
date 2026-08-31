@@ -1,5 +1,28 @@
 # Ratification ask XF0 — the typed shipped read: what carries the rows
 
+> **Q1 ANSWERED 2026-08-31 — (a), the answer edge on the existing step
+> wire.** The operator's words: reuse the existing step wire's answer edge
+> — `PipelineTag` + `STEP_BATCH` + credit, the P4b machinery unchanged —
+> with the 992-byte ring slot forcing the rows onto something that
+> batches. That is this file's own recommendation and §4 of
+> `docs/inflight/blocked/workplan-shipped-read-typed.md` is now the design
+> rather than a proposal.
+>
+> **Q2-Q7 are still open, and XF1 does not start on Q1 alone.** Each of
+> the five build tasks names the questions it waits on
+> (`workplan-shipped-read-typed.md` §8): XF1-a needs **Q3** (how the
+> description crosses, and its bound — the engine has *no* column-count
+> cap, so this opens a ceiling or a chunking rule) and **Q6** (16 bytes off
+> the longest shippable statement, 992 → 976); XF1-b needs **Q5** (reuse
+> `kStepBatchTargetBytes`, or scope a new one — a constant, so CLA stops);
+> XF1-d needs **Q7** (what stays refused, by name); XF1-e needs **Q2** (the
+> dedup record's fate for a typed read, the one question with no CLA
+> recommendation).
+>
+> XF1-c — the arrival core's forward path — is the one task Q1 alone
+> settles, and it is not buildable on its own: it has nothing to forward
+> until XF1-a defines the description message.
+
 Drafted 2026-08-31 by CLA on the worktree `xf` at `04403a1`
 (`v2.7.0-22-g04403a1`), as row **XF0** of work order XF
 (`instructions/v2.7.1/workorder-xf.md`). **Nothing is built under this

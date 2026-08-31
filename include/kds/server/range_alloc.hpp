@@ -135,6 +135,18 @@ inline constexpr std::uint64_t kRangeSizeOff = 0;
 // has no caller at all. This value then sizes nothing but a lease block that
 // is never asked for. The suppression is what bounds the *contended* case
 // (§6's HK4): a relation only one peer ever writes settles at two ranges.
+//
+// **This is a size, and since the 2026-08-31 operator amendment it is no
+// longer a default.** The amendment makes insert spreading a per-relation
+// option the user decides, default **off**, so `Expeditor::Config` ships
+// `kRangeSizeOff` and this value is what a range measures **once
+// something has asked for one**. The name is kept rather than a second one
+// minted: DA1's sweep is still the derivation of the number, and the
+// number is still the lease grant (D6's "range = grant"). What moved is
+// which layer answers *whether*, not *how big* - and until the relation's
+// own flag exists (`expeditor.hpp` names its two gates: a `SysTableRow`
+// that has no spare byte, and V11's unbuilt `WITH (...)`), the answer to
+// *whether* is "no relation has asked".
 inline constexpr std::uint64_t kRangeSizeIdsDefault = 65536;
 
 // Counts declined range openings by `(relation, gate)` — C3's decision

@@ -33,6 +33,21 @@ bool IEquals(std::string_view a, std::string_view b) {
 struct BoundRelation {
     std::string binding;  // alias if written, else the table name
     const catalog::TableAccess* access = nullptr;
+    // **A layout with no catalog entry behind it** (SA-T1). Every relation
+    // a *statement* binds has a `TableAccess`; a consuming stage's
+    // forwarded upstream row does not - it is one edge's declared column
+    // list, assembled on the wire from whatever the producing stages
+    // project, and there is no relation on this core to name it.
+    //
+    // Exactly one of the two is set, and `schema()` is the only reader of
+    // either: nothing in the ladder wants a *catalog* for the enclosing
+    // row, it wants the column descriptor to compare against
+    // (`SameDescriptor`, the correlated arms' first guard).
+    const catalog::Schema* layout = nullptr;
+
+    const catalog::Schema& schema() const noexcept {
+        return access != nullptr ? access->schema : *layout;
+    }
 };
 
 // The scope a name resolves against. One per query block; sub-chains
@@ -103,7 +118,7 @@ std::string AggregateLabel(const parser::SelectItem& item) {
 const catalog::SysColumnRow& ColumnAt(const Scope& scope, const ColumnRef& ref) {
     const Scope* s = &scope;
     for (std::uint16_t i = 0; i < ref.up; ++i) s = s->parent;
-    return s->relations[ref.rel_slot].access->schema.columns[ref.col_pos];
+    return s->relations[ref.rel_slot].schema().columns[ref.col_pos];
 }
 
 // The whole right-hand side of one lowered conjunct, coerced or refused.
@@ -992,6 +1007,102 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
 }
 
 }  // namespace
+
+// ---- SA-T1: the structure a shipped step lost, re-derived where it runs --
+//
+// **Why this exists.** `ShippedForm` (`server/step_descriptor.cpp`)
+// downgrades every structure-served step to the walk it would fall back
+// to - `kIndexProbe`, `kIndexRange`, `kCabinProbe` all ship as `kScan`
+// with the aux dropped and the residual intact. That is correct and
+// stays: an index probe carries **core-local structure state**, and a
+// descriptor that carried it would be naming pages and cabin ids another
+// core minted. What it costs is the structure: the executing core walks a
+// relation it could have descended (`known-gaps.md`'s recorded
+// improvement, promoted to a task by SA-R5).
+//
+// **Why it is a re-derivation and not a decode.** The owner does not
+// reconstruct what the session compiled; it compiles the step again,
+// against **its own** catalog, and gets whatever *it* can serve. That is
+// the same argument `statement_ship_service.hpp` makes for shipping text
+// rather than a plan - binding on the owner is the only authoritative
+// resolution - applied to the one part of a step that is core-local.
+//
+// **And it is the same ladder, not a second one.** The arms below are
+// `Compile`'s own, in `Compile`'s order, calling `Compile`'s functions:
+// index before Cabin because an index is complete for every key value
+// where a Cabin is authoritative only for observed ones (spec §9), and
+// literal before correlated because a compile-time key needs no per-row
+// encode. A second ladder here would drift from the planner's exactly the
+// way `result_sink.hpp`'s header describes a second formatter drifting -
+// and it would do it invisibly, because both would return correct rows.
+//
+// **What `outer` is.** The enclosing (`up = 1`) row's layout, for the
+// correlated arms - a consuming stage's forwarded upstream columns. Null
+// on a leaf stage, where by the descriptor's own rule every reference
+// resolves inside the step and a key is a literal, so no correlated form
+// can apply and both correlated arms are skipped rather than answered.
+//
+// **Slot 0, and only slot 0.** Both remote shapes are one step: a leaf
+// reads its own relation, and a consuming stage holds one step whose
+// enclosing row is the upstream edge. A caller with a deeper chain is not
+// a shape that ships.
+//
+// Declining is never wrong, only a forgone descent - the walk returns the
+// identical rows, because the residual is what filters and it is
+// untouched here.
+Step RestructureForExecutingCore(Step step, const catalog::TableAccess& access,
+                                 const catalog::Schema* outer) {
+    // **Only a downgraded walk.** A step that arrived as anything else was
+    // already the compiler's answer on the session's core and re-deciding
+    // it here could only disagree with a plan the session is rendering
+    // against: `kRange` beat the index arms at compile time by the ladder's
+    // own order, and `kFilterScan` is what the ladder reaches when every
+    // structure arm declined. Re-deriving those would be a second planner,
+    // not a restored one.
+    if (step.kind != AccessKind::kScan) return step;
+    if (!step.sub_chains.empty()) return step;
+    // Belt and braces: a caller that skipped `ShippedForm` and left the aux
+    // in place gets its step back untouched rather than a second probe
+    // grafted over the first.
+    if (step.index.has_value() || step.cabin.has_value()) return step;
+
+    Scope outer_scope;
+    if (outer != nullptr) {
+        outer_scope.relations.push_back(BoundRelation{"", nullptr, outer});
+    }
+    Scope scope;
+    scope.relations.push_back(BoundRelation{step.rel_name, &access, nullptr});
+    scope.parent = outer != nullptr ? &outer_scope : nullptr;
+
+    if (auto ix = IndexProbeOf(access, step, 0); ix.has_value()) {
+        step.kind = ix->ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
+        step.index = std::move(ix);
+    } else if (outer != nullptr) {
+        if (auto cx = CorrelatedIndexProbeOf(scope, access, step, 0); cx.has_value()) {
+            step.kind = AccessKind::kIndexProbe;
+            step.index = std::move(cx);
+        }
+    }
+    if (step.kind == AccessKind::kScan) {
+        if (auto probe = CabinProbeOf(access, step, 0); probe.has_value()) {
+            step.kind = AccessKind::kCabinProbe;
+            step.cabin = std::move(probe);
+        } else if (outer != nullptr) {
+            if (auto cp = CorrelatedCabinProbeOf(scope, access, step, 0); cp.has_value()) {
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(cp);
+            }
+        }
+    }
+    if (step.kind == AccessKind::kScan) return step;
+
+    // The shape the new kind implies, from the one routine that derives it -
+    // `ShippedForm` cleared this for self-consistency, and a step whose kind
+    // and access shape disagree is exactly the lie that comment refused to
+    // put on the wire.
+    step.access_columns = AccessColumnsOf(step, 0);
+    return step;
+}
 
 namespace {
 
