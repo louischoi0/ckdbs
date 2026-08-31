@@ -503,16 +503,29 @@ the owning decisions, never by relaxing the decline.
 ### 6b. Inserts and the Tail — Id-Block-Aligned Spreading (v2, R4)
 
 **Built 2026-08-29** (R4/IS1-IS5,
-`docs/inflight/in-progress/workplan-insert-spreading.md`), off by default:
-`range_size_ids` is still `kRangeSizeOff` and the operator takes its value
-on IS7's numbers. What R3 left and R4 supplies is a *producer* — a core
-that does not own a relation now records row-id lease demand before giving
-a foreign INSERT away, which is what makes core 0 open a range owned by
-that core — plus the routing over it: **a write is routed by the id it
-will issue, not by which relation the statement names.** Two limits ride
-with it and are §3 and §7b of that workplan: a read of a spread relation
-is bounded by the fan-in's 64 stages, and a write naming no primary key on
-a *multi-owner* relation is refused until R6.
+`docs/inflight/in-progress/workplan-insert-spreading.md`) and **armed by
+default 2026-08-31** (**DA1**, `instructions/v2.7.0/ratification-da.md`):
+`range_size_ids` was `kRangeSizeOff` while the operator took its value on
+RD9(b)'s sweep, and the value taken is **65,536**
+(`server/range_alloc.hpp`'s `kRangeSizeIdsDefault` carries the numbers).
+`kRangeSizeOff` stays the off-switch. What R3 left and R4 supplies is a
+*producer* — a core that does not own a relation now records row-id lease
+demand before giving a foreign INSERT away, which is what makes core 0
+open a range owned by that core — plus the routing over it: **a write is
+routed by the id it will issue, not by which relation the statement
+names.** Two limits ride with it and are §3 and §7b of that workplan: a
+read of a spread relation is bounded by the fan-in's stage ceiling
+(**255** since **DA3**, 64 before it), and a write naming no primary key
+on a *multi-owner* relation is refused until R6.
+
+**What arming by default changes is which instances meet those two
+limits**, not the limits. A range opens only where a core that does not
+own the relation asks for a block, and the suppression in
+`OpenRangeOnSystemCore` declines whenever the asking core already owns the
+top range — so a **single-core instance opens no range at any size**, and
+neither does a relation only one peer ever writes (§6's HK4). The two
+limits are reachable from the second contending writer on, which before
+DA1 needed a configuration and now needs only a workload.
 
 **The first of those two was corrected by measurement and has since been
 fixed** — both halves are recorded here because the intermediate reading
@@ -726,8 +739,14 @@ mechanism, R3-R5:
 - Batch size and initial credit tuning (`[PROPOSED]` values above).
 - ~~Pattern/Waystone-driven relation placement~~ — the *dynamic* half
   subsumed 2026-08-24 by the mover (CC10): re-placement is range
-  placement, decided by statistics. **Initial placement stays open**:
-  `PlacementPolicy` (`creating` | `rotate`) is built, configured and
-  unsettled, and where a new relation's one range starts is not the
-  mover's question. Either way placement stays an optimization
-  concern — cross-core execution is the correctness path regardless.
+  placement, decided by statistics. **Initial placement closed 2026-08-31
+  as `creating`** (**DA2**, `instructions/v2.7.0/ratification-da.md`), on
+  `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §6:
+  rotation's crossover is a step at the first core to take a second
+  session, and past it rotation is negative at seven writer cores
+  (0.51×). It is also the policy DA1's sweep was run under, so DA1's
+  numbers are numbers for the ratified policy rather than for the other
+  one. **`rotate` is not deleted** — it stays a configurable placement and
+  §6a's gates are unchanged; what DA2 settles is the default. Either way
+  placement stays an optimization concern — cross-core execution is the
+  correctness path regardless.

@@ -6019,8 +6019,12 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
 StatusOr<std::uint32_t> CommandDispatcher::WriteTargetCore(
     const catalog::TableAccess& access, const std::vector<parser::Condition>& where,
     std::optional<std::uint64_t>* target_id) const {
-    // The zero-cost branch: no directory, no question. Every relation this
-    // engine has today, because `range_size_ids` defaults off.
+    // The zero-cost branch: no directory, no question. Every relation on a
+    // single-core instance and every one whose ranges never opened - which
+    // since DA1 is a statement about contention rather than about the
+    // default, because `range_size_ids` now ships armed
+    // (`server/range_alloc.hpp`) and a range opens only where a second core
+    // asks.
     if (access.ranges.empty()) return access.owner_core;
 
     // A bare pk equality names one id, one range, one owner - the OLTP
@@ -6977,8 +6981,10 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             // (§8 test 9).
             //
             // Unsplit is `owner_core` and one stage, which is every
-            // relation on an instance that has not armed `range_size_ids`
-            // - still the default. **This row's producer arrived at R4**
+            // relation nothing has split - since DA1 armed
+            // `range_size_ids` by default, that is every relation on a
+            // single-core instance and every uncontended one, rather than
+            // every relation. **This row's producer arrived at R4**
             // (2026-08-29): a core that does not own a relation now
             // records lease demand, so core 0 opens a range owned by that
             // core and a second *owner* is an ordinary state rather than a

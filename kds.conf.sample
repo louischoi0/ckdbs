@@ -88,13 +88,16 @@ cores = 1
 # Off by default.
 # peer_listeners = off
 
-# Relation placement (docs/inflight/in-progress/workplan-crosscore.md P6c). `creating` (default)
-# pins every relation to the creating core - which is core 0, since DDL is
-# core 0's. `rotate` spreads user relations over the non-system cores;
-# legal since CC7's flush-then-grant handoff, but until cross-core dispatch
-# exists a rotated relation's statements are refused retryably by the
-# affinity check - so rotate exercises the handoff, it does not serve
-# traffic. At cores = 1 rotate degrades to creating.
+# Relation placement (docs/inflight/in-progress/workplan-crosscore.md P6c).
+# `creating` pins every relation to the creating core - which is core 0,
+# since DDL is core 0's. `rotate` spreads user relations over the
+# non-system cores. At cores = 1 rotate degrades to creating.
+#
+# `creating` is the ratified default (DA2, 2026-08-31), and the ground is a
+# measurement: rotation's crossover is a step at the first core to take a
+# second session, and past it rotation is negative at seven writer cores
+# (0.51x) - bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md
+# section 6. `rotate` stays configurable; it is not the default.
 placement = creating
 
 # ---- Network ---------------------------------------------------------------
@@ -533,6 +536,38 @@ join_build_max_rows = 65536
 # can put a row in this state, so on a single-core instance this key does
 # nothing.
 in_doubt_ceiling_ms = 200
+
+# How many primary-key ids one **range** of a relation covers - and, because
+# D6 makes them one quantity, how many ids a non-core-0 core leases at a
+# time. A range is an engine-owned unit of ownership; nothing in SQL names
+# one, and the engine decides which relations get one and when.
+#
+# 65,536 is the ratified value (DA1, 2026-08-31) and it comes off a sweep:
+# bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md
+# section 6d, k = 4, both durability arms. It gives up 9% of the group
+# arm's gain against 4,096's throughput optimum (1.339 against 1.470) and
+# takes 16x the read ceiling; the relaxed arm prefers it outright (1.031,
+# the sweep's high). Below 4,096 is a loss on every axis - a block that
+# small is spent as fast as it is granted, and the relaxed arm falls to
+# 0.434x at 256.
+#
+# **A range opens only where a core that does not own the relation writes
+# to it.** A single-core server never opens one, and neither does a
+# relation only one peer ever writes, so on those this key sizes the lease
+# block and nothing else. The engine also declines to split any relation
+# carrying an index, a Cabin, a foreign key, an assertion, a spillable
+# column, or a BTREE clustering.
+#
+# Two limits arrive with a relation that has actually been split across
+# cores: an UPDATE/DELETE whose predicate names no primary key is refused
+# retryably (until R6), and a read is refused once the relation exceeds 255
+# ranges. The burn is the other cost - a core that stops inserting burns
+# the rest of its block and a restart burns every live block, so up to
+# 65,535 ids per (relation, core, mount) out of a 40-bit space.
+#
+# `range_size_ids = 0` turns splitting off entirely and returns the
+# pre-2026-08-31 engine. Refused at or above the 40-bit id ceiling.
+range_size_ids = 65536
 
 # ---- Logging ---------------------------------------------------------------
 

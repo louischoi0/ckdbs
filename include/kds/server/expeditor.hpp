@@ -420,8 +420,19 @@ public:
         sched::MonoTimeNs in_doubt_ceiling_ns = kTxnInDoubtCeilingNs;
 
         // RD5's `range_size_ids`; `server/range_alloc.hpp` owns what it
-        // means and why it is off by default.
-        std::uint64_t range_size_ids = kRangeSizeOff;
+        // means, and `kRangeSizeIdsDefault` carries the sweep DA1 took the
+        // value on. `kRangeSizeOff` (0) is still the off-switch and is what
+        // an operator sets to get the pre-DA1 engine back.
+        //
+        // **Armed means armed on peers.** This field reaches a dispatcher
+        // through `CoreRuntime::Open` alone (`core_runtime.cpp`'s
+        // `set_range_size_ids`, its only caller), so **core 0's dispatcher
+        // keeps `kRangeSizeOff` at every `cores`** - which is right rather
+        // than an oversight, since core 0 holds no row-id lease and the R4
+        // pump it gates would record demand nothing could satisfy. At
+        // `cores = 1` there is no other dispatcher, so this value reaches
+        // none and no range ever opens.
+        std::uint64_t range_size_ids = kRangeSizeIdsDefault;
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
@@ -482,11 +493,18 @@ public:
         std::uint32_t cores = 1;
 
         // Relation placement (workplan P6c, `placement` config key):
-        // `creating` (default) pins every relation to the creating core;
-        // `rotate` spreads user relations over the non-system cores. Until
-        // cross-core dispatch exists a rotated relation's statements are
-        // refused retryably by the affinity check, so rotate is for
-        // exercising CC7's handoff, not for serving traffic.
+        // `creating` pins every relation to the creating core; `rotate`
+        // spreads user relations over the non-system cores.
+        //
+        // **`creating` is the ratified default** (DA2, 2026-08-31,
+        // `instructions/v2.7.0/ratification-da.md`), on the measurement in
+        // `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
+        // §6: rotation's crossover is a step at the first core to take a
+        // second session, and past it rotation is **negative at seven
+        // writer cores (0.51x)**. It is also the arrangement DA1's sweep
+        // was run under, so DA1's numbers are numbers for this policy.
+        // `rotate` is not deleted and stays configurable; what DA2 settles
+        // is which one ships.
         catalog::PlacementPolicy placement = catalog::PlacementPolicy::kCreatingCore;
 
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to

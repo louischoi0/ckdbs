@@ -97,6 +97,15 @@ product of two ratified choices (D6's range = grant, RD7's run-shaped
 stage) and of nothing this phase introduces, which is why it is priced
 here rather than discovered in RD9's successor.
 
+**Both factors moved on 2026-08-31** (**DA1** and **DA3**,
+`instructions/v2.7.0/ratification-da.md`), and the paragraph above is kept
+as what was priced rather than rewritten: `range_size_ids` ships at
+**65,536** and `kMaxFanInUpstreams` is **255**, so the same arithmetic
+reads **~16.7 M rows** — a factor of 64 over what is priced here, which
+neither decision reached alone. The ratification's own DA-c calls that
+number **not measured**: §6 of the k-sweep measured the 64 × 4,096 form and
+the arithmetic held there, and nothing has measured the 255 × 65,536 form.
+
 ### 3a. Measured, and the arithmetic was answering the wrong question
 
 **R4-M (`instructions/v2.6.0/r4-k-sweep.md`), worktree `v2.6.0-ksweep` at
@@ -165,6 +174,13 @@ this line's largest open hand-off.
   session core. Not taken because 4× does not change the shape of the
   problem, and because the constant is `crosscore.md` §9's sizing item,
   not this plan's.
+  **Taken 2026-08-31 as DA3, and the "4×" reasoning is what changed.** It
+  was computed against a 4,096-id range, where 255 stages buy ~1.04 M
+  rows; DA1 made the range 65,536, so the two together take the ceiling
+  from 262,144 rows to ~16.7 M — 64×, which is a different question from
+  the one declined here. What DA3 does **not** establish is that 255
+  stages are affordable in *state*: the byte makes them representable, and
+  the per-stage cost on the session core is DA-b's measurement.
 - **A per-core stripe of the id space** — each core's ranges become one
   interval per relation instead of one per block, so ranges stay at
   `cores` forever and the ceiling disappears. This is the real answer and
@@ -184,8 +200,15 @@ reasons. It is not a way out for R4 because R5 does not exist.
 - **D6's final value** — the operator's, on IS7's numbers. This plan
   ships `range_size_ids` still defaulting to `kRangeSizeOff`, for the
   reason RD5 gave and one more of its own (§5's IS6).
+  **Taken 2026-08-31 as DA1: 65,536, and the default is armed** — on
+  R4-M's re-run of RD9(b) rather than on IS7's own numbers, which k = 2
+  bounded (§9a).
 - **The stripe alternative to D6** (§3) — a reversal, the operator's.
+  **Still open after DA1**, and DA1 is explicit that it does not pre-empt
+  it: raising the ceiling 64× buys time for that decision rather than
+  replacing it.
 - **`kMaxFanInUpstreams`** — `crosscore.md` §9's sizing item.
+  **Taken 2026-08-31 as DA3: 255.**
 - **Multi-range write statements** — R6's, and this plan refuses them by
   name rather than answering them partially (IS4).
 - **Whether the multi-row INSERT straddle refusal should partition

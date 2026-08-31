@@ -152,8 +152,15 @@ public:
 
         // RD5's `range_size_ids`, copied from core 0 like every other
         // shared setting. One number sizes both the row-id lease grant and
-        // the range, and `kRangeSizeOff` (0) is the default; the argument
-        // for both is `server/range_alloc.hpp`'s.
+        // the range; the argument for both is `server/range_alloc.hpp`'s.
+        //
+        // **Zero here is a transport zero, not the shipped default**, the
+        // same way `in_doubt_ceiling_ns` above is: the expeditor always
+        // writes this field from `Expeditor::Config`, which carries DA1's
+        // `kRangeSizeIdsDefault`. A `CoreRuntime` built by hand - which is
+        // every unit test - therefore gets ranges off unless it says
+        // otherwise, and says so at the site rather than inheriting an
+        // instance-wide decision it is not modelling.
         std::uint64_t range_size_ids = kRangeSizeOff;
 
         // CR7: whether this core records access shapes at all. **The

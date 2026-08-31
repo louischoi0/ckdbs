@@ -135,3 +135,99 @@ moves where predicted, or find where the prediction breaks.
 **DA-d. `creating` is already the default the sweep ran under** — verify
 that in source rather than assuming it, and record whether anything
 still reads `rotate` as its default.
+
+---
+
+## CLA's enactment record (2026-08-31)
+
+Appended by CLA below the operator's text rather than edited into it. The
+sections above are the ratification; this is what enacting it found.
+
+### DA1's recorded discrepancy resolves in the value's favour
+
+The order records that the stated ground — *"the same unit as a lease
+grant"* — points at `kRowIdLeasePerGrant` = 4,096 rather than at 65,536,
+and asks that the discrepancy be corrected here if the ground was the
+intent. **It was not a discrepancy, and the value stands with the ground
+intact.** `core_runtime.cpp`'s refill reads
+
+```
+const std::uint64_t count = ranges_on ? config_.range_size_ids : kRowIdLeasePerGrant;
+```
+
+so **where ranges are armed the row-id lease grant *is* `range_size_ids`**
+— D6's "one quantity, not two", built. `kRowIdLeasePerGrant` is the value
+the grant takes only where ranges are **off**, and its own justification is
+K-M2's measured **floor** below which the durable bump stops amortizing.
+65,536 clears that floor rather than contradicting it. Range size and
+grant size therefore remain the same unit and the same number, which is
+exactly the ground the operator gave; nothing needs correcting and DA1 is
+enacted at 65,536.
+
+### DA-a — done
+
+`kRangeSizeIdsDefault = 65536` (`server/range_alloc.hpp`) with the sweep
+cited at the constant, and `Expeditor::Config::range_size_ids` takes it.
+`kMaxFanInUpstreams = 255` (`server/remote_step_service.hpp`) with DA3's
+argument and R4-M's superseded one both cited. `kRangeSizeOff` stays the
+off-switch.
+
+Two consequences of the constant that the order did not name, recorded
+because they change how the code reads and not only what it does:
+
+- **At 255 the STEP_OPEN upstream byte is exhaustive.** Every count the
+  wire can spell is at or below the ceiling, so the decoder's
+  `upstream_count > kMaxFanInUpstreams` refusal can no longer fire. It is
+  kept under `if constexpr (kMaxFanInUpstreams < 255)` — compiled in
+  exactly where a lower ceiling would make a count spellable above it —
+  rather than left as a check that guards nothing. The producer-side gate
+  is unchanged and is the real one: the dispatcher refuses a statement
+  needing more stages than the ceiling, and refuses rather than truncates.
+- **`CoreRuntime::Config::range_size_ids` deliberately stays
+  `kRangeSizeOff`.** It is a transport field the expeditor always writes
+  from `Expeditor::Config`, the same idiom `in_doubt_ceiling_ns` already
+  uses, so a hand-built `CoreRuntime` — every unit test — states its own
+  arrangement instead of inheriting an instance-wide default it is not
+  modelling.
+
+### DA-d — verified in source, and the prose it found was stale
+
+`creating` is the default in all three places that carry one, and
+**nothing reads `rotate` as a default**: `PlacementPolicy`'s first
+enumerator (`catalog/core_placement.hpp`), `Catalog::placement_`
+(`catalog/catalog.hpp`), and `Expeditor::Config::placement`
+(`server/expeditor.hpp`). Every `kRotate` in the tree is a test setting it
+explicitly.
+
+What the check did find is that **both comments justifying the default
+were arguing from an unfinished pipeline rather than from a measurement**
+— `core_placement.hpp` said `kRotate` *"becomes the real policy when P4d
+wires multi-step pipelines and converts the executor"*, and
+`expeditor.hpp` said a rotated relation's statements are refused until
+cross-core dispatch exists. Both premises are spent: P4d landed,
+statement shipping carries an autocommit single-relation statement to its
+owner, and R4-R/RS gave a spread relation a read surface from every core.
+Rotation is no longer one shape wide, so the reason it is not the default
+is DA2's measurement and nothing else. Both comments now say that.
+
+### DA-b and DA-c — what this host can and cannot answer
+
+Reported rather than attempted quietly. **A relation on this machine
+cannot exceed two ranges**, so neither a 255-stage fan-in nor the
+16.7 M-row refusal boundary is reachable here:
+
+- The host has **2 CPUs**, and `cores` is refused above
+  `hardware_concurrency()` (`expeditor.cpp`) — reactors are pinned and
+  never block.
+- Only cores **1..n-1** get a `CoreRuntime`, so only they hold a row-id
+  lease and only they ask core 0 to open a range. At `cores = 2` that is
+  one peer.
+- `OpenRangeOnSystemCore`'s IS5 suppression declines whenever the asking
+  core already owns the top range. One peer therefore opens exactly one
+  boundary and every later carve is suppressed — which is not inference:
+  R4-M measured it as HK4's refutation, *"at k = 2 the ceiling is not
+  reached after two million rows at any size"*.
+
+This is the same bound IS7 already stated for the k sweep. What was run
+and what was not is in the ck-tester report; nothing unrun is reported as
+a pass.

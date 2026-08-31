@@ -147,18 +147,58 @@ struct StepOpenUpstream {
 // ownership every run is one range and it equals the **range count**, which
 // is exactly what R4's id-block-aligned insert spreading produces
 // (`crosscore.md` §6b). R4-M measured the refusal firing at **65-72
-// stages**, so the bound is a real limit on a spread relation's readable
-// size - roughly `64 x range_size_ids` rows
-// (`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`
-// §6). A **self-directed** run costs a slot like any other (R4-R §10b).
+// stages** against the old ceiling of 64, so the bound is a real limit on a
+// spread relation's readable size - `kMaxFanInUpstreams x range_size_ids`
+// rows (`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`
+// §6). Since DA1 and DA3 that arithmetic is 255 x 65,536 ~ **16.7 M rows**,
+// which is **not measured**: §6's numbers are the 64 x 4,096 form.
+// A **self-directed** run costs a slot like any other (R4-R §10b).
 //
 // **One constant, two quantities**, and they are different questions: the
 // dispatcher's independent-stage count (`command_dispatcher.cpp`, not a
 // wire quantity - each stage is its own single-step pipeline with its own
 // `request_id`), and the STEP_OPEN envelope's upstream-edge count, which
-// the wire carries in one byte. 64 is safe for the second and chosen for
-// the first.
-inline constexpr std::size_t kMaxFanInUpstreams = 64;
+// the wire carries in one byte.
+//
+// **255 since DA3** (2026-08-31, `instructions/v2.7.0/ratification-da.md`),
+// up from 64, and **DA3's stated ground names the wrong one of the two**.
+// The order reasoned from the one byte - *"the wire carries the upstream
+// index in one byte, so 255 is reachable without a format change"* - which
+// is true of the second quantity and irrelevant to the first, and it is the
+// **first** that DA3 raises. The fan-in opens one *independent* pipeline
+// per stage, each a whole-row STEP_OPEN carrying **zero** upstreams
+// (`session_step_client.cpp`'s `Open`, called per stage from
+// `command_dispatcher.cpp`'s stage loop), so a fan-in's width never reaches
+// the upstream byte at all. 255 is free on the wire for a stronger reason
+// than the order gives: this quantity has no wire representation.
+//
+// **And the byte is not what bounds the second quantity either.** A
+// STEP_OPEN must fit one ring slot - `sched::kCoreRingPayloadBytes` = 1024,
+// enforced at `MakeStepSend` - and 255 upstream edges do not, even with
+// empty forwarded layouts. Production encodes 0 or 1 (the two-step join's
+// `BuildTwoStepPipeline`), so nothing meets it today; a future shape that
+// nested opens would meet the payload cap long before the count byte, and
+// that is the constraint to size against.
+//
+// What 255 does cost is per-stage state on the session core - the park
+// predicate and the teardown are both linear scans over the stage list, so
+// quadratic in it - and that is DA-b's measurement, not the wire's.
+//
+// **Why the constant moved.** R4-M declined the same option because "4x
+// does not change the shape of the problem", reasoning against a 4,096-id
+// range where 255 stages buy ~1.04 M rows. DA1 made the range 65,536, and
+// the two decisions together take the ceiling from 262,144 rows to roughly
+// 16.7 M - a factor of 64, which neither answered alone
+// (`bench/v2.6.0/results-k-sweep-and-read-ceiling-v2.4.0-52-g5b37fec.md`
+// §6 measured the 64-stage form; the 255-stage form is DA-c's).
+inline constexpr std::size_t kMaxFanInUpstreams = 255;
+
+// The upstream count is one byte, so a ceiling above 255 would make
+// `EncodeStepOpen`'s cast truncate an edge list into a short answer
+// reported as a complete one. Unreachable from production, which encodes 0
+// or 1, and asserted rather than trusted for that reason.
+static_assert(kMaxFanInUpstreams <= 255,
+              "the STEP_OPEN upstream count is one byte; a wider ceiling needs a format change");
 
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
                                       std::span<const std::byte> descriptor,

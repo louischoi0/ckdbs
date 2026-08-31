@@ -280,59 +280,54 @@ TEST_F(RemoteStepServiceTest, AnEnvelopeCarriesEveryUpstreamOfAFanIn) {
     // presence flag and is now a **count**: 0 and 1 mean exactly what they
     // meant, which is why every envelope written before this change still
     // decodes, and 2..k is what a split relation's read newly needs.
-    exec::Step step = ScanStep();
-    auto descriptor = EncodeStepDescriptor(step);
-    ASSERT_TRUE(descriptor.ok());
+    //
+    // **Both ends of the count, since DA3.** The narrow case is the shape
+    // RD7 introduced; the wide one is `kMaxFanInUpstreams` itself, which
+    // after DA3 is the largest value the byte can spell - so an off-by-one
+    // in the cast or the decode bound shows up here rather than in
+    // production. It round-trips through the **codec**, not the wire: 255
+    // edges do not fit `sched::kCoreRingPayloadBytes`, and no production
+    // caller encodes more than one edge anyway
+    // (`session_step_client.cpp`).
+    for (const std::size_t width : {std::size_t{3}, kMaxFanInUpstreams}) {
+        exec::Step step = ScanStep();
+        auto descriptor = EncodeStepDescriptor(step);
+        ASSERT_TRUE(descriptor.ok());
 
-    StepOpenHead head{};
-    head.tag = PipelineTag{11, 0, 2};
+        StepOpenHead head{};
+        head.tag = PipelineTag{11, 0, 2};
 
-    catalog::SysColumnRow col{};
-    col.pos = 0;
-    col.type_val = 20;
-    catalog::SetName(col.name, "id");
+        catalog::SysColumnRow col{};
+        col.pos = 0;
+        col.type_val = 20;
+        catalog::SetName(col.name, "id");
 
-    std::vector<StepOpenUpstream> ups(3);
-    for (std::size_t i = 0; i < ups.size(); ++i) {
-        ups[i].upstream_core = static_cast<std::uint32_t>(i + 1);
-        ups[i].forwarded.push_back(col);
-        ups[i].enclosed_open = {std::byte{static_cast<unsigned char>(i)}, std::byte{0x01}};
+        std::vector<StepOpenUpstream> ups(width);
+        for (std::size_t i = 0; i < ups.size(); ++i) {
+            ups[i].upstream_core = static_cast<std::uint32_t>(i + 1);
+            ups[i].forwarded.push_back(col);
+            ups[i].enclosed_open = {std::byte{static_cast<unsigned char>(i)}, std::byte{0x01}};
+        }
+
+        const std::vector<std::byte> envelope = EncodeStepOpen(head, descriptor.value(), ups);
+        auto parts = DecodeStepOpenEnvelope(envelope);
+        ASSERT_TRUE(parts.ok()) << width << ": " << parts.status().message();
+        ASSERT_EQ(parts.value().upstreams.size(), width);
+        // **In order**, which is the whole point: `consumers[i]` is sibling
+        // i, and the fan-in's output is their concatenation in that order,
+        // so a decoder that returned them shuffled would return a shuffled
+        // answer.
+        for (std::size_t i = 0; i < width; ++i) {
+            EXPECT_EQ(parts.value().upstreams[i].upstream_core, i + 1) << width;
+            ASSERT_EQ(parts.value().upstreams[i].enclosed_open.size(), 2u) << width;
+            EXPECT_EQ(std::to_integer<unsigned>(parts.value().upstreams[i].enclosed_open[0]),
+                      static_cast<unsigned>(i & 0xFF))
+                << width;
+        }
+        EXPECT_TRUE(std::equal(parts.value().descriptor.begin(), parts.value().descriptor.end(),
+                               descriptor.value().begin(), descriptor.value().end()))
+            << width;
     }
-
-    const std::vector<std::byte> envelope = EncodeStepOpen(head, descriptor.value(), ups);
-    auto parts = DecodeStepOpenEnvelope(envelope);
-    ASSERT_TRUE(parts.ok()) << parts.status().message();
-    ASSERT_EQ(parts.value().upstreams.size(), 3u);
-    // **In order**, which is the whole point: `consumers[i]` is sibling i,
-    // and the fan-in's output is their concatenation in that order, so a
-    // decoder that returned them shuffled would return a shuffled answer.
-    for (std::size_t i = 0; i < 3; ++i) {
-        EXPECT_EQ(parts.value().upstreams[i].upstream_core, i + 1);
-        ASSERT_EQ(parts.value().upstreams[i].enclosed_open.size(), 2u);
-        EXPECT_EQ(std::to_integer<unsigned>(parts.value().upstreams[i].enclosed_open[0]), i);
-    }
-    EXPECT_TRUE(std::equal(parts.value().descriptor.begin(), parts.value().descriptor.end(),
-                           descriptor.value().begin(), descriptor.value().end()));
-}
-
-TEST_F(RemoteStepServiceTest, AFanInWiderThanTheCeilingIsRefusedRatherThanTruncated) {
-    // The count is one byte and the ceiling is what makes that safe. A cap
-    // **refuses** and never truncates - a fan-in silently missing its
-    // last stages is a short answer reported as a complete one, which is
-    // the class this whole row exists to keep closed.
-    exec::Step step = ScanStep();
-    auto descriptor = EncodeStepDescriptor(step);
-    ASSERT_TRUE(descriptor.ok());
-    StepOpenHead head{};
-    head.tag = PipelineTag{12, 0, 1};
-
-    std::vector<std::byte> envelope = EncodeStepOpen(head, descriptor.value());
-    envelope[sizeof(StepOpenHead)] = std::byte{static_cast<unsigned char>(kMaxFanInUpstreams + 1)};
-    auto parts = DecodeStepOpenEnvelope(envelope);
-    ASSERT_FALSE(parts.ok());
-    EXPECT_EQ(parts.status().code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(parts.status().message().find("fan-in ceiling"), std::string::npos)
-        << parts.status().message();
 }
 
 TEST_F(RemoteStepServiceTest, AnEnvelopeWithAnUpstreamEdgeRoundTrips) {

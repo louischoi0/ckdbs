@@ -867,6 +867,55 @@ still waits on its own gate, so:
   off the relation instead of writing it down; nothing in the engine reads
   a rotated owner by number.
 
+- **Arming `range_size_ids` by default turned ten paths into default
+  refusals on a multi-core instance** (DA1, 2026-08-31,
+  `instructions/v2.7.0/ratification-da.md`; found by the enactment's
+  `critics-developer` pass, not by the ratification). Every one of these
+  existed before DA1 and every one was reachable only by configuring
+  `range_size_ids`. What changed is that a range now opens on **workload**,
+  so a multi-core instance meets them without anybody choosing to. `cores =
+  1` meets none of them — the peer fan-out is gated on `cores > 1`, so
+  nothing leases and no range opens.
+
+  **The one that does not recover is `RefuseAuxiliaryOnSplitRelation`**
+  (`src/catalog/catalog.cpp`): on a relation with two or more ranges,
+  `CREATE INDEX`, `CREATE CABIN` — **including the Cabin optimizer's
+  automatic path**, which enacts through the same call — `CREATE
+  ASSERTION`, and an FK naming it on either side are all `Unsupported`.
+  Nothing merges ranges (the mover is R5, unbuilt), so **order now decides
+  and the decision is permanent**: index-then-write keeps the relation
+  unsplittable through `RangeEligible`'s gate, write-then-index is refused
+  for the life of the relation. Under DA1 the second order is what an
+  ordinary session produces. `DROP TABLE` + recreate is the only way back.
+
+  The other nine, each a path that answered before and refuses now, all in
+  `src/server/command_dispatcher.cpp` unless named otherwise:
+
+  - an `UPDATE`/`DELETE` whose predicate names no pk equality on a
+    multi-owner relation — `Unsupported`, R6's;
+  - any local walk touching a foreign range (`VisitRelation`) —
+    `Unsupported`, refused whole before it walks, so never a partial write;
+  - `CheckReadAffinity`'s `!ServableBy` arm, which catches the five shapes
+    the AG3 fan-in gate does not admit (`LIMIT`/`OFFSET`, any sort but
+    `<pk> ASC`, any join, any sub-chain, `ANALYZE`) **and any read inside
+    an explicit transaction**;
+  - a multi-row `INSERT` straddling a boundary — retryable `TxnConflict`,
+    and 16x rarer at 65,536 than at 4,096, so DA1 helps here;
+  - a fan-in above `kMaxFanInUpstreams` stages — `Unsupported`, pushed out
+    4x by DA3;
+  - and four `SHOW` fields that appear where they used to be absent
+    (`split_relations=`, `split_relation_detail=`,
+    `range_split_decline_*` on `SHOW META`, `surveyed_ranges=n/m` on `SHOW
+    RELAYOUT`).
+
+  **No test exercises a defaulted `Expeditor` end to end.** Every
+  `CoreRuntime` fixture sets `range_size_ids` explicitly, and
+  `Expeditor::Config` is constructed only in `tests/config_file_test.cpp` —
+  so a green suite says nothing about the flip's behaviour. DA1's enactment
+  added the assertion that the two ratified defaults *are* what an omitted
+  key leaves (`ExpeditorConfigTest`), which closes the value question and
+  not the behaviour one.
+
 - **A spread relation is readable up to 64 ranges, and a range is a lease
   block** (R4, 2026-08-29,
   `docs/inflight/in-progress/workplan-insert-spreading.md` §3). Insert
@@ -897,8 +946,36 @@ still waits on its own gate, so:
   `kMaxFanInUpstreams` (one wire byte allows 255, `crosscore.md` §9's
   sizing item), and a per-core **stripe** of the id space, which removes the
   ceiling entirely and **reverses D6**. The last is the real answer and is
-  the operator's. Reachable only with `range_size_ids` armed, which is not
-  the default.
+  the operator's.
+
+  **Two of the three were taken on 2026-08-31, and the third stays open**
+  (**DA1**/**DA3**, `instructions/v2.7.0/ratification-da.md`):
+  `range_size_ids` = **65,536** and `kMaxFanInUpstreams` = **255**, so the
+  arithmetic is now ~**16.7 M rows** - 64x what is priced above, which
+  neither decision reached alone. Three things that changes about this
+  entry, each stated rather than implied:
+
+  - **The ceiling is no longer reachable only by configuration.**
+    `range_size_ids` now ships armed, so an ordinary multi-core instance
+    with two contending writers meets this on workload alone. The
+    suppression above still holds: a single-core instance and a
+    single-writer relation open no range at any size.
+  - **~16.7 M is arithmetic, not a measurement.** The k-sweep's §6 measured
+    the 64 x 4,096 form and the arithmetic held there; nothing has measured
+    the 255 x 65,536 form, and DA-c asks for it. **It is also not
+    measurable on this two-CPU host**: a relation reaches a third range
+    only where two or more *peers* contend, and only cores 1..n-1 hold a
+    `CoreRuntime` and lease, so `cores = 2` gives one peer and the relation
+    settles at two ranges forever (§6's HK4, measured).
+  - **255 stages are representable, not yet shown affordable.** The
+    STEP_OPEN upstream count is one byte, which is what makes 255 a
+    no-format-change value; what it costs is per-stage state on the
+    session core, and DA-b asks for that number. A fan-in above ~70 stages
+    has never been run.
+
+  The **per-core id-space stripe** is untouched by both and is still the
+  standing alternative: it removes the ceiling instead of raising it, and
+  reverses D6 and invariant 11's wording to do so.
 
   **And the knob has a third axis nobody had measured** (R4-M §6d): below
   4,096 a lease block is spent as fast as it is granted, so every
