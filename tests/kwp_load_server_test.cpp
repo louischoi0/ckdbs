@@ -72,7 +72,7 @@ std::string SendAndReceiveLine(int fd, const std::string& line) {
     return response;
 }
 
-void SendFrame(int fd, wire::ClientFrame type, std::span<const std::byte> payload) {
+void SendFrame(int fd, wire::ClientFrameType type, std::span<const std::byte> payload) {
     const auto bytes = wire::EncodeFrame(static_cast<std::uint8_t>(type), 0, payload);
     ::write(fd, bytes.data(), bytes.size());
 }
@@ -111,6 +111,11 @@ protected:
         auto io_backend = sched::EpollIoBackend::Create();
         ASSERT_TRUE(io_backend.ok());
         sched::Scheduler scheduler(clock_, io_backend.value());
+        // The load endpoint's tests drive STOP over the newline surface,
+        // which since KW-D6's cut-over is `debug_text_port`'s rather than
+        // the default: named here so the fixture says which protocol it is
+        // speaking rather than relying on a default that has moved.
+        text.set_protocol(Protocol::kText);
         ASSERT_TRUE(text.Attach(scheduler, *dispatcher_).ok());
         ASSERT_TRUE(kwp.Attach(scheduler, *dispatcher_).ok());
         scheduler.Run();
@@ -123,10 +128,10 @@ protected:
         wire::ClientHello hello;
         hello.capabilities = wire::kCapBulkLoad;
         const auto payload = wire::EncodeClientHello(hello);
-        SendFrame(fd, wire::ClientFrame::kHello, payload);
+        SendFrame(fd, wire::ClientFrameType::kHello, payload);
         auto reply = ReadFrame(fd, decoder);
         if (!reply.has_value() ||
-            reply->type != static_cast<std::uint8_t>(wire::ServerFrame::kHello)) {
+            reply->type != static_cast<std::uint8_t>(wire::ServerFrameType::kHello)) {
             return false;
         }
         wire::PayloadReader r(reply->payload);
@@ -196,10 +201,10 @@ TEST_F(KwpLoadServerTest, ALoadLandsRowsThroughTheOneWritePath) {
         wire::LoadBegin begin;
         begin.relation = "t";
         const auto begin_payload = wire::EncodeLoadBegin(begin);
-        SendFrame(fd, wire::ClientFrame::kLoadBegin, begin_payload);
+        SendFrame(fd, wire::ClientFrameType::kLoadBegin, begin_payload);
         auto ready = ReadFrame(fd, decoder);
         ASSERT_TRUE(ready.has_value());
-        ASSERT_EQ(ready->type, static_cast<std::uint8_t>(wire::ServerFrame::kLoadReady))
+        ASSERT_EQ(ready->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadReady))
             << "payload size " << ready->payload.size();
         wire::PayloadReader r(ready->payload);
         const std::uint64_t load_id = r.U64().value_or(0);
@@ -213,27 +218,29 @@ TEST_F(KwpLoadServerTest, ALoadLandsRowsThroughTheOneWritePath) {
         const std::pair<std::int64_t, std::int64_t> first[] = {{10, 1}, {20, 2}, {30, 3}};
         const std::pair<std::int64_t, std::int64_t> second[] = {{40, 4}, {50, 5}};
         const auto chunk0 = Chunk(load_id, 0, first);
-        SendFrame(fd, wire::ClientFrame::kLoadChunk, chunk0);
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk0);
         auto ack0 = ReadFrame(fd, decoder);
         ASSERT_TRUE(ack0.has_value());
-        ASSERT_EQ(ack0->type, static_cast<std::uint8_t>(wire::ServerFrame::kLoadAck));
+        ASSERT_EQ(ack0->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck));
         wire::PayloadReader a0(ack0->payload);
         EXPECT_EQ(a0.U64().value_or(0), load_id);
         EXPECT_EQ(a0.U32().value_or(9), 0u);
         EXPECT_EQ(a0.U64().value_or(0), 3u);
 
         const auto chunk1 = Chunk(load_id, 1, second);
-        SendFrame(fd, wire::ClientFrame::kLoadChunk, chunk1);
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk1);
         auto ack1 = ReadFrame(fd, decoder);
         ASSERT_TRUE(ack1.has_value());
-        ASSERT_EQ(ack1->type, static_cast<std::uint8_t>(wire::ServerFrame::kLoadAck));
+        ASSERT_EQ(ack1->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck));
 
-        SendFrame(fd, wire::ClientFrame::kLoadEnd, {});
+        SendFrame(fd, wire::ClientFrameType::kLoadEnd, {});
         auto done = ReadFrame(fd, decoder);
         ASSERT_TRUE(done.has_value());
-        ASSERT_EQ(done->type, static_cast<std::uint8_t>(wire::ServerFrame::kComplete));
+        ASSERT_EQ(done->type, static_cast<std::uint8_t>(wire::ServerFrameType::kComplete));
         wire::PayloadReader d(done->payload);
-        EXPECT_EQ(d.Str().value_or(""), "LOAD");
+        // `Text`: the completion tag is the query surface's payload since
+        // the two endpoints were unified on one frame registry.
+        EXPECT_EQ(d.Text().value_or(std::optional<std::string>{}).value_or(""), "LOAD");
         EXPECT_EQ(d.U64().value_or(0), 5u);
         ::close(fd);
 
@@ -272,7 +279,7 @@ TEST_F(KwpLoadServerTest, AnAbortUnwindsAndAProtocolErrorKillsTheLoad) {
         wire::LoadBegin begin;
         begin.relation = "t";
         const auto begin_payload = wire::EncodeLoadBegin(begin);
-        SendFrame(fd, wire::ClientFrame::kLoadBegin, begin_payload);
+        SendFrame(fd, wire::ClientFrameType::kLoadBegin, begin_payload);
         auto ready = ReadFrame(fd, decoder);
         ASSERT_TRUE(ready.has_value());
         wire::PayloadReader r(ready->payload);
@@ -280,27 +287,27 @@ TEST_F(KwpLoadServerTest, AnAbortUnwindsAndAProtocolErrorKillsTheLoad) {
 
         const std::pair<std::int64_t, std::int64_t> rows[] = {{7, 1}, {8, 2}};
         const auto chunk0 = Chunk(load_id, 0, rows);
-        SendFrame(fd, wire::ClientFrame::kLoadChunk, chunk0);
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk0);
         ASSERT_TRUE(ReadFrame(fd, decoder).has_value());  // the ack
-        SendFrame(fd, wire::ClientFrame::kLoadAbort, {});
+        SendFrame(fd, wire::ClientFrameType::kLoadAbort, {});
         auto done = ReadFrame(fd, decoder);
         ASSERT_TRUE(done.has_value());
-        ASSERT_EQ(done->type, static_cast<std::uint8_t>(wire::ServerFrame::kComplete));
+        ASSERT_EQ(done->type, static_cast<std::uint8_t>(wire::ServerFrameType::kComplete));
         wire::PayloadReader d(done->payload);
-        EXPECT_EQ(d.Str().value_or(""), "ABORT");
+        EXPECT_EQ(d.Text().value_or(std::optional<std::string>{}).value_or(""), "ABORT");
 
         // A second load whose chunk skips a sequence number: the load dies
         // with S_ERROR and its rows unwind (KW4's modality).
-        SendFrame(fd, wire::ClientFrame::kLoadBegin, begin_payload);
+        SendFrame(fd, wire::ClientFrameType::kLoadBegin, begin_payload);
         auto ready2 = ReadFrame(fd, decoder);
         ASSERT_TRUE(ready2.has_value());
         wire::PayloadReader r2(ready2->payload);
         const std::uint64_t load2 = r2.U64().value_or(0);
         const auto chunk_skip = Chunk(load2, 5, rows);
-        SendFrame(fd, wire::ClientFrame::kLoadChunk, chunk_skip);
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk_skip);
         auto err = ReadFrame(fd, decoder);
         ASSERT_TRUE(err.has_value());
-        EXPECT_EQ(err->type, static_cast<std::uint8_t>(wire::ServerFrame::kError));
+        EXPECT_EQ(err->type, static_cast<std::uint8_t>(wire::ServerFrameType::kError));
         ::close(fd);
 
         int text_fd = ConnectToLoopback(kTextPort);
@@ -330,10 +337,10 @@ TEST_F(KwpLoadServerTest, AFrameBeforeHelloIsRefusedAndClosed) {
         wire::LoadBegin begin;
         begin.relation = "t";
         const auto payload = wire::EncodeLoadBegin(begin);
-        SendFrame(fd, wire::ClientFrame::kLoadBegin, payload);
+        SendFrame(fd, wire::ClientFrameType::kLoadBegin, payload);
         auto err = ReadFrame(fd, decoder);
         ASSERT_TRUE(err.has_value());
-        EXPECT_EQ(err->type, static_cast<std::uint8_t>(wire::ServerFrame::kError));
+        EXPECT_EQ(err->type, static_cast<std::uint8_t>(wire::ServerFrameType::kError));
         // The server closes after the refusal: the next read is EOF.
         std::byte buf[16];
         EXPECT_LE(::read(fd, buf, sizeof(buf)), 0);

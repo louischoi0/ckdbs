@@ -358,6 +358,82 @@ TEST_F(TxnSessionTest, AnUnknownIsolationLevelIsRefusedAndSerializableSaysWhy) {
               std::string::npos);
 }
 
+// ---- Durability, the same precedence chain (protocol-wp.md P03) ---------
+//
+// `SET DURABILITY` is a session statement the dispatcher routes, exactly as
+// `SET ISOLATION LEVEL` is, and not a `parser::Statement` arm - the reason
+// is at `HandleSetDurability`. These tests are therefore the round-trip
+// P03's row asked the lexer for: the spellings the engine accepts, the ones
+// it refuses, and the rung each one binds.
+//
+// What they do **not** assert is the acknowledgement's *timing*: this
+// fixture runs unlogged (no `WalManager`), so no class here reaches a
+// device. That half is P11's, against a real manager.
+
+TEST_F(TxnSessionTest, SetDurabilityAppliesToTheNextTransaction) {
+    Session s;
+    EXPECT_FALSE(s.durability().has_value()) << "a fresh session takes the server's class";
+
+    EXPECT_EQ(Run(s, "SET DURABILITY STRICT"), "SET durability=strict");
+    ASSERT_TRUE(s.durability().has_value());
+    EXPECT_EQ(*s.durability(), wal::DurabilityClass::kStrict);
+
+    ASSERT_NE(Run(s, "BEGIN").find("durability=strict"), std::string::npos);
+    EXPECT_EQ(Run(s, "SET DURABILITY RELAXED"),
+              "ERR cannot change the durability class inside a transaction");
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_EQ(*s.durability(), wal::DurabilityClass::kStrict)
+        << "the session's class outlives the transaction that used it";
+}
+
+TEST_F(TxnSessionTest, BeginOverridesTheDurabilityClassForOneTransactionOnly) {
+    Session s;
+    ASSERT_EQ(Run(s, "SET DURABILITY RELAXED"), "SET durability=relaxed");
+    ASSERT_NE(Run(s, "BEGIN DURABILITY STRICT").find("durability=strict"), std::string::npos);
+    ASSERT_TRUE(s.txn_durability().has_value());
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_FALSE(s.txn_durability().has_value())
+        << "the override was for that transaction, not for the session";
+    EXPECT_EQ(s.EffectiveDurability(wal::DurabilityClass::kGroup),
+              wal::DurabilityClass::kRelaxed)
+        << "and the session rung is what the next statement falls back to";
+}
+
+TEST_F(TxnSessionTest, BeginTakesBothClausesInEitherOrder) {
+    Session s;
+    // The two-word level name is what makes clause order matter at all: it
+    // has to end where the next clause begins and nowhere else.
+    const std::string a = Run(s, "BEGIN ISOLATION LEVEL REPEATABLE READ DURABILITY GROUP");
+    EXPECT_NE(a.find("isolation=repeatable read"), std::string::npos) << a;
+    EXPECT_NE(a.find("durability=group"), std::string::npos) << a;
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+
+    const std::string b = Run(s, "BEGIN TRANSACTION DURABILITY D1 ISOLATION LEVEL REPEATABLE READ");
+    EXPECT_NE(b.find("isolation=repeatable read"), std::string::npos) << b;
+    EXPECT_NE(b.find("durability=strict"), std::string::npos) << b;
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+}
+
+TEST_F(TxnSessionTest, AnUnknownDurabilityClassAndAnUnknownSetTargetAreBothRefused) {
+    Session s;
+    EXPECT_NE(Run(s, "SET DURABILITY EVENTUAL").find("unknown durability class"),
+              std::string::npos);
+    EXPECT_FALSE(s.durability().has_value()) << "a refused SET binds nothing";
+
+    EXPECT_NE(Run(s, "BEGIN DURABILITY EVENTUAL").find("unknown durability class"),
+              std::string::npos);
+    EXPECT_EQ(s.state(), Session::State::kIdle) << "a refused BEGIN opens nothing";
+
+    const std::string unknown = Run(s, "SET FRUITINESS HIGH");
+    EXPECT_NE(unknown.find("unknown SET target"), std::string::npos) << unknown;
+    EXPECT_NE(unknown.find("SET DURABILITY"), std::string::npos)
+        << "the refusal names the accepted set, so a typo is self-correcting";
+
+    const std::string bad_clause = Run(s, "BEGIN FLAVOUR STRONG");
+    EXPECT_NE(bad_clause.find("expected ISOLATION LEVEL or DURABILITY"), std::string::npos)
+        << bad_clause;
+}
+
 // A dispatcher built without a manager - every pre-existing test - refuses
 // transaction control rather than pretending to support it.
 TEST(TxnSessionNoManagerTest, TransactionControlIsRefusedWithoutAManager) {

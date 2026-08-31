@@ -70,6 +70,8 @@ import os
 import socket
 import sys
 
+import kwp
+
 # Importing readline is the whole line-editing feature: it hooks input(),
 # which is what gives the REPL up/down through history, left/right and
 # ctrl-a/e to move within a line, and ctrl-r to search. Nothing below calls
@@ -120,8 +122,15 @@ KNOWN_COMMANDS = """\
 """
 
 
-class ServerConnection:
-    """One TCP connection to the ckdbs server, one line in / one line out."""
+class TextConnection:
+    """One TCP connection over the **newline debug surface**, one line in and
+    one line out (docs/spec/client-manual.md's appendix).
+
+    Reached with `--text`, and only worth reaching for a server whose
+    `debug_text_port` is open - which is off by default since KW-D6's
+    cut-over. It is unchanged: this is the client that was `ServerConnection`
+    before KWP, kept because §12 keeps the surface.
+    """
 
     def __init__(self, host, port, timeout=5.0):
         self._sock = socket.create_connection((host, port), timeout=timeout)
@@ -142,6 +151,75 @@ class ServerConnection:
 
     def close(self):
         self._sock.close()
+
+
+class ServerConnection:
+    """One KWP/1 session, presented as one statement in and one reply string
+    out (protocol-wp.md P15).
+
+    **The reply is rendered here, and that is the protocol working as
+    designed**: §6 says "No text result mode exists. Human-readable
+    rendering is a client concern (the CLI renders)". What this class adds is
+    that the rendering reproduces the newline protocol's reply *shape* - a
+    header line of column names, then one `"\\n"`-escaped comma row per
+    match - byte for byte, through `kwp.render_value`, which is
+    `exec::FormatValue`'s inverse.
+
+    That shape is load-bearing: thirty-odd drivers under `tools/` import this
+    class and read those strings, and every number in `bench/` was measured
+    against them. Keeping the shape is what makes a before/after reading of
+    the cut-over a comparison of one thing.
+    """
+
+    def __init__(self, host, port, timeout=5.0):
+        self._conn = kwp.Connection(host, port, timeout=timeout)
+
+    @property
+    def session_id(self):
+        return self._conn.session_id
+
+    @property
+    def server_info(self):
+        return self._conn.server_info
+
+    def send_command(self, line):
+        """Runs one statement and renders its answer as the newline protocol
+        would have."""
+        stripped = line.strip()
+        # Transaction control has its own frames (§9); a client that sent
+        # `BEGIN` as a statement would get the same answer, but going
+        # through the frames is what exercises the protocol the server
+        # actually offers - and it is what carries the durability field.
+        upper = stripped.upper()
+        try:
+            if upper == "BEGIN" or upper.startswith("BEGIN "):
+                relaxed = self._conn.begin()
+                return "BEGIN" + (" durability=relaxed" if relaxed else "")
+            if upper == "COMMIT":
+                self._conn.commit()
+                return "COMMIT"
+            if upper in ("ROLLBACK", "ABORT"):
+                self._conn.rollback()
+                return "ROLLBACK"
+            fields, rows, tag, _affected = self._conn.execute(stripped)
+        except kwp.KwpError as e:
+            return e.as_reply_line()
+
+        if not fields:
+            return tag
+        if len(fields) == 1 and (fields[0]["flags"] & kwp.FIELD_DIAGNOSTIC_LINE):
+            # A diagnostic answer, carried as one row per line. Re-joined
+            # with the two-character escape the lines were split on, so the
+            # string is the one the newline protocol produced.
+            return "\\n".join(kwp.render_value(fields[0], row[0]) for row in rows)
+        header = ",".join(f["name"] for f in fields)
+        body = "".join(
+            "\\n" + ",".join(kwp.render_value(fields[i], row[i]) for i in range(len(fields)))
+            for row in rows)
+        return header + body
+
+    def close(self):
+        self._conn.close()
 
 
 def format_reply(reply):
@@ -470,6 +548,9 @@ def main():
                               "repeatable, files run in the order given; '-' reads stdin")
     parser.add_argument("--echo", action="store_true",
                          help="with -f, also print each statement before its reply")
+    parser.add_argument("--text", action="store_true",
+                         help="speak the newline debug protocol instead of KWP/1 - for a "
+                              "server with debug_text_port open (docs/spec/protocol.md 12)")
     parser.add_argument("command", nargs="*",
                          help="command to send (e.g. PING, DESCRIBE accounts); "
                               "omit for an interactive REPL")
@@ -481,7 +562,7 @@ def main():
         parser.error("--echo only applies with -f/--file")
 
     try:
-        conn = ServerConnection(args.host, args.port)
+        conn = (TextConnection if args.text else ServerConnection)(args.host, args.port)
     except OSError as e:
         print(f"could not connect to {args.host}:{args.port}: {e}", file=sys.stderr)
         sys.exit(1)

@@ -9,22 +9,26 @@
 #include <vector>
 
 #include "kds/base/status.hpp"
+#include "kds/wire/kwp.hpp"
 
 // KWP v0's frame-type registry and the payload codecs of the frames it
 // uses (docs/inflight/in-progress/workplan-kwp-load.md KW2, docs/spec/protocol.md §4,
 // docs/spec/bulkinsert.md §3.1).
 //
-// **The first concrete numbers on the wire, and append-only forever** -
-// the sys.access_stats rule, on a surface clients compile against: a
-// value here may never change meaning, and a new frame takes the next
-// free number in its block however the spec orders its prose. Client and
-// server types are separate enums per kwp.hpp's standing comment - the
-// direction disambiguates, so the two spaces never constrain each other.
+// **The frame numbering left this file on 2026-08-31** (milestone KW).
+// It held `ClientFrame`/`ServerFrame` for the load endpoint alongside
+// `kwp.hpp`'s `ClientFrameType`/`ServerFrameType` for the query surface,
+// and the two collided on five values in the base block. The promise made
+// here - "the base block is deliberately left sparse so the query surface
+// can take the spec's own ordering when it lands" - is what the merge
+// kept: the query surface took the base block as `kwp.hpp` numbered it,
+// and the load block moved to `kwp.hpp` at the 16+ numbers it already
+// held. The five that collided (`kPing`/`kTerminate` client,
+// `kError`/`kComplete`/`kPong` server) changed value, which is why this
+// happened before a second endpoint existed rather than after.
 //
-// The 16+ block belongs to the BULK_LOAD capability. The base block
-// (2..15) is deliberately left sparse so the query surface (C_PARSE,
-// C_BIND, ... - protocol.md §4's full list) can take the spec's own
-// ordering when it lands; v0 assigns only what it speaks.
+// What stays here is what it always was minus the enums: the capability
+// bit, the payload readers and writers, and the v0 load payloads.
 
 namespace kds::wire {
 
@@ -35,25 +39,6 @@ inline constexpr std::uint16_t kKwpVersion = 1;
 // load block, matching the frame numbering: capability and frames move
 // together or not at all.
 inline constexpr std::uint64_t kCapBulkLoad = 1ull << 16;
-
-enum class ClientFrame : std::uint8_t {
-    kHello = 1,
-    kPing = 2,
-    kTerminate = 3,
-    kLoadBegin = 16,
-    kLoadChunk = 17,
-    kLoadEnd = 18,
-    kLoadAbort = 19,
-};
-
-enum class ServerFrame : std::uint8_t {
-    kHello = 1,
-    kError = 2,
-    kComplete = 3,
-    kPong = 4,
-    kLoadReady = 16,
-    kLoadAck = 17,
-};
 
 // ---- Little-endian payload helpers ---------------------------------------
 // The frame codec frames; these read and write *inside* a payload. All
@@ -66,15 +51,45 @@ public:
     void U16(std::uint16_t v) { Raw(&v, 2); }
     void U32(std::uint32_t v) { Raw(&v, 4); }
     void U64(std::uint64_t v) { Raw(&v, 8); }
-    // Length-prefixed (u16) UTF-8, the protocol's string shape.
+    // ---- Two string shapes, and the rule that picks one ----------------
+    //
+    // `Str` is `{u16 len, bytes}`: **names**. A relation, a column, a
+    // statement or portal handle, a client's telemetry string - every one
+    // of them is short by construction, and the row description carries
+    // one per field, which makes this the byte the protocol sends most.
+    // Paying four bytes there to buy a length nothing can reach is the
+    // wrong trade.
+    //
+    // `Text` is `{u32 len, bytes}`: **content**. SQL statement text, an
+    // error message, an error's detail. These have no natural bound short
+    // of `kMaxFrame`, and a 64 KiB ceiling on a statement would be a
+    // limit invented by a length field - a bulk `INSERT ... VALUES` can
+    // exceed it, and refusing one for that reason would be indefensible.
+    //
+    // `docs/spec/protocol.md` §2 says both, since 2026-08-31; it used to
+    // say `{u32 len, bytes}` for every variable-length field, which no
+    // frame ever did - the v0 hello and the row description were u16 from
+    // the day they were written.
     void Str(std::string_view s) {
         U16(static_cast<std::uint16_t>(s.size()));
-        const auto* p = reinterpret_cast<const std::byte*>(s.data());
-        bytes_.insert(bytes_.end(), p, p + s.size());
+        Bytes(s);
     }
+    void Text(std::string_view s) {
+        U32(static_cast<std::uint32_t>(s.size()));
+        Bytes(s);
+    }
+    // A `Text` field that is absent, as distinct from present and empty:
+    // 0xFFFFFFFF, the `{i32 len | -1 = NULL}` convention row values use
+    // (§6's "one NULL convention everywhere"), spelled for a payload
+    // field.
+    void AbsentText() { U32(0xFFFFFFFFu); }
     std::vector<std::byte> Take() { return std::move(bytes_); }
 
 private:
+    void Bytes(std::string_view s) {
+        const auto* p = reinterpret_cast<const std::byte*>(s.data());
+        bytes_.insert(bytes_.end(), p, p + s.size());
+    }
     void Raw(const void* p, std::size_t n) {
         const auto* b = static_cast<const std::byte*>(p);
         bytes_.insert(bytes_.end(), b, b + n);  // LE host assumed, rules.md's
@@ -99,6 +114,21 @@ public:
         at_ += n.value();
         return out;
     }
+    // The `Text` counterpart of `Str`, and its absent form: nullopt for a
+    // truncated field, and an engaged optional holding nullopt for the
+    // 0xFFFFFFFF that means "not present". Two levels because the two
+    // failures are different - a client that omitted an optional field and
+    // a client that lied about a length must not be answered alike.
+    std::optional<std::optional<std::string>> Text() {
+        auto n = U32();
+        if (!n.has_value()) return std::nullopt;
+        if (n.value() == 0xFFFFFFFFu) return std::optional<std::string>{};
+        if (bytes_.size() - at_ < n.value()) return std::nullopt;
+        std::string out(reinterpret_cast<const char*>(bytes_.data() + at_), n.value());
+        at_ += n.value();
+        return std::optional<std::string>{std::move(out)};
+    }
+
     // The unread remainder - a chunk's row bytes, handed whole to the row
     // codec rather than re-copied.
     std::span<const std::byte> Rest() const { return bytes_.subspan(at_); }
@@ -117,14 +147,39 @@ private:
     std::size_t at_ = 0;
 };
 
-// ---- v0 frame payloads (KW3, KW4) ----------------------------------------
+// ---- Authentication methods (`C_HELLO.auth_method`, §3) ------------------
+//
+// A `u8` on the wire and an enum here. `kNone` is what a v0 client sends
+// and what an unauthenticated server admits; `kScramSha256` runs the
+// exchange `server/auth.hpp` describes, carried in `C_AUTH`/`S_AUTH`
+// frames. `kMtls` is reserved and refused: the transport already
+// authenticates in that design, so the method needs a decision about what
+// the *session's* identity then is, and §14 has not taken one.
+inline constexpr std::uint8_t kAuthNone = 0;
+inline constexpr std::uint8_t kAuthScramSha256 = 1;
+inline constexpr std::uint8_t kAuthMtls = 2;
+
+// ---- Handshake payloads (§3) ---------------------------------------------
 
 struct ClientHello {
     std::uint16_t max_version = kKwpVersion;
     std::uint16_t min_version = kKwpVersion;
     std::uint64_t capabilities = 0;
-    std::uint8_t auth_method = 0;  // v0: NONE only
-    std::string client_name;       // telemetry only
+    std::uint8_t auth_method = kAuthNone;
+    std::string client_name;  // telemetry only, never interpreted
+};
+
+// The server's answer. `session_id` and `cancel_key` are minted by the
+// endpoint and passed in, never generated here: randomness is an injected
+// concern (rules.md §4), and a negotiation that produced its own would be
+// untestable byte-for-byte - which is exactly what the golden sessions
+// (P16) need it to be.
+struct ServerHello {
+    std::uint16_t version = kKwpVersion;
+    std::uint64_t capabilities = 0;  // the intersection, never the offer
+    std::uint64_t session_id = 0;
+    std::uint64_t cancel_key = 0;  // §10; a wrong one is silently ignored
+    std::string server_info;
 };
 
 struct LoadBegin {
@@ -143,6 +198,9 @@ struct LoadChunkHeader {
 
 std::vector<std::byte> EncodeClientHello(const ClientHello& hello);
 StatusOr<ClientHello> DecodeClientHello(std::span<const std::byte> payload);
+
+std::vector<std::byte> EncodeServerHello(const ServerHello& hello);
+StatusOr<ServerHello> DecodeServerHello(std::span<const std::byte> payload);
 
 std::vector<std::byte> EncodeLoadBegin(const LoadBegin& begin);
 StatusOr<LoadBegin> DecodeLoadBegin(std::span<const std::byte> payload);

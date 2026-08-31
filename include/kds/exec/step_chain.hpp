@@ -713,6 +713,21 @@ struct StepChain {
     // the dispatcher already resolves. Never read on an execute path.
     std::vector<std::uint32_t> projection_types;
 
+    // The same columns' catalog `len` word, resolved by the same lookup at
+    // the same moment - a decimal's packed `(p, s)`, zero for every other
+    // type (`catalog::PackDecimalLen`).
+    //
+    // It exists because a *typed* emission boundary needs it and the text
+    // one did not: `FormatDecimal` reads the scale off the value, so the
+    // newline protocol never had to know a column's, but KWP's
+    // `S_ROW_DESC` states the scale **once per result set**
+    // (protocol.md §6) - including for a result set with no rows, where
+    // there is no value to read it from. Carried rather than looked up for
+    // `projection_types`'s reason, and beside it rather than folded into
+    // it because they are two facts about one column and every existing
+    // reader of `projection_types` wants only the first.
+    std::vector<std::uint32_t> projection_type_mods;
+
     // The fold this chain's rows are consumed by, or nothing (AG1). Set
     // for exactly the statements `parser::SelectStmt::aggregated()` is true
     // for, and read only by the dispatcher - no execute path looks at it.

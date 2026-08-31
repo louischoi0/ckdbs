@@ -2,6 +2,36 @@
 
 Work instructions, companion to `docs/spec/protocol.md` (the specification). This file holds tasks only; normative design lives in the specification, and when they disagree the specification wins — flag, don't guess.
 
+---
+
+## Status 2026-08-31 — the milestone is built
+
+**P01-P16 are done; P17 was struck.** The order was `instructions/v2.7.0/kw-kwp.md`, the decisions `kw-ratification.md` (KW-D1..D6). Where a row's *shape* turned out to be wrong the spec was amended and the row is annotated below with what changed and why — nothing was quietly re-scoped.
+
+| Row | State |
+|---|---|
+| P01 client manual | done — rewritten for KWP/1, newline protocol moved to Appendix A |
+| P02 `CLAUDE.md` | done — milestone row and §14's opens reconciled |
+| P03 `SET DURABILITY` | done, **not as an AST arm** — a routed session statement, like the two that already exist; the reason is at `HandleSetDurability` and in spec §9 |
+| P04 Waystone cross-link | done — on Phase A of `waystone-workplan.md`; the T11/T18 numbers this row names no longer resolve there |
+| P05 header | pre-existing; `kMaxFrame` ratified (KW-D2), the load block folded into the one registry, the duplicate hello structs removed |
+| P06 frame codec | pre-existing |
+| P07 handshake | done — `wire/handshake.{hpp,cpp}`, plus the `C_AUTH`/`S_AUTH` shape §3 held `[PROPOSED]` |
+| P08 session | done — **`server/kwp_session.{hpp,cpp}`, not `src/wire/session.cpp`**: KW-D1 binds it to the real dispatcher, and `wire` sits below `server` |
+| P09 row & type codecs | done — the batch target named, `BoundParam` and its codec added, and `EncodeValue` given the `(type_val, type_mod)` overload a fold's output needs |
+| P10 portals | done — **suspension bounds delivery, not execution**; spec §7 amended rather than the build overstated |
+| P11 txn & durability frames | done, less §15-5's crash-injection half, which KW-D1 assigned here and which is **owed and not run** (`known-gaps.md`) |
+| P12 error registry | done — `wire/error_registry.{hpp,cpp}` and a golden list written as literals |
+| P13 server integration | done — `tcp_server` gained the decoder and kept the line splitter, selected per listener; `debug_text_port` is the newline surface |
+| P14 cancel | **half done**: the flag and its observation point exist and are tested; the `C_CANCEL` *connection* is not built — see the row |
+| P15 reference client | done — `tools/kwp.py` and `ckdbs_cli.py` over it, with `--text` for the debug port |
+| P16 conformance | first half done (golden byte sessions, `tests/testdata/kwp_golden.txt`); the socket-level half is `tests/kwp_endpoint_test.cpp` |
+| P17 | **struck by KW-D1** |
+
+**What the milestone did not do**, stated where it will be looked for: no OUTER JOIN, no `IN (value list)`, no cursors, no sort spill, no index-served `ORDER BY`; `ALTER TABLE`, cabin, assertion and FK are no more transactional than they were; nothing is reclaimed. It does make portal suspension exist, which is the mechanism a cursor and a large result set both need.
+
+---
+
 Every task is startable now: where a neighboring subsystem is missing (executor, multi-core messaging), the task names the seam or fixture it builds against, and real integration is a later task. Spec `[OPEN]` items are isolated behind interfaces; no task requires deciding one.
 
 **Note:** these tasks are numbered `P01`-`P17`, and `docs/inflight/in-progress/waystone-workplan.md` also uses `P01`-`P17`. Cite the file, not the bare number.
@@ -73,7 +103,9 @@ Files: `src/server/tcp_server.cpp`, `src/server/kwp_endpoint.cpp`, tests. Replac
 Tests: golden byte sessions end-to-end against the stub executor; malformed-stream fuzz at the socket layer; debug port off by default.
 Needs: P06–P12.
 
-**P14 — Cancel path.**
+**P14 — Cancel path.** *(half done 2026-08-31.)* The session-side half is built and tested: `KwpSession::RequestCancel` sets the flag, the session observes it **at its next frame** — the reactor has no preemption, so §10's "best-effort-fast, guaranteed-eventually" is exactly what a cooperative point can give — and the cancelled statement is refused with `CANCELLED` and poisons an open transaction. **The `C_CANCEL` connection is not built.** It needs a listener-wide registry keyed on `session_id`, which is a piece of the endpoint rather than of the session, and it needs the `cancel_key` to be unguessable — which on a build without OpenSSL it is not, so the `CANCEL` capability is negotiated away there rather than advertised. Both halves are named in `known-gaps.md`. Original row:
+
+
 Files: extend endpoint/session + `tests/kwp_cancel_test.cpp`. `C_CANCEL{session_id, cancel_key}` on a fresh connection sets the target session's cancel flag; the flag is observed at task yield points via a `CancelToken` seam the executor stub polls; wrong key silently ignored; post-cancel state = failed-txn rules.
 Tests: cancel mid-stream interrupts at the next yield; wrong-key no-op; cancel of idle session is harmless (spec §15-6).
 Needs: P08, P13.

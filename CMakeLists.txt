@@ -89,12 +89,15 @@ add_library(kds
     src/server/config_file.cpp
     src/server/tcp_server.cpp
     src/server/kwp_load_server.cpp
+    src/server/kwp_session.cpp
     src/parser/lexer.cpp
     src/parser/fingerprint.cpp
     src/parser/ast.cpp
     src/parser/parser.cpp
     src/wire/frame_codec.cpp
     src/wire/kwp_types.cpp
+    src/wire/handshake.cpp
+    src/wire/error_registry.cpp
     src/wire/row_codec.cpp
     src/wal/record.cpp
     src/wal/payload.cpp

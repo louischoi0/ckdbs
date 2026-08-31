@@ -7,22 +7,37 @@ Verified against `docs/spec/client-manual.md`, `include/kds/server/tcp_server.hp
 2026-08-10. For what you can *say*, see `manual/sql/sql.md`; for running
 the server, `manual/server/server.md`.
 
-> The binary wire protocol **KWP/1** (`docs/spec/protocol.md`) will eventually
-> replace this newline text protocol. Only its frame codec exists in code,
-> so everything below is still exactly how the server behaves.
+> **The wire is KWP/1 since 2026-08-31** (`docs/spec/protocol.md`, milestone
+> KW): the default port speaks binary length-prefixed frames, and the
+> newline protocol described below survives only on `debug_text_port`,
+> which defaults to 0 — no socket at all.
+>
+> **What that changes for a client author** is the framing and nothing
+> else: the reply *shapes* in §3, the error tokens in §4 and every retry
+> rule below are the engine's own semantics, and they are the same over
+> frames. `tools/ckdbs_cli.py` speaks KWP and renders those same strings
+> client-side, which is why the tools in §6 are unchanged. Write a new
+> client against `docs/spec/client-manual.md` §2 and §5, and read this file
+> for the semantics.
 
 ---
 
 ## 1. Connecting
 
-Plain TCP, **loopback only**, port `15432` by default. No TLS, no
-authentication, no framing beyond newlines — a development/inspection
-surface, not a production API.
+Plain TCP, **loopback only**, port `15432` by default, speaking KWP/1.
+TLS and SCRAM are available and off by default.
 
 ```sh
-printf 'PING\n' | nc 127.0.0.1 15432        # → PONG
-python3 tools/ckdbs_cli.py                  # interactive REPL
+python3 tools/ckdbs_cli.py                  # interactive REPL, over KWP/1
+python3 tools/ckdbs_cli.py PING             # → PONG
 ```
+
+The `printf 'PING\n' | nc` one-liner that used to work here needs the
+newline debug surface, so it needs a server started with
+`debug_text_port` set and `--text` on the CLI. **`STOP` is still a
+newline command**, so an instance with no debug port open cannot be
+stopped that way; sending `STOP` as an ordinary statement over KWP does
+work.
 
 Multiple clients may connect at once; they are served **concurrently but
 cooperatively on one thread** — no client blocks another, and no two
@@ -30,6 +45,12 @@ requests are ever handled in parallel (`tcp_server.hpp`). A note in older
 docs that only one connection is served at a time is stale.
 
 ## 2. Wire protocol
+
+**KWP/1 is normative** — `docs/spec/client-manual.md` §2 describes the
+frames and §5 says how to write a client. What follows is the **newline
+debug surface**, kept because the reply shapes below are what
+`ckdbs_cli.py` renders on either protocol and what the rest of this file
+parses.
 
 - One command per line in, terminated `\n` (a trailing `\r` is tolerated,
   so CRLF clients work).
@@ -67,8 +88,9 @@ client parses:
 | `SELECT` | header line, then one `\n`-escaped comma row per match (per group when aggregated; groups in first-seen order) |
 | `CREATE TABLE` (SQL form) | `CREATED oid=<n> ...` |
 | `CREATE INDEX` / `CABIN` / `PATTERN` / `ASSERTION` | `CREATED <KIND> name=... ...`, possibly with `\n`-escaped `WARN ...` sections |
-| `BEGIN` / `COMMIT` / `ROLLBACK` | `BEGIN trx_id=<n> isolation=<s>` / `COMMIT trx_id=<n>` / `ROLLBACK trx_id=<n>` |
+| `BEGIN` / `COMMIT` / `ROLLBACK` | `BEGIN trx_id=<n> isolation=<s> durability=<c>` / `COMMIT trx_id=<n>` / `ROLLBACK trx_id=<n>` |
 | `SET ISOLATION LEVEL` | `SET isolation=<s>` |
+| `SET DURABILITY` | `SET durability=<c>` |
 | `SHOW <X>` | a count line (`tables=<n>`, `indexes=<n>`, ...) then one `\n`-escaped section per row |
 | `DESCRIBE <t>` | summary line (`oid= root_page_id= clustered_type= next_id= ... budget_used=`), then one section per column |
 | `SYNC` | `OK synced` |

@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
 
@@ -70,6 +72,61 @@ public:
     // precedence chain `durability` uses.
     txn::IsolationLevel isolation() const noexcept { return isolation_; }
     void set_isolation(txn::IsolationLevel level) noexcept { isolation_ = level; }
+
+    // ---- Durability, the same three rungs (docs/spec/protocol.md §9) ----
+    //
+    // **The chain `isolation`'s comment above already names**, now with the
+    // rung it was describing: server config (the dispatcher's own
+    // `durability_`), then `SET DURABILITY` for this connection, then
+    // `BEGIN ... DURABILITY <class>` - or KWP's `C_TXN_BEGIN{durability}`,
+    // which is the same rung reached over a frame - for one transaction.
+    //
+    // Two optionals rather than two values, because absence is what "take
+    // the rung below" means: a session that never issued `SET DURABILITY`
+    // must follow the server's setting as it changes, not a copy of it
+    // taken when the connection opened.
+    //
+    // `txn_durability_` is cleared by `Finish()` with everything else the
+    // transaction owned: a class chosen for one transaction is not the
+    // next one's, exactly as `home_core_` and the participant list are not.
+    std::optional<wal::DurabilityClass> durability() const noexcept { return durability_; }
+    void set_durability(wal::DurabilityClass durability) noexcept { durability_ = durability; }
+
+    std::optional<wal::DurabilityClass> txn_durability() const noexcept {
+        return txn_durability_;
+    }
+    void set_txn_durability(wal::DurabilityClass durability) noexcept {
+        txn_durability_ = durability;
+    }
+
+    // What this session's *next* commit is owed, given a server default.
+    // One function so no call site re-derives the precedence - the failure
+    // that would produce is a commit acked under a class the client did
+    // not ask for, which no test of either rung alone would catch.
+    wal::DurabilityClass EffectiveDurability(wal::DurabilityClass server_default) const noexcept {
+        if (state_ != State::kIdle && txn_durability_.has_value()) return *txn_durability_;
+        if (durability_.has_value()) return *durability_;
+        return server_default;
+    }
+
+    // ---- Where this connection's result rows go (result_sink.hpp) ------
+    //
+    // Null - the default, and every caller that predates KWP - means the
+    // newline protocol's rendering, written into the reply the statement
+    // returns. `KwpSession` installs one for the statement it is running
+    // and clears it afterwards.
+    //
+    // **On the session and not on the dispatcher**, which was the first
+    // shape and was wrong for a reason the dispatcher's own hoisted
+    // aggregator already documents (AG3): a statement can *park* - a
+    // cross-core read, a shipped statement, a group commit's wait - and
+    // while it is parked the reactor runs another connection's statement on
+    // the same core and the same dispatcher. A per-dispatcher pointer would
+    // then be the other connection's by the time the parked one resumed,
+    // and its rows would be encoded into a stranger's session. One sink per
+    // connection cannot be clobbered by another connection.
+    ResultSink* result_sink() const noexcept { return result_sink_; }
+    void set_result_sink(ResultSink* sink) noexcept { result_sink_ = sink; }
 
     // What this connection may do (role.hpp), checked once per statement
     // by the dispatcher. **kAdmin by default, and that is the auth-off
@@ -137,6 +194,12 @@ public:
         if (!participants_.empty()) ship_id_ = 0;
         participants_.clear();
         watermarks_.clear();
+        // The class this transaction was begun under, for `home_core_`'s
+        // reason: `BEGIN ... DURABILITY strict` binds one transaction, and
+        // a session whose next statement is autocommit must fall back to
+        // its own default rather than inherit a stricter class silently -
+        // or, worse, a laxer one.
+        txn_durability_.reset();
         return ended;
     }
 
@@ -313,6 +376,9 @@ private:
 
     State state_ = State::kIdle;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
+    ResultSink* result_sink_ = nullptr;
+    std::optional<wal::DurabilityClass> durability_;      // SET DURABILITY
+    std::optional<wal::DurabilityClass> txn_durability_;  // BEGIN ... DURABILITY
     Role role_ = Role::kAdmin;
     txn::Transaction* txn_ = nullptr;
     std::uint32_t home_core_ = kUnbound;

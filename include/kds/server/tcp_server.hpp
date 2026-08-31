@@ -11,6 +11,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/auth.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/kwp_session.hpp"
 #include "kds/server/wire_channel.hpp"
 
 // The client-facing accept/read/dispatch/write loop - the actual
@@ -35,6 +36,27 @@
 // (rules.md #3) is unchanged and still Phase 2+.
 
 namespace kds::server {
+
+// **Which protocol a listener speaks** (docs/spec/protocol.md §12,
+// protocol-wp.md P13).
+//
+// §12's instruction, verbatim: "`tcp_server` gains a frame decoder
+// (length-prefixed accumulate) replacing line splitting; `command_dispatcher`
+// splits into a KWP session state machine + the retained loopback text
+// dispatcher (debug flag, default off in production builds)". So this is
+// one socket layer with two framings, not two servers - the accept, the TLS
+// channel, the outbox, the write-interest bookkeeping and the async
+// dispatch are the same code either way, and only the framing and the
+// dispatch shape differ. A second listener class was the alternative and it
+// would have been the third copy of this file's syscall handling.
+enum class Protocol : std::uint8_t {
+    // KWP/1 (docs/spec/protocol.md). The default since KW-D6's cut-over.
+    kKwp,
+    // The newline text protocol (docs/spec/client-manual.md, appendix).
+    // Kept as a documented loopback debug surface behind
+    // `--debug-text-port`, off unless a port is configured.
+    kText,
+};
 
 class TcpServer {
 public:
@@ -103,6 +125,31 @@ public:
     void set_auth_gate_factory(AuthGateFactory factory) noexcept {
         auth_gate_factory_ = std::move(factory);
     }
+
+    // The protocol every *subsequently accepted* connection speaks. Set
+    // before Attach(), like the two factories above.
+    void set_protocol(Protocol protocol) noexcept { protocol_ = protocol; }
+    Protocol protocol() const noexcept { return protocol_; }
+
+    // The server's own class, for `S_TXN_OK`'s RELAXED flag (§9). Only the
+    // KWP path reads it; the text protocol reports durability nowhere.
+    void set_durability(wal::DurabilityClass durability) noexcept { durability_ = durability; }
+
+    // What this server tells a KWP client about itself, and the seam that
+    // mints a session's identifiers.
+    //
+    // **The default source is a counter, and a counter is not a secret.**
+    // §10 makes `cancel_key` the whole of a cancel's authorization - "a
+    // wrong key is silently ignored" - so a guessable one lets any peer
+    // cancel any session. The default is therefore *not* offered as the
+    // `CANCEL` capability: a server with no identity source installed
+    // negotiates the bit away, and `C_CANCEL` has nothing to match. The
+    // Expeditor installs a real source where one is available.
+    using IdentitySource = std::function<std::uint64_t()>;
+    void set_identity_source(IdentitySource source) noexcept {
+        identity_source_ = std::move(source);
+    }
+    void set_server_info(std::string info) noexcept { server_info_ = std::move(info); }
 
     // Live client connections, for tests and for the shutdown path.
     std::size_t open_connections() const noexcept { return clients_.size(); }
@@ -178,6 +225,21 @@ private:
         // docs/spec/txn.md section 10-8 requires and what a shared dispatcher
         // could not provide before.
         Session session;
+
+        // ---- KWP/1 (P13) -------------------------------------------------
+        //
+        // Both null on a text connection. `decoder` accumulates frames out
+        // of `inbox` - the same buffer the line splitter reads, holding
+        // frame bytes instead of command bytes - and `kwp` is the protocol
+        // state machine, which **borrows** `session` above.
+        wire::FrameDecoder decoder;
+        std::optional<KwpSession> kwp;
+
+        // Reply frames the session produced for the frame being handled.
+        // A member rather than a local because a dispatched statement
+        // finishes in `OnStatementComplete`, which has to append to the
+        // same buffer the frame handler started.
+        std::vector<std::byte> frames_out;
     };
 
     explicit TcpServer(int fd) noexcept : listen_fd_(fd) {}
@@ -195,6 +257,15 @@ private:
     // then calls this again for the next line.
     bool DrainCommands(int client_fd, Connection& conn);
 
+    // The KWP half of the same loop: hands complete frames to the session
+    // one at a time, stopping when one asks for a dispatch. Returns false
+    // when the connection was closed.
+    bool DrainFrames(int client_fd, Connection& conn);
+    // Appends whatever the session wrote and clears it. Returns false when
+    // the connection was closed (a channel failure).
+    bool FlushFrames(int client_fd, Connection& conn);
+    std::uint64_t NextIdentity();
+
     // The other half: a statement finished, so append its reply, honour
     // STOP, and continue draining.
     void OnStatementComplete(int client_fd);
@@ -202,6 +273,8 @@ private:
     // one is installed. Returns false if the connection was closed (a
     // channel Send failure).
     bool AppendReplyLine(int client_fd, Connection& conn, std::string reply);
+    // The same, without the newline: KWP frames carry their own length.
+    bool AppendReplyBytes(int client_fd, Connection& conn, std::string_view bytes);
     // Writes as much of conn.outbox as the socket will take and drops what
     // went out. Returns false if the connection was closed (write error).
     bool FlushOutbox(int client_fd, Connection& conn);
@@ -220,7 +293,17 @@ private:
     Logger* log_ = nullptr;
     ChannelFactory channel_factory_;
     AuthGateFactory auth_gate_factory_;
+    Protocol protocol_ = Protocol::kKwp;
+    wal::DurabilityClass durability_ = wal::DurabilityClass::kGroup;
+    IdentitySource identity_source_;
+    // The counter behind the default identity source. Not a secret; see
+    // `set_identity_source`.
+    std::uint64_t next_identity_ = 0;
+    std::string server_info_ = "kds";
     std::function<void()> stop_handler_;
+    // The portal-idle sweep's timer (§10, KW-D3), registered by `Attach` on
+    // a KWP listener and cancelled by `Detach`.
+    sched::TimerId idle_sweep_ = sched::kInvalidTimerId;
     std::unordered_map<int, Connection> clients_;
 };
 

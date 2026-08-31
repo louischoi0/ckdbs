@@ -45,9 +45,40 @@ inline constexpr std::size_t kFrameHeaderSize = 8;  // payload starts here
 // violation (bad length, resync impossible - docs/spec/protocol.md §2).
 inline constexpr std::uint32_t kMinFrameLength = 4;
 
-// Sanity ceiling on a frame's `length` field. [OPEN: default] per spec
-// §14 - 16 MiB is this document's starting point, not a confirmed value.
+// Sanity ceiling on a frame's `length` field. **Ratified 2026-08-31 as
+// KW-D2** (`instructions/v2.7.0/kw-ratification.md`), which confirmed the
+// value this header already held rather than moving it.
+//
+// It is a ceiling on a *declared* length, not a sizing target: it exists so
+// a corrupt or hostile `length` is refused before the decoder allocates
+// against it. So it wants to sit far above any legitimate frame and far
+// below what would let one connection exhaust the server. The largest
+// legitimate frame is a row batch, whose target is `kRowBatchTargetBytes`
+// (64 KiB, §9's builder), making this 256x the largest thing the server
+// intends to send; a per-connection buffer bounded here is affordable.
+//
+// **It bounds nothing a shipped statement can produce**: the cross-core
+// ring's reply cap is 992 bytes. Locally-answered result batches only.
 inline constexpr std::uint32_t kMaxFrame = 16u * 1024u * 1024u;
+
+// The size a server aims at when it seals an `S_ROW_BATCH`
+// (docs/spec/protocol.md §7, "batch size server-chosen, default target
+// <= 64 KiB per frame"). **Ratified 2026-08-31 with KW-D2**, which named it
+// as the quantity `kMaxFrame` is a multiple of.
+//
+// A *target*, not a ceiling: a batch is sealed once appending the next row
+// would carry it past this, so one row wider than the target still ships
+// whole - the alternative is a row nothing can ever send. `kMaxFrame` is
+// the ceiling, 256x above.
+//
+// **Deliberately not `kStepBatchTargetBytes`** (server/step_pipeline.hpp,
+// 32 KiB). They look like one quantity and are two: the cross-core target
+// is bounded by the ring slot it must fit inside - a bound that layer
+// derives from the transport, after a batch 32x the slot vanished
+// silently - and this one is bounded by nothing but the frame. Naming
+// them once would tie a wire frame's size to a ring's slot, which is the
+// coupling that defect came from rather than the fix for it.
+inline constexpr std::size_t kRowBatchTargetBytes = 64u * 1024u;
 
 // Decoded form of the 8-byte frame header.
 struct FrameHeader {
@@ -77,6 +108,18 @@ struct FrameHeader {
 // not by the numeric value alone (mirrors how the spec itself lists them
 // as two separate catalogs).
 
+// **One registry per direction, and this is it** (unified 2026-08-31,
+// milestone KW). `kwp_types.hpp` held a second pair of enums for the v0
+// load endpoint - `ClientFrame`/`ServerFrame` - whose base block collided
+// with this one on five values: client 2/3 (kParse/kBind there kPing/
+// kTerminate) and server 2/3/4 (kReady/kParseOk/kBindOk there kError/
+// kComplete/kPong). Two numbering spaces on one `type` byte is not a
+// naming problem: a frame's meaning would have depended on which endpoint
+// received it, and the two endpoints are the same protocol. That file's
+// own comment had already promised the base block to "the spec's own
+// ordering when it lands", so the load block moved onto this numbering
+// rather than the reverse, and its four in-tree speakers moved with it.
+// The load frames are appended here at 16+, the block they already held.
 enum class ClientFrameType : std::uint8_t {
     kHello = 1,
     kParse,
@@ -92,6 +135,21 @@ enum class ClientFrameType : std::uint8_t {
     kPing,
     kCancel,
     kTerminate,
+    // The authentication sub-frame (§3's `[PROPOSED shape]`, proposed and
+    // built 2026-08-31 as P07). One frame in each direction carrying one
+    // SCRAM message, which is what §14 committed to: "KWP will carry these
+    // same SCRAM message bodies in handshake frames; only this line
+    // framing is protocol-specific" (`server/auth.hpp`). It takes the last
+    // base-block number because it is the last frame the base block will
+    // need - every other §4 frame is already numbered above.
+    kAuth = 15,
+    // The bulk-load block, gated by `kCapBulkLoad` (kwp_types.hpp): the
+    // capability bit is bit 16 and the frames start at 16, so a reader of
+    // either can find the other.
+    kLoadBegin = 16,
+    kLoadChunk,
+    kLoadEnd,
+    kLoadAbort,
 };
 
 enum class ServerFrameType : std::uint8_t {
@@ -107,6 +165,9 @@ enum class ServerFrameType : std::uint8_t {
     kError,
     kPong,
     kNotice,
+    kAuth = 13,  // the server half of the exchange above
+    kLoadReady = 16,
+    kLoadAck,
 };
 
 // ---- Capabilities (docs/spec/protocol.md §3) ------------------------------------
@@ -121,11 +182,16 @@ enum class Capability : std::uint64_t {
 };
 
 // ---- Durability (docs/spec/protocol.md §9) --------------------------------------
-// Per-transaction protocol field. Numbering is meant to mirror
-// docs/spec/wal.md §1's D1/D2/D3 durability classes, but that document does
-// not exist yet - treat this enum as the
-// authoritative numbering until docs/spec/wal.md lands and either confirms or
-// amends it.
+// Per-transaction protocol field, carried by `C_TXN_BEGIN`. The numbering
+// mirrors `docs/spec/wal.md` §1's D1/D2/D3 - **confirmed 2026-08-31**, when
+// that document and `wal::DurabilityClass` both existed to be checked
+// against: `kStrict`/`kGroup`/`kRelaxed` are 1/2/3 in both, so the wire
+// value is the engine value and `DurabilityClassOf` below is a range check
+// rather than a translation table.
+//
+// Zero is the wire's own value and has no engine counterpart: it means
+// "whatever this session's default is", which is a statement about the
+// session and not about a class (`Session::EffectiveDurability`).
 enum class DurabilityLevel : std::uint8_t {
     kSessionDefault = 0,
     kStrict = 1,   // D1
@@ -188,6 +254,20 @@ enum class ErrorCategory : std::uint16_t {
     // half of the refusal pair a later release can lift; base/status.hpp
     // carries the test that separates the two.
     kNotImplemented,
+    // Appended for StatusCode::kFkViolation and kAssertionViolation
+    // (2026-08-31, P12). Both earn a category on the rule above and on a
+    // fact the newline protocol already established: `ErrorReply` gives
+    // each of them a token a client switches on (`FK_VIOLATION`,
+    // `ASSERTION_VIOLATION`), so folding either into kInvalidArgument here
+    // would make the binary protocol *less* discriminating than the text
+    // one it replaces - and a client library ported across would lose a
+    // branch it already has.
+    //
+    // **After `kNotImplemented`, not before**, and the order is the whole
+    // point of appending: `kNotImplemented` reached `main` first, so it is
+    // 15 to anything already compiled against it. These two take 16 and 17.
+    kFkViolation,
+    kAssertionViolation,
 };
 
 // Packs a wire error code as `category u16 << 16 | detail u16` (spec
@@ -198,28 +278,14 @@ constexpr std::uint32_t MakeErrorCode(ErrorCategory category, std::uint16_t deta
 }
 
 // ---- Handshake payloads (docs/spec/protocol.md §3) ------------------------------
-// Decoded, in-memory form only. Unlike FrameHeader these are NOT
-// fixed-size wire structs - both carry a variable-length string field, so
-// they get no static_assert offsets here. Wire encode/decode for these
-// lands with the handshake state machine (docs/inflight/in-progress/protocol-wp.md P07,
-// src/wire/handshake.cpp), not this header.
-
-struct ClientHelloPayload {
-    std::uint32_t magic;         // 'KWP1'
-    std::uint16_t max_version;
-    std::uint16_t min_version;
-    std::uint64_t capabilities;  // bitset of Capability
-    std::uint8_t auth_method;    // v1: NONE only; SCRAM_SHA256/MTLS reserved
-    std::string client_info;     // telemetry only, never interpreted
-};
-
-struct ServerHelloPayload {
-    std::uint16_t version;
-    std::uint64_t capabilities;  // intersection of client/server bits
-    std::uint64_t session_id;
-    std::uint64_t cancel_key;  // random per session (spec §10)
-    std::string server_info;
-};
+// **They live in kwp_types.hpp, with their codecs** (moved 2026-08-31).
+// This header declared `ClientHelloPayload`/`ServerHelloPayload` as a
+// decoded-form-only sketch while `kwp_types.hpp` held a `ClientHello` that
+// an endpoint actually encoded and decoded - two names for one frame's
+// payload, of which only one was ever on a wire. The sketch is gone;
+// `ClientHello`/`ServerHello` are the payloads, `EncodeClientHello` and
+// friends are their codecs, and the *negotiation* over them is
+// `wire/handshake.hpp` (P07). One struct, one codec, one place.
 
 // ---- Frame codec (docs/inflight/in-progress/protocol-wp.md P06; bodies in frame_codec.cpp) -----
 

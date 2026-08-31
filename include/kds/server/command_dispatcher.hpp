@@ -34,6 +34,7 @@
 #include "kds/server/range_alloc.hpp"
 #include "kds/stats/trace.hpp"
 #include "kds/server/lease_refill_stats.hpp"
+#include "kds/server/result_sink.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -273,6 +274,12 @@ struct PendingRemoteRender {
     // renders as a date rather than an epoch day.
     std::vector<std::uint32_t> projection_types;
 
+    // And the same columns' `type_mod`, for `StepChain`'s reason: a typed
+    // reply states a decimal's scale once, in the description, and a
+    // fan-in's description is built here rather than from a chain that did
+    // not survive the park.
+    std::vector<std::uint32_t> projection_type_mods;
+
     // The fold, or nothing (AG1's spec, copied whole).
     std::optional<exec::AggregateSpec> aggregate;
 
@@ -286,6 +293,39 @@ struct PendingRemoteRender {
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
+
+    // **How many rows the statement affected**, for a caller that needs the
+    // number rather than the sentence. `S_COMPLETE{tag, rows_affected}`
+    // (docs/spec/protocol.md §7) is the one such caller today.
+    //
+    // Carried rather than read back out of `response`, which was the first
+    // shape and is the drift this codebase refuses everywhere else: the
+    // three DML replies do not share a spelling - `UPDATED 7` puts the
+    // count second, `INSERTED oid=.. id=..` implies one, and a bulk insert
+    // writes `rows=` - so a parser here would be a *second* reading of a
+    // string the renderer owns, and would answer 0 for the commonest write
+    // in the engine. Set where the count is known; 0 everywhere else, which
+    // is the truthful answer for a read, a DDL and a session statement.
+    std::uint64_t rows_affected = 0;
+
+    // **Why the statement failed, as a `Status`.** OK on every success and
+    // on the handful of refusals built from a bare message.
+    //
+    // Carried for `rows_affected`'s reason, one step further: a typed
+    // client switches on the error's *category* (protocol.md §11, and the
+    // `retryable` bit it makes a compatibility surface), and the only route
+    // to one used to be `StatusFromErrorReply` parsing the rendered line -
+    // whose bare arm folds `NotFound`, `Unsupported`, `OutOfRange`,
+    // `Corruption`, `OutOfSpace`, `IoError`, `ResourceExhausted` and
+    // `CardinalityViolation` into `InvalidArgument`. Every one of those
+    // reached a KWP client as INVALID_ARGUMENT, which defeats the whole
+    // point of a category taxonomy at the one seam that feeds it.
+    //
+    // `StatusFromErrorReply` stays, and is still right where it is used:
+    // the cross-core path genuinely has only a rendered line to recover a
+    // code from, and the four spellings it recovers exactly are the ones
+    // that matter there.
+    Status status = Status::OK();
 
     // A remote read this statement opened (workplan P4c): the reply is not
     // in `response` yet - the caller awaits the read and finishes through
@@ -669,6 +709,12 @@ private:
     DispatchOutcome HandleCommit(Session& session);
     DispatchOutcome HandleRollback(Session& session);
     DispatchOutcome HandleSetIsolation(std::string_view args, Session& session);
+    // `SET DURABILITY {STRICT|GROUP|RELAXED}` (protocol-wp.md P03,
+    // docs/spec/protocol.md §9). The session rung of the same chain
+    // `HandleSetIsolation` sets, and deliberately the same shape: a
+    // session statement the dispatcher routes, not a `parser::Statement`
+    // arm - see the note at its definition.
+    DispatchOutcome HandleSetDurability(std::string_view args, Session& session);
 
     // The read view a statement reads through. In autocommit it is minted
     // fresh here and belongs to no transaction; inside an explicit one it
@@ -1375,8 +1421,13 @@ private:
     // taken by reference rather than as a copied header, because building a
     // second `std::ostringstream` costs a stringbuf and a locale and was
     // measured as most of the fold's per-statement overhead (AP03).
-    DispatchOutcome RunAggregated(const exec::StepChain& chain, std::ostringstream& os,
-                                  exec::TrailCollector* trail, const exec::TrailReplay* replay,
+    // `sink` is where the rows go; `text_sink` is the same object when
+    // nothing else was installed, and is what the reply is taken from.
+    // Two references to one thing on the newline path, because a sink that
+    // is somebody else's has no reply to give back.
+    DispatchOutcome RunAggregated(ResultSink& sink, TextResultSink& text_sink,
+                                  const exec::StepChain& chain, exec::TrailCollector* trail,
+                                  const exec::TrailReplay* replay,
                                   const std::optional<stats::InstanceKey>& instance,
                                   const txn::Snapshot& snapshot);
 
@@ -1659,7 +1710,11 @@ private:
     // because a read left open holds its batches for the session's life.
     // `render` says whether the chain's own projection or fold produces the
     // reply (AG3); default-empty is the star read this began as.
-    DispatchOutcome FinishRemoteReads(const std::vector<PipelineTag>& tags,
+    // `sink` is the session's (`Session::result_sink`), passed rather than
+    // read off a member: this runs **after a park**, and a per-dispatcher
+    // pointer would by then be whichever connection's statement ran while
+    // this one waited.
+    DispatchOutcome FinishRemoteReads(ResultSink* sink, const std::vector<PipelineTag>& tags,
                                       const PendingRemoteRender& render);
 
 
@@ -1724,7 +1779,28 @@ private:
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;
+    // The **server's** class - the bottom rung of §9's chain. Never read
+    // by a commit path directly: `effective_durability_` below is what a
+    // commit is owed, and it is this one only for a session that overrode
+    // nothing.
     wal::DurabilityClass durability_;
+
+    // The class the statement now in flight commits under
+    // (`Session::EffectiveDurability`), stamped once at the top of
+    // `DispatchInner` and read by every ack-timing site beneath it.
+    //
+    // A plain member for `statement_boundary_taken_`'s reason, stated in
+    // the same place: one statement runs at a time on a core (sched.md
+    // §3), so per-statement state is a member and not a parameter. The
+    // alternative was threading a `Session&` into `LogInsert` and
+    // `AwaitDdlDurability`, neither of which has one or wants one - and a
+    // second copy of the precedence chain at each site, which is the drift
+    // `Session::EffectiveDurability` exists to prevent.
+    //
+    // Initialised to the server's class so a caller that reaches a commit
+    // path without a dispatch - there is none today, and the field must
+    // still be defined if one appears - behaves exactly as before.
+    wal::DurabilityClass effective_durability_ = durability_;
 
     // The per-statement work ceiling, from `max_rows_touched`. Held by
     // value and handed to each execution, which takes its own copy - so

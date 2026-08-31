@@ -660,8 +660,17 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
 `HandleSetIsolation`:
 
 - `START` is accepted for `BEGIN`; `TRANSACTION` / `WORK` are noise words.
-- Replies: `BEGIN trx_id=<n> isolation=<level>`, `COMMIT trx_id=<n>`,
-  `ROLLBACK trx_id=<n>`, `SET isolation=<level>`.
+- Replies: `BEGIN trx_id=<n> isolation=<level> durability=<class>`,
+  `COMMIT trx_id=<n>`, `ROLLBACK trx_id=<n>`, `SET isolation=<level>`,
+  `SET durability=<class>`.
+- **`SET DURABILITY {STRICT|GROUP|RELAXED}`** (also `D1`/`D2`/`D3`) binds
+  this connection's *next* transaction, never the open one — a transaction
+  that has already logged writes under D3's window cannot be given D1's
+  promise retroactively, because the window it spent is spent.
+  `BEGIN [TRANSACTION] [ISOLATION LEVEL <level>] [DURABILITY <class>]`
+  overrides for one transaction, and the two clauses may be written in
+  either order. Three rungs: the server's configured class, then the
+  session's, then the transaction's.
 - Exactly two isolation levels: `READ COMMITTED` (default, read view per
   statement) and `REPEATABLE READ` (read view per transaction).
   `SERIALIZABLE` is refused as out of scope, not open. The precedence chain
