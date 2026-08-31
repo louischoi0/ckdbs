@@ -407,12 +407,20 @@ TEST_F(KwpSessionTest, AnEngineRefusalKeepsItsOwnCategory) {
     };
     const Case kCases[] = {
         {"SELECT id FROM no_such_relation", wire::ErrorCategory::kNotFound},
-        // An outer join is reserved by the grammar and refused
-        // `Unsupported` with its keyword's position (parser-v2.md I9) -
-        // a *well-formed* statement the engine will not run, which is
-        // exactly the distinction folding into INVALID_ARGUMENT erased.
+        // An outer join is reserved by the grammar and refused with its
+        // keyword's position (parser-v2.md I9) - a *well-formed* statement
+        // the engine will not run, which is exactly the distinction
+        // folding into INVALID_ARGUMENT erased.
+        //
+        // `NotImplemented` and not `Unsupported`, which is the operator's
+        // 2026-08-31 rule read correctly: an outer join is a form the
+        // design admits and nobody built, so a later release could lift the
+        // refusal without changing the architecture. It is also the case
+        // that makes this test worth having - the two codes are one word
+        // apart in the message and two categories apart on the wire, and a
+        // client's feature detection reads only the second.
         {"SELECT t.id FROM t LEFT JOIN t AS u ON t.id = u.id",
-         wire::ErrorCategory::kUnsupported},
+         wire::ErrorCategory::kNotImplemented},
     };
     for (const Case& c : kCases) {
         auto frames = RunStatement(c.sql);
