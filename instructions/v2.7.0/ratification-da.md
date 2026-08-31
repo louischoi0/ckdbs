@@ -228,6 +228,57 @@ cannot exceed two ranges**, so neither a 255-stage fan-in nor the
   R4-M measured it as HK4's refutation, *"at k = 2 the ceiling is not
   reached after two million rows at any size"*.
 
-This is the same bound IS7 already stated for the k sweep. What was run
-and what was not is in the ck-tester report; nothing unrun is reported as
-a pass.
+This is the same bound IS7 already stated for the k sweep. It was then
+**confirmed empirically rather than left as a derivation**: 100,000
+inserts through the one peer at `range_size_ids = 256` - 390 lease
+blocks' worth - left `SHOW META`'s `split_relation_detail` reading
+`4000:2@2` on both of two independent runs.
+
+**DA-b is answered, in isolation from that limit.** A pipeline tag is
+minted once per `Open()` regardless of how many ranges the stages
+address, so `bench/session_step_state_bench.cpp` builds the same
+`SessionStepClient::reads_` vector a 255-stage fan-in would and prices
+the two candidates directly. Both **are** superlinear - the scaling
+ratios land on the quadratic prediction (4.11 against 4.00 at N 64 ->
+128; 3.53 against 4.00 at 32 -> 64) - and both are small: **10.9 us per
+park-predicate poll and 268 us for one teardown at N = 255**, two to
+three orders below this engine's own ~20 us wire hop and ~0.94 ms
+`fdatasync`. The order's instruction was *"if the state cost is
+superlinear, report and stop"*; it is, and what stops here is the
+inference from superlinear to unaffordable. Session-side bookkeeping is
+not what would make 255 stages unusable.
+
+**What DA-b still does not cover** is the order's own third mechanism in
+disguise: credit (`kInitialCreditsPerEdge` = 4) against ring capacity
+(`kCoreRingSlots` = 256), which could self-throttle a fan-in near 64
+stages per peer for reasons unrelated to state size. That needs real
+batches over a real ring between distinct owner cores, so it needs the
+two-range limit not to hold. **Not measured, not measurable here.**
+
+**DA-c is not run**, for the reason above, and nothing estimates it.
+
+**What was runnable was run**: `cores = 1` is unmoved by the armed
+default across 200/1K/10K rows, with `ids_burnt = 0` on both arms - so
+spreading structurally never activated, not merely measured equal; the
+read surface at `cores = 2` under `range_size_ids = 65,536` is 11 of 16
+shapes, identical to `3446666` shape for shape; `scripts/sim.sh` is
+190/190 and the Release suite 3018/3018. All of it, with its provenance
+and its noise floor, is in
+`bench/v2.7.0/results-ratification-da-v2.2.1-155-g1f04418.md`. Nothing
+unrun is reported as a pass.
+
+### One consequence of arming the default that DA1 did not name
+
+Found by the enactment's review, recorded in `docs/inflight/known-gaps.md`
+rather than only here. Arming `range_size_ids` turns ten paths into
+default refusals on a multi-core instance - every one of them already
+existed, and what changed is that a range now opens on **workload**
+instead of on configuration. **The one that does not recover** is
+`RefuseAuxiliaryOnSplitRelation`: on a relation with two or more ranges,
+`CREATE INDEX`, `CREATE CABIN` (**including the Cabin optimizer's
+automatic path**), `CREATE ASSERTION` and an FK naming it are all
+`Unsupported`, and nothing merges ranges until R5. So **order decides and
+the decision is permanent** - index-then-write keeps the relation
+unsplittable through `RangeEligible`'s gate, write-then-index is refused
+for the life of the relation, and under DA1 the second order is what an
+ordinary session produces. `cores = 1` meets none of it.
