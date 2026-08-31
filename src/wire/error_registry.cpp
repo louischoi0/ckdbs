@@ -27,6 +27,12 @@ ErrorCategory CategoryOf(StatusCode code) noexcept {
         case StatusCode::kCorruption: return ErrorCategory::kCorruption;
         case StatusCode::kIoError: return ErrorCategory::kIoError;
         case StatusCode::kUnsupported: return ErrorCategory::kUnsupported;
+        // The other half of the refusal pair (status.hpp, 2026-08-31): what
+        // the design admits and nobody built, against what the architecture
+        // cannot admit. Its own category because the distinction exists for
+        // a client library's feature detection, and one category would
+        // answer neither question.
+        case StatusCode::kNotImplemented: return ErrorCategory::kNotImplemented;
         case StatusCode::kTxnConflict: return ErrorCategory::kTxnConflict;
         case StatusCode::kCardinalityViolation:
             return ErrorCategory::kCardinalityViolation;
@@ -61,6 +67,7 @@ std::string_view ErrorCategoryName(ErrorCategory category) noexcept {
         case ErrorCategory::kCardinalityViolation: return "CARDINALITY_VIOLATION";
         case ErrorCategory::kResourceExhausted: return "RESOURCE_EXHAUSTED";
         case ErrorCategory::kUnknownOutcome: return "UNKNOWN_OUTCOME";
+        case ErrorCategory::kNotImplemented: return "NOT_IMPLEMENTED";
         case ErrorCategory::kFkViolation: return "FK_VIOLATION";
         case ErrorCategory::kAssertionViolation: return "ASSERTION_VIOLATION";
     }

@@ -21,12 +21,37 @@ Work instructions, companion to `docs/spec/protocol.md` (the specification). Thi
 | P09 row & type codecs | done — the batch target named, `BoundParam` and its codec added, and `EncodeValue` given the `(type_val, type_mod)` overload a fold's output needs |
 | P10 portals | done — **suspension bounds delivery, not execution**; spec §7 amended rather than the build overstated |
 | P11 txn & durability frames | done, less §15-5's crash-injection half, which KW-D1 assigned here and which is **owed and not run** (`known-gaps.md`) |
-| P12 error registry | done — `wire/error_registry.{hpp,cpp}` and a golden list written as literals |
+| P12 error registry | done — `wire/error_registry.{hpp,cpp}` and a golden list written as literals. The taxonomy needed a second half nobody had asked for: `DispatchOutcome` now carries the failing `Status`, because the only route to a category was parsing the rendered reply line, and that fold made `NotFound` and six others arrive as `INVALID_ARGUMENT` |
 | P13 server integration | done — `tcp_server` gained the decoder and kept the line splitter, selected per listener; `debug_text_port` is the newline surface |
-| P14 cancel | **half done**: the flag and its observation point exist and are tested; the `C_CANCEL` *connection* is not built — see the row |
+| P14 cancel | **half done**: the flag and its observation point exist and are tested; the `C_CANCEL` *connection* is not built, so the `CANCEL` **capability is not offered** — a bit advertised and then refused is worse for a client than an absent one. See the row |
 | P15 reference client | done — `tools/kwp.py` and `ckdbs_cli.py` over it, with `--text` for the debug port |
 | P16 conformance | first half done (golden byte sessions, `tests/testdata/kwp_golden.txt`); the socket-level half is `tests/kwp_endpoint_test.cpp` |
 | P17 | **struck by KW-D1** |
+
+### What the review changed, after the rows were done
+
+A `critics-developer` pass over the finished change found seventeen items;
+all were taken except one, and the ones that mattered are worth naming here
+because three of them were **not** visible from any test that existed:
+
+- **A shipped read answered a typed client with a text blob.** The ship wire
+  carries the owner's rendered line, so on a multi-core instance one
+  `SELECT` came back as a typed result set or as a diagnostic text block
+  depending on which core owned the relation — invisible from the statement,
+  impossible for a client to branch on. Now refused with the reason;
+  `known-gaps.md` carries it against `crosscore.md`, which owns the fix.
+- **Two use-after-frees on the TLS error path**, both the same shape: a
+  `Connection&` used after a failed append had already closed and erased it.
+- **The protocol's own settings did not survive `TcpServer`'s move**, so the
+  configured *text* port came up speaking KWP and the two ports were
+  indistinguishable. Pinned by a test, because the failure is invisible from
+  inside either endpoint.
+
+Rejected, with the reason: reporting the effective durability class on
+`DispatchOutcome` and deleting the session's copy of §9's chain. It is a
+real simplification and it is a *third* field on the outcome in a change
+that already added two; the session's two-sided read is documented and
+tested, and the cut is better taken on its own.
 
 **What the milestone did not do**, stated where it will be looked for: no OUTER JOIN, no `IN (value list)`, no cursors, no sort spill, no index-served `ORDER BY`; `ALTER TABLE`, cabin, assertion and FK are no more transactional than they were; nothing is reclaimed. It does make portal suspension exist, which is the mechanism a cursor and a large result set both need.
 

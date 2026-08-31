@@ -62,8 +62,9 @@ FIELD_KEYSTONE = 0x1
 FIELD_DIAGNOSTIC_LINE = 0x2
 
 # Error categories (kwp.hpp), for the four spellings a client switches on.
-CAT_TXN_CONFLICT, CAT_FK_VIOLATION = 10, 15
-CAT_ASSERTION_VIOLATION, CAT_UNKNOWN_OUTCOME = 16, 14
+CAT_TXN_CONFLICT, CAT_UNKNOWN_OUTCOME = 10, 14
+CAT_NOT_IMPLEMENTED = 15
+CAT_FK_VIOLATION, CAT_ASSERTION_VIOLATION = 16, 17
 
 
 class KwpError(Exception):
@@ -94,6 +95,7 @@ class KwpError(Exception):
             CAT_FK_VIOLATION: "FK_VIOLATION retryable=0 ",
             CAT_ASSERTION_VIOLATION: "ASSERTION_VIOLATION retryable=0 ",
             CAT_UNKNOWN_OUTCOME: "UNKNOWN_OUTCOME retryable=0 ",
+            CAT_NOT_IMPLEMENTED: "NOT_IMPLEMENTED retryable=0 ",
         }
         return "ERR " + tokens.get(self.category, "") + self.message
 

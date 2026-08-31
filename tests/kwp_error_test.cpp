@@ -47,8 +47,9 @@ constexpr GoldenCategory kGolden[] = {
     {ErrorCategory::kCardinalityViolation, 12, "CARDINALITY_VIOLATION"},
     {ErrorCategory::kResourceExhausted, 13, "RESOURCE_EXHAUSTED"},
     {ErrorCategory::kUnknownOutcome, 14, "UNKNOWN_OUTCOME"},
-    {ErrorCategory::kFkViolation, 15, "FK_VIOLATION"},
-    {ErrorCategory::kAssertionViolation, 16, "ASSERTION_VIOLATION"},
+    {ErrorCategory::kNotImplemented, 15, "NOT_IMPLEMENTED"},
+    {ErrorCategory::kFkViolation, 16, "FK_VIOLATION"},
+    {ErrorCategory::kAssertionViolation, 17, "ASSERTION_VIOLATION"},
 };
 
 TEST(KwpErrorRegistryTest, TheCategoryNumberingIsFrozen) {
@@ -85,6 +86,7 @@ TEST(KwpErrorRegistryTest, EveryStatusCodeMapsToACategory) {
         {StatusCode::kFkViolation, ErrorCategory::kFkViolation},
         {StatusCode::kAssertionViolation, ErrorCategory::kAssertionViolation},
         {StatusCode::kUnknownOutcome, ErrorCategory::kUnknownOutcome},
+        {StatusCode::kNotImplemented, ErrorCategory::kNotImplemented},
     };
     for (const Case& c : kCases) {
         EXPECT_EQ(CategoryOf(c.code), c.expect)
