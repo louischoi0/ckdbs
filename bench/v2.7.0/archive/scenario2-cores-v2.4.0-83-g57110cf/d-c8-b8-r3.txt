@@ -1,0 +1,87 @@
+== d-c8-b8-r3 ==
+cores: 8   peer_listeners: on   port: 15633
+driver flags: --cargos 20000 --bookings 5000 --seed 1 --verify 0 --manifest-customers 0 --bookers 8
+binary sha256: 275317929d6dde4d384e90c6aa94725a9b39d3b017bc9b01b7e2471fa36bf9a4
+uptime before:  04:37:02 up  6:27,  1 user,  load average: 0.60, 0.73, 0.79
+created 8 relations with suffix _043703:
+  organizations_043703
+  ships_043703
+  operations_043703
+  cargos_043703
+  fees_043703
+  recipes_043703
+  freights_043703
+  charges_043703
+
+read probe - which of the reads S2-02..S2-04 need does this server take?
+
+  pk lookup           ok
+  capacity aggregate  ok
+  recipe filterscan   ok
+  voyage manifest     ok
+  voyage rollup       ok
+  customer statement  ok
+
+
+ckdbs benchmark - 68 columns, 57369 rows resident, 1 connection
+server 127.0.0.1:15633  table scenario2_043703
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0  401603.4  20167.3  26538.5  28516.92991821.02991821.0 2991821.0     0
+load-organizations        2000         0     793.5    620.2    697.7    755.3   1025.9   1146.8    1609.1     0
+load-ships                 200         0     819.7    645.6    721.5    784.2   1018.6   1096.7    1243.3     0
+load-operations           2000         0     838.3    633.7    715.6    825.0   1084.8   1214.7    4689.1     0
+load-fees                   12         0     907.9    743.1    781.6    894.1   1057.0   1057.0    1057.0     0
+load-recipes                93         0     920.7    681.1    826.6    895.0   1213.7   1429.8    1429.8     0
+load-cargos              20000         0    1026.5    673.5    921.1    985.7   1283.9   1467.4   22624.1     0
+booking                   5017       608   11394.8    219.3   8726.2  10676.2  17324.6  21810.9  145959.1     0
+cargo-lookup              5033       610    1189.9     21.3    152.6    986.3   2779.2   3150.5   41398.6     0
+credit-lookup             5033       610     812.6     18.1     92.4    184.3   2680.1   3356.8   41340.3     0
+capacity-read             5033       610     560.9     18.8     78.6    127.5   2044.3   2956.2   26872.6     0
+recipe-read               5033       610     490.2     25.7     86.1    128.3   2007.2   2916.5    4122.2     0
+freight-insert            5016       608     236.3     16.0     32.3     39.6   1647.5   2838.1   26875.1     6
+charge-insert            28098     3,405     137.2     10.6     23.6     26.6    938.6   2783.6   28321.1     5
+operation-update          5005       606     970.2     17.5     78.8    850.1   2710.5   3051.3   24320.9     4
+org-update                5001       606    1012.5     16.8     70.3    911.8   2887.9   3688.1  134005.0     1
+commit                    5000       606    5186.8   2189.2   3991.0   4870.1   7170.4   8224.1  140003.9     0
+manifest-scan              180        22    1272.0     40.9    182.8   1064.9   3112.5   3779.3    4482.6     0
+voyage-rollup              180        22    1257.8     45.6    179.8   1053.1   3112.0   4036.1    4181.5     0
+customer-statement           0         0       0.0      0.0      0.0      0.0      0.0      0.0       0.0     0
+
+  ddl: 8 relations
+  booking: BEGIN/COMMIT, capacity=cached, 8 bookers, contended
+  freight-insert: 6 error replies, first: ERR TXN_CONFLICT retryable=1 this transaction's writes are bound to core 0 and relation 'freights_043703' is owned by core 1; a transaction may write on one core only until two-phase commit exists
+  charge-insert: 5 error replies, first: ERR TXN_CONFLICT retryable=1 this transaction's writes are bound to core 0 and relation 'charges_043703' is owned by core 5; a transaction may write on one core only until two-phase commit exists
+  operation-update: 4 error replies, first: ERR TXN_CONFLICT retryable=1 row id=1294 was written by transaction 54094
+  org-update: 1 error replies, first: ERR TXN_CONFLICT retryable=1 row id=1388 was written by transaction 57225
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+bookings
+  committed                 5000       605.9 TPS
+  rejected-capacity           17        0.3% of attempts
+  rejected-credit              0        0.0% of attempts
+  conflicted                  16         16 retries
+    on operations               4       25.0% of conflicts
+    on organizations            1        6.2% of conflicts
+    on read                    11       68.8% of conflicts
+    retries/booking         0.00
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              8, contended (shared voyages and customers)
+  per booker           #0:625  #1:625  #2:625  #3:625  #4:625  #5:625  #6:625  #7:625
+  cargo pool left      15000
+
+  manifest reporter    9 passes, 360 reads, 246 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+  wrote /home/ubuntu/bench-s2-cores/out/d-c8-b8-r3.json
+driver exit: 0
+server utime+stime ticks before: 0 10
+server utime+stime ticks after:  292 336
+load samples max: 1.44 0.91 0.85
+data file bytes: 23068672
+uptime after:  04:37:40 up  6:28,  1 user,  load average: 1.44, 0.91, 0.85

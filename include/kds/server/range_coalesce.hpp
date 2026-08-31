@@ -15,8 +15,8 @@
 
 // AX — coalescing a split relation back to one range so an auxiliary DDL
 // can build on it (`docs/spec/crosscore.md` §6c; ratification
-// `instructions/v2.7.0/ratification-ax.md`; build order
-// `instructions/v2.7.0/ax-coalesce-on-auxiliary-ddl.md`).
+// `instructions/v2.7.0/ratification-AX.md`; build order
+// `instructions/v2.7.0/wirkorder-AX.md`).
 //
 // `range_alloc.hpp` is the other end of the same axis: it opens a
 // boundary, this closes every one of them. The two are deliberately

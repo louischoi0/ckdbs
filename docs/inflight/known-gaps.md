@@ -889,7 +889,7 @@ still waits on its own gate, so:
   ordinary session produces, and `DROP TABLE` + recreate was the only way
   back.
 
-  **Decided a defect 2026-08-31 and fixed by AX** (`ratification-ax.md`
+  **Decided a defect 2026-08-31 and fixed by AX** (`ratification-AX.md`
   AX-D1, built at `6e2cecf` and after; `docs/spec/crosscore.md` §6c). The
   four **explicit** statements now coalesce the relation back to one range
   synchronously and then build: the per-range chains are concatenated in

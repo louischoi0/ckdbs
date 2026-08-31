@@ -2,7 +2,7 @@
 
 Ratified by the operator 2026-08-31 against `main` at `04d53f4`
 (`v2.2.1-159-g04d53f4`). Recorded by CLA. Companion build order:
-`instructions/v2.7.0/ax-coalesce-on-auxiliary-ddl.md`.
+`instructions/v2.7.0/wirkorder-AX.md`.
 
 **What this ratification is about.** `RefuseAuxiliaryOnSplitRelation`
 (`src/catalog/catalog.cpp:1094`) declines `CREATE INDEX`, `CREATE CABIN`

@@ -605,9 +605,9 @@ the tails; R3/R4 owns building the second. Consequences, stated now:
 
 ### 6c. Coalesce on Auxiliary DDL — the Merge, and What Bounds a Range's Walk (v2, AX)
 
-**Ratified 2026-08-31** (`instructions/v2.7.0/ratification-ax.md`,
+**Ratified 2026-08-31** (`instructions/v2.7.0/ratification-AX.md`,
 AX-D1 through AX-D6 and AX-D12; build order
-`instructions/v2.7.0/ax-coalesce-on-auxiliary-ddl.md`). §6a stops a
+`instructions/v2.7.0/wirkorder-AX.md`). §6a stops a
 relation with an auxiliary from splitting; `RefuseAuxiliaryOnSplitRelation`
 (`src/catalog/catalog.cpp`) is its converse and stops a split relation
 from gaining one. Both gates predate DA1, which armed

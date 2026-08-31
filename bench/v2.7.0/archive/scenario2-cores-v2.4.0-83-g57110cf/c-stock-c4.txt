@@ -1,0 +1,90 @@
+== c-stock-c4 ==
+cores: 4   peer_listeners: on   port: 15628
+driver flags: --cargos 20000 --bookings 3000 --seed 1 --verify 25 --bookers 4
+binary sha256: 275317929d6dde4d384e90c6aa94725a9b39d3b017bc9b01b7e2471fa36bf9a4
+uptime before:  04:32:08 up  6:22,  1 user,  load average: 0.65, 0.75, 0.80
+created 8 relations with suffix _043208:
+  organizations_043208
+  ships_043208
+  operations_043208
+  cargos_043208
+  fees_043208
+  recipes_043208
+  freights_043208
+  charges_043208
+
+read probe - which of the reads S2-02..S2-04 need does this server take?
+
+  pk lookup           ok
+  capacity aggregate  ok
+  recipe filterscan   ok
+  voyage manifest     ok
+  voyage rollup       ok
+  customer statement  ok
+
+
+25 statement(s) failed; first: SELECT f.id, f.cbm, f.price_per_cbm FROM freights_043208 AS f JOIN cargos_043208 AS c ON f.cargo_id = c.id WHERE c.org_id = 1275  ->  ERR NOT_IMPLEMENTED retryable=0 relation 'freights_043208 AS f' has ranges on another core and this shape cannot fan in over them; reading it here would answer short
+
+ckdbs benchmark - 68 columns, 44257 rows resident, 1 connection
+server 127.0.0.1:15628  table scenario2_043208
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0  147090.4  23811.3  30694.2  35303.5 923650.3 923650.3  923650.3     0
+load-organizations        2000         0     960.1    648.8    870.9    952.4   1168.6   1251.0    1373.0     0
+load-ships                 200         0     955.9    671.3    871.6    951.5   1158.3   1229.0    1318.7     0
+load-operations           2000         0     953.7    636.4    854.8    937.9   1213.1   1377.6    5288.0     0
+load-fees                   12         0    1051.7    888.9    973.0   1052.8   1207.1   1207.1    1207.1     0
+load-recipes                93         0     983.9    748.3    904.4    971.5   1157.7   1374.5    1374.5     0
+load-cargos              20000         0    1141.9    657.1   1018.3   1120.5   1423.5   1549.5   11333.5     0
+booking                   3000       443    8519.4   3282.9   6519.8   8287.9  13338.7  16667.4   70266.2     0
+cargo-lookup              3004       444     725.7     22.2     75.5    558.5   2052.6   2727.1   59770.8     0
+credit-lookup             3004       444     560.5     19.5     56.7     95.1   2121.3   2794.9   22671.0     0
+capacity-read             3004       444     524.2     18.3     51.7     80.3   2064.9   2547.5   49052.8     0
+recipe-read               3004       444     467.6     26.8     62.3     87.7   1985.6   2586.9   11936.2     0
+freight-insert            3004       444     296.3     16.8     34.9     47.4   1674.0   2563.8   21148.6     1
+charge-insert            16957     2,506     147.4     12.3     24.3     29.4    970.3   2169.1   21456.0     3
+operation-update          3000       443     574.9     16.7     48.6     74.3   1980.9   2491.0    8292.6     0
+org-update                3000       443     482.6     16.9     42.8     56.9   2039.9   2647.9   48621.1     0
+commit                    3000       443    3849.5   2588.3   3130.0   3619.0   5660.3   6382.5   61261.7     0
+manifest-scan              140        21     922.0     34.4    120.8    921.8   2404.7   2821.0    2918.2     0
+voyage-rollup              140        21     901.4     38.3    123.1    922.3   2181.1   3386.7    3758.4     0
+customer-statement          70        10     532.0     41.8     54.3     79.8   2316.2   4404.9    4404.9    60
+
+  ddl: 8 relations
+  booking: BEGIN/COMMIT, capacity=cached, 4 bookers, contended
+  freight-insert: 1 error replies, first: ERR TXN_CONFLICT retryable=1 this transaction's writes are bound to core 0 and relation 'freights_043208' is owned by core 1; a transaction may write on one core only until two-phase commit exists
+  charge-insert: 3 error replies, first: ERR TXN_CONFLICT retryable=1 this transaction's writes are bound to core 0 and relation 'charges_043208' is owned by core 1; a transaction may write on one core only until two-phase commit exists
+  customer-statement: 60 error replies, first: ERR NOT_IMPLEMENTED retryable=0 relation 'freights_043208 AS f' has ranges on another core and this shape cannot fan in over them; reading it here would answer short
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+bookings
+  committed                 3000       443.4 TPS
+  rejected-capacity            0        0.0% of attempts
+  rejected-credit              0        0.0% of attempts
+  conflicted                   4          4 retries
+    on read                     4      100.0% of conflicts
+    retries/booking         0.00
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              4, contended (shared voyages and customers)
+  per booker           #0:750  #1:750  #2:750  #3:750
+  cargo pool left      17000
+
+  manifest reporter    7 passes, 350 reads, 114 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+verify (§4)          75 checks, 0 failure(s)
+  I1 booked_cbm == SUM(freights.cbm), I2 within ship capacity,
+  I3 outstanding == recomputed charges, I4 charge rows == rules
+
+  wrote /home/ubuntu/bench-s2-cores/out/c-stock-c4.json
+driver exit: 1
+server utime+stime ticks before: 0 9
+server utime+stime ticks after:  221 253
+load samples max: 0.89 0.79 0.81
+data file bytes: 15728640
+uptime after:  04:32:45 up  6:23,  1 user,  load average: 0.89, 0.79, 0.81

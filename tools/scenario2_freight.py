@@ -58,6 +58,7 @@ Usage:
 """
 
 import argparse
+import collections
 import datetime
 import multiprocessing
 import random
@@ -1192,17 +1193,35 @@ def merge_bookers(results, elapsed):
 
 # ---- verification (docs/inflight/in-progress/scenario2-freight.md §4) -------------------------
 
+VerifyResult = collections.namedtuple(
+    "VerifyResult", "checks failures first unanswered first_unanswered")
+
+
 def verify(client, tables, state, sample, rng, trust_belief=True):
-    """I1-I4, on a sample. Returns (checks, failures, first).
+    """I1-I4, on a sample. Returns a `VerifyResult`.
 
     What is being asked is not "is the arithmetic right" - the driver did
     the arithmetic - but **whether a write this driver counted as applied
     was lost**, and whether the engine's own two accounts of the same
     quantity agree with each other. Under `--txn` both must hold; under
     `--no-txn` and concurrency they need not, and that contrast is the
-    reason the flag exists."""
-    checks = failures = 0
-    first = None
+    reason the flag exists.
+
+    **A refused read is counted and reported, never skipped.** `select_rows`
+    promises the caller can tell "no such row" from "no answer", and until
+    2026-08-31 no caller here made that distinction: every read that came
+    back `ERR` fell into the same `continue` as an empty result, so the
+    check silently stopped running and the summary said "N checks, 0
+    failures" over a smaller N. That is not a hypothetical - on a
+    multi-core instance I3's join over a spread `freights` is refused
+    (`NOT_IMPLEMENTED`, the fan-in gate), and the pass quietly went from
+    100 checks to 75 while reporting a clean run
+    (`bench/v2.7.0/results-scenario2-cores-v2.4.0-83-g57110cf.md` §7).
+    `unanswered` is that population, and a caller must print it beside
+    `checks` - an invariant nobody could evaluate is not an invariant that
+    held."""
+    checks = failures = unanswered = 0
+    first = first_unanswered = None
 
     def fail(message):
         nonlocal failures, first
@@ -1210,13 +1229,36 @@ def verify(client, tables, state, sample, rng, trust_belief=True):
         if first is None:
             first = message
 
+    def read(statement):
+        """(rows, reply). `rows is None` means the server refused."""
+        reply = client(statement)
+        return select_rows(reply), reply
+
+    def unanswerable(invariant, subject, statement, reply):
+        """One check the server would not let this pass evaluate."""
+        nonlocal unanswered, first_unanswered
+        unanswered += 1
+        if first_unanswered is None:
+            first_unanswered = (f"{invariant} {subject}: {statement}  ->  "
+                                f"{reply}")
+
     booked = [op for op, total in state["booked_cbm"].items() if total > 0]
     for op_id in rng.sample(booked, min(sample, len(booked))):
-        rows = select_rows(client(f"SELECT SUM(cbm) FROM {tables['freights']} "
-                                  f"WHERE operation_id = {op_id}"))
-        stored = select_rows(client(f"SELECT booked_cbm FROM {tables['operations']} "
-                                    f"WHERE id = {op_id}"))
-        if rows is None or stored is None or not stored:
+        ledger_stmt = (f"SELECT SUM(cbm) FROM {tables['freights']} "
+                       f"WHERE operation_id = {op_id}")
+        column_stmt = (f"SELECT booked_cbm FROM {tables['operations']} "
+                       f"WHERE id = {op_id}")
+        rows, ledger_reply = read(ledger_stmt)
+        stored, column_reply = read(column_stmt)
+        if rows is None or stored is None:
+            # Refused, not absent - I1 and I2 both ride on these two reads.
+            bad, reply = ((ledger_stmt, ledger_reply) if rows is None
+                          else (column_stmt, column_reply))
+            unanswerable("I1/I2", f"operation {op_id}", bad, reply)
+            continue
+        if not stored:
+            # Answered, and the row is not there. A different question from
+            # the one above, and the one this pass has always skipped.
             continue
         ledger = sum_value(rows)
         column = int(stored[0][0])
@@ -1240,22 +1282,46 @@ def verify(client, tables, state, sample, rng, trust_belief=True):
 
     owing = [org for org, total in state["outstanding"].items() if total > 0]
     for org_id in rng.sample(owing, min(sample, len(owing))):
-        rows = select_rows(
-            client(f"SELECT f.id, f.cbm, f.price_per_cbm FROM {tables['freights']} AS f "
-                   f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
-                   f"WHERE c.org_id = {org_id}"))
-        stored = select_rows(client(f"SELECT outstanding FROM "
-                                    f"{tables['organizations']} WHERE id = {org_id}"))
-        if rows is None or stored is None or not stored:
+        freights_stmt = (
+            f"SELECT f.id, f.cbm, f.price_per_cbm FROM {tables['freights']} AS f "
+            f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
+            f"WHERE c.org_id = {org_id}")
+        stored_stmt = (f"SELECT outstanding FROM "
+                       f"{tables['organizations']} WHERE id = {org_id}")
+        rows, freights_reply = read(freights_stmt)
+        stored, stored_reply = read(stored_stmt)
+        if rows is None or stored is None:
+            # The join is the read a spread relation refuses, so this is the
+            # arm that fires on a multi-core instance.
+            bad, reply = ((freights_stmt, freights_reply) if rows is None
+                          else (stored_stmt, stored_reply))
+            unanswerable("I3", f"organization {org_id}", bad, reply)
+            continue
+        if not stored:
             continue
         # I3: recomputed from the rows the engine returns, never re-read
         # from a column that would only be agreeing with itself.
+        #
+        # A refused charge read abandons the whole organization rather than
+        # contributing zero. `sum_value(None)` is 0 - it folds SUM-over-no-
+        # rows to 0, which is right for an *answered* empty read - so
+        # passing it a refusal would turn "unknown" into a definite number
+        # and manufacture an I3 failure out of a statement the server never
+        # ran.
         recomputed = 0
         for freight in rows:
             freight_id, cbm, rate = int(freight[0]), int(freight[1]), int(freight[2])
-            charged = select_rows(client(f"SELECT SUM(amount) FROM {tables['charges']} "
-                                         f"WHERE freight_id = {freight_id}"))
+            charged_stmt = (f"SELECT SUM(amount) FROM {tables['charges']} "
+                            f"WHERE freight_id = {freight_id}")
+            charged, charged_reply = read(charged_stmt)
+            if charged is None:
+                unanswerable("I3", f"organization {org_id}", charged_stmt,
+                             charged_reply)
+                recomputed = None
+                break
             recomputed += (cbm // MILLI) * rate + sum_value(charged)
+        if recomputed is None:
+            continue
         checks += 1
         if recomputed != int(stored[0][0]):
             fail(f"I3 organization {org_id}: outstanding={stored[0][0]}, "
@@ -1264,16 +1330,19 @@ def verify(client, tables, state, sample, rng, trust_belief=True):
     # I4: a freight's charge rows against the rule set replayed for it.
     written = list(state["freight_charges"])
     for freight_id in rng.sample(written, min(sample, len(written))):
-        rows = select_rows(client(f"SELECT id FROM {tables['charges']} "
-                                  f"WHERE freight_id = {freight_id}"))
+        charges_stmt = (f"SELECT id FROM {tables['charges']} "
+                        f"WHERE freight_id = {freight_id}")
+        rows, charges_reply = read(charges_stmt)
         if rows is None:
+            unanswerable("I4", f"freight {freight_id}", charges_stmt,
+                         charges_reply)
             continue
         checks += 1
         if len(rows) != state["freight_charges"][freight_id]:
             fail(f"I4 freight {freight_id}: {len(rows)} charge rows stored, "
                  f"{state['freight_charges'][freight_id]} written")
 
-    return checks, failures, first
+    return VerifyResult(checks, failures, first, unanswered, first_unanswered)
 
 
 # ---- the capability probe (docs/inflight/in-progress/scenario2-freight.md §6) -----------------
@@ -1395,12 +1464,22 @@ def print_bookings(result, args):
               f"it contended with")
 
     if "verify" in result:
-        checks, failures, first = result["verify"]
+        v = result["verify"]
         print()
-        print(f"verify (§4)          {checks} checks, {failures} failure(s)")
-        if first:
-            print(f"  first: {first}")
-        elif checks:
+        # `unanswered` prints beside `checks` and never below the fold: a
+        # pass that could not evaluate an invariant has not verified it, and
+        # a reader comparing two runs' check counts has to see why they
+        # differ.
+        line = f"verify (§4)          {v.checks} checks, {v.failures} failure(s)"
+        if v.unanswered:
+            line += f", {v.unanswered} UNANSWERED"
+        print(line)
+        if v.first:
+            print(f"  first: {v.first}")
+        if v.unanswered:
+            print(f"  {v.unanswered} check(s) the server refused - NOT verified:")
+            print(f"  first: {v.first_unanswered}")
+        if not v.first and not v.unanswered and v.checks:
             print("  I1 booked_cbm == SUM(freights.cbm), I2 within ship capacity,")
             print("  I3 outstanding == recomputed charges, I4 charge rows == rules")
     print()
@@ -1709,9 +1788,10 @@ def main():
         meta["tps"] = (result["counts"][COMMITTED] / result["elapsed"]
                        if result["elapsed"] > 0 else 0.0)
         if "verify" in result:
-            checks, failures, first = result["verify"]
-            meta["verify"] = {"checks": checks, "failures": failures,
-                              "first": first}
+            v = result["verify"]
+            meta["verify"] = {"checks": v.checks, "failures": v.failures,
+                              "first": v.first, "unanswered": v.unanswered,
+                              "first_unanswered": v.first_unanswered}
         if result.get("manifest"):
             meta["manifest_passes"] = result["manifest"]["passes"]
             meta["manifest_rows_read"] = result["manifest"]["rows_read"]

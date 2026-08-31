@@ -22,7 +22,7 @@
 // directory contraction (AX3), and the walk bound that makes a
 // part-merged relation read exactly as the split one did
 // (`docs/spec/crosscore.md` §6c; build order
-// `instructions/v2.7.0/ax-coalesce-on-auxiliary-ddl.md`).
+// `instructions/v2.7.0/wirkorder-AX.md`).
 //
 // The ring halves - the quiesce leg on a departing owner, the absorb leg
 // on the absorber - are `core_runtime_test.cpp`'s, where a peer core

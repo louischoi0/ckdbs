@@ -289,8 +289,8 @@ The paragraph above was written the day DA1 was enacted and is kept as
 written, because it is what the enactment's review found. The operator
 then ruled the non-recovering refusal a **defect rather than a
 constraint** and ratified the fix the same day:
-`instructions/v2.7.0/ratification-ax.md` (AX-D1 through AX-D6, AX-D12),
-built to `instructions/v2.7.0/ax-coalesce-on-auxiliary-ddl.md` and
+`instructions/v2.7.0/ratification-AX.md` (AX-D1 through AX-D6, AX-D12),
+built to `instructions/v2.7.0/wirkorder-AX.md` and
 specified as `docs/spec/crosscore.md` §6c.
 
 So the two documents cite each other rather than disagreeing: DA1 armed

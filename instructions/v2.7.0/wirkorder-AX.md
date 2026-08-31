@@ -1,7 +1,7 @@
 # Work order AX — coalesce on auxiliary DDL
 
 Drafted 2026-08-31 by CLA against `main` at `04d53f4`
-(`v2.2.1-159-g04d53f4`). Decisions: `instructions/v2.7.0/ratification-ax.md`
+(`v2.2.1-159-g04d53f4`). Decisions: `instructions/v2.7.0/ratification-AX.md`
 (AX-D1 through AX-D6, AX-D12, operator 2026-08-31) — **read that first**;
 nothing below re-argues a decided item, and nothing below may assume one
 of the five placement `[OPEN]`s it moved to R5.
@@ -93,7 +93,7 @@ existing DDL transaction; the five placement decisions stay R5's.
 including: the AX-D4 proposed ordering with its proposed tag, the
 two-phase DDL structure and its merged-residue-on-failure clause, the
 zero-rows final directory state, conclusion 5's standing rule, and
-AX-D12's carve-out. Cross-cite `ratification-ax.md`. Nothing in AX1+
+AX-D12's carve-out. Cross-cite `ratification-AX.md`. Nothing in AX1+
 lands before this row.
 
 **AX1 — absorber selection.** Page counts per range via
