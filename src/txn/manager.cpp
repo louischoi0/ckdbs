@@ -60,7 +60,7 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
         // locking or SSI read-tracking, neither of which fits a design with
         // no lock manager and no reader registration. Named explicitly so
         // the refusal says why rather than "unknown level".
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "SERIALIZABLE is out of scope: it needs predicate locking or read-tracking, and "
             "this engine has neither a lock manager nor row-level read tracking");
     }

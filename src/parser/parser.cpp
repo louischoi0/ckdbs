@@ -243,7 +243,7 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
             // no expression tree for it to negate.
             const Token& next = lexer_.Peek();
             if (next.type != TokenType::kKeyword || next.kw != Keyword::kExists) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "NOT is supported only as `NOT EXISTS (...)` or `NOT IN (...)` (byte " +
                     std::to_string(lead.byte_offset) + ")");
             }
@@ -274,7 +274,7 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         if (negated) {
             const Token& in_tok = lexer_.Peek();
             if (in_tok.type != TokenType::kKeyword || in_tok.kw != Keyword::kIn) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "NOT is supported only as `NOT IN (...)` or `NOT EXISTS (...)` (byte " +
                     std::to_string(not_at) + ")");
             }
@@ -693,7 +693,7 @@ StatusOr<CabinStmt> Parser::ParseCabin(bool drop) {
     // operator writes when they expect a composite - so it gets an answer
     // that says which decision it is waiting on, not "expected ')'".
     if (lexer_.Peek().type == TokenType::kComma) {
-        return Status::Unsupported("a cabin covers one column in v1 (byte " +
+        return Status::NotImplemented("a cabin covers one column in v1 (byte " +
                                     std::to_string(lexer_.Peek().byte_offset) +
                                     "); multi-column keys are out of scope by C3");
     }
@@ -913,7 +913,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
         // §10: MIN and MAX are not incrementally maintainable under deletion
         // without extra structure, and AVG is not a bound. Reserved and
         // refused by name, so the answer says which decision it is waiting on.
-        return Status::Unsupported(
+        return Status::NotImplemented(
             std::string(AggFuncText(func)) +
             " bounds are out of scope for assertions (byte " +
             std::to_string(agg_tok.byte_offset) +
@@ -943,7 +943,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
         // the operator did not write.
         const Token& star = lexer_.Peek();
         if (star.type != TokenType::kStar) {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "an assertion's cardinality bound is written COUNT(*) (byte " +
                 std::to_string(star.byte_offset) +
                 "); COUNT(<column>) counts non-NULLs, which is a different aggregate");
@@ -993,7 +993,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
             // equality means enforcing a *lower* bound too, which is the
             // DELETE and decreasing-UPDATE write path v1 excludes - so `=`
             // costs exactly what `>=` costs, and is refused beside it.
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "equality assertions (=) are not supported (byte " + std::to_string(op_at) +
                 "); enforcing = means enforcing a lower bound, which v1 excludes, and reading "
                 "it as <= would enforce something other than what was written "
@@ -1004,7 +1004,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
             // a lower bound has to be re-checked on DELETE and on every
             // decreasing UPDATE, which is exactly why v1 leaves DELETE
             // uninstrumented (§4.2). Reserved grammar - it parses.
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 std::string("lower-bound assertions (") + CompareOpName(op.value()) +
                 ") are not supported (byte " + std::to_string(op_at) +
                 "); v1 enforces upper bounds only, which is what makes DELETE check-free "
@@ -1166,7 +1166,7 @@ StatusOr<RelationRef> Parser::ParseRelationRef() {
     // shape of the whole execution model, and puts a temporary relation
     // in the storage layer.
     if (lexer_.Peek().type == TokenType::kLParen) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "a subquery cannot appear in FROM (byte " + std::to_string(offset) +
             "); derived tables and CTEs are not supported, only predicate-position subqueries");
     }
@@ -1238,7 +1238,7 @@ StatusOr<ColumnName> Parser::ParseQualifiedColumn() {
     // the FROM list) this can loosen, and until then a truthful refusal
     // beats a silent choice.
     if (!col.value().qualified()) {
-        return Status::Unsupported("ON requires a qualified column (`rel.col`), got '" +
+        return Status::NotImplemented("ON requires a qualified column (`rel.col`), got '" +
                                     col.value().name + "' at byte " +
                                     std::to_string(col.value().byte_offset) +
                                     "; unqualified names in ON are not resolved");
@@ -1342,7 +1342,7 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
         // position beats letting `count` resolve as a column that does not
         // exist and reporting that instead.
         if (lexer_.Peek().type == TokenType::kLParen) {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "GROUP BY takes column references only, not expressions (byte " +
                 std::to_string(col.value().byte_offset) + ")");
         }
@@ -1388,7 +1388,7 @@ Status Parser::ParseHaving(SelectStmt& stmt) {
         // otherwise produce, which points at a token the client did not get
         // wrong. The same check `ORDER BY` makes one clause down.
         if (lexer_.Peek().type == TokenType::kLParen) {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "HAVING takes an aggregate or a column, not an expression (byte " +
                 std::to_string(cond.agg.byte_offset) + ")");
         }
@@ -1437,7 +1437,7 @@ Status Parser::ParseHaving(SelectStmt& stmt) {
                 auto rhs = ParseSelectItem();
                 if (!rhs.ok()) return rhs.status();
                 if (rhs.value().is_aggregate) {
-                    return Status::Unsupported(
+                    return Status::NotImplemented(
                         "HAVING compares one aggregate against a literal, not against "
                         "another aggregate (byte " +
                         std::to_string(rhs.value().byte_offset) +
@@ -1513,7 +1513,7 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
             // the ordinal names a select-list position, and positional naming
             // is a second spelling of something that already has one.
             if (const Token ordinal = lexer_.Peek(); ordinal.type == TokenType::kIntLit) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "ORDER BY an ordinal is not supported (byte " +
                     std::to_string(ordinal.byte_offset) + "); name the column");
             }
@@ -1532,12 +1532,12 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
             const bool wrote_call =
                 item.value().is_aggregate || lexer_.Peek().type == TokenType::kLParen;
             if (wrote_call && !aggregated) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "ORDER BY takes a column reference only, not an expression (byte " +
                     std::to_string(key_at) + ")");
             }
             if (lexer_.Peek().type == TokenType::kLParen) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "ORDER BY takes a column reference or an aggregate, not an expression "
                     "(byte " + std::to_string(key_at) + ")");
             }
@@ -1607,7 +1607,7 @@ Status Parser::ParseCountClause(std::string_view word, bool aggregated, std::uin
     // ordering the groups first makes that a decision worth making on its
     // own rather than one taken by three other clauses.
     if (aggregated) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             std::string(word) + " is not supported over an aggregated statement (byte " +
             std::to_string(head.byte_offset) +
             "); groups are emitted in fold order, which is not a contract, so which rows "
@@ -1616,7 +1616,7 @@ Status Parser::ParseCountClause(std::string_view word, bool aggregated, std::uin
     // AG8's shape: pagination applies at the statement's emission
     // boundary, and a sub-chain has none - its rows feed a predicate.
     if (depth > 0) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             std::string(word) + " inside a subquery is not supported (byte " +
             std::to_string(head.byte_offset) + "); paginate the outer statement instead");
     }
@@ -1666,7 +1666,7 @@ Status Parser::ParseJoins(SelectStmt& stmt) {
         // for a typo. The position is the keyword's own.
         if (peek.kw == Keyword::kLeft || peek.kw == Keyword::kRight ||
             peek.kw == Keyword::kFull || peek.kw == Keyword::kOuter) {
-            return Status::Unsupported("outer joins are not supported: '" +
+            return Status::NotImplemented("outer joins are not supported: '" +
                                        std::string(peek.text) +
                                         "' at byte " + std::to_string(peek.byte_offset) +
                                         "; only inner equi-joins (JOIN ... ON) are available");
@@ -1720,7 +1720,7 @@ Status Parser::CheckDistinctBindings(const SelectStmt& stmt) const {
             // says so with the position of the second one. Adding
             // distinct aliases is the fix, and it is also what makes a
             // self-join expressible instead of accidental.
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "relation '" + rels[i]->binding() + "' at byte " +
                 std::to_string(rels[i]->byte_offset) +
                 " is named twice in the FROM list; give each occurrence a distinct alias "
@@ -1762,7 +1762,7 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     // named list as a star and refuse every multi-relation SELECT that
     // spells its columns out.
     if (wrote_star && stmt.relation_count() > 1) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "SELECT * is ambiguous across " + std::to_string(stmt.relation_count()) +
             " relations (byte " + std::to_string(star_at) +
             "); name the columns you want, qualified (`a.x, b.y`)");
@@ -1839,7 +1839,7 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     // where the execution model has none. Refused with the position of
     // whichever half made the block aggregated.
     if (aggregated && depth > 0) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "an aggregate or GROUP BY inside a subquery is not supported (byte " +
             std::to_string(agg_at) + "); aggregate in the outer statement instead");
     }
@@ -1962,7 +1962,7 @@ StatusOr<Statement> Parser::Parse() {
             // uniqueness makes the index a *constraint*, which needs a
             // second write-conflict path and would let an index failure
             // abort a write (docs/spec/index.md IX11).
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "UNIQUE indexes are not supported (byte " + std::to_string(what.byte_offset) +
                 "); v1 is a read accelerator that cannot fail a write for a reason of its own "
                 "(docs/spec/index.md IX11)");
@@ -2016,7 +2016,7 @@ StatusOr<Statement> Parser::Parse() {
             ConsumeOptionalSemicolon();
             stmt = std::move(drop);
         } else {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported "
                 "(byte " +
                 std::to_string(what.byte_offset) + ")");
@@ -2047,7 +2047,7 @@ StatusOr<Statement> Parser::Parse() {
         // rather than falling into "unknown SQL keyword" - a CTE is a form
         // this engine understands and declines for the reason
         // ParseRelationRef gives, not a word it has never heard of.
-        return Status::Unsupported("common table expressions (WITH) are not supported (byte " +
+        return Status::NotImplemented("common table expressions (WITH) are not supported (byte " +
                                     std::to_string(tok.byte_offset) +
                                     "); subqueries are allowed in predicate position only");
     } else {
@@ -2088,7 +2088,7 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     if (verb.type == TokenType::kIdent &&
         (IEquals(verb.text, "ADD") || IEquals(verb.text, "MODIFY") ||
          IEquals(verb.text, "SET"))) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "ALTER TABLE " + std::string(verb.text) +
             " is not supported (byte " + std::to_string(verb.byte_offset) +
             "); v1 is catalog-only - RENAME TO and RENAME COLUMN - because a relation's row "

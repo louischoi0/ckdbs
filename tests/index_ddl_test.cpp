@@ -106,7 +106,7 @@ TEST(IndexGrammarTest, NothingIsReservedSoAColumnMayStillBeNamedIndex) {
 TEST(IndexGrammarTest, UniqueIsRefusedAtItsOwnByte) {
     auto stmt = Parse("CREATE UNIQUE INDEX ix ON t (a)");
     ASSERT_FALSE(stmt.ok());
-    EXPECT_EQ(stmt.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(stmt.status().code(), StatusCode::kNotImplemented);
     // The word's own position, which is the point of refusing at the
     // dispatch rather than parsing and rejecting later.
     EXPECT_NE(stmt.status().message().find("byte 7"), std::string::npos)

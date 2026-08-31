@@ -248,15 +248,15 @@ TEST(AssertionDdlTest, AssertionDdlIsNotFingerprintedAndTheVersionDidNotMove) {
 // write path v1 excludes - so `=` costs exactly what `>=` costs.
 TEST(AssertionDdlTest, EqualityIsUnsupportedBecauseReadingItAsAnUpperBoundWouldLie) {
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5",
-                  StatusCode::kUnsupported, "equality assertions (=)");
+                  StatusCode::kNotImplemented, "equality assertions (=)");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100",
-                  StatusCode::kUnsupported, "enforcing a lower bound");
+                  StatusCode::kNotImplemented, "enforcing a lower bound");
 
     // Refused at the operator, before the bound is even read - so the
     // degenerate-predicate check below never sees an `=`, and `= 0` is now
     // answered by this rule rather than by that one.
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0",
-                  StatusCode::kUnsupported, "equality assertions (=)");
+                  StatusCode::kNotImplemented, "equality assertions (=)");
 }
 
 TEST(AssertionDdlTest, ALowerBoundIsUnsupportedAtItsOwnOperator) {
@@ -264,9 +264,9 @@ TEST(AssertionDdlTest, ALowerBoundIsUnsupportedAtItsOwnOperator) {
     // bound has to be re-checked on DELETE and on every decreasing UPDATE,
     // which is exactly why v1 can leave DELETE uninstrumented (§4.2).
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5",
-                  StatusCode::kUnsupported, "lower-bound");
+                  StatusCode::kNotImplemented, "lower-bound");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5",
-                  StatusCode::kUnsupported, "lower-bound");
+                  StatusCode::kNotImplemented, "lower-bound");
     // The byte is the operator's, not the statement's.
     auto parsed = ParseSql("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5");
     ASSERT_FALSE(parsed.ok());
@@ -316,7 +316,7 @@ TEST(AssertionDdlTest, TheThreeUnmaintainableAggregatesAreRefusedByName) {
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK MAX(v) <= 1",
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1",
          }) {
-        ExpectRefusal(sql, StatusCode::kUnsupported, "out of scope for assertions");
+        ExpectRefusal(sql, StatusCode::kNotImplemented, "out of scope for assertions");
     }
     // A word that is no aggregate at all is a different answer: there is no
     // decision to wait on.
@@ -329,7 +329,7 @@ TEST(AssertionDdlTest, CountTakesStarAndSumTakesAColumnAndNeitherIsCoerced) {
     // reading it as `COUNT(*)` would enforce a bound the operator did not
     // write, so it is refused rather than folded.
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1",
-                  StatusCode::kUnsupported, "COUNT(*)");
+                  StatusCode::kNotImplemented, "COUNT(*)");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1",
                   StatusCode::kInvalidArgument, "SUM takes a column");
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1",

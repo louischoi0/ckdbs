@@ -316,9 +316,9 @@ StatusOr<std::string> Server::OnClientFirst(std::string_view client_first) {
         gs2_header_ = std::string(client_first.substr(0, 3));
         rest = client_first.substr(3);
     } else if (client_first.substr(0, 2) == "p=") {
-        return Status::Unsupported("SCRAM: channel binding is not offered (no SCRAM-PLUS)");
+        return Status::NotImplemented("SCRAM: channel binding is not offered (no SCRAM-PLUS)");
     } else if (client_first.substr(0, 2) == "n," || client_first.substr(0, 2) == "y,") {
-        return Status::Unsupported("SCRAM: authorization identities are not accepted");
+        return Status::NotImplemented("SCRAM: authorization identities are not accepted");
     } else {
         return Status::InvalidArgument("SCRAM: malformed gs2 header");
     }
@@ -331,7 +331,7 @@ StatusOr<std::string> Server::OnClientFirst(std::string_view client_first) {
     if (fields[0].substr(0, 2) == "m=") {
         // A mandatory extension this server does not know is a refusal
         // by the RFC's own rule.
-        return Status::Unsupported("SCRAM: mandatory extension not understood");
+        return Status::NotImplemented("SCRAM: mandatory extension not understood");
     }
 
     auto name = TakeAttr(fields[0], 'n');
@@ -429,7 +429,7 @@ StatusOr<std::string> Server::OnClientFinal(std::string_view client_final) {
     // mere presence MUST fail authentication at whichever end parses it.
     for (std::size_t i = 2; i < fields.size(); ++i) {
         if (fields[i].substr(0, 2) == "m=") {
-            return Status::Unsupported("SCRAM: mandatory extension not understood");
+            return Status::NotImplemented("SCRAM: mandatory extension not understood");
         }
     }
 

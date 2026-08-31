@@ -109,7 +109,8 @@ PG-shaped phases, KDS semantics:
 
 `S_ERROR` payload: `{code u32, retryable u8, severity u8, message str, detail str?, position u32?}`.
 
-- `code = category u16 << 16 | detail u16`; categories mirror engine `Status` (InvalidArgument, NotFound, AlreadyExists, OutOfSpace, Internal, Protocol, Unsupported, TxnConflict, Cancelled, …). Detail codes are append-only — never renumber.
+- `code = category u16 << 16 | detail u16`; categories mirror engine `Status` (InvalidArgument, NotFound, AlreadyExists, OutOfSpace, Internal, Protocol, Unsupported, NotImplemented, TxnConflict, Cancelled, …). Detail codes are append-only — never renumber.
+- **`Unsupported` and `NotImplemented` are two categories, not one** (operator rule, 2026-08-31). `Unsupported` is a form this engine's architecture cannot admit — an invariant (a pk `UPDATE`), a fixed structure's ceiling (the fan-in's stage cap, a shipped reply's one slot), a format (two decimals of different width are different types), or a protocol's shape (a `$name` bind on a wire with no bind step). `NotImplemented` is a form the design admits and nobody has built: outer joins, CTEs, `UNIQUE` indexes, `ALTER TABLE`'s data-moving verbs, every seam whose owner-side half exists and whose peer-side half does not. **The test is whether a later release could lift the refusal without changing the architecture.** The distinction is for feature detection: a client seeing `NotImplemented` may usefully ask a newer server, and one seeing `Unsupported` must rewrite. Neither is retryable, and within one process both are equally permanent — the difference is across releases, never across retries.
 - `retryable` is authoritative client guidance (e.g. TxnConflict = 1, InvalidArgument = 0); financial client libraries build retry loops on this bit, so it is part of the compatibility surface.
 - Errors never close the connection except framing-level corruption (§2) and handshake failures.
 

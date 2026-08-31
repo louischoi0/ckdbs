@@ -36,7 +36,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
             // the same one-implementation-two-doors split the pre-check
             // below describes.
             if (!access.schema.columns[i].notnull) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "column '" + col.name + "' is nullable and cannot be in an index "
                     "(docs/spec/null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
                     std::to_string(col.byte_offset) + ")");
@@ -418,9 +418,15 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
         // `WithContext` would prefix instead of append and would bury the
         // position mid-sentence, so the one refusal that names the user's
         // object gets it spelled out the way the sibling above does.
-        if (s.code() == StatusCode::kUnsupported) {
-            return Status::Unsupported("index '" + stmt.index_name + "': " + s.message() +
-                                       " (byte " + std::to_string(stmt.byte_offset) + ")");
+        // Re-wrapped under the code it arrived with, never a fixed one
+        // (2026-08-31): the pair says whether a later release could lift the
+        // refusal, and a wrapper that flattened both to one would answer
+        // that question with its own guess.
+        if (s.code() == StatusCode::kUnsupported || s.code() == StatusCode::kNotImplemented) {
+            std::string msg = "index '" + stmt.index_name + "': " + s.message() + " (byte " +
+                              std::to_string(stmt.byte_offset) + ")";
+            return s.code() == StatusCode::kUnsupported ? Status::Unsupported(std::move(msg))
+                                                        : Status::NotImplemented(std::move(msg));
         }
         return s;
     }

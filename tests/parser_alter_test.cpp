@@ -76,7 +76,7 @@ TEST(ParserAlterTest, AddColumnIsUnsupportedWithItsPosition) {
     const std::string_view sql = "ALTER TABLE t ADD COLUMN x int";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "ADD")));
 }
 
@@ -90,8 +90,8 @@ TEST(ParserAlterTest, DropColumnIsUnsupportedWithItsPosition) {
 
 TEST(ParserAlterTest, ModifyAndSetAreUnsupported) {
     EXPECT_EQ(Parse("ALTER TABLE t MODIFY a bigint").status().code(),
-              StatusCode::kUnsupported);
-    EXPECT_EQ(Parse("ALTER TABLE t SET x = 1").status().code(), StatusCode::kUnsupported);
+              StatusCode::kNotImplemented);
+    EXPECT_EQ(Parse("ALTER TABLE t SET x = 1").status().code(), StatusCode::kNotImplemented);
 }
 
 // ---- Malformed forms ------------------------------------------------------

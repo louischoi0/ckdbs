@@ -160,6 +160,15 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // correct response is to read the data back - not to retry, which
     // against engine-issued primary keys would insert twice.
     {StatusCode::kUnknownOutcome, "UNKNOWN_OUTCOME retryable=0 "},
+    // The refusal pair (2026-08-31, operator rule; status.hpp carries the
+    // test that separates them). Both are spelled, and spelled together,
+    // because the whole value of the distinction is at the client: a
+    // library feature-detecting a form needs to know whether a later server
+    // could answer it. UNSUPPORTED says no - the architecture forbids it.
+    // NOT_IMPLEMENTED says not yet. Bare `ERR ...`, which is what both wore
+    // until today, said neither.
+    {StatusCode::kUnsupported, "UNSUPPORTED retryable=0 "},
+    {StatusCode::kNotImplemented, "NOT_IMPLEMENTED retryable=0 "},
 };
 
 }  // namespace
@@ -186,7 +195,10 @@ Status StatusFromErrorReply(std::string_view reply) {
     // The bare arm. kInvalidArgument stands for every code that renders
     // bare - which is what makes this lossy, and harmless: `ErrorReply`
     // renders all of them identically, so the line the client is handed is
-    // the line the owner wrote whichever of them it was.
+    // the line the owner wrote whichever of them it was. Two codes left
+    // this arm on 2026-08-31: a shipped statement's kUnsupported and
+    // kNotImplemented now come back as themselves, which is what lets a
+    // peer's refusal keep saying *which kind of no* it was.
     return Status::InvalidArgument(std::string(reply));
 }
 
@@ -1067,14 +1079,14 @@ DispatchOutcome CommandDispatcher::HandleSync() {
             if (logging(LogLevel::kError)) {
                 log_->Error("wal", "client SYNC failed to sync the log: " + s.message());
             }
-            return {"ERR " + s.message(), false};
+            return {ErrorReply(s), false};
         }
     }
     if (Status s = page_store_.Sync(); !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("storage", "client SYNC failed: " + s.message());
         }
-        return {"ERR " + s.message(), false};
+        return {ErrorReply(s), false};
     }
     // Info, not Debug: a client-forced sync is rare and it is a durability
     // point, so it is one of the few things worth having in a default log.
@@ -1549,7 +1561,7 @@ DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest
 DispatchOutcome CommandDispatcher::HandleShowPatterns() {
     auto rows = catalog_.ListPatterns();
     if (!rows.ok()) {
-        return {"ERR " + rows.status().message(), false};
+        return {ErrorReply(rows.status()), false};
     }
 
     // A `name=` column stood here until 2026-08-31, joined in from
@@ -1605,7 +1617,7 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
 DispatchOutcome CommandDispatcher::HandleShowAccess() {
     auto rows = catalog_.ListAccessStats();
     if (!rows.ok()) {
-        return {"ERR " + rows.status().message(), false};
+        return {ErrorReply(rows.status()), false};
     }
 
     // Relation and column *names*, resolved here rather than stored: the
@@ -1683,7 +1695,7 @@ DispatchOutcome CommandDispatcher::HandleShowBudget() {
     // ddl-transactional.md §5.
     auto tables = catalog_.ListTables();
     if (!tables.ok()) {
-        return {"ERR " + tables.status().message(), false};
+        return {ErrorReply(tables.status()), false};
     }
 
     // Built in two passes so the summary line can carry the warning count.
@@ -1743,7 +1755,7 @@ DispatchOutcome CommandDispatcher::HandleListTables(Session& session) {
     const std::optional<txn::ReadView> view = ViewFor(session);
     auto tables = catalog_.ListTables(view.has_value() ? &*view : nullptr);
     if (!tables.ok()) {
-        return {"ERR " + tables.status().message(), false};
+        return {ErrorReply(tables.status()), false};
     }
 
     std::ostringstream os;
@@ -1788,7 +1800,7 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     // the DML verbs; this one was a read all along.
     auto page = page_store_.GetForRead(page_id);
     if (!page.ok()) {
-        return {"ERR " + page.status().message(), false};
+        return {ErrorReply(page.status()), false};
     }
 
     // A B+ tree internal node has no slot directory and no tuples, so it
@@ -1879,7 +1891,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
             return {"EXISTS oid=" + std::to_string(existing.value()), false};
         }
         if (existing.status().code() != StatusCode::kNotFound) {
-            return {"ERR " + existing.status().message(), false};
+            return {ErrorReply(existing.status()), false};
         }
         if (auto refused = RefuseIfNameHeldByPendingDrop(args, session); refused.has_value()) {
             return *refused;
@@ -1891,7 +1903,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
                                          catalog::ClusteredType::kHeap, ddl.trx_id, ddl.sink());
         NoteDdlRows(ddl);  // before the status, for the partial-write reason above
         if (!oid.ok()) {
-            return {"ERR " + oid.status().message(), false};
+            return {ErrorReply(oid.status()), false};
         }
         return {"CREATED oid=" + std::to_string(oid.value()), false};
     });
@@ -1906,12 +1918,12 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     const std::optional<txn::ReadView> view = ViewFor(session);
     auto oid = catalog_.FindTableOidByName(args, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
+        return {ErrorReply(oid.status()), false};
     }
 
     auto table_row = catalog_.GetSysTableRow(oid.value());
     if (!table_row.ok()) {
-        return {"ERR " + table_row.status().message(), false};
+        return {ErrorReply(table_row.status()), false};
     }
 
     // A relation with no registered columns is a fact, not a failure: the
@@ -1924,7 +1936,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     if (built.ok()) {
         schema = std::move(built.value());
     } else if (built.status().code() != StatusCode::kNotFound) {
-        return {"ERR " + built.status().message(), false};
+        return {ErrorReply(built.status()), false};
     }
 
     const char* clustered =
@@ -1947,7 +1959,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
             storage::ValidatePageHeader(anchor.value().bytes(), PageType::kAnchor).ok()) {
             current_root = storage::AnchorClusteredRoot(anchor.value().bytes());
         } else if (!anchor.ok() && anchor.status().code() == StatusCode::kCorruption) {
-            return {"ERR " + anchor.status().message(), false};
+            return {ErrorReply(anchor.status()), false};
         }
     }
     std::ostringstream os;
@@ -2094,7 +2106,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
+        return {ErrorReply(parsed.status()), false};
     }
     if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
         return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
@@ -2118,15 +2130,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 if (index_builds_ != nullptr) {
                     return BeginForeignIndexBuild(stmt, rel_row.value().owner_core, session);
                 }
-                return {"ERR " +
-                            Status::Unsupported(
-                                "CREATE INDEX on '" + stmt.table_name + "' at byte " +
-                                std::to_string(stmt.table_byte_offset) + ": the relation is "
-                                "owned by core " +
-                                std::to_string(rel_row.value().owner_core) +
-                                ", built by its owner (workplan-peer-writer.md §7c, PW1c-6b), "
-                                "and this dispatcher has no index-build client to reach it")
-                                .message(),
+                return {ErrorReply(Status::NotImplemented( "CREATE INDEX on '" + stmt.table_name + "' at byte " + std::to_string(stmt.table_byte_offset) + ": the relation is " "owned by core " + std::to_string(rel_row.value().owner_core) + ", built by its owner (workplan-peer-writer.md §7c, PW1c-6b), " "and this dispatcher has no index-build client to reach it")),
                         false};
             }
         }
@@ -2150,17 +2154,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
             auto rel_row = catalog_.GetSysTableRow(ix.value().table_oid);
             if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
-                return {"ERR " +
-                            Status::Unsupported(
-                                "DROP INDEX '" + stmt.index_name + "' at byte " +
-                                std::to_string(stmt.byte_offset) + ": its relation is owned by "
-                                "core " + std::to_string(rel_row.value().owner_core) +
-                                ", whose maintenance cannot see this delete-mark's deleter in "
-                                "flight (DT9 is core-local), so inside a transaction the owner "
-                                "would stop maintaining the index before COMMIT and a ROLLBACK "
-                                "would restore it missing the owner's meanwhile-writes; run it "
-                                "in autocommit (workplan-peer-writer.md PW1c-6b-4)")
-                                .message(),
+                return {ErrorReply(Status::NotImplemented( "DROP INDEX '" + stmt.index_name + "' at byte " + std::to_string(stmt.byte_offset) + ": its relation is owned by " "core " + std::to_string(rel_row.value().owner_core) + ", whose maintenance cannot see this delete-mark's deleter in " "flight (DT9 is core-local), so inside a transaction the owner " "would stop maintaining the index before COMMIT and a ROLLBACK " "would restore it missing the owner's meanwhile-writes; run it " "in autocommit (workplan-peer-writer.md PW1c-6b-4)")),
                         false};
             }
         }
@@ -2201,7 +2195,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 MarkHoldsDdl(*ddl.txn);
             }
             if (!index_oid.ok()) {
-                return {"ERR " + index_oid.status().message(), false};
+                return {ErrorReply(index_oid.status()), false};
             }
             std::ostringstream os;
             os << "DROPPED INDEX name=" << stmt.index_name << " index_oid=" << index_oid.value();
@@ -2252,7 +2246,7 @@ DispatchOutcome CommandDispatcher::BeginForeignIndexBuild(const parser::IndexStm
     // is refused by name before anything is sent (§7c). Not poisoned:
     // nothing was written and the transaction is as it was.
     if (session.in_explicit_txn()) {
-        return {ErrorReply(Status::Unsupported(
+        return {ErrorReply(Status::NotImplemented(
                     "CREATE INDEX on '" + stmt.table_name + "' at byte " +
                     std::to_string(stmt.table_byte_offset) + ": the relation is owned by core " +
                     std::to_string(owner_core) +
@@ -2378,7 +2372,7 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
     const std::optional<txn::ReadView> view = ViewFor(session);
     auto rows = catalog_.ListIndexes(view.has_value() ? &*view : nullptr);
     if (!rows.ok()) {
-        return {"ERR " + rows.status().message(), false};
+        return {ErrorReply(rows.status()), false};
     }
 
     std::ostringstream os;
@@ -2472,7 +2466,7 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         return parser::Parse(line);
     }();
     if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
+        return {ErrorReply(parsed.status()), false};
     }
     if (!std::holds_alternative<parser::CabinStmt>(parsed.value())) {
         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
@@ -2485,7 +2479,7 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     if (stmt.drop) {
         auto cabin_id = exec::DropCabin(catalog_, stmt);
         if (!cabin_id.ok()) {
-            return {"ERR " + cabin_id.status().message(), false};
+            return {ErrorReply(cabin_id.status()), false};
         }
         // The runtime half. The catalog cannot see the observed sets, and
         // they are unreachable the moment its row is gone - the compiler
@@ -2506,7 +2500,7 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
 
     auto result = exec::CreateCabin(catalog_, stmt);
     if (!result.ok()) {
-        return {"ERR " + result.status().message(), false};
+        return {ErrorReply(result.status()), false};
     }
     if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
 
@@ -2537,7 +2531,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
         return parser::Parse(line);
     }();
     if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
+        return {ErrorReply(parsed.status()), false};
     }
     if (!std::holds_alternative<parser::AlterStmt>(parsed.value())) {
         return {"ERR expected an ALTER TABLE statement", false};
@@ -2549,7 +2543,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     auto oid =
         catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
+        return {ErrorReply(oid.status()), false};
     }
 
     // AL7: the catalog's own names are load-bearing for bootstrap and are
@@ -2561,7 +2555,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     // system relation is a bootstrap row visible to every view (DT3c).
     auto tables = catalog_.ListTables();
     if (!tables.ok()) {
-        return {"ERR " + tables.status().message(), false};
+        return {ErrorReply(tables.status()), false};
     }
     for (const auto& row : tables.value()) {
         if (row.oid == oid.value() && row.namespace_oid != catalog::kNamespacePublic) {
@@ -2578,7 +2572,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     // AssertionsOnRelation()'s first live call site.
     auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
     if (!restricting.ok()) {
-        return {"ERR " + restricting.status().message(), false};
+        return {ErrorReply(restricting.status()), false};
     }
     if (!restricting.value().empty()) {
         return {"ERR assertion '" + restricting.value().front().name +
@@ -2592,7 +2586,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
             ? catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name)
             : catalog_.RenameTable(oid.value(), stmt.new_name);
     if (!renamed.ok()) {
-        return {"ERR " + renamed.message(), false};
+        return {ErrorReply(renamed), false};
     }
     // Transactionless like the pattern and assertion routes: the renamed
     // catalog rows are logged but no commit record follows them.
@@ -2625,7 +2619,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         return parser::Parse(line);
     }();
         if (!parsed.ok()) {
-            return {"ERR " + parsed.status().message(), false};
+            return {ErrorReply(parsed.status()), false};
         }
         if (!std::holds_alternative<parser::DropTableStmt>(parsed.value())) {
             return {"ERR expected a DROP TABLE statement", false};
@@ -2637,7 +2631,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         auto oid = catalog_.FindTableOidByName(
             stmt.table_name, drop_view.has_value() ? &*drop_view : nullptr);
         if (!oid.ok()) {
-            return {"ERR " + oid.status().message(), false};
+            return {ErrorReply(oid.status()), false};
         }
 
         // DT3's RESTRICT, both blockers named. A referencing foreign key
@@ -2646,7 +2640,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // exactly this caller.
         auto fkeys = catalog_.ListForeignKeys();
         if (!fkeys.ok()) {
-            return {"ERR " + fkeys.status().message(), false};
+            return {ErrorReply(fkeys.status()), false};
         }
         for (const catalog::SysFkeyRow& fk : fkeys.value()) {
             if (fk.parent_rel_oid != oid.value()) continue;
@@ -2659,7 +2653,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // argument, same predicate, third caller.
         auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
         if (!restricting.ok()) {
-            return {"ERR " + restricting.status().message(), false};
+            return {ErrorReply(restricting.status()), false};
         }
         if (!restricting.value().empty()) {
             return {"ERR assertion '" + restricting.value().front().name +
@@ -2698,7 +2692,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             if (!changed.empty()) MarkHoldsDdl(*ddl.txn);
         }
         if (Status s = dropped; !s.ok()) {
-            return {"ERR " + s.message(), false};
+            return {ErrorReply(s), false};
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -2720,7 +2714,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
+        return {ErrorReply(parsed.status()), false};
     }
     if (!std::holds_alternative<parser::AssertionStmt>(parsed.value())) {
         return {"ERR expected a CREATE ASSERTION or DROP ASSERTION statement", false};
@@ -2754,7 +2748,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
                 if (assertion_builds_ != nullptr) {
                     return BeginForeignAssertionBuild(stmt, rel_row.value().owner_core, session);
                 }
-                return {ErrorReply(Status::Unsupported(
+                return {ErrorReply(Status::NotImplemented(
                             "CREATE ASSERTION on '" + stmt.table_name + "' at byte " +
                             std::to_string(stmt.table_byte_offset) +
                             ": the relation is owned by core " +
@@ -2866,7 +2860,7 @@ DispatchOutcome CommandDispatcher::BeginForeignAssertionBuild(const parser::Asse
     // not transactional DDL, `docs/spec/ddl-transactional.md` §5) - named
     // here rather than left to be found.
     if (session.in_explicit_txn()) {
-        return {ErrorReply(Status::Unsupported(
+        return {ErrorReply(Status::NotImplemented(
                     "CREATE ASSERTION on '" + stmt.table_name + "' at byte " +
                     std::to_string(stmt.table_byte_offset) + ": the relation is owned by core " +
                     std::to_string(owner_core) +
@@ -2981,7 +2975,7 @@ DispatchOutcome CommandDispatcher::FinishAssertionBuild(const PendingAssertionBu
 DispatchOutcome CommandDispatcher::HandleShowAssertions() {
     auto rows = exec::ListAssertions(catalog_, page_store_);
     if (!rows.ok()) {
-        return {"ERR " + rows.status().message(), false};
+        return {ErrorReply(rows.status()), false};
     }
 
     std::ostringstream os;
@@ -3059,7 +3053,7 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
     std::vector<stats::RelationReport> reports;
     if (name.empty()) {
         auto all = stats::PlanAllRelations(catalog_, clock_, decay_half_life_ns_);
-        if (!all.ok()) return {"ERR " + all.status().message(), false};
+        if (!all.ok()) return {ErrorReply(all.status()), false};
         reports = std::move(all.value());
     } else {
         auto oid = catalog_.FindTableOidByName(name);
@@ -3072,7 +3066,7 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
         exec::Budget budget(budget_.limit());
         auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
                                        decay_half_life_ns_, core_id_);
-        if (!one.ok()) return {"ERR " + one.status().message(), false};
+        if (!one.ok()) return {ErrorReply(one.status()), false};
         reports.push_back(std::move(one.value()));
     }
 
@@ -3137,7 +3131,7 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
 DispatchOutcome CommandDispatcher::HandleShowCabins() {
     auto rows = catalog_.ListCabins();
     if (!rows.ok()) {
-        return {"ERR " + rows.status().message(), false};
+        return {ErrorReply(rows.status()), false};
     }
 
     std::ostringstream os;
@@ -3500,7 +3494,7 @@ std::string CommandDispatcher::RelationNameOf(catalog::Oid oid) {
 DispatchOutcome CommandDispatcher::HandleShowFkeys() {
     auto rows = catalog_.ListForeignKeys();
     if (!rows.ok()) {
-        return {"ERR " + rows.status().message(), false};
+        return {ErrorReply(rows.status()), false};
     }
 
     std::ostringstream os;
@@ -3541,7 +3535,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         return parser::Parse(line);
     }();
         if (!parsed.ok()) {
-            return {"ERR " + parsed.status().message(), false};
+            return {ErrorReply(parsed.status()), false};
         }
         if (!std::holds_alternative<parser::CreateTableStmt>(parsed.value())) {
             return {"ERR expected a CREATE TABLE statement", false};
@@ -3570,7 +3564,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             return {"EXISTS oid=" + std::to_string(existing.value()), false};
         }
         if (existing.status().code() != StatusCode::kNotFound) {
-            return {"ERR " + existing.status().message(), false};
+            return {ErrorReply(existing.status()), false};
         }
         if (auto refused = RefuseIfNameHeldByPendingDrop(stmt.table_name, session);
             refused.has_value()) {
@@ -3586,7 +3580,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         for (const auto& col : stmt.columns) {
             auto type_row = catalog_.ResolveTypeByName(col.type_name);
             if (!type_row.ok()) {
-                return {"ERR " + type_row.status().message(), false};
+                return {ErrorReply(type_row.status()), false};
             }
 
             // A cabin policy on the primary key is refused rather than ignored.
@@ -3681,7 +3675,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                     ? exec::CheckDecimalWidePrecisionScale(col.precision, col.scale)
                                     : exec::CheckDecimalPrecisionScale(col.precision, col.scale);
                 if (!bounds.ok()) {
-                    return {"ERR " + bounds.message() + " (byte " +
+                    return {ErrorReply(bounds) + " (byte " +
                                 std::to_string(col.type_byte_offset) + ")",
                             false};
                 }
@@ -3766,7 +3760,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             }
             auto parent = catalog_.InitTableAccess(parent_oid.value());
             if (!parent.ok()) {
-                return {"ERR " + parent.status().message(), false};
+                return {ErrorReply(parent.status()), false};
             }
 
             // The shared declaration checks (catalog/foreign_key.hpp) - the same
@@ -3775,7 +3769,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             if (Status s = catalog::CheckForeignKeyDeclaration(
                     *parent.value(), schema.columns[i], static_cast<std::uint16_t>(i));
                 !s.ok()) {
-                return {"ERR " + s.message() + " (byte " +
+                return {ErrorReply(s) + " (byte " +
                             std::to_string(col.references_byte_offset) + ")",
                         false};
             }
@@ -3804,7 +3798,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // rollback has to retire.
         NoteDdlRows(ddl);
         if (!oid.ok()) {
-            return {"ERR " + oid.status().message(), false};
+            return {ErrorReply(oid.status()), false};
         }
 
         // The constraints, now that there is a child relation to hang them on.
@@ -4619,21 +4613,21 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                                   !any_cabin && !enforcer_.CannotEnforce(access.oid);
         if (!funded_shape) {
             if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "an FK-linked relation cannot take writes on core " +
                     std::to_string(core_id_) +
                     ": validation reads the linked relation, which this core may not fault "
                     "(workplan-peer-writer.md §4)");
             }
             if (any_cabin) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "a cabined relation cannot take writes on core " +
                     std::to_string(core_id_) +
                     ": whether a Bound Cabin's entry pages follow the grant is unverified "
                     "(workplan-peer-writer.md §4)");
             }
             if (enforcer_.CannotEnforce(access.oid)) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "a relation under an assertion this core cannot enforce cannot take "
                     "writes on core " +
                     std::to_string(core_id_) +
@@ -4642,7 +4636,7 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                     "re-create the assertion so its owner builds it "
                     "(workplan-peer-writer.md §7d, PW1c-6c)");
             }
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "this relation's shape is not funded for writes on core " +
                 std::to_string(core_id_) + " (workplan-peer-writer.md §8)");
         }
@@ -5003,7 +4997,7 @@ Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
         // is this core but one of whose ranges is not would be walked
         // short: rows silently missing, success reported - the one ending
         // this row may not leave open.
-        refusal = Status::Unsupported(
+        refusal = Status::NotImplemented(
             "relation '" + step.rel_name +
             "' has ranges on another core and this shape cannot fan in over them; "
             "reading it here would answer short");
@@ -5022,7 +5016,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
         return parser::Parse(line);
     }();
     if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
+        return {ErrorReply(parsed.status()), false};
     }
     if (!std::holds_alternative<parser::InsertStmt>(parsed.value())) {
         return {"ERR expected an INSERT statement", false};
@@ -5081,12 +5075,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     auto oid =
         catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
+        return {ErrorReply(oid.status()), false};
     }
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
-        return {"ERR " + access.status().message(), false};
+        return {ErrorReply(access.status()), false};
     }
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp), and
@@ -5373,7 +5367,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
 
     auto first = catalog_.AllocateRowIdRange(oid, stmt.rows.size());
     if (!first.ok()) {
-        return {"ERR " + first.status().message(), false};
+        return {ErrorReply(first.status()), false};
     }
 
     // Encoded up front, ids contiguous from the range. The gate excluded
@@ -5386,7 +5380,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
                             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
                                               /*appended=*/nullptr, ta.oid});
         if (!encoded.ok()) {
-            return {"ERR " + encoded.status().message() + " (row " + std::to_string(k + 1) + ")",
+            return {ErrorReply(encoded.status()) + " (row " + std::to_string(k + 1) + ")",
                     false};
         }
         payloads.push_back(std::move(encoded.value()));
@@ -5464,7 +5458,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     auto filled = heap::ChainAppendBatch(page_store_, chain.value().head, first.value(), payloads,
                                          WriterId(scope), ta.oid, chain.value().tail_hint);
     if (!filled.ok()) {
-        return {"ERR " + filled.status().message(), false};
+        return {ErrorReply(filled.status()), false};
     }
 
     // The rollback trail, row for row - BI4's unwind is the manager's,
@@ -5482,7 +5476,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             rec.target_slot = filled.value().rows[k].slot;
             rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
             auto ptr = txn_->AppendUndo(*scope.txn, rec, first.value() + k, {});
-            if (!ptr.ok()) return {"ERR " + ptr.status().message(), false};
+            if (!ptr.ok()) return {ErrorReply(ptr.status()), false};
 
             txn_->NoteInsert(*scope.txn, oid, filled.value().rows[k].page_id,
                              filled.value().rows[k].slot, first.value() + k);
@@ -5498,7 +5492,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             // The one site that answers a client rather than a caller, so the
             // helper's Status is turned into this path's reply shape here.
             if (Status s = LogFullPageImage(page.page_id, WriterId(scope)); !s.ok()) {
-                return {"ERR " + s.message(), false};
+                return {ErrorReply(s), false};
             }
         }
     }
@@ -5625,7 +5619,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         // catalog page at all: AllocateRowId below draws from this core's
         // lease, which is why the omitted arity needs no gate.
         if (catalog_read_only_) {
-            return ErrorReply(Status::Unsupported(
+            return ErrorReply(Status::NotImplemented(
                 "a caller-supplied primary key cannot be written on core " +
                 std::to_string(core_id_) +
                 ": admitting one writes the relation's catalog row, the system core's page "
@@ -5770,7 +5764,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
             log_->Error("wal", "logging the insert of id " + std::to_string(row_id) +
                                    " failed: " + s.message());
         }
-        return "ERR " + s.message();
+        return ErrorReply(s);
     }
 
     // The tree grew a level, so the relation's root moved. Persisted only
@@ -5790,7 +5784,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                                          std::to_string(placed.value().new_root) + ": " +
                                          s.message());
             }
-            return "ERR " + s.message();
+            return ErrorReply(s);
         }
         if (logging(LogLevel::kInfo)) {
             log_->Info("btree", "table oid " + std::to_string(oid) +
@@ -5948,7 +5942,7 @@ Status CommandDispatcher::VisitRelation(
                 // class RD6 exists to close.
                 for (const catalog::RangeTarget& range : touched.value()) {
                     if (range.owner_core != core_id_) {
-                        return Status::Unsupported(
+                        return Status::NotImplemented(
                             "relation oid " + std::to_string(access.oid) +
                             " has a range at lo " + std::to_string(range.lo) +
                             " owned by core " + std::to_string(range.owner_core) +
@@ -6050,7 +6044,7 @@ StatusOr<std::uint32_t> CommandDispatcher::WriteTargetCore(
     const std::uint32_t sole = access.ranges.front().owner_core;
     for (const catalog::RangeTarget& range : access.ranges) {
         if (range.owner_core == sole) continue;
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "relation oid " + std::to_string(access.oid) +
             " is split across cores and this statement names no primary key, so it would "
             "write ranges owned by core " + std::to_string(sole) + " and core " +
@@ -6186,7 +6180,7 @@ std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
     if (!view.has_value()) return std::nullopt;
 
     auto held = catalog_.NameHeldByPendingDrop(name, *view);
-    if (!held.ok()) return DispatchOutcome{"ERR " + held.status().message(), false};
+    if (!held.ok()) return DispatchOutcome{ErrorReply(held.status()), false};
     if (!held.value()) return std::nullopt;
 
     // Refused rather than allowed, for §6's reason and with §6's cost: the
@@ -6428,7 +6422,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
 
     auto view = exec::ReadCatalogView(catalog_, stmt.from.table_name);
     if (!view.ok()) {
-        return {"ERR " + view.status().message(), false};
+        return {ErrorReply(view.status()), false};
     }
     const exec::CatalogView& rows = view.value();
 
@@ -6441,7 +6435,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     } else {
         for (const parser::ColumnName& col : stmt.projection) {
             auto found = ResolveViewColumn(rows, stmt, col);
-            if (!found.ok()) return {"ERR " + found.status().message(), false};
+            if (!found.ok()) return {ErrorReply(found.status()), false};
             project.push_back(found.value());
         }
     }
@@ -6473,7 +6467,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                     "supported", false};
         }
         auto at = ResolveViewColumn(rows, stmt, cond.col);
-        if (!at.ok()) return {"ERR " + at.status().message(), false};
+        if (!at.ok()) return {ErrorReply(at.status()), false};
         where_at.push_back(at.value());
     }
 
@@ -6581,7 +6575,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     const txn::Snapshot& snapshot) {
     if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names, aggregate_limits_);
         !s.ok()) {
-        return {"ERR " + s.message(), false};
+        return {ErrorReply(s), false};
     }
 
     // The fold's own failures - a SUM overflow, a cap - have to reach the
@@ -6601,7 +6595,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         // path has it: a statement that stopped part way through touched
         // some tuples, and a trail describing that points a later reader at
         // a state no reader should be pointed at.
-        return {"ERR " + ran.message(), false};
+        return {ErrorReply(ran), false};
     }
 
     // Through the one renderer the fan-in's fold also emits by
@@ -6616,7 +6610,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
             return Status::OK();
         });
     if (!emitted.ok()) {
-        return {"ERR " + emitted.message(), false};
+        return {ErrorReply(emitted), false};
     }
 
     // Recorded after a *complete* execution, and unconditionally - the fold
@@ -6656,7 +6650,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names,
                                          aggregate_limits_);
             !s.ok()) {
-            return {"ERR " + s.message(), false};
+            return {ErrorReply(s), false};
         }
     }
 
@@ -6708,7 +6702,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         },
         &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
-        return {"ERR " + ran.message(), false};
+        return {ErrorReply(ran), false};
     }
     // `rows=` counts what the client would have been sent, so on the sorted
     // path the quota runs where the real path runs it: after the order
@@ -6786,7 +6780,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
+        return {ErrorReply(parsed.status()), false};
     }
     if (!std::holds_alternative<parser::SelectStmt>(parsed.value())) {
         return {"ERR expected a SELECT statement", false};
@@ -6861,7 +6855,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     auto chain =
         exec::Compile(catalog_, stmt, resolve_view.has_value() ? &*resolve_view : nullptr);
     if (!chain.ok()) {
-        return {"ERR " + chain.status().message(), false};
+        return {ErrorReply(chain.status()), false};
     }
 
     // The plan is resolved; now ask whether this core may run it
@@ -7141,7 +7135,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                                      chain.value().steps[0].rel_name, session, /*read=*/true);
             }
         }
-        return {"ERR " + affinity.message(), false};
+        return {ErrorReply(affinity), false};
     }
 
     // Same one-line-per-response contract as SHOW PAGE: a header line of
@@ -7272,7 +7266,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     const catalog::TableAccess* star_access = nullptr;
     if (compiled.star()) {
         auto access = catalog_.InitTableAccess(compiled.steps[0].rel_oid);
-        if (!access.ok()) return {"ERR " + access.status().message(), false};
+        if (!access.ok()) return {ErrorReply(access.status()), false};
         star_access = access.value();
     }
 
@@ -7330,7 +7324,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // way through touched some tuples and then stopped; a trail
         // describing that is a trail describing a state no reader should
         // ever be pointed at (workplan P10).
-        return {"ERR " + ran.message(), false};
+        return {ErrorReply(ran), false};
     }
 
     // The order exists only now, so the quota is applied here rather than
@@ -7566,7 +7560,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         return parser::Parse(line);
     }();
     if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
+        return {ErrorReply(parsed.status()), false};
     }
     if (!std::holds_alternative<parser::UpdateStmt>(parsed.value())) {
         return {"ERR expected an UPDATE statement", false};
@@ -7581,12 +7575,12 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     auto oid =
         catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
+        return {ErrorReply(oid.status()), false};
     }
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
-        return {"ERR " + access.status().message(), false};
+        return {ErrorReply(access.status()), false};
     }
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp).
@@ -7634,7 +7628,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // reads one relation, so the frame has one step.
     auto predicates = exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where);
     if (!predicates.ok()) {
-        return {"ERR " + predicates.status().message(), false};
+        return {ErrorReply(predicates.status()), false};
     }
     const std::vector<const catalog::Schema*> schemas = {&ta.schema};
     exec::ChainFrame frame;
@@ -8061,7 +8055,7 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
             return {"ERR expected LEVEL after ISOLATION", false};
         }
         auto parsed = txn::ParseIsolationLevel(Trim(name));
-        if (!parsed.ok()) return {"ERR " + parsed.status().message(), false};
+        if (!parsed.ok()) return {ErrorReply(parsed.status()), false};
         level = parsed.value();
     }
 
@@ -8139,11 +8133,11 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
         // The commit failure is the client's answer; a failure to unwind
         // on top of it is a second, worse fact and is not swallowed.
         if (!rolled.ok()) {
-            return {"ERR " + committed.status().message() +
+            return {ErrorReply(committed.status()) +
                         " (and rolling it back failed: " + rolled.message() + ")",
                     false};
         }
-        return {"ERR " + committed.status().message(), false};
+        return {ErrorReply(committed.status()), false};
     }
 
     // Its catalog rows are committed now, so every reader may see them
@@ -8245,7 +8239,7 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     EndDdlScope(session);
     session.Finish();
     txn_->Release(*txn);
-    if (!aborted.ok()) return {"ERR " + aborted.message(), false};
+    if (!aborted.ok()) return {ErrorReply(aborted), false};
     return {"ROLLBACK trx_id=" + std::to_string(id), false};
 }
 
@@ -8255,7 +8249,7 @@ DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Ses
         return {"ERR expected LEVEL after SET ISOLATION", false};
     }
     auto parsed = txn::ParseIsolationLevel(Trim(name));
-    if (!parsed.ok()) return {"ERR " + parsed.status().message(), false};
+    if (!parsed.ok()) return {ErrorReply(parsed.status()), false};
 
     // Applies to the *next* transaction, never the open one: changing what
     // a running transaction's read view means halfway through would make
@@ -8490,7 +8484,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
     }();
-    if (!parsed.ok()) return {"ERR " + parsed.status().message(), false};
+    if (!parsed.ok()) return {ErrorReply(parsed.status()), false};
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};
     }
@@ -8501,9 +8495,9 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         scope.session != nullptr ? ViewFor(*scope.session) : std::nullopt;
     auto oid =
         catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
-    if (!oid.ok()) return {"ERR " + oid.status().message(), false};
+    if (!oid.ok()) return {ErrorReply(oid.status()), false};
     auto access = catalog_.InitTableAccess(oid.value());
-    if (!access.ok()) return {"ERR " + access.status().message(), false};
+    if (!access.ok()) return {ErrorReply(access.status()), false};
     const catalog::TableAccess& ta = *access.value();
 
     // **The fork** (SS2): `MayShip` states the conditions and why each is
@@ -8532,7 +8526,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The same WHERE compilation UPDATE uses, so a DELETE's predicate means
     // exactly what the SELECT that found the rows meant.
     auto predicates = exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where);
-    if (!predicates.ok()) return {"ERR " + predicates.status().message(), false};
+    if (!predicates.ok()) return {ErrorReply(predicates.status()), false};
     const std::vector<const catalog::Schema*> schemas = {&ta.schema};
     exec::ChainFrame frame;
     frame.Open(schemas, /*parent=*/nullptr);

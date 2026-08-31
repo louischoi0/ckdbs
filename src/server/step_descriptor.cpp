@@ -198,7 +198,7 @@ exec::Step ShippedForm(exec::Step step) {
 
 StatusOr<std::vector<std::byte>> EncodeStepDescriptor(const exec::Step& step) {
     if (!step.sub_chains.empty()) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "a step carrying a predicate-position subquery cannot ship yet; nested chains "
             "are P4d's multi-step work (docs/inflight/in-progress/workplan-crosscore.md)");
     }

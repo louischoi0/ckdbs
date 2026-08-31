@@ -1743,13 +1743,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // and a refusal that can only be reached through a second fact is one
     // that stops holding the day that fact changes.
     if (!stmt.having.empty()) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "HAVING is not supported yet (byte " +
             std::to_string(stmt.having.front().agg.byte_offset) +
             "); filter before the fold with WHERE, or filter the result client-side");
     }
     if (stmt.aggregated() && !stmt.order_by.empty()) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "ORDER BY is not supported yet over an aggregated statement (byte " +
             std::to_string(stmt.order_by.front().key.byte_offset) +
             "); an aggregated statement's output rows are not chain rows");

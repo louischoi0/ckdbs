@@ -223,6 +223,19 @@ printf 'PING\n' | nc 127.0.0.1 15432
   than replay an idempotent one. The correct response is to **read the data
   back**, never to resend. The token is deliberately one no retry loop
   follows; it is not a `TXN_CONFLICT` and never carries `retryable=1`.
+- **`ERR UNSUPPORTED retryable=0 ...` and `ERR NOT_IMPLEMENTED retryable=0 ...`
+  are two different answers to "will this ever work?"** (2026-08-31). Both
+  mean the statement was understood and declined, both carry the byte
+  position of what was declined, and neither is retryable. They differ in
+  one thing, and it is the thing a client library wants: `UNSUPPORTED` is a
+  form this engine's architecture cannot admit — updating a primary key,
+  comparing two decimals of different width, a read wider than the fan-in's
+  stage ceiling — so **no later server answers it** and the statement must
+  be rewritten. `NOT_IMPLEMENTED` is a form the design admits and this
+  release has not built — outer joins, CTEs, `UNIQUE`, `ALTER TABLE ADD
+  COLUMN` — so a client may feature-detect and try again against a newer
+  server. Both tokens were a bare `ERR <message>` before this date, which
+  said neither; the messages themselves are unchanged.
 - **REPEATABLE READ does not cross cores as a single instant** (2026-08-28,
   `docs/spec/cross-owner-txn.md` §3). On a multi-core instance a
   transaction may touch relations several cores own, and the engine runs a

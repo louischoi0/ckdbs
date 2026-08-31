@@ -155,10 +155,17 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   reported the wrong sign twice. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.** Details:
   `docs/inflight/in-progress/workplan-aggregate-perf.md`.
-- Every refusal carries the byte position of the offending token;
-  `Unsupported` means "understood and declined", `InvalidArgument` means
-  "simply wrong". Truthfulness beats convenience: never accept a spelling
-  and enforce something other than what was written.
+- Every refusal carries the byte position of the offending token, and
+  "understood and declined" is **two** codes since 2026-08-31 (operator
+  rule): `Unsupported` is what the architecture cannot admit and no release
+  lifts, `NotImplemented` is what the design admits and nobody built.
+  `InvalidArgument` stays "simply wrong". Both refusals reach a client as
+  their own token (`ERR UNSUPPORTED retryable=0 …` /
+  `ERR NOT_IMPLEMENTED retryable=0 …`), because the difference exists for
+  the client's feature detection; neither is retryable. The test and the
+  full statement are in `include/kds/base/status.hpp` and
+  `docs/spec/protocol.md` §11. Truthfulness beats convenience: never accept
+  a spelling and enforce something other than what was written.
 - Nothing new is reserved lightly: keywords hash as identifiers, and
   `kFingerprintVersion` moves only per `fingerprint.hpp`'s bump rule (the
   golden corpus pins it).

@@ -184,6 +184,12 @@ enum class ErrorCategory : std::uint16_t {
     // write a correct retry loop, which is the whole reason categories
     // mirror engine Status rather than being coarsened.
     kUnknownOutcome,
+    // Appended for StatusCode::kNotImplemented (2026-08-31). It earns a
+    // category for the reason the pair exists at all: folded into
+    // kUnsupported it would tell a client "rewrite, forever" about a form
+    // the design admits and a later release will answer, and a client
+    // library's feature detection is exactly the code that reads this.
+    kNotImplemented,
 };
 
 // Packs a wire error code as `category u16 << 16 | detail u16` (spec

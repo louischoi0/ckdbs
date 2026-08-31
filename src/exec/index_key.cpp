@@ -171,7 +171,7 @@ Status EncodeIndexKeyColumn(const catalog::SysColumnRow& col, const parser::AstV
         // settle where NULLs sort - which is a decision, not an
         // implementation detail, and one nothing can exercise while the row
         // codec refuses to encode a NULL.
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "index key column '" + NameOf(col) +
             "' was handed a NULL; NULLs are not storable yet and their position in the key "
             "order (first or last) is undecided");

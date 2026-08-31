@@ -102,7 +102,7 @@ TEST(StepDescriptorTest, TheRefusedClassesAreRefusedByName) {
     with_sub.sub_chains.emplace_back();
     auto sub = EncodeStepDescriptor(with_sub);
     ASSERT_FALSE(sub.ok());
-    EXPECT_EQ(sub.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(sub.status().code(), StatusCode::kNotImplemented);
 
     // Core-local structure state cannot ship.
     exec::Step index_step;

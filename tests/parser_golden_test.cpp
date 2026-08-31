@@ -77,6 +77,12 @@ std::string_view StatusCodeName(StatusCode code) {
         case StatusCode::kFkViolation: return "FkViolation";
         case StatusCode::kAssertionViolation: return "AssertionViolation";
         case StatusCode::kUnknownOutcome: return "UnknownOutcome";
+        // The sibling of Unsupported (2026-08-31, status.hpp): a form the
+        // design admits and nobody built. Most of what the parser used to
+        // call Unsupported spells itself this way, so the corpus moved with
+        // it - which is exactly the movement this file is here to make
+        // deliberate rather than silent.
+        case StatusCode::kNotImplemented: return "NotImplemented";
     }
     return "<unknown>";
 }

@@ -100,7 +100,7 @@ TEST(ParserProjectionTest, StarIsUnsupportedOnceThereIsMoreThanOneRelation) {
     //                  0123456
     auto parsed = Parse("SELECT * FROM t JOIN u ON t.id = u.id");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     // The position is the star's own - that is the token the client has
     // to replace.
     EXPECT_NE(parsed.status().message().find("byte 7"), std::string::npos)

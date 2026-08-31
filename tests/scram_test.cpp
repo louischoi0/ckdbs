@@ -159,14 +159,14 @@ TEST(ScramTest, ScramPlusHelloRefusedAsUnsupported) {
     Server server(LookupPencil());
     auto out = server.OnClientFirst("p=tls-unique,,n=user,r=abc");
     EXPECT_FALSE(out.ok());
-    EXPECT_EQ(out.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(out.status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(ScramTest, AuthzidRefusedAsUnsupported) {
     Server server(LookupPencil());
     auto out = server.OnClientFirst("n,a=admin,n=user,r=abc");
     EXPECT_FALSE(out.ok());
-    EXPECT_EQ(out.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(out.status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(ScramTest, StepsOutOfOrderRefused) {
@@ -249,13 +249,13 @@ TEST(ScramTest, MandatoryExtensionRefusedInEitherClientMessage) {
     // must fail authentication at the end that parses it.
     Server hello(LookupPencil(), [] { return std::string(kServerNonce); });
     EXPECT_EQ(hello.OnClientFirst("n,,m=future,n=user,r=abc").status().code(),
-              StatusCode::kUnsupported);
+              StatusCode::kNotImplemented);
 
     Server server(LookupPencil(), [] { return std::string(kServerNonce); });
     ASSERT_TRUE(server.OnClientFirst(kClientFirst).ok());
     std::string with_ext(kClientFinal);
     with_ext.insert(with_ext.rfind(",p="), ",m=future");
-    EXPECT_EQ(server.OnClientFinal(with_ext).status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(server.OnClientFinal(with_ext).status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(ScramVerifierTest, RandomSaltIsRawBytesOfTheDeclaredWidth) {

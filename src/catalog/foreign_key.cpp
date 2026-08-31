@@ -20,7 +20,7 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
     if (parent.clustered_type != ClusteredType::kBtree) {
         // Named as the parent's property rather than as "unsupported", so
         // the operator reads the one thing that would fix it.
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "the parent relation is a heap relation and has no primary-key index, so every check "
             "of this foreign key would scan it - declare the parent CLUSTERED BTREE");
     }
@@ -29,7 +29,7 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
 
 Status CheckForeignKeyColocation(const TableAccess& parent, const TableAccess& child) {
     if (parent.owner_core != child.owner_core) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "a foreign key may not cross cores: the child relation is owned by core " +
             std::to_string(child.owner_core) + " and the parent by core " +
             std::to_string(parent.owner_core));

@@ -680,16 +680,54 @@ TEST_F(CommandDispatcherTest, UpdatingThePrimaryKeyIsRefused) {
     auto out = d.Dispatch("UPDATE acct SET id = 99");
     EXPECT_EQ(out.response.substr(0, 4), "ERR ") << out.response;
     EXPECT_NE(out.response.find("cannot be updated"), std::string::npos) << out.response;
-    // K-M3: the refusal is `Unsupported`, so it carries a byte position
-    // and reaches the wire as a plain `ERR` - none of the three coded
-    // tokens, because a client cannot fix this by retrying or by changing
-    // an argument. Asserting the absence is what keeps the compatibility
-    // surface one bit wide.
+    // K-M3: the refusal is `Unsupported`, so it carries a byte position -
+    // and since 2026-08-31 it reaches the wire under its own token rather
+    // than bare. `UNSUPPORTED`, not `NOT_IMPLEMENTED`, is the assertion
+    // that matters here: a pk UPDATE is refused by invariant 11, so no
+    // later release lifts it and a client must be told that rather than
+    // left to feature-detect forever. The bit stays one wide - retryable=0,
+    // spelled rather than implied by omission.
     EXPECT_NE(out.response.find("at byte "), std::string::npos) << out.response;
-    EXPECT_EQ(out.response.find("retryable="), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR UNSUPPORTED retryable=0 ", 0), 0u) << out.response;
+    EXPECT_EQ(out.response.find("NOT_IMPLEMENTED"), std::string::npos) << out.response;
 
     // The row is untouched, key included.
     EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("1,alice"), std::string::npos);
+}
+
+// The pair at the wire (operator rule, 2026-08-31). Two refusals of the
+// same statement class - one the architecture forbids, one nobody built -
+// must reach a client as two different tokens, or the client cannot tell
+// "rewrite this" from "try a newer server".
+TEST_F(CommandDispatcherTest, TheTwoRefusalTokensAreDistinctAndRoundTrip) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int32, a int32)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE u (id int32, b int32)").response.substr(0, 7), "CREATED");
+
+    // An outer join is a form the design admits and the engine has not
+    // built (parser-v2.md J2), so it is the "not yet" half.
+    const auto not_built = d.Dispatch("SELECT * FROM t LEFT JOIN u ON t.id = u.id");
+    EXPECT_EQ(not_built.response.rfind("ERR NOT_IMPLEMENTED retryable=0 ", 0), 0u)
+        << not_built.response;
+    EXPECT_NE(not_built.response.find("at byte "), std::string::npos) << not_built.response;
+
+    // A pk UPDATE is invariant 11, so it is the "never" half. Same
+    // statement class, same `ERR ` prefix, different answer to the only
+    // question a client library asks about a refused form.
+    const auto forbidden = d.Dispatch("UPDATE t SET id = 99");
+    EXPECT_EQ(forbidden.response.rfind("ERR UNSUPPORTED retryable=0 ", 0), 0u)
+        << forbidden.response;
+
+    // Both recover as themselves, which is what a peer's refusal needs to
+    // survive the ring: `StatusFromErrorReply` is the only reader of the
+    // token, and a code that renders but does not recover would come back
+    // from an owner core as kInvalidArgument.
+    EXPECT_EQ(StatusFromErrorReply(not_built.response).code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(StatusFromErrorReply(forbidden.response).code(), StatusCode::kUnsupported);
+    EXPECT_FALSE(StatusFromErrorReply(not_built.response).retryable());
+    EXPECT_FALSE(StatusFromErrorReply(forbidden.response).retryable());
+    EXPECT_EQ(ErrorReply(StatusFromErrorReply(not_built.response)), not_built.response);
+    EXPECT_EQ(ErrorReply(StatusFromErrorReply(forbidden.response)), forbidden.response);
 }
 
 // The other half of the same compile step, at the wire: an unknown SET
