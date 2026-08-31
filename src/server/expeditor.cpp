@@ -771,9 +771,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->wal_ = std::move(wal.value());
     expeditor->wal_->SetLogger(&*expeditor->logger_);
 
-    // **The reactor stops touching the device here.** Every sync moves to
-    // the WAL writer thread (wal/writer.hpp): a commit's, the D3
-    // loss-window's, and the checkpoint gate's. The server starts one and
+    // **The idle sync stops touching the reactor here.** D3's loss-window
+    // tick moves to the WAL writer thread (wal/writer.hpp) - and only it.
+    // A commit's sync, a prepare's, a client `SYNC`'s and the checkpoint
+    // gate's all stay on the reactor, by the decision `WalManager::Sync()`
+    // states: every one of them has somebody parked on the result, and a
+    // hand-off adds a wake-up to a latency somebody is measuring. This
+    // comment claimed the opposite until XD0 read the code
+    // (`instructions/v2.7.1/measurement-xd.md`). The server starts one and
     // an in-process caller does not, because a test that drives a
     // WalManager on one thread wants its syncs to have happened by the time
     // the call returns.
