@@ -324,8 +324,20 @@ verified*.
 
 This is a **driver** gap, not an engine one, and it is `tools/scenario2_freight.py`'s
 to fix: an `ERR` reply inside `verify()` should be counted and reported, not
-`continue`d past. Not fixed here — this session measured, and changing the
-driver mid-matrix would have measured two drivers.
+`continue`d past. Not fixed *during* the matrix — changing the driver
+mid-run would have measured two drivers.
+
+**Fixed afterwards, and every number above is pre-fix.** `verify()` now
+returns a `VerifyResult` carrying `unanswered` and `first_unanswered`
+beside the old three, refuses to fold a refused `SELECT SUM(amount)` to
+zero inside I3's recomputation (`sum_value(None)` is 0, which would have
+manufactured an I3 *failure* out of a statement the server never ran), and
+the summary line prints `75 checks, 0 failure(s), 25 UNANSWERED` with the
+refusing statement named. The `.json` gains two keys and
+`compare_scenario2.py` prints them when present, so a pre-fix results file
+— including this one's archive — still renders. The measurement was **not**
+re-run: the fix changes what the pass *reports*, never what the engine does,
+and the 25 refusals it now names are the same 25 the table above counts.
 
 ## 8. Where a booking's time goes
 
