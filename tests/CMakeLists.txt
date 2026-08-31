@@ -138,6 +138,11 @@ add_executable(kds_tests
     exec_budget_test.cpp
     subsystem_logging_test.cpp
     kwp_frame_test.cpp
+    kwp_handshake_test.cpp
+    kwp_error_test.cpp
+    kwp_session_test.cpp
+    kwp_conformance_test.cpp
+    kwp_endpoint_test.cpp
     wire_row_codec_test.cpp
     wal_record_test.cpp
     wal_payload_test.cpp
@@ -174,6 +179,13 @@ endif()
 # directly-invoked binary do not agree on what that is.
 target_compile_definitions(kds_tests
     PRIVATE KDS_PARSER_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/testdata/parser_corpus.txt")
+
+# P16's golden byte sessions, the same data-not-source arrangement and for
+# a sharper reason: the file *is* the wire's compatibility surface, so a
+# change to it must be a deliberate edit in a change that moves the wire,
+# never a rebuild artefact.
+target_compile_definitions(kds_tests
+    PRIVATE KDS_KWP_GOLDEN="${CMAKE_CURRENT_SOURCE_DIR}/testdata/kwp_golden.txt")
 
 # PHY07's golden action traces, the same data-not-source arrangement for
 # the same reasons - and stability of this file across runs and platforms

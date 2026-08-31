@@ -8,6 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/wire/error_registry.hpp"
 #include "kds/wire/kwp.hpp"
 #include "kds/wire/kwp_types.hpp"
 #include "kds/wire/row_codec.hpp"
@@ -98,8 +99,13 @@ private:
 
     // Frame writers. Send() appends to the outbox and flushes what the
     // socket will take.
-    void Send(Connection& conn, wire::ServerFrame type, std::span<const std::byte> payload);
-    void SendError(Connection& conn, std::string_view code, std::string_view message);
+    void Send(Connection& conn, wire::ServerFrameType type, std::span<const std::byte> payload);
+    // One `S_ERROR` payload with the query surface's (`wire::EncodeError`).
+    // The protocol-shaped overload names a `ProtocolDetail`; the other
+    // carries an engine `Status`, whose category and `retryable` bit reach
+    // the client unchanged.
+    void SendError(Connection& conn, wire::ProtocolDetail detail, std::string_view message);
+    void SendError(Connection& conn, const Status& status);
     bool FlushOutbox(int client_fd, Connection& conn);
     void SyncWriteInterest(int client_fd, Connection& conn);
     void CloseClient(int client_fd);

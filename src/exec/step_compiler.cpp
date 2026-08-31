@@ -1771,7 +1771,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // Resolved here so the emission boundary never asks the catalog
         // per row (TY06). Same list, same order, same lifetime as the
         // names beside it.
-        chain.projection_types.push_back(ColumnAt(scope, ref.value()).type_val);
+        const catalog::SysColumnRow& projected = ColumnAt(scope, ref.value());
+        chain.projection_types.push_back(projected.type_val);
+        chain.projection_type_mods.push_back(
+            catalog::TypeModOf(projected.type_val, projected.len));
     }
     if (stmt.star()) {
         // `SELECT *`, which the grammar admits only for a single relation

@@ -208,75 +208,86 @@ bool KwpLoadServer::DrainFrames(int client_fd, Connection& conn) {
 
 bool KwpLoadServer::HandleFrame(int client_fd, Connection& conn,
                                 const wire::DecodedFrame& frame) {
-    const auto type = static_cast<wire::ClientFrame>(frame.type);
+    const auto type = static_cast<wire::ClientFrameType>(frame.type);
 
     // The two frames legal in every phase past the handshake (KW4).
-    if (conn.phase != Phase::kAwaitHello && type == wire::ClientFrame::kPing) {
-        Send(conn, wire::ServerFrame::kPong, {});
+    if (conn.phase != Phase::kAwaitHello && type == wire::ClientFrameType::kPing) {
+        Send(conn, wire::ServerFrameType::kPong, {});
         return true;
     }
-    if (type == wire::ClientFrame::kTerminate) {
+    if (type == wire::ClientFrameType::kTerminate) {
         CloseClient(client_fd);
         return false;
     }
 
     switch (conn.phase) {
         case Phase::kAwaitHello: {
-            if (type != wire::ClientFrame::kHello) {
-                SendError(conn, "PROTOCOL", "expected C_HELLO first");
+            if (type != wire::ClientFrameType::kHello) {
+                SendError(conn, wire::ProtocolDetail::kUnexpectedFrame, "expected C_HELLO first");
                 CloseClient(client_fd);
                 return false;
             }
             auto hello = wire::DecodeClientHello(frame.payload);
             if (!hello.ok()) {
-                SendError(conn, "PROTOCOL", hello.status().message());
+                SendError(conn, wire::ProtocolDetail::kBadMagic, hello.status().message());
                 CloseClient(client_fd);
                 return false;
             }
             if (hello.value().min_version > wire::kKwpVersion ||
                 hello.value().max_version < wire::kKwpVersion) {
-                SendError(conn, "VERSION", "server speaks KWP version 1 only");
+                SendError(conn, wire::ProtocolDetail::kUnsupportedVersion, "server speaks KWP version 1 only");
                 CloseClient(client_fd);
                 return false;
             }
             if (hello.value().auth_method != 0) {
-                SendError(conn, "UNSUPPORTED", "v0 authenticates NONE only (loopback)");
+                SendError(conn, wire::ProtocolDetail::kUnexpectedFrame, "v0 authenticates NONE only (loopback)");
                 CloseClient(client_fd);
                 return false;
             }
-            wire::PayloadWriter w;
-            w.U16(wire::kKwpVersion);
-            w.U64(wire::kCapBulkLoad);
-            const auto payload = w.Take();
-            Send(conn, wire::ServerFrame::kHello, payload);
+            // **The one `S_HELLO` payload** (`wire::EncodeServerHello`).
+            // The frame *numbers* were unified on 2026-08-31; writing a
+            // different payload under a shared number is the same defect
+            // one layer in, and worse than the split was - a client pointed
+            // at the wrong endpoint used to fail on an unknown type and
+            // would now decode garbage.
+            //
+            // This endpoint mints no session id and no cancel key: it has
+            // no cancel connection and no session state to name, so both
+            // stay zero, which is what the field means where nothing issues
+            // one.
+            wire::ServerHello hello_out;
+            hello_out.version = wire::kKwpVersion;
+            hello_out.capabilities = wire::kCapBulkLoad;
+            hello_out.server_info = "kds-load";
+            Send(conn, wire::ServerFrameType::kHello, wire::EncodeServerHello(hello_out));
             conn.phase = Phase::kIdle;
             return true;
         }
 
         case Phase::kIdle: {
-            if (type == wire::ClientFrame::kLoadBegin) {
+            if (type == wire::ClientFrameType::kLoadBegin) {
                 HandleLoadBegin(conn, frame.payload);
                 return true;
             }
-            SendError(conn, "PROTOCOL", "frame not legal outside a load session");
+            SendError(conn, wire::ProtocolDetail::kUnexpectedFrame, "frame not legal outside a load session");
             return true;
         }
 
         case Phase::kLoading: {
             switch (type) {
-                case wire::ClientFrame::kLoadChunk:
+                case wire::ClientFrameType::kLoadChunk:
                     HandleLoadChunk(conn, frame);
                     return true;
-                case wire::ClientFrame::kLoadEnd:
+                case wire::ClientFrameType::kLoadEnd:
                     HandleLoadEnd(conn, /*abort=*/false);
                     return true;
-                case wire::ClientFrame::kLoadAbort:
+                case wire::ClientFrameType::kLoadAbort:
                     HandleLoadEnd(conn, /*abort=*/true);
                     return true;
                 default:
                     // KW4's modality: the load is dead and the transaction
                     // with it - v0's collapse of §5's discard-to-sync.
-                    SendError(conn, "PROTOCOL", "frame not legal inside a load session");
+                    SendError(conn, wire::ProtocolDetail::kUnexpectedFrame, "frame not legal inside a load session");
                     (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
                     conn.phase = Phase::kIdle;
                     conn.load = LoadState{};
@@ -290,31 +301,32 @@ bool KwpLoadServer::HandleFrame(int client_fd, Connection& conn,
 void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte> payload) {
     auto begin = wire::DecodeLoadBegin(payload);
     if (!begin.ok()) {
-        SendError(conn, "PROTOCOL", begin.status().message());
+        SendError(conn, wire::ProtocolDetail::kMalformedPayload, begin.status().message());
         return;
     }
     if (begin.value().flags != 0) {
-        SendError(conn, "PROTOCOL", "C_LOAD_BEGIN flags are reserved 0");
+        SendError(conn, wire::ProtocolDetail::kMalformedPayload, "C_LOAD_BEGIN flags are reserved 0");
         return;
     }
 
     auto& catalog = dispatcher_->catalog();
     auto oid = catalog.FindTableOidByName(begin.value().relation);
     if (!oid.ok()) {
-        SendError(conn, "LOAD", oid.status().message());
+        SendError(conn, oid.status());
         return;
     }
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) {
-        SendError(conn, "LOAD", access.status().message());
+        SendError(conn, access.status());
         return;
     }
     const catalog::Schema& schema = access.value()->schema;
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
         if (!LoadableColumn(schema.columns[i].type_val)) {
-            SendError(conn, "UNSUPPORTED",
-                      "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
-                          "' has a type v0 cannot load (int family and varchar only)");
+            SendError(conn, Status::Unsupported(
+                                "column '" +
+                                std::string(catalog::NameView(schema.columns[i].name)) +
+                                "' has a type v0 cannot load (int family and varchar only)"));
             return;
         }
     }
@@ -324,7 +336,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // already inside a transaction is refused by BEGIN itself.
     if (auto out = dispatcher_->Dispatch("BEGIN", &conn.session);
         out.response.rfind("ERR", 0) == 0) {
-        SendError(conn, "LOAD", out.response);
+        SendError(conn, StatusFromErrorReply(out.response));
         return;
     }
 
@@ -349,7 +361,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     auto fields = wire::DescribeSchema(schema);
     fields.erase(fields.begin());  // the pk is the engine's, never the client's
     wire::EncodeRowDescription(fields, head);
-    Send(conn, wire::ServerFrame::kLoadReady, head);
+    Send(conn, wire::ServerFrameType::kLoadReady, head);
 
     if (logging(LogLevel::kInfo)) {
         log_->Info("kwp", "load " + std::to_string(conn.load.load_id) + " on " +
@@ -358,41 +370,41 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
 }
 
 void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& frame) {
-    const auto fail_load = [&](std::string_view code, const std::string& message) {
-        SendError(conn, code, message);
+    const auto fail_load = [&](const Status& status) {
+        SendError(conn, status);
         (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};
     };
 
     if (frame.payload.size() > kKwpMaxChunkBytes) {
-        fail_load("PROTOCOL", "chunk exceeds the announced max_chunk_bytes");
+        fail_load(Status::InvalidArgument("chunk exceeds the announced max_chunk_bytes"));
         return;
     }
     wire::PayloadReader reader(frame.payload);
     auto header = wire::DecodeLoadChunkHeader(reader);
     if (!header.ok()) {
-        fail_load("PROTOCOL", header.status().message());
+        fail_load(Status::InvalidArgument(header.status().message()));
         return;
     }
     if (header.value().load_id != conn.load.load_id) {
-        fail_load("PROTOCOL", "chunk names a load this connection is not running");
+        fail_load(Status::InvalidArgument("chunk names a load this connection is not running"));
         return;
     }
     if (header.value().chunk_seq != conn.load.next_seq) {
-        fail_load("PROTOCOL", "chunk_seq " + std::to_string(header.value().chunk_seq) +
+        fail_load(Status::InvalidArgument("chunk_seq " + std::to_string(header.value().chunk_seq) +
                                   ", expected " + std::to_string(conn.load.next_seq) +
-                                  " (BI14: no resume, no reorder)");
+                                  " (BI14: no resume, no reorder)"));
         return;
     }
 
     auto rows = wire::DecodeRowBatch(reader.Rest(), conn.load.field_count);
     if (!rows.ok()) {
-        fail_load("PROTOCOL", rows.status().message());
+        fail_load(Status::InvalidArgument(rows.status().message()));
         return;
     }
     if (rows.value().size() != header.value().row_count) {
-        fail_load("PROTOCOL", "row_count disagrees with the rows the chunk holds");
+        fail_load(Status::InvalidArgument("row_count disagrees with the rows the chunk holds"));
         return;
     }
 
@@ -408,17 +420,17 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
         for (std::size_t f = 0; f < conn.load.field_count; ++f) {
             const wire::DecodedField& field = rows.value()[r][f];
             if (field.is_null) {
-                fail_load("LOAD", "chunk " + std::to_string(header.value().chunk_seq) +
+                fail_load(Status::InvalidArgument("chunk " + std::to_string(header.value().chunk_seq) +
                                       ", row " + std::to_string(r + 1) +
-                                      ": NULL is not storable");
+                                      ": NULL is not storable"));
                 return;
             }
             parser::AstValue v;
             if (wire::WireTypeLen(conn.load.type_vals[f]) == 8) {
                 if (field.bytes.size() != 8) {
-                    fail_load("PROTOCOL", "chunk " + std::to_string(header.value().chunk_seq) +
+                    fail_load(Status::InvalidArgument("chunk " + std::to_string(header.value().chunk_seq) +
                                               ", row " + std::to_string(r + 1) +
-                                              ": fixed field of the wrong width");
+                                              ": fixed field of the wrong width"));
                     return;
                 }
                 std::uint64_t raw = 0;
@@ -442,8 +454,7 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     // included when the relation is inside the gate.
     auto out = dispatcher_->ExecuteInsert(stmt, conn.session);
     if (out.response.rfind("ERR", 0) == 0) {
-        fail_load("LOAD",
-                  "chunk " + std::to_string(header.value().chunk_seq) + ": " + out.response);
+        fail_load(Status::InvalidArgument("chunk " + std::to_string(header.value().chunk_seq) + ": " + out.response));
         return;
     }
 
@@ -455,25 +466,26 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     w.U32(header.value().chunk_seq);
     w.U64(conn.load.rows_accepted);
     const auto payload = w.Take();
-    Send(conn, wire::ServerFrame::kLoadAck, payload);
+    Send(conn, wire::ServerFrameType::kLoadAck, payload);
 }
 
 void KwpLoadServer::HandleLoadEnd(Connection& conn, bool abort) {
     const std::uint64_t rows = abort ? 0 : conn.load.rows_accepted;
     auto out = dispatcher_->Dispatch(abort ? "ROLLBACK" : "COMMIT", &conn.session);
     if (!abort && out.response.rfind("ERR", 0) == 0) {
-        SendError(conn, "LOAD", out.response);
+        SendError(conn, StatusFromErrorReply(out.response));
         (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};
         return;
     }
 
+    // `Text` and not `Str`, which is the query surface's `S_COMPLETE` shape
+    // (§7: `{tag Text, rows_affected u64}`) - one frame number, one payload.
     wire::PayloadWriter w;
-    w.Str(abort ? "ABORT" : "LOAD");
+    w.Text(abort ? "ABORT" : "LOAD");
     w.U64(rows);
-    const auto payload = w.Take();
-    Send(conn, wire::ServerFrame::kComplete, payload);
+    Send(conn, wire::ServerFrameType::kComplete, w.Take());
 
     if (logging(LogLevel::kInfo)) {
         log_->Info("kwp", "load " + std::to_string(conn.load.load_id) +
@@ -484,19 +496,26 @@ void KwpLoadServer::HandleLoadEnd(Connection& conn, bool abort) {
     conn.load = LoadState{};
 }
 
-void KwpLoadServer::Send(Connection& conn, wire::ServerFrame type,
+void KwpLoadServer::Send(Connection& conn, wire::ServerFrameType type,
                          std::span<const std::byte> payload) {
     const auto bytes = wire::EncodeFrame(static_cast<std::uint8_t>(type), 0, payload);
     conn.outbox.insert(conn.outbox.end(), bytes.begin(), bytes.end());
 }
 
-void KwpLoadServer::SendError(Connection& conn, std::string_view code,
+void KwpLoadServer::SendError(Connection& conn, wire::ProtocolDetail detail,
                               std::string_view message) {
-    wire::PayloadWriter w;
-    w.Str(code);
-    w.Str(message);
-    const auto payload = w.Take();
-    Send(conn, wire::ServerFrame::kError, payload);
+    // **The one `S_ERROR` payload** (`wire::EncodeError`, §11): a code a
+    // client switches on, a `retryable` bit, a severity, and the message.
+    // The private `{Str code, Str message}` this replaced was a second
+    // shape under a shared frame number, and its "code" was a *word* - so
+    // no client could branch on it without matching strings.
+    Send(conn, wire::ServerFrameType::kError,
+         wire::EncodeError(wire::ProtocolError(detail, std::string(message),
+                                               wire::Severity::kError)));
+}
+
+void KwpLoadServer::SendError(Connection& conn, const Status& status) {
+    Send(conn, wire::ServerFrameType::kError, wire::EncodeError(wire::ErrorFromStatus(status)));
 }
 
 bool KwpLoadServer::FlushOutbox(int client_fd, Connection& conn) {

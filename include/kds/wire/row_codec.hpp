@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -103,6 +104,17 @@ struct FieldDescription {
 // is a u64 and never NULL. Named so no call site re-derives it.
 inline constexpr std::uint16_t kFieldFlagKeystone = 0x1;
 
+// **This result set is a diagnostic answer the engine has never typed** -
+// `SHOW`, `DESCRIBE`, `ANALYZE`, `TRACE` - carried as one `varchar` column,
+// one row per line (`server/kwp_session.cpp`'s `DeliverTextLines`).
+//
+// A flag rather than a reserved column name, because a column *can* be
+// called `line` and a client that keyed on the name would then render a
+// real relation's rows as a diagnostic block. The flag is exact and it is
+// what a client reads to decide whether to re-join the rows into the text
+// they came from.
+inline constexpr std::uint16_t kFieldFlagDiagnosticLine = 0x2;
+
 // Wire bytes for a fixed-width column type, or -1 when it is variable.
 // Answers -1 for a type this build does not know, which is the safe
 // reading: a consumer then relies on the per-value length, which is always
@@ -136,6 +148,18 @@ void EncodeRowDescription(const std::vector<FieldDescription>& fields,
 // (parser/ast.hpp), and kept with the enumerator.
 Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& value,
                    std::vector<std::byte>& out);
+
+// The same encoder, given the two fields of a column that decide how a
+// value is written rather than the column row itself.
+//
+// It exists because a result set is not always a relation's columns: a
+// fold's output row (`SUM(v)`, `COUNT(*)`) has a type and a scale and **no
+// `SysColumnRow` anywhere** - the aggregate spec carries the pair, resolved
+// at compile, precisely because the fold sits outside the catalog. The
+// overload above is this one with the two fields read off the row, so there
+// is one encoder and no arm that can drift.
+Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
+                   const parser::AstValue& value, std::vector<std::byte>& out);
 
 // Accumulates rows into one batch payload.
 //
@@ -184,6 +208,52 @@ private:
     std::vector<std::byte> buffer_;
     std::uint16_t row_count_ = 0;
 };
+
+// ---- Bound parameters (§5's `C_BIND`) ------------------------------------
+//
+// The inbound half of the `{i32 len | -1 = NULL}` convention this file
+// already owns: "the same encoding carries bound parameters, so a NULL
+// going in and a NULL coming back are spelled identically" (file header).
+//
+// **A parameter carries its own `type_oid`, and §5 did not say so** (added
+// 2026-08-31, P09). The frame as specified was `{i32 len, bytes}` per
+// parameter and nothing else, which cannot be decoded: eight bytes are an
+// int64, a timestamp, an unscaled decimal or eight bytes of text, and the
+// server has no way to choose. Every value travelling *outward* is typed by
+// `S_ROW_DESC`; this is the same fact travelling inward, and without it the
+// protocol's own "binary, little-endian end to end" (D5) has no reading.
+//
+// `type_mod` rides along for the same reason it does on a field
+// description: a decimal's unscaled integer means nothing without its
+// scale.
+struct BoundParam {
+    std::uint32_t type_oid = 0;
+    std::uint32_t type_mod = 0;
+    // Absent is SQL NULL - the `-1` length - and not the empty span, which
+    // is a present value of zero bytes (an empty string).
+    std::optional<std::span<const std::byte>> bytes;
+};
+
+// Decodes a `C_BIND` parameter list:
+//
+//     param_count u16
+//     params[]    type_oid u32, type_mod u32, len i32 (-1 = NULL), bytes
+//
+// Views into `payload`, which must outlive the result - `DecodeRowBatch`'s
+// rule and its reason, and the rvalue overload below is deleted for the
+// same one.
+StatusOr<std::vector<BoundParam>> DecodeBindParams(std::span<const std::byte> payload,
+                                                   std::size_t* consumed = nullptr);
+StatusOr<std::vector<BoundParam>> DecodeBindParams(std::vector<std::byte>&&,
+                                                   std::size_t* = nullptr) = delete;
+
+// The encoder, which exists so the two agree and so a client library in
+// this tree (the CLI, P15) has one implementation to be right about.
+//
+// Fails with InvalidArgument past 65,535 parameters, which is the format's
+// own u16 count: writing a wrapped count instead would put a payload on the
+// wire that decodes as a different, shorter statement's parameters.
+Status EncodeBindParams(const std::vector<BoundParam>& params, std::vector<std::byte>& out);
 
 // ---- Decoding ------------------------------------------------------------
 //

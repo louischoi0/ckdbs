@@ -39,11 +39,15 @@ namespace {
 
 constexpr const char* kUsage =
     "usage: kds_server [<data_file>] [--config <path>] [--port <n>]\n"
+    "                  [--debug-text-port <n>]\n"
     "                  [--log-file <name>] [--log-dir <dir>] [--log-level <level>]\n"
     "       kds_server --add-user <name> [--role readonly|readwrite|admin]\n"
     "                  [--users-file <path>] [--config <path>]\n"
     "\n"
     "  --config <path>   key = value settings file; see docs/spec/client-manual.md\n"
+    "  --debug-text-port <n>\n"
+    "                    open the newline debug surface on this port (off by\n"
+    "                    default; the main port speaks KWP/1 - protocol.md 12)\n"
     "  <data_file>       positional, overrides data_file from the config\n"
     "  --add-user <name> provision a SCRAM-SHA-256 user into the users file\n"
     "                    (prompts for the password; the server does not run)\n"
@@ -235,6 +239,21 @@ bool ParseArgs(int argc, char** argv, kds::server::Expeditor::Config& config, Cl
                 return false;
             }
             config.port = static_cast<std::uint16_t>(port);
+        } else if (arg == "--debug-text-port") {
+            // The newline protocol's loopback debug surface
+            // (docs/spec/protocol.md §12, KW-D6's cut-over). Off unless
+            // asked for, and a flag as well as a config key because the
+            // one thing it is most often needed for - `STOP`, which is
+            // still a newline command - is wanted on a server somebody is
+            // starting by hand.
+            const char* v = next("--debug-text-port");
+            if (v == nullptr) return false;
+            int port = std::atoi(v);
+            if (port <= 0 || port > 65535) {
+                std::cerr << "--debug-text-port must be 1..65535, got '" << v << "'\n";
+                return false;
+            }
+            config.debug_text_port = static_cast<std::uint16_t>(port);
         } else if (arg == "--log-file") {
             const char* v = next("--log-file");
             if (v == nullptr) return false;

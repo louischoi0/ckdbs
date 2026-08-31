@@ -249,6 +249,16 @@ static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicy
 // Precision in the high byte, scale in the low one. Both are bounded well
 // under 255 by TY2 (1 <= p <= 18, 0 <= s <= p), so sixteen of `len`'s
 // thirty-two bits are used and the rest stay zero and available.
+// **A column's `type_mod` as a description carries it** - the packed
+// `(p, s)` for the two decimal types, zero for everything else.
+//
+// One function because the rule is one rule and was written out at eight
+// sites: `len` means a *storage* width for `char`/`varchar` and a packed
+// pair for `decimal`, so "carry `len`" is wrong and "carry 0" is wrong, and
+// which one applies is decided by `type_val` alone. A description that
+// leaked a char column's width has clients padding.
+constexpr std::uint32_t TypeModOf(std::uint32_t type_val, std::uint32_t len) noexcept;
+
 inline constexpr std::uint32_t PackDecimalLen(std::uint8_t precision,
                                               std::uint8_t scale) noexcept {
     return (static_cast<std::uint32_t>(precision) << 8) | static_cast<std::uint32_t>(scale);
@@ -256,6 +266,15 @@ inline constexpr std::uint32_t PackDecimalLen(std::uint8_t precision,
 
 inline constexpr std::uint8_t DecimalPrecisionOf(std::uint32_t len) noexcept {
     return static_cast<std::uint8_t>((len >> 8) & 0xFF);
+}
+
+// Defined here, after `PackDecimalLen`, because it is the same word read
+// the other way round. The two decimal type numbers are spelled literally
+// rather than through `well_known.hpp`, which includes this header - the
+// values are frozen (`kTypeValDecimal` = 7, `kTypeValDecimalWide` = 13) and
+// a static_assert in `well_known.hpp` pins the two spellings together.
+constexpr std::uint32_t TypeModOf(std::uint32_t type_val, std::uint32_t len) noexcept {
+    return (type_val == 7 || type_val == 13) ? len : 0;
 }
 
 inline constexpr std::uint8_t DecimalScaleOf(std::uint32_t len) noexcept {

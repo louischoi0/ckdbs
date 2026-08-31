@@ -3891,7 +3891,7 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
     ASSERT_EQ(row.value().owner_core, 1u);
     peer.value()->GrantRelationFault(
         RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
-    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort).ok());
+    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, Protocol::kText).ok());
 
     std::thread worker([&] { peer.value()->Run(); });
 
@@ -3990,7 +3990,7 @@ TEST_F(CoreRuntimeTest, APeerListenerIsTornDownBeforeTheReactorItRegisteredWith)
     constexpr std::uint16_t kPort = 25441;
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
-    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort).ok());
+    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, Protocol::kText).ok());
 
     // A socket without SO_REUSEPORT may not join a REUSEPORT group, so this
     // is the port being genuinely held by the peer.

@@ -24,6 +24,14 @@
 #include "kds/wal/log_page_handoff.hpp"
 
 #if KDS_WITH_TLS
+// The one unguessable-byte source this build has - SCRAM's own
+// (`server/scram.cpp` uses the same RNG for salts and nonces). Included
+// here rather than behind a helper because it is used once, in one lambda,
+// and a wrapper would be a second name for `RAND_bytes`.
+#include <openssl/rand.h>
+#endif
+
+#if KDS_WITH_TLS
 #include "kds/server/auth.hpp"
 #include "kds/server/tls_channel.hpp"
 #endif
@@ -64,6 +72,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "wal_drain_interval_us", "relaxed_flush_interval_us",
             "log_dir",  "log_file",               "log_level",
             "max_rows_touched",      "max_insert_rows",        "kwp_port",
+            "debug_text_port",
             "buffer_pool_frames",
             "inline_cell_width",      "waystone_recording",
             "waystone_replay",
@@ -558,6 +567,14 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // operator has already asked for by setting it.
         max_rows_touched = v.value();
     }
+    if (file.Has("debug_text_port")) {
+        auto v = file.GetUint("debug_text_port");
+        if (!v.ok()) return v.status();
+        if (v.value() > 65535) {
+            return Status::InvalidArgument("debug_text_port must fit a TCP port");
+        }
+        debug_text_port = static_cast<std::uint16_t>(v.value());
+    }
     if (file.Has("kwp_port")) {
         auto v = file.GetUint("kwp_port");
         if (!v.ok()) return v.status();
@@ -661,10 +678,17 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     // becomes legal when KWP P07's handshake carries the same SCRAM
     // exchange.
     if (auth_scram && kwp_port != 0) {
+        // **Narrowed 2026-08-31, not lifted.** P07 landed, so the *query*
+        // surface authenticates: the main port's KWP handshake runs the
+        // same SCRAM exchange in `C_AUTH`/`S_AUTH` frames. The **load**
+        // endpoint (`kwp_port`) is KWP v0 and still has no auth stage of
+        // its own, so it stays refused - and the message says which
+        // endpoint, because the old one now reads as though the whole
+        // protocol were unauthenticated.
         return Status::InvalidArgument(file.origin() +
-                                        ": auth = scram cannot serve kwp_port yet - the KWP "
-                                        "load endpoint has no auth stage until protocol-wp "
-                                        "P07; set kwp_port = 0");
+                                        ": auth = scram cannot serve kwp_port - the v0 bulk-load "
+                                        "endpoint has no auth stage of its own (the main port's "
+                                        "KWP/1 handshake does); set kwp_port = 0");
     }
     return Status::OK();
 }
@@ -1241,6 +1265,12 @@ Status Expeditor::Serve() {
     // matters).
     auto listener = TcpServer::Listen(config_.port, config_.peer_listeners);
     if (!listener.ok()) return listener.status();
+    // **The cut-over** (KW-D6, protocol-wp.md P13): the default port speaks
+    // KWP/1. The newline protocol is not deleted - it is `debug_text_port`
+    // below, off unless asked for.
+    listener.value().set_protocol(Protocol::kKwp);
+    listener.value().set_durability(config_.durability);
+    listener.value().set_server_info("kds");
 #if KDS_WITH_TLS
     if (tls_context.has_value()) {
         listener.value().set_channel_factory(
@@ -1252,6 +1282,47 @@ Status Expeditor::Serve() {
         });
     }
 #endif
+
+    // **One identity source for every listener on the port.** Peers share
+    // it through SO_REUSEPORT, so a session id minted from a per-listener
+    // counter is unique only within one core - and the kernel decides which
+    // core a client lands on. Built here, once, and handed to core 0 below
+    // and to every peer at `ListenAndAttach`.
+    //
+    // Without OpenSSL there is no unguessable source in this build, and the
+    // fallback counter is honest about it: `kServerCapabilities` does not
+    // offer `CANCEL` either way (handshake.hpp), so nothing depends on the
+    // value being a secret today.
+    TcpServer::IdentitySource identity;
+#if KDS_WITH_TLS
+    // The RNG SCRAM's salts already come from (`server/scram.cpp`).
+    identity = [] {
+        std::uint64_t v = 0;
+        if (RAND_bytes(reinterpret_cast<unsigned char*>(&v), sizeof(v)) != 1) {
+            return std::uint64_t{0};
+        }
+        return v;
+    };
+    listener.value().set_identity_source(identity);
+#endif
+
+    // The newline text protocol's loopback debug surface (§12). A second
+    // `TcpServer` over the same dispatcher, differing in one call - which
+    // is the whole point of `set_protocol` rather than a second class.
+    std::optional<TcpServer> text_listener;
+    if (config_.debug_text_port != 0) {
+        auto text = TcpServer::Listen(config_.debug_text_port);
+        if (!text.ok()) return text.status();
+        text.value().set_protocol(Protocol::kText);
+        text_listener.emplace(std::move(text.value()));
+#if KDS_WITH_TLS
+        if (credentials.has_value()) {
+            text_listener->set_auth_gate_factory([store = &*credentials] {
+                return std::make_unique<ScramAuthGate>(store);
+            });
+        }
+#endif
+    }
 
     // KWP v0's load endpoint (docs/inflight/in-progress/workplan-kwp-load.md KW1): a second
     // listener, existing only when asked for - kwp_port 0 means no socket
@@ -1453,7 +1524,9 @@ Status Expeditor::Serve() {
             if (!core.ok()) return core.status();
             if (Status s = core.value()->AttachTransport(*transport_); !s.ok()) return s;
             if (config_.peer_listeners) {
-                if (Status s = core.value()->ListenAndAttach(config_.port); !s.ok()) {
+                if (Status s = core.value()->ListenAndAttach(
+                        config_.port, Protocol::kKwp, config_.durability, identity);
+                    !s.ok()) {
                     return s;
                 }
             }
@@ -1774,6 +1847,11 @@ Status Expeditor::Serve() {
         }
     }
 
+    if (text_listener.has_value()) {
+        if (Status s = text_listener->Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
+            return s;
+        }
+    }
     if (Status s = listener.value().Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
         return s;
     }
@@ -1947,9 +2025,16 @@ Status Expeditor::Serve() {
     remote_reads_.reset();
     transport_.reset();
 
-    // Torn down before the scheduler leaves scope: both hold fds
-    // registered with it.
+    // **Every listener is torn down before the scheduler leaves scope**,
+    // because each holds fds registered with it and `~TcpServer` calls
+    // `Detach()` - which would then unregister against a destroyed
+    // `Scheduler`. The list has to grow with the listeners: the debug text
+    // port and the v0 load endpoint are both declared *before* `scheduler`,
+    // so reverse-order destruction runs their destructors after it, and
+    // only an explicit detach here gets the ordering right.
     listener.value().Detach();
+    if (text_listener.has_value()) text_listener->Detach();
+    if (kwp_listener.has_value()) kwp_listener->Detach();
 
     // **A checkpoint on the way out, so the next mount does not re-read this
     // run's whole log.** A clean stop used to sync and stop there, which left

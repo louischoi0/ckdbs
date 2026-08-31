@@ -85,6 +85,17 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       log_(other.log_),
       channel_factory_(std::move(other.channel_factory_)),
       auth_gate_factory_(std::move(other.auth_gate_factory_)),
+      // **The configuration moves with the socket.** A listener is
+      // configured and *then* moved into the optional that owns it, so a
+      // member left out here is a setting silently dropped - which is
+      // exactly what happened to `protocol_` first time round: the debug
+      // port was configured for the text protocol, moved, and then served
+      // KWP on it while the KWP port served KWP too.
+      protocol_(other.protocol_),
+      durability_(other.durability_),
+      identity_source_(std::move(other.identity_source_)),
+      next_identity_(other.next_identity_),
+      server_info_(std::move(other.server_info_)),
       stop_handler_(std::move(other.stop_handler_)),
       clients_(std::move(other.clients_)) {
     other.listen_fd_ = -1;
@@ -106,6 +117,11 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         log_ = other.log_;
         channel_factory_ = std::move(other.channel_factory_);
         auth_gate_factory_ = std::move(other.auth_gate_factory_);
+        protocol_ = other.protocol_;
+        durability_ = other.durability_;
+        identity_source_ = std::move(other.identity_source_);
+        next_identity_ = other.next_identity_;
+        server_info_ = std::move(other.server_info_);
         stop_handler_ = std::move(other.stop_handler_);
         clients_ = std::move(other.clients_);
         other.listen_fd_ = -1;
@@ -145,12 +161,43 @@ Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatc
     // would re-create the problem this class exists to solve.
     if (Status s = SetNonBlocking(listen_fd_); !s.ok()) return s;
 
-    return scheduler_->RegisterIoHandler(listen_fd_, sched::IoInterest::kReadable,
-                                          [this](const sched::IoEvent&) { OnListenerReadable(); });
+    if (Status s = scheduler_->RegisterIoHandler(
+            listen_fd_, sched::IoInterest::kReadable,
+            [this](const sched::IoEvent&) { OnListenerReadable(); });
+        !s.ok()) {
+        return s;
+    }
+
+    // **The portal-idle timeout's caller** (§10, KW-D3). Without one the
+    // 60 s bound was a constant and a method with no producer, and the
+    // memory a suspended portal holds - which is what the spec's amended §7
+    // says the timeout bounds - was bounded by nothing.
+    //
+    // A sweep rather than a timer per portal: portals are few (64 a
+    // session), the sweep is a walk over one map per connection, and a
+    // timer per portal would be a registration on every `C_BIND`. The
+    // period is a quarter of the timeout, so a portal is released within
+    // 25% of the bound rather than at a multiple of it.
+    if (protocol_ == Protocol::kKwp) {
+        idle_sweep_ = scheduler_->SubmitEvery(kPortalIdleTimeoutNs / 4, [this] {
+            for (auto& [fd, conn] : clients_) {
+                (void)fd;
+                if (conn.kwp.has_value()) conn.kwp->ExpireIdlePortals();
+            }
+        });
+    }
+    return Status::OK();
 }
 
 void TcpServer::Detach() noexcept {
     if (scheduler_ != nullptr) {
+        // Before the handlers, and before the map they walk: a timer left
+        // registered would fire against a `clients_` this function is about
+        // to empty, on a scheduler the caller is about to destroy.
+        if (idle_sweep_ != sched::kInvalidTimerId) {
+            scheduler_->CancelTimer(idle_sweep_);
+            idle_sweep_ = sched::kInvalidTimerId;
+        }
         // Copied first: CloseClient mutates clients_.
         std::vector<int> fds;
         fds.reserve(clients_.size());
@@ -220,7 +267,22 @@ void TcpServer::OnListenerReadable() {
         // line - and cheap to make untrue-by-construction anyway.
         fresh.session.set_role(Role::kReadOnly);
     }
-    clients_.emplace(client_fd, std::move(fresh));
+    auto [entry, inserted] = clients_.emplace(client_fd, std::move(fresh));
+    if (protocol_ == Protocol::kKwp) {
+        Connection& conn = entry->second;
+        wire::HandshakeConfig config;
+        config.server_info = server_info_;
+        config.tls_active = conn.channel != nullptr;
+        config.capabilities = wire::kServerCapabilities;
+        conn.kwp.emplace(conn.session, config, durability_);
+        conn.kwp->set_identity(NextIdentity(), NextIdentity());
+        // The gate moves into the protocol session: a KWP connection's
+        // exchange runs in `C_AUTH` frames, not in lines, and `auth.hpp`'s
+        // gate is the same object either way ("only this line framing is
+        // protocol-specific"). Moved rather than shared, so there is one
+        // owner and `conn.auth_gate` stays the text path's alone.
+        if (conn.auth_gate != nullptr) conn.kwp->set_auth_gate(std::move(conn.auth_gate));
+    }
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "accepted fd=" + std::to_string(client_fd) +
                                   " open_connections=" + std::to_string(clients_.size()));
@@ -270,8 +332,15 @@ void TcpServer::OnClientReadable(int client_fd) {
     // is generous, and an authenticated connection is uncapped as before.
     // (A pre-auth *deadline* needs a timer and is future hardening.)
     constexpr std::size_t kPreAuthInboxCap = 4096;
-    if (conn.auth_gate != nullptr &&
-        conn.inbox.size() + static_cast<std::size_t>(n) > kPreAuthInboxCap) {
+    // **"Pre-auth" is not `auth_gate != nullptr` any more.** A KWP
+    // connection's gate is *moved* into its session at accept, so that
+    // pointer is null on every one of them and the cap never fired - an
+    // anonymous peer could push a 16 MiB frame at the decoder where a text
+    // client was held to 4 KiB. The condition is now "this connection has
+    // not finished its handshake", which is what the cap always meant.
+    const bool pre_auth = conn.auth_gate != nullptr ||
+                          (conn.kwp.has_value() && !conn.kwp->handshake_done());
+    if (pre_auth && conn.inbox.size() + static_cast<std::size_t>(n) > kPreAuthInboxCap) {
         if (logging(LogLevel::kInfo)) {
             log_->Info("client", "fd=" + std::to_string(client_fd) +
                                      " overflowed the pre-auth budget; closing");
@@ -308,9 +377,109 @@ void TcpServer::OnClientReadable(int client_fd) {
     } else {
         conn.inbox.append(chunk, static_cast<std::size_t>(n));
     }
-    if (!DrainCommands(client_fd, conn)) return;  // closed or server stopping
+    if (protocol_ == Protocol::kKwp) {
+        if (!DrainFrames(client_fd, conn)) return;
+    } else if (!DrainCommands(client_fd, conn)) {
+        return;  // closed or server stopping
+    }
     if (!FlushOutbox(client_fd, conn)) return;
     SyncWriteInterest(client_fd, conn);
+}
+
+std::uint64_t TcpServer::NextIdentity() {
+    if (identity_source_) return identity_source_();
+    // splitmix64 over a counter: distinct and well-spread, and **not a
+    // secret** - which is why the `CANCEL` capability is withheld when this
+    // is what is minting keys. Distinctness is all the session id needs.
+    std::uint64_t z = (next_identity_ += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+
+bool TcpServer::FlushFrames(int client_fd, Connection& conn) {
+    if (conn.frames_out.empty()) return true;
+    const std::string_view bytes(reinterpret_cast<const char*>(conn.frames_out.data()),
+                                 conn.frames_out.size());
+    // **Nothing touches `conn` after a false.** `AppendReplyBytes` closes
+    // the connection on a channel failure, and `CloseClient` erases the map
+    // entry whenever no statement is in flight - which is every caller of
+    // this function. Clearing the buffer afterwards wrote into the freed
+    // Connection.
+    if (!AppendReplyBytes(client_fd, conn, bytes)) return false;
+    conn.frames_out.clear();
+    return true;
+}
+
+bool TcpServer::DrainFrames(int client_fd, Connection& conn) {
+    // The same loop shape and the same one-at-a-time rule as
+    // `DrainCommands`: a frame that dispatches returns, and
+    // `OnStatementComplete` comes back here. Pipelining still works -
+    // PARSE/BIND/EXECUTE arrive in one read and are handled in order -
+    // and it is only *concurrency within one connection* that is excluded,
+    // which §5's `C_SYNC` barrier already assumes.
+    if (conn.closing) return true;
+
+    // The inbox holds frame bytes on this path. Handed to the decoder
+    // whole and cleared, because the decoder does its own accumulation
+    // across chunk boundaries (kwp.hpp).
+    if (!conn.inbox.empty()) {
+        const auto* p = reinterpret_cast<const std::byte*>(conn.inbox.data());
+        Status fed = conn.decoder.Feed(std::span<const std::byte>(p, conn.inbox.size()));
+        conn.inbox.clear();
+        if (!fed.ok()) {
+            // §2: framing-level corruption where resync is impossible ends
+            // the connection. The error frame is best effort - the peer
+            // that sent a bad length may not be reading.
+            const wire::WireError e = wire::ProtocolError(
+                wire::ProtocolDetail::kMalformedFrame, fed.message(), wire::Severity::kFatal);
+            const auto frame = wire::EncodeFrame(
+                static_cast<std::uint8_t>(wire::ServerFrameType::kError), 0,
+                wire::EncodeError(e));
+            // Same rule as `FlushFrames`: a failed append has already
+            // closed and erased the connection, so the flush and the close
+            // below must not run against it.
+            if (!AppendReplyBytes(
+                    client_fd, conn,
+                    std::string_view(reinterpret_cast<const char*>(frame.data()),
+                                     frame.size()))) {
+                return false;
+            }
+            (void)FlushOutbox(client_fd, conn);
+            CloseClient(client_fd);
+            return false;
+        }
+    }
+
+    while (!conn.in_flight && !conn.closing) {
+        auto frame = conn.decoder.PopFrame();
+        if (!frame.has_value()) return true;
+
+        FrameAction action = conn.kwp->OnFrame(*frame, conn.frames_out);
+        if (!action.dispatch) {
+            if (!FlushFrames(client_fd, conn)) return false;
+            if (action.close) {
+                (void)FlushOutbox(client_fd, conn);
+                CloseClient(client_fd);
+                return false;
+            }
+            continue;
+        }
+        if (dispatcher_ == nullptr || scheduler_ == nullptr) return true;
+
+        // The statement text has to outlive the coroutine: the parser's
+        // tokens view it (`DispatchAsync`'s contract), and the portal that
+        // owns it may be closed while the statement runs.
+        conn.current_line = std::move(action.sql);
+        conn.session.set_result_sink(action.sink);
+        conn.in_flight = true;
+        scheduler_->Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground,
+            dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
+            [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
+        return true;
+    }
+    return true;
 }
 
 bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
@@ -444,6 +613,35 @@ void TcpServer::OnStatementComplete(int client_fd) {
     if (it == clients_.end()) return;  // nothing left to reply to
     Connection& conn = it->second;
     conn.in_flight = false;
+    // Cleared whatever happens next: the sink belongs to the portal that
+    // asked for it, and a portal closed while its statement ran must not
+    // leave the next statement encoding into a dead one.
+    conn.session.set_result_sink(nullptr);
+
+    if (conn.kwp.has_value()) {
+        if (conn.closing) {
+            conn.closing = false;
+            CloseClient(client_fd);
+            return;
+        }
+        const bool stop = conn.pending.should_stop;
+        conn.kwp->OnStatementComplete(conn.pending, conn.frames_out);
+        conn.pending = DispatchOutcome{};
+        if (!FlushFrames(client_fd, conn)) return;
+        if (stop) {
+            (void)FlushOutbox(client_fd, conn);
+            if (stop_handler_) {
+                stop_handler_();
+            } else if (scheduler_ != nullptr) {
+                scheduler_->Stop();
+            }
+            return;
+        }
+        if (!DrainFrames(client_fd, conn)) return;
+        if (!FlushOutbox(client_fd, conn)) return;
+        SyncWriteInterest(client_fd, conn);
+        return;
+    }
 
     // The connection went away while the statement ran (Connection::closing).
     // Its reply has nowhere to go, and *now* it is safe to destroy the
@@ -492,21 +690,25 @@ void TcpServer::OnStatementComplete(int client_fd) {
     SyncWriteInterest(client_fd, conn);
 }
 
-bool TcpServer::AppendReplyLine(int client_fd, Connection& conn, std::string reply) {
-    // The newline goes onto the reply first so a wire channel seals one
-    // record per reply, not a one-byte second record.
-    reply.push_back('\n');
+bool TcpServer::AppendReplyBytes(int client_fd, Connection& conn, std::string_view bytes) {
     if (conn.channel != nullptr) {
-        Status s = conn.channel->Send(reply, conn.outbox);
+        Status s = conn.channel->Send(bytes, conn.outbox);
         if (!s.ok()) {
             (void)FlushOutbox(client_fd, conn);
             CloseClient(client_fd);
             return false;
         }
     } else {
-        conn.outbox.append(reply);
+        conn.outbox.append(bytes);
     }
     return true;
+}
+
+bool TcpServer::AppendReplyLine(int client_fd, Connection& conn, std::string reply) {
+    // The newline goes onto the reply first so a wire channel seals one
+    // record per reply, not a one-byte second record.
+    reply.push_back('\n');
+    return AppendReplyBytes(client_fd, conn, reply);
 }
 
 void TcpServer::CloseClient(int client_fd) {

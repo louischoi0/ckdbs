@@ -144,9 +144,12 @@ tls = off
 # changing one is delete-then-add. Per-relation GRANT/REVOKE does not
 # exist yet - it is the recorded refinement, gated on catalog recovery.
 #
-# Incompatible with `kwp_port` for now: the KWP load endpoint has no
-# auth stage, so `auth = scram` refuses to start while kwp_port is set -
-# an ungated second door on a guarded server is not a configuration.
+# Incompatible with `kwp_port`: the **v0 bulk-load** endpoint has no auth
+# stage of its own, so `auth = scram` refuses to start while kwp_port is
+# set - an ungated second door on a guarded server is not a configuration.
+# The main port's KWP/1 handshake *does* authenticate (the same SCRAM
+# exchange, carried in C_AUTH frames), so `auth = scram` and `port` are
+# compatible and always were meant to be.
 auth = off
 # users_file = /etc/kds/users
 
@@ -239,10 +242,23 @@ max_insert_rows = 1024
 
 # ---- KWP (binary protocol) -------------------------------------------------
 
+# The newline text protocol's loopback debug surface (protocol.md 12).
+#
+# **`port` above speaks KWP/1** since 2026-08-31; this is where the newline
+# protocol survives, and 0 - the default - opens no socket at all. It is a
+# documented debug surface, not a second production surface.
+#
+# One thing to know before you need it: `STOP` is still a newline command,
+# so an instance started with no debug port cannot be stopped by connecting
+# and typing STOP. Sending STOP as an ordinary statement over KWP works.
+# `--debug-text-port <n>` is the same setting on the command line.
+debug_text_port = 0
+
 # The KWP v0 load endpoint (docs/inflight/in-progress/workplan-kwp-load.md): a second, framed
 # listener carrying exactly the bulk load stream - handshake, BULK_LOAD
-# capability, C_LOAD_* session - while every query stays on the text port
-# above. 0 (the default) opens no socket at all. Loopback only.
+# capability, C_LOAD_* session. It is KWP **v0** and not the protocol
+# `port` speaks: a separate listener with its own frame subset. 0 (the
+# default) opens no socket at all. Loopback only.
 kwp_port = 0
 
 # ---- Waystone --------------------------------------------------------------

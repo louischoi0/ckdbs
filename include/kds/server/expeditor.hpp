@@ -227,6 +227,23 @@ public:
         // only when asked for. Loopback only, like the text port.
         std::uint16_t kwp_port = 0;
 
+        // **The newline text protocol's loopback debug port**
+        // (`debug_text_port`, docs/spec/protocol.md §12, KW-D6). 0 - the
+        // default - opens no socket at all.
+        //
+        // The main `port` speaks KWP/1 since the cut-over; this is where
+        // the newline protocol survives, and §12 calls it what it is: "a
+        // documented loopback debug surface", not a second production
+        // surface. Loopback only, like every listener this server binds.
+        //
+        // **`STOP` lives here** for the duration of milestone KW (KW-D4):
+        // it stays an unauthenticated line command rather than becoming a
+        // capability-gated admin statement, so cutting the text port to
+        // off-by-default makes `STOP` reachable only on this port. A
+        // deployment that stops its server by connecting and typing STOP
+        // needs this port open until that deferral is taken up.
+        std::uint16_t debug_text_port = 0;
+
         // ---- `isolation` (docs/spec/txn.md section 1) -----------------------
         //
         // The level a session starts at, and therefore the level an

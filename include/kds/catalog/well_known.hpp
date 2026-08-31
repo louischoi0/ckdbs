@@ -490,6 +490,13 @@ inline constexpr std::uint32_t kTypeValTimestamp = 12;
 // room to spare. 38 is the cap because 10^38 - 1 < 2^127.
 inline constexpr std::uint32_t kTypeValDecimalWide = 13;
 
+// `catalog::TypeModOf` (rows.hpp) spells these two numbers literally,
+// because rows.hpp is included *by* this header and cannot name them. The
+// two spellings are pinned together here so a renumber - which would be a
+// format change anyway - cannot leave one of them behind.
+static_assert(kTypeValDecimal == 7 && kTypeValDecimalWide == 13,
+              "catalog::TypeModOf spells these values literally; keep them in step");
+
 enum class ClusteredType : std::uint8_t {
     kHeap = 0,
     kBtree = 1,

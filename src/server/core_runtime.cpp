@@ -1325,10 +1325,15 @@ Status CoreRuntime::ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor) {
     return s;
 }
 
-Status CoreRuntime::ListenAndAttach(std::uint16_t port) {
+Status CoreRuntime::ListenAndAttach(std::uint16_t port, Protocol protocol,
+                                    wal::DurabilityClass durability,
+                                    TcpServer::IdentitySource identity) {
     auto listener = TcpServer::Listen(port, /*reuse_port=*/true);
     if (!listener.ok()) return listener.status();
     listener_.emplace(std::move(listener.value()));
+    listener_->set_protocol(protocol);
+    listener_->set_durability(durability);
+    if (identity) listener_->set_identity_source(std::move(identity));
     if (Status s = listener_->Attach(*scheduler_, *dispatcher_, log_); !s.ok()) {
         listener_.reset();
         return s;
