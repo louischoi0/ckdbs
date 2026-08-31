@@ -309,8 +309,9 @@ StatusOr<std::string> Server::OnClientFirst(std::string_view client_first) {
     // gs2 header: "n,," (no channel binding) or "y,," (client would have
     // bound but believes this server cannot). "p=..." is SCRAM-PLUS,
     // unbuilt; an authzid between the commas is authorization, an Open
-    // Decision - both are Unsupported, not InvalidArgument: understood
-    // and declined.
+    // Decision - both are NotImplemented, not InvalidArgument:
+    // understood, declined, and buildable. (Neither reaches a client as a
+    // token: auth.cpp collapses every handshake failure to `Refuse()`.)
     std::string_view rest;
     if (client_first.substr(0, 3) == "n,," || client_first.substr(0, 3) == "y,,") {
         gs2_header_ = std::string(client_first.substr(0, 3));

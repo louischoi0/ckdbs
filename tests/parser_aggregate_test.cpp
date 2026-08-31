@@ -345,7 +345,7 @@ TEST(ParserAggregateTest, HavingAgainstAColumnIsRefusedAtTheColumn) {
     const StatusOr<Statement> parsed =
         Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > b");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 45));
 }
 
@@ -373,7 +373,7 @@ TEST(ParserAggregateTest, HavingAgainstASubqueryIsRefusedAtTheParen) {
     const StatusOr<Statement> parsed =
         Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > (SELECT COUNT(*) FROM u)");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
     EXPECT_TRUE(MentionsByte(parsed.status(), 45));
 }
 

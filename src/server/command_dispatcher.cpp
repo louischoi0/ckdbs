@@ -160,13 +160,11 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // correct response is to read the data back - not to retry, which
     // against engine-issued primary keys would insert twice.
     {StatusCode::kUnknownOutcome, "UNKNOWN_OUTCOME retryable=0 "},
-    // The refusal pair (2026-08-31, operator rule; status.hpp carries the
-    // test that separates them). Both are spelled, and spelled together,
-    // because the whole value of the distinction is at the client: a
-    // library feature-detecting a form needs to know whether a later server
-    // could answer it. UNSUPPORTED says no - the architecture forbids it.
-    // NOT_IMPLEMENTED says not yet. Bare `ERR ...`, which is what both wore
-    // until today, said neither.
+    // The refusal pair (2026-08-31; status.hpp carries the test that
+    // separates them). Both are spelled, and spelled together, because the
+    // distinction only pays at the client: a bare `ERR ...`, which is what
+    // both wore until today, answers neither "can I rewrite this?" nor
+    // "should I ask a newer server?".
     {StatusCode::kUnsupported, "UNSUPPORTED retryable=0 "},
     {StatusCode::kNotImplemented, "NOT_IMPLEMENTED retryable=0 "},
 };
@@ -2130,7 +2128,13 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                 if (index_builds_ != nullptr) {
                     return BeginForeignIndexBuild(stmt, rel_row.value().owner_core, session);
                 }
-                return {ErrorReply(Status::NotImplemented( "CREATE INDEX on '" + stmt.table_name + "' at byte " + std::to_string(stmt.table_byte_offset) + ": the relation is " "owned by core " + std::to_string(rel_row.value().owner_core) + ", built by its owner (workplan-peer-writer.md §7c, PW1c-6b), " "and this dispatcher has no index-build client to reach it")),
+                return {ErrorReply(Status::NotImplemented(
+                            "CREATE INDEX on '" + stmt.table_name + "' at byte " +
+                            std::to_string(stmt.table_byte_offset) +
+                            ": the relation is owned by core " +
+                            std::to_string(rel_row.value().owner_core) +
+                            ", built by its owner (workplan-peer-writer.md §7c, PW1c-6b), "
+                            "and this dispatcher has no index-build client to reach it")),
                         false};
             }
         }
@@ -2154,7 +2158,16 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         if (auto ix = catalog_.FindIndexByName(stmt.index_name); ix.ok()) {
             auto rel_row = catalog_.GetSysTableRow(ix.value().table_oid);
             if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
-                return {ErrorReply(Status::NotImplemented( "DROP INDEX '" + stmt.index_name + "' at byte " + std::to_string(stmt.byte_offset) + ": its relation is owned by " "core " + std::to_string(rel_row.value().owner_core) + ", whose maintenance cannot see this delete-mark's deleter in " "flight (DT9 is core-local), so inside a transaction the owner " "would stop maintaining the index before COMMIT and a ROLLBACK " "would restore it missing the owner's meanwhile-writes; run it " "in autocommit (workplan-peer-writer.md PW1c-6b-4)")),
+                return {ErrorReply(Status::NotImplemented(
+                            "DROP INDEX '" + stmt.index_name + "' at byte " +
+                            std::to_string(stmt.byte_offset) +
+                            ": its relation is owned by core " +
+                            std::to_string(rel_row.value().owner_core) +
+                            ", whose maintenance cannot see this delete-mark's deleter in "
+                            "flight (DT9 is core-local), so inside a transaction the owner "
+                            "would stop maintaining the index before COMMIT and a ROLLBACK "
+                            "would restore it missing the owner's meanwhile-writes; run it "
+                            "in autocommit (workplan-peer-writer.md PW1c-6b-4)")),
                         false};
             }
         }
@@ -3712,7 +3725,13 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             } else if (row.type_val == catalog::kTypeValVarchar) {
                 if (col.has_width) {
                     if (Status s = storage::CheckInlineCellWidth(col.width); !s.ok()) {
-                        return {"ERR column '" + col.name + "': " + s.message() + " (byte " +
+                        // Through `ErrorReply` like every other refusal in
+                        // this file: the width validator answers
+                        // InvalidArgument today, which renders bare, so the
+                        // line is unchanged - but a coded refusal reaching
+                        // this one path bare is exactly the hole the rest of
+                        // the file just closed.
+                        return {ErrorReply(s.WithContext("column '" + col.name + "'")) + " (byte " +
                                     std::to_string(col.type_arg_byte_offset) + ")",
                                 false};
                     }
@@ -4988,7 +5007,7 @@ Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
         if (access.value()->ServableBy(core_id_)) return true;
         if (access.value()->owner_core != core_id_) {
             refusal =
-                CrossCoreReadUnsupported(core_id_, access.value()->owner_core, step.rel_name);
+                CrossCoreReadNotImplemented(core_id_, access.value()->owner_core, step.rel_name);
             return false;
         }
         // **Owned here is not the same as wholly here** (RD7). The walk

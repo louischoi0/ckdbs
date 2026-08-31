@@ -187,7 +187,7 @@ v1 is **catalog-only**: a rename changes a catalog label and no tuple
 bytes. Identity is the oid, so nothing dangles — foreign keys still
 enforce, indexes and Cabins still serve, all with no re-declaration.
 
-- `ADD COLUMN` / `DROP COLUMN` / type changes answer `Unsupported` with a
+- `ADD COLUMN` / `DROP COLUMN` / type changes answer `NOT_IMPLEMENTED` with a
   position: the row size is a schema constant (invariant 13), so a
   column-set change is a relation rewrite, not a catalog edit. Widening
   is permanently out by the tagged-cell design.
@@ -214,7 +214,7 @@ DROP INDEX ix_owner;
   `kMaxIndexCoveredColumns` (8) covered columns. The caps refuse, never
   truncate, and the parser names the byte of the offending column.
 - Only a `BTREE` relation may carry an index (an entry's payload is the pk).
-- `CREATE UNIQUE INDEX` is refused (`Unsupported`): enforcing uniqueness
+- `CREATE UNIQUE INDEX` is refused (`NOT_IMPLEMENTED`): enforcing uniqueness
   would make the index a constraint that can fail a write, and v1 is a read
   accelerator that cannot fail a write for a reason of its own (IX11).
 - Maintenance is append-only; DELETE does not touch an index; there is no
@@ -312,7 +312,7 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 | `int8`, `int16`, `int32`, `int64` | 1/2/4/8 bytes | first column must be one of the integer types |
 | `uint64` | 8 bytes | full range preserved via the literal's digit text |
 | `bool` | 1 byte | |
-| `varchar` | one tagged cell of `inline_cell_width` (64) bytes | longer values spill to the var-heap; > 8144 bytes is `Unsupported` |
+| `varchar` | one tagged cell of `inline_cell_width` (64) bytes | longer values spill to the var-heap; > 8144 bytes is `NotImplemented` |
 | `varchar(N)` | one tagged cell of **N** bytes | `N` is this column's `inline_cell_width`, `16 ≤ N ≤ 4096`; a value longer than `N − 3` spills — `N` is a width, **not** a length cap |
 | `char` | 1 byte | `char` alone is `char(1)` |
 | `char(N)` | N bytes | zero-padded; a longer value is refused, and a value containing a NUL byte is refused |
@@ -762,10 +762,25 @@ create anything.
 
 ## 7. What KDS refuses, and why
 
-Every refusal below is deliberate — `StatusCode::kUnsupported` with the byte
-position of the offending token, not a syntax error. The distinction is
-policy: `Unsupported` means "understood and declined, here is the decision it
-waits on"; `InvalidArgument` means "simply wrong".
+Every refusal below is deliberate — understood and declined, with the byte
+position of the offending token, not a syntax error. `InvalidArgument` means
+"simply wrong"; "understood and declined" is **two** codes since 2026-08-31,
+and a client reads which one to learn whether waiting for a newer server is
+worth anything:
+
+- **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
+  this release has not built it. Feature-detect and try again against a later
+  server. Most of this section is this one: CTEs, derived tables, outer
+  joins, `HAVING`, `UNIQUE` indexes, `ALTER TABLE`'s data-moving verbs, a
+  value wider than one var-heap page.
+- **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
+  admit the form, so no later server answers it and the statement must be
+  rewritten: updating a primary key, `float`, comparing decimals of different
+  width or scale, one relation named twice in a `FROM` list without distinct
+  aliases, a `$name` parameter on this protocol.
+
+Neither is retryable, and the message and its byte position are the same as
+they were before the split.
 
 - **No CTEs.** `WITH` is answered by name at the statement head: a CTE is
   table-position nesting, and the inner result would have to become a
@@ -780,8 +795,8 @@ waits on"; `InvalidArgument` means "simply wrong".
   executes predictably was chosen over a larger one with unpredictable
   corners.
 - **No outer joins.** `LEFT`/`RIGHT`/`FULL`/`OUTER` are reserved keywords
-  that answer `Unsupported` with their own position, so the grammar will not
-  shift if they ever land.
+  that answer `NOT_IMPLEMENTED` with their own position, so the grammar will
+  not shift if they ever land.
 - **The join rule.** KDS supports inner equi-join chains, executed in
   written order, probing by primary key where the ON allows it. There is no
   merge join and no plan search **— the query is the plan.** Written order
@@ -837,8 +852,12 @@ waits on"; `InvalidArgument` means "simply wrong".
 ## 8. Error surfaces
 
 Reply shape (verified, `server::ErrorReply` — a compatibility surface, not a
-diagnostic): `ERR <TOKEN> retryable=<b> <message>` for the three codes a
-client library switches on, `ERR <message>` for everything else.
+diagnostic): `ERR <TOKEN> retryable=<b> <message>` for the six codes a client
+library switches on, `ERR <message>` for everything else. The six are
+`TXN_CONFLICT`, `FK_VIOLATION`, `ASSERTION_VIOLATION`, `UNKNOWN_OUTCOME`, and
+— since 2026-08-31 — `UNSUPPORTED` and `NOT_IMPLEMENTED`, which every refusal
+in §7 below now carries and which both used to reach a client as a bare
+`ERR <message>`.
 
 | Situation | Exact surface |
 |---|---|
@@ -853,17 +872,17 @@ client library switches on, `ERR <message>` for everything else.
 | A supplied pk outside `[1, 2^40 - 1]` | `InvalidArgument` — names the bound it missed (`0 is reserved for "unset"`, or the 40-bit ceiling) |
 | A supplied pk already in use (including a `DELETE`d row's, whose slot is never reclaimed) | `AlreadyExists` — `ERR duplicate primary key <n> already present at page <p> slot <s>` |
 | A supplied pk below a **heap** relation's high-water mark | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a heap-clustered relation's ids must ascend ... - use BTREE to name keys in any order` |
-| `ASSIGNED` in CREATE TABLE | `Unsupported` — `ERR the ASSIGNED key mode no longer exists (byte <n>) - ...` (removed 2026-08-25; `EXPLICIT` is accepted and does nothing) |
-| Assigning the pk in UPDATE | `Unsupported` — `ERR primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
+| `ASSIGNED` in CREATE TABLE | `Unsupported` — `ERR UNSUPPORTED retryable=0 the ASSIGNED key mode no longer exists (byte <n>) - ...` (removed 2026-08-25 and not coming back, which is why it is the permanent half; `EXPLICIT` is accepted and does nothing) |
+| Assigning the pk in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)` |
 | Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |
 | Bare `decimal` | `ERR column '<c>' needs a precision and a scale - decimal(p, s) - at byte <n>; there is no default scale, ...` |
-| `float` column | `Unsupported` from the row-layout build: no decided on-disk encoding |
+| `float` column | `Unsupported` from the row-layout build: no decided on-disk encoding, and the type is refused rather than deferred |
 | Scalar subquery returns >1 row | runtime `CardinalityViolation`, non-retryable — never a first-row pick |
 | Statement touches more than `max_rows_touched` tuples (default 100M) | `ResourceExhausted`, non-retryable |
 | Keystone id space exhausted | `OutOfRange` — ids are never wrapped |
-| Value wider than one var-heap page (8144 bytes) | `Unsupported` |
+| Value wider than one var-heap page (8144 bytes) | `NotImplemented` — a multi-page value needs a chained representation behind the same append/fetch pair, which is an open decision rather than a closed door |
 | Cross-scale / cross-width decimal comparison, `SUM(uint64)`, `AVG(int)` | positioned compile-time refusal |
 
 Retryability is one bit wide on purpose: `TXN_CONFLICT` is the only

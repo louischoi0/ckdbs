@@ -14,6 +14,13 @@ v1 is exactly two statements:
     ALTER TABLE <t> RENAME COLUMN <old> TO <new>
 
 Everything else spelled under `ALTER TABLE` is a form this engine
+**`[AMENDED 2026-08-31 - which refusal code]`** The data-moving verbs answer
+**`NotImplemented`**, not `Unsupported`: `ADD COLUMN`, `MODIFY`, `SET` and `DROP
+COLUMN` all cost a relation rewrite this release does not do, and a later one
+could. `Unsupported` is now reserved for what the architecture forbids
+(`include/kds/base/status.hpp`, `docs/spec/protocol.md` §11). The position and the
+reason in each message are unchanged.
+
 understands and declines — `Unsupported`, with a position and the reason:
 
 - **`ADD COLUMN` / `DROP COLUMN` / column type changes.** Invariant 13

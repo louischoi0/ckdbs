@@ -150,7 +150,7 @@ public:
         // Both paths must be set when `tls` is (ApplyFile refuses
         // otherwise), must be PEM, and are read once at Serve(). On a
         // server built without TLS (KDS_WITH_TLS=OFF), `tls = on` is
-        // refused with Unsupported naming the build flag - a config
+        // refused with NotImplemented naming the build flag - a config
         // written for a capability this binary does not have fails
         // loudly, the physical_optimizer = on precedent.
         // Per-core listeners (workplan-peer-writer.md PW5; the operator

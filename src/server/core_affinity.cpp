@@ -30,7 +30,7 @@ Status CrossCoreWriteRefused(std::uint32_t home_core, std::uint32_t target_core,
         "; a transaction may write on one core only until two-phase commit exists");
 }
 
-Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_core,
+Status CrossCoreReadNotImplemented(std::uint32_t this_core, std::uint32_t target_core,
                                 std::string_view relation) {
     // **The pipeline is built; this shape cannot take it** (R4-R/RS0). The
     // old spelling said cross-core reads "need the step pipeline, which is

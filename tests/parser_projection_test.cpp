@@ -96,7 +96,7 @@ TEST(ParserProjectionTest, AMalformedSelectListIsRejected) {
 
 // ---- Star over more than one relation -------------------------------------
 
-TEST(ParserProjectionTest, StarIsUnsupportedOnceThereIsMoreThanOneRelation) {
+TEST(ParserProjectionTest, StarIsNotImplementedOnceThereIsMoreThanOneRelation) {
     //                  0123456
     auto parsed = Parse("SELECT * FROM t JOIN u ON t.id = u.id");
     ASSERT_FALSE(parsed.ok());

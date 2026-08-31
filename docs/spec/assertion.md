@@ -56,6 +56,15 @@ and correct.
 | AS8 | v1 assertions target exactly one relation. Multi-relation assertions: `Unsupported` (blocked on cross-core write / 2PC, which is itself reserved). |
 | AS9 | A violation is a **statement error** (transaction survives), consistent with AG3 overflow semantics. New Status code `AssertionViolation`; the error carries the assertion name and the violating group key. |
 | AS10 | Catalog: `sys.assertions` storing the full declaration `source_text` (same model as `sys.pattern_defs`). `DROP ASSERTION` supported. Dropping a relation referenced by an assertion is `RESTRICT`. ANALYZE reports per-statement assertion check counts and reservation failures. |
+**`[AMENDED 2026-08-31 - which refusal code]`** `Unsupported` in this document
+now names one of a pair (`include/kds/base/status.hpp`). **`NotImplemented`**:
+AS11's lower bounds and `=` (the row below says why - "v1 excludes", not
+"cannot"), `MIN`/`MAX`/`AVG` bounds, `COUNT(<column>)`, `COUNT(DISTINCT ...)`, and
+a declaration longer than one var-heap value can hold. **`Unsupported` stays** for
+AS3's and AS7's timing clauses - an assertion is checked at statement time,
+always, so `DEFERRABLE` and `NOT VALID` name a mechanism this design does not have
+rather than one it has not built - and for `SUM` over `uint64`, at AG3 parity.
+
 | AS11 | **Revised 2026-08-08.** v1 supports **upper-bound constraints only**: comparison operators `<` and `<=`. Lower bounds (`>`, `>=`) are `Unsupported` — they would require checking on DELETE and on decreasing UPDATE paths. **`=` is `Unsupported` with them**, having briefly been accepted as meaning `aggregate <= N`: that reinterpreted what the operator wrote, and enforcing real equality needs the lower-bound half anyway, so `=` costs exactly what `>=` costs. Consequently DELETE never requires an assertion check in v1. |
 
 ---

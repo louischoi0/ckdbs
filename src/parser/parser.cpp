@@ -729,7 +729,7 @@ Status Parser::ParseDeclaredColumnList(std::vector<IndexColumnRef>& out, const c
         // truncated index declared complete is a wrong answer with a right
         // answer's shape.
         if (cap != 0 && out.size() == cap) {
-            return Status::Unsupported("at most " + std::to_string(cap) + " " + what +
+            return Status::NotImplemented("at most " + std::to_string(cap) + " " + what +
                                         " are supported (byte " +
                                         std::to_string(col.byte_offset) + ")");
         }
@@ -931,7 +931,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     // multiplicity that no group header carries.
     if (const Token& distinct = lexer_.Peek();
         distinct.type == TokenType::kIdent && IEquals(distinct.text, "DISTINCT")) {
-        return Status::Unsupported("DISTINCT is not supported in an assertion's CHECK (byte " +
+        return Status::NotImplemented("DISTINCT is not supported in an assertion's CHECK (byte " +
                                     std::to_string(distinct.byte_offset) +
                                     "); a distinct aggregate is not incrementally maintainable "
                                     "from a group header alone");
@@ -1423,7 +1423,7 @@ Status Parser::ParseHaving(SelectStmt& stmt) {
             // boundary where the execution model has none - AG8's refusal,
             // which this is the same statement about from the other side.
             if (const Token paren = lexer_.Peek(); paren.type == TokenType::kLParen) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "HAVING compares against a literal, not a subquery (byte " +
                     std::to_string(paren.byte_offset) +
                     "); a fold has no row for a sub-chain to correlate with");
@@ -1443,7 +1443,7 @@ Status Parser::ParseHaving(SelectStmt& stmt) {
                         std::to_string(rhs.value().byte_offset) +
                         "); this grammar has no expressions");
                 }
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "HAVING compares against a literal, not a column (byte " +
                     std::to_string(rhs.value().byte_offset) +
                     "); the fold has already consumed the rows a column would be read "
@@ -1498,7 +1498,7 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
         // a scalar's one value - and no order of them is observable, so an
         // ORDER BY there is a clause with nothing to mean.
         if (depth > 0) {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "ORDER BY inside a subquery is not supported (byte " +
                 std::to_string(order.byte_offset) +
                 "); a subquery's rows feed a predicate, and no order of them is observable");
@@ -1546,7 +1546,7 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
             // and refuses at the byte of the key that crossed it - so the
             // client is pointed at the ninth key, not at the clause.
             if (stmt.order_by.size() >= kMaxSortKeys) {
-                return Status::Unsupported(
+                return Status::NotImplemented(
                     "ORDER BY takes at most " + std::to_string(kMaxSortKeys) +
                     " keys (byte " + std::to_string(key_at) +
                     "); every key costs a comparison on every row pair, and sorting by a "
@@ -1661,9 +1661,10 @@ Status Parser::ParseJoins(SelectStmt& stmt) {
         if (peek.type != TokenType::kKeyword) return Status::OK();
 
         // An outer join is a form this engine understands and declines,
-        // which is what Unsupported means (docs/spec/parser-v2.md J2) - as
-        // opposed to a syntax error, which would send a client looking
-        // for a typo. The position is the keyword's own.
+        // and one a later release could build - `NotImplemented`, the half
+        // of J2's pair that says so (status.hpp) - as opposed to a syntax
+        // error, which would send a client looking for a typo. The
+        // position is the keyword's own.
         if (peek.kw == Keyword::kLeft || peek.kw == Keyword::kRight ||
             peek.kw == Keyword::kFull || peek.kw == Keyword::kOuter) {
             return Status::NotImplemented("outer joins are not supported: '" +
@@ -1715,12 +1716,15 @@ Status Parser::CheckDistinctBindings(const SelectStmt& stmt) const {
         for (std::size_t j = 0; j < i; ++j) {
             if (!IEquals(rels[i]->binding(), rels[j]->binding())) continue;
             // Unsupported, not InvalidArgument: the statement is
-            // well-formed and has a meaning in standard SQL. This engine
+            // well-formed and has a meaning in standard SQL. And
+            // Unsupported rather than NotImplemented, because "give each
+            // occurrence a distinct alias" is the answer on every later
+            // release too - there is nothing here to build. This engine
             // declines to guess which occurrence a predicate meant, and
             // says so with the position of the second one. Adding
             // distinct aliases is the fix, and it is also what makes a
             // self-join expressible instead of accidental.
-            return Status::NotImplemented(
+            return Status::Unsupported(
                 "relation '" + rels[i]->binding() + "' at byte " +
                 std::to_string(rels[i]->byte_offset) +
                 " is named twice in the FROM list; give each occurrence a distinct alias "
@@ -1754,9 +1758,10 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     // `SELECT *` over more than one relation. Which columns it means, and
     // in what order, would be a property of how the relations were joined
     // - and written order being the client's to choose (spec section 1) is
-    // exactly what makes that unanswerable here. Unsupported rather than
-    // InvalidArgument: the statement is well-formed, and naming the
-    // columns is the fix.
+    // exactly what makes that unanswerable here. NotImplemented rather
+    // than InvalidArgument: the statement is well-formed, naming the
+    // columns is the fix today, and cross-relation `*` is a real SQL
+    // semantic a later release could adopt.
     // `wrote_star`, not `stmt.star()`: the items are still staged in a
     // local at this point, so the statement's own star test would read a
     // named list as a star and refuse every multi-relation SELECT that
@@ -2099,7 +2104,7 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     // dropping a column is the rewrite, dropping the table is DROP TABLE's
     // feature, and neither is a rename.
     if (verb.type == TokenType::kIdent && IEquals(verb.text, "DROP")) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "ALTER TABLE DROP is not supported (byte " + std::to_string(verb.byte_offset) +
             "); dropping a column changes the row size (invariant 13), and dropping the "
             "relation is DROP TABLE's feature, which does not exist yet");

@@ -194,7 +194,7 @@ TEST(ParserSubqueryTest, DepthUnwindsSoSiblingSubqueriesEachGetTheFullBudget) {
 
 // ---- Nesting outside predicate position -----------------------------------
 
-TEST(ParserSubqueryTest, ASubqueryInFromIsUnsupportedWithItsPosition) {
+TEST(ParserSubqueryTest, ASubqueryInFromIsNotImplementedWithItsPosition) {
     //                  01234567890123
     auto parsed = Parse("SELECT * FROM (SELECT * FROM u)");
     ASSERT_FALSE(parsed.ok());
@@ -206,7 +206,7 @@ TEST(ParserSubqueryTest, ASubqueryInFromIsUnsupportedWithItsPosition) {
         << parsed.status().message();
 }
 
-TEST(ParserSubqueryTest, ASubqueryInAJoinsRelationPositionIsUnsupportedToo) {
+TEST(ParserSubqueryTest, ASubqueryInAJoinsRelationPositionIsNotImplementedToo) {
     // The rule is on the relation-reference production, so it holds
     // wherever a relation reference appears - not just after FROM.
     auto parsed = Parse("SELECT t.id FROM t JOIN (SELECT * FROM u) ON t.id = u.id");
@@ -214,7 +214,7 @@ TEST(ParserSubqueryTest, ASubqueryInAJoinsRelationPositionIsUnsupportedToo) {
     EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
 }
 
-TEST(ParserSubqueryTest, ACteIsUnsupportedRatherThanAnUnknownKeyword) {
+TEST(ParserSubqueryTest, ACteIsNotImplementedRatherThanAnUnknownKeyword) {
     //                  0123
     auto parsed = Parse("WITH x AS (SELECT * FROM u) SELECT * FROM x");
     ASSERT_FALSE(parsed.ok());

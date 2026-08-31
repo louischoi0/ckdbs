@@ -51,7 +51,7 @@ enum class Keyword : std::uint8_t {
     kBetween,
 
     // Reserved by V05 and rejected by it: an outer join answers
-    // `Unsupported` with the keyword's own position (spec I9). Reserved
+    // `NotImplemented` with the keyword's own position (spec I9). Reserved
     // *now*, before they are implementable, so a client gets a truthful
     // "not supported, here" instead of a syntax error pointing somewhere
     // else - and so the grammar does not shift when they land.

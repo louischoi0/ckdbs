@@ -119,12 +119,12 @@ TEST(IndexGrammarTest, AnOverCapColumnListIsRefusedWithAPosition) {
     // not come through it.
     auto keys = Parse("CREATE INDEX ix ON t (a, b, c, d, e)");
     ASSERT_FALSE(keys.ok());
-    EXPECT_EQ(keys.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(keys.status().code(), StatusCode::kNotImplemented);
     EXPECT_NE(keys.status().message().find("byte"), std::string::npos);
 
     auto covered = Parse("CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)");
     ASSERT_FALSE(covered.ok());
-    EXPECT_EQ(covered.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(covered.status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(IndexGrammarTest, AMissingOnOrListIsASyntaxErrorThatSaysWhatWasWanted) {

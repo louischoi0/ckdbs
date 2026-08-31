@@ -417,18 +417,15 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
         // The byte belongs to the statement, and only this layer has it.
         // `WithContext` would prefix instead of append and would bury the
         // position mid-sentence, so the one refusal that names the user's
-        // object gets it spelled out the way the sibling above does.
-        // Re-wrapped under the code it arrived with, never a fixed one
-        // (2026-08-31): the pair says whether a later release could lift the
-        // refusal, and a wrapper that flattened both to one would answer
-        // that question with its own guess.
-        if (s.code() == StatusCode::kUnsupported || s.code() == StatusCode::kNotImplemented) {
-            std::string msg = "index '" + stmt.index_name + "': " + s.message() + " (byte " +
-                              std::to_string(stmt.byte_offset) + ")";
-            return s.code() == StatusCode::kUnsupported ? Status::Unsupported(std::move(msg))
-                                                        : Status::NotImplemented(std::move(msg));
+        // object gets it spelled out the way the sibling above does -
+        // through `WithMessage`, which keeps whatever code arrived rather
+        // than naming one here. Naming one is how a re-wrap answers "could
+        // a later release lift this?" with its own guess.
+        if (s.code() != StatusCode::kUnsupported && s.code() != StatusCode::kNotImplemented) {
+            return s;
         }
-        return s;
+        return s.WithMessage("index '" + stmt.index_name + "': " + s.message() + " (byte " +
+                             std::to_string(stmt.byte_offset) + ")");
     }
     return row.value().index_oid;
 }

@@ -99,7 +99,7 @@ PageId PageNextPageId(std::span<const std::byte, kPageSize> page) {
 StatusOr<std::uint16_t> PageAppend(std::span<std::byte, kPageSize> page,
                                     std::span<const std::byte> value) {
     if (value.size() > kMaxValueSize) {
-        return Status::Unsupported("var-heap value of " + std::to_string(value.size()) +
+        return Status::NotImplemented("var-heap value of " + std::to_string(value.size()) +
                                     " bytes exceeds the " + std::to_string(kMaxValueSize) +
                                     " a page can hold; values spanning pages are not supported "
                                     "(docs/rules/rule-fixed-length-tuple.md section 9)");
@@ -130,7 +130,7 @@ StatusOr<std::uint16_t> PageAppend(std::span<std::byte, kPageSize> page,
 Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
                    std::span<const std::byte> value) {
     if (value.size() > kMaxValueSize) {
-        return Status::Unsupported("var-heap value of " + std::to_string(value.size()) +
+        return Status::NotImplemented("var-heap value of " + std::to_string(value.size()) +
                                     " bytes exceeds the " + std::to_string(kMaxValueSize) +
                                     " a page can hold");
     }
@@ -306,7 +306,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
             "this relation has no var-heap chain; it was created without a spillable column");
     }
     if (value.size() > kMaxValueSize) {
-        return Status::Unsupported("var-heap value of " + std::to_string(value.size()) +
+        return Status::NotImplemented("var-heap value of " + std::to_string(value.size()) +
                                     " bytes exceeds the " + std::to_string(kMaxValueSize) +
                                     " a page can hold; values spanning pages are not supported "
                                     "(docs/rules/rule-fixed-length-tuple.md section 9)");

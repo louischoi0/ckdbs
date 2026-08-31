@@ -386,7 +386,7 @@ TEST_F(PreparedMountTest, APreparedTransactionWithNoResolverRefusesTheMount) {
     // back nor publish it, so it will not open at all.
     auto report = Recover(/*resolver=*/nullptr);
     ASSERT_FALSE(report.ok());
-    EXPECT_EQ(report.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(report.status().code(), StatusCode::kNotImplemented);
     EXPECT_NE(report.status().message().find("promised not to decide"), std::string::npos)
         << report.status().message();
 }

@@ -18,6 +18,16 @@ chains), `docs/rules/rules.md`, `docs/spec/waystone-concpets.md` (trail model),
 | AG4 | NULL semantics | **SQL standard** (§3.1): aggregates skip NULLs; `COUNT(*)` counts rows; a group with no non-NULL argument yields NULL for `SUM`/`MIN`/`MAX`; NULL grouping keys form one group |
 | AG5 | Strict grouping | A bare column in an aggregated select list **must appear in GROUP BY**, or the statement is refused with the column's byte position. There is no "any row" mode: an answer that depends on scan order is an answer this engine refuses to give |
 | AG6 | Emit order | **First-seen order** — the order the chain's deterministic row stream founded each group. Hash-iteration order would vary by seed and growth history, which the deterministic-test rule forbids |
+**`[AMENDED 2026-08-31 - which refusal code]`** Where this document writes
+`Unsupported`, the engine now picks one of a pair (`include/kds/base/status.hpp`,
+`docs/spec/protocol.md` §11): `Unsupported` for what the architecture cannot
+admit, `NotImplemented` for what the design admits and nobody built. **AG7's
+`HAVING`, AG8's subquery aggregates and the aggregated-output `ORDER BY`/`LIMIT`
+tail all answer `NotImplemented`** - each is a decision or a build away, which is
+what §10 has said about them all along. **AG3's `SUM` over a `uint64` column stays
+`Unsupported`**: half its range does not fit the int64 accumulator, and a wrapped
+sum is a wrong number rather than a missing feature.
+
 | AG7 | HAVING | **Not in v1.** Recognized by text after the GROUP BY list and refused with `Unsupported` and the keyword's own position — a truthful "not supported, here" instead of a syntax error pointing somewhere else |
 | AG8 | Subquery aggregates | **J2 stands, unchanged**: a subquery containing GROUP BY or an aggregate answers `Unsupported`. The refusal moves from "blocked on I14" to permanent-for-v1: a fold inside a sub-chain puts an aggregation boundary where the execution model has none |
 | AG9 | Grouping targets | **Column references only** (`col`, `rel.col`). The grammar has no expressions, and GROUP BY does not grow one |

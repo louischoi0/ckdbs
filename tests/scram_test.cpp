@@ -155,14 +155,14 @@ TEST(ScramTest, ChannelBindingDowngradeRefused) {
     EXPECT_NE(out.status().message().find("channel-binding"), std::string::npos);
 }
 
-TEST(ScramTest, ScramPlusHelloRefusedAsUnsupported) {
+TEST(ScramTest, ScramPlusHelloRefusedAsNotImplemented) {
     Server server(LookupPencil());
     auto out = server.OnClientFirst("p=tls-unique,,n=user,r=abc");
     EXPECT_FALSE(out.ok());
     EXPECT_EQ(out.status().code(), StatusCode::kNotImplemented);
 }
 
-TEST(ScramTest, AuthzidRefusedAsUnsupported) {
+TEST(ScramTest, AuthzidRefusedAsNotImplemented) {
     Server server(LookupPencil());
     auto out = server.OnClientFirst("n,a=admin,n=user,r=abc");
     EXPECT_FALSE(out.ok());

@@ -2324,7 +2324,7 @@ TEST_F(CoreRuntimeTest, APeerReadsASpreadRelationThroughItsOwnFanIn) {
 // stages, so it is proof the plan was made. Without RR2's
 // `remote_reads_.emplace(...)` and the `SetRemoteReads` that follows it,
 // the route is skipped entirely and the answer is `CheckReadAffinity`'s
-// `Unsupported` - `CrossCoreReadUnsupported`'s "relation 'spread2' is owned
+// `NotImplemented` - `CrossCoreReadNotImplemented`'s "relation 'spread2' is owned
 // by core 0 and this statement is running on core 1", which is what every
 // peer answered before RR2. **Not** the "cannot fan in over them" arm: that
 // one is reached only when `owner_core == core_id_`, and this fixture reads

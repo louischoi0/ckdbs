@@ -129,7 +129,7 @@ TEST(VarHeapPageTest, AFullPageReportsOutOfSpaceRatherThanOverwriting) {
     EXPECT_EQ(overflow.status().code(), StatusCode::kOutOfSpace);
 }
 
-TEST(VarHeapPageTest, AValueLargerThanAPageIsUnsupportedNotTruncated) {
+TEST(VarHeapPageTest, AValueLargerThanAPageIsNotImplementedNotTruncated) {
     // The spilled-value size cap is an open decision, and this layer
     // refuses rather than inventing a multi-page representation to answer
     // it (varheap.hpp's kMaxValueSize).
@@ -138,7 +138,7 @@ TEST(VarHeapPageTest, AValueLargerThanAPageIsUnsupportedNotTruncated) {
 
     auto too_big = PageAppend(AsSpan(buf), std::vector<std::byte>(kMaxValueSize + 1, std::byte{0}));
     ASSERT_FALSE(too_big.ok());
-    EXPECT_EQ(too_big.status().code(), StatusCode::kUnsupported);
+    EXPECT_EQ(too_big.status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(VarHeapPageTest, AnOutOfRangeSlotIsCorruption) {

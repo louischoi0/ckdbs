@@ -59,7 +59,7 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
     out.prepared = out.analysis.prepared;
     if (out.analysis.prepared != 0) {
         if (resolver == nullptr) {
-            return Status::Unsupported(
+            return Status::NotImplemented(
                 "recovery of core " + std::to_string(core_id) + ": " +
                 std::to_string(out.analysis.prepared) +
                 " transaction(s) are prepared and undecided and no resolver is installed; this "
@@ -134,7 +134,7 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
     // only version of this refusal that leaves the database as it was found
     // is the one that happens before redo.
     if (undo == nullptr && out.analysis.losers != 0) {
-        return Status::Unsupported(
+        return Status::NotImplemented(
             "recovery of core " + std::to_string(core_id) + ": " +
             std::to_string(out.analysis.losers) +
             " transaction(s) have no terminal record and no undo phase is installed; replaying "

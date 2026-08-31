@@ -93,7 +93,7 @@ TEST(ParserJoinTest, OneRelationNamedTwiceWithoutAliasesIsUnsupportedNotAmbiguou
     // with a meaning in standard SQL that this engine declines to guess
     // at. The message has to say how to fix it, since "t is named twice"
     // is not actionable on its own.
-    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
     EXPECT_NE(parsed.status().message().find("alias"), std::string::npos)
         << parsed.status().message();
 }
@@ -103,7 +103,7 @@ TEST(ParserJoinTest, TwoRelationsSharingAnAliasIsRefusedForTheSameReason) {
     // in the table name, so the check has to be on binding().
     auto parsed = Parse("SELECT * FROM accounts AS x JOIN trades AS x ON x.id = x.id");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
 }
 
 TEST(ParserJoinTest, AnAliasCollidingWithAnUnaliasedTableNameIsRefused) {
@@ -112,7 +112,7 @@ TEST(ParserJoinTest, AnAliasCollidingWithAnUnaliasedTableNameIsRefused) {
     // aliases and table names separately.
     auto parsed = Parse("SELECT * FROM t JOIN u AS t ON t.id = t.id");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
 }
 
 TEST(ParserJoinTest, BindingComparisonIsCaseInsensitive) {
@@ -122,12 +122,12 @@ TEST(ParserJoinTest, BindingComparisonIsCaseInsensitive) {
     // matters - the other direction only costs an alias.
     auto parsed = Parse("SELECT * FROM t JOIN T ON t.id = T.id");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
 }
 
 // ---- Outer joins: reserved, refused, positioned ---------------------------
 
-TEST(ParserJoinTest, OuterJoinKeywordsAreUnsupportedWithTheirOwnPosition) {
+TEST(ParserJoinTest, OuterJoinKeywordsAreNotImplementedWithTheirOwnPosition) {
     struct Case {
         const char* sql;
         std::size_t keyword_at;
@@ -174,7 +174,7 @@ TEST(ParserJoinTest, AJoinWithoutOnIsRejected) {
         << parsed.status().message();
 }
 
-TEST(ParserJoinTest, AnUnqualifiedOnColumnIsUnsupportedWithItsPosition) {
+TEST(ParserJoinTest, AnUnqualifiedOnColumnIsNotImplementedWithItsPosition) {
     //                 0123456789012345678901234567890
     auto parsed = Parse("SELECT * FROM t JOIN u ON id = u.id");
     ASSERT_FALSE(parsed.ok());

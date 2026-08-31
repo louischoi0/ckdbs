@@ -794,7 +794,7 @@ struct AssertionStmt {
 
     // `<` or `<=`, and nothing else (AS11 as revised 2026-08-08).
     //
-    // `>` and `>=` parse and are refused as `Unsupported`: a lower bound
+    // `>` and `>=` parse and are refused as `NotImplemented`: a lower bound
     // would have to be checked on DELETE and on every decreasing UPDATE,
     // which is the whole reason v1 can leave DELETE uninstrumented.
     //

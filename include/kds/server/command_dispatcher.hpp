@@ -2075,7 +2075,7 @@ private:
     //     field this was before ranges existed and costs one branch;
     //   - a pk equality, or a relation whose every range has one owner:
     //     that owner, and the statement ships there or runs here;
-    //   - anything else over a **multi-owner** relation: `Unsupported`,
+    //   - anything else over a **multi-owner** relation: `NotImplemented`,
     //     naming R6. That is the cost of arming spreading and it is stated
     //     rather than discovered - a non-pk-predicate UPDATE or DELETE on a
     //     spread relation stops working until multi-range writes exist.

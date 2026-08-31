@@ -546,7 +546,7 @@ TEST(IsolationLevelTest, TheNameRoundTripsThroughTheParser) {
 // refusal says why rather than "unknown level".
 TEST(IsolationLevelTest, SerializableIsRefusedWithItsReason) {
     auto parsed = ParseIsolationLevel("serializable");
-    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
     EXPECT_NE(parsed.status().message().find("predicate locking"), std::string::npos)
         << parsed.status().message();
 }

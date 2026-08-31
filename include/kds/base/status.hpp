@@ -242,8 +242,18 @@ public:
     // being retryable. Returns OK unchanged; there is nothing to say about
     // a success.
     Status WithContext(std::string_view prefix) const {
+        return WithMessage(std::string(prefix) + ": " + message_);
+    }
+
+    // The same code under a message this layer composed. `WithContext` is
+    // the prefix form of it; a layer that must *append* - a byte position
+    // belongs at the end of a sentence, not buried in the middle - needs
+    // this one, and the alternative is a call site that switches on the
+    // code to pick a factory, which is the re-wrapping-with-the-wrong-code
+    // mistake in slower motion.
+    Status WithMessage(std::string msg) const {
         if (ok()) return *this;
-        return Status(code_, std::string(prefix) + ": " + message_);
+        return Status(code_, std::move(msg));
     }
 
     bool ok() const noexcept { return code_ == StatusCode::kOk; }
