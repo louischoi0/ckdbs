@@ -569,6 +569,12 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
     // participant promised nothing, so both readings must end in ABORT.
     base::CrashPointHit("participant.prepare_logged_predurable");
 
+    // XF4's origin for the prepare leg: the record is appended, and
+    // everything after this line is what it takes to make it durable.
+    // Above `RequestDurable` and the submit deliberately - those two *are*
+    // part of making a prepare durable, not overhead beside it.
+    const sched::MonoTimeNs prepare_appended_ns = clock_.Now();
+
     // The drain has nothing to sync *for* until it is told (`RequestDurable`):
     // a prepare is not a commit, so without this the record waits out D3's
     // loss-window interval while a coordinator is parked on it.
@@ -579,11 +585,13 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
     // on - `Execute`'s argument, one level up.
     scheduler_.Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kForeground,
-        AwaitPrepared(key, lsn.value(), clock_.Now() + kTxnPhaseDeadlineNs, std::move(reply))));
+        AwaitPrepared(key, lsn.value(), prepare_appended_ns + kTxnPhaseDeadlineNs,
+                      prepare_appended_ns, std::move(reply))));
 }
 
 sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
                                                     sched::MonoTimeNs deadline_ns,
+                                                    sched::MonoTimeNs appended_at_ns,
                                                     Txn2pcServer::ReplyFn reply) {
     // **Bounded, and the bound is not decoration.** A device that never
     // answers would otherwise park this coroutine for the life of the
@@ -596,6 +604,20 @@ sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,
         return wal_->IsDurable(lsn) || clock_.Now() >= deadline_ns;
     };
     co_await sched::WaitUntil{&durable};
+    // **XF4, participant leg 1: PREPARE appended -> durable.** Recorded
+    // only where the record actually became durable, so an expiry - the
+    // `!IsDurable` arm below - contributes no span and the count says how
+    // many prepares this core really made good on.
+    //
+    // **Cost, stated rather than waved at**: one clock read per prepare,
+    // on a path that already reads the clock on every poll of the predicate
+    // above. The stamp it is subtracted from costs nothing extra - the
+    // deadline is anchored on `appended_at_ns` instead of on a second
+    // `Now()` at the submit, so the append site's net addition is zero.
+    // Neither read is reachable from a one-owner commit.
+    if (wal_->IsDurable(lsn)) {
+        commit_phase_.prepare_durable.Note(clock_.Now() - appended_at_ns);
+    }
 
     auto it = enrolled_.find(key);
     if (it == enrolled_.end()) {
@@ -826,6 +848,9 @@ void ShippedStatementExecutor::StartDecision(
     context.decision_commits = commit;
     context.decision_reply = std::move(reply);
     context.decision_out = DispatchOutcome{};
+    // XF4's origin for both decide legs. One stamp, two ends: the ack and
+    // this core's own durability, which before XE1 were the same instant.
+    context.decide_began_ns = clock_.Now();
     // A literal, so the text outlives every park `DispatchAsync` takes -
     // and the *ordinary* verbs, because a participant's transaction is an
     // ordinary local transaction (R6-2's whole argument). The async entry
@@ -848,6 +873,26 @@ void ShippedStatementExecutor::StartDecision(
         [this, key](const Status&) { FinishDecision(key); }));
 }
 
+sched::Coro ShippedStatementExecutor::AwaitDecideDurable(wal::Lsn lsn,
+                                                         sched::MonoTimeNs began_ns,
+                                                         sched::MonoTimeNs deadline_ns) {
+    // Holds an LSN and two stamps and nothing else. The context this
+    // belongs to has already been erased by the caller, which is why this
+    // cannot be folded into `FinishDecision` and why nothing here has to be
+    // re-found across the park: there is no state to lose.
+    const std::function<bool()> durable = [this, lsn, deadline_ns] {
+        return wal_->IsDurable(lsn) || clock_.Now() >= deadline_ns;
+    };
+    co_await sched::WaitUntil{&durable};
+    // Nothing recorded on expiry, per the header: a truncated span would
+    // report the deadline as the cost of a sync, and a `decide_durable`
+    // count below `decide_ack`'s says the truer thing.
+    if (wal_->IsDurable(lsn)) {
+        commit_phase_.decide_durable.Note(clock_.Now() - began_ns);
+    }
+    co_return Status::OK();
+}
+
 void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
     auto it = enrolled_.find(key);
     if (it == enrolled_.end()) return;  // unreachable: one completion per decide
@@ -856,6 +901,10 @@ void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
     const bool was_prepared = context.prepared;
     const bool commit = context.decision_commits;
     Txn2pcServer::ReplyFn reply = std::move(context.decision_reply);
+    // XF4: read off the context before it is erased below, which happens on
+    // the success arm several lines from here.
+    const sched::MonoTimeNs decide_began_ns = context.decide_began_ns;
+    const wal::Lsn decided_lsn = context.decision_out.commit_lsn;
 
     // The rendered line back into a code, `Finish`'s rule: an error line
     // carries its message in the status, and a success's line is the
@@ -888,6 +937,11 @@ void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
         // the two routes above answers, from redo to resolution, and both
         // give COMMIT (`cross-owner-txn.md` §2, §2c).
         base::CrashPointHit("participant.decide_applied_preack");
+        // **XF4, participant leg 2: decide received -> coordinator
+        // acknowledged.** Taken immediately before the ack goes out, so
+        // nothing after it is charged to the coordinator's wait.
+        const sched::MonoTimeNs acked_ns = clock_.Now();
+        commit_phase_.decide_ack.Note(acked_ns - decide_began_ns);
         if (reply) reply(Status::OK());
         // The **new** window XE1 opens, and the only one it opens: the
         // acknowledgement has been handed to the seam and this core's
@@ -898,6 +952,23 @@ void ShippedStatementExecutor::FinishDecision(const DedupKey& key) {
         // decide was sent. Named so `bench/txn_2pc_kill_matrix_probe.py`
         // can stop the process inside it rather than racing it.
         base::CrashPointHit("participant.decide_acked_predurable");
+        // **XF4, participant leg 3: decide received -> this core's own
+        // terminal record durable.** The pair with leg 2, and the whole
+        // instrument XE1's timing question needs: their difference is the
+        // wait that moved off the ack.
+        //
+        // Submitted only on the **commit** arm and only where a record
+        // exists - an abort stages none, and neither does an unlogged
+        // fixture. On the pre-XE1 arm the record is durable before this
+        // line is reached, so the park below resolves on its first poll and
+        // costs one task; under `kAtAppend` it is the deferred drain, held
+        // by nothing else, which is exactly the quantity being asked for.
+        if (commit && decided_lsn != wal::kNoLsn && wal_ != nullptr) {
+            scheduler_.Submit(sched::MakeCoroTask(
+                sched::SchedulingGroup::kForeground,
+                AwaitDecideDurable(decided_lsn, decide_began_ns,
+                                   acked_ns + kTxnPhaseDeadlineNs)));
+        }
         return;
     }
 

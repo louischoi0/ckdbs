@@ -4760,6 +4760,94 @@ TEST_F(CoreRuntimeTest, AWriteInsideATransactionEnrolsItsOwnerAndTheCommitRunsBo
     EXPECT_FALSE(session.has_participants());
 }
 
+TEST_F(CoreRuntimeTest, EachCrossOwnerCommitLegIsTimedAndAOneOwnerCommitTimesNothing) {
+    // **XF4's instrument, and its cost guard in one test.** Three results
+    // files billed for per-leg times (`results-crosscore-2pc` §8,
+    // `results-xd-commit-decomposition` §8, `results-xe-ack-at-append` §6),
+    // and the guard the work order set on paying that bill is that a
+    // one-owner commit must not read the clock even once more than before.
+    // That guard is structural - every `Note` lives inside the cross-owner
+    // path - and this is what makes it visible: the same dispatcher, two
+    // commits, and only the second records anything.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "commit_legs");
+
+    ASSERT_NE(rig.peer->shipped_statements(), nullptr);
+    EXPECT_FALSE(rig.dispatcher->xowner_commit_stats().observed())
+        << "a dispatcher that has committed nothing reported a leg";
+    EXPECT_FALSE(rig.peer->shipped_statements()->commit_phase().observed());
+
+    // **The one-owner commit.** No statement, so no participant: this is
+    // the shape the guard is about, and it must leave every leg untouched.
+    Session local;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &local).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(rig.dispatcher->Dispatch("COMMIT", &local).response.rfind("COMMIT", 0), 0u);
+    EXPECT_FALSE(rig.dispatcher->xowner_commit_stats().observed())
+        << "a one-owner commit recorded a cross-owner leg";
+    EXPECT_EQ(rig.dispatcher->xowner_commit_stats().whole.count, 0u);
+
+    // And `SHOW META` is silent about all of it - the absent-rather-than-
+    // zeroed rule, which is what keeps a single-owner instance from
+    // reading as "the protocol ran and cost nothing".
+    const std::string quiet = rig.dispatcher->Dispatch("SHOW META").response;
+    EXPECT_EQ(quiet.find("xowner_commit_n="), std::string::npos) << quiet;
+    EXPECT_EQ(quiet.find("xowner_part_ack_n="), std::string::npos) << quiet;
+
+    // **The cross-owner commit**, the same shape the test above proves
+    // runs both phases.
+    Session session;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome out;
+    auto write = rig.Start("INSERT INTO commit_legs VALUES (43)", out, &session);
+    ASSERT_TRUE(rig.Drive(*write)) << out.response;
+    ASSERT_TRUE(session.has_participants());
+
+    DispatchOutcome commit_out;
+    auto commit = rig.Start("COMMIT", commit_out, &session);
+    ASSERT_TRUE(rig.Drive(*commit)) << commit_out.response;
+    ASSERT_EQ(commit_out.response.rfind("COMMIT trx_id=", 0), 0u) << commit_out.response;
+
+    // All four coordinator legs, walked once each. Counts rather than
+    // durations: this rig runs on a `SystemClock` and a span here is
+    // microseconds of real time, which is not a thing to assert on.
+    const CoordinatorCommitStats& c = rig.dispatcher->xowner_commit_stats();
+    EXPECT_EQ(c.prepare.count, 1u);
+    // Walked by every cross-owner transaction that decided to commit,
+    // whatever the instance's logging: **this rig's core-0 dispatcher has
+    // no WAL manager at all** (`ForeignIndexRig` wires a catalog, an undo
+    // log and a transaction manager and no `wal::Manager`), so the leg has
+    // nothing to make durable and is very nearly instant here. That it is
+    // still counted is the point - a short `decision.count` must mean an
+    // abort and nothing else.
+    EXPECT_EQ(c.decision.count, 1u);
+    EXPECT_EQ(c.decide.count, 1u);
+    EXPECT_EQ(c.whole.count, 1u);
+
+    // The participant's prepare and its ack. The third leg - its own
+    // record's durability - is a park that outlives the coordinator's
+    // answer by construction, so it is pumped for rather than expected to
+    // have happened by now.
+    const ParticipantCommitStats& p = rig.peer->shipped_statements()->commit_phase();
+    EXPECT_EQ(p.prepare_durable.count, 1u);
+    EXPECT_EQ(p.decide_ack.count, 1u);
+    for (int i = 0; i < 512 && p.decide_durable.count == 0; ++i) rig.Pump();
+    EXPECT_EQ(p.decide_durable.count, 1u)
+        << "the participant's own terminal record never became durable";
+
+    // And now `SHOW META` carries both blocks - on the core that walked
+    // them, which for the participant's half is the peer.
+    const std::string meta = rig.dispatcher->Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find("xowner_commit_n=1"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("xowner_prepare_n=1"), std::string::npos) << meta;
+    const std::string peer_meta = rig.peer->dispatcher().Dispatch("SHOW META").response;
+    EXPECT_NE(peer_meta.find("xowner_part_ack_n=1"), std::string::npos) << peer_meta;
+    EXPECT_NE(peer_meta.find("xowner_part_prepare_n=1"), std::string::npos) << peer_meta;
+    // The peer coordinated nothing, so its coordinator block stays absent -
+    // the two halves are independent, which is the reason they are two
+    // conditions in `SHOW META` and not one.
+    EXPECT_EQ(peer_meta.find("xowner_commit_n="), std::string::npos) << peer_meta;
+}
+
 TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone) {
     // The other end of the same path: a client's ROLLBACK unwinds the
     // *participant's* half too, and does not merely leave it invisible.

@@ -33,6 +33,7 @@
 #include "kds/server/core_affinity.hpp"
 #include "kds/server/range_alloc.hpp"
 #include "kds/stats/trace.hpp"
+#include "kds/server/commit_phase_stats.hpp"
 #include "kds/server/lease_refill_stats.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/session.hpp"
@@ -238,6 +239,21 @@ struct PendingCrossOwnerCommit {
     std::uint64_t session_id = 0;
     std::uint64_t transaction_id = 0;
     std::vector<std::uint32_t> participants;
+
+    // **XF4's two coordinator-side stamps**, carried here because the
+    // commit's two halves live in two functions: `PrepareAcrossOwners`
+    // sends the prepare and returns, and the parked half in `DispatchAsync`
+    // is where every leg ends. Both are this core's own monotonic clock and
+    // are never compared with another core's.
+    //
+    // `began_at_ns` is taken where the pending record is built - after
+    // every pre-send refusal, so a transaction that never sent a prepare
+    // records no leg at all - and `prepare_sent_ns` immediately after the
+    // prepare is on its way. The gap between them is the send itself, and
+    // it is deliberately outside the prepare leg so that leg measures the
+    // *participants* rather than the ring.
+    sched::MonoTimeNs began_at_ns = 0;
+    sched::MonoTimeNs prepare_sent_ns = 0;
 };
 
 // How a finished fan-in becomes a reply when the chain's own projection or
@@ -425,6 +441,23 @@ struct DispatchOutcome {
     // `DispatchAsync()` parks, which is what lets the next connection's
     // statement run and stage its own commit into the same sync.
     wal::Lsn pending_lsn = wal::kNoLsn;
+
+    // **The COMMIT record's own LSN, whatever the class and whatever the
+    // ack point** (XF4). Distinct from `pending_lsn`, which is *"the wait
+    // this statement still owes"* and is deliberately empty where the
+    // caller was answered at the append: a cross-owner participant under
+    // `CommitAck::kAtAppend` leaves `pending_lsn` at `kNoLsn` precisely
+    // because nobody is waiting, and yet **the record it appended is the
+    // one thing XE1's timing question is about**.
+    //
+    // `HandleCommit` already had this value in hand and already exported
+    // it through an out-parameter for the coordinator (`CommitLocal`'s
+    // `commit_lsn`); carrying it on the outcome is that same fact reaching
+    // the one caller that has no out-parameter to read it from -
+    // `ShippedStatementExecutor::FinishDecision`, which needs it to time
+    // the leg between its ack and its own durability. `kNoLsn` on every
+    // statement that is not a commit.
+    wal::Lsn commit_lsn = wal::kNoLsn;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -1382,6 +1415,11 @@ public:
     }
     bool cabin_optimizer_enabled() const noexcept { return cabin_optimizer_enabled_; }
 
+    // XF4's coordinator legs, for `SHOW META` and for the tests that assert
+    // a one-owner commit records nothing. Read-only: nothing outside the
+    // parked commit block may write them.
+    const CoordinatorCommitStats& xowner_commit_stats() const noexcept { return xowner_commit_; }
+
     // What the mount's recovery did, for `SHOW META` (RC09). A pointer into
     // the report the mount owns - `Expeditor::recovery_`, which outlives this
     // dispatcher - and null everywhere that mounts nothing, where SHOW META
@@ -2022,6 +2060,15 @@ private:
     // BI3's per-statement row cap, from the `max_insert_rows` config key.
     // A refusal, never a truncation.
     std::uint64_t max_insert_rows_ = parser::kDefaultMaxInsertRows;
+
+    // **The coordinator's per-leg commit times** (XF4,
+    // `commit_phase_stats.hpp`). A plain member rather than an injected
+    // pointer, unlike the lease refills beside it in `SHOW META`: those are
+    // stamped by `CoreRuntime` and the ring handlers and so must live where
+    // both can reach them, while every one of these four legs begins and
+    // ends inside this class's own parked commit block. Nothing else writes
+    // it and nothing off this core reads it.
+    CoordinatorCommitStats xowner_commit_;
 
     // The physical optimizer's mode and R1 half-life (workplan PX06).
     // Shadow costs nothing at rest - the planner is pull-only, computed

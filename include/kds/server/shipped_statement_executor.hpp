@@ -14,6 +14,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/commit_phase_stats.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/statement_ship_service.hpp"
 #include "kds/server/txn_2pc_service.hpp"
@@ -307,6 +308,12 @@ public:
     // somewhere else - nothing on a healthy path reaches the ceiling.
     std::uint64_t enrolment_expiries() const noexcept { return enrolment_expiries_; }
 
+    // **What each leg of this core's participation cost** (XF4,
+    // `commit_phase_stats.hpp`). Read by `SHOW META` through the
+    // dispatcher's pointer to this executor, and by the tests that assert a
+    // one-owner commit records nothing here.
+    const ParticipantCommitStats& commit_phase() const noexcept { return commit_phase_; }
+
     // ---- R6-3 ------------------------------------------------------------
 
     // Transactions this core has replied **prepared** for and not yet been
@@ -536,6 +543,11 @@ private:
         // transaction, and an `in_doubt_resolved_unknown_` that counts asks
         // instead of the transactions its accessor documents.
         bool resolve_terminal = false;
+        // **XF4: when this context's decide arrived.** One stamp serves
+        // both participant decide legs - the ack and the durability - so
+        // the two are measured from one origin and their difference is
+        // exactly the wait XE1 moved off the ack.
+        sched::MonoTimeNs decide_began_ns = 0;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
             : session(isolation), touched_at_ns(now) {
@@ -605,8 +617,26 @@ private:
     // core: a blocking sync here is the cost statement shipping exists to
     // remove, paid once per cross-owner commit instead of once per
     // statement.
+    //
+    // `appended_at_ns` is XF4's origin for the prepare leg: the instant the
+    // record left `LogTxnPrepare`, carried in rather than re-read here so
+    // the leg is *append -> durable* and not *park -> durable*.
     sched::Coro AwaitPrepared(DedupKey key, wal::Lsn lsn, sched::MonoTimeNs deadline_ns,
-                              Txn2pcServer::ReplyFn reply);
+                              sched::MonoTimeNs appended_at_ns, Txn2pcServer::ReplyFn reply);
+    // **XF4's third participant leg**: parks until this core's own terminal
+    // COMMIT record is durable and records how long that took from the
+    // decide's arrival. It holds an LSN and two stamps and touches no
+    // context - by the time it runs the context has been erased, which is
+    // the whole reason it cannot be folded into `FinishDecision`.
+    //
+    // Before XE1 this resolves on its first poll, because the ack was given
+    // at durability and the record is durable already. Under XE1 it is a
+    // real wait, and `decide_durable - decide_ack` is what moved. Bounded
+    // by the same phase deadline `AwaitPrepared` uses, for the same reason;
+    // on expiry it records **nothing**, so `decide_durable.count` short of
+    // `decide_ack.count` is how a reader sees that a record never made it.
+    sched::Coro AwaitDecideDurable(wal::Lsn lsn, sched::MonoTimeNs began_ns,
+                                   sched::MonoTimeNs deadline_ns);
     // Runs the decided end - `COMMIT` or `ROLLBACK` - on the context's own
     // session. One entry point for both callers, `Decide` and the prepare
     // that woke holding a decision, so the "never commit unprepared work"
@@ -662,6 +692,10 @@ private:
     std::uint64_t enrolment_refusals_ = 0;
     std::uint64_t join_refusals_ = 0;
     std::uint64_t enrolment_expiries_ = 0;
+
+    // XF4. Written from the prepare and decide handlers only, which is what
+    // makes a one-owner commit cost nothing: it reaches neither.
+    ParticipantCommitStats commit_phase_;
 
     // R6-3. `in_doubt_` is derived from `enrolled_`'s `prepared` flags and
     // kept beside them rather than counted on demand, because the sweep and

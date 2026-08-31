@@ -433,6 +433,11 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             return txn_2pc_->Settled(id);
         };
         co_await sched::WaitUntil{&prepared};
+        // **XF4, leg 1: prepare sent -> every participant settled.** Taken
+        // the instant the park resolves, before the outcome is even read,
+        // so nothing this core does with the answer is charged to the
+        // participants.
+        xowner_commit_.prepare.Note(NowNs() - pending.prepare_sent_ns);
 
         const TxnPhaseOutcome* phase = txn_2pc_->Find(pending.prepare_request_id);
         bool commit = phase != nullptr && phase->AllPrepared();
@@ -453,6 +458,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // one-owner transaction takes, because a second commit path is how
         // two commits stop meaning the same thing.
         wal::Lsn decision_lsn = wal::kNoLsn;
+        // **XF4, leg 2 begins here**: the coordinator's own decision. What
+        // ends it, and why on this arm only, is stated where it ends.
+        const sched::MonoTimeNs decision_began_ns = NowNs();
         if (commit) {
             *out = CommitLocal(active, &decision_lsn);
             if (out->response.rfind("ERR ", 0) == 0) {
@@ -503,6 +511,21 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             out->pending_lsn = wal::kNoLsn;
             pending_commit_lsn_ = wal::kNoLsn;
         }
+        // **XF4, leg 2 ends here**, and outside the durability arm above
+        // rather than inside it. One rule, stated once: this leg is walked
+        // by every cross-owner transaction that **decided to commit**, so
+        // `decision.count` is the committed population and the difference
+        // from `whole.count` is the aborted one - and `commit` is read
+        // *after* the block above, where a coordinator whose own half
+        // refused has already flipped it.
+        //
+        // Putting it inside the `wal_ != nullptr && lsn` arm instead would
+        // have made a short count mean two different things - an abort, or
+        // an instance with no log - which is exactly the ambiguity a leg
+        // count exists to avoid. An unlogged instance has no record to make
+        // durable, so it walks this leg in very nearly no time, and saying
+        // that is truer than not counting it.
+        if (commit) xowner_commit_.decision.Note(NowNs() - decision_began_ns);
 
         // RP7's fourth protocol point, and the one the whole protocol
         // exists for: on the COMMIT arm the decision is durable in this
@@ -516,6 +539,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // carries the decision; it is not the decision** - a lost one costs
         // a resend (R6-5's resolution ask), never an outcome.
         const TxnDecision decision = commit ? TxnDecision::kCommit : TxnDecision::kAbort;
+        // **XF4, leg 3 begins**: the decide, from the send to the last ack.
+        const sched::MonoTimeNs decide_began_ns = NowNs();
         if (Status sent = txn_2pc_->Decide(pending.decide_request_id, pending.session_id,
                                            pending.transaction_id, decision,
                                            pending.participants);
@@ -535,6 +560,12 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                 return txn_2pc_->Settled(id);
             };
             co_await sched::WaitUntil{&acked};
+            // **XF4, leg 3 ends.** Only where the decide was actually sent:
+            // the `!sent.ok()` arm above has nobody to wait for, and timing
+            // a leg nobody walked would report a fast decide where in fact
+            // there was none. `decide.count` short of `whole.count` is that
+            // send failing, which is also the log line above it.
+            xowner_commit_.decide.Note(NowNs() - decide_began_ns);
             const TxnPhaseOutcome* acks = txn_2pc_->Find(pending.decide_request_id);
             if (acks != nullptr && !acks->AllPrepared() && logging(LogLevel::kWarn)) {
                 // **Not an outcome change**, which is why it is a log line
@@ -550,6 +581,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             }
             txn_2pc_->Close(pending.decide_request_id);
         }
+        // **XF4, leg 4**: the whole cross-owner commit as the client waited
+        // for it. Not the sum of the three above - it also carries the two
+        // sends, the outcome reads and the refusal arms - so
+        // `whole - (prepare + decision + decide)` is the coordinator's own
+        // unaccounted time, and whether that remainder is small is the
+        // first thing a reader of these six fields should check.
+        xowner_commit_.whole.Note(NowNs() - pending.began_at_ns);
     }
 
     if (!out->pending_remote.empty() && remote_reads_ != nullptr) {
@@ -1262,6 +1300,42 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     refill_block("extent", extent_refill_stats_);
     refill_block("trxid", trx_id_refill_stats_);
     refill_block("rowid", row_id_refill_stats_);
+
+    // **What each leg of a cross-owner commit costs** (XF4,
+    // `commit_phase_stats.hpp`). Three results files billed for this and
+    // each had to reason about the chain from its total alone; these are
+    // the legs.
+    //
+    // **Absent until this core has walked one**, the same rule the recovery
+    // and in-doubt blocks keep: on a single-owner instance every field here
+    // is structurally zero, and printing zeroes would read as "the protocol
+    // ran and cost nothing" rather than "the protocol did not run". The
+    // coordinator's block and the participant's are independent, because a
+    // core can be one without ever being the other - a coordinator that
+    // owns no relation the transaction touched, a participant whose own
+    // clients never open a cross-owner transaction.
+    //
+    // Microseconds on the wire and nanoseconds inside, which is the refill
+    // block's convention immediately above. `_n` is the leg's walk count
+    // and it is not the same on every leg by design: `decision_n` short of
+    // `commit_n` counts the commits that aborted, `part_durable_n` short of
+    // `part_ack_n` counts the records that never made the device.
+    const auto leg = [&os](const char* name, const PhaseLeg& l) {
+        os << ' ' << name << "_n=" << l.count << ' ' << name << "_us=" << l.total_ns / 1000
+           << ' ' << name << "_max_us=" << l.max_ns / 1000;
+    };
+    if (xowner_commit_.observed()) {
+        leg("xowner_prepare", xowner_commit_.prepare);
+        leg("xowner_decision", xowner_commit_.decision);
+        leg("xowner_decide", xowner_commit_.decide);
+        leg("xowner_commit", xowner_commit_.whole);
+    }
+    if (shipped_statements_ != nullptr && shipped_statements_->commit_phase().observed()) {
+        const ParticipantCommitStats& p = shipped_statements_->commit_phase();
+        leg("xowner_part_prepare", p.prepare_durable);
+        leg("xowner_part_ack", p.decide_ack);
+        leg("xowner_part_durable", p.decide_durable);
+    }
 
     // The cross-core writes this core refused, `crosscore.md` §6's "input
     // the future placement/2PC decision will be made from". Printed
@@ -4361,6 +4435,11 @@ DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
     }
 
     PendingCrossOwnerCommit pending;
+    // XF4's first stamp. Here rather than at the top of the function: every
+    // refusal above returns without a pending record, so a transaction that
+    // never sent a prepare contributes no leg and `xowner_commit_.whole`
+    // counts commits that actually ran the protocol.
+    pending.began_at_ns = NowNs();
     pending.prepare_request_id = next_remote_request_++;
     pending.decide_request_id = next_remote_request_++;
     pending.session_id = session.ship_id();
@@ -4376,6 +4455,10 @@ DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
         !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
+    // XF4's second stamp: the prepare is on its way. The send itself sits
+    // between the two stamps and so is charged to `whole` and to no leg -
+    // the prepare leg measures what the participants did, not the ring.
+    pending.prepare_sent_ns = NowNs();
     if (logging(LogLevel::kDebug)) {
         log_->Debug("2pc", "core " + std::to_string(core_id_) + " is preparing " +
                                std::to_string(pending.participants.size()) +
@@ -8581,7 +8664,15 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
     // *decision* durable rather than the acknowledgement honest (R6-3).
     if (commit_lsn != nullptr) *commit_lsn = committed.value();
     txn_->Release(*txn);
-    return {"COMMIT trx_id=" + std::to_string(id), false};
+    // **And on the outcome too** (XF4). The out-parameter above serves the
+    // coordinator, which calls `CommitLocal` directly; a cross-owner
+    // *participant* reaches this through `DispatchAsync("COMMIT")` and has
+    // no out-parameter, so without this the one caller that must time its
+    // own record's durability cannot name the record. `DispatchOutcome`'s
+    // header says why this is not `pending_lsn`.
+    DispatchOutcome committed_out{"COMMIT trx_id=" + std::to_string(id), false};
+    committed_out.commit_lsn = committed.value();
+    return committed_out;
 }
 
 DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {

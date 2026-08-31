@@ -98,7 +98,7 @@ def field(reply, key):
     return None
 
 
-def meta_fields(meta, prefixes=("wal_",)):
+def meta_fields(meta, prefixes=("wal_", "xowner_")):
     out = {}
     for tok in meta.split():
         if "=" not in tok:
@@ -309,6 +309,35 @@ def main():
                                 for c in before)
         out["total_wal_syncs_delta"] = total_syncs_delta
         out["syncs_per_commit"] = total_syncs_delta / committed if committed else None
+
+        # **XF4's per-leg times**, one block per core that reported any
+        # (`commit_phase_stats.hpp`; absent on a core that walked no leg,
+        # which is the engine's absent-rather-than-zeroed rule and is why
+        # this loop tests for the `_n` field rather than defaulting it).
+        #
+        # `_n` and `_us` are counters and are differenced; `_max_us` is a
+        # running maximum and is taken from `after` as-is - every cell here
+        # starts a fresh server, so the process's max *is* the run's max.
+        # A leg with no walks is omitted rather than reported as 0/0.
+        legs = {}
+        for core in before:
+            names = sorted({k[:-2] for k in after[core] if k.endswith("_n")})
+            per_core = {}
+            for name in names:
+                n = after[core].get(name + "_n", 0) - before[core].get(name + "_n", 0)
+                if n <= 0:
+                    continue
+                us = after[core].get(name + "_us", 0) - before[core].get(name + "_us", 0)
+                per_core[name] = {
+                    "n": n,
+                    "total_us": us,
+                    "mean_us": round(us / n, 1),
+                    "max_us": after[core].get(name + "_max_us", 0),
+                }
+            if per_core:
+                legs[str(core)] = per_core
+        if legs:
+            out["commit_legs"] = legs
 
         try:
             setup.send_command("STOP")
