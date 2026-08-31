@@ -641,6 +641,32 @@ delete-mark purge (`ddl-transactional.md` §5d) and the undo purge
 the log's own growth, so this run's chain plateaus). Everything else
 still waits on its own gate, so:
 
+- **WAL segment recycling, when it is built, must not recycle a
+  coordinator's decision out from under an unresolved participant** —
+  found 2026-08-31 by XD1's source read (worktree `measure-v2.7.1` at
+  `951a91a`, `instructions/v2.7.1/ratification-xd1.md`), **source-read,
+  not a defect today**. `CoordinatorStreamResolver::ResolveOneStream`
+  (`src/server/prepared_resolver.cpp:132-135`) resolves a prepared
+  participant against the coordinator's stream and takes **no decision
+  found ⇒ ABORT**, deliberately scanning that stream whole from LSN 0
+  because no sound lower bound exists (`:76-90`). Its soundness rests
+  entirely on the decision still being *in* that stream, which holds
+  today for one reason only: **nothing recycles a WAL segment** —
+  `wal.md` §11 is `[PROPOSED]`, retention is an open item in §15, and
+  `FileLogDevice` unlinks a segment only on a failed create
+  (`src/wal/file_log_device.cpp:264-281`). So the hazard is entirely
+  future, and it is named here because the code that would open it is
+  not the code that would look wrong: a retention policy written against
+  this core's own checkpoint alone would discard a decision another
+  core's mount still needs, and the failure is a **committed transaction
+  recovered as aborted**, silently. `cross-owner-txn.md` §2c is the
+  owning statement; what a retention build owes it is that a decision is
+  retained until every participant of that transaction has made its own
+  terminal record durable. Today the participant's ack proves exactly
+  that, which is why XD1's ask (moving the ack ahead of the participant's
+  durability) has to carry the obligation explicitly rather than inherit
+  it.
+
 - **A dropped relation's `sys.access_stats` ghosts consume the
   instance-wide shape cap** — found 2026-08-27 by RD4's C2 enumeration
   (worktree `v2.4.0-range-foundation-1`,

@@ -1,0 +1,13 @@
+quiet: loadavg 0.09
+=== xd2-pl-c8-b8-allx (attempt 1, port 15951) 2026-08-31T06:35:57Z ===
+OK xd2-pl-c8-b8-allx rc=0 (attempt 1)
+quiet: loadavg 0.66
+=== xd4-pl-c8-b2-allx (attempt 1, port 15952) 2026-08-31T06:36:49Z ===
+OK xd4-pl-c8-b2-allx rc=0 (attempt 1)
+quiet: loadavg 0.59
+=== xd4-pl-c8-b4-allx (attempt 1, port 15953) 2026-08-31T06:38:16Z ===
+RETRY xd4-pl-c8-b4-allx
+quiet: loadavg 0.57
+=== xd4-pl-c8-b4-allx (attempt 2, port 15954) 2026-08-31T06:39:26Z ===
+OK xd4-pl-c8-b4-allx rc=0 (attempt 2)
+RERUN DONE 2026-08-31T06:40:06Z

@@ -966,6 +966,50 @@ instrument gap blocked an attribution — `shipped_statement_us` was the
 first, at M3 — and both belong to the observability subsystem rather than
 to either driver.
 
+### The XD commit-decomposition probe (2026-08-31)
+
+`bench/wal_sync_decomposition_probe.py` — **one scenario-2 booking cell,
+bracketed exactly around the booking phase by per-core `SHOW META` reads**,
+so a cell reports not only TPS and commit-latency percentiles but also
+*which cores took the device syncs a fixed booking count cost* (XD0's
+`wal_syncs`) and core 0's `sched_*`/`shipped_*` occupancy over the same
+window. Orchestration only: schema, load, partitioning, one booking
+attempt and merging bookers' results are all imported unchanged from
+`tools/scenario2_freight.py` and called exactly as its own `main()` calls
+them, so the workload measured is byte-for-byte the one
+`bench/v2.7.0/results-scenario2-cores-*.md` measured — what this driver adds
+is the two `SHOW META` snapshots (instant before the booker processes
+start, instant after they all join) `main()` cannot give an outside reader,
+because DDL and load's own syncs would otherwise sit inside the same
+delta. The manifest reporter is left off and `--verify` defaults to 0, on
+`results-scenario2-cores`'s own rule that every cell should do identical
+engine work; pass `--verify N` to sanity-check the wiring rather than as a
+matrix default. `--wal-dir` moves only the WAL segments (`wal_dir`,
+`kds.conf.sample`), never the data file, for the device ablation.
+
+**`--require-shipped` and `--require-shipped-rate`** answer the same
+problem at two booker counts. A booker's own connection lands on whichever
+core the kernel's `SO_REUSEPORT` picked; at `--bookers 1` that is core 0
+itself with probability `1/cores`, which would silently measure the
+one-owner path under a cross-owner label — `--require-shipped` exits 42
+(rather than reporting the cell) when core 0's `shipped_executed` delta is
+0, so a caller retries on a fresh cell. At `--bookers N > 1` the same
+kernel choice can land a *minority* of the N connections on core 0,
+diluting a "cross-owner" cell with some genuinely local commits;
+`--require-shipped-rate 0.97` exits 42 unless core 0's `shipped_executed`
+delta reaches 97% of `committed * 6.0` (the empirical shipped-statements-
+per-booking rate a fully cross-owner run measures), so the cell is either
+clean or retried.
+
+```bash
+bench/wal_sync_decomposition_probe.py --server /path/to/kds_server-<sha> \
+    --workdir ~/bench-xd/cells --label xd2-pl-c8-b8 --port 15902 \
+    --cores 8 --peer-listeners on --durability group --bookers 8 \
+    --bookings 5000 --require-shipped-rate 0.97 --json out.json
+```
+
+Results: `bench/v2.7.0/results-xd-commit-decomposition-*.md`.
+
 ### The R6-R read-half probes (RR2, 2026-08-28)
 
 Two more drivers, added when RR1 widened the read site (`HandleSelect`) to

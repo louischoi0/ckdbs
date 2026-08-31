@@ -26,8 +26,27 @@ within 0.3% (**5,789 vs 5,807 bookings/s**) — so arm B's 1.26× was the
 commit path, never scaling. And with the fsync gone the cross-core cost
 stands naked: the same eight cores with peer listeners run at **935
 bookings/s, 6.21× slower**, and a commit that costs **76.6 µs** on core 0
-costs **3,053 µs** — about **3.0 ms of two-phase commit with no device in
-it**.
+costs **3,053 µs** — ~~about **3.0 ms of two-phase commit with no device in
+it**~~.
+
+> **Amended 2026-08-31 by XD3** (`bench/v2.7.0/results-xd-commit-decomposition-v2.7.0-2-g951a91a.md`
+> §4, measured at `951a91a`). **The device was in it.** This sentence read
+> `relaxed`'s near-zero *one-owner* commit as proof that its cross-owner
+> commit had no fsync in it, and that inference does not follow: two of the
+> protocol's three durability parks — the participant's prepare and the
+> coordinator's own decide — are **unconditional on the durability class**
+> (`command_dispatcher.cpp:453` says so in as many words: "whatever the
+> durability class"), so a `relaxed` cross-owner commit still takes
+> **2.00 device syncs per booking** where a `relaxed` one-owner commit takes
+> **0**. `relaxed` only ever removed the *third* leg, the one that already
+> rides the class everywhere. The experiment that does answer "is it the
+> device" is to make the device free regardless of class: moving **only**
+> the WAL segments to tmpfs collapses the cross-owner increment from
+> **1,988.7 µs to 38.0 µs** at one booker and **3,743.9 µs to 60.4 µs** at
+> eight — a **51-62×** collapse, and **98.1%** of the increment gone at
+> b = 1. What is left, ~40 µs, is the ring-hop and park residue this
+> sentence was reaching for. The 3.0 ms is real and the number stands; what
+> was wrong is what it was made of.
 
 **Spreading itself works, and the commit eats it.** From `cores = 1` to
 `cores = 8` with peer listeners, `freight-insert` p50 falls **359.8 → 41.3
@@ -235,12 +254,20 @@ does not resolve *which* part of it (the group committer's own thread
 finding a free CPU is the obvious candidate, and it is a candidate, not a
 finding).
 
-**The cross-core cost is 6.21×, and it is not the device.** Same eight
+**The cross-core cost is 6.21×~~, and it is not the device~~.** Same eight
 cores, same relaxed durability, sessions moved onto the peers: **935.0
 against 5,806.6**. The commit goes from **76.6 µs to 3,053.3 µs**, so
-roughly **3.0 ms of two-phase commit with no fsync in it at all**. Per-booking
+roughly ~~**3.0 ms of two-phase commit with no fsync in it at all**~~. Per-booking
 server CPU nearly triples, 216 → 624 µs, which is the shipping and the
 protocol and nothing else.
+
+> **Amended 2026-08-31 by XD3**, the same correction the headline carries:
+> the relaxed arm is not the fsync-free arm for a *cross-owner* commit, and
+> the 3.0 ms is mostly `fdatasync`. The one reading in this paragraph that
+> survives unchanged is the CPU: 216 → 624 µs is shipping and protocol, and
+> XD4 tracks its growth to core 0's own reactor occupancy — 2.6% → 5.6% of
+> wall time in the foreground group as bookers go 1 → 8
+> (`results-xd-commit-decomposition-v2.7.0-2-g951a91a.md` §5).
 
 ## 6. Noise floor
 

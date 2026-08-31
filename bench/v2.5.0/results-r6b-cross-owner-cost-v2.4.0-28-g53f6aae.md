@@ -237,6 +237,32 @@ off 2x") does not fire on either reading**, so the verdict in §5c stands;
 what changes is that it now stands on two numbers instead of resting on
 the one that also carries an uncontrolled instance-shape difference.
 
+> **Cross-noted 2026-08-31 by XD5** (`bench/v2.7.0/results-xd-commit-decomposition-v2.7.0-2-g951a91a.md`
+> §6, measured at `951a91a`). **A second workload puts the same ratio at
+> 3.08-3.15×, and that is not a contradiction of the 1.975× above.** On
+> scenario 2 at one booker, `strict` measures **3.077×** (median of three
+> repeats) and `group` **3.111×** — both close to the naive "3 syncs / 1
+> sync" additive reading, and both larger than this file's number because
+> they price a **strictly larger quantity**: scenario 2 ships every one of
+> a booking's 6-8 statements to the owner individually
+> (`shipped_executed = 39,497` against ~40,000 statements), so its ratio is
+> protocol *plus* per-statement shipping, where `xowner-N` here writes one
+> row per participant and prices the protocol close to alone. The two
+> numbers bracket what a transaction pays by how much of it is shipped.
+>
+> What XD did add to this file's mechanism: the three legs were **counted**
+> from outside the process at `951a91a`, using `SHOW META`'s new
+> `wal_syncs` — 1.00 sync for a one-owner commit and **3.00** for a
+> cross-owner one under both `group` and `strict`, **2.00** under `relaxed`,
+> confirming §5c's three sites are three *device* syncs and not three
+> waits on a shared one. And at b = 1 they cost close to full additive
+> latency: the two extra legs are ~1,002 µs each against a 925.9 µs local
+> sync on the same device, so **there is no batching discount for a single
+> transaction's own chain** — the discount §5c's "the third leg costs less
+> than a fresh sync" reading anticipated appears only once *concurrent*
+> bookings share a drain (XD2: 3.00 syncs/booking at b = 1 falling to
+> 2.45-2.50 at b = 8).
+
 ### 5c. The three-sync hypothesis — source-read mechanism, measured cost
 
 **Source read: the mechanism the smoke run proposed is real, and is
