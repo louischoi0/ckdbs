@@ -1,7 +1,7 @@
 # Ratification KW-D — the six protocol decisions
 
 Ratified by the operator 2026-08-31 against `main` at `c8e3d31`
-(`v2.2.1-153-gc8e3d31`). Addendum to `kw-kwp-protocol.md`.
+(`v2.2.1-153-gc8e3d31`). Addendum to `kw-kwp.md`.
 
 Standing qualifier on every item the operator marked **"운영 가능한
 수준일 것"** — operable, not placeholder. Where a value is named below it

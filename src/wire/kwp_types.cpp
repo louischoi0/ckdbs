@@ -42,6 +42,38 @@ StatusOr<ClientHello> DecodeClientHello(std::span<const std::byte> payload) {
     return out;
 }
 
+std::vector<std::byte> EncodeServerHello(const ServerHello& hello) {
+    PayloadWriter w;
+    // No magic: the client already proved it speaks KWP, and echoing one
+    // back would be a constant a client could only ever check against
+    // itself.
+    w.U16(hello.version);
+    w.U64(hello.capabilities);
+    w.U64(hello.session_id);
+    w.U64(hello.cancel_key);
+    w.Str(hello.server_info);
+    return w.Take();
+}
+
+StatusOr<ServerHello> DecodeServerHello(std::span<const std::byte> payload) {
+    PayloadReader r(payload);
+    ServerHello out;
+    const auto version = r.U16();
+    const auto caps = r.U64();
+    const auto session = r.U64();
+    const auto cancel = r.U64();
+    auto info = r.Str();
+    if (!version || !caps || !session || !cancel || !info.has_value()) {
+        return Status::InvalidArgument("S_HELLO: truncated payload");
+    }
+    out.version = version.value();
+    out.capabilities = caps.value();
+    out.session_id = session.value();
+    out.cancel_key = cancel.value();
+    out.server_info = std::move(info.value());
+    return out;
+}
+
 std::vector<std::byte> EncodeLoadBegin(const LoadBegin& begin) {
     PayloadWriter w;
     w.Str(begin.relation);

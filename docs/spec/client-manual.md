@@ -1,15 +1,17 @@
 # KDS Client Manual
 
-> **Heads up:** a new binary wire protocol, **KWP/1**, is the eventual
-> replacement for everything below — see
-> `docs/spec/protocol.md` (spec) and `docs/inflight/in-progress/protocol-wp.md` (task breakdown).
-> Once KWP/1's handshake and session layer actually exist in code, this
-> newline text protocol becomes an off-by-default loopback debug surface
-> and this manual gets rewritten around KWP/1. As of this note, only the
-> KWP frame format itself has landed in code (`include/kds/wire/kwp.hpp`,
-> `src/wire/frame_codec.cpp`) — no handshake, sessions, or client-visible
-> behavior change yet, so everything documented below is still accurate
-> and still how `kds_server` actually behaves today.
+> **The wire is KWP/1** (2026-08-31, milestone KW). `kds_server`'s default
+> port speaks the binary framed protocol `docs/spec/protocol.md`
+> specifies: a handshake, PARSE / BIND / EXECUTE over server-side
+> statement and portal handles, typed row batches, transaction and
+> durability frames, structured errors. The newline text protocol this
+> manual used to describe survives as an **off-by-default loopback debug
+> surface** — Appendix A, `debug_text_port` — and everything the old
+> §2 said about it is still true there.
+>
+> What did **not** change is the statement surface: §3's command
+> reference is SQL, and SQL does not depend on how the bytes are framed.
+> A statement that worked yesterday works today, on either port.
 
 How to talk to the `kds_server` process from a client: the wire protocol,
 the full command reference, and how to use the bundled CLI tool. This
@@ -21,9 +23,19 @@ documents the *client-facing* surface only - for server internals see
 ## 1. Connecting
 
 `kds_server` listens on a TCP socket, loopback only, port `15432` by
-default (see `kDefaultPort` in `src/server/main.cpp`). There is no
-authentication, and no wire framing beyond newlines - this is an internal
-development/inspection protocol, not a client-facing production API.
+default (see `kDefaultPort` in `src/server/main.cpp`), and that port
+speaks **KWP/1** (§2). Authentication is off by default; when it is on,
+the exchange runs inside the handshake and no statement is admitted
+before it succeeds.
+
+The newline text protocol is **not** on that port. It is reachable only
+where a deployment opens `debug_text_port`, which defaults to 0 — no
+socket at all — and Appendix A documents it. One consequence worth
+stating before it is discovered: **`STOP` is still a newline command**, so
+an instance with no debug port open cannot be stopped by connecting and
+typing `STOP`. Sending `STOP` as an ordinary *statement* over KWP works
+and is admin-classed; what has not been built is `STOP` as a
+capability-gated protocol frame (`docs/spec/protocol.md` §10, KW-D4).
 
 With `tls = on` (off by default; `docs/spec/protocol.md` §1) the same port
 speaks **direct TLS 1.3**: every connection must open with a handshake,
@@ -36,8 +48,12 @@ openssl s_client -connect 127.0.0.1:15432 -CAfile server.crt -quiet
 
 With `auth = scram` (off by default) every connection must complete a
 **SCRAM-SHA-256** exchange (RFC 5802/7677) before its first statement —
-any other line, `STOP` included, is refused and the connection closed.
-One SCRAM message per line:
+anything else is refused and the connection closed. Over KWP/1 the
+exchange runs in `C_AUTH` / `S_AUTH` frames and the server withholds
+`S_HELLO` until it succeeds, so an unauthenticated connection never
+learns a session id or a cancel key; the message bodies are **the same
+strings** the newline exchange sends, one per frame instead of one per
+line. On the debug port, one SCRAM message per line:
 
 ```
 C: AUTH SCRAM-SHA-256 <client-first-message>
@@ -187,42 +203,91 @@ be a client. For a quick manual check:
 printf 'PING\n' | nc 127.0.0.1 15432
 ```
 
-## 2. Wire protocol
+## 2. Wire protocol — KWP/1
 
-- **Transport:** one TCP connection per client.
-- **Request:** exactly one command per line, terminated by `\n` (a
-  trailing `\r` before the `\n` is tolerated, so CRLF clients work too).
-- **Response:** exactly one line back per command, `\n`-terminated, never
-  containing an embedded newline of its own.
-- **Encoding:** ASCII/UTF-8 text; commands are case-insensitive keywords,
-  arguments are space-separated.
-- **Session model:** a connection can send any number of commands in
-  sequence, reusing the same socket. There is no pipelining contract
-  beyond "one line in, wait for one line out, then send the next" -
-  clients should not assume out-of-order or batched responses.
-- **`ERR TXN_CONFLICT retryable=1 ...` is the one error worth special-casing
-  in a client.** It means another transaction wrote a row this one wanted,
-  and the whole transaction must be rolled back and retried — there is no
-  lock to wait on and no partial recovery. The `retryable=1` token is a
-  compatibility surface rather than prose: retry loops are expected to read
-  it, and it will not change spelling. On a multi-core instance the same
-  token answers a statement that reached a peer core whose id or page lease
-  is spent while its refill is in flight; retrying the statement is the
-  right response there too — unless core 0 has refused the refill (a
-  dropped relation, an exhausted id space), which answers the next
-  statement without the bit. Every other `ERR` is not retryable.
-  After a conflict the connection is in a failed transaction and answers
-  only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` until it is rolled back.
-- **`ERR UNKNOWN_OUTCOME retryable=0 ...` means the statement may have run,
-  and a client must not retry it** (2026-08-26, statement shipping). On a
-  multi-core instance a statement whose relation another core owns is
-  carried to that core, executed there and answered back. If the answer
-  does not return within ten seconds, the connection is told the outcome is
-  unknown — because the owner may already have committed it, and this
-  engine issues primary keys, so a retry would insert a *second* row rather
-  than replay an idempotent one. The correct response is to **read the data
-  back**, never to resend. The token is deliberately one no retry loop
-  follows; it is not a `TXN_CONFLICT` and never carries `retryable=1`.
+The whole normative description is `docs/spec/protocol.md`; this is what a
+client author has to know to write one.
+
+- **Transport:** one TCP connection per session. TLS 1.3 when the port is
+  configured for it, from the first byte — there is no upgrade handshake.
+- **Framing:** every message in both directions is
+  `{length u32 LE, type u8, flags u8, reserved u16, payload}`, where
+  `length` counts everything after itself. Binary, little-endian end to
+  end. Two string shapes inside a payload: `Str` is `{u16 len, bytes}` for
+  names, `Text` is `{u32 len, bytes}` for content, both UTF-8 and neither
+  NUL-terminated.
+- **Handshake, before anything else:** `C_HELLO` carries the magic
+  `'KWP1'`, a `[min, max]` version range, a capability bitset and an
+  `auth_method`. The server answers `S_HELLO` with the chosen version, the
+  **intersection** of the capabilities, a `session_id` and a `cancel_key`,
+  then `S_READY`. A capability bit this server does not know is dropped by
+  the intersection rather than refused, which is how a newer client
+  connects to an older server.
+- **Statements:** `C_PARSE {name, sql}` → `S_PARSE_OK {pattern_id}`;
+  `C_BIND {portal, statement, params}` → `S_BIND_OK`;
+  `C_EXECUTE {portal, max_rows}` → a result. A named statement lives until
+  `C_CLOSE` or disconnect; the unnamed one (`""`) is replaced by the next
+  `C_PARSE`. **`pattern_id` is informational** — log it, never interpret
+  it; it names a row in this instance's statistics and is not a handle.
+- **Parameters carry their own type**: `{type_oid u32, type_mod u32,
+  i32 len | -1 = NULL, bytes}`, and they replace the `?` placeholders of
+  the parsed statement in order. `type_oid` is the engine's own column
+  type number, which is also what `S_ROW_DESC` reports — one numbering,
+  two directions.
+- **Results:** `S_ROW_DESC` describes the shape once — per field a name, a
+  `type_oid`, a wire width (`-1` for variable), flags and a `type_mod`
+  (the packed `(precision, scale)` of a `DECIMAL`, zero otherwise). Then
+  `S_ROW_BATCH` frames, each `{row_count u16, rows…}`, each row a
+  `{i32 len | -1 = NULL, bytes}` per field. Then `S_COMPLETE {tag,
+  rows_affected}`.
+- **A statement with no result set** answers `S_COMPLETE` alone, its `tag`
+  being the sentence the engine rendered. Where that sentence carries
+  *lines* — `SHOW`, `DESCRIBE`, `ANALYZE`, `TRACE` — it arrives as a
+  one-column `varchar` result set, one row per line, flagged
+  `kFieldFlagDiagnosticLine` in the description.
+- **No text result mode exists.** A `DATE` is an epoch day, a `TIMESTAMP`
+  is microseconds, a `DECIMAL` is its unscaled integer with the scale in
+  the description. Rendering them for a human is the client's job, and
+  `tools/kwp.py`'s `render_value` is the reference for how.
+- **Pipelining and errors:** a client may send `C_PARSE`/`C_BIND`/
+  `C_EXECUTE` without waiting. After any `S_ERROR` the server **discards
+  every frame until the next `C_SYNC`**, then answers `S_READY` with the
+  transaction state. That skip-to-sync rule is the whole pipelining error
+  contract; a client that does not send `C_SYNC` after an error will find
+  its next statement swallowed.
+- **Errors** are `S_ERROR {code, retryable, severity, message, detail?,
+  position?}`, `code` being `category << 16 | detail`. `severity` says
+  whether the connection survives: an ordinary refusal leaves it standing,
+  and only framing corruption and a handshake failure close it.
+- **Transactions:** `C_TXN_BEGIN {durability}` / `C_TXN_COMMIT` /
+  `C_TXN_ABORT` → `S_TXN_OK`, whose `flags` bit 0 says the commit was
+  acked under D3's relaxed semantics. `durability` is 0 for the session
+  default, 1/2/3 for D1/D2/D3.
+
+### What a client must special-case
+
+These are the engine's own semantics, unchanged by the framing — the old
+newline manual said all of them and they are as true over frames.
+
+- **`TXN_CONFLICT` with `retryable = 1` is the one error worth a retry
+  loop.** Another transaction wrote a row this one wanted; there is no lock
+  to wait on and no partial recovery, so the whole transaction is rolled
+  back and retried. On a multi-core instance the same code answers a
+  statement that reached a peer core whose id or page lease is spent while
+  its refill is in flight. **Every other code is not retryable**, and the
+  bit is the compatibility surface: read the bit, not the message. After a
+  conflict the session is in a failed transaction and answers only
+  `C_TXN_ABORT` and `C_SYNC` until it is rolled back.
+- **`UNKNOWN_OUTCOME` means the statement may have run, and must not be
+  retried.** On a multi-core instance a statement whose relation another
+  core owns is carried there; if no answer returns within ten seconds the
+  outcome is unknown, because the owner may already have committed it — and
+  this engine issues primary keys, so a retry would insert a *second* row
+  rather than replay an idempotent one. **Read the data back.**
+- **A connection that drops mid-statement may find the statement applied.**
+  That is the contract, not an edge case: there is no cancellation in this
+  engine, so a shipped statement already on its way to its owner runs there
+  whatever happens to the connection.
 - **`ERR UNSUPPORTED retryable=0 ...` and `ERR NOT_IMPLEMENTED retryable=0 ...`
   are two different answers to "will this ever work?"** (2026-08-31). Both
   mean the statement was understood and declined, both carry the byte
@@ -236,46 +301,25 @@ printf 'PING\n' | nc 127.0.0.1 15432
   COLUMN` — so a client may feature-detect and try again against a newer
   server. Both tokens were a bare `ERR <message>` before this date, which
   said neither; the messages themselves are unchanged.
-- **REPEATABLE READ does not cross cores as a single instant** (2026-08-28,
-  `docs/spec/cross-owner-txn.md` §3). On a multi-core instance a
-  transaction may touch relations several cores own, and the engine runs a
-  two-phase commit over them so that it commits or aborts as a whole. What
-  it gives a `REPEATABLE READ` transaction is a **consistent snapshot per
-  core**: each core it touches is pinned at one moment and stays there for
-  the transaction's life, so reading the same relation twice gives the same
-  answer, and a transaction always sees its own earlier writes. What it
-  does **not** give is one instant across all of them — two such
-  transactions can disagree about the order of two commits on two different
-  cores. If that ordering matters to an application, the relations it
-  orders must live on one core.
+- **`REPEATABLE READ` does not cross cores as a single instant**
+  (`docs/spec/cross-owner-txn.md` §3). A cross-owner transaction commits or
+  aborts as a whole, and what `REPEATABLE READ` gives it is a **consistent
+  snapshot per core**: each core it touches is pinned at one moment for the
+  transaction's life, so a relation read twice answers alike and a
+  transaction always sees its own earlier writes. What it does not give is
+  one instant across all of them — two such transactions can disagree about
+  the order of two commits on two different cores. Relations whose ordering
+  matters to an application must live on one core.
 
-  **One limit comes with it, and it is a size.** A read of another core's
-  relation *inside a transaction* is carried to that core and its answer is
-  carried back in a **single message**, which holds 992 bytes of reply
-  text. A read whose answer is larger is refused — `ERR UNKNOWN_OUTCOME
-  ... the read returned nothing and changed nothing` — rather than answered
-  with part of the rows, and the refusal does not end the transaction. The
-  same read *outside* a transaction has no such limit, because it takes a
-  different route. Narrow it with a `WHERE`, or run it outside the
-  transaction.
+  **One limit rides with it, and it is a size.** A read of another core's
+  relation *inside* a transaction is carried in a single message holding
+  992 bytes of reply. A larger answer is refused rather than truncated, and
+  the refusal does not end the transaction. The same read outside a
+  transaction has no such limit, because it takes a different route.
 
   **`READ COMMITTED` makes no cross-core promise at all**, and it is the
-  default. That is not a weaker version of the above; it is the level's own
-  contract, which already lets every statement see the latest committed
-  state — so a `READ COMMITTED` transaction reading two cores is reading
-  each of them as it is now, which is what it asked for.
-- **A connection that drops mid-statement may find the statement applied.**
-  That is the documented contract, not an edge case: the server does not
-  cancel a running statement when its client disappears — there is no
-  cancellation in this engine — so a shipped statement already on its way
-  to its owner is executed there whatever happens to the connection. The
-  same holds for the ten-second answer above: the client is told nothing is
-  known, and the row may well be committed. A client that needs certainty
-  after a disconnect or an `UNKNOWN_OUTCOME` reads the data back.
-- **Errors** are just another response line, always prefixed `ERR `. There
-  is no separate error channel - a malformed or unrecognized line never
-  closes the connection or crashes the server, it just gets an `ERR ...`
-  reply (see `CommandDispatcher::Dispatch`, `src/server/command_dispatcher.cpp`).
+  default. Not a weaker version of the above — the level's own contract
+  already lets every statement see the latest committed state.
 
 ## 3. Command reference
 
@@ -605,21 +649,151 @@ elsewhere.
 
 ## 5. Writing your own client
 
-Minimum viable client in any language: open a TCP socket to
-`127.0.0.1:15432`, then for each command: write `COMMAND args\n`, read
-until you see a `\n`, and treat everything before it as the full reply.
-`tools/ckdbs_cli.py`'s `ServerConnection` class (`tools/ckdbs_cli.py`) is a
-~15-line reference implementation of exactly that loop, buffering partial
-reads until a newline shows up.
+**Read `docs/spec/protocol.md` first** — it is the normative description
+and this is the orientation.
 
-Things a robust client should handle that the CLI's REPL does not bother
-with, since it is a manual-use tool:
+The shortest correct client is a loop over four things: frame, handshake,
+statement, sync.
+
+1. **Frame.** Write `{length u32 LE, type u8, flags u8, reserved u16,
+   payload}` and read the same. TCP has no message boundaries, so a read
+   may split a frame anywhere including mid-header — accumulate until
+   `4 + length` bytes are buffered, then take exactly that many. Refuse a
+   `length` outside `[4, 16 MiB]` rather than allocating against it.
+2. **Handshake.** Send `C_HELLO`, expect `S_HELLO` then `S_READY`. Keep
+   the negotiated capability set: it is the intersection, so a bit you
+   asked for and did not get is a feature this server does not have.
+3. **Statement.** `C_PARSE`, `C_BIND`, `C_EXECUTE`; then read frames until
+   `S_COMPLETE` or `S_ERROR`, collecting `S_ROW_DESC` once and
+   `S_ROW_BATCH` repeatedly, and answering `S_PORTAL_SUSPENDED` with
+   `C_CONTINUE` if you set a `max_rows`.
+4. **Sync.** Send `C_SYNC` and wait for `S_READY` — **always, not only
+   after an error**. After an `S_ERROR` the server discards frames until
+   it sees one, so a client that skips it loses its next statement to the
+   discard; sending it unconditionally is one code path instead of two.
+
+`tools/kwp.py` is the reference implementation of exactly that, in about
+four hundred lines with the reasoning in comments, and `tools/ckdbs_cli.py`
+drives it.
+
+Things a robust client should handle that the CLI does not bother with,
+since it is a manual-use tool:
 
 - A `read()`/`recv()` returning zero bytes means the server closed the
-  connection (e.g. after `STOP`, or a crash) - do not spin retrying.
-- There is currently exactly one accepted client connection served at a
-  time end-to-end (see the concurrency note in
-  `include/kds/server/tcp_server.hpp`); a second client blocks at the TCP
-  `accept()` queue until the first disconnects. This is expected to change
-  once the thread-per-core scheduler work lands - this manual will be
-  updated when concurrent client handling ships.
+  connection (after `C_TERMINATE`, a fatal error, or a crash) — do not
+  spin retrying.
+- **Render values yourself.** There is no text result mode: a `DATE`
+  arrives as an epoch day, a `TIMESTAMP` as microseconds, a `DECIMAL` as
+  its unscaled integer with the scale in `S_ROW_DESC.type_mod`. A client
+  that prints the integer has printed the wrong thing.
+- **Switch on the error `code`, not on the message.** The category is the
+  compatibility surface and the message is prose. In particular, retry on
+  `retryable = 1` and nothing else, and never retry `UNKNOWN_OUTCOME`.
+- Many clients are served concurrently, cooperatively, on one thread per
+  core; no client blocks another, and no two statements of one connection
+  run at once. Do not send a second statement before the first has
+  answered — the session is stateful and the protocol has no request ids,
+  which is why `C_SYNC` is the barrier.
+
+---
+
+# Appendix A — the newline debug surface
+
+**Off by default.** It exists on `debug_text_port` and nowhere else
+(`docs/spec/protocol.md` §12): one command per line in, one line out, no
+framing beyond the newline. It is an internal development and inspection
+protocol, not a client-facing API, and it is documented because §12 keeps
+it rather than because anything should be built on it.
+
+`tools/ckdbs_cli.py --text` speaks it. Everything §3's command reference
+says about statements applies unchanged — the difference is only how the
+bytes are framed and how the answer is rendered.
+
+
+- **Transport:** one TCP connection per client.
+- **Request:** exactly one command per line, terminated by `\n` (a
+  trailing `\r` before the `\n` is tolerated, so CRLF clients work too).
+- **Response:** exactly one line back per command, `\n`-terminated, never
+  containing an embedded newline of its own.
+- **Encoding:** ASCII/UTF-8 text; commands are case-insensitive keywords,
+  arguments are space-separated.
+- **Session model:** a connection can send any number of commands in
+  sequence, reusing the same socket. There is no pipelining contract
+  beyond "one line in, wait for one line out, then send the next" -
+  clients should not assume out-of-order or batched responses.
+- **`ERR TXN_CONFLICT retryable=1 ...` is the one error worth special-casing
+  in a client.** It means another transaction wrote a row this one wanted,
+  and the whole transaction must be rolled back and retried — there is no
+  lock to wait on and no partial recovery. The `retryable=1` token is a
+  compatibility surface rather than prose: retry loops are expected to read
+  it, and it will not change spelling. On a multi-core instance the same
+  token answers a statement that reached a peer core whose id or page lease
+  is spent while its refill is in flight; retrying the statement is the
+  right response there too — unless core 0 has refused the refill (a
+  dropped relation, an exhausted id space), which answers the next
+  statement without the bit. Every other `ERR` is not retryable.
+  After a conflict the connection is in a failed transaction and answers
+  only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` until it is rolled back.
+- **`ERR UNKNOWN_OUTCOME retryable=0 ...` means the statement may have run,
+  and a client must not retry it** (2026-08-26, statement shipping). On a
+  multi-core instance a statement whose relation another core owns is
+  carried to that core, executed there and answered back. If the answer
+  does not return within ten seconds, the connection is told the outcome is
+  unknown — because the owner may already have committed it, and this
+  engine issues primary keys, so a retry would insert a *second* row rather
+  than replay an idempotent one. The correct response is to **read the data
+  back**, never to resend. The token is deliberately one no retry loop
+  follows; it is not a `TXN_CONFLICT` and never carries `retryable=1`.
+- **`ERR UNSUPPORTED retryable=0 ...` and `ERR NOT_IMPLEMENTED retryable=0 ...`
+  are two different answers to "will this ever work?"** (2026-08-31). Both
+  mean the statement was understood and declined, both carry the byte
+  position of what was declined, and neither is retryable. They differ in
+  one thing, and it is the thing a client library wants: `UNSUPPORTED` is a
+  form this engine's architecture cannot admit — updating a primary key,
+  comparing two decimals of different width, a read wider than the fan-in's
+  stage ceiling — so **no later server answers it** and the statement must
+  be rewritten. `NOT_IMPLEMENTED` is a form the design admits and this
+  release has not built — outer joins, CTEs, `UNIQUE`, `ALTER TABLE ADD
+  COLUMN` — so a client may feature-detect and try again against a newer
+  server. Both tokens were a bare `ERR <message>` before this date, which
+  said neither; the messages themselves are unchanged.
+- **REPEATABLE READ does not cross cores as a single instant** (2026-08-28,
+  `docs/spec/cross-owner-txn.md` §3). On a multi-core instance a
+  transaction may touch relations several cores own, and the engine runs a
+  two-phase commit over them so that it commits or aborts as a whole. What
+  it gives a `REPEATABLE READ` transaction is a **consistent snapshot per
+  core**: each core it touches is pinned at one moment and stays there for
+  the transaction's life, so reading the same relation twice gives the same
+  answer, and a transaction always sees its own earlier writes. What it
+  does **not** give is one instant across all of them — two such
+  transactions can disagree about the order of two commits on two different
+  cores. If that ordering matters to an application, the relations it
+  orders must live on one core.
+
+  **One limit comes with it, and it is a size.** A read of another core's
+  relation *inside a transaction* is carried to that core and its answer is
+  carried back in a **single message**, which holds 992 bytes of reply
+  text. A read whose answer is larger is refused — `ERR UNKNOWN_OUTCOME
+  ... the read returned nothing and changed nothing` — rather than answered
+  with part of the rows, and the refusal does not end the transaction. The
+  same read *outside* a transaction has no such limit, because it takes a
+  different route. Narrow it with a `WHERE`, or run it outside the
+  transaction.
+
+  **`READ COMMITTED` makes no cross-core promise at all**, and it is the
+  default. That is not a weaker version of the above; it is the level's own
+  contract, which already lets every statement see the latest committed
+  state — so a `READ COMMITTED` transaction reading two cores is reading
+  each of them as it is now, which is what it asked for.
+- **A connection that drops mid-statement may find the statement applied.**
+  That is the documented contract, not an edge case: the server does not
+  cancel a running statement when its client disappears — there is no
+  cancellation in this engine — so a shipped statement already on its way
+  to its owner is executed there whatever happens to the connection. The
+  same holds for the ten-second answer above: the client is told nothing is
+  known, and the row may well be committed. A client that needs certainty
+  after a disconnect or an `UNKNOWN_OUTCOME` reads the data back.
+- **Errors** are just another response line, always prefixed `ERR `. There
+  is no separate error channel - a malformed or unrecognized line never
+  closes the connection or crashes the server, it just gets an `ERR ...`
+  reply (see `CommandDispatcher::Dispatch`, `src/server/command_dispatcher.cpp`).

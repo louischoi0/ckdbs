@@ -7,7 +7,7 @@ Spec: `docs/spec/protocol.md`. Task rows:
 file, not the bare number, because `waystone-workplan.md` reuses the
 same range.
 
-Decisions: `kw-d-ratification.md` (KW-D1 through KW-D6, operator
+Decisions: `kw-ratification.md` (KW-D1 through KW-D6, operator
 2026-08-31). **Read that first** — it strikes P17, reorders the rows,
 and names two constants.
 

@@ -16,6 +16,37 @@ Every task here depends on a statement having a stable identity, so Phase A come
 
 ## Phase A — pattern identity
 
+### The wire protocol's tie-in (`docs/spec/protocol.md` §5; protocol-wp.md P04)
+
+KWP/1 computes the fingerprint **at `C_PARSE`** and returns
+`S_PARSE_OK{pattern_id}` — informational, never interpreted by a client —
+and `C_BIND` is where the bound parameters' `arg_hash` is completed. So the
+protocol does not add a plumbing path: it names the two points at which the
+pair this phase produces already exists.
+
+`protocol-wp.md` P04 asks for this cross-link on **T11 and T18**, and those
+numbers do not resolve in this file. It was written against an earlier
+numbering; the tasks that carry their content are **P01** (the fingerprint
+itself, and the accumulator that takes it from the parse rather than a
+second lex) and **P09/P10** (the executor seam and the recording wired into
+the dispatcher, which is where a `pattern_id`/`arg_hash` reaches the trail).
+All three are done, so this is a record of where the protocol attaches, not
+a change to any of them.
+
+Two things it does *not* change, stated because a reader arriving from the
+protocol spec would reasonably assume otherwise:
+
+- **`C_PARSE` does not record anything.** Recording is decided at execution
+  by `WouldRecord()` (P10's `n = 2`), and a statement parsed and never
+  executed is not a sighting. A prepared statement executed four times is
+  four sightings of one pattern, exactly as four newline statements are.
+- **`pattern_id` on the wire is not a handle.** It names a `sys.patterns`
+  row this instance may or may not have; a client that stored one and sent
+  it back would be sending a number no frame accepts. Invariant 8 is the
+  reason the field can be informational at all — a client that ignores it
+  loses nothing but a log line.
+
+
 **P01 — Fingerprint over the token stream.** — **done.**
 Files: `include/kds/parser/fingerprint.hpp`, `src/parser/fingerprint.cpp`, `tests/fingerprint_test.cpp`.
 Walk the lexer's tokens once. Emit `pattern_id` (hash of the shape stream, with every literal replaced by a parameter marker) and `arg_hash` (hash of the literal values in order). No second pass and no separate normalization step — the shape stream is what the lexer already produces. Hashing must be value-based: no pointers, no addresses, no container iteration order.

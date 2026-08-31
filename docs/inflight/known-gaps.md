@@ -2107,6 +2107,80 @@ still waits on its own gate, so:
 
 ## SQL surface and protocol
 
+- **KWP/1's crash-injection acceptance is owed and was not run**
+  (2026-08-31, milestone KW). `docs/spec/protocol.md` §15-5 requires that
+  under deterministic crash injection an acked `S_TXN_OK(D1/D2)` commit
+  always survives and D3's window is bounded. That half belonged to P17;
+  KW-D1 struck P17 and **assigned its acceptance checklist to P11**, in as
+  many words: *"P17's acceptance checklist is not lost with P17… Carry it,
+  or the one thing P17 was going to prove goes unproven."* What P11
+  actually asserts is the *plumbing* — the class reaches the commit through
+  §9's three rungs, and `S_TXN_OK`'s RELAXED flag names the class the
+  commit used. The crash injection did not run. **Owner: P11.** The
+  underlying guarantee is `wal.md`'s and is separately tested there; what
+  is unproven is that the *protocol's acknowledgement* is tied to it.
+- **A text parameter containing a single quote cannot be bound**
+  (2026-08-31). `C_BIND` renders each parameter as a SQL literal and
+  substitutes it into the statement text, and this engine's lexer has no
+  escape for a quote inside a string literal (`src/parser/lexer.cpp`: "No
+  escaping, deliberately - a string literal cannot contain a quote"). So
+  `O'Brien` has no spelling any SQL text this server accepts can carry, and
+  it is refused at `C_BIND` with that reason. **Owner:
+  `docs/spec/parser-v2.md`, which owns the string-literal grammar** — this
+  is not a protocol limit reached through the protocol, and the same value
+  is equally unreachable through the newline surface. The v0 bulk-load
+  endpoint *can* store one, because it is binary end to end, which is the
+  clean statement of where the boundary is.
+- **`C_CANCEL` is not built, and the `CANCEL` capability is therefore not
+  offered** (2026-08-31, P14 half done). The session-side half exists: a
+  cancel flag, observed at the session's next frame, refusing the statement
+  with `CANCELLED` and poisoning an open transaction. What is missing is
+  the *connection* — a fresh connection carrying `{session_id,
+  cancel_key}`, which needs a listener-wide registry keyed on session id.
+
+  **The bit is withheld rather than advertised**, and that is the shape of
+  the gap rather than a detail of it: a server that offered `CANCEL` would
+  refuse the one frame it had just advertised, which is worse for a client
+  than the absence — an absent capability is a branch it does not take, a
+  lying one is a branch that fails. Riding with it: `TcpServer`'s default
+  identity source is a counter, and §10 makes `cancel_key` the whole of a
+  cancel's authorization, so a `C_CANCEL` built on a non-OpenSSL build
+  would need a real source first. With OpenSSL both come from `RAND_bytes`,
+  and one source serves every listener on the port — peers share it through
+  SO_REUSEPORT, so two listeners minting from two counters could issue one
+  session id twice.
+
+- **A read of another core's relation is refused to a KWP client**
+  (2026-08-31). Statement shipping carries the statement to its owner and
+  the owner answers with a **rendered reply line** (SS3) — text, by design,
+  because the arrival core re-renders through `ErrorReply` and the only
+  structured thing that has to survive is the status code. A typed client
+  wants values, and this core holds only their rendering, so `ShipStatement`
+  refuses a *read* with `Unsupported` when a result sink is installed rather
+  than answering one `SELECT` as a typed result set or as a block of text
+  depending on which core owns the relation — a difference invisible from
+  the statement and impossible for a client to branch on.
+
+  Shipped **writes** are unaffected: their answer is a completion tag, which
+  is what a completion tag is for. The newline surface is unaffected
+  entirely, on both. **Owner: `docs/spec/crosscore.md`** — the fix is typed
+  rows on the ship wire, which is the same problem the cross-core *fan-in*
+  already solved (`FinishRemoteReads` decodes real values), so the shape
+  exists and only shipping has not adopted it.
+- **Nothing bounds an idle authenticated session.** KW-D3 set the
+  *portal*-idle timeout at 60 s, which bounds how long an unread result set
+  holds memory. A connection that completed its handshake and then sits
+  with no statement and no portal is bounded by nothing; §14 keeps it open
+  and it is a resource question rather than a protocol one.
+- **`STOP` is reachable only on the debug port.** KW-D4 deferred `STOP` as
+  a capability-gated admin statement, and KW-D6 cut the newline protocol to
+  `debug_text_port`, off by default — so the two together mean an instance
+  configured with no debug port cannot be stopped by connecting and typing
+  `STOP`. Sending `STOP` as an ordinary statement over KWP works and is
+  admin-classed; the deferral is about the frame, not the statement. Named
+  here because KW-D4 asked for exactly this to be established during P13
+  rather than discovered.
+
 - ~~**No NULL storage**~~ — **closed 2026-08-20** by `docs/spec/null.md`
   (NU1-NU8, `docs/workplan-null.md`): a tail null bitmap sized to the
   relation's *nullable* columns, the bitmap as sole authority with the

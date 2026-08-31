@@ -258,7 +258,22 @@ public:
     // the worker exists. STOP accepted here routes to the system core
     // (tcp_server.hpp's stop contract); the listener dies first at
     // teardown - see ~CoreRuntime.
-    Status ListenAndAttach(std::uint16_t port);
+    // `protocol` **must match every other listener on `port`**: peers
+    // share one port through SO_REUSEPORT, so the kernel hands a
+    // connection to whichever core it likes and a peer speaking a
+    // different framing would answer a KWP client in lines. KWP by
+    // default, like core 0's; the text protocol is passed explicitly by
+    // the tests that exercise the newline surface.
+    // `identity` mints this listener's session ids and cancel keys. It
+    // **must be the same source core 0 uses**, and that is a correctness
+    // statement rather than tidiness: peers share one port through
+    // SO_REUSEPORT, so the kernel decides which core accepts a connection,
+    // and two listeners minting from two independent counters can issue one
+    // session id twice. Unset falls back to `TcpServer`'s counter, which is
+    // distinct per listener and not unique across them.
+    Status ListenAndAttach(std::uint16_t port, Protocol protocol = Protocol::kKwp,
+                           wal::DurabilityClass durability = wal::DurabilityClass::kGroup,
+                           TcpServer::IdentitySource identity = {});
 
     // BUG-4 ordering (the PW5 review): closes the listener - and with it
     // every accepted session, rolling back open transactions - while this

@@ -105,6 +105,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench_common
 
+from ckdbs_cli import ServerConnection
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 15432
 
@@ -113,31 +115,31 @@ COMPARE_TAGS = ("none", "twin", "cnt", "sum", "multi")
 ASSERTED = {"cnt": ("count",), "sum": ("sum",), "multi": ("count", "sum")}
 
 
-class Conn:
-    """One connection, one line in / one line out."""
+class Conn(ServerConnection):
+    """One KWP/1 session, presented as one statement in and one reply
+    string out.
+
+    **The private newline client this class used to be is gone**
+    (KW-D6's cut-over, protocol-wp.md P13/P15): the default port speaks
+    KWP/1, and every driver in this directory now goes through the one
+    client `ckdbs_cli.ServerConnection`. The reply strings are the same
+    ones the newline protocol produced - rendered client-side, which is
+    where protocol.md §6 puts rendering - so this file's parsing of them
+    is untouched and its numbers stay comparable with the runs in
+    `bench/` that predate the cut.
+    """
 
     def __init__(self, host, port, timeout):
-        self._sock = socket.create_connection((host, port), timeout=timeout)
-        self._buf = b""
+        super().__init__(host, port, timeout=timeout)
 
     def send(self, line):
-        self._sock.sendall(line.encode("utf-8") + b"\n")
-        while b"\n" not in self._buf:
-            chunk = self._sock.recv(65536)
-            if not chunk:
-                raise ConnectionError("server closed the connection")
-            self._buf += chunk
-        out, self._buf = self._buf.split(b"\n", 1)
-        return out.decode("utf-8", errors="replace")
+        return self.send_command(line)
 
     def must(self, line):
         reply = self.send(line)
         if reply.startswith("ERR"):
             raise RuntimeError("%s -> %s" % (line, reply))
         return reply
-
-    def close(self):
-        self._sock.close()
 
 
 class ServerCpu:

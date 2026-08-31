@@ -50,6 +50,15 @@ protected:
     // the same shape Expeditor::Serve() uses, so the tests exercise the
     // real path rather than a socket loop that no longer exists.
     void RunReactor(TcpServer& listener) {
+        // **These are the text protocol's tests, and they say so**
+        // (KW-D6's cut-over, P13). The default is now KWP/1; the newline
+        // protocol survives as `debug_text_port`'s loopback debug surface
+        // (§12), and it still has a socket layer worth testing - partial
+        // lines, pipelined batches, a disconnect mid-batch, CRLF clients.
+        // Those tests did not stop being true, so they are kept and
+        // pointed at the protocol they were written for. The KWP path over
+        // a real socket is `kwp_endpoint_test.cpp`.
+        listener.set_protocol(Protocol::kText);
         auto io_backend = sched::EpollIoBackend::Create();
         ASSERT_TRUE(io_backend.ok()) << io_backend.status().message();
         sched::Scheduler scheduler(clock_, io_backend.value());

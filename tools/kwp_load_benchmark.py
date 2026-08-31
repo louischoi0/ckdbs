@@ -18,7 +18,7 @@ Wire shapes implemented here (authoritative sources in the tree):
   row batch    = row_count u16 + rows; each field {len i32 LE, bytes},
                  int64 = 8-byte LE                     (wire/row_codec)
   S_LOAD_ACK   = load_id u64 + chunk_seq u32 + rows_accepted u64
-  S_COMPLETE   = tag str + rows u64
+  S_COMPLETE   = tag Text (u32-prefixed) + rows u64
 Capability bit 16 (BULK_LOAD) must be set in C_HELLO.
 
 Two modes:
@@ -53,9 +53,13 @@ from ckdbs_cli import DEFAULT_HOST, ServerConnection
 CAP_BULK_LOAD = 1 << 16
 KWP_MAGIC = 0x3150574B
 
-C_HELLO, C_PING, C_TERMINATE = 1, 2, 3
+# One registry per direction, `include/kds/wire/kwp.hpp`'s (unified
+# 2026-08-31): the load endpoint used to number its base-block frames
+# itself and collided with the query surface on five values. These are the
+# query surface's numbers; the 16+ load block is unchanged.
+C_HELLO, C_PING, C_TERMINATE = 1, 12, 14
 C_LOAD_BEGIN, C_LOAD_CHUNK, C_LOAD_END, C_LOAD_ABORT = 16, 17, 18, 19
-S_HELLO, S_ERROR, S_COMPLETE, S_PONG = 1, 2, 3, 4
+S_HELLO, S_ERROR, S_COMPLETE, S_PONG = 1, 10, 8, 11
 S_LOAD_READY, S_LOAD_ACK = 16, 17
 
 COLUMNS = "(id int64, a int64, b int64, c int64, d int64) HEAP"
@@ -172,9 +176,11 @@ def run_load(kwp, table, total_rows, chunk_rows, window, phase_name):
     phase.elapsed = time.perf_counter() - started
     if ftype != S_COMPLETE:
         sys.exit(f"FATAL: expected S_COMPLETE, got frame type {ftype}")
-    (taglen,) = struct.unpack_from("<H", payload)
-    tag = payload[2:2 + taglen].decode()
-    (rows_affected,) = struct.unpack_from("<Q", payload, 2 + taglen)
+    # `Text`, not `Str`: the load endpoint's `S_COMPLETE` is the query
+    # surface's payload since the two were unified (protocol.md §7).
+    (taglen,) = struct.unpack_from("<I", payload)
+    tag = payload[4:4 + taglen].decode()
+    (rows_affected,) = struct.unpack_from("<Q", payload, 4 + taglen)
     if tag != "LOAD" or rows_affected != total_rows:
         sys.exit(f"FATAL: S_COMPLETE tag={tag!r} rows={rows_affected}, "
                  f"expected LOAD {total_rows}")

@@ -85,25 +85,32 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import Phase  # noqa: E402
 
+from ckdbs_cli import ServerConnection
 
-class Conn:
+
+class Conn(ServerConnection):
+    """One KWP/1 session, presented as one statement in and one reply
+    string out.
+
+    **The private newline client this class used to be is gone**
+    (KW-D6's cut-over, protocol-wp.md P13/P15): the default port speaks
+    KWP/1, and every driver in this directory now goes through the one
+    client `ckdbs_cli.ServerConnection`. The reply strings are the same
+    ones the newline protocol produced - rendered client-side, which is
+    where protocol.md §6 puts rendering - so this file's parsing of them
+    is untouched and its numbers stay comparable with the runs in
+    `bench/` that predate the cut.
+    """
+
     def __init__(self, port):
-        self.sock = socket.create_connection(("127.0.0.1", port), timeout=30)
-        self.buf = b""
+        super().__init__("127.0.0.1", port, timeout=30)
 
     def cmd(self, line):
-        self.sock.sendall(line.encode() + b"\n")
-        while b"\n" not in self.buf:
-            chunk = self.sock.recv(65536)
-            if not chunk:
-                raise ConnectionError("server closed the connection")
-            self.buf += chunk
-        reply, self.buf = self.buf.split(b"\n", 1)
-        return reply.decode()
+        return self.send_command(line)
 
     def close(self):
         try:
-            self.sock.close()
+            super().close()
         except OSError:
             pass
 

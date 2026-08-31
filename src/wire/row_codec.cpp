@@ -117,12 +117,9 @@ std::vector<FieldDescription> DescribeSchema(const catalog::Schema& schema) {
         f.type_oid = col.type_val;
         f.type_len = WireTypeLen(col.type_val);
         // The catalog's packed (p, s) word, carried as-is: one packing,
-        // two readers (TY02's helpers), zero for every other type. Not
-        // col.len unconditionally - a char column's len is a storage width,
-        // which the header says this description deliberately does not leak.
-        if (col.type_val == kTypeValDecimal || col.type_val == catalog::kTypeValDecimalWide) {
-            f.type_mod = col.len;
-        }
+        // two readers (TY02's helpers), zero for every other type - which
+        // `catalog::TypeModOf` is, so the rule lives in one place.
+        f.type_mod = catalog::TypeModOf(col.type_val, col.len);
         // Column 0 is the Keystone id on every user relation (invariant 11,
         // protocol.md §6), and it is the one field a client can rely on
         // without reading the schema.
@@ -147,7 +144,22 @@ void EncodeRowDescription(const std::vector<FieldDescription>& fields,
 
 Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& value,
                    std::vector<std::byte>& out) {
-    const std::uint32_t type_val = col.type_val;
+    return EncodeValue(col.type_val, col.len, value, out);
+}
+
+Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
+                   const parser::AstValue& value, std::vector<std::byte>& out) {
+    // The column row's `len` and a description's `type_mod` are the same
+    // word for the decimal types (`catalog::PackDecimalLen`), which is the
+    // whole reason one function can serve both callers; for every other
+    // type neither arm reads it.
+    //
+    // The scale is read from `type_mod` directly rather than through a
+    // `SysColumnRow` built for the purpose: this runs **per value, per
+    // row**, on the cross-core batch writer as well as the wire's, and the
+    // struct it used to construct carries a name array and eight other
+    // fields, all zero-initialised, so two callers could read one word.
+    const std::uint8_t decimal_scale = catalog::DecimalScaleOf(type_mod);
     if (value.type == parser::ValueType::kNull) {
         // -1, the one NULL convention (protocol.md §6). Decided before the
         // engine could store a NULL, which is why NULL storage landing
@@ -187,7 +199,7 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
             // integer under any other scale is a different number wearing
             // the right width, so a disagreement is refused, never
             // rescaled - the same rule the storage codec applies (TY04).
-            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            const std::uint8_t scale = decimal_scale;
             if (value.scale != scale) {
                 return Status::InvalidArgument(
                     "wire row codec: decimal value at scale " + std::to_string(value.scale) +
@@ -207,7 +219,7 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
                 return Status::InvalidArgument(
                     "wire row codec: wide decimal column did not receive a wide decimal value");
             }
-            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            const std::uint8_t scale = decimal_scale;
             if (value.scale != scale) {
                 return Status::InvalidArgument(
                     "wire row codec: decimal value at scale " + std::to_string(value.scale) +
@@ -503,6 +515,70 @@ StatusOr<parser::AstValue> FieldToValueChecked(const catalog::SysColumnRow& col,
         }
     }
     return FieldToValue(col, field);
+}
+
+// ---- Bound parameters (§5) -----------------------------------------------
+
+Status EncodeBindParams(const std::vector<BoundParam>& params, std::vector<std::byte>& out) {
+    if (params.size() > 0xFFFFu) {
+        return Status::InvalidArgument(
+            "C_BIND: " + std::to_string(params.size()) +
+            " parameters exceed the format's u16 count; a wrapped count would decode as a "
+            "different, shorter parameter list");
+    }
+    PutLE(out, static_cast<std::uint32_t>(params.size()), 2);
+    for (const BoundParam& p : params) {
+        PutLE(out, p.type_oid, 4);
+        PutLE(out, p.type_mod, 4);
+        if (!p.bytes.has_value()) {
+            PutLE(out, static_cast<std::uint32_t>(0xFFFFFFFFu), 4);
+            continue;
+        }
+        PutLE(out, static_cast<std::uint32_t>(p.bytes->size()), 4);
+        out.insert(out.end(), p.bytes->begin(), p.bytes->end());
+    }
+    return Status::OK();
+}
+
+StatusOr<std::vector<BoundParam>> DecodeBindParams(std::span<const std::byte> payload,
+                                                   std::size_t* consumed) {
+    std::size_t at = 0;
+    auto need = [&](std::size_t n) { return payload.size() - at >= n; };
+    if (!need(2)) return Status::Corruption("C_BIND: parameter count is truncated");
+    const auto count = static_cast<std::size_t>(LoadLE(payload.subspan(at, 2)));
+    at += 2;
+
+    std::vector<BoundParam> out;
+    // The count is a u16, so it cannot exceed 65,535 and a reserve on it is
+    // bounded by the format rather than by a length the client chose. That
+    // is what makes reserving here safe where reserving on a u32 length
+    // would be a way to spend the server's memory in one frame.
+    out.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!need(12)) {
+            return Status::Corruption("C_BIND: parameter " + std::to_string(i) +
+                                      " header runs past the payload");
+        }
+        BoundParam p;
+        p.type_oid = static_cast<std::uint32_t>(LoadLE(payload.subspan(at, 4)));
+        p.type_mod = static_cast<std::uint32_t>(LoadLE(payload.subspan(at + 4, 4)));
+        const auto len = static_cast<std::uint32_t>(LoadLE(payload.subspan(at + 8, 4)));
+        at += 12;
+        if (len == 0xFFFFFFFFu) {
+            out.push_back(std::move(p));
+            continue;
+        }
+        if (!need(len)) {
+            return Status::Corruption("C_BIND: parameter " + std::to_string(i) + " declares " +
+                                      std::to_string(len) +
+                                      " bytes, more than the payload holds");
+        }
+        p.bytes = payload.subspan(at, len);
+        at += len;
+        out.push_back(std::move(p));
+    }
+    if (consumed != nullptr) *consumed = at;
+    return out;
 }
 
 }  // namespace kds::wire
