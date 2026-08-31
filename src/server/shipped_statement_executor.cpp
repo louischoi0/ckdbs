@@ -528,6 +528,57 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
     // against it.
     context.coordinator_txn_id = ask.transaction_id;
     const std::uint64_t participant_txn_id = context.session.transaction()->id();
+
+    // ---- SA-T0: a participant that wrote nothing writes no record --------
+    //
+    // **The largest measured cost the cross-owner line leaves** (XD6;
+    // `cross-owner-txn.md` §1a, and the lever `bench/v2.5.0/results-rr-read-half-*`
+    // prices and nothing else does). A participant enrolled by reads alone
+    // pays a durable `TXN_PREPARE` - an append and a device sync a
+    // coordinator is parked on - for a half of the transaction that has
+    // nothing in this stream.
+    //
+    // **Why the record carries no information, which is the whole
+    // argument.** What a participant's PREPARE buys is recovery: the mount
+    // finds it, sees no decision in this stream, and resolves *this core's
+    // rows* against the coordinator's. A transaction that wrote nothing has
+    // no rows here - no redo, and an empty undo chain - so replaying this
+    // stream gives the same state whichever way the coordinator decided.
+    // The record's replay is a no-op, and removing a no-op is not a
+    // weakening.
+    //
+    // **The predicate, and why it is sound rather than convenient.**
+    // `last_undo_ptr() == kNoUndoPtr` is the engine's own definition of "has
+    // written nothing" (`txn/manager.hpp`: "`kNoUndoPtr` until it writes
+    // one", and `AppendUndo` "being the only thing that advances either").
+    // It is safe to lean on because **recovery already leans on it**: a
+    // loser transaction is undone by walking its undo chain, so a write
+    // that logged redo without recording undo would already leave that
+    // write applied after a rollback. `NoteInsert`'s own header states the
+    // ordering that makes it hold - "the caller records *before* it
+    // mutates". This row adds no new requirement; it reads one the log
+    // already depends on.
+    //
+    // **SA-R's accepted clause: an intent is prepare-relevant.** When
+    // SA-T4's row-scoped FK reference intents land, a participant holding
+    // one is *not* write-free - the intent has to survive to be visible to
+    // a reverse check racing the decide - so it must fail this predicate
+    // and keep its durable prepare. The term is named here, in the one
+    // place that decides, so SA-T4 extends this expression rather than
+    // hunting for the site.
+    //
+    // What does **not** change: the context is still prepared, still
+    // in-doubt, still decided by the coordinator and still counted. Only
+    // the record and its sync go. `MarkPrepared(kNoLsn)` is the existing
+    // spelling for "prepared with no record to pin the checkpoint below",
+    // which is exactly true here - there is nothing below it to protect.
+    const txn::Transaction* held = context.session.transaction();
+    const bool wrote_nothing = held != nullptr && held->last_undo_ptr() == txn::kNoUndoPtr;
+    if (wal_ == nullptr || wrote_nothing) {
+        if (wrote_nothing && wal_ != nullptr) ++read_only_prepares_;
+        return PrepareWithoutRecord(it, std::move(reply));
+    }
+
     auto lsn = wal::LogTxnPrepare(wal_, participant_txn_id, ask.coordinator, ask.session_id,
                                   ask.transaction_id);
     if (!lsn.ok()) {
@@ -538,31 +589,6 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
         return;
     }
 
-    if (wal_ == nullptr) {
-        // The unlogged fixture. There is no record and therefore no sync to
-        // wait for; the promise this reply makes is as durable as anything
-        // else on an unlogged instance, which is to say not at all - and
-        // that is the property of the instance, not of this row. Stated
-        // rather than silently taken, because "prepared" is a durability
-        // claim everywhere else in this file.
-        // **The LSN is 0 on this arm and the flag is still raised** (R6-5):
-        // there is no record for a checkpoint's redo start to be held
-        // below, because there is no record - but a writer of this
-        // transaction's rows must block on it here exactly as it would on a
-        // logged core, since what it is waiting for is a *decision* and
-        // that arrives over the ring either way. `MarkPrepared(0)` is the
-        // one call that says both, which is why the flag is not derived
-        // from the LSN.
-        context.prepared = true;
-        context.asked_at_ns = clock_.Now();
-        ++in_doubt_;
-        ++prepared_;
-        if (txn::Transaction* txn = context.session.transaction(); txn != nullptr) {
-            txn->MarkPrepared(wal::kNoLsn);
-        }
-        reply(Status::OK());
-        return;
-    }
     // RP7's second protocol point: the record is written into the stream's
     // buffer and nothing has asked the device for it. Whether it survives
     // is the device's business and not the protocol's - and either way the
@@ -587,6 +613,40 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
         sched::SchedulingGroup::kForeground,
         AwaitPrepared(key, lsn.value(), prepare_appended_ns + kTxnPhaseDeadlineNs,
                       prepare_appended_ns, std::move(reply))));
+}
+
+void ShippedStatementExecutor::PrepareWithoutRecord(
+    std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it, Txn2pcServer::ReplyFn reply) {
+    Enrolled& context = *it->second;
+    // Two callers with one shape, and they are the same case seen twice:
+    // there is no record to make durable, so there is no sync to wait for
+    // and the promise is made now.
+    //
+    //   - **the unlogged fixture** (`wal_ == nullptr`), where the promise
+    //     is as durable as anything else on an unlogged instance, which is
+    //     to say not at all - the property of the instance, not of this
+    //     path. Stated rather than silently taken, because "prepared" is a
+    //     durability claim everywhere else in this file.
+    //   - **SA-T0's read-only participant**, where the promise is fully
+    //     durable in the only sense that matters: the transaction's whole
+    //     footprint on this core is empty, so there is nothing a crash
+    //     could lose. `Prepare`'s comment carries that argument.
+    //
+    // **The LSN is 0 on both and the flag is still raised** (R6-5): there
+    // is no record for a checkpoint's redo start to be held below, and a
+    // writer of this transaction's rows must still block on it exactly as
+    // it would on a logged core, since what it waits for is a *decision*
+    // and that arrives over the ring either way. `MarkPrepared(0)` is the
+    // one call that says both, which is why the flag is not derived from
+    // the LSN.
+    context.prepared = true;
+    context.asked_at_ns = clock_.Now();
+    ++in_doubt_;
+    ++prepared_;
+    if (txn::Transaction* txn = context.session.transaction(); txn != nullptr) {
+        txn->MarkPrepared(wal::kNoLsn);
+    }
+    reply(Status::OK());
 }
 
 sched::Coro ShippedStatementExecutor::AwaitPrepared(DedupKey key, wal::Lsn lsn,

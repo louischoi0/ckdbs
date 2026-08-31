@@ -314,6 +314,12 @@ public:
     // one-owner commit records nothing here.
     const ParticipantCommitStats& commit_phase() const noexcept { return commit_phase_; }
 
+    // **Prepares answered with no record and no device sync** (SA-T0): the
+    // enrolment read and wrote nothing, so this core's half of the
+    // transaction has no footprint a crash could lose. Read beside
+    // `prepared()`: the difference is the enrolments that did write.
+    std::uint64_t read_only_prepares() const noexcept { return read_only_prepares_; }
+
     // ---- R6-3 ------------------------------------------------------------
 
     // Transactions this core has replied **prepared** for and not yet been
@@ -623,6 +629,12 @@ private:
     // the leg is *append -> durable* and not *park -> durable*.
     sched::Coro AwaitPrepared(DedupKey key, wal::Lsn lsn, sched::MonoTimeNs deadline_ns,
                               sched::MonoTimeNs appended_at_ns, Txn2pcServer::ReplyFn reply);
+    // Prepares and answers **now**, with no record and no sync. Two callers
+    // and one shape: the unlogged fixture, and SA-T0's participant whose
+    // enrolment wrote nothing. The body carries why the two are the same
+    // case; `Prepare` carries why the second is sound.
+    void PrepareWithoutRecord(std::map<DedupKey, std::unique_ptr<Enrolled>>::iterator it,
+                              Txn2pcServer::ReplyFn reply);
     // **XF4's third participant leg**: parks until this core's own terminal
     // COMMIT record is durable and records how long that took from the
     // decide's arrival. It holds an LSN and two stamps and touches no
@@ -696,6 +708,12 @@ private:
     // XF4. Written from the prepare and decide handlers only, which is what
     // makes a one-owner commit cost nothing: it reaches neither.
     ParticipantCommitStats commit_phase_;
+
+    // SA-T0. Prepares this core answered with no record and no sync because
+    // the enrolment had written nothing. Counted on a logged instance only -
+    // on an unlogged one every prepare takes that path and the number would
+    // say nothing about the workload.
+    std::uint64_t read_only_prepares_ = 0;
 
     // R6-3. `in_doubt_` is derived from `enrolled_`'s `prepared` flags and
     // kept beside them rather than counted on demand, because the sweep and

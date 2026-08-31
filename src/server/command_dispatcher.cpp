@@ -1529,6 +1529,15 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // that arrived afterwards and was refused instead of silently
            // opening a second transaction for the same one.
            << " shipped_join_refusals=" << shipped_statements_->join_refusals();
+        // **SA-T0**: prepares this core answered with no record and no
+        // device sync, because the enrolment had written nothing. Printed
+        // only where one happened - a workload with no read-only
+        // participants would otherwise carry a zero that reads as "the
+        // optimisation is off". `txn_prepared` beside it is the whole
+        // population; the difference is the enrolments that wrote.
+        if (shipped_statements_->read_only_prepares() != 0) {
+            os << " shipped_readonly_prepares=" << shipped_statements_->read_only_prepares();
+        }
         // **The in-doubt population and what became of it** (R6-5, D5).
         // `txn_in_doubt` is what this core is holding locks for right now
         // and cannot decide on its own; a non-zero

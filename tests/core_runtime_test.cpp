@@ -4848,6 +4848,78 @@ TEST_F(CoreRuntimeTest, EachCrossOwnerCommitLegIsTimedAndAOneOwnerCommitTimesNot
     EXPECT_EQ(peer_meta.find("xowner_commit_n="), std::string::npos) << peer_meta;
 }
 
+TEST_F(CoreRuntimeTest, AParticipantEnrolledByReadsAlonePreparesWithNoRecord) {
+    // **SA-T0.** The largest measured cost the cross-owner line leaves
+    // (XD6): a participant enrolled by a read pays a durable `TXN_PREPARE`
+    // - an append and a device sync the coordinator is parked on - for a
+    // half of the transaction that has nothing in this stream. It has no
+    // rows here, no redo and an empty undo chain, so the record's replay is
+    // a no-op and removing it removes nothing recovery uses.
+    //
+    // The two arms are in one test on purpose: what makes the read-only
+    // count meaningful is that the writing enrolment does **not** take the
+    // same path, and a test that only ever reads cannot show that.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "readonly_part");
+
+    ASSERT_NE(rig.peer->shipped_statements(), nullptr);
+    // A row to read, written by the owner itself so nothing about it is
+    // this test's subject.
+    ASSERT_EQ(rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO readonly_part VALUES (91)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(rig.peer->shipped_statements()->read_only_prepares(), 0u);
+
+    // ---- Arm 1: a transaction whose only foreign statement is a read ----
+    Session reader;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &reader).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome got;
+    auto read = rig.Start("SELECT * FROM readonly_part", got, &reader);
+    ASSERT_TRUE(rig.Drive(*read)) << got.response;
+    EXPECT_NE(got.response.find(",91"), std::string::npos) << got.response;
+    // RR1: a read inside a transaction ships and **enrols**, which is what
+    // puts a read-only participant into the protocol at all.
+    ASSERT_EQ(reader.participants().size(), 1u);
+
+    DispatchOutcome committed;
+    auto commit = rig.Start("COMMIT", committed, &reader);
+    ASSERT_TRUE(rig.Drive(*commit)) << committed.response;
+    EXPECT_EQ(committed.response.rfind("COMMIT trx_id=", 0), 0u) << committed.response;
+
+    EXPECT_EQ(rig.peer->shipped_statements()->read_only_prepares(), 1u)
+        << "a participant that wrote nothing still logged a prepare record";
+    EXPECT_EQ(rig.peer->shipped_statements()->prepared(), 1u)
+        << "the promise is still made - only the record is gone";
+    EXPECT_EQ(rig.peer->shipped_statements()->decides_committed(), 1u);
+    EXPECT_EQ(rig.peer->shipped_statements()->in_doubt(), 0u);
+    EXPECT_EQ(rig.peer->shipped_statements()->enrolled(), 0u);
+
+    // ---- Arm 2: the same shape with a write in it takes the other path --
+    Session writer;
+    ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &writer).response.rfind("BEGIN", 0), 0u);
+    DispatchOutcome wrote;
+    auto write = rig.Start("INSERT INTO readonly_part VALUES (92)", wrote, &writer);
+    ASSERT_TRUE(rig.Drive(*write)) << wrote.response;
+    ASSERT_EQ(wrote.response.rfind("INSERTED", 0), 0u) << wrote.response;
+
+    DispatchOutcome committed2;
+    auto commit2 = rig.Start("COMMIT", committed2, &writer);
+    ASSERT_TRUE(rig.Drive(*commit2)) << committed2.response;
+    ASSERT_EQ(committed2.response.rfind("COMMIT trx_id=", 0), 0u) << committed2.response;
+
+    EXPECT_EQ(rig.peer->shipped_statements()->read_only_prepares(), 1u)
+        << "a participant that wrote took the record-free path";
+    EXPECT_EQ(rig.peer->shipped_statements()->prepared(), 2u);
+
+    // Both halves are real: the read saw the owner's row and the write
+    // landed. The optimisation is about the record, never the outcome.
+    const std::string rows =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM readonly_part").response;
+    EXPECT_NE(rows.find(",91"), std::string::npos) << rows;
+    EXPECT_NE(rows.find(",92"), std::string::npos) << rows;
+}
+
 TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone) {
     // The other end of the same path: a client's ROLLBACK unwinds the
     // *participant's* half too, and does not merely leave it invisible.

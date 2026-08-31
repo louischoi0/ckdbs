@@ -86,9 +86,51 @@ through both remote-read fast paths and takes the general shipping route
 rather than the purpose-built single-hop reader — a change of route, not a
 branch added to a path. And the larger half is not the read: a core that
 only *read* becomes a full participant and pays a **full cross-owner
-decide** at commit, 7-30x what the read cost. The read-only-participant
-reply that would remove it is a new answer on an existing leg, not built,
-and that ratio is what says what it would be worth.
+decide** at commit, 7-30x what the read cost.
+
+**Half of that is closed 2026-08-31 (SA-T0): a participant that wrote
+nothing writes no `TXN_PREPARE` and takes no sync for it.** Its prepare is
+answered immediately, `MarkPrepared(kNoLsn)`, and everything else about it
+is unchanged — it is still prepared, still in doubt, still decided by the
+coordinator, still counted, and a writer of the rows it holds still blocks
+on it.
+
+*Why the record carries no information.* What a participant's PREPARE buys
+is recovery: the mount finds it, sees no decision in this stream, and
+resolves **this core's rows** against the coordinator's. A transaction that
+wrote nothing has no rows here — no redo, and an empty undo chain — so
+replaying this stream reaches the same state whichever way the coordinator
+decided. The record's replay is a no-op, and removing a no-op is not a
+weakening of the promise.
+
+*The predicate is one recovery already depends on.* "Wrote nothing" is
+`Transaction::last_undo_ptr() == kNoUndoPtr` — the engine's own definition
+(`txn/manager.hpp`), and safe to lean on because a loser is undone by
+walking its undo chain: a write that logged redo without first recording
+undo would already survive a rollback today. This adds no requirement; it
+reads one the log already keeps.
+
+*The one thing that does change, stated because it looks like a D4
+violation and is not.* Without the record, a crash before the decide leaves
+nothing in this stream, so the next mount does not resolve the transaction
+against the coordinator — it may find it in a checkpoint's active table and
+roll it back as an ordinary loser, **including where the coordinator
+committed**. D4's prohibition is on a participant unilaterally aborting
+*work*; a participant with no rows has no state that the two verdicts
+distinguish, and the rollback of an empty undo chain is the same empty
+change as the commit. The prohibition is about substance, and here there is
+none.
+
+*And the clause that rides ahead of its cause* (SA-R, accepted): when
+row-scoped FK reference intents land (SA-T4), a participant holding one is
+**not** write-free — the intent must survive to be visible to a reverse
+check racing the decide — so it fails the predicate and keeps its durable
+prepare. An FK-only enrolment is a writing enrolment for this purpose.
+
+`SHOW META` reports `shipped_readonly_prepares` where one has happened,
+absent otherwise. What remains of the original cost is the decide leg,
+which is still walked; `bench/v2.5.0/results-rr-read-half-*` is the file
+that prices this lever and nothing else does.
 
 **What still does not ship**, each a scope statement:
 
