@@ -165,6 +165,64 @@ TEST_F(SessionStepLoopbackTest, TwoReceiversOnOneTagAreRefusedRatherThanCrossed)
     client_->Close(tag);
 }
 
+TEST_F(SessionStepLoopbackTest, ADescriptionChunkOutOfOrderFailsTheReadRatherThanAssembling) {
+    // **XG3's description cell, at the layer that assembles it.** The ring
+    // is FIFO per edge, so a `seq` that is not the next one means the two
+    // ends disagree about the sequence rather than that a chunk is late -
+    // and a description assembled out of order decodes as plausible field
+    // widths, which is the failure the whole typed path may not have.
+    //
+    // Reported as a read error rather than dropped: a description that
+    // never completes would otherwise park the statement to its deadline
+    // and answer `UnknownOutcome` about a read that did arrive.
+    const PipelineTag tag{51, 0, 0};
+    ASSERT_TRUE(client_->RegisterInbound(tag, /*owner_core=*/1, oid_).ok());
+
+    ShippedRowDescHeader header{};
+    header.tag = tag;
+    header.seq = 1;  // the second chunk, first
+    header.chunks = 2;
+    std::vector<std::byte> payload(sizeof(header) + 4, std::byte{0});
+    std::memcpy(payload.data(), &header, sizeof(header));
+    client_->OnShippedRowDesc(payload);
+
+    SessionStepClient::RemoteRead* read = client_->Find(tag);
+    ASSERT_NE(read, nullptr);
+    EXPECT_TRUE(read->done) << "an out-of-order chunk must end the read, not wait for more";
+    EXPECT_FALSE(read->error.ok());
+    EXPECT_EQ(read->error.code(), StatusCode::kCorruption);
+    EXPECT_FALSE(read->described());
+    client_->Close(tag);
+}
+
+TEST_F(SessionStepLoopbackTest, ADescriptionIsWholeOnlyWhenEveryChunkHasArrived) {
+    // The other half of the same rule: `chunks` rides every chunk, so a
+    // receiver holding the first of two knows it is assembling a
+    // description and knows it is not done. `described()` is what the
+    // forward tests before it decodes anything.
+    const PipelineTag tag{52, 0, 0};
+    ASSERT_TRUE(client_->RegisterInbound(tag, 1, oid_).ok());
+
+    for (std::uint32_t seq = 0; seq < 2; ++seq) {
+        ShippedRowDescHeader header{};
+        header.tag = tag;
+        header.seq = seq;
+        header.chunks = 2;
+        std::vector<std::byte> payload(sizeof(header) + 3, std::byte{7});
+        std::memcpy(payload.data(), &header, sizeof(header));
+        client_->OnShippedRowDesc(payload);
+        SessionStepClient::RemoteRead* read = client_->Find(tag);
+        ASSERT_NE(read, nullptr);
+        EXPECT_EQ(read->described(), seq == 1)
+            << "whole after " << (seq + 1) << " of 2 chunks";
+    }
+    SessionStepClient::RemoteRead* read = client_->Find(tag);
+    ASSERT_NE(read, nullptr);
+    EXPECT_EQ(read->description.size(), 6u) << "the chunks concatenate in order";
+    EXPECT_TRUE(read->error.ok());
+    client_->Close(tag);
+}
+
 TEST_F(SessionStepLoopbackTest, ARemoteScanCompletesWithEveryRow) {
     auto tag = client_->Open(ScanStep(), /*owner_core=*/1, /*request_id=*/11);
     ASSERT_TRUE(tag.ok()) << tag.status().message();

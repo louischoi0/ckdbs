@@ -1112,6 +1112,25 @@ python3 bench/xe4_crossowner_commit_probe.py --server /path/to/kds_server-<sha> 
 
 Results: `bench/v2.7.0/results-xe-ack-at-append-*.md`.
 
+### The answer edge's crash points (XG3, 2026-09-01)
+
+Four points on a typed shipped read's answer edge
+(`docs/spec/crosscore.md` §4a), placed for `txn_2pc_kill_matrix_probe.py`'s
+harness and **not yet run by it**:
+
+| point | what a kill there leaves |
+|---|---|
+| `shipped.answer_desc_chunk` | a description **partly** across. `:1` is "the first chunk landed and no more will". The arrival core must refuse rather than decode what it has — a truncated description decodes as plausible field widths |
+| `shipped.answer_described_prerows` | a complete description, no rows, no terminator. The deadline must answer `UnknownOutcome`, never an empty result set: "no rows yet" and "no rows" are different answers |
+| `shipped.answer_batch_sent` | mid-stream. `:1` leaves *some* rows and no EOF — the case that must not be delivered as a whole result set |
+| `shipped.answer_edge_closed_prereply` | every row and the EOF away, the terminator not sent. The arrival core holds a complete answer it may not deliver, because the status saying whether it is whole is on the reply |
+
+Every one of these is a **read**, so there is nothing durable to reconcile
+after a restart: the assertion is about the answer the client gets, not
+about recovered state. That is what makes them different from the 2PC
+points beside them, and it is why they want a harness that reads the
+client's answer rather than counting rows after a mount.
+
 ### The portal-close tax probe (XG2, 2026-09-01)
 
 `bench/portal_close_tax_probe.py` — what the portal-close workaround cost

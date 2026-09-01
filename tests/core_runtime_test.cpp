@@ -5388,7 +5388,11 @@ TEST_F(CoreRuntimeTest, AStatementInsideATransactionShipsAndEnrolsSinceR68) {
 // route production does not take. Every RR1 test below wires it, which is
 // what makes "the read ships" a statement about the server rather than
 // about the fixture.
-void WireRemoteReads(ForeignIndexRig& rig, std::optional<SessionStepClient>& client) {
+// `with_description = false` is XG3's fault injection: the arrival core
+// never receives a `kShippedRowDesc`, which is what an owner dying
+// between its rows and its description looks like from here.
+void WireRemoteReads(ForeignIndexRig& rig, std::optional<SessionStepClient>& client,
+                     bool with_description = true) {
     client.emplace(/*core_id=*/0,
                    [&rig](std::uint32_t dst, sched::RingMessageKind kind,
                           std::vector<std::byte> payload) {
@@ -5429,13 +5433,15 @@ void WireRemoteReads(ForeignIndexRig& rig, std::optional<SessionStepClient>& cli
     // arriving with nothing to type them - which is exactly what
     // `ForwardAnswerEdge` refuses, so the omission would have shown up as a
     // refusal rather than a wrong answer.
-    ASSERT_TRUE(rig.core0
-                    ->RegisterMessageHandler(sched::RingMessageKind::kShippedRowDesc,
-                                             [&client](const sched::MessageHeader&,
-                                                       std::span<const std::byte> payload) {
-                                                 client->OnShippedRowDesc(payload);
-                                             })
-                    .ok());
+    if (with_description) {
+        ASSERT_TRUE(rig.core0
+                        ->RegisterMessageHandler(sched::RingMessageKind::kShippedRowDesc,
+                                                 [&client](const sched::MessageHeader&,
+                                                           std::span<const std::byte> payload) {
+                                                     client->OnShippedRowDesc(payload);
+                                                 })
+                        .ok());
+    }
     rig.dispatcher->SetRemoteReads(&*client);
 }
 
@@ -5508,6 +5514,83 @@ TEST_F(CoreRuntimeTest, ATypedClientsShippedReadComesBackAsRowsOnTheAnswerEdge) 
     DispatchOutcome rb;
     auto rollback = rig.Start("ROLLBACK", rb, &session);
     ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+}
+
+TEST_F(CoreRuntimeTest, RowsWithNoDescriptionAreRefusedRatherThanDecoded) {
+    // **XG3's description cell, end to end.** An owner that died between
+    // its rows and its description leaves the arrival core holding bytes
+    // it cannot type. Decoding them against a guessed shape would produce
+    // plausible field widths - invariant 13's forbidden reading one layer
+    // up - so the forward refuses, and it refuses **before** anything
+    // reaches the sink.
+    std::optional<SessionStepClient> reads;
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "no_desc");
+    WireRemoteReads(rig, reads, /*with_description=*/false);
+
+    ASSERT_EQ(rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO no_desc VALUES (81)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    WireResultSink sink;
+    Session session;
+    session.set_result_sink(&sink);
+
+    // **Inside a transaction, which is what forces the shipping route.** An
+    // autocommit star read of an unsplit foreign relation is served by the
+    // remote-step edge instead and would describe itself from the
+    // relation's schema - passing this test while proving nothing about the
+    // path under it. That is exactly the trap the first draft of this cell
+    // fell into.
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT * FROM no_desc", out, &session);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR", 0), 0u)
+        << "rows with no description were delivered anyway: " << out.response;
+    EXPECT_EQ(sink.row_count(), 0u) << "a row reached the sink untyped";
+    EXPECT_FALSE(sink.described());
+    EXPECT_EQ(reads->open_reads(), 0u) << "the receiver outlived its statement";
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+}
+
+TEST_F(CoreRuntimeTest, ARefusedReadDescribesNothingToATypedClient) {
+    // **A failed read must reach a typed client as a failure and nothing
+    // else** - not as an empty result set, which is a different answer.
+    //
+    // **What this covers and what it does not**, stated because the
+    // difference matters: this refusal is taken on *this* core, at compile,
+    // before anything ships - so it proves the sink is left untouched and
+    // no receiver is left behind, and it does **not** exercise an owner
+    // failing part way through a result it has already begun sending. That
+    // case needs a process kill at `shipped.answer_batch_sent:1`, which is
+    // why that crash point exists; it is not reachable from this rig.
+    std::optional<SessionStepClient> reads;
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "refused_read");
+    WireRemoteReads(rig, reads);
+
+    WireResultSink sink;
+    Session session;
+    session.set_result_sink(&sink);
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT no_such_column FROM refused_read", out, &session);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR", 0), 0u)
+        << "the owner's refusal did not reach the client: " << out.response;
+    EXPECT_EQ(sink.row_count(), 0u);
+    EXPECT_FALSE(sink.described())
+        << "a refused statement described a result set it does not have";
+    EXPECT_EQ(reads->open_reads(), 0u)
+        << "the answer edge is closed on every exit, refusals included";
 }
 
 TEST_F(CoreRuntimeTest, AShippedReadToATextClientKeepsTheRenderedLine) {

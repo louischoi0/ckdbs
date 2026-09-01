@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "kds/base/crash_point.hpp"  // XG3: the answer edge's kill points
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/ring_transport.hpp"
@@ -1172,6 +1173,13 @@ Status RemoteStepServer::SendAnswerDescription(const PipelineTag& tag,
             !s.ok()) {
             return s;
         }
+        // XG3's description cell: a description **partly** across. The
+        // arrival core holds an incomplete one, `described()` is false, and
+        // the forward must refuse rather than decode what it has - a
+        // truncated description decodes as plausible field widths, which is
+        // the one failure this path may not have. Fires after each chunk,
+        // so `:1` is "the first chunk landed and no more will".
+        base::CrashPointHit("shipped.answer_desc_chunk");
     }
     return Status::OK();
 }

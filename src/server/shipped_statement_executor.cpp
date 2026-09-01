@@ -317,6 +317,13 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
                 !sent.ok()) {
                 status = sent;
             } else {
+                // XG3: the description is across and no row has left. A
+                // crash here leaves the arrival core with a complete
+                // description, no rows, and no terminator - it must answer
+                // its deadline as `UnknownOutcome`, never as an empty
+                // result set, because "no rows yet" and "no rows" are
+                // different answers.
+                base::CrashPointHit("shipped.answer_described_prerows");
                 std::uint32_t seq = 0;
                 for (WireResultSink::Batch& batch : state->sink.batches()) {
                     // **The sink's payload goes across whole**, u16 row
@@ -348,6 +355,11 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
                         status = pushed;
                         break;
                     }
+                    // XG3: mid-stream. `:1` is after the first batch, so a
+                    // kill there leaves the arrival core holding *some*
+                    // rows and no EOF - the case that must not be delivered
+                    // as a whole result set.
+                    base::CrashPointHit("shipped.answer_batch_sent");
                 }
             }
         }
@@ -355,6 +367,13 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
         // its queue and its receiver for the session's life, and the
         // arrival core is parked on its EOF.
         remote_steps_->CloseAnswerEdge(state->answer_tag);
+        // XG3: every row and the EOF are away and the terminator has not
+        // been sent. The arrival core has a complete answer it may not yet
+        // deliver, because the status that says whether it is whole is on
+        // the reply. Its deadline answers `UnknownOutcome` - which for a
+        // read says the read returned nothing and changed nothing, and is
+        // exactly right: it did not change anything.
+        base::CrashPointHit("shipped.answer_edge_closed_prereply");
         // The reply is the terminator now - it carries the status and the
         // watermark and no rows, and `text` would be a rendering nobody
         // asked for. Held in a local because `text` is a view.
