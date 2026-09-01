@@ -63,7 +63,7 @@ Seven fields, in this order. An entry missing one is not ready to build.
 
 | # | Title | State | Branch | Commit |
 |---|---|---|---|---|
-| OPT-001 | UPDATE/DELETE decode every scanned row before testing the WHERE | proposed | — | — |
+| OPT-001 | UPDATE/DELETE decode every scanned row before testing the WHERE | **built**, reviewed, A/B owed | `opt-001-update-decode-order` | `e156b3d` |
 | OPT-002 | Every decoded string costs a malloc+free the codec's own header says it should not | **built, measured** | `opt-002-string-slot-assign` | `55d2c0b` |
 | OPT-003 | UPDATE/DELETE walk the relation with `kWrite` and dirty every page they read | proposed | — | — |
 | OPT-004 | `DecodeRowInto` still pays the Status-constructing preconditions AP02 removed | **built**, A/B owed | `opt-004-decoderowinto-preconditions` | `b05925f` |
@@ -125,8 +125,50 @@ pre-SET image the `previous` copy must carry (`:8232-8236`).
 suite, the MVCC and FK contract tests, and a `sim/` cell whose oracle
 would see any wrong-row write.
 
-**Implementation.** Branch `opt-001-update-decode-order` — filled in
-with its remote link, commits and suite result when the work lands.
+**Implementation.** Branch `opt-001-update-decode-order` at `c4799b8`
+and `e156b3d` (`v2.7.0-36-ge156b3d`), cut from the merged working branch
+and pushed to
+`https://github.com/louischoi0/ckdbs/tree/opt-001-update-decode-order`.
+`CompileWhere` emits the residual's real mask behind two structural
+gates — a step carrying a sub-chain is unmaskable, and a relation wider
+than 64 columns cannot be named by a `uint64_t`; the row's bytes are
+copied out of the page once and decoded from the copy; UPDATE's second
+full decode is gone and DELETE completes the frame with the complement
+before the assertion enforcer reads it.
+
+**Sanity, three ways.** Release suite **3091/3091 green**;
+`scripts/sim.sh` **266 runs, 0 failures** at `c4799b8` — every committed
+seed plus 8 fresh ones across the crash and I/O-fault modes, which is
+the check aimed at this change's actual failure mode, a wrong row
+written with no crash; and a `critics-developer` review of the diff that
+found **no correctness bug**, having checked the mask against what
+`EvaluateConjuncts` reads, both sides of a column-to-column compare,
+`BETWEEN`'s lowered pair, `IS NULL` as a `CompareOp` rather than a kind,
+and the 64-column boundary in all three places.
+
+**What the review changed** (`e156b3d`): the comment justifying the
+payload copy was **wrong on its facts** — a store does not move a pinned
+frame, so the copy is R1 *discipline* on a path with no
+`PageSpanGuard`, not a dangling-pointer fix, and the comment now says
+so. The decode-then-resolve rule, written at four sites, is now one
+`exec::DecodeAndResolve` — the fourth site is DELETE's complement, where
+drift hands back the previous row's value instead of failing. And three
+tests, because nothing asserted this mask at all: it names the WHERE's
+column and only it, it gives the mask up to a sub-chain, and it gives it
+up past 64 columns.
+
+**Declined from the review, with the reason:** reusing `payload_copy` as
+the undo before-image. Its premise holds today, but the before-image is
+what an abort restores, and the re-read is the only thing keeping it
+independent of how long the row body was suspended — wrong there is
+silent corruption, against a saving of one page-store lookup on matched
+rows only.
+
+**A/B owed.** OPT-002's run is the instrument, and its finding governs
+the shapes: `full-scan` cannot see a decode saving, so `update`,
+`delete` and `analyze-scan` are what to run. Expect OPT-002's own
+`update` number to *shrink* once this lands — that number was partly a
+measure of this defect.
 
 ---
 
