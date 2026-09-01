@@ -198,18 +198,19 @@ struct PendingAssertionBuild {
 // waiter needs to be found again, and what its refusals need to name.
 // **Whether the owner's half of the answer edge exists yet** (XG1).
 //
-// `false` until the owner can install a batch sink on a shipped session,
-// send the result description, and stream `STEP_BATCH` to the tag the
-// request carries. While it is false, `ShipStatement` keeps refusing a
-// shipped read to a typed client exactly as it did before XG1 - which is
-// the honest state, because shipping `form = 1` to an owner that renders
-// text would answer a typed client with a rendered line and that is the
-// failure the refusal exists to prevent.
+// **True since 2026-09-01**, when the owner's half landed: it installs a
+// batch sink on the shipped session, sends the result description on the
+// answer edge, and streams `STEP_BATCH` to the tag the request carries.
 //
-// A named constant rather than a comment promising to remember: the
-// request side is built and tested behind it, and flipping this with the
-// owner's half is one line at one site.
-inline constexpr bool kShippedTypedAnswerBuilt = false;
+// Kept as a named constant rather than deleted, because it is the one
+// switch that turns the whole path off: a build that needed the pre-XG1
+// behaviour - the refusal - flips this and gets it, with the wire, the
+// receiver and the owner all still compiled and still tested. What it must
+// never be is *half* true; the two halves are one feature, and shipping
+// `form = 1` to an owner that renders text would answer a typed client
+// with a rendered line, which is the failure the refusal existed to
+// prevent.
+inline constexpr bool kShippedTypedAnswerBuilt = true;
 
 struct PendingShippedStatement {
     std::uint64_t request_id = 0;
@@ -2196,6 +2197,11 @@ private:
 
     // The parked statement's other end: the owner's answer, its deadline,
     // or a waiter that vanished.
+    // XG1: puts a typed shipped read's description and rows into the
+    // session's sink. Called on the OK arm alone - a partial result set
+    // must never reach a client as a whole one.
+    Status ForwardAnswerEdge(const PendingShippedStatement& shipped, Session& session);
+
     DispatchOutcome FinishShippedStatement(const PendingShippedStatement& shipped,
                                           Session& session);
 

@@ -146,6 +146,10 @@ public:
                           std::span<const parser::AstValue> values, std::string& out) override;
     Status Emit(std::string_view row) override;
 
+    // Yes: this sink's `Emit` takes the D5 encoding, which is the same
+    // encoding a cross-core batch carries. XG1's forward relies on it.
+    bool AcceptsEncodedRows() const noexcept override { return true; }
+
     bool described() const noexcept { return described_; }
     const std::vector<wire::FieldDescription>& fields() const noexcept { return fields_; }
     std::uint64_t row_count() const noexcept { return rows_; }

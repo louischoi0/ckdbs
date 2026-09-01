@@ -289,6 +289,27 @@ StatusOr<std::vector<std::vector<DecodedField>>> DecodeRowBatch(
 StatusOr<std::vector<std::vector<DecodedField>>> DecodeRowBatch(std::vector<std::byte>&&,
                                                                 std::size_t) = delete;
 
+// The same walk, answering a different question: **where each row's bytes
+// begin and end**, rather than what its fields hold.
+//
+// Added for XG1's forward (`docs/spec/crosscore.md` §4a), which hands a
+// shipped read's already-encoded rows to a sink that speaks this encoding
+// instead of decoding and re-encoding them. It lives here, beside
+// `DecodeRowBatch`, because "how a row batch is walked" is one rule and a
+// second copy of it in a server file is how the two come to disagree - the
+// same argument this file's own header makes about the encoder.
+//
+// Fails exactly where `DecodeRowBatch` fails and for the same reasons: a
+// truncated payload, a length past the end, a count the payload cannot
+// supply. Never a partial answer.
+//
+// Views into `payload`, which must outlive the result. The rvalue overload
+// is deleted for `DecodeRowBatch`'s reason.
+StatusOr<std::vector<std::span<const std::byte>>> DecodeRowExtents(
+    std::span<const std::byte> payload, std::size_t field_count);
+StatusOr<std::vector<std::span<const std::byte>>> DecodeRowExtents(std::vector<std::byte>&&,
+                                                                   std::size_t) = delete;
+
 // Reads a fixed-width signed integer field back. The counterpart of
 // EncodeValue for the integer types, so a test can round-trip without
 // re-implementing the layout.

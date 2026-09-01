@@ -5423,7 +5423,124 @@ void WireRemoteReads(ForeignIndexRig& rig, std::optional<SessionStepClient>& cli
                                                  client->OnStepError(payload);
                                              })
                     .ok());
+    // XG1: a shipped read's answer edge carries its description on its own
+    // kind, and this rig wires the endpoints by hand rather than through
+    // `WireStepEndpoints`. Missing it would leave a typed read's rows
+    // arriving with nothing to type them - which is exactly what
+    // `ForwardAnswerEdge` refuses, so the omission would have shown up as a
+    // refusal rather than a wrong answer.
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(sched::RingMessageKind::kShippedRowDesc,
+                                             [&client](const sched::MessageHeader&,
+                                                       std::span<const std::byte> payload) {
+                                                 client->OnShippedRowDesc(payload);
+                                             })
+                    .ok());
     rig.dispatcher->SetRemoteReads(&*client);
+}
+
+TEST_F(CoreRuntimeTest, ATypedClientsShippedReadComesBackAsRowsOnTheAnswerEdge) {
+    // **XG1 end to end** (`docs/spec/crosscore.md` §4a). Until this row a
+    // shipped read was refused outright to any session carrying a result
+    // sink, which under KWP/1 is every session - so a typed client could
+    // not read foreign data inside a transaction at all.
+    //
+    // **The sink is what makes this test the feature's test.** Without one
+    // the statement takes the text arm and proves nothing about the edge;
+    // every other shipping test in this file is on that arm, and all of
+    // them stayed green while this path did not exist.
+    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "typed_ship");
+    WireRemoteReads(rig, reads);
+
+    ASSERT_EQ(rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO typed_ship VALUES (61)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO typed_ship VALUES (62)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    // A typed client: a session carrying the wire sink, which is what
+    // `ShipStatement` reads to decide the answer's form.
+    WireResultSink sink;
+    Session session;
+    session.set_result_sink(&sink);
+
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT * FROM typed_ship", out, &session);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    EXPECT_NE(out.response.rfind("ERR", 0), 0u)
+        << "a typed client's shipped read was still refused: " << out.response;
+
+    // The description arrived and typed the rows - it is the owner's,
+    // because only the owner compiled the statement.
+    EXPECT_TRUE(sink.described()) << "no description reached the sink";
+    EXPECT_FALSE(sink.fields().empty());
+
+    // **As many rows as the owner's own local read answers**, which is the
+    // property the whole cross-core suite is built on: a statement answered
+    // over an edge and the same statement answered locally are one answer.
+    // Counted from the owner's rendered reply - one `"\n"` section per row -
+    // rather than from a literal, because the rig seeds rows of its own and
+    // a hard-coded count would be asserting the fixture.
+    const std::string local =
+        rig.peer->dispatcher().Dispatch("SELECT * FROM typed_ship").response;
+    std::uint64_t local_rows = 0;
+    for (std::size_t at = local.find("\\n"); at != std::string::npos;
+         at = local.find("\\n", at + 2)) {
+        ++local_rows;
+    }
+    ASSERT_GE(local_rows, 2u) << "the fixture answered nothing to compare against: " << local;
+    EXPECT_EQ(sink.row_count(), local_rows)
+        << "the edge delivered a different number of rows than the owner's own read";
+
+    // And the receiver is gone: an edge left registered holds its batches
+    // for the session's life.
+    EXPECT_EQ(reads->open_reads(), 0u);
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+}
+
+TEST_F(CoreRuntimeTest, AShippedReadToATextClientKeepsTheRenderedLine) {
+    // The other arm, asserted beside it: a session with **no** sink ships
+    // `form = 0`, the owner installs no sink, and the answer is the
+    // rendered reply line byte for byte. That arm is what the newline
+    // byte-identity suite rests on, and a change that quietly typed it
+    // would pass every test in this file except this one.
+    std::optional<SessionStepClient> reads;
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "text_ship");
+    WireRemoteReads(rig, reads);
+
+    ASSERT_EQ(rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO text_ship VALUES (71)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Session session;  // no sink
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &session);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome out;
+    auto read = rig.Start("SELECT * FROM text_ship", out, &session);
+    ASSERT_TRUE(rig.Drive(*read)) << out.response;
+    EXPECT_NE(out.response.find(",71"), std::string::npos)
+        << "the text arm stopped answering in a rendered line: " << out.response;
+    EXPECT_EQ(reads->open_reads(), 0u) << "the text arm must register no edge at all";
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
 }
 
 TEST_F(CoreRuntimeTest, AReadInsideATransactionShipsAndEnrolsSinceRR1) {

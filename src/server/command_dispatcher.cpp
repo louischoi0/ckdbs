@@ -373,6 +373,31 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             return statement_ship_->Settled(id);
         };
         co_await sched::WaitUntil{&settled};
+
+        // **XG1: the reply is the terminator, and it may outrun the rows.**
+        //
+        // The owner queues its batches and answers; the drain that empties
+        // that queue resumes on each `STEP_CREDIT` this core grants as it
+        // stores one, so the reply can arrive with batches still in flight.
+        // Waiting on `Settled` alone would then forward a short result set
+        // and call it whole - which is the one failure this path may not
+        // have. So a typed read waits for the edge's own EOF as well.
+        //
+        // Bounded by the same deadline the statement itself has, and for
+        // the same reason: an owner that died mid-stream must not park this
+        // statement for the life of the process. On expiry the read is not
+        // `done`, `ForwardAnswerEdge` finds no description or an error, and
+        // the answer is the honest refusal rather than a truncated one.
+        if (shipped.typed_answer && remote_reads_ != nullptr) {
+            const sched::MonoTimeNs edge_deadline = NowNs() + kShippedStatementDeadlineNs;
+            const std::function<bool()> answered = [this, tag = shipped.answer_tag,
+                                                    edge_deadline] {
+                const SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
+                return read == nullptr || read->done || NowNs() >= edge_deadline;
+            };
+            co_await sched::WaitUntil{&answered};
+        }
+
         Session& shipped_session = session != nullptr ? *session : autocommit_session_;
         *out = FinishShippedStatement(shipped, shipped_session);
         // **A shipped statement that failed inside an explicit transaction
@@ -4525,6 +4550,70 @@ DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
     return pending_out;
 }
 
+Status CommandDispatcher::ForwardAnswerEdge(const PendingShippedStatement& shipped,
+                                            Session& session) {
+    SessionStepClient::RemoteRead* read =
+        remote_reads_ != nullptr ? remote_reads_->Find(shipped.answer_tag) : nullptr;
+    if (read == nullptr) {
+        return Status::IoError("the answer edge for a shipped read vanished before its rows "
+                               "could be delivered");
+    }
+    if (!read->error.ok()) return read->error;
+    if (!read->described()) {
+        // The owner answered OK and its rows are here, but the description
+        // that types them is not - so nothing can be decoded and nothing
+        // may be guessed. A truncated description is `Corruption` on the
+        // receive path; this is the *absent* one, which the deadline arm
+        // reaches when an owner dies between its reply and its chunks.
+        return Status::Corruption(
+            "a shipped read's rows arrived without the description that types them");
+    }
+    auto fields = wire::DecodeRowDescription(read->description);
+    if (!fields.ok()) return fields.status();
+
+    ResultSink* sink = session.result_sink();
+    if (sink == nullptr) {
+        // Unreachable: `ShipStatement` asks for a typed answer only where a
+        // sink is installed, and a session does not lose one mid-statement.
+        // Answered rather than asserted, because the cost of being wrong is
+        // a client with rows nobody delivered.
+        return Status::IoError("a typed shipped read finished on a session with no sink");
+    }
+    // **XG-R1's "without re-encoding", and the predicate that makes it
+    // safe** (`result_sink.hpp`). The rows on the edge are already in the
+    // engine's one row encoding; a sink that says it takes that encoding
+    // gets them byte for byte. A sink that does not - the newline form,
+    // whose `Emit` takes rendered text - would read them as text, which is
+    // a wrong answer rather than an error, so it is refused instead.
+    if (!sink->AcceptsEncodedRows()) {
+        return Status::Unsupported(
+            "a shipped read's rows are carried in the wire encoding and this connection's "
+            "output form does not read it");
+    }
+    const std::size_t field_count = fields.value().size();
+    if (Status described = sink->Describe(std::move(fields.value())); !described.ok()) {
+        return described;
+    }
+    for (const std::vector<std::byte>& batch : read->batches) {
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(batch, rows);
+        if (!header.ok()) return header.status();
+        // The row *boundaries* only - the fields inside are the sink's
+        // business, and this path exists precisely so nothing decodes them
+        // twice (`wire/row_codec.hpp`'s `DecodeRowExtents`).
+        auto extents = wire::DecodeRowExtents(rows, field_count);
+        if (!extents.ok()) return extents.status();
+        for (std::span<const std::byte> row : extents.value()) {
+            if (Status s = sink->Emit(std::string_view(
+                    reinterpret_cast<const char*>(row.data()), row.size()));
+                !s.ok()) {
+                return s;
+            }
+        }
+    }
+    return Status::OK();
+}
+
 Status CommandDispatcher::DescribePrepareFailure(const TxnPhaseOutcome* phase) const {
     if (phase == nullptr) {
         return Status::TxnConflict(
@@ -4568,6 +4657,21 @@ Status CommandDispatcher::DescribePrepareFailure(const TxnPhaseOutcome* phase) c
 
 DispatchOutcome CommandDispatcher::FinishShippedStatement(
     const PendingShippedStatement& shipped, Session& session) {
+    // **XG1: the answer edge is closed on every exit of this function.**
+    // A registered receiver nobody drains holds its batches and its
+    // description for the session's life - the leak `FinishRemoteReads`'
+    // own `CloseAll` guard exists to prevent, and this function has five
+    // returns. `Close` also sends `STEP_CANCEL` where the far side is
+    // still open, which is what the deadline arm below needs: an owner
+    // still producing into a receiver that has given up must be told.
+    struct CloseAnswer {
+        SessionStepClient* reads;
+        const PendingShippedStatement& shipped;
+        ~CloseAnswer() {
+            if (shipped.typed_answer && reads != nullptr) reads->Close(shipped.answer_tag);
+        }
+    } close_answer{remote_reads_, shipped};
+
     const ShippedStatementOutcome* reply = statement_ship_->Find(shipped.request_id);
     if (reply == nullptr || !reply->arrived) {
         // The deadline, or a waiter closed under the statement. **Never
@@ -4661,6 +4765,20 @@ DispatchOutcome CommandDispatcher::FinishShippedStatement(
     // The owner's own answer, and on the refusal arm its own spelling: the
     // code crossed, so `ErrorReply` here reproduces the line the owner
     // wrote, `retryable` bit included (statement_ship_service.hpp).
+    // ---- XG1: a typed answer's rows go into the session's sink ----------
+    //
+    // **Only on an OK status**, and that is the rule rather than a
+    // convenience: an owner that failed part way has already emitted rows
+    // onto the edge, and a partial result set delivered as a whole one is
+    // the wrong answer this whole path exists to avoid. The refusal below
+    // forwards nothing and the destructor above drops what arrived.
+    if (shipped.typed_answer && reply->status.ok()) {
+        Status forwarded = ForwardAnswerEdge(shipped, session);
+        if (!forwarded.ok()) {
+            return {ErrorReply(forwarded), false, 0, forwarded};
+        }
+    }
+
     DispatchOutcome out;
     out.response = reply->status.ok() ? reply->text : ErrorReply(reply->status);
     // CB6: a DDL this core shipped has changed catalog pages core 0 flushed

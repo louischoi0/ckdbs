@@ -402,6 +402,38 @@ StatusOr<std::vector<std::vector<DecodedField>>> DecodeRowBatch(std::span<const 
     return out;
 }
 
+StatusOr<std::vector<std::span<const std::byte>>> DecodeRowExtents(
+    std::span<const std::byte> payload, std::size_t field_count) {
+    if (payload.size() < kBatchHeaderSize) {
+        return Status::Corruption("wire row batch: truncated row count");
+    }
+    const auto rows = static_cast<std::uint16_t>(LoadLE(payload.subspan(kRowCountOffset, 2)));
+    std::size_t at = kBatchHeaderSize;
+
+    std::vector<std::span<const std::byte>> out;
+    out.reserve(rows);
+    for (std::uint16_t r = 0; r < rows; ++r) {
+        const std::size_t row_at = at;
+        for (std::size_t f = 0; f < field_count; ++f) {
+            if (at + 4 > payload.size()) {
+                return Status::Corruption("wire row batch: truncated field length at row " +
+                                          std::to_string(r));
+            }
+            const auto raw = static_cast<std::uint32_t>(LoadLE(payload.subspan(at, 4)));
+            at += 4;
+            if (raw == 0xFFFFFFFFu) continue;  // NULL: the length and nothing else
+            if (at + raw > payload.size()) {
+                return Status::Corruption("wire row batch: field of " + std::to_string(raw) +
+                                          " bytes runs past the payload at row " +
+                                          std::to_string(r));
+            }
+            at += raw;
+        }
+        out.push_back(payload.subspan(row_at, at - row_at));
+    }
+    return out;
+}
+
 StatusOr<std::int64_t> DecodeInt(std::span<const std::byte> bytes) {
     if (bytes.empty() || bytes.size() > 8) {
         return Status::Corruption("wire row codec: integer field of " +

@@ -2235,8 +2235,13 @@ still waits on its own gate, so:
   column-count bound without naming a ceiling. A read is exempt from D4's
   dedup record; the text arm and its own 992-byte cap are untouched; the
   longest shippable statement falls 992 → 976 bytes. The four refusals that
-  survive are listed by name in §4a. **Built by XG1; this entry closes when
-  that lands, and not before.**
+  survive are listed by name in §4a. **Built 2026-09-01 by XG1 and
+  closed**: a typed client's shipped read is answered in rows, end to
+  end, with `CoreRuntimeTest.ATypedClientsShippedReadComesBackAsRowsOnTheAnswerEdge`
+  asserting the row count matches the owner's own local read and
+  `.AShippedReadToATextClientKeepsTheRenderedLine` asserting the other arm
+  did not move. What is left of this entry is §4a's four named refusals,
+  of which the wide-row one is the entry above.
 
   **Surveyed 2026-08-31 (work order XF, row XF0):
   `docs/inflight/blocked/workplan-shipped-read-typed.md`, with the ask at

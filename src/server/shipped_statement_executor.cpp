@@ -319,22 +319,28 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
             } else {
                 std::uint32_t seq = 0;
                 for (WireResultSink::Batch& batch : state->sink.batches()) {
-                    // `WireResultSink` frames a batch for a *socket* - a u16
-                    // row count then the rows - and the edge frames one for a
-                    // *ring*. The row bytes are the same D5 encoding in both,
-                    // which is the point: this re-frames, it never re-encodes.
+                    // **The sink's payload goes across whole**, u16 row
+                    // count and all: `EncodeStepBatch` frames a STEP_BATCH
+                    // as `[StepBatchHeader][RowBatchWriter::Finish()]`, and
+                    // `Finish()` *is* the count-then-rows form this sink
+                    // seals. So the region after the header is exactly what
+                    // `wire::DecodeRowBatch` reads on the other side, which
+                    // is what lets the fan-in's decoder serve this edge
+                    // unchanged.
+                    //
+                    // Stripping the count here was this row's one real bug
+                    // in the making: it would have shifted every field by
+                    // two bytes and decoded as plausible values rather than
+                    // as an error.
                     StepBatchHeader header{};
                     header.tag = state->answer_tag;
                     header.seq = seq++;
                     header.row_count = batch.rows;
-                    const std::size_t rows_at = 2;  // past the sink's own count
-                    const std::size_t rows_len =
-                        batch.payload.size() > rows_at ? batch.payload.size() - rows_at : 0;
-                    std::vector<std::byte> framed(sizeof(header) + rows_len);
+                    std::vector<std::byte> framed(sizeof(header) + batch.payload.size());
                     std::memcpy(framed.data(), &header, sizeof(header));
-                    if (rows_len > 0) {
-                        std::memcpy(framed.data() + sizeof(header),
-                                    batch.payload.data() + rows_at, rows_len);
+                    if (!batch.payload.empty()) {
+                        std::memcpy(framed.data() + sizeof(header), batch.payload.data(),
+                                    batch.payload.size());
                     }
                     if (Status pushed =
                             remote_steps_->PushAnswerBatch(state->answer_tag, std::move(framed));

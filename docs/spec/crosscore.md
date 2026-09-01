@@ -234,8 +234,29 @@ owner installs a batch sink on the shipped session and streams
 `STEP_BATCH` under the existing credit protocol; the ship reply POD arrives
 last as the **terminator**, carrying the status and the watermark with
 `text_len = 0`. Codec, batch builder, credit grant, `STEP_CANCEL` and the
-ceiling are reused unchanged — this is a fifth consumer of the pipeline,
-not a second pipeline.
+ceiling are reused unchanged — this is a fifth **producer** on the
+pipeline, not a second pipeline.
+
+**Buffered on the owner and sent under credit, not streamed row by row**
+(built 2026-09-01; this replaces the word "streams" above, which the build
+showed the engine cannot honour here). A `ResultSink` is called from inside
+the executor's row callback and **has no suspension point**, so nothing on
+that path can park on credit. The rows are sealed into batches as the
+statement runs and queued on the edge when it finishes; what parks is the
+drain, which resumes on each `STEP_CREDIT`. The consequence is visible at
+the other end, which is why it is stated here: **the terminator can outrun
+the rows**, so the arrival core waits for the edge's own EOF as well as for
+the reply, under the same 10 s deadline.
+
+**The rows reach the client's sink without being re-encoded**, which is
+what one row encoding buys. A `ResultSink` answers whether its `Emit` takes
+that encoding (`AcceptsEncodedRows`, **false by default**, so a sink
+written later without reading this gets the safe answer); a sink that says
+yes is handed the edge's bytes as they arrived. The text form says no — its
+`Emit` takes rendered text — and a shipped read to a text session never
+asks, because that arm ships `form = 0`. Row boundaries come from
+`wire::DecodeRowExtents`, the same walk `DecodeRowBatch` performs, in the
+file that owns the format, so nothing reads the row format twice.
 
 *Why an edge and not a bigger reply.* Both ship PODs fill exactly one ring
 slot, so the reply carries **992 bytes** and cannot hold a result set at
@@ -290,7 +311,11 @@ already takes.
 
 **A duplicate read re-executes rather than being answered from a record**
 (XG-R2). D4's dedup record keeps running for every write; a read is exempt.
-See `cross-owner-txn.md` §1a for why, and for what it bounds.
+See `cross-owner-txn.md` §1a for why, and for what it bounds. **Narrower in
+the build than in the ruling, and the narrowing is the wire's**: the owner
+cannot tell a *text-arm* read from a write, because nothing on the request
+says so, so a text read keeps its record — which is what it always had and
+is bounded at 992 bytes either way.
 
 **What stays refused after this lands** (XG-R7), by name, so a client sees
 one rule rather than a surprise:

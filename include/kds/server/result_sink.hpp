@@ -82,6 +82,28 @@ public:
     // caller's scratch buffer is reused for the next row, so a sink that
     // keeps the bytes must copy them.
     virtual Status Emit(std::string_view row) = 0;
+
+    // **Whether `Emit` will accept a row this sink did not encode** (XG1,
+    // `docs/spec/crosscore.md` §4a).
+    //
+    // `Emit`'s contract above is "a row an `Encode*` call produced" -
+    // meaning *this* sink's. That is the whole of the answer: the text form
+    // takes rendered text and the wire form takes the D5 encoding, and
+    // handing either the other's bytes is a wrong answer rather than an
+    // error.
+    //
+    // It matters because a **shipped read's rows arrive already encoded**,
+    // in the same D5 form a `WireResultSink` emits - so forwarding them
+    // byte for byte is exactly right for that sink and exactly wrong for
+    // the text one, and nothing else in this interface can tell them apart.
+    // A sink that answers true is promising that its `Emit` reads the
+    // engine's one row encoding, which is the promise `wire/row_codec.hpp`
+    // exists to make singular.
+    //
+    // **False by default**, so a sink written later without reading this
+    // gets the safe answer, and the forward path refuses rather than
+    // guessing.
+    virtual bool AcceptsEncodedRows() const noexcept { return false; }
 };
 
 // The newline protocol's form: a header line of comma-joined column names,
