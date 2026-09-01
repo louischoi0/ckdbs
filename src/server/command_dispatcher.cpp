@@ -3710,6 +3710,10 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
         if (!child.ok()) return child.status();
 
         exec::FkReverseOptions options;
+        // The scope the answer is good for (`fk_check.hpp`): a reverse
+        // check that saw less than the whole child may not answer "no
+        // children", and this is the core whose ranges bound what it saw.
+        options.core_id = core_id_;
         const catalog::TableAccess::CabinRef cabin = child.value()->CabinOn(fk.column_no);
         if (cabins_ != nullptr && cabin.id != 0) {
             options.cabins = cabins_;

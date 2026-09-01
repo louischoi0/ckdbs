@@ -147,6 +147,37 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                                                   const txn::ReadView& check_view,
                                                   const FkReverseOptions& options,
                                                   Budget* budget) {
+    // ---- Scope: this check answers for the whole child, or not at all ---
+    //
+    // **Asked first, before the Cabin and before the walk, because both of
+    // them are per-core answers.** The entry set speaks for (observed value
+    // x the ranges its core owns) since SB-R1 (`docs/spec/cabin.md` §4b),
+    // and the walk below covers the chains this core owns (RD6: one chain
+    // per range). Either would happily report *"no children"* for a child
+    // row sitting in a range another core holds - and `kPass` here is not a
+    // slow answer but a **dropped constraint**, the one degraded mode
+    // `foreign-keys.md` §1 says a constraint may not have.
+    //
+    // So: refuse. `ServableBy` is the same predicate the read surface and
+    // `step_vm.cpp`'s `CabinScopeCovers` ask, not a third spelling of it,
+    // and the refusal is what SA-T5's fan-out replaces - one boolean probe
+    // per child-range owner, each answering from its own Cabin or its own
+    // walk.
+    //
+    // **Unreachable today and deliberately built anyway.**
+    // `RangeEligible`'s `kForeignKey` arm gates a split on either side of
+    // an FK, so no child reaches here with a directory. That gate is
+    // SA-T6's to lift, and this is the line that decides whether lifting it
+    // costs a refusal or a silently unenforced constraint.
+    if (!child.ranges.empty() && !child.ServableBy(options.core_id)) {
+        return Status::NotImplemented(
+            "relation oid " + std::to_string(child.oid) +
+            " has ranges core " + std::to_string(options.core_id) +
+            " does not own, and a foreign key's reverse check must see every child row to "
+            "answer 'no children'; a fan-out over the child's range owners is not built "
+            "(docs/spec/crosscore.md §6a, §9)");
+    }
+
     FkReverseOutcome outcome;
 
     // ---- The Cabin, if this value has been observed (F6) ----------------
@@ -316,11 +347,38 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
         return storage::VisitControl::kStop;
     };
 
-    Status walked = child.clustered_type == catalog::ClusteredType::kBtree
-                        ? btree::BtreeVisit(store, child.desc_page_id, storage::PageAccess::kRead,
-                                            visitor)
-                        : heap::ChainVisit(store, child.desc_page_id, storage::PageAccess::kRead,
-                                           visitor);
+    // One walk per chain this core owns (RD6, `WalkHeadsFor`); the argument
+    // for taking that rule rather than `desc_page_id` is at
+    // `cabin_optimizer_exec.cpp`'s copy of it. **No range arm on the btree
+    // side**, and D1 is what makes that an absence rather than an omission:
+    // a btree relation never splits, so a btree child never has a directory.
+    Status walked = Status::OK();
+    if (child.clustered_type == catalog::ClusteredType::kBtree) {
+        walked = btree::BtreeVisit(store, child.desc_page_id, storage::PageAccess::kRead, visitor);
+    } else {
+        const std::vector<PageId> heads = child.WalkHeadsFor(options.core_id);
+        // **Checked rather than assumed**, `TableAccess::RangeFor`'s reason
+        // in this function's terms: no heads would run no loop body, leave
+        // `verdict` at `kPass`, and report "no children" having read
+        // nothing - the silent drop this whole guard exists to prevent. The
+        // scope refusal above makes it unreachable (every range is ours, or
+        // there is no directory and the one head is `desc_page_id`), and
+        // that guarantee lives in another function, which is exactly when
+        // this engine checks instead of trusting.
+        if (heads.empty()) {
+            return Status::Corruption(
+                "relation oid " + std::to_string(child.oid) +
+                " yielded no chain heads for core " + std::to_string(options.core_id) +
+                "; a foreign key's reverse check cannot answer 'no children' from no walk");
+        }
+        for (const PageId head : heads) {
+            walked = heap::ChainVisit(store, head, storage::PageAccess::kRead, visitor);
+            // A match ends the whole check, not merely this chain: the
+            // visitor stops at the first referencing row and `verdict`
+            // carries which kind it was.
+            if (!walked.ok() || verdict != FkVerdict::kPass) break;
+        }
+    }
     if (!inner.ok()) return inner;
     if (!walked.ok()) return walked;
 

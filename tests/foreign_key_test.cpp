@@ -620,6 +620,108 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
     EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1"), "DELETED 1");
 }
 
+// ---- The reverse check under a split child (SA-T6's prerequisite) ----
+//
+// `RangeEligible`'s `kForeignKey` arm gates a split on either side of an
+// FK, so nothing below is reachable through the shipped surface; the
+// directory rows are written directly, which is the state SA-T6 makes
+// ordinary the day it lifts that gate. Both cells exist because RESTRICT
+// needs an authoritative *"no children"* (F6), and a reverse check that
+// saw less than the whole child and answered `kPass` would not be a slow
+// constraint - it would be an absent one.
+
+// Splits `name` at `lo`, giving the upper range to `owner`.
+void SplitChild(catalog::Catalog& catalog, const char* name, std::uint64_t lo,
+                std::uint32_t owner) {
+    auto oid = catalog.FindTableOidByName(name, nullptr);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto head = catalog.CreateRangeEntryPage(oid.value(), lo);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(catalog.OpenRangeRows(oid.value(), lo, owner, head.value()).ok());
+}
+
+TEST_F(ForeignKeyCheckTest, AChildRangeOnAnotherCoreRefusesRatherThanPassing) {
+    // The child is heap: D1 declines every btree relation a directory, so
+    // a btree child could never reach this arm.
+    ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
+                  "qty int64)")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 100)").substr(0, 8), "INSERTED");
+
+    // A range this core does not own. Everything below it - the whole of
+    // account 1's child population - is still visible here, and that is
+    // exactly the trap: a walk of what is visible answers "no children"
+    // for a parent whose children may sit in the range that is not.
+    SplitChild(boot_->catalog, "trades_h", /*lo=*/4096, /*owner=*/1);
+
+    const std::string refused = Run("DELETE FROM accounts WHERE id = 1");
+    EXPECT_EQ(refused.rfind("ERR ", 0), 0u) << refused;
+    EXPECT_NE(refused.find("reverse check"), std::string::npos) << refused;
+
+    // And the parent really is still there: a refusal, not a deletion that
+    // reported an error.
+    EXPECT_EQ(RowCount("SELECT * FROM accounts WHERE id = 1"), 1u);
+}
+
+TEST_F(ForeignKeyCheckTest, AChildInASecondOwnedRangeStillBlocksTheParent) {
+    // The cell that bites. Every range is this core's, so the check may
+    // answer - but the referencing row lives in the **second** chain, and
+    // `desc_page_id` alone is the first. A walk that stopped there would
+    // report "no children", delete the parent, and leave a dangling
+    // foreign key with nothing logged.
+    ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
+                  "qty int64)")
+                  .substr(0, 7),
+              "CREATED");
+    // Ids 1 and 2, both below the boundary, and neither references
+    // account 1 - so the first chain is a walk that finds nothing.
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 100)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (2, 200)").substr(0, 8), "INSERTED");
+
+    SplitChild(boot_->catalog, "trades_h", /*lo=*/3, /*owner=*/0);
+
+    // Id 3: the first row of the second chain, and the only reference to
+    // account 1 anywhere.
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (1, 300)").substr(0, 8), "INSERTED");
+
+    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1").substr(0, 16), "ERR FK_VIOLATION");
+    EXPECT_EQ(RowCount("SELECT * FROM accounts WHERE id = 1"), 1u);
+
+    // The converse, so the cell is not passing by refusing everything:
+    // account 2 is referenced only from the first chain, and deleting it
+    // is still refused for the ordinary reason.
+    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 2").substr(0, 16), "ERR FK_VIOLATION");
+}
+
+// The **Cabin** arm of that same refusal, and the reason it is asked
+// before the serve rather than beside the walk. An exhausted entry set is
+// an authoritative "no children" (F6) - and since SB-R1 it is
+// authoritative for *(observed value x the ranges its core owns)* alone
+// (`docs/spec/cabin.md` §4b). A set observed while the relation was whole
+// answers `kPass` for ranges it no longer speaks for, and no walk runs to
+// contradict it: a guard placed below the serve would be a guard this
+// shape never reaches. Account 2's set is observed empty *before* the
+// boundary opens, which is that state exactly.
+TEST_F(ForeignKeyCheckTest, ACabinCannotAnswerForAChildRangeOnAnotherCore) {
+    ASSERT_EQ(Run("CREATE TABLE trades_h (id int64, account_id int64 REFERENCES accounts, "
+                  "qty int64)")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("CREATE CABIN ON trades_h(account_id)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO trades_h VALUES (1, 100)").substr(0, 8), "INSERTED");
+    // A declared Cabin observes on the first probe, and the set it banks
+    // for account 2 is empty - the answer the serve exists to give.
+    ASSERT_EQ(RowCount("SELECT * FROM trades_h WHERE account_id = 2"), 0u);
+
+    SplitChild(boot_->catalog, "trades_h", /*lo=*/4096, /*owner=*/1);
+
+    const std::string refused = Run("DELETE FROM accounts WHERE id = 2");
+    EXPECT_EQ(refused.rfind("ERR ", 0), 0u) << refused;
+    EXPECT_NE(refused.find("reverse check"), std::string::npos) << refused;
+    EXPECT_EQ(RowCount("SELECT * FROM accounts WHERE id = 2"), 1u);
+}
+
 // ---- NULL fk values: MATCH SIMPLE, both directions (null.md §4) ------
 
 // A NULL child key satisfies the constraint vacuously: the insert probes no

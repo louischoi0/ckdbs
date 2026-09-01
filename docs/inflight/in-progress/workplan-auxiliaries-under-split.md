@@ -9,7 +9,9 @@ built on the `xf` worktree; every path:line below is `1b27d68`
 | SA-T0 | **Built** at `1beda80` — a participant that wrote nothing writes no `TXN_PREPARE`. Spec: `cross-owner-txn.md` §1a |
 | SA-T1 | **Built** at `1b27d68` — `exec::RestructureForExecutingCore`, both remote shapes, correlated arms included |
 | SA-T2 | **Ruled 2026-09-01 and built as work order SB** (`instructions/v2.7.1/workorder-sb.md`). §2's proposal was ratified as SB-R1; §2.6 records what building it found. |
-| SA-T3..T9 | not started |
+| SA-T3, T5, T7, T8, T9 | not started |
+| SA-T4 | not started. The only trace in the tree is a comment (`src/server/shipped_statement_executor.cpp:704`) |
+| SA-T6 | **Blocked on its own gate, and its two hazards are pre-emptively closed.** §3 below |
 
 ---
 
@@ -222,3 +224,133 @@ gate), and **D1**, which is where `RangeEligible`'s index arm returns —
 not IX11, which shapes the re-added arm rather than triggering it (the
 review's C1: the arm was dead code, since IX3 makes an index btree-only
 and D1 declines every btree relation first).
+
+
+## 3. SA-T6 — surveyed 2026-09-01, blocked, and defused in advance
+
+### 3.1 Both halves are gated, and the gate is real
+
+`workorder-sa.md` states SA-T6's gate as **SA-T4, SA-T5**. Neither is
+started: the only occurrence of either in the tree is a comment at
+`src/server/shipped_statement_executor.cpp:704` saying where SA-T4's
+intents will go. SA-T6 has two halves and the gate binds both:
+
+- **The `CREATE`-time pair.** `catalog::CheckForeignKeyColocation`
+  (`src/catalog/foreign_key.cpp:31`) refuses `parent.owner_core !=
+  child.owner_core`. SA-R6 relaxes F5 from "same core" to
+  "2PC-reachable owner" — but SA-R6's own sentence is *"The correctness
+  path is SA-T4/T5's protocol."* Admitting the pair without that
+  protocol declares a constraint whose forward check
+  (`exec::CheckParentPresent`) does a **local** `BtreeLookup` on
+  `parent.desc_page_id` with no ownership question anywhere in it. On a
+  foreign parent that is a page this core may not fault: the check
+  fails or faults rather than answering, and no path exists that answers
+  it correctly. **The reverse direction has the same shape and the guard
+  built below does not cover it**: the guard is keyed on
+  `!child.ranges.empty()`, so an *unsplit* child owned by another core is
+  walked at `desc_page_id` with no scope question asked. That is correct
+  today because F5 forces parent and child onto one core; the day SA-R6
+  relaxes it, SA-T4/T5 owe both directions, not just the forward one.
+- **The split gate.** `RefuseAuxiliaryOnSplitRelation`'s FK arm (both
+  ends, `src/catalog/catalog.cpp`) and `RangeEligible`'s `kForeignKey`
+  arm. What lifting these costs is §3.2, and it is worse than a fault.
+
+**Nothing in SA-T6 is buildable today**, and the order says so itself.
+This entry records that rather than leaving the next reader to re-derive
+it.
+
+### 3.2 What the split gate was holding shut — measured by breaking it
+
+SB's review named two sites; building the guards proved both, by
+reverting each and watching a cell fail. Neither is a hypothetical.
+
+**(1) The reverse check's walk covered one range and reported success.**
+`CheckNoChildReferences` walked `heap::ChainVisit(store,
+child.desc_page_id, ...)`, and since RD6 a split heap relation is **one
+chain per range** — so `desc_page_id` is the `lo = 0` chain and nothing
+else. With a referencing child row in the second range, the reverse
+check found nothing, answered `FkVerdict::kPass`, and the parent DELETE
+replied **`DELETED 1`**. A dangling foreign key, the constraint
+reporting success, nothing logged. `foreign-keys.md` §1 already names
+this class: *"A constraint that silently does not run is not a degraded
+mode."*
+
+**(2) The Cabin serve had no scope check.** An exhausted entry set
+returns an authoritative `kPass` — which is the whole of F6 — but since
+SB-R1 a set speaks for *(observed value × the ranges its core owns)*
+(`cabin.md` §4b). On a child whose ranges are not all this core's, an
+exhausted set means "no children **here**", and answering `kPass` from
+it drops the constraint the same way (1) does.
+
+### 3.3 What was built instead, and why it is not SA-T6
+
+Both are closed **while the gate is still up**, which is the same order
+SB took with `BuildSeededSets`: fix the hazard on the safe side of a
+refusal, so lifting the refusal later is a decision about capability
+rather than a bet on correctness.
+
+- **One scope refusal, asked before the Cabin and before the walk**
+  (`src/exec/fk_check.cpp`): if the child has a directory and is not
+  `ServableBy(options.core_id)`, the check returns `NotImplemented`
+  naming SA-T5's fan-out. `ServableBy` is the read surface's own
+  predicate and `step_vm.cpp`'s, not a third spelling. **A refusal, not
+  a partial answer**, because RESTRICT's contract is an authoritative
+  "no children".
+- **`WalkHeadsFor(core_id)` for the walk**, so a child that *is* wholly
+  this core's is covered across every chain it has. The btree arm keeps
+  `desc_page_id` and says why: D1 declines every btree relation a
+  directory, so a btree child never has one.
+- `FkReverseOptions` gains `core_id`, set from `CommandDispatcher::core_id_`.
+
+Behaviour on every shipped shape is unchanged — an unsplit child has no
+directory, `WalkHeadsFor` answers the one head it always did, and the
+refusal is unreachable. **Three cells** pin it
+(`tests/foreign_key_test.cpp`), one per hazard plus the ordering
+between them, and each was verified to fail with its own guard reverted
+or moved:
+
+- `AChildInASecondOwnedRangeStillBlocksTheParent` — the walk hazard. With
+  the walk reverted to `desc_page_id`, the parent DELETE answers
+  `DELETED 1`.
+- `ACabinCannotAnswerForAChildRangeOnAnotherCore` — the Cabin hazard,
+  **added by review**: the first two cells declared no Cabin, so both
+  reached the guard through the walk, and §3.2's hazard (2) was closed by
+  the code and proven by nothing. Moving the guard *below* the Cabin serve
+  left the whole suite green, which is what a missing cell looks like.
+- `AChildRangeOnAnotherCoreRefusesRatherThanPassing` — the refusal itself,
+  and that it is a refusal rather than a deletion reporting an error.
+
+A fourth thing the review established and this file records because it is
+easy to mistake for an optimisation: the loop's `break` on
+`verdict != kPass` is **load-bearing**. Without it a later chain's
+`kBusy` would overwrite an earlier chain's `kViolation`, turning a
+`FK_VIOLATION` into a retryable `TXN_CONFLICT` — a wrong code, not a slow
+one.
+
+**This is not SA-T6 and must not be counted as it.** SA-T6 is the two
+gates coming down; this is the work that makes taking them down a
+question about SA-T4/T5 rather than about whether foreign keys still
+enforce.
+
+### 3.4 One site deliberately left
+
+`CheckParentPresent`'s **heap** arm walks `parent.desc_page_id` with the
+same one-chain exposure. It is gated by a different and *permanent*
+refusal — a heap parent is `Unsupported` at declaration, which SA-T6
+explicitly leaves unchanged ("Heap-parent `Unsupported` unchanged") —
+and closing it would mean threading a core id through a signature for a
+path the DDL forbids. Named here so it is a decision rather than an
+oversight; it becomes live only if heap parents are ever admitted, which
+is `foreign-keys.md`'s own open item.
+
+### 3.5 Named, not grown: the seventh split-a-relation test helper
+
+`SplitChild` in `tests/foreign_key_test.cpp` is the seventh spelling of
+the same three calls (`CreateRangeEntryPage` → `OpenRangeRows`, plus the
+oid lookup): `SplitRelation` in `tests/cabin_contract_test.cpp`, `SplitAt`
+in `tests/range_chain_test.cpp`, and inline copies in
+`tests/cabin_optimizer_exec_test.cpp`, `tests/relayout_planner_test.cpp`
+and four sites in `tests/core_runtime_test.cpp`. Consolidating it is out
+of this change's scope and is recorded here so the next one does not add
+an eighth silently; `SplitChild`'s `catalog::Catalog&` signature is the
+most reusable of the set and is the shape to lift.

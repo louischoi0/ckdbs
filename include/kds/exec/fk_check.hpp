@@ -95,6 +95,16 @@ struct FkReverseOptions {
     // There is deliberately no `declared` flag beside it: that one exists to
     // decide n=1 versus n=2 *when recording*, and this check never records.
     std::uint64_t cabin_id = 0;
+
+    // The core running this check (`CommandDispatcher::core_id_`), which
+    // bounds what its answer is good for. The scope guard at the top of
+    // `CheckNoChildReferences` is where that matters and why.
+    //
+    // **The default is safe because there is exactly one caller and it
+    // sets it** - not because 0 is a harmless value. A future caller on
+    // core 3 that forgot, against a child whose ranges are all core 0's,
+    // would pass the guard and walk another core's chains.
+    std::uint32_t core_id = 0;
 };
 
 struct FkReverseOutcome {

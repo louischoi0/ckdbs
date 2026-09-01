@@ -961,12 +961,32 @@ still waits on its own gate, so:
   flag, which is a condition on the arm and not the trigger for it.
   `crosscore.md` §6a's index bullet carries the same amendment.
 
-  **Two more sites of the subset shape, gated and named** (SB's review):
-  `exec::CheckNoChildReferences` (`src/exec/fk_check.cpp`) serves an
-  authoritative FK verdict from a Cabin set with no scope check, and its
-  fall-back walks `child.desc_page_id` alone — both unreachable only
-  because `RangeEligible`'s `kForeignKey` arm still gates a split, and
-  both live the moment **SA-T6** lifts it.
+  **Two more sites of the subset shape — found by SB's review, closed
+  2026-09-01 before the gate that hides them lifts.**
+  `exec::CheckNoChildReferences` served an authoritative FK verdict from
+  a Cabin set with no scope check, and its fall-back walked
+  `child.desc_page_id` alone — one chain of a split heap relation since
+  RD6. The second was proven by reverting the fix: a referencing child
+  row in the relation's *second* range left the reverse check answering
+  `kPass`, and the parent DELETE replied **`DELETED 1`** — a dangling
+  foreign key with the constraint reporting success, which §1 of
+  `docs/spec/foreign-keys.md` names as the one degraded mode a
+  constraint may not have. Both are now closed: one `ServableBy` refusal
+  asked ahead of both paths, and `WalkHeadsFor` for the walk. **This is
+  not SA-T6** — the FK split gate and the cross-core pair refusal both
+  stand, gated on SA-T4/SA-T5, neither started
+  (`workplan-auxiliaries-under-split.md` §3). What changed is that
+  lifting them is now a question about capability rather than a bet on
+  whether foreign keys still enforce.
+
+  Left deliberately, both named in `workplan-auxiliaries-under-split.md`
+  §3: `CheckParentPresent`'s **heap** arm has the same one-chain exposure
+  and is gated by a permanent, separate refusal (a heap parent is
+  `Unsupported` at declaration, which SA-T6 does not touch); and the new
+  guard is keyed on `!child.ranges.empty()`, so an **unsplit** child owned
+  by another core still gets walked with no scope question — correct only
+  while F5 forces colocation, and SA-T4/T5's to answer in both directions
+  the day SA-R6 relaxes it.
 
   The other nine, each a path that answered before and refuses now, all in
   `src/server/command_dispatcher.cpp` unless named otherwise:
