@@ -3654,10 +3654,72 @@ void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_o
     (void)recorded;
 }
 
+std::vector<parser::AstValue> CommandDispatcher::InsertBodyOf(
+    const catalog::TableAccess& ta, const std::vector<parser::AstValue>& values) {
+    const std::size_t ncols = ta.schema.columns.size();
+    if (ncols > 0 && values.size() == ncols) {
+        return std::vector<parser::AstValue>(values.begin() + 1, values.end());
+    }
+    if (ncols > 0 && values.size() == ncols - 1) return values;
+    // Neither legal arity. Empty rather than a guess: `InsertOneRow` refuses
+    // this row by name, and resolving foreign keys against a shape nobody
+    // can read would be resolving the wrong columns.
+    return {};
+}
+
+Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& child,
+                                                    const std::vector<parser::AstValue>& body,
+                                                    const txn::ReadView& check_view,
+                                                    exec::FkParentVerdicts& into) {
+    for (const catalog::ForeignKeyRef& fk : child.fkeys_out) {
+        if (fk.column_no == 0 || fk.column_no > body.size()) continue;
+        const parser::AstValue& value = body[fk.column_no - 1];
+        // The same bail `CheckForeignKeyOnWrite` takes, and it must be the
+        // same one: a value that is not an id cannot reference one, and
+        // resolving it would put a nonsense pk in the held set.
+        if (value.type != parser::ValueType::kInt || value.int_val < 0) continue;
+
+        // ---- The one thing this pass does not hoist -------------------
+        //
+        // **A self-referencing foreign key stays a per-row check.** Hoisting
+        // it would change answers: in `INSERT INTO t VALUES (1, NULL),
+        // (2, 1)` on a `t` that references itself, row 2's parent is row 1,
+        // which is written *by this statement* - so a verdict taken before
+        // any row work says "no such parent" where today's per-row check,
+        // running after row 1 landed, says pass.
+        //
+        // Carving it out costs nothing AH wants, and that is the point
+        // rather than a consolation: parent and child being one relation
+        // means one `owner_core`, so a self-referencing foreign key **can
+        // never be foreign**. The descent it leaves inside the write scope
+        // is a descent that never needs to cross, so AH-R1's rule - nothing
+        // in an open `WriteScope` initiates a ring round trip - is intact.
+        if (fk.rel_oid == child.oid) continue;
+
+        const auto pk = static_cast<std::uint64_t>(value.int_val);
+        if (into.Find(fk.rel_oid, pk) != nullptr) continue;  // AH-R2's dedup
+
+        auto parent = catalog_.InitTableAccess(fk.rel_oid);
+        if (!parent.ok()) return parent.status();
+        auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), pk, check_view,
+                                                &budget_);
+        if (!verdict.ok()) return verdict.status();
+
+        // Recorded **per resolution, not per row**, which is the mechanism
+        // made visible in `SHOW ACCESS`: a thousand-row insert against one
+        // parent now reports one lookup where it reported a thousand. The
+        // number moved because the work did.
+        RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
+        into.Put(fk.rel_oid, pk, verdict.value());
+    }
+    return Status::OK();
+}
+
 Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& child,
                                                  const catalog::ForeignKeyRef& fk,
                                                  const parser::AstValue& value,
-                                                 const txn::ReadView& check_view) {
+                                                 const txn::ReadView& check_view,
+                                                 const exec::FkParentVerdicts& held) {
     // A value that is not an id cannot reference one. Left alone rather than
     // failed here, and the same bail carries two different outcomes:
     //   - a NULL is MATCH SIMPLE's vacuous pass - the codec stores it if the
@@ -3669,23 +3731,53 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     //     the reader looking at the wrong table.
     if (value.type != parser::ValueType::kInt || value.int_val < 0) return Status::OK();
 
-    auto parent = catalog_.InitTableAccess(fk.rel_oid);
-    if (!parent.ok()) return parent.status();
+    const auto parent_pk = static_cast<std::uint64_t>(value.int_val);
 
-    auto verdict = exec::CheckParentPresent(page_store_, *parent.value(),
-                                            static_cast<std::uint64_t>(value.int_val), check_view,
-                                            &budget_);
-    if (!verdict.ok()) return verdict.status();
-
-    // The pk column, which is the only column a foreign key ever probes (F1).
-    RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
+    // The held verdict, resolved by `ResolveForeignKeyParents` before any
+    // row work (§2a). No descent happens here and none may be added: this
+    // call site is inside an open `WriteScope`, which is the place AH-R1
+    // exists to keep free of anything that could need to wait.
+    exec::FkVerdict resolved{};
+    if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk); found != nullptr) {
+        resolved = *found;
+    } else if (fk.rel_oid == child.oid) {
+        // The self-referencing arm, the one case the extraction pass
+        // deliberately skips (see there). It can never be foreign, so the
+        // descent is local by construction.
+        auto parent = catalog_.InitTableAccess(fk.rel_oid);
+        if (!parent.ok()) return parent.status();
+        auto verdict =
+            exec::CheckParentPresent(page_store_, *parent.value(), parent_pk, check_view, &budget_);
+        if (!verdict.ok()) return verdict.status();
+        RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
+        resolved = verdict.value();
+    } else {
+        // AH-R3: a statement whose parent set could not be enumerated is
+        // refused rather than run against a partial one. Refused and never
+        // quietly re-checked here, because a silent re-check is exactly how
+        // the descent gets back inside the write scope and the crossing
+        // becomes unreachable again.
+        //
+        // **`NotImplemented` and not `Corruption`**: nothing on disk
+        // disagrees with anything. What has happened is that a statement
+        // shape reached the write path which the extraction pass does not
+        // enumerate - which is the two-code rule's "nobody built this yet",
+        // exactly. Unreachable today (F1 makes every fk value a literal or
+        // a bound parameter, so the pass is total), and written out because
+        // "can't happen" is not a thing to encode as silence.
+        return Status::NotImplemented(
+            "the foreign key on '" + RelationNameOf(child.oid) + "' names parent row id=" +
+            std::to_string(parent_pk) + " of '" + RelationNameOf(fk.rel_oid) +
+            "', which this statement's shape did not resolve before writing "
+            "(docs/spec/foreign-keys.md §2a)");
+    }
 
     const std::string column =
         fk.column_no < child.schema.columns.size()
             ? std::string(catalog::NameView(child.schema.columns[fk.column_no].name))
             : std::to_string(fk.column_no);
 
-    switch (verdict.value()) {
+    switch (resolved) {
         case exec::FkVerdict::kPass:
             return Status::OK();
         case exec::FkVerdict::kBusy:
@@ -5907,11 +5999,30 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
         return SortedFillInner(stmt, oid.value(), *ta, scope);
     }
 
+    // ---- The extraction pass (foreign-keys.md §2a, AH-R1) ---------------
+    //
+    // Over **every** row, before the loop enters `InsertOneRow` for any of
+    // them. That is the whole hoist on this path: a thousand-row insert
+    // against one parent descends once rather than a thousand times, and
+    // AH-T2 replaces this local resolution with one probe round per foreign
+    // owner without the row loop below noticing.
+    exec::FkParentVerdicts fk_held;
+    if (!ta->fkeys_out.empty()) {
+        auto view = CheckView(scope);
+        if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
+        for (const auto& values : stmt.rows) {
+            const std::vector<parser::AstValue> body = InsertBodyOf(*ta, values);
+            if (Status s = ResolveForeignKeyParents(*ta, body, view.value(), fk_held); !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
+        }
+    }
+
     InsertRowResult first{};
     InsertRowResult last{};
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         InsertRowResult row{};
-        if (auto err = InsertOneRow(oid.value(), ta, stmt.rows[k], scope, row);
+        if (auto err = InsertOneRow(oid.value(), ta, stmt.rows[k], scope, fk_held, row);
             err.has_value()) {
             if (bulk) *err += " (row " + std::to_string(k + 1) + ")";
             return {std::move(*err), false};
@@ -5962,6 +6073,27 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
                                                    WriteScope& scope) {
     const std::size_t ncols = ta.schema.columns.size();
 
+    // ---- The extraction pass (foreign-keys.md §2a, AH-R1) ---------------
+    //
+    // Every parent this statement names, resolved once, before the row loop
+    // - which is where AH-T2 will park on a foreign owner instead. The row
+    // loop below is unchanged in order and in what it reports: it answers
+    // from what this resolved, so a refused statement still names the same
+    // row ordinal it always did.
+    //
+    // Every row of a sorted fill omits its pk (the caller's gate), so the
+    // body is the row.
+    exec::FkParentVerdicts fk_held;
+    if (!ta.fkeys_out.empty()) {
+        auto view = CheckView(scope);
+        if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
+        for (const auto& values : stmt.rows) {
+            if (Status s = ResolveForeignKeyParents(ta, values, view.value(), fk_held); !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
+        }
+    }
+
     // Admission-class checks for every row, before anything burns (BI9) -
     // arity, the pk rule, FK - in the row loop's order, so a refused
     // statement answers identically down to the ordinal.
@@ -5984,7 +6116,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
                 for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
                     if (fk.column_no == 0 || fk.column_no > values.size()) continue;
                     if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1],
-                                                          view.value());
+                                                          view.value(), fk_held);
                         !s.ok()) {
                         err = ErrorReply(s);
                         break;
@@ -6137,7 +6269,8 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
 
 std::optional<std::string> CommandDispatcher::InsertOneRow(
     catalog::Oid oid, const catalog::TableAccess*& ta_ptr,
-    const std::vector<parser::AstValue>& values, WriteScope& scope, InsertRowResult& out) {
+    const std::vector<parser::AstValue>& values, WriteScope& scope,
+    const exec::FkParentVerdicts& fk_held, InsertRowResult& out) {
     const catalog::TableAccess& ta = *ta_ptr;
 
     // ---- Where a peer's leases can refuse, and how that reaches the wire --
@@ -6212,13 +6345,19 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // "before the heap write": a refused row costs no undo work *and* no
     // Keystone id (BI9). VALUES supplies the columns after the pk, so a
     // column at schema position c is at index c-1.
+    //
+    // **The resolution is the caller's** (§2a, AH-R1): `HandleInsert` runs
+    // the extraction pass over every row before this function is entered
+    // for any of them, so a bulk statement naming one parent descends once.
+    // What is left here is the per-row *answer*, which is what keeps the
+    // refusal on the row that caused it.
     if (!ta.fkeys_out.empty()) {
         auto view = CheckView(scope);
         if (!view.ok()) return ErrorReply(view.status());
         for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
             if (fk.column_no == 0 || fk.column_no > body.size()) continue;
-            if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1],
-                                                  view.value());
+            if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1], view.value(),
+                                                  fk_held);
                 !s.ok()) {
                 return ErrorReply(s);
             }
@@ -8347,10 +8486,36 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // can only come from the core that owns it, which is this one, and it is
     // running this statement (crosscore.md CC3).
     txn::ReadView check_view = txn::ReadView::Everything();
+    exec::FkParentVerdicts fk_held;
     if (!fk_assignments.empty()) {
         auto view = CheckView(scope);
         if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
         check_view = view.value();
+
+        // ---- The extraction pass (foreign-keys.md §2a, AH-R1) -----------
+        //
+        // A SET assigns a literal, so the parent set is a property of the
+        // *statement* and is resolved here, once, before any row work -
+        // which is the comment the per-row check below used to carry as a
+        // regret ("this repeats one descent per row where one would do").
+        //
+        // **Resolving is not failing, and that distinction is what keeps
+        // this byte-identical.** An UPDATE matching zero rows must still
+        // answer `UPDATED 0` even when its SET names a parent that does not
+        // exist, because today's check never runs when no row qualifies.
+        // So the verdict is *held* here and *applied* per matched row: an
+        // unmatched statement resolves a parent, uses nothing, and reports
+        // what it always reported.
+        for (const auto& [fk, value] : fk_assignments) {
+            std::vector<parser::AstValue> one(ta.schema.columns.size() > 0
+                                                  ? ta.schema.columns.size() - 1
+                                                  : 0);
+            if (fk->column_no == 0 || fk->column_no > one.size()) continue;
+            one[fk->column_no - 1] = *value;
+            if (Status s = ResolveForeignKeyParents(ta, one, check_view, fk_held); !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
+        }
     }
 
     std::uint32_t updated = 0;
@@ -8445,14 +8610,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // ---- The forward check, for an fk column this SET touches (§2) --
         //
         // Per matched row, after the row has qualified and the cheap
-        // conflict check has passed. The *value* is statement-constant - a
-        // SET assigns a literal - so this repeats one descent per row where
-        // one would do; hoisting it is safe only for an UPDATE that matches
-        // at least one row, which is not known until one does, and the
-        // probe memo that would have absorbed the repetition is in the step
-        // VM this path does not use (fk_check.hpp's amendment).
+        // conflict check has passed - but **the descent is no longer here**
+        // (§2a, AH-T1). The value is statement-constant, so the parent was
+        // resolved once above; what remains is applying the held verdict to
+        // this row, which is what keeps an UPDATE matching zero rows
+        // answering `UPDATED 0` rather than a violation it never used to
+        // report.
         for (const auto& [fk, value] : fk_assignments) {
-            if (Status s = CheckForeignKeyOnWrite(ta, *fk, *value, check_view); !s.ok()) return s;
+            if (Status s = CheckForeignKeyOnWrite(ta, *fk, *value, check_view, fk_held); !s.ok()) {
+                return s;
+            }
         }
 
         // The row as it stands *before* the SET list is applied, kept only

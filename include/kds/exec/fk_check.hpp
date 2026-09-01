@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/schema.hpp"
@@ -84,6 +86,72 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
                                        const catalog::TableAccess& parent,
                                        std::uint64_t parent_pk,
                                        const txn::ReadView& check_view, Budget* budget);
+
+// ---- The hoisted forward check's held verdicts (AH-T1) -------------------
+//
+// `docs/spec/foreign-keys.md` §2a. The forward check used to run per row
+// from inside an open `WriteScope`, which is where nothing can wait - so a
+// check that must ask another core cannot ask from where it stands. AH
+// moves the *asking* out to the dispatch fork: every parent pk a statement
+// needs is resolved before any row work, and the per-row check then answers
+// from what was resolved.
+//
+// This is that "what was resolved". One entry per **distinct (parent
+// relation, parent pk)**, which is AH-R2's deduplication and the whole of
+// why a thousand-row insert against one parent costs one descent rather
+// than a thousand.
+//
+// **Not to be confused with `server/fk_intent.hpp`.** That is the
+// *parent* side - what a parent's owner remembers so its own DELETE can
+// answer busy. This is the *child* side, statement-scoped, and it holds
+// answers rather than promises. AH-T2 fills it from a `kFkProbeRequest`
+// reply for a foreign parent; AH-T1 fills it locally, and the shape is the
+// same either way, which is the point of landing them apart.
+class FkParentVerdicts {
+public:
+    // The verdict for a parent pk this statement needs, or nullptr when it
+    // was never resolved.
+    //
+    // **A miss is a caller bug, not a fall-back.** AH-R3: a statement whose
+    // parent set could not be enumerated is refused at the fork rather than
+    // run against a partial set, so by the time a row is written every pk
+    // it names has an entry. Callers report a miss; they must never quietly
+    // check it themselves, which would put a descent back inside the write
+    // scope and make the crossing unreachable again.
+    const FkVerdict* Find(catalog::Oid parent_rel, std::uint64_t parent_pk) const noexcept {
+        for (const Entry& e : entries_) {
+            if (e.parent_rel == parent_rel && e.parent_pk == parent_pk) return &e.verdict;
+        }
+        return nullptr;
+    }
+
+    // Records one resolution. Idempotent on a repeat of the same key - the
+    // extraction pass deduplicates, and this is the second half of that: a
+    // statement naming one parent from twenty rows resolves it once.
+    // Returns whether the key was new, so a caller can count descents.
+    bool Put(catalog::Oid parent_rel, std::uint64_t parent_pk, FkVerdict verdict) {
+        if (Find(parent_rel, parent_pk) != nullptr) return false;
+        entries_.push_back(Entry{parent_rel, parent_pk, verdict});
+        return true;
+    }
+
+    std::size_t size() const noexcept { return entries_.size(); }
+    bool empty() const noexcept { return entries_.empty(); }
+
+private:
+    // A vector with a linear scan, for `SysObjectRegistry`'s reason: the
+    // set is one entry per distinct parent pk a *single statement* names,
+    // which is small - and a map would cost an allocation per entry to save
+    // comparisons that are not being made. If a statement ever names
+    // thousands of distinct parents this is the line to revisit, and
+    // AH-T6's counters are what would say so.
+    struct Entry {
+        catalog::Oid parent_rel;
+        std::uint64_t parent_pk;
+        FkVerdict verdict;
+    };
+    std::vector<Entry> entries_;
+};
 
 // What the reverse check may use to answer without walking (F6, FK-M5).
 struct FkReverseOptions {

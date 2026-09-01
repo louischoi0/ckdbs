@@ -444,6 +444,86 @@ TEST_F(ForeignKeyCheckTest, AChildReferencingNoParentIsRefused) {
     EXPECT_EQ(RowCount("SELECT * FROM trades"), 0u);
 }
 
+// ---- AH-T1: the hoist changes no answer (§2a, H-AH1) --------------------
+//
+// The forward check's descent moved out of the write scope to an extraction
+// pass that runs before any row work. These cells are the two places that
+// move could have changed an answer, and the one place it must not have
+// changed a refusal's shape.
+
+// **The zero-match UPDATE.** Resolving is not failing: an UPDATE whose SET
+// names a parent that does not exist, but which matches no row, must still
+// answer `UPDATED 0` - because the per-row check it used to run never ran.
+// Hoisting the *verdict* rather than only the descent would turn this into
+// an FK_VIOLATION that no version of this engine has ever reported.
+TEST_F(ForeignKeyCheckTest, AnUpdateMatchingNoRowsDoesNotReportTheHoistedVerdict) {
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (1, 100)").substr(0, 8), "INSERTED");
+
+    const std::string out = Run("UPDATE trades SET account_id = 99 WHERE qty = 12345");
+    EXPECT_EQ(out, "UPDATED 0") << out;
+
+    // And the same statement against a row that *does* match still refuses,
+    // so the cell above is not passing because the check stopped running.
+    const std::string matched = Run("UPDATE trades SET account_id = 99 WHERE qty = 100");
+    EXPECT_EQ(matched.substr(0, 16), "ERR FK_VIOLATION") << matched;
+}
+
+// **The self-referencing foreign key is unreachable through the DDL
+// surface**, and the extraction pass carves it out anyway.
+//
+// Why it matters to AH-T1: a self-referencing parent can be written by the
+// *same statement* that checks it - `INSERT INTO nodes VALUES (1, NULL),
+// (2, 1)` - so a verdict resolved before any row work would answer "no such
+// parent" where the per-row check, running after row 1 landed, answers
+// pass. That is the one shape the hoist would change, and
+// `ResolveForeignKeyParents` skips it for that reason.
+//
+// This cell asserts the *unreachability*, because that is the fact today:
+// `REFERENCES nodes` inside `CREATE TABLE nodes` cannot resolve, the parent
+// not existing yet, and nothing else declares a foreign key. If that ever
+// changes, this cell fails and points at a carve-out already waiting rather
+// than at a wrong answer nobody was looking for.
+//
+// The carve-out costs AH nothing either way: parent and child being one
+// relation means one `owner_core`, so a self-referencing foreign key can
+// never be foreign and its descent never needs to cross.
+TEST_F(ForeignKeyCheckTest, ASelfReferencingForeignKeyCannotBeDeclared) {
+    const std::string out =
+        Run("CREATE TABLE nodes (id int64, parent int64 REFERENCES nodes, label int64) BTREE");
+    EXPECT_EQ(out.rfind("ERR", 0), 0u)
+        << "a self-referencing foreign key became declarable; "
+           "ResolveForeignKeyParents' carve-out is now live code and wants a cell that "
+           "exercises it: " << out;
+}
+
+// **The refusal still names the row that caused it.** The resolution is
+// hoisted over every row; the verdict is applied per row, so a bulk insert
+// whose third row is bad still says so about the third row.
+TEST_F(ForeignKeyCheckTest, ABulkInsertRefusesOnTheRowThatNamesTheMissingParent) {
+    const std::string out =
+        Run("INSERT INTO trades VALUES (1, 10), (2, 20), (99, 30), (1, 40)");
+    EXPECT_EQ(out.substr(0, 16), "ERR FK_VIOLATION") << out;
+    EXPECT_NE(out.find("(row 3)"), std::string::npos) << out;
+}
+
+// **AH-R2's deduplication, read off `SHOW ACCESS`.** Twenty children of one
+// parent resolve that parent once. The counter moved because the work did -
+// before the hoist this reported twenty lookups on `accounts`.
+TEST_F(ForeignKeyCheckTest, ManyChildrenOfOneParentResolveItOnce) {
+    std::string sql = "INSERT INTO trades VALUES (1, 1)";
+    for (int k = 2; k <= 20; ++k) sql += ", (1, " + std::to_string(k) + ")";
+    const std::string inserted = Run(sql);
+    ASSERT_EQ(inserted.substr(0, 8), "INSERTED") << inserted;
+
+    // One Lookup recorded against the parent, not twenty. `uses=` is the
+    // shape's counter (`SHOW ACCESS`), and before the hoist this read
+    // `uses=20`.
+    const std::string access = Run("SHOW ACCESS");
+    EXPECT_NE(access.find("kind=Lookup rel=accounts"), std::string::npos) << access;
+    EXPECT_NE(access.find("kind=Lookup rel=accounts columns=[id] uses=1"), std::string::npos)
+        << "the parent was resolved once per row rather than once: " << access;
+}
+
 // Latest state, not the statement's snapshot: a parent deleted and committed
 // is gone for a check even though a snapshot taken earlier could still see
 // it. This is the case §4 exists for.

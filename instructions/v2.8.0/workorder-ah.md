@@ -205,7 +205,70 @@ counters reported beside every latency; results under
 | row | status |
 |---|---|
 | AH-T0 | **Done 2026-09-01.** AH-R1..R7 recorded; AH-R6 carries the operator's mark below. Amendments landed: `foreign-keys.md` gains **§2a** (the crossing, the fork park, the per-owner round, AH-R3's fail-closed rule, AH-R5's invariant, AH-R7's load-path refusal), F3 carries AH-R4's non-reversal, F5 carries the conversion; `crosscore.md`'s FK bullet splits along AE-2's seam; `workplan-auxiliaries-under-split.md`'s SA-T4/SA-T6 rows retired into AH |
-| AH-T1..T6 | not started |
+| AH-T1 | **Built 2026-09-01**, no probe wired — the local path restructured only. `exec::FkParentVerdicts` (child-side, statement-scoped) holds one verdict per distinct (parent relation, pk); `CommandDispatcher::ResolveForeignKeyParents` is the extraction pass and `CheckForeignKeyOnWrite` starts no descent. All three callers converted. **The colocated A/B measurement (H-AH1's latency half) is not run** — see below. Full suite 3139/3139 green |
+| AH-T2..T6 | not started |
+
+### AH-T1 — what the hoist ran into
+
+**Two shapes could have changed an answer. Both are handled, and each has
+a cell that was proved to fail with its guard removed.**
+
+1. **An UPDATE matching zero rows.** Today's check never runs when no row
+   qualifies, so `UPDATE trades SET account_id = 99 WHERE qty = 12345`
+   answers `UPDATED 0` even though 99 is no parent. Hoisting the *verdict*
+   would turn that into an `FK_VIOLATION` no version of this engine has
+   reported. So the hoist moves the **descent** and not the failure: the
+   parent is resolved once at the fork, and the verdict is **applied per
+   matched row**. Proved by applying it at resolve time instead — the cell
+   then reports `ERR FK_VIOLATION … row id=99` where it must say
+   `UPDATED 0`.
+
+   This is the sharper reading of AH-R1 than the ruling's own words: *"the
+   statement then runs synchronously against the intents it holds"* —
+   holding an intent is not the same as acting on it, and a statement that
+   touches nothing must use none of them.
+
+2. **A self-referencing foreign key.** Row 2's parent can be row 1, written
+   by the same statement, so a verdict taken before any row work says "no
+   such parent" where the per-row check says pass.
+   `ResolveForeignKeyParents` skips `fk.rel_oid == child.oid`, and the
+   carve-out **costs AH nothing by construction**: one relation is one
+   `owner_core`, so a self-referencing foreign key can never be foreign and
+   its descent never needs to cross. AH-R1's rule — nothing in an open
+   `WriteScope` starts a ring round trip — is intact.
+
+   **And it is unreachable today**, which the survey did not say and the
+   cell now pins: `REFERENCES nodes` inside `CREATE TABLE nodes` cannot
+   resolve, the parent not existing yet, and nothing else declares a
+   foreign key. The cell asserts the refusal, so the day self-reference
+   becomes declarable it fails and points at a carve-out already waiting
+   rather than at a wrong answer nobody was looking for.
+
+**What moved that a user can see.** `SHOW ACCESS` now reports **one**
+`Lookup` on the parent where a twenty-row insert against one parent
+reported twenty (`uses=20` → `uses=1`, proved by disabling the dedup). The
+counter moved because the work did — this is AH-R2's deduplication
+arriving one task earlier than the crossing that motivated it, and it is
+the answer to `fk_check.hpp`'s recorded regret that "batch-inserting N
+children of one parent pays N descents where §2 predicts one". **§2's
+probe-memo prediction is met, by a different mechanism than §2 named.**
+
+**A refusal's shape is unchanged**: resolution is hoisted over every row,
+the verdict is applied per row, so a bulk insert whose third row names a
+missing parent still says `(row 3)`.
+
+**A miss in the held set is `NotImplemented`, not `Corruption`** — nothing
+on disk disagrees with anything; a statement shape reached the write path
+that the extraction pass does not enumerate, which is the two-code rule's
+"nobody built this yet". Unreachable today under F1.
+
+**What AH-T1 owes and did not do:** H-AH1's *latency* half. The verdict
+byte-identity is proved by the suite; the "zero within noise on the
+colocated path" claim is **not measured** — `build-release`, interleaved
+A/B, per AH's measurement discipline. It is owed before AH-T6 and is
+stated here as unrun rather than assumed, the more so because the
+mechanism above predicts the colocated path got *faster* on a batch, not
+merely no slower.
 
 ### AH-R6 — the operator's mark, 2026-09-01
 

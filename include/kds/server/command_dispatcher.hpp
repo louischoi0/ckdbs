@@ -16,6 +16,7 @@
 #include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/fk_check.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/server/session_step_client.hpp"
@@ -1111,12 +1112,40 @@ private:
     // statement's snapshot, because a check reads latest state.
     StatusOr<txn::ReadView> CheckView(const WriteScope& scope);
 
-    // The forward check for one foreign key and one written value (§2).
-    // OK when the value is not an id at all - the row codec has the better
-    // error for that.
+    // The forward check for one foreign key and one written value (§2),
+    // **answered from what the extraction pass already resolved** (§2a,
+    // AH-T1). OK when the value is not an id at all - the row codec has the
+    // better error for that.
+    //
+    // `check_view` is still taken, and is used by exactly one arm: a
+    // **self-referencing** foreign key, which `ResolveForeignKeyParents`
+    // deliberately does not hoist. See its comment for why that arm is not
+    // a hole in AH-R1.
     Status CheckForeignKeyOnWrite(const catalog::TableAccess& child,
                                   const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
-                                  const txn::ReadView& check_view);
+                                  const txn::ReadView& check_view,
+                                  const exec::FkParentVerdicts& held);
+
+    // The extraction pass (§2a, AH-R1): resolves every parent pk one row's
+    // body names, into `into`, deduplicated by (parent relation, pk) so a
+    // statement naming one parent from a thousand rows descends once.
+    //
+    // Called **before any row work** - at the dispatch fork for a statement
+    // whose rows are all known there, and once per row otherwise. Nothing it
+    // does may depend on a row having been written, which is what makes it
+    // legal to run early and what the self-referencing carve-out protects.
+    Status ResolveForeignKeyParents(const catalog::TableAccess& child,
+                                     const std::vector<parser::AstValue>& body,
+                                     const txn::ReadView& check_view,
+                                     exec::FkParentVerdicts& into);
+
+    // The body `ResolveForeignKeyParents` and the FK checks index into: the
+    // columns after the pk, which is the shape every downstream consumer
+    // takes. Mirrors `InsertOneRow`'s arity split without repeating its
+    // refusals - a row of neither legal length yields an empty body here and
+    // is refused there, in the order it always was.
+    static std::vector<parser::AstValue> InsertBodyOf(
+        const catalog::TableAccess& ta, const std::vector<parser::AstValue>& values);
 
     // The reverse check for every foreign key pointing at `parent` (§3),
     // run per row about to be delete-marked.
@@ -1167,9 +1196,16 @@ private:
     // repoints the relation's root, which invalidates the catalog cache -
     // harmless on the last row, fatal to the next one, so the pointer is
     // re-borrowed before returning.
+    //
+    // `fk_held` is what the caller's extraction pass resolved over **every**
+    // row of the statement (§2a): this function answers from it and starts
+    // no descent of its own, which is what makes a bulk insert against one
+    // parent cost one.
     std::optional<std::string> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
                                             const std::vector<parser::AstValue>& values,
-                                            WriteScope& scope, InsertRowResult& out);
+                                            WriteScope& scope,
+                                            const exec::FkParentVerdicts& fk_held,
+                                            InsertRowResult& out);
 
     // T3, the sorted heap fill (docs/inflight/in-progress/workplan-t3.md). The gate is T3-2's,
     // conservative and only able to widen: heap-clustered, nothing that
