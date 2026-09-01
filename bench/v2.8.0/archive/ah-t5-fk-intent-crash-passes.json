@@ -1,0 +1,53 @@
+[
+  {
+    "point": "participant.fk_intent_granted_preprepare",
+    "owners": {
+      "parent": "2",
+      "child": "1"
+    },
+    "parent_pk": "1",
+    "insert_reply": "ConnectionError: server closed the connection",
+    "killed_rc": -9,
+    "crash_line": true,
+    "in_doubt_unresolved": null,
+    "child_reply": "id",
+    "child_rows": 0,
+    "parent_reply": "id\\n1",
+    "pass": 1,
+    "verdict": "PASS"
+  },
+  {
+    "point": "participant.fk_intent_granted_preprepare",
+    "owners": {
+      "parent": "2",
+      "child": "1"
+    },
+    "parent_pk": "1",
+    "insert_reply": "ConnectionError: server closed the connection",
+    "killed_rc": -9,
+    "crash_line": true,
+    "in_doubt_unresolved": null,
+    "child_reply": "id",
+    "child_rows": 0,
+    "parent_reply": "id\\n1",
+    "pass": 2,
+    "verdict": "PASS"
+  },
+  {
+    "point": "participant.fk_intent_granted_preprepare",
+    "owners": {
+      "parent": "2",
+      "child": "1"
+    },
+    "parent_pk": "1",
+    "insert_reply": "ConnectionError: server closed the connection",
+    "killed_rc": -9,
+    "crash_line": true,
+    "in_doubt_unresolved": null,
+    "child_reply": "id",
+    "child_rows": 0,
+    "parent_reply": "id\\n1",
+    "pass": 3,
+    "verdict": "PASS"
+  }
+]
