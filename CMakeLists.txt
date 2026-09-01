@@ -56,6 +56,7 @@ add_library(kds
     src/server/range_alloc.cpp
     src/server/relation_grant_service.cpp
     src/server/index_build_service.cpp
+    src/server/fk_probe_service.cpp
     src/server/assertion_build_service.cpp
     src/server/statement_ship_service.cpp
     src/server/shipped_statement_executor.cpp

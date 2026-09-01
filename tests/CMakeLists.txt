@@ -40,6 +40,7 @@ add_executable(kds_tests
     extent_lease_service_test.cpp
     trx_id_lease_service_test.cpp
     statement_ship_service_test.cpp
+    fk_probe_service_test.cpp
     shipped_statement_executor_test.cpp
     txn_2pc_wire_test.cpp
     txn_2pc_protocol_test.cpp

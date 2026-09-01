@@ -688,6 +688,23 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             sched::RingMessageKind::kTxnDecideRequest,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
                 txn_2pc_server_->OnDecide(header, payload);
+                // **The decide is what ends a reference intent, and the
+                // only thing that does** (AH-R5, fk_probe_service.hpp).
+                // Here rather than inside `Txn2pcServer`, which would take
+                // a dependency on the FK for a reason 2PC has none of; the
+                // payload is decoded a second time, 24 bytes, on a leg
+                // that already writes the log.
+                //
+                // **After `OnDecide`, not before**: the decision is what
+                // the intent was holding the parent still *for*, so
+                // releasing ahead of it would reopen the window one line
+                // early. Idempotent both sides - a resent decide releases
+                // nothing the first one left.
+                if (!fk_probe_server_.has_value()) return;
+                TxnDecideRequestPayload decide{};
+                if (payload.size() != sizeof(decide)) return;
+                std::memcpy(&decide, payload.data(), sizeof(decide));
+                fk_probe_server_->ReleaseIntents(header.src_core, decide.session_id);
             });
         !s.ok()) {
         return s;
@@ -695,6 +712,28 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     txn_2pc_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
     if (Status s = txn_2pc_client_->RegisterReplyReceivers(); !s.ok()) return s;
     dispatcher_->SetTxn2pc(&*txn_2pc_client_);
+
+    // ---- The foreign key across owners (AH-T2, fk_probe_service.hpp) ----
+    //
+    // **Both halves on every core.** A relation is a foreign parent on one
+    // statement and a child on the next, so unlike the index build's
+    // owner-only server there is no core that only asks or only answers.
+    //
+    // Registered here, beside 2PC, because the two are one mechanism: the
+    // probe's intent is released by the transaction's **decide** and by
+    // nothing else (AH-R5), which is the hook installed just below.
+    fk_probe_server_.emplace(*catalog_, *store_, config_.core_id, fk_intents_, *scheduler_,
+                             transport, txn_manager_.has_value() ? &*txn_manager_ : nullptr, log_);
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kFkProbeRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                fk_probe_server_->OnRequest(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    fk_probe_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
+    if (Status s = fk_probe_client_->RegisterReplyReceiver(); !s.ok()) return s;
 
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has

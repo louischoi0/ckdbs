@@ -207,7 +207,72 @@ counters reported beside every latency; results under
 | AH-T0 | **Done 2026-09-01.** AH-R1..R7 recorded; AH-R6 carries the operator's mark below. Amendments landed: `foreign-keys.md` gains **§2a** (the crossing, the fork park, the per-owner round, AH-R3's fail-closed rule, AH-R5's invariant, AH-R7's load-path refusal), F3 carries AH-R4's non-reversal, F5 carries the conversion; `crosscore.md`'s FK bullet splits along AE-2's seam; `workplan-auxiliaries-under-split.md`'s SA-T4/SA-T6 rows retired into AH |
 | AH-T1 | **Built 2026-09-01**, no probe wired — the local path restructured only. `exec::FkParentVerdicts` (child-side, statement-scoped) holds one verdict per distinct (parent relation, pk); `CommandDispatcher::ResolveForeignKeyParents` is the extraction pass and `CheckForeignKeyOnWrite` starts no descent. All three callers converted. **The colocated A/B measurement (H-AH1's latency half) is not run** — see below. Full suite 3139/3139 green |
 | AH-T2 | **First slice built 2026-09-01** — owner resolution, per-owner grouping (`FkParentVerdicts::Defer`), and the fail-closed refusal at all three sites. **The wire is not built**: no payloads, no sender, no park/resume. AH-R7 is answered by survey and needed no code. Full suite 3140/3140 green |
+| AH-T2 | **Second slice built 2026-09-01** — the wire: `FkProbeRequestPayload` / `FkProbeReplyPayload`, `FkProbeServer` (resolve, grant, reply), `FkProbeClient` (send, wait, read), both halves on every core, and the intent release wired to the 2PC decide. **The park/resume is not built**, so the fork's refusal still stands and nothing sends yet. Seven cells in `fk_probe_service_test.cpp`. Full suite 3147/3147 green |
 | AH-T3..T6 | not started |
+
+### AH-T2, second slice — the wire, and the cap that had to be derived
+
+**Built.** `fk_probe_service.hpp/cpp`, on `index_build_service`'s shape:
+the owner's `OnRequest` bounds the count, refuses any parent that is not
+its own, resolves each against a view it mints itself (§4 asks for the
+*parent owner's* now, so carrying a view would carry the wrong core's idea
+of who is live), **grants an intent per pass and only per pass**, and
+replies with verdicts matched **positionally**. The child's `Request`
+opens a waiter under a deadline and sends; `Settled` / `Find` / `Close`
+are `IndexBuildClient`'s and for its reasons.
+
+**Both halves on every core**, unlike the index build's owner-only server:
+a relation is a foreign parent on one statement and a child on the next,
+and core 0 is not special here the way it is for DDL.
+
+**The intent's release rides the decide** (AH-R5), wired in `CoreRuntime`'s
+`kTxnDecideRequest` handler rather than inside `Txn2pcServer` — which would
+take a 2PC dependency on the FK for a reason 2PC has none of. It runs
+**after** `OnDecide`, because the decision is what the intent was holding
+the parent still for, and it is idempotent both sides, which a resendable
+decide requires.
+
+**The cap had to be derived, and finding that out cost a whole red
+suite.** `kFkProbeMaxParents` was first written as a flat 64, producing a
+1048-byte request against a 1024-byte ring payload
+(`sched::kCoreRingPayloadBytes`). The ring refuses an oversized send, so
+every cell failed on a reply that never came — the failure of a chosen
+constant, seen from the outside. It is now
+`(kCoreRingPayloadBytes - head) / 16` = **62**, with a `static_assert` on
+the payload as the real statement. A statement naming more distinct
+parents on one owner is **refused, not chunked**: chunking is protocol for
+a shape nobody has produced, and if AH-T6 measures one past the cap the
+refusal converts into it.
+
+**Two fixture facts worth keeping**, because both took a red run to find:
+
+- The owner is ring core **0** and the child ring core 1, not the reverse.
+  `AssignOwnerCore` puts every relation on its creator, so core 0 is who
+  must answer for the parent; attached the other way the owner replied to
+  itself and the ring dropped it.
+- The one way this engine can currently produce a relation a given core
+  does **not** own is a second `Catalog` over the same store under
+  `kRotate` with `core_count = 2`. That is what the stale-owner cell uses,
+  and it is the closest thing to a migration this tree can stage.
+
+**What AH-T2 still owes — and it is the whole reason the refusal stays**:
+the park/resume. The extraction pass groups foreign parents and
+`RefuseUnsentForeignKeyProbes` still turns the statement away; nothing
+calls `FkProbeClient::Request` from the dispatcher yet. The open design
+question is unchanged and now sharper for having built the rest: every
+`pending_*` record in `DispatchOutcome` **finishes** work, where a foreign
+FK must **re-enter the statement** with verdicts in hand. The candidate
+stands — a pending record carrying the statement line plus a member the
+extraction pass consults first, so the second pass resolves everything
+from held state and sends nothing — and it is the third slice.
+
+Also owed and not started: **enrolment**. The probe round is specified to
+carry the participant's enrolment (AH-R2, RR1's enrol-on-first-contact),
+and this slice sends `session_id` and `transaction_id` on the request
+without yet enrolling the owner as a 2PC participant. Until that lands, an
+intent granted here is released only if the coordinator happens to send
+that owner a decide for another reason — which is a **leak**, and it is
+why the fork's refusal may not be lifted before the third slice.
 
 ### AH-T2, first slice — what it built and what it corrected
 

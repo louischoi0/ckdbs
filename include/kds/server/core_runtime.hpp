@@ -19,6 +19,7 @@
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/fk_probe_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"
 #include "kds/server/statement_ship_service.hpp"
@@ -603,6 +604,19 @@ private:
     // after the executor and destroyed before it.
     std::optional<Txn2pcServer> txn_2pc_server_;
     std::optional<Txn2pcClient> txn_2pc_client_;
+
+    // The foreign key's forward check across owners (AH-T2,
+    // fk_probe_service.hpp). **Both halves on every core**, unlike the
+    // index build's owner-only server: a relation can be a foreign parent
+    // on one statement and a child on the next, and core 0 is not special
+    // here the way it is for DDL.
+    //
+    // `fk_intents_` is declared ahead of the server that fills it and
+    // outlives it, which is what lets a decide arriving after a teardown
+    // find an empty table rather than a dangling one.
+    FkIntentTable fk_intents_;
+    std::optional<FkProbeServer> fk_probe_server_;
+    std::optional<FkProbeClient> fk_probe_client_;
     // The client listener this core accepts on, when per-core listeners are
     // configured (PW5). It borrows the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so
