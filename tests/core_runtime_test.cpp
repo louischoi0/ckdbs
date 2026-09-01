@@ -6458,9 +6458,18 @@ TEST_F(CoreRuntimeTest, AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetri
 // it *returns* - so everything above it has already run, and everything
 // below it is what the owner runs instead, through its own ordinary
 // dispatcher. The gates that could therefore be lost are the owner's, and
-// the peer-side shape gates (`workplan-peer-writer.md` §4: FK-linked,
-// cabined, assertion-covered) are the ones a shipped write newly reaches -
-// core 0 could write those relations itself, and a peer cannot.
+// the peer-side shape gates (`workplan-peer-writer.md` §4: cabined,
+// assertion-covered - FK-linked lifted 2026-09-01, work order AI) are the
+// ones a shipped write newly reaches - core 0 could write those relations
+// itself, and a peer cannot.
+//
+// **The vehicle moved when the FK arm lifted, and the property did not**
+// (AI-R3). A5's real claim is *a shipped write is answered by the owner's
+// own gate, byte for byte, with no retryable bit invented on the way* -
+// which is independent of which arm answers. The FK shape proved it until
+// 2026-09-01 and now admits instead, so the **cabined** cell below carries
+// it, and the FK cell beside it proves the converse: that the arm which
+// used to answer no longer does.
 
 TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
     ForeignIndexRig rig(clock_);
@@ -6513,6 +6522,10 @@ TEST_F(CoreRuntimeTest, AShippedWriteToACabinedPeerRelationIsRefusedByTheOwnersS
     // live** where the FK arm lifted: `any_cabin` is read off
     // `TableAccess`, which is catalog-derived and refreshed by the peer's
     // catalog invalidation.
+    //
+    // **This cell carries A5's property since 2026-09-01** (AI-R3): the FK
+    // shape used to be the vehicle and now admits, so the byte-identity
+    // and the retryable-bit assertions moved here with it.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_gate2");
 
@@ -6529,6 +6542,26 @@ TEST_F(CoreRuntimeTest, AShippedWriteToACabinedPeerRelationIsRefusedByTheOwnersS
     ASSERT_EQ(cabin_out.response.rfind("ERR ", 0), 0u) << cabin_out.response;
     EXPECT_NE(cabin_out.response.find("cabined relation cannot take writes"), std::string::npos)
         << cabin_out.response;
+
+    // Byte for byte the line the owner writes itself - the property the
+    // round trip actually promises, and it promises more than two bare
+    // lines matching: the refusal is `NOT_IMPLEMENTED`, a spelled token, so
+    // this equality proves the *code* survived the ring. `Status::FromWire`
+    // is where it would be lost, and an arm missing there degrades the code
+    // to IoError, which renders bare - which is what this assertion
+    // catches.
+    EXPECT_EQ(cabin_out.response,
+              rig.peer->dispatcher().Dispatch("INSERT INTO cabined VALUES ('x')").response);
+
+    // **And the answer a client sees is terminal, not a retry hint.**
+    // Before shipping, core 0's affinity check refused this statement
+    // `TXN_CONFLICT retryable=1` - "not mine, try elsewhere". It is now the
+    // owner's bare `ERR`, which carries no retryable bit and is therefore
+    // terminal by the client manual's rule. Truthful (no core can take this
+    // write today) and different, so it is asserted here rather than left
+    // for a client's retry loop to discover by going quiet.
+    EXPECT_EQ(cabin_out.response.find("retryable=1"), std::string::npos) << cabin_out.response;
+    EXPECT_EQ(cabin_out.response.find("TXN_CONFLICT"), std::string::npos) << cabin_out.response;
 }
 
 // **The finding this closes** (A5 of the post-SS5 verification order,

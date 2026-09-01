@@ -1187,10 +1187,12 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // The PW1c interim DML guard stood here from 2026-08-24 until PW1c-5
     // removed it the same day. What replaced it, so its removal is not a
     // hole: `CheckWriteAffinity`'s shape gate refuses the still-unsound
-    // shapes by name (FK-linked, cabined, assertion-covered
+    // shapes by name (cabined, assertion-covered
     // - each citing the task that lifts it; btree lifted at PW2-4, indexed at
-    // PW1c-6b-4, and the key mode gone entirely 2026-08-25 - a
-    // caller-named pk is now refused per row in InsertOneRow), the
+    // PW1c-6b-4, the key mode gone entirely 2026-08-25 - a
+    // caller-named pk is now refused per row in InsertOneRow - and
+    // **FK-linked lifted 2026-09-01**, work order AI, once the forward
+    // check probed the parent's owner instead of reading it), the
     // multi-row VALUES path refuses on a
     // peer before touching the catalog page, and the store's `MayWrite`
     // is enforced for leased stores in **every** build now, not Debug
