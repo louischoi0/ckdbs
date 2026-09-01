@@ -8314,6 +8314,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     exec::ChainFrame frame;
     frame.Open(schemas, /*parent=*/nullptr);
 
+    // Per-row scratch, owned by the statement rather than by the row loop:
+    // each is cleared and refilled per scanned row, so after the first row
+    // none of them allocates. `payload_copy` is the row's own bytes, copied
+    // out of the page for the reason its use site states.
+    std::vector<std::byte> payload_copy;
+    std::vector<exec::PendingSpill> frame_spills;
+    std::vector<exec::PendingSpill> spills;
+    const std::uint64_t filter_mask = predicates.value().filter_columns;
+
     // ---- Which foreign keys this SET list touches (§2) -------------------
     //
     // Resolved once, here: an UPDATE that changes no fk column must cost
@@ -8371,32 +8380,35 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             return Status::OK();
         }
 
-        std::vector<exec::PendingSpill> spills;
-        auto row = exec::DecodeRow(ta.schema, ta.layout, tuple.value().payload, &spills);
-        if (!row.ok()) return row.status();
-
-        // Decoded a second time into the frame so the predicates read it
-        // by index. UPDATE rewrites the row afterwards, which is why it
-        // keeps an owned copy as well - the frame is for evaluation only.
-        std::vector<exec::PendingSpill> frame_spills;
-        if (Status s = exec::DecodeRowInto(ta.schema, ta.layout, tuple.value().payload,
-                                            frame.SlotsFor(0), &frame_spills);
-            !s.ok()) {
-            return s;
-        }
-
-        // The pk is read here, while the payload span is still in hand, so
-        // nothing below needs it (row_codec.hpp's R1 split).
-        auto id = exec::RowKeystoneId(tuple.value().payload);
+        // **The row is copied out of the page once, and decoded from the
+        // copy**, which is what makes the two-stage decode below legal
+        // under R1: stage 1 resolves spills and may evaluate a subquery,
+        // both of which fetch pages, and R1's rule is that no span into a
+        // tuple's page may be live across a nested fetch. The pin this walk
+        // holds would in fact keep the bytes valid - `PageRef::bytes()` is
+        // valid as long as the handle is - so this is the *discipline*
+        // rather than a dangling-pointer fix, and it is the discipline
+        // because this path has no PageSpanGuard to catch a violation of
+        // it. `payload_copy` is hoisted to the statement, so this is one
+        // memcpy of a schema-constant row size per scanned row and no
+        // allocation after the first.
+        payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+        auto id = exec::RowKeystoneId(payload_copy);
         if (!id.ok()) return id.status();
         const std::uint64_t trx_id = tuple.value().trx_id;
         const std::uint64_t undo_ptr = tuple.value().undo_ptr;
 
-        // Spilled values are fetched only now, after everything that needed
-        // the tuple's own bytes is done with them: resolving mid-decode
-        // would put a var-heap fetch under a live page span.
-        if (Status s = exec::ResolveSpills(page_store_, spills, row.value()); !s.ok()) return s;
-        if (Status s = exec::ResolveSpills(page_store_, frame_spills, frame.SlotsFor(0));
+        // ---- Stage 1: only what the WHERE reads (OPT-001) ---------------
+        //
+        // A statement that writes one row of two thousand used to decode
+        // all two thousand, twice over, before testing anything - the same
+        // defect AP01 measured at 75% of a SELECT's scan, left standing on
+        // the write path. `filter_mask` is the compiler's, hoisted to the
+        // statement because that is what it is a fact about; it is
+        // kAllColumns whenever a sub-chain or a >64-column relation makes a
+        // partial decode unsound (step_compiler.cpp's CompileWhere).
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
+                                              frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
         }
@@ -8404,6 +8416,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                frame, /*stats=*/nullptr, budget_, &snapshot);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
+
+        // ---- Stage 2: the whole row, for a row that qualified -----------
+        //
+        // An owned copy, because UPDATE re-encodes it and hands it to the
+        // write hook; the frame is for evaluation only and is not read
+        // again below. Decoded from `payload_copy`, whose bytes outlive
+        // every page fetch stage 1 may have made.
+        auto row = exec::DecodeRow(ta.schema, ta.layout, payload_copy, &spills);
+        if (!row.ok()) return row.status();
+        if (Status s = exec::ResolveSpills(page_store_, spills, row.value()); !s.ok()) return s;
 
         // ---- First-updater-wins (docs/spec/txn.md section 5) ----------------
         //
@@ -9292,6 +9314,12 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     exec::ChainFrame frame;
     frame.Open(schemas, /*parent=*/nullptr);
 
+    // Per-row scratch owned by the statement, as UPDATE's site explains:
+    // cleared and refilled per scanned row, allocating only on the first.
+    std::vector<std::byte> payload_copy;
+    std::vector<exec::PendingSpill> frame_spills;
+    const std::uint64_t filter_mask = predicates.value().filter_columns;
+
     // Minted once per statement, for the reason UPDATE's copy records.
     txn::ReadView check_view = txn::ReadView::Everything();
     if (!ta.fkeys_in.empty()) {
@@ -9312,20 +9340,21 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             return Status::OK();
         }
 
-        std::vector<exec::PendingSpill> frame_spills;
-        if (Status s = exec::DecodeRowInto(ta.schema, ta.layout, tuple.value().payload,
-                                            frame.SlotsFor(0), &frame_spills);
-            !s.ok()) {
-            return s;
-        }
-        auto id = exec::RowKeystoneId(tuple.value().payload);
+        // The row's own bytes, copied out of the page before anything can
+        // fetch another one - the same reason UPDATE's apply() copies.
+        payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+        auto id = exec::RowKeystoneId(payload_copy);
         if (!id.ok()) return id.status();
         const std::uint64_t trx_id = tuple.value().trx_id;
         const std::uint64_t undo_ptr = tuple.value().undo_ptr;
 
-        // Resolved only now, after everything that needed the tuple's own
-        // bytes is done with them - the same R1 split every read path uses.
-        if (Status s = exec::ResolveSpills(page_store_, frame_spills, frame.SlotsFor(0));
+        // ---- Stage 1: only what the WHERE reads (OPT-001) ---------------
+        //
+        // DELETE walks the whole relation exactly as UPDATE does, so it
+        // decoded every row of it to mark one. The mask is the compiler's,
+        // and is kAllColumns wherever a partial decode would be unsound.
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
+                                              frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
         }
@@ -9333,6 +9362,28 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                                frame, /*stats=*/nullptr, budget_, &snapshot);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
+
+        // ---- Stage 2: complete the row that qualified -------------------
+        //
+        // **The frame is read after this point** - the assertion enforcer
+        // takes the departing row's values from it - so a masked row must
+        // be finished before anything downstream sees it, or a slot outside
+        // the mask would hand over the *previous* row's value. The step VM
+        // completes a matched row with the same complement decode.
+        //
+        // The complement needs no width arithmetic of its own: the decoder
+        // clamps the mask to the relation's column count, so `~filter_mask`
+        // names the rest and nothing beyond it. Deliberately not gated on
+        // whether an assertion exists - that would couple the decode to one
+        // downstream reader, and the next reader added here would silently
+        // get stale slots.
+        if (filter_mask != exec::kAllColumnsMask) {
+            if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
+                                                  frame.SlotsFor(0), ~filter_mask, frame_spills);
+                !s.ok()) {
+                return s;
+            }
+        }
 
         if (scope.txn != nullptr) {
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value()); !s.ok()) {

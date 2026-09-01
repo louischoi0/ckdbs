@@ -1261,6 +1261,32 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
     return all ? Step::kAllColumns : mask;
 }
 
+// The columns of step `index`'s own relation that its residual reads.
+//
+// Only `up == 0 && rel_slot == index` references count: a predicate reaching
+// into an earlier step reads a value that step already put in the frame, and
+// an outward reference belongs to an enclosing chain. Both are present when
+// this row is filtered and neither costs this row a decode.
+//
+// A column past bit 63 answers kAllColumns - a relation that wide loses the
+// optimization and keeps every answer, which is the right way round.
+std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
+    std::uint64_t mask = 0;
+    auto note = [&](const ColumnRef& ref) {
+        if (ref.up != 0 || ref.rel_slot != index) return;
+        if (ref.col_pos >= 64) {
+            mask = Step::kAllColumns;
+            return;
+        }
+        if (mask != Step::kAllColumns) mask |= std::uint64_t{1} << ref.col_pos;
+    };
+    for (const StepPredicate& pred : step.residual) {
+        note(pred.lhs);
+        if (pred.rhs.kind == OperandKind::kColumn) note(pred.rhs.column);
+    }
+    return mask;
+}
+
 // `inner_build`: whether steps of this block may take the walked-join
 // annotation (workplan JB1). True from `Compile` down; false from
 // `CompileWhere` down (v1 is SELECT-only - a DML statement's own writes
@@ -1407,41 +1433,26 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
         if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
         out.residual.push_back(pred);
     }
-    // **kAllColumns, deliberately.** UPDATE and DELETE walk the relation
-    // themselves rather than through the step VM, and they need every column
-    // of a matching row anyway - one to re-encode, one to hand the write
-    // hook. A mask here would be a promise the caller does not keep.
-    out.filter_columns = Step::kAllColumns;
+    // **The mask the caller now keeps** (OPT-001). This used to answer
+    // kAllColumns on the grounds that UPDATE and DELETE need every column
+    // of a *matching* row anyway - true, and irrelevant to a rejected one,
+    // which is most of them: both walk the whole relation, so a point
+    // UPDATE on a 2,000-row heap decoded 2,000 rows to write one. The
+    // dispatcher now decodes this mask, tests the predicate, and completes
+    // the row only once it matches, exactly as the step VM does.
+    //
+    // Two gates, both structural, both matching the step VM's:
+    //   - a **sub-chain** can correlate to any column of this row and reads
+    //     it through the frame, so a step carrying one is unmaskable;
+    //   - a relation **wider than 64 columns** cannot be named by a
+    //     uint64_t mask, and a partial decode there would leave the tail
+    //     holding the previous row's values.
+    const bool maskable = out.sub_chains.empty() && access.schema.columns.size() <= 64;
+    out.filter_columns = maskable ? FilterColumnsOf(out, /*index=*/0) : Step::kAllColumns;
     return out;
 }
 
 namespace {
-
-// The columns of step `index`'s own relation that its residual reads.
-//
-// Only `up == 0 && rel_slot == index` references count: a predicate reaching
-// into an earlier step reads a value that step already put in the frame, and
-// an outward reference belongs to an enclosing chain. Both are present when
-// this row is filtered and neither costs this row a decode.
-//
-// A column past bit 63 answers kAllColumns - a relation that wide loses the
-// optimization and keeps every answer, which is the right way round.
-std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
-    std::uint64_t mask = 0;
-    auto note = [&](const ColumnRef& ref) {
-        if (ref.up != 0 || ref.rel_slot != index) return;
-        if (ref.col_pos >= 64) {
-            mask = Step::kAllColumns;
-            return;
-        }
-        if (mask != Step::kAllColumns) mask |= std::uint64_t{1} << ref.col_pos;
-    };
-    for (const StepPredicate& pred : step.residual) {
-        note(pred.lhs);
-        if (pred.rhs.kind == OperandKind::kColumn) note(pred.rhs.column);
-    }
-    return mask;
-}
 
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
