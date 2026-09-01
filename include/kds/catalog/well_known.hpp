@@ -32,13 +32,12 @@ inline constexpr Oid kNamespacePublic = 1;
 // not be moved back to `public` either.
 // (AF-P3, `instructions/v2.8.0/ratification-af-namespace.md`.)
 //
-// **A gate wants the opposite failure and must not call this.**
-// `server/range_alloc.cpp` keeps `!= kNamespacePublic` deliberately, so an
-// unknown namespace fails *closed* - it declines a split rather than
-// permitting one. The two spellings are two different questions that
-// happened to share an answer while there were only two namespaces; this
-// helper exists so the one that is about identity stops borrowing the
-// one that is about permission.
+// **A gate wants the opposite failure and must not call this** -
+// `server/range_alloc.cpp` keeps `!= kNamespacePublic`, and carries the
+// argument for the divergence at its own site. The two spellings are two
+// different questions that happened to share an answer while there were
+// only two namespaces; this helper exists so the one about identity stops
+// borrowing the one about permission.
 constexpr bool IsSystemNamespace(Oid namespace_oid) noexcept {
     return namespace_oid == kNamespaceSys;
 }

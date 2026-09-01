@@ -2820,13 +2820,14 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     if (!tables.ok()) {
         return {ErrorReply(tables.status()), false, 0, tables.status()};
     }
-    for (const auto& row : tables.value()) {
-        // AF-P3: `IsSystemNamespace`, not `!= kNamespacePublic` - a user
-        // relation in a user namespace is alterable (well_known.hpp).
-        if (row.oid == oid.value() && catalog::IsSystemNamespace(row.namespace_oid)) {
-            return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered",
-                    false};
-        }
+    // An oid names one row, so the search **stops** at it rather than
+    // walking every relation in the instance to find nothing more.
+    const auto named = std::find_if(
+        tables.value().begin(), tables.value().end(),
+        [&](const catalog::SysObjectRow& row) { return row.oid == oid.value(); });
+    // AF-P3: identity, not permission (well_known.hpp).
+    if (named != tables.value().end() && catalog::IsSystemNamespace(named->namespace_oid)) {
+        return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered", false};
     }
 
     // AL4: assertions RESTRICT both forms. The stored canon is the

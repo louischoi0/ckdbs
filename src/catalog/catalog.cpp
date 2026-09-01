@@ -1631,10 +1631,8 @@ Status Catalog::RenameTable(Oid table_oid, std::string_view new_name) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.type_oid != kTypeTable || row.oid != table_oid) return false;
             // The catalog's own names are load-bearing for bootstrap and
-            // are nobody's to change (AL7). Asked as `IsSystemNamespace`
-            // rather than `!= kNamespacePublic` (well_known.hpp, AF-P3):
-            // a user relation in a user namespace is renamable, and the
-            // older spelling would have called it a system relation.
+            // are nobody's to change (AL7). AF-P3: identity, not
+            // permission (well_known.hpp).
             if (IsSystemNamespace(row.namespace_oid)) {
                 return Status::InvalidArgument("relation '" +
                                                 std::string(NameView(row.name)) +

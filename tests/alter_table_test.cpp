@@ -259,6 +259,21 @@ TEST_F(AlterTableTest, ARelationInAUserNamespaceIsNotASystemRelation) {
                                           catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
+    // **The column form runs first, and the order is what makes the two
+    // guards independently attributable.** RENAME TO passes *two*
+    // converted guards - the dispatcher's and `RenameTable`'s - so a
+    // revert of either alone is masked by the other. `RenameColumn` has
+    // no namespace guard of its own (review C-5), which makes the
+    // dispatcher the sole door for this form: revert the dispatcher and
+    // this line fails; revert `RenameTable` and this line passes while
+    // the one below fails. Run the other way round, the table rename's
+    // refusal deletes the relation this line names and both revert the
+    // same way.
+    const std::string col = Run("ALTER TABLE orders_line RENAME COLUMN id TO key");
+    EXPECT_EQ(col.find("system relation"), std::string::npos)
+        << "a user relation outside `public` was refused as a system relation: " << col;
+    EXPECT_EQ(col, "RENAMED COLUMN orders_line.id TO key") << col;
+
     const std::string out = Run("ALTER TABLE orders_line RENAME TO orders_item");
     EXPECT_EQ(out.find("system relation"), std::string::npos)
         << "a user relation outside `public` was refused as a system relation: " << out;

@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "kds/base/log.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/storage/device_page_store.hpp"
@@ -90,6 +91,23 @@ protected:
                                      /*log=*/nullptr, &cabins_, &discards_);
     }
 
+    // The same call with the decline log captured. `kInvalidPageId` is
+    // four different answers in this function - the namespace gate, the
+    // top-owner short-circuit, `RangeEligible`, the durable-assertion
+    // re-check - so a cell that names *which* one declined has to read the
+    // reason rather than the return value.
+    StatusOr<PageId> OpenLogged(catalog::Oid oid, std::uint64_t lo, std::uint32_t owner) {
+        return OpenRangeOnSystemCore(catalog_, store_, /*wal=*/nullptr, enforcer_, oid, lo, owner,
+                                     &logger_, &cabins_, &discards_);
+    }
+
+    bool LoggedReason(std::string_view fragment) const {
+        for (const std::string& line : sink_.lines) {
+            if (line.find(fragment) != std::string::npos) return true;
+        }
+        return false;
+    }
+
     // An observed set for `cabin_id` on one value, which is what a probe
     // would have banked. Committed through the store's own door so the
     // per-cabin accounting is the accounting a real recording produces.
@@ -107,6 +125,11 @@ protected:
 
     stats::CabinStore cabins_;
     CabinSplitDiscardCounters discards_;
+
+    // Declared in this order because `logger_` holds the other two.
+    MemoryLogSink sink_;
+    ManualWallClock clock_{1'700'000'000};
+    Logger logger_{&sink_, clock_, LogLevel::kDebug};
 };
 
 // AF-T0's other half: the gate keeps `!= kNamespacePublic` on purpose, so
@@ -120,10 +143,14 @@ TEST_F(RangeAllocTest, ARelationInAUserNamespaceIsDeclinedASplit) {
                                     ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
-    auto entry = Open(oid.value(), 4096, 1);
+    auto entry = OpenLogged(oid.value(), 4096, 1);
     ASSERT_TRUE(entry.ok()) << entry.status().message();
     EXPECT_EQ(entry.value(), kInvalidPageId)
         << "the fail-closed namespace gate admitted an unknown namespace";
+    // …and declined *here*, not at one of the other three exits that
+    // answer with the same page id.
+    EXPECT_TRUE(LoggedReason("the relation is not in `public`"))
+        << "something other than the namespace gate turned this relation away";
 }
 
 TEST_F(RangeAllocTest, OpeningARangeWritesTheOpeningRowBesideIt) {

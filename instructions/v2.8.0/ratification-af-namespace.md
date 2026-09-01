@@ -261,8 +261,44 @@ interleaved arms. Gate: AF-T3.
 
 | row | status |
 |---|---|
-| AF-T0 | **Built 2026-09-01** on `worktree-v2.8.0-ratification-ae`. `catalog::IsSystemNamespace` (`include/kds/catalog/well_known.hpp`) carries the identity question; the three DDL refusals call it; `range_alloc.cpp`'s gate keeps `!= kNamespacePublic` and its comment now says it knowingly over-declines. Three cells, **each verified to fail with its own guard reverted**: `CatalogTest.ARelationInAUserNamespaceIsRenamableAndDroppable`, `AlterTableTest.ARelationInAUserNamespaceIsNotASystemRelation` (both refused the relation as a system one under the old spelling), and `RangeAllocTest.ARelationInAUserNamespaceIsDeclinedASplit` (admitted the split when the gate was converted for symmetry). `CatalogTest.ACatalogsOwnRelationIsStillRefusedARenameAndADrop` holds the other half. Full suite 3131/3131 green |
+| AF-T0 | **Built and reviewed 2026-09-01** on `worktree-v2.8.0-ratification-ae`. `catalog::IsSystemNamespace` (`include/kds/catalog/well_known.hpp`) carries the identity question; the three DDL refusals call it; `range_alloc.cpp`'s gate keeps `!= kNamespacePublic`. **Each of the four guards was reverted on its own and the cell that names it failed** — the dispatcher's (the `RENAME COLUMN` line, the form where it is the sole door), `RenameTable`'s (the `RENAME TO` line, which the column line then proves was not the dispatcher's), `DropTable`'s, and the gate's (converted for symmetry, and the split opened at page 131). `CatalogTest.ACatalogsOwnRelationIsStillRefusedARenameAndADrop` holds the converse. Full suite 3131/3131 green; overhead not measured (v2 suspension) |
 | AF-T1..T5 | not started |
+
+**What the review established and AF inherits.** `critics-developer`,
+2026-09-01, against `e79e1bc`:
+
+- **No fifth site.** Two *other* idioms for "is this a catalog relation"
+  exist and both stay correct under a third namespace: the oid-range test
+  (`mount_recovery.cpp:130`, `relayout_planner.cpp:87`/`:207`,
+  `sim/integrity.cpp:162` — a user-namespace relation's oid still comes
+  from `GenerateUserOid()`, above `kUserOidStart`), and the anchor-page
+  test (`catalog.cpp:2455`, `:3337` — structural, namespace-independent).
+  Nothing else reads `namespace_oid` in a decision; `SHOW TABLES`,
+  `ListTables` and `catalog_view.cpp` filter on `type_oid` alone, which
+  is what makes a user-namespace relation listed and resolvable today.
+- **The gate's own decline message was still telling the lie AF-T0 took
+  out of the other three** — it logged "a catalog relation's pages and
+  chain head are core 0's by construction" for a user-namespace relation
+  too. Fixed; the `why` now names both populations and asserts neither of
+  the other.
+- **The fail-closed argument was overstated and is now stated truthfully.**
+  There *is* an exact spelling of the gate's scope — `rel_oid <
+  kUserOidStart`, the idiom three other files use — which would also
+  delete the `GetSysTableRow` scan the gate makes for one field. It is not
+  taken because it is strictly *narrower*, so adopting it would **loosen**
+  a gate, which AE-5.1 forbids. The reason to keep the coarse test is the
+  AE programme, not the absence of a precise one, and the comment says so
+  rather than leaving the next reader to re-derive a dilemma that does not
+  exist.
+- **`RenameColumn` has no namespace guard of its own** (`catalog.cpp:1655`),
+  so the dispatcher is the *sole* door for that form where `RENAME TO` has
+  two. Recorded rather than changed: AF-T0 narrows the one door in the
+  safe direction, and the asymmetry is AF-T3's to resolve if a namespace
+  ever scopes names.
+- **`TableAccess::namespace_oid` is write-only today** — set at
+  `catalog.cpp:2005`, read by no engine code. Kept, because AF-T2 is its
+  first reader; said at the field so that is a decision rather than a
+  discovery.
 
 **What AF-T0 found and AF-T3 inherits:** `Catalog::FindTableOidByName`
 (`include/kds/catalog/catalog.hpp:468`) takes a name and **no namespace**,

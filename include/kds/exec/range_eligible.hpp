@@ -49,6 +49,12 @@
 // `workplan-range-directory.md` §9b's, inherited by RD5 with the
 // admission windows below; the test pins the current answer.
 //
+// **That spelling is the *gate's*, deliberately, and not the identity
+// question's** (AF-P3, 2026-09-01): it over-declines an unknown namespace
+// on purpose, where a rename or a drop asking the same words would refuse
+// a user relation as a system one. `catalog::IsSystemNamespace` is the
+// identity spelling; `range_alloc.cpp` carries why this one diverges.
+//
 // Two admission windows this function cannot see, named so RD5 closes
 // them rather than discovers them (§9's enumeration): an index build in
 // flight (`PendingIndexBuilds::Covers`) and an assertion between core 0's

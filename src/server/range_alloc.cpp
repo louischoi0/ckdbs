@@ -86,24 +86,38 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
     // one a later change cannot remove by making the fill succeed.
     auto row = catalog.GetSysTableRow(rel_oid);
     if (!row.ok()) return row.status();
-    // `!= kNamespacePublic` and **not** `catalog::IsSystemNamespace`: the
-    // two agree only while `sys` and `public` are the only namespaces, and
-    // the difference between them is which way a third one fails. A gate
-    // must fail closed.
+    // `!= kNamespacePublic` and **not** `catalog::IsSystemNamespace`,
+    // **kept deliberately when AF-P3 moved the other three sites**
+    // (`instructions/v2.8.0/ratification-af-namespace.md`). Those three ask
+    // *identity* - "is this the catalog's own relation" - and a false yes
+    // there is a user relation nobody can drop. This one asks *permission*,
+    // and under a user namespace it knowingly **over-declines**: a relation
+    // in namespace `orders` is refused a split it might have been eligible
+    // for.
     //
-    // **Kept deliberately when AF-P3 moved the other three sites**
-    // (`instructions/v2.8.0/ratification-af-namespace.md`). Those three
-    // ask *identity* — "is this the catalog's own relation" — and a false
-    // yes there is a user relation nobody can drop. This one asks
-    // *permission*, and under a user namespace it knowingly
-    // **over-declines**: a relation in namespace `orders` is refused a
-    // split it might have been eligible for. That costs nothing this
-    // version can reach — AE-3.2 works at one range per relation — and
-    // converting it for symmetry would turn a fail-closed into a
-    // fail-open, which is the one trade AE-5.1 forbids.
+    // **There is an exact spelling of the question and this is not it.**
+    // The scope above states itself as "pages core 0's by construction,
+    // chain head a compile-time `kCatalogPage*` constant", which is
+    // `rel_oid < catalog::kUserOidStart` - the idiom `mount_recovery.cpp`,
+    // `relayout_planner.cpp` and `sim/integrity.cpp` already use, and it
+    // would delete the `GetSysTableRow` scan below with it. It is not used
+    // here because it is strictly *narrower*: for a user-namespace relation
+    // it is a **loosening**, and AE-5.1 says every gate this version
+    // touches is strengthened rather than loosened. So the reason to keep
+    // the coarse test is the AE programme, not an absence of a precise one
+    // - stated because the next reader would otherwise re-derive a dilemma
+    // that does not exist, and write a fourth identity site with this
+    // spelling for want of a better one.
     if (row.value().namespace_oid != catalog::kNamespacePublic) {
+        // The `why` names **both** populations the predicate now has, and
+        // asserts neither of the other: it read "a catalog relation's
+        // pages ... by construction" unconditionally, which is the same
+        // false sentence AF-T0 took out of the three refusals, left on the
+        // log for the namespace this gate over-declines.
         LogRangeDecline(log, catalog::kSystemCore, rel_oid, exec::RangeGate::kNone,
-                        "a catalog relation's pages and chain head are core 0's by construction");
+                        "the relation is not in `public`: a catalog relation's pages and chain "
+                        "head are core 0's by construction, and any other namespace is declined "
+                        "with it because this gate fails closed");
         return kInvalidPageId;
     }
 
