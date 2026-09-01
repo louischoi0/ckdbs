@@ -1,0 +1,479 @@
+{
+  "mode": "plain",
+  "rows": 10000,
+  "del_victims": 129,
+  "seed": 20260901,
+  "lat_rounds": 25,
+  "lat_n": {
+    "select": 15,
+    "update": 15,
+    "delete": 4
+  },
+  "ckpt_reps": 25,
+  "pre_check": {
+    "label": "post-load",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_upd",
+        "hashes": {
+          "A": "b7a3da41d0a92eb7d7b4c3bebb995c8b026fd774fac9088c718c1839bc10086a",
+          "B": "b7a3da41d0a92eb7d7b4c3bebb995c8b026fd774fac9088c718c1839bc10086a"
+        },
+        "match": true
+      },
+      {
+        "check": "t_del_core",
+        "hashes": {
+          "A": "1e558e439a4c95bf555a38f0ddf8cb98edcae0cab356f5f03f2eb098840fd1c3",
+          "B": "1e558e439a4c95bf555a38f0ddf8cb98edcae0cab356f5f03f2eb098840fd1c3"
+        },
+        "match": true
+      },
+      {
+        "check": "t_del_count",
+        "hashes": {
+          "A": "d782619c997c243c4dde3fea687da382e0469737966ad3ad17a78c305ce93b4d",
+          "B": "d782619c997c243c4dde3fea687da382e0469737966ad3ad17a78c305ce93b4d"
+        },
+        "match": true
+      }
+    ],
+    "spot_rows": {
+      "1": {
+        "A": "id,c_int,c_small,c_flag,c_text\n1,496674,40,0,uanripuvicigljfp",
+        "B": "id,c_int,c_small,c_flag,c_text\n1,496674,40,0,uanripuvicigljfp"
+      },
+      "5000": {
+        "A": "id,c_int,c_small,c_flag,c_text\n5000,816048,22101,0,oyoyovmcfakzqutr",
+        "B": "id,c_int,c_small,c_flag,c_text\n5000,816048,22101,0,oyoyovmcfakzqutr"
+      },
+      "10000": {
+        "A": "id,c_int,c_small,c_flag,c_text\n10000,246325,971,0,bbpckjwviapqadli",
+        "B": "id,c_int,c_small,c_flag,c_text\n10000,246325,971,0,bbpckjwviapqadli"
+      }
+    }
+  },
+  "post_check": {
+    "label": "post-writes",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_upd",
+        "hashes": {
+          "A": "c7f5d068680aa353108d1f741ae4b23da0433d7d3e44ae3d55a6be6885597aa1",
+          "B": "c7f5d068680aa353108d1f741ae4b23da0433d7d3e44ae3d55a6be6885597aa1"
+        },
+        "match": true
+      },
+      {
+        "check": "t_del_core",
+        "hashes": {
+          "A": "1e558e439a4c95bf555a38f0ddf8cb98edcae0cab356f5f03f2eb098840fd1c3",
+          "B": "1e558e439a4c95bf555a38f0ddf8cb98edcae0cab356f5f03f2eb098840fd1c3"
+        },
+        "match": true
+      },
+      {
+        "check": "t_del_count",
+        "hashes": {
+          "A": "ac6f654d0506b23fba89265c1100231d12d14d54488242daca65853650a4c76a",
+          "B": "ac6f654d0506b23fba89265c1100231d12d14d54488242daca65853650a4c76a"
+        },
+        "match": true
+      }
+    ],
+    "spot_rows": {
+      "1": {
+        "A": "id,c_int,c_small,c_flag,c_text\n1,496674,40,0,uanripuvicigljfp",
+        "B": "id,c_int,c_small,c_flag,c_text\n1,496674,40,0,uanripuvicigljfp"
+      },
+      "5000": {
+        "A": "id,c_int,c_small,c_flag,c_text\n5000,816048,22101,0,oyoyovmcfakzqutr",
+        "B": "id,c_int,c_small,c_flag,c_text\n5000,816048,22101,0,oyoyovmcfakzqutr"
+      },
+      "10000": {
+        "A": "id,c_int,c_small,c_flag,c_text\n10000,246325,971,0,bbpckjwviapqadli",
+        "B": "id,c_int,c_small,c_flag,c_text\n10000,246325,971,0,bbpckjwviapqadli"
+      }
+    }
+  },
+  "lat_phases": {
+    "A:select": {
+      "phase": "A-select",
+      "detail": "",
+      "ops": 375,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.307957,
+      "qps": 1217.7,
+      "mean_us": 821.2,
+      "p0_us": 784.8,
+      "p25_us": 804.7,
+      "p50_us": 812.3,
+      "p95_us": 884.0,
+      "p99_us": 1000.7,
+      "max_us": 1145.8
+    },
+    "A:update": {
+      "phase": "A-update",
+      "detail": "",
+      "ops": 375,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.801241,
+      "qps": 468.0,
+      "mean_us": 2136.6,
+      "p0_us": 1812.7,
+      "p25_us": 1948.2,
+      "p50_us": 2011.9,
+      "p95_us": 2390.8,
+      "p99_us": 8049.2,
+      "max_us": 11800.8
+    },
+    "A:delete": {
+      "phase": "A-delete",
+      "detail": "",
+      "ops": 100,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.235626,
+      "qps": 424.4,
+      "mean_us": 2356.3,
+      "p0_us": 1766.7,
+      "p25_us": 1928.8,
+      "p50_us": 1973.6,
+      "p95_us": 3492.5,
+      "p99_us": 11265.9,
+      "max_us": 12728.7
+    },
+    "B:select": {
+      "phase": "B-select",
+      "detail": "",
+      "ops": 375,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.308088,
+      "qps": 1217.2,
+      "mean_us": 821.6,
+      "p0_us": 787.4,
+      "p25_us": 804.2,
+      "p50_us": 811.0,
+      "p95_us": 886.3,
+      "p99_us": 988.6,
+      "max_us": 1031.4
+    },
+    "B:update": {
+      "phase": "B-update",
+      "detail": "",
+      "ops": 375,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.789668,
+      "qps": 474.9,
+      "mean_us": 2105.8,
+      "p0_us": 1825.8,
+      "p25_us": 1945.5,
+      "p50_us": 2004.6,
+      "p95_us": 2542.9,
+      "p99_us": 4119.3,
+      "max_us": 10453.8
+    },
+    "B:delete": {
+      "phase": "B-delete",
+      "detail": "",
+      "ops": 100,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.200847,
+      "qps": 497.9,
+      "mean_us": 2008.5,
+      "p0_us": 1809.8,
+      "p25_us": 1902.1,
+      "p50_us": 1962.9,
+      "p95_us": 2181.8,
+      "p99_us": 2826.2,
+      "max_us": 4290.8
+    }
+  },
+  "lat_floor": {
+    "Afloor1:select": {
+      "phase": "Afloor1-select",
+      "detail": "",
+      "ops": 187,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.153564,
+      "qps": 1217.7,
+      "mean_us": 821.2,
+      "p0_us": 785.1,
+      "p25_us": 803.0,
+      "p50_us": 810.1,
+      "p95_us": 900.6,
+      "p99_us": 1099.0,
+      "max_us": 1145.8
+    },
+    "Afloor2:select": {
+      "phase": "Afloor2-select",
+      "detail": "",
+      "ops": 188,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.154393,
+      "qps": 1217.7,
+      "mean_us": 821.2,
+      "p0_us": 784.8,
+      "p25_us": 806.0,
+      "p50_us": 815.2,
+      "p95_us": 862.2,
+      "p99_us": 986.8,
+      "max_us": 994.6
+    },
+    "Afloor1:update": {
+      "phase": "Afloor1-update",
+      "detail": "",
+      "ops": 187,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.393716,
+      "qps": 475.0,
+      "mean_us": 2105.4,
+      "p0_us": 1859.5,
+      "p25_us": 1982.2,
+      "p50_us": 2033.2,
+      "p95_us": 2363.7,
+      "p99_us": 3977.2,
+      "max_us": 8049.2
+    },
+    "Afloor2:update": {
+      "phase": "Afloor2-update",
+      "detail": "",
+      "ops": 188,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.407525,
+      "qps": 461.3,
+      "mean_us": 2167.7,
+      "p0_us": 1812.7,
+      "p25_us": 1922.6,
+      "p50_us": 1978.9,
+      "p95_us": 2527.5,
+      "p99_us": 10454.3,
+      "max_us": 11800.8
+    },
+    "Afloor1:delete": {
+      "phase": "Afloor1-delete",
+      "detail": "",
+      "ops": 50,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.114291,
+      "qps": 437.5,
+      "mean_us": 2285.8,
+      "p0_us": 1791.0,
+      "p25_us": 1949.1,
+      "p50_us": 2003.2,
+      "p95_us": 2916.5,
+      "p99_us": 12728.7,
+      "max_us": 12728.7
+    },
+    "Afloor2:delete": {
+      "phase": "Afloor2-delete",
+      "detail": "",
+      "ops": 50,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.121335,
+      "qps": 412.1,
+      "mean_us": 2426.7,
+      "p0_us": 1766.7,
+      "p25_us": 1868.0,
+      "p50_us": 1956.7,
+      "p95_us": 7170.1,
+      "p99_us": 11265.9,
+      "max_us": 11265.9
+    }
+  },
+  "ckpt": {
+    "select": {
+      "A": {
+        "bytes": null,
+        "raw_bytes": null,
+        "stmt_lat_us": {
+          "n": 25,
+          "mean": 834.948759584222,
+          "min": 809.0760020422749,
+          "max": 912.2650008066557,
+          "stdev": 19.5244341629606
+        },
+        "sync_lat_us": {
+          "n": 25,
+          "mean": 2503.2443593954667,
+          "min": 2275.5649988539517,
+          "max": 4567.744996165857,
+          "stdev": 431.8428030149777
+        },
+        "measured_under_strace": false
+      },
+      "B": {
+        "bytes": null,
+        "raw_bytes": null,
+        "stmt_lat_us": {
+          "n": 25,
+          "mean": 839.3375601735897,
+          "min": 819.1910019377246,
+          "max": 877.3910012678243,
+          "stdev": 14.344918009541786
+        },
+        "sync_lat_us": {
+          "n": 25,
+          "mean": 2534.9286006530747,
+          "min": 2288.1340046296827,
+          "max": 4454.661000636406,
+          "stdev": 416.3923742329138
+        },
+        "measured_under_strace": false
+      }
+    },
+    "update": {
+      "A": {
+        "bytes": null,
+        "raw_bytes": null,
+        "stmt_lat_us": {
+          "n": 25,
+          "mean": 2018.6903199646622,
+          "min": 1887.2069995268248,
+          "max": 2362.3180022696033,
+          "stdev": 104.8509137240669
+        },
+        "sync_lat_us": {
+          "n": 25,
+          "mean": 4351.718318939675,
+          "min": 3684.955998323858,
+          "max": 8767.813997110352,
+          "stdev": 1111.6126504878737
+        },
+        "measured_under_strace": false
+      },
+      "B": {
+        "bytes": null,
+        "raw_bytes": null,
+        "stmt_lat_us": {
+          "n": 25,
+          "mean": 2034.429079212714,
+          "min": 1893.0859951069579,
+          "max": 3273.742004239466,
+          "stdev": 262.51809749340106
+        },
+        "sync_lat_us": {
+          "n": 25,
+          "mean": 1688.446679909248,
+          "min": 1529.9370061256923,
+          "max": 2473.930006090086,
+          "stdev": 204.94899179047576
+        },
+        "measured_under_strace": false
+      }
+    },
+    "delete": {
+      "A": {
+        "bytes": null,
+        "raw_bytes": null,
+        "stmt_lat_us": {
+          "n": 25,
+          "mean": 2120.474720140919,
+          "min": 1841.6070015518926,
+          "max": 4247.217002557591,
+          "stdev": 479.58098761086563
+        },
+        "sync_lat_us": {
+          "n": 25,
+          "mean": 4537.096720014233,
+          "min": 3636.8910004966892,
+          "max": 10229.722000076436,
+          "stdev": 1501.8668852004214
+        },
+        "measured_under_strace": false
+      },
+      "B": {
+        "bytes": null,
+        "raw_bytes": null,
+        "stmt_lat_us": {
+          "n": 25,
+          "mean": 2043.2835194515064,
+          "min": 1843.2709985063411,
+          "max": 2921.5069953352213,
+          "stdev": 223.71523504138534
+        },
+        "sync_lat_us": {
+          "n": 25,
+          "mean": 1643.711320066359,
+          "min": 1470.2279950142838,
+          "max": 1821.2750001112,
+          "stdev": 81.80103683906947
+        },
+        "measured_under_strace": false
+      }
+    }
+  },
+  "ckpt_floor": {
+    "select": {
+      "half1_sync_us": {
+        "n": 12,
+        "mean": 2404.733165652336,
+        "min": 2280.8330031693913,
+        "max": 2609.2789994436316,
+        "stdev": 80.96118180207692
+      },
+      "half2_sync_us": {
+        "n": 13,
+        "mean": 2594.1777690045105,
+        "min": 2275.5649988539517,
+        "max": 4567.744996165857,
+        "stdev": 579.0974170138423
+      }
+    },
+    "update": {
+      "half1_sync_us": {
+        "n": 12,
+        "mean": 4059.643416743105,
+        "min": 3684.955998323858,
+        "max": 5255.023999779951,
+        "stdev": 442.06742870805107
+      },
+      "half2_sync_us": {
+        "n": 13,
+        "mean": 4621.325920967278,
+        "min": 3714.3409936106764,
+        "max": 8767.813997110352,
+        "stdev": 1429.8559214663424
+      }
+    },
+    "delete": {
+      "half1_sync_us": {
+        "n": 12,
+        "mean": 4551.861333311535,
+        "min": 3636.8910004966892,
+        "max": 7456.665000063367,
+        "stdev": 1278.5373418068107
+      },
+      "half2_sync_us": {
+        "n": 13,
+        "mean": 4523.467846201339,
+        "min": 3725.4920025588945,
+        "max": 10229.722000076436,
+        "stdev": 1681.784310750368
+      }
+    }
+  },
+  "errors": {
+    "A": {
+      "count": 0,
+      "first": null
+    },
+    "B": {
+      "count": 0,
+      "first": null
+    }
+  }
+}

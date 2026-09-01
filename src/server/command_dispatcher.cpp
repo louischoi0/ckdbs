@@ -8487,8 +8487,23 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
     }
 
+    // **kRead, though this statement writes** (OPT-003). The walk itself
+    // never writes through the page it is handed: `apply` re-fetches with
+    // `page_store_.Get(page_id)` before `OverwriteTuple`, because encoding
+    // may have appended to the var-heap and a store may hand back a
+    // different frame. Asking for kWrite here therefore marked *every page
+    // the walk touched* dirty (heap_chain.cpp's ChainVisitOnePage takes
+    // `store.Get`, device_page_store marks on handout), so a point UPDATE
+    // on a 2,000-row heap relation dirtied ~28 pages to change one and the
+    // next checkpoint wrote all 28 back.
+    //
+    // The one thing this defers: on a leased store `Get` also runs
+    // `MayWrite`, so a peer's write refusal is now raised at the mutating
+    // re-fetch rather than at the walk. That is later, but still before
+    // anything is dirtied or logged, so the refusal a client sees is
+    // unchanged in code and in ordering with respect to the write.
     Status scan = VisitRelation(
-        ta, storage::PageAccess::kWrite,
+        ta, storage::PageAccess::kRead,
         [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             // UPDATE has no early exit: it must consider every row, since
@@ -9297,8 +9312,12 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         }
     }
 
+    // kRead, for the reason UPDATE's site states: `mark` re-fetches the
+    // page before it delete-marks a slot, so the walk's own view is never
+    // written through and marking every page it read dirty was write
+    // amplification, not correctness (OPT-003).
     Status scan = VisitRelation(
-        ta, storage::PageAccess::kWrite,
+        ta, storage::PageAccess::kRead,
         [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (Status s = mark(page_id, page, slot); !s.ok()) return s;
