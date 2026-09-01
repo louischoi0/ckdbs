@@ -1,0 +1,51 @@
+[setup] rows=200 del_victims=1324 seed=20260901
+[setup] done in 0.36s; first insert reply A='INSERTED oid=4000 id=1 page=129 slot=0' B='INSERTED oid=4000 id=1 page=129 slot=0'
+[correctness] post-load ok=True
+[latency pass] 20 rounds done in 0.39s
+[cpu pass] 20 rounds done in 11.75s
+[correctness] post-writes ok=True
+wrote /home/cdkbs/ckdbs/.claude/worktrees/path-optimizer/CIP/OPT-001-update-decode-order/archive/run200.json
+
+arm:shape               ops      qps   mean us      p0     p25     p50     p95      p99  err
+A-select                400    8,062     124.0   103.1   118.2   121.8   145.4    171.1    0
+A-update                400    7,765     128.8   119.7   124.8   126.1   142.7    154.0    0
+A-delete                120    4,352     229.8   213.0   220.0   223.8   252.0    357.1    0
+A-wide                  300    4,749     210.6   199.4   203.5   206.8   225.7    256.4    0
+A-subchain               80    3,459     289.1   272.2   280.0   284.4   319.5    339.2    0
+B-select                400    7,574     132.0   101.3   121.7   125.4   176.3    192.7    0
+B-update                400    9,133     109.5    94.4   101.8   103.0   139.6    151.9    0
+B-delete                120    5,108     195.8   179.9   187.5   190.7   223.3    232.1    0
+B-wide                  300    8,960     111.6    98.7   102.3   103.3   144.2    153.7    0
+B-subchain               80    3,582     279.2   263.6   265.5   270.5   316.3    324.1    0
+Afloor1-select          200    8,019     124.7   103.3   119.3   121.3   143.3    163.2    0
+Afloor2-select          200    8,105     123.4   103.1   111.2   122.8   146.6    173.8    0
+Afloor1-update          200    7,822     127.9   119.7   124.9   125.9   142.4    145.1    0
+Afloor2-update          200    7,710     129.7   120.4   124.8   126.2   144.1    164.0    0
+Afloor1-delete           60    4,248     235.4   218.9   222.7   228.2   254.4    381.0    0
+Afloor2-delete           60    4,460     224.2   213.0   218.8   220.3   236.8    254.4    0
+Afloor1-wide            150    4,762     210.0   199.4   205.4   207.2   225.5    246.8    0
+Afloor2-wide            150    4,736     211.2   199.9   202.6   205.3   232.6    295.7    0
+Afloor1-subchain         40    3,516     284.4   272.2   278.5   282.4   299.8    303.3    0
+Afloor2-subchain         40    3,404     293.8   276.7   281.8   287.4   331.5    339.2    0
+
+arm:shape (cpu)         ops     us/op
+A:select              16000     53.13
+A:update              16000     84.38
+A:delete               1200    183.33
+A:wide                10000    164.00
+A:subchain             1600    256.25
+B:select              16000     49.38
+B:update              16000     62.50
+B:delete               1200    141.67
+B:wide                10000     59.00
+B:subchain             1600    243.75
+Afloor1:select         8000     53.75
+Afloor2:select         8000     52.50
+Afloor1:update         8000     83.75
+Afloor2:update         8000     85.00
+Afloor1:delete          600    216.67
+Afloor2:delete          600    150.00
+Afloor1:wide           5000    164.00
+Afloor2:wide           5000    164.00
+Afloor1:subchain        800    237.50
+Afloor2:subchain        800    275.00
