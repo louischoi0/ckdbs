@@ -8,7 +8,7 @@ built on the `xf` worktree; every path:line below is `1b27d68`
 |---|---|
 | SA-T0 | **Built** at `1beda80` — a participant that wrote nothing writes no `TXN_PREPARE`. Spec: `cross-owner-txn.md` §1a |
 | SA-T1 | **Built** at `1b27d68` — `exec::RestructureForExecutingCore`, both remote shapes, correlated arms included |
-| SA-T2 | **Surveyed, not built — and the survey found the order's remedy necessary but not sufficient.** §2 below |
+| SA-T2 | **Ruled 2026-09-01 and built as work order SB** (`instructions/v2.7.1/workorder-sb.md`). §2's proposal was ratified as SB-R1; §2.6 records what building it found. |
 | SA-T3..T9 | not started |
 
 ---
@@ -148,3 +148,62 @@ admits every indexed relation" holds unchanged. What it does change is the
 **consequence of getting §2.3 or §2.4 wrong** — a wrong Cabin answer would
 now reach only relations whose owner opted into spreading, rather than
 every relation on a multi-core instance.
+
+
+### 2.6 Ruled, built, and what building it found `[2026-09-01 — work order SB]`
+
+§2.4's proposal is ratified verbatim as **SB-R1**: an Observational
+Cabin's entry set is authoritative for (observed value × the ranges its
+core owns). SB-R2 ordered the discard before CC10's grant, SB-R3 made the
+scoping, the discard and the two gate drops one merge, and SB-R5 kept the
+Bound class and migration out. T2a/T2b/T2c/T2d landed together;
+`docs/spec/cabin.md` §4b and `crosscore.md` CC10/§6a are where the rules
+now live.
+
+**Two findings from the code, each of which contradicts a premise this
+survey stated, and both are why the built shape differs from the order's
+letter.**
+
+**Finding A — there is one Cabin store, and it is core 0's.** §2.3 said "a
+set may live on any core that has read the relation (under
+`peer_listeners = on`, that is any core)". That is false against the tree:
+`Expeditor::cabin_store_` is the only `stats::CabinStore` the engine
+constructs; every peer dispatcher passes `/*cabins=*/nullptr`
+(`src/server/core_runtime.cpp`) and so does every fan-in stage
+(`src/server/remote_step_service.cpp`, three sites). `known-gaps.md`
+already recorded the same fact from the other direction — the four
+unbroadcast catalog relations are safe "only because a peer's dispatcher
+is built with no recorder, no replay, no access statistics and no cabins".
+So SB-R2's acknowledgement set is one core, and that core is the one
+performing the split. The operator ruled on 2026-09-01 that the discard is
+therefore a direct core-local `Forget` before the grant — no window at
+all, rather than a window closed by acknowledgements — with the broadcast
+named in `cabin.md` §4b and CC10 as what the obligation becomes the day a
+peer or a stage holds a store.
+
+**Finding B — a Cabin probe on a split relation is unreachable, before
+the lift and after it.** A relation with two or more owners is never read
+locally: `HandleSelect`'s fan-in route is taken exactly when
+`TableAccess::ServableBy(core_id)` is false, and `CheckReadAffinity`
+refuses every shape the fan-in gate will not admit. Every stage of that
+fan-in — core 0's own included, since a run of ranges the reader owns
+becomes a self-directed stage — runs with no Cabin store. So dropping the
+two gates cannot produce the wrong answer §2.3 feared, and it cannot
+produce a saving either. That is worth stating twice, because it changes
+what the bundle *is*: it is a correctness statement made structural and a
+refusal removed, not an acceleration. `SHOW META`'s
+`cabin_scope_fallthroughs` counts it rather than leaving it to be
+inferred.
+
+**What Finding B does not excuse.** The serve-site predicate is built
+anyway, and deliberately: today it is true because of a router two
+functions away, and `schema.hpp`'s own rule — "a predicate correct only
+because of a neighbouring invariant is what this line refuses to be" — is
+what the scoping is for. The day a stage is given a store, the predicate
+is what keeps the answer right; without it the same day is a silent
+subset.
+
+**Still open here, unchanged by SB:** SA-T3 (per-owner index builds),
+SA-T5a (the router), SA-T6 (FK), SA-T7 (the Bound Cabin's migration, and
+with it the Cabin bullet's surviving migration gate), and IX11, which is
+where `RangeEligible`'s index arm returns.

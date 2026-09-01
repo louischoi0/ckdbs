@@ -922,22 +922,40 @@ still waits on its own gate, so:
 
   **The one that does not recover is `RefuseAuxiliaryOnSplitRelation`**
   (`src/catalog/catalog.cpp`): on a relation with two or more ranges,
-  `CREATE INDEX`, `CREATE CABIN` — **including the Cabin optimizer's
-  automatic path**, which enacts through the same call — `CREATE
-  ASSERTION`, and an FK naming it on either side are all `Unsupported`.
-  Nothing merges ranges (the mover is R5, unbuilt), so **order now decides
-  and the decision is permanent**: index-then-write keeps the relation
-  unsplittable through `RangeEligible`'s gate, write-then-index is refused
-  for the life of the relation. `DROP TABLE` + recreate is the only way back.
+  `CREATE INDEX`, `CREATE ASSERTION`, and an FK naming it on either side
+  are all refused. Nothing merges ranges (the mover is R5, unbuilt), so
+  **order now decides and the decision is permanent**: index-then-write
+  keeps the relation unsplittable through `RangeEligible`'s gate,
+  write-then-index is refused for the life of the relation. `DROP TABLE`
+  + recreate is the only way back.
+
+  **`CREATE CABIN` left this list on 2026-09-01** (SB-R3,
+  `instructions/v2.7.1/workorder-sb.md`), and with it the Cabin
+  optimizer's automatic path, which enacted through the same call. It was
+  lifted by scoping the authority — an Observational Cabin's set speaks
+  for (observed value × the ranges its core owns), `docs/spec/cabin.md`
+  §4b — together with a discard of the pre-split sets in CC10's pre-grant
+  window, in one merge, because lifting the refusal without the scoping
+  would have turned it into a quiet wrong answer. `RangeEligible` lost its
+  `kCabin` arm in the same merge, so a cabined relation splits. **What the
+  lift does not buy is speed**: a split relation is never read locally
+  (`HandleSelect` fans it in, `CheckReadAffinity` refuses the rest), and a
+  fan-in stage is built with no Cabin store, so a Cabin on a split
+  relation serves nothing and walks everything. `SHOW META`'s
+  `cabin_scope_fallthroughs` is that fact, counted rather than assumed.
 
   **Reachability narrowed 2026-08-31 by the operator's amendment**, and
   the defect is not fixed by it: spreading is now a per-relation option
   shipping **off**, so "the second order is what an ordinary session
   produces" — true under DA1 — is no longer true of the shipped engine.
   Reaching this now takes a relation that asked to spread. **Work order
-  SA is what narrows the gate itself** (SA-T2 for the Cabin class,
-  SA-T3 for per-owner index builds, SA-T6 for FK), leaving UNIQUE and
-  the Bound Cabin as the named residue.
+  SA is what narrows the gate itself** (SA-T2 for the Cabin class —
+  **done 2026-09-01 as work order SB**, SA-T3 for per-owner index builds,
+  SA-T6 for FK), leaving UNIQUE and the Bound Cabin as the named
+  residue. `RangeEligible`'s `kIndex` arm went with SB's merge too and is
+  a comment naming IX11, where a `unique` flag on `IndexRef` will bring
+  it back: the arm tested a field that does not exist, so it admitted
+  every indexed relation and named nothing.
 
   The other nine, each a path that answered before and refuses now, all in
   `src/server/command_dispatcher.cpp` unless named otherwise:

@@ -275,6 +275,85 @@ the walk's order before emission — pk while a relation's keys have only
 ascended, page and slot once one has been admitted below its high-water
 mark — IX8a's rule applied with §4.1's `key_order` respected.
 
+### 4b. Authority under a split relation `[ADDED 2026-09-01 — SB-R1]`
+
+**A Cabin's entry set is authoritative for (observed value × the ranges
+its core owns).** Ratified by the operator on 2026-09-01
+(`instructions/v2.7.1/workorder-sb.md` SB-R1) after the SA-T2 survey
+found that a split turns a whole-relation set into a subset with nothing
+in the write path noticing: `CabinStore::NoteWrite` appends only where the
+value is observed and only on the core performing the write, so a peer's
+insert into a range that core does not own is appended nowhere and the
+original observer's set silently stops covering the relation
+(`docs/inflight/in-progress/workplan-auxiliaries-under-split.md` §2.3).
+
+This is an **authority change, not a narrowing by convention.** §1's
+promise is unchanged in its own scope; what the scope is has become
+explicit, because a relation now has more than one owner. Three rules
+follow, and none of them is a preference:
+
+1. **A relation of one range is the case that exists today and is
+   unchanged, byte for byte.** `ranges.empty()` is CC9's zero-cost
+   invariant reaching the serve path — one load from an entry the step is
+   already holding and one predictable branch — and it is written first
+   so it can never pay for the split case. A one-range relation's owner
+   owns every range, so the scoped claim and the v1 claim are the same
+   claim.
+2. **A probe resolves the ranges it needs through the range directory.**
+   Ranges the serving core owns are answered from the set; any range it
+   does not own falls through to that range's own stage — which is the
+   fan-in the read surface already opens (RD7,
+   `docs/spec/crosscore.md` §2a). The Cabin does not open the stage and
+   never could: which cores a read fans out to is a plan-time fact, and
+   the plan already splits a split relation into one stage per maximal
+   contiguous run of same-owner ranges.
+3. **Therefore a set may be served only where the serving core's owned
+   ranges cover the walk the step would otherwise do.** That is the
+   predicate, stated at the serve site rather than inherited from the
+   router: `TableAccess::ServableBy` is what the dispatcher asks before
+   reading locally, and a serve that leaned on it from two functions away
+   would be correct only because of a neighbouring invariant. When it does
+   not hold, the probe **falls through to the walk** — always legal, §1's
+   corollary, a performance event and never an answer.
+
+**What this leaves reachable today, stated plainly rather than implied.**
+A split relation (two or more owners) is never read locally: `HandleSelect`
+routes it to the fan-in and `CheckReadAffinity` refuses whatever the
+fan-in's shape gate will not admit. Every fan-in stage is constructed with
+**no Cabin store at all** (`src/server/remote_step_service.cpp`), as is
+every peer dispatcher (`src/server/core_runtime.cpp`; the same fact
+`docs/inflight/known-gaps.md` records for the four unbroadcast catalog
+relations). So on a split relation a Cabin probe today serves *nothing*
+and walks *everything* — correct, and worth no cycles. The scoping is what
+makes that correctness structural instead of accidental, and the
+acceleration SB-R1 authorizes becomes reachable the day a stage is given a
+store; until then the fall-through counter of §4c reads 100% and the
+engine is not pretending otherwise.
+
+**The transition rule is the discard**, and it is `crosscore.md` CC10's:
+sets banked while the relation was whole were banked under the *old*
+claim, and nothing in a set records which claim it was made under. They are
+therefore dropped before the grant that creates the second owner, not
+after. See CC10's pre-grant window; the two halves are one rule and the
+sequence is where it lives.
+
+### 4c. What the serve path reports `[ADDED 2026-09-01 — SB-R4]`
+
+Two counters, ratified with the scoping as its acceptance terms, because a
+Cabin on a split relation whose savings cannot be seen cannot be measured
+and an unmeasured saving is not claimed:
+
+- **`cabin_scope_fallthroughs`** on `SHOW META`, and `scope_declines` per
+  cabin on `SHOW CABINS` beside that cabin's hits and misses — probes that
+  found an observed set and declined to serve from it because rule 3 did
+  not hold. It is the one number that distinguishes "this Cabin is not
+  earning its write hook" from "this Cabin cannot be reached from where
+  the read runs", which no existing counter can tell apart.
+- **`cabin_split_discard`** on `SHOW META`, keyed by relation, in §6's
+  refusal-counter form and absent at zero — sets dropped by CC10's
+  pre-grant discard. Its reading is the cost of the transition rule:
+  re-observation, priced in misses that follow.
+
 ## 5. Write path — the witness
 
 The write hook is what "observed ⇒ complete" costs. The superset
@@ -445,6 +524,12 @@ Distinct trust classes, cooperative operation; none replaces another:
   descent. Correctness never depends on any of them.
 - **ANALYZE narrates all three.** Per step: cabin hit/miss, trail
   replay/fallback, and the recording events themselves.
+- **And all three are scoped to one core's ranges.** Cabin's scope is
+  §4b's — observed value × the ranges its core owns — Waystone's is its
+  trail's own core by invariant 8, and the clustered tree's is the range
+  its owner holds. The three degrade independently *within* a scope; none
+  of them speaks for a range its core does not own, and the fan-in is
+  where the ranges are put back together.
 
 ## 8. Materialization policy and the full-coverage limit (C5)
 
@@ -580,12 +665,18 @@ drop on its own judgement.
 - Entry-set page layout details and directory persistence format —
   workplan (the 24 B CabinEntry of §3 is fixed; its packing into
   pages is not).
-- Cabin under a split or migrated relation (added 2026-08-24).
-  `docs/spec/crosscore.md` §6a gates a cabined relation from **both** until
-  this decides — entry sets are memory-resident where they were
-  observed, and the hint-miss fall-back resolves through the pk on the
-  same core, so a moved range's Cabin neither travels nor self-heals
-  (`crosscore.md` CC10).
+- ~~Cabin under a split or migrated relation (added 2026-08-24)~~ —
+  **decided 2026-09-01 by SB-R1** (`instructions/v2.7.1/workorder-sb.md`),
+  written into §4b: a set is authoritative for (observed value × the
+  ranges its core owns), sets banked under the whole-relation claim are
+  discarded before the grant that creates a second owner (`crosscore.md`
+  CC10), and `crosscore.md` §6a's Cabin gate on **split** is lifted with
+  it. What did **not** land and is named rather than folded away: the
+  **Bound** class keeps its gate (SA-T7 owns its migration, and this
+  ruling is Observational-only, SB-R5); **migration** of an Observational
+  Cabin is discarded, not carried, so a moved relation's sets are rebuilt
+  by traffic; and the acceleration §4b authorizes is unreachable until a
+  fan-in stage is given a Cabin store, which nothing has ordered.
 
 ---
 
@@ -618,6 +709,14 @@ and the lookup machinery are shared; the **lifecycle contracts are not**.
 | Entry size | 24 B (`stats::CabinEntry`, C6) | **32 B** — the same fields plus the row's aggregate value inline |
 | Key | One non-pk column's value, held by value | The `GROUP BY` column list, hashed into a group directory |
 | Instances | One per `(relation, column)` | One per **assertion** (§5.3); never shared in v1 |
+
+**The scope of the two classes differs and §4b is where the
+Observational one is stated.** An Observational set is authoritative for
+(observed value × the ranges its core owns) and falls through for the
+rest; a Bound Cabin has no such rule yet, which is why `crosscore.md` §6a
+still gates it from split and migration both — its coverage contract is
+100% of the target relation's live rows, and a scope narrower than the
+relation is a contract change rather than an authority one (SA-T7 owns it).
 
 **Observational Cabin semantics are untouched by this revision.** Every
 property §§1-11 of this document states — the superset invariant, append-only
