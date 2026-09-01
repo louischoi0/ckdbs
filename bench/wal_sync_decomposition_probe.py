@@ -66,7 +66,9 @@ def meta_fields(meta, prefixes):
     return out
 
 
-TRACKED_PREFIXES = ("wal_", "sched_", "shipped_")
+# `xowner_` since XG4: XF4's per-leg commit timers, which are what makes a
+# cross-owner booking reportable per leg instead of per total.
+TRACKED_PREFIXES = ("wal_", "sched_", "shipped_", "xowner_")
 
 
 def delta(before, after):

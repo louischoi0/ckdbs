@@ -1,0 +1,64 @@
+=== c1-b1-r1 (port 17401, attempt 1) 2026-09-01T03:10:52Z ===
+OK c1-b1-r1 (attempt 1)
+=== c2-pl-b1-r1 (port 17402, attempt 1) 2026-09-01T03:11:03Z ===
+=== c2-pl-b1-r1 (port 17403, attempt 2) 2026-09-01T03:11:16Z ===
+OK c2-pl-b1-r1 (attempt 2)
+=== c2-nopl-b1-r1 (port 17404, attempt 1) 2026-09-01T03:11:46Z ===
+OK c2-nopl-b1-r1 (attempt 1)
+=== c4-pl-b1-r1 (port 17405, attempt 1) 2026-09-01T03:12:14Z ===
+OK c4-pl-b1-r1 (attempt 1)
+=== c4-nopl-b1-r1 (port 17406, attempt 1) 2026-09-01T03:12:31Z ===
+OK c4-nopl-b1-r1 (attempt 1)
+=== c1-b8-r1 (port 17407, attempt 1) 2026-09-01T03:12:45Z ===
+OK c1-b8-r1 (attempt 1)
+=== c2-pl-b8-r1 (port 17408, attempt 1) 2026-09-01T03:13:11Z ===
+OK c2-pl-b8-r1 (attempt 1)
+=== c2-nopl-b8-r1 (port 17409, attempt 1) 2026-09-01T03:13:39Z ===
+OK c2-nopl-b8-r1 (attempt 1)
+=== c4-pl-b8-r1 (port 17410, attempt 1) 2026-09-01T03:13:50Z ===
+OK c4-pl-b8-r1 (attempt 1)
+=== c4-nopl-b8-r1 (port 17411, attempt 1) 2026-09-01T03:14:19Z ===
+OK c4-nopl-b8-r1 (attempt 1)
+=== c1-b1-r2 (port 17412, attempt 1) 2026-09-01T03:14:47Z ===
+OK c1-b1-r2 (attempt 1)
+=== c2-pl-b1-r2 (port 17413, attempt 1) 2026-09-01T03:15:14Z ===
+OK c2-pl-b1-r2 (attempt 1)
+=== c2-nopl-b1-r2 (port 17414, attempt 1) 2026-09-01T03:15:45Z ===
+OK c2-nopl-b1-r2 (attempt 1)
+=== c4-pl-b1-r2 (port 17415, attempt 1) 2026-09-01T03:16:13Z ===
+=== c4-pl-b1-r2 (port 17416, attempt 2) 2026-09-01T03:16:27Z ===
+=== c4-pl-b1-r2 (port 17417, attempt 3) 2026-09-01T03:16:40Z ===
+OK c4-pl-b1-r2 (attempt 3)
+=== c4-nopl-b1-r2 (port 17418, attempt 1) 2026-09-01T03:17:11Z ===
+OK c4-nopl-b1-r2 (attempt 1)
+=== c1-b8-r2 (port 17419, attempt 1) 2026-09-01T03:17:39Z ===
+OK c1-b8-r2 (attempt 1)
+=== c2-pl-b8-r2 (port 17420, attempt 1) 2026-09-01T03:17:49Z ===
+OK c2-pl-b8-r2 (attempt 1)
+=== c2-nopl-b8-r2 (port 17421, attempt 1) 2026-09-01T03:18:02Z ===
+OK c2-nopl-b8-r2 (attempt 1)
+=== c4-pl-b8-r2 (port 17422, attempt 1) 2026-09-01T03:18:29Z ===
+OK c4-pl-b8-r2 (attempt 1)
+=== c4-nopl-b8-r2 (port 17423, attempt 1) 2026-09-01T03:18:43Z ===
+OK c4-nopl-b8-r2 (attempt 1)
+=== c1-b1-r3 (port 17424, attempt 1) 2026-09-01T03:19:10Z ===
+OK c1-b1-r3 (attempt 1)
+=== c2-pl-b1-r3 (port 17425, attempt 1) 2026-09-01T03:19:21Z ===
+OK c2-pl-b1-r3 (attempt 1)
+=== c2-nopl-b1-r3 (port 17426, attempt 1) 2026-09-01T03:19:51Z ===
+OK c2-nopl-b1-r3 (attempt 1)
+=== c4-pl-b1-r3 (port 17427, attempt 1) 2026-09-01T03:20:03Z ===
+OK c4-pl-b1-r3 (attempt 1)
+=== c4-nopl-b1-r3 (port 17428, attempt 1) 2026-09-01T03:20:35Z ===
+OK c4-nopl-b1-r3 (attempt 1)
+=== c1-b8-r3 (port 17429, attempt 1) 2026-09-01T03:21:03Z ===
+OK c1-b8-r3 (attempt 1)
+=== c2-pl-b8-r3 (port 17430, attempt 1) 2026-09-01T03:21:28Z ===
+OK c2-pl-b8-r3 (attempt 1)
+=== c2-nopl-b8-r3 (port 17431, attempt 1) 2026-09-01T03:21:40Z ===
+OK c2-nopl-b8-r3 (attempt 1)
+=== c4-pl-b8-r3 (port 17432, attempt 1) 2026-09-01T03:21:52Z ===
+OK c4-pl-b8-r3 (attempt 1)
+=== c4-nopl-b8-r3 (port 17433, attempt 1) 2026-09-01T03:22:20Z ===
+OK c4-nopl-b8-r3 (attempt 1)
+ALL DONE 2026-09-01T03:22:33Z
