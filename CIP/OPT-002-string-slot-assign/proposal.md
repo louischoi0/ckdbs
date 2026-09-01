@@ -49,7 +49,8 @@ that happened to stop there. Release suite **3088/3088 green** at that
 commit, and the pre-push hook's own Debug suite green again on push.
 
 **Measured — and the entry's own prediction was wrong about the shape.**
-`bench/v2.7.0/results-opt002-string-slot-assign-v2.7.0-30-g55d2c0b.md`,
+`results-opt002-string-slot-assign-v2.7.0-30-g55d2c0b.md`, beside this
+file (it lived at `bench/v2.7.0/` until the CIP restructure moved it):
 arm A `dfe4c98` against arm B `55d2c0b`, both built from a clean
 `git archive` of their own commit, interleaved with one RNG stream
 driving both arms:
@@ -72,9 +73,50 @@ The largest end-to-end win landing on `update` is the second finding:
 UPDATE decodes every scanned row *including its strings* before testing
 the WHERE, which is OPT-001 — so OPT-002's win there is a measure of
 OPT-001's defect, and it will shrink when OPT-001 lands. That is a
-correct outcome, not a regression.
+correct outcome, not a regression. **OPT-001 has since landed**
+(`e156b3d`), and the reconciliation in
+`../OPT-001-update-decode-order/results-opt001-update-decode-order-v2.7.0-38-gea1d9d0.md`
+measured exactly that shrink — `update` p50 fell a further 60% below
+this run's B arm once rejected rows stopped decoding strings at all. So
+this entry's `update` numbers price a decode order the tree no longer
+has; `analyze-scan` (+18-27%) is the figure that still describes
+OPT-002's standing contribution.
 
 **Sanity.** No `ANALYZE` counter differed between arms at any size
 (`examined=`, `pages=`, `opens=`, `pattern_id=`), and a byte-for-byte
 row spot-check plus `COUNT(*)` matched — which is the check that
 outranks the timing.
+
+**Reviewed** (`critics-developer`, on the merged tree at `fc9242f`): no
+correctness bug. The `char(N)` memchr rewrite was traced against the
+encoder contract on all four edges (empty cell, NUL at offset 0, no NUL
+at all, non-ASCII); `AssignBytes` was proven unable to alias its
+destination at any of the three sites — every source span is a page
+frame, StepVm's reconstruction buffer, or a tagged-cell view, never an
+`AstValue::str_val`; `ResolveSpills`' copy lands before its pin dies,
+at the same sequence point the old loop occupied; and the
+capacity-reuse premise is real — `ChainFrame::Open` sizes the slot
+vector once per statement (`chain_frame.hpp:55-58`) and the three hot
+walks open the frame outside the per-row body.
+
+**What the review changed** (`3631ec5`): the one missed site of the
+same pattern — the uint64 arm's above-INT64_MAX branch move-assigned
+`std::to_string`'s result, a fresh 20-digit malloc per decoded row; it
+now writes `to_chars` into a stack buffer and assigns, like the string
+arms. A read-back assertion for the full-width `char(N)` value — a cell
+holding no NUL at all is the one branch where the memchr rewrite
+differs structurally from the old loop, and nothing selected one. Two
+dead `docs/inflight/in-progress/cip-path-optimizer.md` citations in the
+code repointed at the CIP/ directories, and `AssignBytes`'s own comment
+un-claimed the twice-per-UPDATE decode OPT-001 has since removed. Suite
+3118/3118 green with the changes.
+
+**Declined from the review, with the reason:** removing the
+`!cell.empty()` guard as an impossible state — its absence is UB
+(`memchr` with a null pointer), not merely dead code; clearing
+`int_val`/`scale`/`dec_hi` at the three kStr sites — a slot's column
+type is fixed for a frame's life and every kStr consumer dispatches on
+type before reading, and `SetNullSlot`'s comment already owns the one
+place that hazard is real; and repairing the dead doc path inside the
+`results-*.md` files — a measurement record is not back-filled, and its
+citations were true at the commit it describes.
