@@ -1061,6 +1061,77 @@ TEST_F(StepCompileTest, ARelationWiderThanSixtyFourColumnsGetsNoMask) {
         << "a mask cannot describe column 64 and beyond, so there must be no mask";
 }
 
+// ---- CompileWhere's mask (OPT-001) ---------------------------------------
+//
+// UPDATE and DELETE do not compile to a chain: they walk the relation and
+// evaluate `CompileWhere`'s single step per row. Until OPT-001 that step
+// answered kAllColumns and both decoded every scanned row in full before
+// testing anything. The mask is now real, which makes these three the
+// tests that matter - a mask naming too little does not fail loudly, it
+// leaves a slot holding the previous row's value.
+
+TEST_F(StepCompileTest, CompileWhereMasksTheColumnsItsPredicateReads) {
+    auto parsed = parser::Parse("UPDATE acct SET name = 'x' WHERE name = 'y'");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& update = std::get<parser::UpdateStmt>(parsed.value());
+    auto oid = boot_->catalog.FindTableOidByName("acct", nullptr);
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+
+    auto step = CompileWhere(boot_->catalog, *access.value(), "acct", update.where);
+    ASSERT_TRUE(step.ok()) << step.status().message();
+    ASSERT_EQ(step.value().residual.size(), 1u);
+    const std::uint64_t expected = std::uint64_t{1} << step.value().residual[0].lhs.col_pos;
+    EXPECT_EQ(step.value().filter_columns, expected)
+        << "the mask must name the WHERE's column, and only it";
+    EXPECT_NE(step.value().filter_columns, Step::kAllColumns);
+}
+
+TEST_F(StepCompileTest, CompileWhereGivesUpItsMaskToASubquery) {
+    // A sub-chain's correlation can reach any column of the outer row and
+    // reads it through the frame, which no residual mask describes. The
+    // gate is structural, and this is the shape that would otherwise hand
+    // a correlated inner step a slot nobody decoded.
+    auto parsed = parser::Parse(
+        "UPDATE acct SET name = 'x' WHERE id IN (SELECT trade.acct_id FROM trade "
+        "WHERE trade.sym = acct.name)");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& update = std::get<parser::UpdateStmt>(parsed.value());
+    auto oid = boot_->catalog.FindTableOidByName("acct", nullptr);
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+
+    auto step = CompileWhere(boot_->catalog, *access.value(), "acct", update.where);
+    ASSERT_TRUE(step.ok()) << step.status().message();
+    ASSERT_FALSE(step.value().sub_chains.empty());
+    EXPECT_EQ(step.value().filter_columns, Step::kAllColumns)
+        << "a step carrying a sub-chain is unmaskable";
+}
+
+TEST_F(StepCompileTest, CompileWhereGivesUpItsMaskOnAWideRelation) {
+    // The same bound the SELECT path has: a uint64 mask cannot name column
+    // 64, so a partial decode there would leave the tail holding the
+    // previous row's values.
+    std::string sql = "CREATE TABLE wide_upd (id int64";
+    for (int i = 1; i < 70; ++i) sql += ", c" + std::to_string(i) + " int64";
+    sql += ")";
+    Create(sql);
+
+    auto parsed = parser::Parse("UPDATE wide_upd SET c1 = 1 WHERE c2 = 2");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& update = std::get<parser::UpdateStmt>(parsed.value());
+    auto oid = boot_->catalog.FindTableOidByName("wide_upd", nullptr);
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+
+    auto step = CompileWhere(boot_->catalog, *access.value(), "wide_upd", update.where);
+    ASSERT_TRUE(step.ok()) << step.status().message();
+    EXPECT_EQ(step.value().filter_columns, Step::kAllColumns);
+}
+
 TEST_F(StepCompileTest, ADefaultConstructedStepDecodesEverything) {
     // The zero-initialised default is the *opposite* of the mask, on
     // purpose: a Step built by anything other than the compiler is slow
