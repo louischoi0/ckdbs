@@ -389,19 +389,21 @@ wanted for its own sake.
 
 ## 8c. XG3's coverage, cell by cell — and what is owed
 
-**Four crash points are placed and three faults are asserted; the
-process-kill half is owed and has not been run.** Stated in that order
-because the second half is the one a reader would otherwise assume.
+**Four crash points are placed, three faults are asserted, and the
+process-kill half is now run** — `bench/v2.8.0/results-xg3-answer-edge-kill-v2.7.0-86-g6b18f69.md`,
+3/3 across three passes, `bench/shipped_answer_edge_kill_probe.py`. The
+table below is amended in place: the three "not run" kill cells are
+**PASS**, and the two cells that were never kill cells stay owed.
 
 | XG3's cell | crash point | asserted where |
 |---|---|---|
-| receiver registered, no batch yet | `shipped.answer_described_prerows` | **not run** — needs the kill harness |
-| mid-stream between batches | `shipped.answer_batch_sent` (`:1` is after the first) | **not run** |
+| receiver registered, no batch yet | `shipped.answer_described_prerows` | **PASS ×3** — killed at the point; the typed client got `ConnectionError`, never a result set |
+| mid-stream between batches | `shipped.answer_batch_sent` | **PASS ×3**. The `:1` ordinal is *not* what the probe arms - `crash_point.hpp`'s ordinals are 1-based, so `:1` is the **first** hit and the bare name is what fires mid-stream on a 400-row read |
 | description partially chunked | `shipped.answer_desc_chunk` (`:1` after the first) | **the fault is asserted, the kill is not**: `ADescriptionChunkOutOfOrderFailsTheReadRatherThanAssembling` and `ADescriptionIsWholeOnlyWhenEveryChunkHasArrived` at the receiver, and `RowsWithNoDescriptionAreRefusedRatherThanDecoded` end to end for the absent case |
-| terminator sent, not yet consumed | `shipped.answer_edge_closed_prereply` | **not run** |
+| terminator sent, not yet consumed | `shipped.answer_edge_closed_prereply` | **PASS ×3** |
 | cancel racing the first batch | — | the mechanism is `SessionStepLoopbackTest.CloseBeforeEofCancelsTheRemoteSide`, which predates this row and is not specific to the answer edge |
-| credit exhausted at owner death | — | **not run** |
-| the 10 s deadline, typed arm | — | **not run** — a unit cell cannot afford it and the harness has not |
+| credit exhausted at owner death | — | **still not run** — not a kill cell, and not part of AH-T5's gate |
+| the 10 s deadline, typed arm | — | **still not run** — a unit cell cannot afford it and the harness has not |
 
 **What *is* proven, and it is the taxonomy XG3 asked about**: a failure
 reaches a typed client as a failure and never as an empty or partial
