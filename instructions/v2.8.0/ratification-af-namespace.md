@@ -262,7 +262,39 @@ interleaved arms. Gate: AF-T3.
 | row | status |
 |---|---|
 | AF-T0 | **Built and reviewed 2026-09-01** on `worktree-v2.8.0-ratification-ae`. `catalog::IsSystemNamespace` (`include/kds/catalog/well_known.hpp`) carries the identity question; the three DDL refusals call it; `range_alloc.cpp`'s gate keeps `!= kNamespacePublic`. **Each of the four guards was reverted on its own and the cell that names it failed** — the dispatcher's (the `RENAME COLUMN` line, the form where it is the sole door), `RenameTable`'s (the `RENAME TO` line, which the column line then proves was not the dispatcher's), `DropTable`'s, and the gate's (converted for symmetry, and the split opened at page 131). `CatalogTest.ACatalogsOwnRelationIsStillRefusedARenameAndADrop` holds the converse. Full suite 3131/3131 green; overhead not measured (v2 suspension) |
-| AF-T1..T5 | not started |
+| AF-T1 | **Built 2026-09-01.** `Catalog::CreateNamespace` / `FindNamespaceOidByName` / `ListNamespaces` / `DropNamespace`, a `sys.objects` row of `kTypeNamespace` whose `namespace_oid` is its own oid — `InitWellKnownObjects`' convention, so a user namespace and a well-known one decode alike and `IsSystemNamespace` answers false without being told. **No format change**: the row type and the field both predate this. DROP is RESTRICT and retypes to the new `kTypeDroppedNamespace` (35) rather than retiring — the row is `GenerateUserOid()`'s floor evidence, and the tombstone is a *distinct* oid from `kTypeDroppedTable` so the two sweeps cannot match each other's. Five cells in `catalog_test.cpp`. Full suite 3135/3135 green |
+| AF-T2..T5 | not started |
+
+**Two names decided at AF-T1 that AF-T3 inherits.** `sys` and `public`
+are **reserved**: `CREATE NAMESPACE` refuses both, and
+`FindNamespaceOidByName` resolves them to `kNamespaceSys` /
+`kNamespacePublic`. The grounds are not symmetry —
+
+- **`sys` is already a qualifier**, and has been since the catalog views:
+  `exec::kCatalogSchema` is `"sys"`, so `sys.tables` today resolves to a
+  *view* rather than to the bootstrap relation of that name
+  (`command_dispatcher.cpp`'s schema-qualified arm, which also carries the
+  only "unknown schema" refusal in the engine). Admitting a user namespace
+  called `sys` would create the ambiguity before AF-T3 had ruled on it.
+- **`public` has no spelling at all today** — the qualifier is simply
+  omitted. A user namespace of that name would be a *third* thing,
+  distinct from the default, and `public.customer` would name it rather
+  than the relation a bare `customer` resolves to.
+
+The registry names stay `namespaceSys` / `namespacePublic`, which is what
+`SELECT ... FROM sys.objects` shows. Two spellings for one thing, which
+this codebase otherwise forbids — recorded at `well_known.hpp` rather than
+quietly fixed, because converging them is user-visible and AF-T3 is where
+it belongs.
+
+**And the syntax half of AF-6 is already built.** `Parser::ParseRelationRef`
+(`src/parser/parser.cpp:1181`) parses `ns.table` into `RelationRef::schema`
+and has since the catalog views; `command_dispatcher.cpp:7471-7489` is the
+single site that resolves it, and today answers everything but `sys` with
+*"unknown schema '<x>'; the only qualified relations are the catalog views
+under `sys`"*. **AF-T3 is therefore mostly that one arm plus `CREATE
+NAMESPACE`**, not a grammar project — a materially smaller task than AF-6
+priced it at.
 
 **What the review established and AF inherits.** `critics-developer`,
 2026-09-01, against `e79e1bc`:

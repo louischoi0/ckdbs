@@ -454,6 +454,112 @@ TEST_F(CatalogTest, ACatalogsOwnRelationIsStillRefusedARenameAndADrop) {
     EXPECT_NE(dropped.message().find("system relation"), std::string::npos) << dropped.message();
 }
 
+// ---- AF-T1: the namespace as a catalog object ---------------------------
+//
+// `instructions/v2.8.0/ratification-af-namespace.md` AF-T1. A namespace is
+// a `sys.objects` row of `kTypeNamespace` whose `namespace_oid` is its own
+// oid - no new relation, no new page, no format change.
+
+TEST_F(CatalogTest, ANamespaceIsAnObjectRowThatOwnsItself) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto ns = catalog_.CreateNamespace("orders");
+    ASSERT_TRUE(ns.ok()) << ns.status().message();
+    EXPECT_GE(ns.value(), kUserOidStart) << "a namespace took a bootstrap oid";
+
+    auto found = catalog_.FindNamespaceOidByName("orders");
+    ASSERT_TRUE(found.ok()) << found.status().message();
+    EXPECT_EQ(found.value(), ns.value());
+
+    auto all = catalog_.ListNamespaces();
+    ASSERT_TRUE(all.ok()) << all.status().message();
+    ASSERT_EQ(all.value().size(), 1u) << "the two bootstrap namespaces are registry-only";
+    EXPECT_EQ(all.value()[0].oid, ns.value());
+    // The convention `InitWellKnownObjects` set for the two that bootstrap,
+    // so a user namespace and a well-known one decode the same way.
+    EXPECT_EQ(all.value()[0].namespace_oid, ns.value())
+        << "a namespace's own namespace is not itself";
+    // And therefore not a system relation, without anything being told so.
+    EXPECT_FALSE(IsSystemNamespace(all.value()[0].namespace_oid));
+}
+
+TEST_F(CatalogTest, ANamespaceNameIsUniqueAndTheTwoReservedSpellingsAreRefused) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    ASSERT_TRUE(catalog_.CreateNamespace("orders").ok());
+
+    auto again = catalog_.CreateNamespace("orders");
+    EXPECT_FALSE(again.ok());
+    EXPECT_EQ(again.status().code(), StatusCode::kAlreadyExists) << again.status().message();
+
+    // `sys` is already a qualifier in the grammar (exec::kCatalogSchema)
+    // and `public` is the namespace every relation is created in, so
+    // admitting either as a user namespace would create an ambiguity
+    // before AF-T3 has ruled on what a qualifier means.
+    for (const char* reserved : {"sys", "public"}) {
+        auto refused = catalog_.CreateNamespace(reserved);
+        EXPECT_FALSE(refused.ok()) << reserved << " was admitted as a user namespace";
+        EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument)
+            << refused.status().message();
+    }
+    // …and both still resolve, to the oids that existed before any DDL.
+    auto sys_ns = catalog_.FindNamespaceOidByName("sys");
+    ASSERT_TRUE(sys_ns.ok());
+    EXPECT_EQ(sys_ns.value(), kNamespaceSys);
+    auto public_ns = catalog_.FindNamespaceOidByName("public");
+    ASSERT_TRUE(public_ns.ok());
+    EXPECT_EQ(public_ns.value(), kNamespacePublic);
+
+    // A well-known object's own stored name is taken too - two objects
+    // answering one GetByName is a collision the registry cannot report.
+    auto clash = catalog_.CreateNamespace("namespacePublic");
+    EXPECT_FALSE(clash.ok());
+    EXPECT_EQ(clash.status().code(), StatusCode::kAlreadyExists) << clash.status().message();
+}
+
+TEST_F(CatalogTest, DroppingANamespaceIsRestrictedByTheRelationsInIt) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto ns = catalog_.CreateNamespace("orders");
+    ASSERT_TRUE(ns.ok()) << ns.status().message();
+
+    auto rel = catalog_.CreateTable(ns.value(), "orders_line", MinimalPkSchema(),
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(rel.ok()) << rel.status().message();
+
+    Status restricted = catalog_.DropNamespace(ns.value());
+    EXPECT_FALSE(restricted.ok()) << "a namespace holding a relation was dropped";
+    EXPECT_NE(restricted.message().find("orders_line"), std::string::npos)
+        << "the refusal did not name the relation that blocked it: " << restricted.message();
+
+    // Empty it, and the drop goes through.
+    std::vector<std::uint64_t> dropped_cabins;
+    ASSERT_TRUE(catalog_.DropTable(rel.value(), dropped_cabins).ok());
+    Status dropped = catalog_.DropNamespace(ns.value());
+    EXPECT_TRUE(dropped.ok()) << dropped.message();
+
+    // The name is free the instant the retype lands, and the row is not:
+    // it is GenerateUserOid()'s floor evidence, so a reissued oid could
+    // make a live relation read as a member of a namespace that is gone.
+    EXPECT_EQ(catalog_.FindNamespaceOidByName("orders").status().code(), StatusCode::kNotFound);
+    auto live = catalog_.ListNamespaces();
+    ASSERT_TRUE(live.ok());
+    EXPECT_TRUE(live.value().empty()) << "a dropped namespace still lists as live";
+    auto next = catalog_.GenerateUserOid();
+    ASSERT_TRUE(next.ok());
+    EXPECT_GT(next.value(), ns.value()) << "the dropped namespace's oid was reissued";
+}
+
+TEST_F(CatalogTest, TheTwoReservedNamespacesCannotBeDropped) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    for (const Oid reserved : {kNamespaceSys, kNamespacePublic}) {
+        Status s = catalog_.DropNamespace(reserved);
+        EXPECT_FALSE(s.ok()) << "reserved namespace oid " << reserved << " was dropped";
+        EXPECT_EQ(s.code(), StatusCode::kInvalidArgument) << s.message();
+    }
+}
+
 TEST_F(CatalogTest, ACachedAccessCarriesTheRelationsRangesAndTheyRepublishOnInsert) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 

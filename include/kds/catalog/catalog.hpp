@@ -448,6 +448,64 @@ public:
                                std::uint64_t trx_id = kBootstrapXid,
                                std::vector<CatalogRowRef>* written = nullptr);
 
+    // ---- Namespaces (AF-T1) ---------------------------------------------
+    //
+    // A namespace is a **logical grouping that decides placement**: a
+    // relation created in one is owned by the core that owns the
+    // namespace, fixed by its first relation (AF-P1, unbuilt - that is
+    // AF-T2). It partitions nothing and bounds no transaction; two
+    // namespaces are two cores and 2PC crosses them exactly as it does
+    // today (`instructions/v2.8.0/ratification-af-namespace.md` AF-2).
+    //
+    // **It is an ordinary `sys.objects` row of `kTypeNamespace`**, with a
+    // `GenerateUserOid()` oid and - following the bootstrap convention at
+    // `InitWellKnownObjects` - its own oid as its `namespace_oid`, because
+    // a namespace's namespace is itself. No new catalog relation, no new
+    // page, no format change: `SysObjectRow` has carried `namespace_oid`
+    // and `kTypeNamespace = 17` since the format existed.
+    //
+    // The two that exist before any DDL - `kNamespaceSys`,
+    // `kNamespacePublic` - live in the in-memory registry rather than on a
+    // catalog page, so every lookup here answers from both.
+
+    // Creates one, name-unique across the registry and the page. Refuses
+    // `AlreadyExists` for a taken name and `InvalidArgument` for the two
+    // reserved spellings (`well_known.hpp`'s `kNamespaceSysName` /
+    // `kNamespacePublicName`) and for a name that would not survive
+    // `SetName` intact.
+    //
+    // `trx_id` / `written` are `CreateTable`'s, for the same reason and
+    // with the same defaults: one row, registered for rollback when a
+    // transactional caller asks.
+    StatusOr<Oid> CreateNamespace(std::string_view name,
+                                   std::uint64_t trx_id = kBootstrapXid,
+                                   std::vector<CatalogRowRef>* written = nullptr);
+
+    // Resolves a namespace's SQL spelling. Answers the two reserved names
+    // first, then the `kTypeNamespace` rows on `sys.objects`; `kNotFound`
+    // otherwise. A dropped namespace does not resolve - the retype to
+    // `kTypeDroppedNamespace` frees the name the instant the drop runs,
+    // which is `DROP TABLE`'s own rule (ddl-transactional.md §5a).
+    StatusOr<Oid> FindNamespaceOidByName(std::string_view name);
+
+    // Every live user namespace, registry entries excluded - the callers
+    // that want those have `sys_objects()`.
+    StatusOr<std::vector<SysObjectRow>> ListNamespaces();
+
+    // Drops one. **RESTRICT**, the rule `DROP TABLE` already uses for
+    // foreign keys and assertions: a namespace holding any relation is
+    // refused rather than emptied, because the alternative is a cascade
+    // nobody asked for over relations whose data is not the namespace's.
+    //
+    // Retypes to `kTypeDroppedNamespace` and never retires the row
+    // (well_known.hpp's note): the row is `GenerateUserOid()`'s floor
+    // evidence, and a reissued namespace oid could make a live relation
+    // read as a member of a namespace that no longer exists.
+    //
+    // The two reserved namespaces are refused `InvalidArgument`.
+    Status DropNamespace(Oid namespace_oid, std::uint64_t trx_id = kBootstrapXid,
+                          std::vector<CatalogRowChange>* written = nullptr);
+
     StatusOr<SysTableRow> GetSysTableRow(Oid table_oid);
 
     // Scans sys.objects (disk, not the in-memory well-known registry -

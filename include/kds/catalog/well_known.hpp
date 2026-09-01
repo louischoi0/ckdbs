@@ -42,6 +42,33 @@ constexpr bool IsSystemNamespace(Oid namespace_oid) noexcept {
     return namespace_oid == kNamespaceSys;
 }
 
+// The **SQL spellings** of the two namespaces that exist before any DDL
+// does, and they are not the names their `sys.objects` rows carry
+// ("namespaceSys" / "namespacePublic", written by `InitWellKnownObjects`).
+// Two names for one thing, which this codebase otherwise forbids - so the
+// split is stated rather than left to be discovered:
+//
+// - `sys` is **already** a qualifier in the grammar, and has been since the
+//   catalog views: `exec::kCatalogSchema` is "sys", and `sys.tables` today
+//   resolves to a *view* rather than to the bootstrap relation of that name
+//   (`command_dispatcher.cpp`'s schema-qualified arm). AF-T3 decides what
+//   `sys.` means once real namespaces exist; until it does, admitting a
+//   user namespace called `sys` would create the ambiguity before anyone
+//   had ruled on it.
+// - `public` is the namespace every relation is created in today, and it
+//   has no spelling at all - the qualifier is simply omitted. A user
+//   namespace called `public` would therefore be a *third* thing, distinct
+//   from the default, and `public.customer` would name it rather than the
+//   relation an unqualified `customer` resolves to.
+//
+// So both are refused at `CREATE NAMESPACE` and both resolve in
+// `FindNamespaceOidByName`. The registry names are left alone: they are
+// what a `SELECT ... FROM sys.objects` shows, changing them is a
+// user-visible act with no benefit here, and AF-T3 is where the two
+// spellings either converge or the difference is written into the manual.
+inline constexpr std::string_view kNamespaceSysName = "sys";
+inline constexpr std::string_view kNamespacePublicName = "public";
+
 inline constexpr Oid kTypeInt = 12;
 inline constexpr Oid kTypeVarchar = 13;
 inline constexpr Oid kTypeSchema = 14;
@@ -100,6 +127,20 @@ inline constexpr Oid kTypeDecimalWide = 33;
 // name stays freed and the oid stays counted by the floor recovery. The row
 // goes on doing its whole job under the old number.
 inline constexpr Oid kTypeDroppedTable = 34;
+
+// A dropped **namespace**'s sys.objects row is retyped to this, for the
+// identical reason the value above exists (AF-T1,
+// `instructions/v2.8.0/ratification-af-namespace.md`): the row is
+// `GenerateUserOid()`'s floor evidence, so it may never be retired, while
+// every namespace lookup filters on `kTypeNamespace` and so frees the name
+// at once.
+//
+// **A distinct value rather than reusing `kTypeDroppedTable`**, appended
+// past it per the rule above. Sharing one oid would put two concepts under
+// one identity, which is precisely the defect the note on 22 records - and
+// here it would be worse than cosmetic, because the namespace sweep and
+// the relation sweep would each match the other's tombstones.
+inline constexpr Oid kTypeDroppedNamespace = 35;
 
 inline constexpr Oid kSysTypesTable = 100;
 inline constexpr Oid kSysObjectsTable = 110;
@@ -260,7 +301,7 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kTypeInt8,            kTypeInt16,            kTypeInt32,
     kTypeFloat,           kTypeDecimal,          kTypeUint64,
     kTypeDate,            kTypeTimestamp,        kTypeDecimalWide,
-    kTypeDroppedTable,    kSysTypesTable,        kSysObjectsTable,
+    kTypeDroppedTable,    kTypeDroppedNamespace, kSysTypesTable,        kSysObjectsTable,
     kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
     kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,

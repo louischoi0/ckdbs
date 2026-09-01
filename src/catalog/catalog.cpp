@@ -1695,6 +1695,175 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     return Status::OK();
 }
 
+// ---- Namespaces (AF-T1) ---------------------------------------------------
+
+StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name) {
+    // The reserved spellings first, and **before** the page scan rather
+    // than after it: `CreateNamespace` refuses these two names, so a row
+    // carrying one cannot exist - and if a file written by some other
+    // build ever held one, answering it ahead of the reserved oid would
+    // silently redirect `public.` at a user relation. Fail towards the
+    // fixed answer.
+    if (name == kNamespaceSysName) return kNamespaceSys;
+    if (name == kNamespacePublicName) return kNamespacePublic;
+
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    if (!rows.ok()) return rows.status();
+    for (const SysObjectRow& row : rows.value()) {
+        // `kTypeNamespace` and not `kTypeDroppedNamespace`: the retype is
+        // what frees the name, exactly as a dropped table's does.
+        if (row.type_oid == kTypeNamespace && NameView(row.name) == name) return row.oid;
+    }
+    // Not cached, for `FindTableOidByName`'s reason: a caller looking a
+    // name up *expecting* NotFound before creating it would be answered
+    // from a remembered absence that its own create just falsified.
+    return Status::NotFound("no namespace with this name");
+}
+
+StatusOr<std::vector<SysObjectRow>> Catalog::ListNamespaces() {
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    if (!rows.ok()) return rows.status();
+    std::vector<SysObjectRow> out;
+    for (const SysObjectRow& row : rows.value()) {
+        if (row.type_oid == kTypeNamespace) out.push_back(row);
+    }
+    return out;
+}
+
+StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_id,
+                                        std::vector<CatalogRowRef>* written) {
+    // Same validator as a rename's, and deliberately the same one: a name
+    // this refuses is a name `SetName` would truncate, and a truncated
+    // name is not the one that was asked for.
+    if (Status s = CheckRenameName("namespace", name); !s.ok()) return s;
+
+    if (name == kNamespaceSysName || name == kNamespacePublicName) {
+        return Status::InvalidArgument("catalog: '" + std::string(name) +
+                                        "' is a reserved namespace name (well_known.hpp)");
+    }
+    // A user namespace may not take a well-known object's name either -
+    // "namespaceSys" and "namespacePublic" are what those rows carry, and
+    // two objects answering one `GetByName` is the collision the registry
+    // has no way to report.
+    if (sys_objects_.GetByName(name) != nullptr) {
+        return Status::AlreadyExists("catalog: '" + std::string(name) +
+                                      "' is a well-known catalog object");
+    }
+
+    // The collision check and the write run on one core (DDL is core 0's),
+    // so check-then-write is atomic by the event loop - `RenameTable`'s
+    // argument, and the same absence of a tombstone race: a dropped
+    // namespace's name is free the instant the retype lands, and unlike
+    // `DROP TABLE` there is no `NameHeldByPendingDrop` equivalent owed
+    // here yet, because nothing but this function creates one and no
+    // reader resolves a namespace under a view. **AF-T3 owes that check**
+    // the moment `CREATE NAMESPACE` becomes a transactional statement two
+    // sessions can run at once.
+    if (auto taken = FindNamespaceOidByName(name); taken.ok()) {
+        return Status::AlreadyExists("a namespace named '" + std::string(name) +
+                                      "' already exists");
+    } else if (taken.status().code() != StatusCode::kNotFound) {
+        return taken.status();
+    }
+
+    auto generated_oid = GenerateUserOid();
+    if (!generated_oid.ok()) return generated_oid.status();
+    const Oid new_oid = generated_oid.value();
+
+    CatalogRowRef where;
+    // `namespace_oid = new_oid`: a namespace's own namespace is itself,
+    // which is `InitWellKnownObjects`' convention for the two that
+    // bootstrap - so a user namespace and a well-known one decode the
+    // same way and `IsSystemNamespace` answers false for this row without
+    // being told about it.
+    if (Status s = InsertObjectRow(new_oid, new_oid, kTypeNamespace, name, trx_id, &where);
+        !s.ok()) {
+        return s;
+    }
+    if (written != nullptr) written->push_back(where);
+    return new_oid;
+}
+
+Status Catalog::DropNamespace(Oid namespace_oid, std::uint64_t trx_id,
+                               std::vector<CatalogRowChange>* written) {
+    if (namespace_oid == kNamespaceSys || namespace_oid == kNamespacePublic) {
+        return Status::InvalidArgument(
+            "catalog: namespace oid " + std::to_string(namespace_oid) +
+            " is a reserved namespace and cannot be dropped");
+    }
+
+    // **RESTRICT, asked before anything is written** - the rule DROP TABLE
+    // already uses for foreign keys and assertions. A cascade here would
+    // delete relations whose data has nothing to do with the namespace;
+    // emptying it silently would be worse. `sys.tables` rather than
+    // `sys.objects` because that is where a relation's namespace is a
+    // *relation* fact rather than an object one, and it is the row AF-T2's
+    // placement will read.
+    auto tables = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
+    if (!tables.ok()) return tables.status();
+    for (const SysTableRow& row : tables.value()) {
+        if (row.namespace_oid != namespace_oid) continue;
+        // Names the relation that blocked it, not just a count: the user's
+        // next act is to drop or move that relation, and a message saying
+        // "3 relations" sends them to a catalog query first.
+        return Status::InvalidArgument("namespace oid " + std::to_string(namespace_oid) +
+                                        " cannot be dropped: relation '" +
+                                        std::string(NameView(row.name)) + "' is still in it");
+    }
+
+    const bool transactional = trx_id != kBootstrapXid;
+    PageId retyped_page = kInvalidPageId;
+    CatalogRowChange retype_change;
+    auto retyped = ForFirstRow<SysObjectRow>(
+        store_, kCatalogPageObjects,
+        [&](SysObjectRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.type_oid != kTypeNamespace || row.oid != namespace_oid) return false;
+
+            // The before-image, captured before the overwrite: it is what
+            // a rollback writes back and it is the only copy - a catalog
+            // row has no undo chain. `DropTable`'s step 1, one row wide.
+            CatalogRowChange change;
+            change.slot = i;
+            change.oid = row.oid;
+            change.rel_oid = kSysObjectsTable;
+            change.prior_trx_id = tuple.trx_id;
+            change.prior_undo_ptr = tuple.undo_ptr;
+            const auto before = row.Encode();
+            change.prior_image.assign(before.begin(), before.end());
+
+            row.type_oid = kTypeDroppedNamespace;
+            const auto encoded = row.Encode();
+            if (ddl_undo_hook_) {
+                if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kOverwrite, page_id, i,
+                                               change.prior_image, tuple.trx_id, tuple.undo_ptr,
+                                               UndoPkOf(change.prior_image)});
+                    !s.ok()) {
+                    return s;
+                }
+            }
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
+                                           transactional ? trx_id : wal::kNoTxnId,
+                                           transactional ? trx_id : tuple.trx_id,
+                                           tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            retype_change = std::move(change);
+            return true;
+        },
+        &retyped_page);
+    if (!retyped.ok()) return retyped.status();
+    if (!retyped.value()) return Status::NotFound("no sys.objects row for this namespace");
+    if (transactional && written != nullptr) {
+        retype_change.page_id = retyped_page;  // known only once the walk found it
+        written->push_back(retype_change);
+    }
+
+    BumpVersion("drop namespace");
+    return Status::OK();
+}
+
 Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
                           std::uint64_t trx_id, std::vector<CatalogRowChange>* written) {
     // Transactional only when a caller supplies an id (DT5). Without one
