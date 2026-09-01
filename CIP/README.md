@@ -88,8 +88,8 @@ Seven fields, in this order. An entry missing one is not ready to build.
 | [OPT-002](OPT-002-string-slot-assign/proposal.md) | Every decoded string costs a malloc+free the codec's own header says it should not | **built, measured** | `opt-002-string-slot-assign` | `55d2c0b` |
 | [OPT-003](OPT-003-walk-read-access/proposal.md) | UPDATE/DELETE walk the relation with `kWrite` and dirty every page they read | **built, measured** | `opt-003-walk-read-access` | `31bc482` |
 | [OPT-004](OPT-004-decoderowinto-preconditions/proposal.md) | `DecodeRowInto` still pays the Status-constructing preconditions AP02 removed | **built, measured — no measurable win** | `opt-004-decoderowinto-preconditions` | `b05925f` |
-| [OPT-005](OPT-005-btree-leaf-ref/proposal.md) | `BtreeLookup` drops the leaf pin and every caller re-fetches the same page | proposed | — | — |
-| [OPT-006](OPT-006-subchain-runner-reuse/proposal.md) | A correlated sub-chain rebuilds its whole runner per outer row | proposed | — | — |
+| [OPT-005](OPT-005-btree-leaf-ref/proposal.md) | `BtreeLookup` drops the leaf pin and every caller re-fetches the same page | **built, measured — inside the floor** | `opt-005-btree-leaf-ref` | `c578e29`, `1495016` |
+| [OPT-006](OPT-006-subchain-runner-reuse/proposal.md) | A correlated sub-chain rebuilds its whole runner per outer row | **built, reviewed, measured** | `opt-006-subchain-runner-reuse` | `ff27662`, `1495016` |
 
 Each row's number links to that proposal's own directory. Survey that
 produced OPT-001..OPT-006: `worktree-path-optimizer` at

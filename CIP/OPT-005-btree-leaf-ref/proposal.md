@@ -43,5 +43,45 @@ fetches. Proof: the index and eviction contract suites, plus an
 8-frame-budget run of the full suite, which is how eviction was armed in
 the first place.
 
-**Implementation.** Branch `opt-005-btree-leaf-ref` — filled in with its
-remote link, commits and suite result when the work lands.
+**Implementation.** Branch `opt-005-btree-leaf-ref` at `c578e29`,
+carried on to `1495016` (`v2.7.0-47-g1495016`) by the review.
+`BtreeLookupHeld` moves the descent's leaf `PageRef` out; `BtreeLookup`
+remains, implemented over it, for callers wanting an address rather than
+bytes. Converted: the point step, the index-range resolve (once per
+resolved row), and `fk_check.cpp`'s parent descent (once per FK-checked
+row) — **the third instance, which this entry's own survey missed** and
+the review found. Left unconverted, each verified to record a location
+without reading the tuple: the Cabin heal, `cabin_optimizer_exec.cpp`,
+and `LocateByPk`, whose caller is a write path that must re-fetch a
+writable frame anyway. Release suite **3091/3091**, sim **228/0**.
+
+**Two claims in this entry were false, and both are retracted.**
+
+- *"`ANALYZE`'s `pages=` must drop by exactly one per resolved row,
+  which makes the change provable from a counter."* It does not:
+  `pages_fetched` is incremented explicitly beside the descent and the
+  removed `GetForRead` was **never counted**. The A/B confirmed it
+  empirically — `pages=` and `index_resolved=` byte-identical across all
+  32 arm/shape/size comparisons.
+- *"one more live pin, pressing on `eviction.md` §3's ceiling."* Also
+  wrong: both converted sites already held a `PageRef` across the
+  identical read, so peak pins is unchanged at 1 and MG03's audited
+  claim stands. The invented cost would have argued against the very
+  conversion this entry wanted.
+
+**Measured — and unresolvable at this scale.**
+`results-opt005-btree-leaf-ref-v2.7.0-45-gc578e29.md`, beside this file.
+Two pairs (`31bc482` vs `c578e29`; `c578e29` vs `1495016` isolating the
+fk_check site), six shapes, three sizes. **Every delta sits inside a
+~0-3% floor, and none reproduces in the predicted direction across
+sizes.** The reason is arithmetic rather than mysterious: the saving is
+a few hundred nanoseconds against a statement costing 80-800 us. The
+change is real by construction — a fetch that no longer happens — and
+invisible to this harness. That is the honest verdict, and it is not a
+win.
+
+Correctness: 96 full-table hash comparisons, zero mismatches, zero
+statement errors. One cell showed a uniform 20-30% slowdown across
+*every* shape including untouched controls; the tester attributed it to
+host interference, discarded it, and re-measured clean rather than
+reporting it.

@@ -1,0 +1,659 @@
+{
+  "rows": 1000,
+  "fanout": 3,
+  "seed": 20260901,
+  "lat_rounds": 12,
+  "cpu_rounds": 12,
+  "lat_ops": 8,
+  "cpu_ops": 10,
+  "pre_check": {
+    "label": "post-load",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_outer",
+        "hashes": {
+          "ff27662A": "5e29ded2a8b8c9fd3f78ddde9ccb3ed92318d40bd9dbc370cb34abf2281a69b5",
+          "finalB": "5e29ded2a8b8c9fd3f78ddde9ccb3ed92318d40bd9dbc370cb34abf2281a69b5"
+        },
+        "match": true
+      },
+      {
+        "check": "t_inner",
+        "hashes": {
+          "ff27662A": "849856eb6ba517e8a3a92819077c5275a9ebe92ad781b14eec755b0e1f3a874a",
+          "finalB": "849856eb6ba517e8a3a92819077c5275a9ebe92ad781b14eec755b0e1f3a874a"
+        },
+        "match": true
+      },
+      {
+        "check": "exists_result",
+        "hashes": {
+          "ff27662A": "93a30c071abf2323840707a808e086847fa323679a383d97631ac0cf47c6f189",
+          "finalB": "93a30c071abf2323840707a808e086847fa323679a383d97631ac0cf47c6f189"
+        },
+        "match": true
+      },
+      {
+        "check": "in_result",
+        "hashes": {
+          "ff27662A": "c3beb449f562a0411e6fdb534e1978c5f62cb545927a6461c641c79ac8d0500b",
+          "finalB": "c3beb449f562a0411e6fdb534e1978c5f62cb545927a6461c641c79ac8d0500b"
+        },
+        "match": true
+      },
+      {
+        "check": "scalar_result",
+        "hashes": {
+          "ff27662A": "c988a65d6f4b087681924d13ef7a215c05cf0d253491dc688e9f40ac397044f7",
+          "finalB": "c988a65d6f4b087681924d13ef7a215c05cf0d253491dc688e9f40ac397044f7"
+        },
+        "match": true
+      }
+    ]
+  },
+  "post_check": {
+    "label": "post-writes",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_outer",
+        "hashes": {
+          "ff27662A": "d7896d60b22de94e61e07747c91e1f67ccab69e2f6a37d2b36d3890dc5e27792",
+          "finalB": "d7896d60b22de94e61e07747c91e1f67ccab69e2f6a37d2b36d3890dc5e27792"
+        },
+        "match": true
+      },
+      {
+        "check": "t_inner",
+        "hashes": {
+          "ff27662A": "849856eb6ba517e8a3a92819077c5275a9ebe92ad781b14eec755b0e1f3a874a",
+          "finalB": "849856eb6ba517e8a3a92819077c5275a9ebe92ad781b14eec755b0e1f3a874a"
+        },
+        "match": true
+      },
+      {
+        "check": "exists_result",
+        "hashes": {
+          "ff27662A": "93a30c071abf2323840707a808e086847fa323679a383d97631ac0cf47c6f189",
+          "finalB": "93a30c071abf2323840707a808e086847fa323679a383d97631ac0cf47c6f189"
+        },
+        "match": true
+      },
+      {
+        "check": "in_result",
+        "hashes": {
+          "ff27662A": "c3beb449f562a0411e6fdb534e1978c5f62cb545927a6461c641c79ac8d0500b",
+          "finalB": "c3beb449f562a0411e6fdb534e1978c5f62cb545927a6461c641c79ac8d0500b"
+        },
+        "match": true
+      },
+      {
+        "check": "scalar_result",
+        "hashes": {
+          "ff27662A": "c988a65d6f4b087681924d13ef7a215c05cf0d253491dc688e9f40ac397044f7",
+          "finalB": "c988a65d6f4b087681924d13ef7a215c05cf0d253491dc688e9f40ac397044f7"
+        },
+        "match": true
+      }
+    ]
+  },
+  "analyze": {
+    "exists": {
+      "ff27662A": {
+        "sub_runs": [
+          1000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          2000,
+          1000,
+          1000
+        ],
+        "raw_head": "analyze rows=1000 class=JoinSelect steps=1 examined=2000 pages=2008 opens=1001 pattern_id=0x16cfa14cc6184398\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated EXISTS [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=1000 matched=1000 sel=100% pages=8\nstep 1 IndexProbe t_inner opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 index_scanned=3000 index_resolved=1000"
+      },
+      "finalB": {
+        "sub_runs": [
+          1000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          2000,
+          1000,
+          1000
+        ],
+        "raw_head": "analyze rows=1000 class=JoinSelect steps=1 examined=2000 pages=2008 opens=1001 pattern_id=0x16cfa14cc6184398\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated EXISTS [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=1000 matched=1000 sel=100% pages=8\nstep 1 IndexProbe t_inner opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 index_scanned=3000 index_resolved=1000"
+      }
+    },
+    "in_": {
+      "ff27662A": {
+        "sub_runs": [
+          1000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          3402,
+          1000,
+          2402
+        ],
+        "raw_head": "analyze rows=596 class=JoinSelect steps=1 examined=3402 pages=3410 opens=1001 pattern_id=0x94620a7c4eebb84c\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated IN 0:0.1 <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=1000 matched=1000 sel=100% pages=8\nstep 1 IndexProbe t_inner opens=1000 examined=2402 matched=2402 sel=100% pages=3402 sub_runs=1000 index_scanned=3000 index_resolved=2402"
+      },
+      "finalB": {
+        "sub_runs": [
+          1000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          3402,
+          1000,
+          2402
+        ],
+        "raw_head": "analyze rows=596 class=JoinSelect steps=1 examined=3402 pages=3410 opens=1001 pattern_id=0x94620a7c4eebb84c\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated IN 0:0.1 <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=1000 matched=1000 sel=100% pages=8\nstep 1 IndexProbe t_inner opens=1000 examined=2402 matched=2402 sel=100% pages=3402 sub_runs=1000 index_scanned=3000 index_resolved=2402"
+      }
+    },
+    "scalar": {
+      "ff27662A": {
+        "sub_runs": [
+          1000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          4000,
+          1000,
+          3000
+        ],
+        "raw_head": "analyze rows=629 class=JoinSelect steps=1 examined=4000 pages=4008 opens=1001 pattern_id=0x64bb20ddcc1de2c4\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated scalar 0:0.2 = <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\n      filter 0:0.3 = 0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=1000 matched=1000 sel=100% pages=8\nstep 1 IndexProbe t_inner opens=1000 examined=3000 matched=1000 sel=33% pages=4000 sub_runs=1000 index_scanned=3000 index_resolved=3000"
+      },
+      "finalB": {
+        "sub_runs": [
+          1000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          4000,
+          1000,
+          3000
+        ],
+        "raw_head": "analyze rows=629 class=JoinSelect steps=1 examined=4000 pages=4008 opens=1001 pattern_id=0x64bb20ddcc1de2c4\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated scalar 0:0.2 = <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\n      filter 0:0.3 = 0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=1000 matched=1000 sel=100% pages=8\nstep 1 IndexProbe t_inner opens=1000 examined=3000 matched=1000 sel=33% pages=4000 sub_runs=1000 index_scanned=3000 index_resolved=3000"
+      }
+    },
+    "control_hoisted": {
+      "ff27662A": {
+        "sub_runs": [
+          1
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          3000,
+          3000
+        ],
+        "raw_head": "analyze rows=0 class=JoinSelect steps=1 examined=3000 pages=20 opens=1 pattern_id=0x1dce7f926cc48d26\nclass=JoinSelect steps=1 hoisted=1\nhoisted EXISTS [uncorrelated]\n  step 1 FilterScan t_inner\n    filter 0:0.3 = 0\n    filter 0:0.2 < 5\nstep 0 Scan t_outer\nproject id=0:0.0\nstep 1 FilterScan t_inner opens=1 examined=3000 matched=0 sel=0% pages=20 sub_runs=1 corr_scans=1"
+      },
+      "finalB": {
+        "sub_runs": [
+          1
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          3000,
+          3000
+        ],
+        "raw_head": "analyze rows=0 class=JoinSelect steps=1 examined=3000 pages=20 opens=1 pattern_id=0x1dce7f926cc48d26\nclass=JoinSelect steps=1 hoisted=1\nhoisted EXISTS [uncorrelated]\n  step 1 FilterScan t_inner\n    filter 0:0.3 = 0\n    filter 0:0.2 < 5\nstep 0 Scan t_outer\nproject id=0:0.0\nstep 1 FilterScan t_inner opens=1 examined=3000 matched=0 sel=0% pages=20 sub_runs=1 corr_scans=1"
+      }
+    }
+  },
+  "phases": {
+    "ff27662A:exists": {
+      "phase": "ff27662A-exists",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.37058,
+      "qps": 259.1,
+      "mean_us": 3860.2,
+      "p0_us": 3758.2,
+      "p25_us": 3791.1,
+      "p50_us": 3815.0,
+      "p95_us": 4084.7,
+      "p99_us": 5197.5,
+      "max_us": 5197.5
+    },
+    "ff27662A:in_": {
+      "phase": "ff27662A-in_",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.356444,
+      "qps": 269.3,
+      "mean_us": 3713.0,
+      "p0_us": 3646.5,
+      "p25_us": 3680.5,
+      "p50_us": 3706.6,
+      "p95_us": 3802.4,
+      "p99_us": 3836.2,
+      "max_us": 3836.2
+    },
+    "ff27662A:scalar": {
+      "phase": "ff27662A-scalar",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.377028,
+      "qps": 254.6,
+      "mean_us": 3927.4,
+      "p0_us": 3871.9,
+      "p25_us": 3907.5,
+      "p50_us": 3922.6,
+      "p95_us": 3974.8,
+      "p99_us": 4064.2,
+      "max_us": 4064.2
+    },
+    "ff27662A:control_hoisted": {
+      "phase": "ff27662A-control_hoisted",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.033413,
+      "qps": 2873.1,
+      "mean_us": 348.1,
+      "p0_us": 325.4,
+      "p25_us": 331.1,
+      "p50_us": 341.4,
+      "p95_us": 397.3,
+      "p99_us": 420.1,
+      "max_us": 420.1
+    },
+    "ff27662A:control_update": {
+      "phase": "ff27662A-control_update",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.385729,
+      "qps": 248.9,
+      "mean_us": 4018.0,
+      "p0_us": 3901.3,
+      "p25_us": 3937.1,
+      "p50_us": 3956.1,
+      "p95_us": 4057.2,
+      "p99_us": 9145.6,
+      "max_us": 9145.6
+    },
+    "finalB:exists": {
+      "phase": "finalB-exists",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.372217,
+      "qps": 257.9,
+      "mean_us": 3877.3,
+      "p0_us": 3767.7,
+      "p25_us": 3809.0,
+      "p50_us": 3835.7,
+      "p95_us": 4128.3,
+      "p99_us": 4196.1,
+      "max_us": 4196.1
+    },
+    "finalB:in_": {
+      "phase": "finalB-in_",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.364003,
+      "qps": 263.7,
+      "mean_us": 3791.7,
+      "p0_us": 3654.6,
+      "p25_us": 3693.2,
+      "p50_us": 3733.7,
+      "p95_us": 4039.5,
+      "p99_us": 4174.1,
+      "max_us": 4174.1
+    },
+    "finalB:scalar": {
+      "phase": "finalB-scalar",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.379756,
+      "qps": 252.8,
+      "mean_us": 3955.8,
+      "p0_us": 3870.1,
+      "p25_us": 3910.2,
+      "p50_us": 3938.4,
+      "p95_us": 4173.7,
+      "p99_us": 4238.3,
+      "max_us": 4238.3
+    },
+    "finalB:control_hoisted": {
+      "phase": "finalB-control_hoisted",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.033414,
+      "qps": 2873.0,
+      "mean_us": 348.1,
+      "p0_us": 321.8,
+      "p25_us": 331.5,
+      "p50_us": 342.3,
+      "p95_us": 395.8,
+      "p99_us": 405.0,
+      "max_us": 405.0
+    },
+    "finalB:control_update": {
+      "phase": "finalB-control_update",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.369371,
+      "qps": 259.9,
+      "mean_us": 3847.6,
+      "p0_us": 3738.1,
+      "p25_us": 3767.9,
+      "p50_us": 3786.7,
+      "p95_us": 3857.5,
+      "p99_us": 8865.4,
+      "max_us": 8865.4
+    }
+  },
+  "floor": {
+    "ff27662Afloor1:exists": {
+      "phase": "ff27662Afloor1-exists",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.184754,
+      "qps": 259.8,
+      "mean_us": 3849.0,
+      "p0_us": 3758.3,
+      "p25_us": 3810.4,
+      "p50_us": 3825.1,
+      "p95_us": 4067.4,
+      "p99_us": 4286.7,
+      "max_us": 4286.7
+    },
+    "ff27662Afloor2:exists": {
+      "phase": "ff27662Afloor2-exists",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.185826,
+      "qps": 258.3,
+      "mean_us": 3871.4,
+      "p0_us": 3758.2,
+      "p25_us": 3779.9,
+      "p50_us": 3803.0,
+      "p95_us": 4144.2,
+      "p99_us": 5197.5,
+      "max_us": 5197.5
+    },
+    "ff27662Afloor1:in_": {
+      "phase": "ff27662Afloor1-in_",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.178522,
+      "qps": 268.9,
+      "mean_us": 3719.2,
+      "p0_us": 3647.6,
+      "p25_us": 3686.5,
+      "p50_us": 3720.6,
+      "p95_us": 3786.0,
+      "p99_us": 3836.2,
+      "max_us": 3836.2
+    },
+    "ff27662Afloor2:in_": {
+      "phase": "ff27662Afloor2-in_",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.177922,
+      "qps": 269.8,
+      "mean_us": 3706.7,
+      "p0_us": 3646.5,
+      "p25_us": 3678.5,
+      "p50_us": 3692.9,
+      "p95_us": 3813.9,
+      "p99_us": 3831.0,
+      "max_us": 3831.0
+    },
+    "ff27662Afloor1:scalar": {
+      "phase": "ff27662Afloor1-scalar",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.189003,
+      "qps": 254.0,
+      "mean_us": 3937.6,
+      "p0_us": 3882.7,
+      "p25_us": 3917.6,
+      "p50_us": 3937.8,
+      "p95_us": 3974.8,
+      "p99_us": 4020.1,
+      "max_us": 4020.1
+    },
+    "ff27662Afloor2:scalar": {
+      "phase": "ff27662Afloor2-scalar",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.188025,
+      "qps": 255.3,
+      "mean_us": 3917.2,
+      "p0_us": 3871.9,
+      "p25_us": 3898.3,
+      "p50_us": 3914.1,
+      "p95_us": 3961.2,
+      "p99_us": 4064.2,
+      "max_us": 4064.2
+    },
+    "ff27662Afloor1:control_hoisted": {
+      "phase": "ff27662Afloor1-control_hoisted",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.017112,
+      "qps": 2805.0,
+      "mean_us": 356.5,
+      "p0_us": 326.8,
+      "p25_us": 333.0,
+      "p50_us": 345.0,
+      "p95_us": 405.3,
+      "p99_us": 420.1,
+      "max_us": 420.1
+    },
+    "ff27662Afloor2:control_hoisted": {
+      "phase": "ff27662Afloor2-control_hoisted",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.016301,
+      "qps": 2944.6,
+      "mean_us": 339.6,
+      "p0_us": 325.4,
+      "p25_us": 329.3,
+      "p50_us": 338.6,
+      "p95_us": 361.6,
+      "p99_us": 382.7,
+      "max_us": 382.7
+    },
+    "ff27662Afloor1:control_update": {
+      "phase": "ff27662Afloor1-control_update",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.190086,
+      "qps": 252.5,
+      "mean_us": 3960.1,
+      "p0_us": 3905.1,
+      "p25_us": 3928.4,
+      "p50_us": 3956.0,
+      "p95_us": 4009.3,
+      "p99_us": 4063.1,
+      "max_us": 4063.1
+    },
+    "ff27662Afloor2:control_update": {
+      "phase": "ff27662Afloor2-control_update",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.195643,
+      "qps": 245.3,
+      "mean_us": 4075.9,
+      "p0_us": 3901.3,
+      "p25_us": 3938.8,
+      "p50_us": 3960.1,
+      "p95_us": 4099.1,
+      "p99_us": 9145.6,
+      "max_us": 9145.6
+    }
+  },
+  "cpu": {
+    "ff27662A:exists": {
+      "cpu_s": 0.30000000000000004,
+      "ops": 120,
+      "us_per_op": 2500.0000000000005
+    },
+    "ff27662A:in_": {
+      "cpu_s": 0.3500000000000001,
+      "ops": 120,
+      "us_per_op": 2916.6666666666674
+    },
+    "ff27662A:scalar": {
+      "cpu_s": 0.3600000000000003,
+      "ops": 120,
+      "us_per_op": 3000.0000000000027
+    },
+    "ff27662A:control_hoisted": {
+      "cpu_s": 0.05999999999999983,
+      "ops": 120,
+      "us_per_op": 499.9999999999986
+    },
+    "ff27662A:control_update": {
+      "cpu_s": 0.47999999999999954,
+      "ops": 120,
+      "us_per_op": 3999.999999999996
+    },
+    "finalB:exists": {
+      "cpu_s": 0.3099999999999996,
+      "ops": 120,
+      "us_per_op": 2583.3333333333303
+    },
+    "finalB:in_": {
+      "cpu_s": 0.3699999999999999,
+      "ops": 120,
+      "us_per_op": 3083.3333333333326
+    },
+    "finalB:scalar": {
+      "cpu_s": 0.37000000000000055,
+      "ops": 120,
+      "us_per_op": 3083.333333333338
+    },
+    "finalB:control_hoisted": {
+      "cpu_s": 0.04999999999999982,
+      "ops": 120,
+      "us_per_op": 416.66666666666515
+    },
+    "finalB:control_update": {
+      "cpu_s": 0.43999999999999995,
+      "ops": 120,
+      "us_per_op": 3666.666666666666
+    }
+  },
+  "cpu_floor": {
+    "ff27662Afloor1:exists": {
+      "cpu_s": 0.15000000000000013,
+      "ops": 60,
+      "us_per_op": 2500.0000000000023
+    },
+    "ff27662Afloor2:exists": {
+      "cpu_s": 0.1499999999999999,
+      "ops": 60,
+      "us_per_op": 2499.999999999998
+    },
+    "ff27662Afloor1:in_": {
+      "cpu_s": 0.16999999999999993,
+      "ops": 60,
+      "us_per_op": 2833.333333333332
+    },
+    "ff27662Afloor2:in_": {
+      "cpu_s": 0.18000000000000016,
+      "ops": 60,
+      "us_per_op": 3000.0000000000027
+    },
+    "ff27662Afloor1:scalar": {
+      "cpu_s": 0.18000000000000016,
+      "ops": 60,
+      "us_per_op": 3000.0000000000027
+    },
+    "ff27662Afloor2:scalar": {
+      "cpu_s": 0.18000000000000016,
+      "ops": 60,
+      "us_per_op": 3000.0000000000027
+    },
+    "ff27662Afloor1:control_hoisted": {
+      "cpu_s": 0.050000000000000044,
+      "ops": 60,
+      "us_per_op": 833.333333333334
+    },
+    "ff27662Afloor2:control_hoisted": {
+      "cpu_s": 0.009999999999999787,
+      "ops": 60,
+      "us_per_op": 166.6666666666631
+    },
+    "ff27662Afloor1:control_update": {
+      "cpu_s": 0.23999999999999977,
+      "ops": 60,
+      "us_per_op": 3999.999999999996
+    },
+    "ff27662Afloor2:control_update": {
+      "cpu_s": 0.23999999999999977,
+      "ops": 60,
+      "us_per_op": 3999.999999999996
+    }
+  },
+  "errors": {
+    "ff27662A": {
+      "count": 0,
+      "first": null
+    },
+    "finalB": {
+      "count": 0,
+      "first": null
+    }
+  }
+}

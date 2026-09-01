@@ -1,0 +1,69 @@
+[setup] rows=200 matches=6 seed=20260901
+[setup] done in 0.27s, customers=33
+[correctness] post-load ok=True
+[latency pass] 12 rounds done in 0.18s
+[cpu pass] 10 rounds done in 10.02s
+[correctness] post-writes ok=True
+wrote /home/cdkbs/ckdbs/.claude/worktrees/path-optimizer/CIP/OPT-005-btree-leaf-ref/archive/pair1-base-vs-005-run200.json
+
+arm:shape                   ops      qps   mean us      p0     p25     p50     p95      p99  err
+base005A-point              180    9,313     107.4    96.3   100.8   104.3   128.8    166.0    0
+base005A-point_heap         180    8,440     118.5    96.5   114.8   116.7   134.8    149.6    0
+base005A-range               96    4,160     240.4   117.1   234.9   257.6   291.9    300.5    0
+base005A-join               120    8,954     111.7   101.2   106.6   108.9   127.0    133.1    0
+base005A-fk_insert           60   11,213      89.2    78.3    82.3    87.0   107.1    114.4    0
+base005A-plain_insert        60   12,385      80.7    77.6    78.2    78.8    90.6    104.8    0
+c578e29B-point              180    9,264     107.9    95.5   100.9   105.1   130.1    149.7    0
+c578e29B-point_heap         180    8,354     119.7    97.5   115.0   117.9   134.9    157.3    0
+c578e29B-range               96    4,188     238.8   112.0   228.8   255.5   283.7    313.0    0
+c578e29B-join               120    8,932     112.0    97.7   106.6   109.0   125.7    142.3    0
+c578e29B-fk_insert           60   11,449      87.3    77.3    79.5    85.3   106.7    134.8    0
+c578e29B-plain_insert        60   12,440      80.4    76.8    77.6    78.4    94.2     95.8    0
+base005Afloor1-point         90    9,246     108.2    96.4   101.5   104.0   132.5    174.3    0
+base005Afloor2-point         90    9,381     106.6    96.3   100.0   104.4   125.8    138.3    0
+base005Afloor1-point_heap     90    8,430     118.6    99.2   114.8   116.3   134.8    154.5    0
+base005Afloor2-point_heap     90    8,450     118.3    96.5   114.8   117.0   136.6    149.6    0
+base005Afloor1-range         48    4,275     233.9   121.2   216.0   256.7   290.2    296.9    0
+base005Afloor2-range         48    4,051     246.8   117.1   235.4   259.2   297.0    300.5    0
+base005Afloor1-join          60    9,014     110.9   104.8   106.5   108.6   122.5    133.1    0
+base005Afloor2-join          60    8,895     112.4   101.2   106.6   109.1   128.5    147.9    0
+base005Afloor1-fk_insert     30   11,071      90.3    78.3    82.3    87.8   109.7    114.4    0
+base005Afloor2-fk_insert     30   11,359      88.0    78.4    84.3    86.6   102.4    107.1    0
+base005Afloor1-plain_insert     30   12,595      79.4    77.6    78.2    78.7    88.0     92.1    0
+base005Afloor2-plain_insert     30   12,182      82.1    77.9    78.3    78.9    97.7    104.8    0
+
+arm:shape (cpu)             ops     us/op
+base005A:point            12000     55.83
+base005A:point_heap        8000     60.00
+base005A:range             5000     82.00
+base005A:join              8000     57.50
+base005A:fk_insert         3000     60.00
+base005A:plain_insert      3000     36.67
+c578e29B:point            12000     56.67
+c578e29B:point_heap        8000     58.75
+c578e29B:range             5000     82.00
+c578e29B:join              8000     71.25
+c578e29B:fk_insert         3000     43.33
+c578e29B:plain_insert      3000     53.33
+base005Afloor1:point       6000     56.67
+base005Afloor2:point       6000     55.00
+base005Afloor1:point_heap   4000     67.50
+base005Afloor2:point_heap   4000     52.50
+base005Afloor1:range       2500     84.00
+base005Afloor2:range       2500     80.00
+base005Afloor1:join        4000     55.00
+base005Afloor2:join        4000     60.00
+base005Afloor1:fk_insert   1500     60.00
+base005Afloor2:fk_insert   1500     60.00
+base005Afloor1:plain_insert   1500     33.33
+base005Afloor2:plain_insert   1500     40.00
+
+ANALYZE pages=/index_resolved=:
+  point       base005A pages=[1, 1] index_resolved=[]
+  point       c578e29B pages=[1, 1] index_resolved=[]
+  point_heap  base005A pages=[3, 3] index_resolved=[]
+  point_heap  c578e29B pages=[3, 3] index_resolved=[]
+  range       base005A pages=[69, 69] index_resolved=[68]
+  range       c578e29B pages=[69, 69] index_resolved=[68]
+  join        base005A pages=[2, 1, 1] index_resolved=[]
+  join        c578e29B pages=[2, 1, 1] index_resolved=[]
