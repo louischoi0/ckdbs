@@ -1638,6 +1638,15 @@ Status Expeditor::Serve() {
         if (Status s = statement_ship_client_->RegisterReplyReceiver(); !s.ok()) return s;
         dispatcher_->SetStatementShip(&*statement_ship_client_);
         dispatcher_->SetShippedStatements(&*shipped_executor_);
+        // **XG1's answer edge, on core 0 too.** This wiring exists in
+        // `CoreRuntime` for a peer, and core 0 builds its own executor and
+        // its own step server here - so the setter has to be called twice,
+        // once per builder, and the omission is invisible to any test whose
+        // *owner* is a peer. It was: the rig's owner is a `CoreRuntime`, so
+        // every unit cell passed while a real instance answered
+        // `Unsupported` for every typed shipped read to a core-0-owned
+        // relation - which under `placement = creating` is every relation.
+        if (remote_steps_.has_value()) shipped_executor_->SetRemoteSteps(&*remote_steps_);
 
         // **Core 0's two halves of the cross-owner commit** (R6-3), on the
         // same wiring rule and in the same order: the participant transport

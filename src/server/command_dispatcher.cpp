@@ -388,7 +388,19 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // statement for the life of the process. On expiry the read is not
         // `done`, `ForwardAnswerEdge` finds no description or an error, and
         // the answer is the honest refusal rather than a truncated one.
-        if (shipped.typed_answer && remote_reads_ != nullptr) {
+        // **Only where the owner says it has rows coming.** A refusal opens
+        // no edge, so waiting for one costs the whole deadline and turns a
+        // 39-microsecond `Unsupported` into a ten-second one - measured,
+        // not theorised: that is exactly what an unwired owner produced
+        // before this check, and the refusal it was answering was itself a
+        // wiring bug on the other side.
+        //
+        // Read through `Find` rather than a flag, because `Settled` is true
+        // for a deadline too, and a deadline has no reply to inspect.
+        const ShippedStatementOutcome* settled_reply = statement_ship_->Find(shipped.request_id);
+        const bool rows_coming = settled_reply != nullptr && settled_reply->arrived &&
+                                 settled_reply->status.ok();
+        if (shipped.typed_answer && rows_coming && remote_reads_ != nullptr) {
             const sched::MonoTimeNs edge_deadline = NowNs() + kShippedStatementDeadlineNs;
             const std::function<bool()> answered = [this, tag = shipped.answer_tag,
                                                     edge_deadline] {
