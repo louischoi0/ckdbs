@@ -26,14 +26,31 @@ RangeGate RangeEligible(const catalog::TableAccess& access,
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         return RangeGate::kBtree;
     }
-    if (!access.indexes.empty()) {
-        return RangeGate::kIndex;
-    }
-    // The live-id test; the wrong tests (`cabin_mask != 0`, emptiness) are
-    // named where the rule lives, on `AnyCabin` itself (schema.hpp).
-    if (access.AnyCabin()) {
-        return RangeGate::kCabin;
-    }
+    // **`kIndex` and `kCabin` were here and are gone** (SB3,
+    // `instructions/v2.7.1/workorder-sb.md`), and the two were dropped for
+    // opposite reasons - which is why both are stated here rather than
+    // summarised as one.
+    //
+    // The **index** arm tested `!access.indexes.empty()` and was **dead
+    // code**: a secondary index is btree-only (IX3,
+    // `Catalog::CheckIndexDef`), so every relation that could trip it was
+    // already declined by `kBtree` directly above. Dropping it is
+    // behaviour-preserving for *that* reason and not because §6a's
+    // question was answered - it was not. **The arm is owed again the day
+    // D1 lifts**, not at IX11: the day a btree relation may split, an
+    // indexed one must not, until `index.md` §13 decides per-range vs
+    // global. SA-R2 narrows the *re-added* arm to UNIQUE-indexed, which
+    // additionally waits on IX11's `unique` flag - a second condition on
+    // the arm's shape, never the trigger for its return.
+    //
+    // The **Cabin** arm was answered rather than deferred: an
+    // Observational set is authoritative for (observed value × the ranges
+    // its core owns), so a boundary narrows a set instead of falsifying
+    // it, and the sets banked under the older claim are dropped in CC10's
+    // pre-grant window (`range_alloc.cpp`). What survives of the Cabin
+    // question is the **Bound** class, and `kAssertion` below is where it
+    // is asked.
+
     // §6a's own words: invariant 13 makes every relation fixed-length, so
     // the *spill* is the gate — one kVarHeap page may hold values
     // referenced from both sides of a boundary, and a core faults only

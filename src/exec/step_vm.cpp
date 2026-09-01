@@ -695,8 +695,64 @@ private:
                                                 : step.cabin->value;
     }
 
+    // **Whether this core's Cabin may speak for the walk this step would
+    // do** (`docs/spec/cabin.md` §4b rule 3, SB-R1). A set is
+    // authoritative for (observed value × the ranges its core owns), so it
+    // may be served only where those ranges cover the walk exactly:
+    // narrower and the answer is short, wider and the same row is emitted
+    // by two stages of one fan-in.
+    //
+    // **The one-range answer is first and is one branch on a cached
+    // field** - CC9's zero-cost invariant reaching the serve path, the
+    // same `ranges.empty()` test `HeapChainFor` and `VisitRelation` take,
+    // and the reason an unsplit relation's probe is byte-identical to what
+    // it was before this rule existed.
+    //
+    // For a split relation the test is `ServableBy` plus a whole span, and
+    // both halves are load-bearing. `ServableBy` is the router's own
+    // predicate - `HandleSelect` fans out exactly when it is false - asked
+    // here rather than inherited, because a serve that is correct only
+    // because of a routing decision two functions away is correct by
+    // accident, which `schema.hpp` refuses in the same words for the same
+    // reason. The span is the second half: a fan-in stage covers one
+    // maximal run of its core's ranges, and a set covering *all* of them
+    // would hand that stage rows another stage is also sending.
+    //
+    // Today no split relation reaches either arm - `HandleSelect` routes
+    // it to the fan-in and every stage is built with no Cabin store at all
+    // - so this predicate declines nothing that would otherwise have been
+    // wrong. It is built for the day a stage has one, when it is the
+    // difference between an answer and a silent subset.
+    // The slice step `index` walks: RD7's stage assignment on the chain's
+    // own first step, the whole space for every step below it. **One
+    // spelling**, because the walk asks it too (`WalkHeadsFor`, below) and
+    // the agreement between the two is the entire correctness argument for
+    // `CabinScopeCovers` - written twice, they could stop agreeing.
+    catalog::PkSpan SpanFor(std::size_t index) const noexcept {
+        return index == 0 ? walk_span_ : catalog::PkSpan::Whole();
+    }
+
+    bool CabinScopeCovers(const catalog::TableAccess& access, std::size_t index) const noexcept {
+        if (access.ranges.empty()) return true;
+        if (!access.ServableBy(catalog_.core_id())) return false;
+        const catalog::PkSpan span = SpanFor(index);
+        return span.lo == 0 && span.hi == catalog::kIdSpaceEnd;
+    }
+
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
+        // §4b rule 3, before anything else this step could do with the
+        // Cabin - **the recording path is gated by it too**, not only the
+        // serve. A walk that covered less than this core's ranges would
+        // bank a set missing exactly the rows it did not reach, which is
+        // the C1 break in its most durable form: recorded once, served as
+        // authoritative forever after.
+        if (cabins_ != nullptr && step.cabin.has_value() && !CabinScopeCovers(access, index)) {
+            cabins_->NoteScopeDecline(step.cabin->cabin_id);
+            ++stats_.For(step.step_id).cabin_scope_declines;
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+
         // Nothing configured, or a value that must never be observed (NULL,
         // an unbound `$param`). Both take the walk, which is what the step
         // would have compiled to had the Cabin not existed. An unresolvable
@@ -1819,7 +1875,7 @@ private:
             // stage is assigned; an inner step reads a different relation
             // and the assignment says nothing about it.
             walk_heads = access.WalkHeadsFor(
-                catalog_.core_id(), index == 0 ? walk_span_ : catalog::PkSpan::Whole());
+                catalog_.core_id(), SpanFor(index));
         }
         PageId cur = kInvalidPageId;
         if (resume_page != kInvalidPageId) {
@@ -2613,6 +2669,7 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     cabin_hint_hits += other.cabin_hint_hits;
     cabin_hint_misses += other.cabin_hint_misses;
     cabin_recordings += other.cabin_recordings;
+    cabin_scope_declines += other.cabin_scope_declines;
     inner_builds += other.inner_builds;
     build_rows += other.build_rows;
     build_probes += other.build_probes;

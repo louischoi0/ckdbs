@@ -12,10 +12,12 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, catalog::Catalog& catalog,
                                  Logger* log, storage::DevicePageStore* store,
                                  wal::WalManager* wal,
-                                 const exec::AssertionEnforcer* enforcer) {
+                                 const exec::AssertionEnforcer* enforcer,
+                                 stats::CabinStore* cabins,
+                                 CabinSplitDiscardCounters* discards) {
     return system_scheduler.RegisterMessageHandler(
         sched::RingMessageKind::kRowIdLease,
-        [&system_scheduler, &transport, &catalog, log, store, wal, enforcer](
+        [&system_scheduler, &transport, &catalog, log, store, wal, enforcer, cabins, discards](
             const sched::MessageHeader& header, std::span<const std::byte> payload) {
             RowIdLeaseRequestPayload request{};
             if (payload.size() != sizeof(request)) {
@@ -84,7 +86,7 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                     auto opened = OpenRangeOnSystemCore(
                         catalog, *store, wal, *enforcer,
                         static_cast<catalog::Oid>(request.table_oid), grant.first_id,
-                        header.src_core, log);
+                        header.src_core, log, cabins, discards);
                     if (opened.ok()) {
                         grant.entry_page = opened.value();
                     } else if (log != nullptr && log->enabled(LogLevel::kError)) {

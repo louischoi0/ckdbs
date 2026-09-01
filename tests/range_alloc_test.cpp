@@ -12,6 +12,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/stats/cabin_store.hpp"
 
 // RD5 — the allocator's half that can be tested without a reactor: the
 // gate re-check core 0 runs, `Catalog::OpenRange`'s two-row opening, and
@@ -80,11 +81,32 @@ protected:
 
     // `OpenRangeOnSystemCore` with this fixture's pieces. No WAL: an
     // unlogged store answers kNoLsn throughout, which is what makes the
-    // handoff record and its durability wait no-ops here.
+    // handoff record and its durability wait no-ops here. The Cabin store
+    // and the discard counter are SB1's, passed on every call so the
+    // pre-grant discard is exercised by every test in this file rather
+    // than by the one that names it.
     StatusOr<PageId> Open(catalog::Oid oid, std::uint64_t lo, std::uint32_t owner) {
         return OpenRangeOnSystemCore(catalog_, store_, /*wal=*/nullptr, enforcer_, oid, lo, owner,
-                                     /*log=*/nullptr);
+                                     /*log=*/nullptr, &cabins_, &discards_);
     }
+
+    // An observed set for `cabin_id` on one value, which is what a probe
+    // would have banked. Committed through the store's own door so the
+    // per-cabin accounting is the accounting a real recording produces.
+    void ObserveOneValue(std::uint64_t cabin_id, std::int64_t value, std::uint64_t pk) {
+        parser::AstValue v{};
+        v.type = parser::ValueType::kInt;
+        v.int_val = value;
+        auto key = stats::MakeCabinKey(cabin_id, v);
+        ASSERT_TRUE(key.has_value());
+        stats::CabinEntry entry;
+        entry.pk = pk;
+        ASSERT_TRUE(cabins_.Commit(*key, {entry}));
+        ASSERT_NE(cabins_.Find(*key), nullptr);
+    }
+
+    stats::CabinStore cabins_;
+    CabinSplitDiscardCounters discards_;
 };
 
 TEST_F(RangeAllocTest, OpeningARangeWritesTheOpeningRowBesideIt) {
@@ -289,7 +311,7 @@ TEST_F(RangeAllocTest, AnAssertedRelationIsDeclinedByTheDurableRowNotTheRegistry
 
 // ---- The converse gates (§9b) ---------------------------------------
 
-TEST_F(RangeAllocTest, ASplitRelationTakesNoIndexCabinOrForeignKey) {
+TEST_F(RangeAllocTest, ASplitRelationTakesNoIndexOrForeignKeyButTakesACabin) {
     const catalog::Oid oid = MakeHeap("split");
     ASSERT_TRUE(Open(oid, 4096, 1).ok());
 
@@ -301,14 +323,14 @@ TEST_F(RangeAllocTest, ASplitRelationTakesNoIndexCabinOrForeignKey) {
     EXPECT_EQ(ix.code(), StatusCode::kNotImplemented) << ix.message();
     EXPECT_NE(ix.message().find("split across"), std::string::npos) << ix.message();
 
-    // Column **1**, not 0: the pk column is refused for its own reason
-    // before the range gate is ever reached, so asking on it would assert
-    // nothing about this row's change. The optimizer's auto path comes
-    // through this same door, which is the one that would otherwise cabin a
-    // split relation with nobody having asked.
-    Status cabin = catalog_.CreateCabin(oid, 1, catalog::kCabinOriginUser).status();
-    EXPECT_EQ(cabin.code(), StatusCode::kNotImplemented) << cabin.message();
-    EXPECT_NE(cabin.message().find("split across"), std::string::npos) << cabin.message();
+    // **A Cabin is admitted since SB3**, and column 1 rather than 0
+    // because the pk column is refused for its own reason before the
+    // range question is reached. It is born correctly scoped rather than
+    // born incomplete: an Observational set speaks for the ranges its
+    // core owns (`docs/spec/cabin.md` §4b). The optimizer's auto path
+    // comes through this same door and is admitted on the same terms.
+    auto cabin = catalog_.CreateCabin(oid, 1, catalog::kCabinOriginUser);
+    EXPECT_TRUE(cabin.ok()) << cabin.status().message();
 
     const catalog::Oid child = MakeHeap("child");
     Status fk = catalog_.CreateForeignKey(child, 0, oid, 0).status();
@@ -363,23 +385,91 @@ TEST_F(RangeAllocTest, AnUnsplitRelationIsRefusedNothing) {
 // what actually fires. The other three are reachable on a heap relation
 // and are here.
 
-TEST_F(RangeAllocTest, ACabinedRelationDeclinesNamingItsGate) {
+TEST_F(RangeAllocTest, ACabinedRelationSplitsAndItsSetsAreDiscardedFirst) {
+    // SB1 + SB3, and the ordering is the assertion: the sets are gone by
+    // the time the call that grants the range returns, because the grant
+    // is the caller's reply to this call and a peer may write from it
+    // onward (`crosscore.md` CC10's pre-grant window).
+    //
     // `PkSchema` already carries the second column a Cabin needs -
     // `CreateCabin` refuses column 0 for its own reason.
     auto oid = catalog_.CreateTable(kNamespacePublic, "cabined", PkSchema(),
                                     ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
-    ASSERT_TRUE(catalog_.CreateCabin(oid.value(), 1, catalog::kCabinOriginUser).ok());
+    auto cabin = catalog_.CreateCabin(oid.value(), 1, catalog::kCabinOriginUser);
+    ASSERT_TRUE(cabin.ok()) << cabin.status().message();
+    const std::uint64_t cabin_id = cabin.value();
+
+    ObserveOneValue(cabin_id, /*value=*/7, /*pk=*/1);
+    ObserveOneValue(cabin_id, /*value=*/8, /*pk=*/2);
+    ASSERT_EQ(cabins_.observed_value_count(), 2u);
 
     auto access = catalog_.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());
-    EXPECT_EQ(exec::RangeEligible(*access.value(), enforcer_), exec::RangeGate::kCabin);
-    EXPECT_EQ(exec::RangeGateName(exec::RangeGate::kCabin), "cabined");
+    ASSERT_TRUE(access.value()->AnyCabin());
+    EXPECT_EQ(exec::RangeEligible(*access.value(), enforcer_), exec::RangeGate::kNone);
 
-    EXPECT_EQ(Open(oid.value(), 4096, 1).value(), kInvalidPageId);
+    auto entry = Open(oid.value(), 4096, 1);
+    ASSERT_TRUE(entry.ok()) << entry.status().message();
+    EXPECT_NE(entry.value(), kInvalidPageId) << "a cabined relation was still gated";
+
     auto ranges = catalog_.RangesOf(oid.value());
     ASSERT_TRUE(ranges.ok());
-    EXPECT_TRUE(ranges.value().empty()) << "a cabined relation was split";
+    EXPECT_EQ(ranges.value().size(), 2u) << "a cabined relation did not split";
+
+    // The discard, counted in value sets and keyed by the relation.
+    EXPECT_EQ(cabins_.observed_value_count(), 0u) << "sets survived the grant";
+    EXPECT_EQ(cabins_.InfoFor(cabin_id).values, 0u);
+    EXPECT_EQ(cabins_.InfoFor(cabin_id).entries, 0u);
+    EXPECT_EQ(discards_.CountFor(oid.value()), 2u);
+    EXPECT_EQ(discards_.total(), 2u);
+}
+
+TEST_F(RangeAllocTest, ADeclinedSplitDiscardsNothing) {
+    // The discard sits **after** the gates for a reason: a relation the
+    // re-check declines is not splitting, so charging it re-observation
+    // would price a boundary that never opened. The spilling gate is the
+    // convenient one to prove it with - it survives SB3 untouched.
+    Schema schema = PkSchema();
+    catalog::SetName(schema.columns[1].name, "note");
+    schema.columns[1].type_val = catalog::kTypeValVarchar;
+    schema.columns[1].len = 0;
+    auto oid = catalog_.CreateTable(kNamespacePublic, "gated_cabined", schema,
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto cabin = catalog_.CreateCabin(oid.value(), 1, catalog::kCabinOriginUser);
+    ASSERT_TRUE(cabin.ok()) << cabin.status().message();
+    ObserveOneValue(cabin.value(), /*value=*/7, /*pk=*/1);
+
+    EXPECT_EQ(Open(oid.value(), 4096, 1).value(), kInvalidPageId);
+    EXPECT_EQ(cabins_.observed_value_count(), 1u) << "a declined split discarded anyway";
+    EXPECT_EQ(discards_.total(), 0u);
+}
+
+TEST_F(RangeAllocTest, AMigrationGrantDiscardsToo) {
+    // SB4's second cell, as far as this level can carry it: a grant to a
+    // core that owns nothing of this relation is what a migration's step 4
+    // is, and the discard is keyed on the grant rather than on the word
+    // "split". The mover (R5) does not exist, so what is asserted here is
+    // the rule and not the mover: **every** boundary this function opens
+    // drops the sets first, so the day a move grants through here it
+    // inherits the discard rather than needing a second one.
+    const catalog::Oid oid = MakeHeap("moved");
+    auto cabin = catalog_.CreateCabin(oid, 1, catalog::kCabinOriginUser);
+    ASSERT_TRUE(cabin.ok()) << cabin.status().message();
+    ObserveOneValue(cabin.value(), /*value=*/9, /*pk=*/3);
+
+    ASSERT_TRUE(Open(oid, 4096, /*owner=*/1).ok());
+    EXPECT_EQ(cabins_.observed_value_count(), 0u);
+
+    // And a second grant on the now-split relation discards **again**,
+    // because the discard is per boundary and not per relation: whatever
+    // was re-observed between the two grants was banked under the claim
+    // the second grant is about to falsify. 1 + 1, so the counter
+    // accumulates rather than latching.
+    ObserveOneValue(cabin.value(), /*value=*/9, /*pk=*/3);
+    ASSERT_TRUE(Open(oid, 8192, /*owner=*/2).ok());
+    EXPECT_EQ(discards_.CountFor(oid), 2u);
 }
 
 TEST_F(RangeAllocTest, ASpillingRelationDeclinesNamingItsGate) {

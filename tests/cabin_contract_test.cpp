@@ -6,6 +6,9 @@
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/exec/step_vm.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -1014,6 +1017,138 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
               ref.Run("SELECT * FROM h WHERE sym = 'ddd'"));
     EXPECT_NE(db.cabins().Find(*lit_key), nullptr)
         << "the declared literal probe records first-touch";
+}
+
+// ---- SB4: the Cabin under a split, and what it may still speak for ----
+//
+// Three cells for `docs/spec/cabin.md` §4b's rule 3, ratified as SB-R1.
+// A set is authoritative for (observed value x the ranges its core owns),
+// so the serve site asks whether this core's ranges cover the walk this
+// step would do - and answers, not the router two functions away.
+//
+// The fixture splits a relation by writing the directory rows directly
+// rather than through `OpenRangeOnSystemCore`, which is the allocator's
+// job and has its own file: what is under test here is what a *reader*
+// does with the directory once it exists.
+
+// Splits `name` at `lo`, with the upper range owned by `owner`. Returns
+// the relation's oid.
+catalog::Oid SplitRelation(Instance& db, const char* name, std::uint64_t lo,
+                           std::uint32_t owner) {
+    auto oid = db.catalog().FindTableOidByName(name, nullptr);
+    EXPECT_TRUE(oid.ok()) << oid.status().message();
+    auto head = db.catalog().CreateRangeEntryPage(oid.value(), lo);
+    EXPECT_TRUE(head.ok()) << head.status().message();
+    EXPECT_TRUE(db.catalog().OpenRangeRows(oid.value(), lo, owner, head.value()).ok());
+    return oid.value();
+}
+
+std::uint64_t CabinIdOn(Instance& db, catalog::Oid oid, std::uint16_t col_pos) {
+    auto access = db.catalog().InitTableAccess(oid);
+    EXPECT_TRUE(access.ok()) << access.status().message();
+    return access.value()->CabinOn(col_pos).id;
+}
+
+TEST(CabinSplitScopeTest, ASplitRelationWhollyThisCoresStillServes) {
+    // The split arm's **positive** half, and the one that proves the
+    // predicate is about ownership rather than about the word "split": a
+    // second range this core also owns leaves the set covering exactly
+    // the walk, so serving is correct and the reply is byte-identical to
+    // an instance with no Cabin at all.
+    Instance db(/*cabins=*/true);
+    Instance ref(/*cabins=*/false);
+    Load(db);
+    Load(ref);
+    DeclareCabins(db);
+
+    const std::string q = "SELECT * FROM h WHERE sym = 'aaa'";
+    ASSERT_EQ(db.Run(q), ref.Run(q));  // records: a declaration observes first-touch
+    const catalog::Oid oid = SplitRelation(db, "h", /*lo=*/4096, /*owner=*/0);
+    const std::uint64_t cabin_id = CabinIdOn(db, oid, /*col_pos=*/1);
+    ASSERT_GT(db.cabins().InfoFor(cabin_id).values, 0u) << "nothing was observed to serve from";
+
+    const std::uint64_t hits_before = db.cabins().InfoFor(cabin_id).hits;
+    EXPECT_EQ(db.Run(q), ref.Run(q));
+    EXPECT_GT(db.cabins().InfoFor(cabin_id).hits, hits_before) << "the split declined a serve";
+    EXPECT_EQ(db.cabins().InfoFor(cabin_id).scope_declines, 0u);
+    EXPECT_EQ(db.cabins().stats().scope_declines, 0u);
+}
+
+TEST(CabinSplitScopeTest, AForeignRangeMakesTheProbeFallThroughToTheWalk) {
+    // The **negative** half, run through `exec::Execute` rather than the
+    // dispatcher, and deliberately: the dispatcher refuses this read
+    // before a step ever runs (the cell below), so the serve site would
+    // never be reached from there. That is exactly why the predicate is
+    // stated at the serve site - the refusal that makes it unreachable
+    // today lives in another subsystem, and this cell is what keeps the
+    // answer right on the day it moves.
+    Instance db(/*cabins=*/true);
+    Instance ref(/*cabins=*/false);
+    Load(db);
+    Load(ref);
+    DeclareCabins(db);
+
+    const std::string q = "SELECT * FROM h WHERE sym = 'aaa'";
+    ASSERT_EQ(db.Run(q), ref.Run(q));
+    const catalog::Oid oid = SplitRelation(db, "h", /*lo=*/4096, /*owner=*/1);
+    const std::uint64_t cabin_id = CabinIdOn(db, oid, /*col_pos=*/1);
+    ASSERT_GT(db.cabins().InfoFor(cabin_id).values, 0u);
+
+    auto parsed = parser::Parse(q);
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    auto chain = exec::Compile(db.catalog(), std::get<parser::SelectStmt>(parsed.value()));
+    ASSERT_TRUE(chain.ok()) << chain.status().message();
+    ASSERT_EQ(chain.value().steps.size(), 1u);
+    ASSERT_EQ(chain.value().steps[0].kind, exec::AccessKind::kCabinProbe);
+
+    std::vector<std::string> rows;
+    exec::ExecStats stats;
+    const Status ran = exec::Execute(
+        db.catalog(), db.store(), chain.value(),
+        [&](const exec::ChainFrame&) -> StatusOr<storage::VisitControl> {
+            rows.emplace_back();
+            return storage::VisitControl::kContinue;
+        },
+        &stats, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr, &db.cabins());
+    ASSERT_TRUE(ran.ok()) << ran.message();
+
+    // The walk answered - three 'aaa' rows, exactly what the observed set
+    // holds - and the Cabin was never consulted.
+    EXPECT_EQ(rows.size(), 3u);
+    const exec::StepStats& step = stats.steps[chain.value().steps[0].step_id];
+    EXPECT_EQ(step.cabin_scope_declines, 1u);
+    EXPECT_EQ(step.cabin_hits, 0u);
+    EXPECT_EQ(step.cabin_misses, 0u) << "a scope decline is neither a hit nor a miss";
+    EXPECT_GT(step.rows_examined, 0u) << "the fall-through did not walk";
+    EXPECT_EQ(db.cabins().InfoFor(cabin_id).scope_declines, 1u);
+    EXPECT_EQ(db.cabins().stats().scope_declines, 1u);
+    // And the set is untouched: a scope decline is not an un-observe.
+    EXPECT_GT(db.cabins().InfoFor(cabin_id).values, 0u);
+}
+
+TEST(CabinSplitScopeTest, TheDispatcherRefusesAForeignRangeBeforeAnyProbe) {
+    // Finding B, stated executably: a relation with a range on another
+    // core is not read locally at all, so on the shipped engine the
+    // decline above is unreachable and a Cabin on a split relation neither
+    // serves nor mis-serves. The counter says so rather than leaving it to
+    // be inferred - `cabin_scope_fallthroughs` at zero beside a refusal is
+    // a different reading from one at zero beside an answer.
+    Instance db(/*cabins=*/true);
+    Load(db);
+    DeclareCabins(db);
+    const std::string q = "SELECT * FROM h WHERE sym = 'aaa'";
+    ASSERT_EQ(db.Run(q).rfind("ERR ", 0), std::string::npos);
+    const catalog::Oid oid = SplitRelation(db, "h", /*lo=*/4096, /*owner=*/1);
+
+    const std::string refused = db.Run(q);
+    EXPECT_EQ(refused.rfind("ERR ", 0), 0u) << refused;
+    // The *affinity* refusal by its own words, not merely some error: a
+    // later refusal moving in front of this one would keep a bare `ERR`
+    // check green while the subject of this cell stopped being tested.
+    EXPECT_NE(refused.find("ranges on another core"), std::string::npos) << refused;
+    EXPECT_EQ(db.cabins().InfoFor(CabinIdOn(db, oid, 1)).scope_declines, 0u)
+        << "the step ran; the refusal is supposed to precede it";
+    EXPECT_EQ(db.cabins().stats().scope_declines, 0u);
 }
 
 }  // namespace

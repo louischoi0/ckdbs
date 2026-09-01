@@ -2,6 +2,7 @@
 
 #include "kds/exec/tuple_verify.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
@@ -179,6 +180,60 @@ TEST(CabinOptimizerExecTest, ExtendBuildsEverySeededSetInOneCompleteWalk) {
     // And the served path agrees: the next probe is a Cabin hit.
     const std::string analyzed = db.Run("ANALYZE SELECT * FROM b WHERE sym = 'aaa'");
     EXPECT_NE(analyzed.find("cabin_hits=1"), std::string::npos) << analyzed;
+}
+
+TEST(CabinOptimizerExecTest, ExtendWalksEveryChainOfASplitRelation) {
+    // SB3 admitted `CREATE CABIN` on a split relation, the optimizer's
+    // automatic path included - and RD6 gave a split heap relation **one
+    // chain per range**. A build that walked `desc_page_id` alone would
+    // cover the `lo = 0` range, stop, and commit the result as an
+    // *observed* set: a subset served as authoritative, which is the C1
+    // break in its most durable form. This is the cell that fails if the
+    // build goes back to one head.
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO h VALUES ('aaa')").substr(0, 8), "INSERTED");   // id 1
+    ASSERT_EQ(db.Run("INSERT INTO h VALUES ('bbb')").substr(0, 8), "INSERTED");   // id 2
+
+    // Split at 3, the upper range this core's own: a foreign owner would
+    // make the writes below cross cores, which is a different refusal and
+    // would prove nothing about the walk.
+    auto oid = db.catalog().FindTableOidByName("h");
+    ASSERT_TRUE(oid.ok());
+    auto head = db.catalog().CreateRangeEntryPage(oid.value(), /*lo=*/3);
+    ASSERT_TRUE(head.ok()) << head.status().message();
+    ASSERT_TRUE(db.catalog().OpenRangeRows(oid.value(), /*lo=*/3, /*owner_core=*/0,
+                                           head.value()).ok());
+
+    // Rows 3 and 4 land in the second chain, and row 3 carries the value
+    // row 1 does - so a one-chain walk returns a set that is short by
+    // exactly one pk rather than empty, which is the failure that looks
+    // like a correct answer.
+    ASSERT_EQ(db.Run("INSERT INTO h VALUES ('aaa')").substr(0, 8), "INSERTED");   // id 3
+    ASSERT_EQ(db.Run("INSERT INTO h VALUES ('ccc')").substr(0, 8), "INSERTED");   // id 4
+
+    const std::uint64_t cabin_id = MakeAutoCabin(db, "h");
+    db.Run("SELECT * FROM h WHERE sym = 'aaa'");
+    ASSERT_EQ(db.cabins().SightedUnobservedOf(cabin_id).size(), 1u);
+
+    stats::CabinOptimizer controller;
+    exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
+    ASSERT_TRUE(executor.Apply({ExtendAction(db, "h", cabin_id)}, kAlwaysOn).ok());
+
+    auto aaa = stats::MakeCabinKey(cabin_id, [] {
+        parser::AstValue v;
+        v.type = parser::ValueType::kStr;
+        v.str_val = "aaa";
+        return v;
+    }());
+    ASSERT_TRUE(aaa.has_value());
+    std::vector<stats::CabinEntry>* set = db.cabins().Find(*aaa);
+    ASSERT_NE(set, nullptr) << "the seeded value was not observed";
+    std::vector<std::uint64_t> pks;
+    for (const stats::CabinEntry& e : *set) pks.push_back(e.pk);
+    std::sort(pks.begin(), pks.end());
+    EXPECT_EQ(pks, (std::vector<std::uint64_t>{1, 3}))
+        << "the build covered one chain, so the set is a subset of its own scope";
 }
 
 TEST(CabinOptimizerExecTest, TheKillSwitchMidBuildDiscardsCleanly) {

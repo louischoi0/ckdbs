@@ -212,6 +212,13 @@ public:
         // is not filling, which no other counter can distinguish from
         // "nobody probed it".
         std::uint64_t unbankable_views = 0;
+        // SB-R4: probes that found a Cabin and declined to use it because
+        // the serving core's owned ranges do not cover the walk this step
+        // would do (`docs/spec/cabin.md` §4b rule 3). It is the one number
+        // that tells "this Cabin is not earning its write hook" apart from
+        // "this Cabin cannot be reached from where the read runs", which
+        // hits and misses cannot: both of those are zero either way.
+        std::uint64_t scope_declines = 0;
     };
 
     // What one Cabin holds and how it has been doing. Per cabin rather than
@@ -225,6 +232,7 @@ public:
         std::uint64_t misses = 0;
         std::uint64_t recordings = 0;
         std::uint64_t appends = 0;
+        std::uint64_t scope_declines = 0;
     };
 
     explicit CabinStore(CabinLimits limits = CabinLimits()) noexcept : limits_(limits) {}
@@ -347,7 +355,24 @@ public:
     // other surprise.
     void Unobserve(const CabinKey& key);
 
-    // Drops everything belonging to one Cabin. `DROP CABIN`'s runtime half.
+    // Drops every observed set and every sighting belonging to one Cabin,
+    // **leaving the Cabin and its accounting in place**. CC10's pre-grant
+    // discard (`docs/spec/cabin.md` §4b, `crosscore.md` CC10): the sets
+    // were banked under the whole-relation claim and nothing in a set
+    // records which claim it was made under, so they go before the grant
+    // that creates a second owner. The Cabin itself still exists and
+    // re-observes, which is why this does not erase `info_` — zeroing a
+    // Cabin's history here would zero the very counters that price the
+    // discard.
+    //
+    // Returns how many value sets were dropped, which is what the
+    // `cabin_split_discard` counter records. Always legal by §1's
+    // corollary: every dropped value returns to the authoritative scan.
+    std::size_t Discard(std::uint64_t cabin_id);
+
+    // Drops everything belonging to one Cabin, its accounting included.
+    // `DROP CABIN`'s runtime half - the Cabin is gone, so its history is
+    // not a series anything can continue.
     //
     // Late is fine: the compiler stops emitting cabin probes the moment the
     // catalog row is gone, so a set nobody can reach costs memory and never
@@ -366,6 +391,11 @@ public:
     void NoteWrite(const CabinKey& key, const CabinEntry& entry);
 
     // ---- Inspection -----------------------------------------------------
+
+    // The serve-scope decline of §4b rule 3, per Cabin and store-wide.
+    // Counted at the serve site rather than derived from the router,
+    // because the router's answer is two functions away.
+    void NoteScopeDecline(std::uint64_t cabin_id);
 
     const Stats& stats() const noexcept { return stats_; }
     CabinInfo InfoFor(std::uint64_t cabin_id) const;

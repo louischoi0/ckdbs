@@ -248,6 +248,77 @@ TEST(CabinStoreTest, ForgetDropsOneCabinAndLeavesTheOthers) {
     EXPECT_NE(store.Find(theirs), nullptr);
 }
 
+TEST(CabinStoreTest, DiscardDropsTheSetsAndKeepsTheAccounting) {
+    // SB1: CC10's pre-grant discard. The Cabin still exists and will
+    // re-observe, so its history is a series that continues - zeroing it
+    // would zero the very counters that price the discard. `Forget` is
+    // the other case, and it takes the history because the Cabin is gone.
+    CabinStore store;
+    const CabinKey aaa = KeyFor(1, Str("aaa"));
+    const CabinKey bbb = KeyFor(1, Str("bbb"));
+    const CabinKey theirs = KeyFor(2, Str("aaa"));
+    ASSERT_TRUE(store.Commit(aaa, {EntryFor(1), EntryFor(2)}));
+    ASSERT_TRUE(store.Commit(bbb, {EntryFor(3)}));
+    ASSERT_TRUE(store.Commit(theirs, {EntryFor(4)}));
+    store.NoteHit(1);
+    store.NoteMiss(1);
+
+    EXPECT_EQ(store.Discard(1), 2u) << "the count is value sets, which is what re-observation rebuilds";
+    EXPECT_EQ(store.Find(aaa), nullptr);
+    EXPECT_EQ(store.Find(bbb), nullptr);
+    EXPECT_NE(store.Find(theirs), nullptr) << "another Cabin's sets are not this split's business";
+
+    const CabinStore::CabinInfo info = store.InfoFor(1);
+    EXPECT_EQ(info.values, 0u);
+    EXPECT_EQ(info.entries, 0u);
+    EXPECT_EQ(info.hits, 1u) << "the history is the series the counter reads";
+    EXPECT_EQ(info.misses, 1u);
+
+    // A second discard on an already-discarded Cabin drops nothing, which
+    // is what keeps a per-grant call from inflating the counter.
+    EXPECT_EQ(store.Discard(1), 0u);
+
+    store.Forget(1);
+    EXPECT_EQ(store.InfoFor(1).hits, 0u) << "a dropped Cabin's history goes with it";
+}
+
+TEST(CabinStoreTest, DiscardClearsTheEntryCapSoReObservationIsPossible) {
+    // The cap is a fact about how many rows a value had, and a split is
+    // exactly the event that changes it: the ranges this core keeps hold
+    // fewer rows than the whole relation did. A capped key surviving the
+    // discard would refuse to re-observe forever, on evidence the boundary
+    // invalidated.
+    CabinStore store;
+    const CabinKey key = KeyFor(1, Str("aaa"));
+    store.NoteEntryCapRefusal(key);  // the sticky mark a recording walk sets
+    ASSERT_FALSE(store.MayObserve(key));
+
+    store.Discard(1);
+    EXPECT_TRUE(store.MayObserve(key));
+
+    // And the other Cabin's mark is untouched - the discard is one
+    // relation's, not the store's.
+    const CabinKey theirs = KeyFor(2, Str("aaa"));
+    store.NoteEntryCapRefusal(theirs);
+    store.Discard(1);
+    EXPECT_FALSE(store.MayObserve(theirs));
+}
+
+TEST(CabinStoreTest, ScopeDeclinesCountPerCabinAndStoreWide) {
+    // SB-R4's fall-through counter. It is neither a hit nor a miss: the
+    // set was never consulted, and folding it into misses would read as
+    // "the value was not observed", a different fact with a different fix.
+    CabinStore store;
+    store.NoteScopeDecline(1);
+    store.NoteScopeDecline(1);
+    store.NoteScopeDecline(2);
+    EXPECT_EQ(store.InfoFor(1).scope_declines, 2u);
+    EXPECT_EQ(store.InfoFor(2).scope_declines, 1u);
+    EXPECT_EQ(store.stats().scope_declines, 3u);
+    EXPECT_EQ(store.stats().hits, 0u);
+    EXPECT_EQ(store.stats().misses, 0u);
+}
+
 TEST(CabinStoreTest, InfoTracksValuesAndEntriesPerCabin) {
     CabinStore store;
     ASSERT_TRUE(store.Commit(KeyFor(1, Str("aaa")), {EntryFor(1), EntryFor(2)}));

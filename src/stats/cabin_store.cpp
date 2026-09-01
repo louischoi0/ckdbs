@@ -205,14 +205,41 @@ std::vector<CabinKey> CabinStore::ObservedValuesOf(std::uint64_t cabin_id) const
     return keys;
 }
 
-void CabinStore::Forget(std::uint64_t cabin_id) {
+std::size_t CabinStore::Discard(std::uint64_t cabin_id) {
+    std::size_t sets = 0;
     for (auto it = observed_.begin(); it != observed_.end();) {
-        it = it->first.cabin_id == cabin_id ? observed_.erase(it) : std::next(it);
+        if (it->first.cabin_id != cabin_id) {
+            ++it;
+            continue;
+        }
+        ++sets;
+        it = observed_.erase(it);
     }
     for (auto it = sightings_.begin(); it != sightings_.end();) {
         it = it->first.cabin_id == cabin_id ? sightings_.erase(it) : std::next(it);
     }
+    for (auto it = entry_capped_.begin(); it != entry_capped_.end();) {
+        it = it->cabin_id == cabin_id ? entry_capped_.erase(it) : std::next(it);
+    }
+    // Every one of this Cabin's sets has gone, so the two live figures are
+    // zero exactly - not decremented set by set, which would be the same
+    // arithmetic done in a way that can drift. `RemoveSet`'s saturation
+    // exists for counters that have drifted; this one cannot.
+    if (auto info = info_.find(cabin_id); info != info_.end()) {
+        info->second.values = 0;
+        info->second.entries = 0;
+    }
+    return sets;
+}
+
+void CabinStore::Forget(std::uint64_t cabin_id) {
+    Discard(cabin_id);
     info_.erase(cabin_id);
+}
+
+void CabinStore::NoteScopeDecline(std::uint64_t cabin_id) {
+    ++stats_.scope_declines;
+    ++info_[cabin_id].scope_declines;
 }
 
 void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {

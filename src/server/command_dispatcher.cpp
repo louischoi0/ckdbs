@@ -1427,6 +1427,27 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                          },
                          /*even_when_zero=*/false);
 
+    // **The Cabin's two numbers under a split** (SB-R4,
+    // `docs/spec/cabin.md` §4c), printed here and adjacent because they
+    // are one reading: what the pre-grant discard cost, and whether
+    // anything was served afterwards. Split apart they answer nothing —
+    // a discard with no fall-throughs after it is a Cabin that rebuilt,
+    // and a discard followed by fall-throughs on the same relation is a
+    // Cabin the read path cannot reach.
+    //
+    // `cabin_split_discard` is keyed by relation and counts **value
+    // sets**; it is written on core 0, which is where a split runs, so a
+    // peer's block is empty by construction rather than by policy.
+    // `cabin_scope_fallthroughs` is store-wide here and per Cabin on
+    // `SHOW CABINS`, which is where the per-Cabin figures already live.
+    // Both absent at zero, this section's rule.
+    PrintRefusalCounters(os, "cabin_split_discard", cabin_split_discards_.counts(),
+                         [](std::ostream& out, const catalog::Oid& oid) { out << oid; },
+                         /*even_when_zero=*/false);
+    if (cabins_ != nullptr && cabins_->stats().scope_declines != 0) {
+        os << " cabin_scope_fallthroughs=" << cabins_->stats().scope_declines;
+    }
+
     // **How many ranges each split relation actually has** (R4-R §7's
     // instrument gap, added with RR1). Nothing reported this from outside
     // the process: `sys.ranges` has no column definitions, so
@@ -3436,16 +3457,22 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         //
         // `observed=0 hits=0` on an old Cabin means the column is declared
         // and never probed by equality. `observed>0 hits=0` means the
-        // values being probed are not the ones being observed.
+        // values being probed are not the ones being observed. And
+        // `scope_declines>0` (SB-R4) means neither: the probes arrived and
+        // the serve path declined them, because this core's owned ranges
+        // do not cover the walk (`docs/spec/cabin.md` §4b rule 3) - the
+        // third reading, which the first two cannot be distinguished from
+        // without it.
         if (cabins_ != nullptr) {
             const stats::CabinStore::CabinInfo info = cabins_->InfoFor(row.cabin_id);
             os << " observed=" << info.values << " entries=" << info.entries
-               << " hits=" << info.hits << " misses=" << info.misses;
+               << " hits=" << info.hits << " misses=" << info.misses
+               << " scope_declines=" << info.scope_declines;
         } else {
             // Not "0": the store is off, so every count is unknown rather
             // than zero, and printing zeros would read as "nothing has
             // happened" when the truth is "nothing is being recorded".
-            os << " observed=- entries=- hits=- misses=- (cabins = off)";
+            os << " observed=- entries=- hits=- misses=- scope_declines=- (cabins = off)";
         }
     }
     return {os.str(), false};

@@ -11,6 +11,8 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/lease_refill_stats.hpp"
+#include "kds/server/refusal_counters.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/wal/manager.hpp"
 
@@ -70,12 +72,19 @@ static_assert(sizeof(RowIdLeaseGrantPayload) == 32);
 // no store or enforcer simply grants the ids and opens nothing** - which is what every
 // fixture is, and what makes the range half additive rather than a new
 // precondition on the lease.
+// `cabins` and `discards` are SB1's, and they are core 0's own: the
+// pre-grant Cabin discard runs inside `OpenRangeOnSystemCore`, on the same
+// task, so the grant this handler replies with can never precede it. Both
+// nullable on the same terms as `store` and `enforcer` above — a handler
+// given no store grants the ids and discards nothing.
 Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, catalog::Catalog& catalog,
                                  Logger* log = nullptr,
                                  storage::DevicePageStore* store = nullptr,
                                  wal::WalManager* wal = nullptr,
-                                 const exec::AssertionEnforcer* enforcer = nullptr);
+                                 const exec::AssertionEnforcer* enforcer = nullptr,
+                                 stats::CabinStore* cabins = nullptr,
+                                 CabinSplitDiscardCounters* discards = nullptr);
 
 // One core's refill state, owned by the caller for the coroutine's reason
 // (extent_lease_service.hpp): it must outlive the wait.

@@ -176,6 +176,13 @@ struct StepStats {
     std::uint64_t cabin_hint_hits = 0;
     std::uint64_t cabin_hint_misses = 0;
     std::uint64_t cabin_recordings = 0;
+    // `cabin_scope_declines` counts probes this step declined to put to
+    // the Cabin at all, because the serving core's owned ranges do not
+    // cover the walk (`docs/spec/cabin.md` §4b rule 3). It is neither a
+    // hit nor a miss - the set was never consulted - which is why it is
+    // its own number: folded into misses it would read as "the value was
+    // not observed", and that is a different fact with a different fix.
+    std::uint64_t cabin_scope_declines = 0;
 
     // The statement-local inner build (join-inner-build.md §4's
     // honesty clause; workplan JB3/JB4 collect, JB7 prints).

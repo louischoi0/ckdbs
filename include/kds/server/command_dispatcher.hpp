@@ -1493,6 +1493,12 @@ public:
     // statement, so it cannot go through a statement path.
     RangeSplitDeclineCounters& range_split_declines() noexcept { return range_split_declines_; }
 
+    // SB-R4: what CC10's pre-grant Cabin discard dropped, keyed by
+    // relation. Filled by core 0's row-id lease handler, which is where
+    // the split runs, and read here because `SHOW META` is where its
+    // sibling counters are.
+    CabinSplitDiscardCounters& cabin_split_discards() noexcept { return cabin_split_discards_; }
+
     // The view's two sources (workplan PHY06), a setter for
     // `set_optimizer_signals`'s reason. Both null - every construction
     // site without the controller - and `SHOW CABIN_OPTIMIZER` then
@@ -2151,6 +2157,7 @@ private:
     bool tracing_ = false;
 
     RangeSplitDeclineCounters range_split_declines_;
+    CabinSplitDiscardCounters cabin_split_discards_;
     // `set_range_size_ids`; `kRangeSizeOff` means no range ever opens and this
     // dispatcher's write path is the one it always was.
     std::uint64_t range_size_ids_ = kRangeSizeOff;

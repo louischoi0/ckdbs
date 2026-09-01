@@ -288,6 +288,12 @@ DROP CABIN ON accounts(owner);
 - Refused on the primary key and on a `NO CABIN` column, whoever asks.
 - `SHOW CABINS` lists them. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
+- **On a relation spread across cores a Cabin is admitted and serves
+  nothing** (2026-09-01). A set speaks for the ranges its core owns, and a
+  spread relation is read by fanning out to every owner — where no entry
+  set lives — so every probe walks. Correct, and no faster: `SHOW CABINS`'
+  `scope_declines` is the count, and it is the field to read before
+  concluding a Cabin is not earning its keep.
 
 ### CREATE PATTERN / DROP PATTERN — withdrawn
 

@@ -56,31 +56,42 @@ TEST(RangeEligibleTest, BtreeDeclinesByD1) {
     EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kBtree);
 }
 
-TEST(RangeEligibleTest, AnIndexedRelationDeclines) {
+TEST(RangeEligibleTest, AnIndexedRelationNoLongerDeclines) {
+    // SB3 dropped the arm as dead code: a secondary index is btree-only
+    // (IX3), so `kBtree` declined every relation that could trip it
+    // first, and this shape - heap-clustered *and* indexed - is one only
+    // this fixture can build. The expectation flips back when **D1**
+    // lifts, not at IX11; the enum value is kept for exactly that.
     const AssertionEnforcer enforcer;
     catalog::TableAccess access = BareHeapRelation();
     catalog::TableAccess::IndexRef index{};
     index.index_oid = 7001;
     access.indexes.push_back(index);
-    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kIndex);
+    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kNone);
 }
 
-TEST(RangeEligibleTest, ALiveCabinIdDeclinesEvenWhereTheMaskWouldNot) {
-    // The wrong-test pin (command_dispatcher.cpp's comment, kept here as a
-    // contract): the gate reads live ids, not `cabin_mask` - a Cabin on a
-    // column past 64 folds into no mask bit, so the mask stays 0 while the
-    // id is live, and the mask test would admit the split.
+TEST(RangeEligibleTest, ALiveCabinIdNoLongerDeclines) {
+    // SB3, and it was answered rather than deferred: an Observational
+    // set is authoritative for (observed value x the ranges its core
+    // owns), so a boundary narrows what a set speaks for instead of
+    // falsifying it (`docs/spec/cabin.md` §4b). The wrong-test pin the
+    // old assertion carried - live ids, never `cabin_mask` - survives in
+    // `AnyCabin`'s own comment, which is where the rule lives; the field
+    // is set here so a re-added arm reading the mask still fails.
     const AssertionEnforcer enforcer;
     catalog::TableAccess access = BareHeapRelation();
     access.cabin_ids[1].id = 41;
     ASSERT_EQ(access.cabin_mask, 0u);
-    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kCabin);
+    ASSERT_TRUE(access.AnyCabin());
+    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kNone);
 }
 
 TEST(RangeEligibleTest, ZeroIdCabinEntriesDoNotDecline) {
-    // The other wrong test: `cabin_ids` is column-parallel and non-empty
-    // on every relation the cache fills, so emptiness would gate every
-    // relation in the instance. All-zero ids are "no Cabin anywhere".
+    // `cabin_ids` is column-parallel and non-empty on every relation the
+    // cache fills. Kept after SB3 dropped the Cabin arm because it pins
+    // the *shape* rather than the arm: all-zero ids are "no Cabin
+    // anywhere", and a future gate reading emptiness would gate every
+    // relation in the instance.
     const AssertionEnforcer enforcer;
     catalog::TableAccess access = BareHeapRelation();
     ASSERT_FALSE(access.cabin_ids.empty());
@@ -138,9 +149,14 @@ TEST(RangeEligibleTest, AnAssertionOnAnotherRelationDoesNotDecline) {
 
 TEST(RangeEligibleTest, PrecedenceIsTheDocumentedOrder) {
     // A relation tripping several gates names the first in the header's
-    // fixed order, so the decline's one reason is deterministic. All six
-    // tripped at once, then cleared one per step: the walk pins the whole
-    // order, not just its head — a reordering anywhere breaks a step.
+    // fixed order, so the decline's one reason is deterministic. All of
+    // them tripped at once, then cleared one per step: the walk pins the
+    // whole order, not just its head — a reordering anywhere breaks a step.
+    //
+    // **The index and Cabin facts stay set for every step** after SB3
+    // dropped their arms, which is the point: the walk now proves they
+    // are *transparent*, so a re-added arm at IX11 fails this test
+    // instead of silently changing which gate a relation names.
     AssertionEnforcer enforcer;
     LiveAssertion assertion;
     assertion.assertion_id = 504;
@@ -152,20 +168,16 @@ TEST(RangeEligibleTest, PrecedenceIsTheDocumentedOrder) {
     catalog::TableAccess::IndexRef index{};
     index.index_oid = 7002;
     access.indexes.push_back(index);
-    access.cabin_ids[1].id = 43;
     access.schema.columns.push_back(Column(2, catalog::kTypeValVarchar));
+    // After the grow, so the id survives it - `resize` appends and leaves
+    // the existing entries alone, which is why one assignment is enough.
     access.cabin_ids.resize(access.schema.columns.size());
+    access.cabin_ids[1].id = 43;
     access.fkeys_out.push_back(catalog::ForeignKeyRef{.fk_id = 3, .rel_oid = 903});
 
     EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kBtree);
 
     access.clustered_type = catalog::ClusteredType::kHeap;
-    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kIndex);
-
-    access.indexes.clear();
-    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kCabin);
-
-    access.cabin_ids[1].id = 0;
     EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kSpill);
 
     access.schema.columns.pop_back();
@@ -173,6 +185,14 @@ TEST(RangeEligibleTest, PrecedenceIsTheDocumentedOrder) {
 
     access.fkeys_out.clear();
     EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kAssertion);
+
+    // And with the assertion gone, an indexed *and* cabined relation is
+    // eligible — the two facts SB3 made transparent, asserted as such
+    // rather than left as an absence.
+    enforcer.Evict(504);
+    ASSERT_FALSE(access.indexes.empty());
+    ASSERT_TRUE(access.AnyCabin());
+    EXPECT_EQ(RangeEligible(access, enforcer), RangeGate::kNone);
 }
 
 TEST(RangeEligibleTest, ACatalogShapedRelationAnswersEligible) {

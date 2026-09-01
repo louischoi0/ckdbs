@@ -1692,9 +1692,16 @@ Status Expeditor::Serve() {
         // enforcer is deliberately not the fifth gate's authority here -
         // `OpenRangeOnSystemCore` asks `sys.assertions` for that, because
         // this registry is silent about a peer-owned relation.
-        if (Status s = RegisterRowIdGrantHandler(scheduler, *transport_, database_->catalog,
-                                                 &*logger_, store_.get(), wal_.get(),
-                                                 &dispatcher_->assertions());
+        // The Cabin store and the discard counter are SB1's, and they are
+        // this core's own: `OpenRangeOnSystemCore` drops the relation's
+        // Observational sets before the reply that grants the range, on
+        // this task, so no grant can precede the discard. Core 0 is the
+        // only core that holds a store at all (`cabin.md` §4b), which is
+        // why passing one core's is passing every core's.
+        if (Status s = RegisterRowIdGrantHandler(
+                scheduler, *transport_, database_->catalog, &*logger_, store_.get(), wal_.get(),
+                &dispatcher_->assertions(), cabin_store_ ? &*cabin_store_ : nullptr,
+                &dispatcher_->cabin_split_discards());
             !s.ok()) {
             return s;
         }

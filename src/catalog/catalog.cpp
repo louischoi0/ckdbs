@@ -2755,13 +2755,15 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // nothing and be invisible until someone read the catalog by hand.
     auto access = InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
-    // §6a's converse, and the **auto** path comes through here too - which
-    // is the one that would otherwise open a Cabin on a split relation
-    // with nobody having asked (physical-optimizer.md Part II's
-    // controller).
-    if (Status s = RefuseAuxiliaryOnSplitRelation(*access.value(), "a Cabin"); !s.ok()) {
-        return s;
-    }
+    // **§6a's converse was here and is gone** (SB3,
+    // `instructions/v2.7.1/workorder-sb.md`): a Cabin on a split relation
+    // is admitted, and is born correctly scoped rather than born
+    // incomplete, because an Observational set is authoritative for
+    // (observed value × the ranges its core owns) - `docs/spec/cabin.md`
+    // §4b, enforced at the serve site in `step_vm.cpp` and at the build in
+    // `cabin_optimizer_exec.cpp`, which walks every chain this core owns
+    // rather than the `lo = 0` one. The **auto** path came through here
+    // too and is admitted on the same terms.
     if (col_pos >= access.value()->schema.columns.size()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(rel_oid) +
                                        " has no column at position " + std::to_string(col_pos));

@@ -203,7 +203,22 @@ what the scoping is for. The day a stage is given a store, the predicate
 is what keeps the answer right; without it the same day is a silent
 subset.
 
+**One more site of the same shape, found by SB's review and left gated.**
+`exec::CheckNoChildReferences` (`src/exec/fk_check.cpp`) returns an
+authoritative `FkVerdict::kPass` from an exhausted Cabin entry set with
+**no scope check**, and its fall-back walks `heap::ChainVisit(store,
+child.desc_page_id, ...)` — the same `desc_page_id`-only walk SB had to
+fix in `BuildSeededSets`, which on a split heap relation covers the
+`lo = 0` range and stops. Both are unreachable because `RangeEligible`'s
+`kForeignKey` arm gates a split in either direction, and **both become
+live the moment SA-T6 lifts it**. SA-T6 therefore owns two changes it did
+not know about: the serve needs §4b rule 3, and the walk needs
+`WalkHeadsFor`.
+
 **Still open here, unchanged by SB:** SA-T3 (per-owner index builds),
-SA-T5a (the router), SA-T6 (FK), SA-T7 (the Bound Cabin's migration, and
-with it the Cabin bullet's surviving migration gate), and IX11, which is
-where `RangeEligible`'s index arm returns.
+SA-T5a (the router), SA-T6 (FK, and the two above), SA-T7 (the Bound
+Cabin's migration, and with it the Cabin bullet's surviving migration
+gate), and **D1**, which is where `RangeEligible`'s index arm returns —
+not IX11, which shapes the re-added arm rather than triggering it (the
+review's C1: the arm was dead code, since IX3 makes an index btree-only
+and D1 declines every btree relation first).

@@ -400,7 +400,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
             counters.sub_chain_runs == 0 && counters.trail_replays == 0 &&
             counters.trail_misses == 0 && counters.range_pages_pruned == 0 &&
             counters.cabin_hits == 0 && counters.cabin_misses == 0 &&
-            counters.index_entries_scanned == 0) {
+            counters.cabin_scope_declines == 0 && counters.index_entries_scanned == 0) {
             continue;
         }
 
@@ -453,6 +453,9 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.cabin_hint_hits > 0) os << " hint_hits=" << counters.cabin_hint_hits;
         if (counters.cabin_hint_misses > 0) os << " hint_misses=" << counters.cabin_hint_misses;
         if (counters.cabin_recordings > 0) os << " cabin_recorded=" << counters.cabin_recordings;
+        if (counters.cabin_scope_declines > 0) {
+            os << " cabin_scope_declines=" << counters.cabin_scope_declines;
+        }
 
         // The index's three numbers (docs/spec/index.md §7). The gap between
         // `index_scanned` and `index_resolved` is what the layer saved, and

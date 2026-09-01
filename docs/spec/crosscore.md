@@ -569,7 +569,18 @@ binds migration alone:
   (`docs/spec/index.md` §13; reading on record: local per range, cut by
   Cabin/Waystone — not ratified). Uniqueness enforcement under either
   shape is part of that decision. Gate: an indexed relation does not
-  split.
+  split. **Amended 2026-09-01 (SB3): the gate is still owed and is no
+  longer *asked*, because it never fired.** `RangeEligible`'s `kIndex` arm
+  tested `!indexes.empty()`, and a secondary index is btree-only (IX3), so
+  every relation that could trip it was already declined by the **D1**
+  btree arm one line earlier. The arm was dead code and was removed rather
+  than narrowed; what stands in for it today is D1. **The trigger to
+  re-add it is therefore D1's lift, not IX11** — the day a btree relation
+  may split, an indexed one must not, until §13 decides. SA-R2's narrowing
+  to *UNIQUE*-indexed shapes the re-added arm and needs IX11's `unique`
+  flag; that is a condition on the arm, never the reason for its return.
+  Read this bullet as a statement about the *relation*, not about the
+  code: the placement question §13 owns is untouched.
 - **Cabin** — **the split half of this gate was lifted 2026-09-01**
   (SB-R1/SB-R3, `instructions/v2.7.1/workorder-sb.md`), and it was lifted
   by scoping the authority rather than by deciding the placement: an

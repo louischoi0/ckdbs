@@ -6,6 +6,8 @@
 #include <ostream>
 #include <string_view>
 
+#include "kds/catalog/oid.hpp"
+
 // The shape `crosscore.md` §6's refusal counters have, once — a tally by a
 // composite key, ordered, with a total.
 //
@@ -31,6 +33,12 @@ template <typename Key>
 class RefusalCounters {
 public:
     void Add(const Key& key) { ++counts_[key]; }
+
+    // `n` events at once, for a counter whose unit is finer than its call
+    // site - the pre-grant Cabin discard drops a relation's value sets in
+    // one pass. A loop at the call site would be `+=` written where it can
+    // be got wrong.
+    void Add(const Key& key, std::uint64_t n) { counts_[key] += n; }
 
     std::uint64_t CountFor(const Key& key) const {
         auto it = counts_.find(key);
@@ -88,5 +96,22 @@ void PrintRefusalCounters(std::ostream& os, std::string_view name,
         ++printed;
     }
 }
+
+// **What CC10's pre-grant Cabin discard dropped**, keyed by relation
+// (SB-R4, `instructions/v2.7.1/workorder-sb.md`). Here, with the template,
+// because two headers need the type and a `using` in one of them would be
+// a declaration the other could not see.
+//
+// **One count per value set, not per Cabin**: the unit is what
+// re-observation has to rebuild, and a Cabin with a thousand observed
+// values costs a thousand times what one with a single value costs. The
+// reading is the price of the transition rule `docs/spec/cabin.md` §4b
+// states — the discard buys a true authority claim, and this is the bill,
+// arriving later as misses on the same relation. Written on **core 0**,
+// which is where a split runs and, today, the only core holding a Cabin
+// store at all; read through core 0's `SHOW META` beside
+// `cabin_scope_fallthroughs`, because the pair is one reading: what the
+// discard cost, and whether anything was served afterwards.
+using CabinSplitDiscardCounters = RefusalCounters<catalog::Oid>;
 
 }  // namespace kds::server

@@ -87,6 +87,18 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     const catalog::TableAccess& access, std::uint16_t col_pos, std::uint64_t cabin_id,
     const std::function<bool()>& enabled, bool* aborted) {
     *aborted = false;
+    // **§4b rule 3, asked here as well as at the serve site** (`step_vm.cpp`'s
+    // `CabinScopeCovers`), and not because a caller is expected to get it
+    // wrong: this is the *other* place a set is banked, and a set banked
+    // from fewer ranges than it will speak for is a subset served as
+    // authoritative - recorded once, wrong forever after. Unreachable
+    // today, and only by two facts that live in other files (the serve
+    // site declines before `Observe`, so no sightings accrue on a
+    // non-servable relation, and `Discard` clears the sightings pre-grant),
+    // which is precisely the inheritance this engine's rules refuse.
+    // Declining to build is always legal - §1's corollary - so the answer
+    // is zero committed, never an error.
+    if (!access.ranges.empty() && !access.ServableBy(catalog_.core_id())) return std::size_t{0};
     const std::vector<stats::CabinKey> seeds = cabins_.SightedUnobservedOf(cabin_id);
     if (seeds.empty()) return std::size_t{0};
 
@@ -102,11 +114,23 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
 
     // A btree leaf is a heap page, so one loop serves both clustered forms
     // - only the first leaf differs (the assertion builder's shape).
-    PageId leaf = access.desc_page_id;
+    //
+    // **RD6: one chain per range, so this is one walk per chain this core
+    // owns** - `WalkHeadsFor`, the same rule `VisitRelation` and a fan-in
+    // stage take, rather than a third spelling of it. A build that walked
+    // `desc_page_id` alone would cover the `lo = 0` range and stop, then
+    // commit the result as an **observed** set: a subset served as
+    // authoritative, which is the C1 break `cabin_store.hpp` forbids and
+    // the one this build could make permanent. It became reachable when
+    // SB3 admitted `CREATE CABIN` on a split relation, the optimizer's
+    // automatic path included. Unsplit, `WalkHeadsFor` answers the one
+    // head this always walked. A btree relation never splits (D1), so its
+    // arm needs no range handling and says so by taking `desc_page_id`.
+    std::vector<PageId> heads = access.WalkHeadsFor(catalog_.core_id());
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);
         if (!first.ok()) return first.status();
-        leaf = first.value();
+        heads.assign(1, first.value());
     }
 
     struct StagedRow {
@@ -115,87 +139,90 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
         std::vector<std::byte> payload;
     };
 
-    const PageId walk_origin = leaf;
-    for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation chain");
-            !s.ok()) {
-            return s;
-        }
-        // PO8, between pages: an OFF mid-build discards cleanly, because
-        // nothing commits until the walk completes.
-        if (!enabled()) {
-            *aborted = true;
-            return std::size_t{0};
-        }
-
-        // Phase 1: copy out under the ring page, no fetch beneath it. The
-        // ring's stricter lifetime is honored the same way: this page is
-        // finished before anything can rotate it away.
-        std::vector<StagedRow> staged;
-        PageId next = kInvalidPageId;
-        std::uint32_t page_epoch = 0;
-        {
-            auto bytes = ring->Fetch(leaf);
-            if (!bytes.ok()) return bytes.status();
-            heap::PageView page(bytes.value());
-            page_epoch = static_cast<std::uint32_t>(page.RelayoutEpoch());
-            const std::uint16_t n = page.slot_count();
-            staged.reserve(n);
-            for (std::uint16_t i = 0; i < n; ++i) {
-                auto tuple = page.ReadTuple(i);
-                if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired
-                if (!tuple.ok()) return tuple.status();
-
-                switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
-                                             tuple.value().deleted)) {
-                    case txn::CheckVerdict::kBusy:
-                        // An in-flight row can neither be counted (its
-                        // abort would leave a phantom entry) nor skipped
-                        // (its commit already passed the write hook while
-                        // the value was unobserved). Defer the whole build;
-                        // demand re-nominates (AST06's argument).
-                        *aborted = true;
-                        return std::size_t{0};
-                    case txn::CheckVerdict::kAbsent:
-                        continue;
-                    case txn::CheckVerdict::kLive:
-                        break;
-                }
-
-                auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
-                if (!pk.ok()) return pk.status();
-                StagedRow row;
-                row.pk = pk.value();
-                row.slot = i;
-                row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-                staged.push_back(std::move(row));
+    for (const PageId head : heads) {
+        PageId leaf = head;
+        const PageId walk_origin = leaf;
+        for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
+            if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation chain");
+                !s.ok()) {
+                return s;
             }
-            next = page.next_page_id();
+            // PO8, between pages: an OFF mid-build discards cleanly, because
+            // nothing commits until the walk completes.
+            if (!enabled()) {
+                *aborted = true;
+                return std::size_t{0};
+            }
+
+            // Phase 1: copy out under the ring page, no fetch beneath it. The
+            // ring's stricter lifetime is honored the same way: this page is
+            // finished before anything can rotate it away.
+            std::vector<StagedRow> staged;
+            PageId next = kInvalidPageId;
+            std::uint32_t page_epoch = 0;
+            {
+                auto bytes = ring->Fetch(leaf);
+                if (!bytes.ok()) return bytes.status();
+                heap::PageView page(bytes.value());
+                page_epoch = static_cast<std::uint32_t>(page.RelayoutEpoch());
+                const std::uint16_t n = page.slot_count();
+                staged.reserve(n);
+                for (std::uint16_t i = 0; i < n; ++i) {
+                    auto tuple = page.ReadTuple(i);
+                    if (tuple.status().code() == StatusCode::kNotFound) continue;  // retired
+                    if (!tuple.ok()) return tuple.status();
+
+                    switch (txn::CheckVisibility(check_view, tuple.value().trx_id,
+                                                 tuple.value().deleted)) {
+                        case txn::CheckVerdict::kBusy:
+                            // An in-flight row can neither be counted (its
+                            // abort would leave a phantom entry) nor skipped
+                            // (its commit already passed the write hook while
+                            // the value was unobserved). Defer the whole build;
+                            // demand re-nominates (AST06's argument).
+                            *aborted = true;
+                            return std::size_t{0};
+                        case txn::CheckVerdict::kAbsent:
+                            continue;
+                        case txn::CheckVerdict::kLive:
+                            break;
+                    }
+
+                    auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
+                    if (!pk.ok()) return pk.status();
+                    StagedRow row;
+                    row.pk = pk.value();
+                    row.slot = i;
+                    row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+                    staged.push_back(std::move(row));
+                }
+                next = page.next_page_id();
+            }
+
+            // Phase 2: decode and collect. Spill fetches are legal here - the
+            // page span is finished with - and they go through the ordinary
+            // path, never the ring.
+            for (const StagedRow& row : staged) {
+                std::vector<PendingSpill> spills;
+                auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
+                if (!decoded.ok()) return decoded.status();
+                if (Status s = ResolveSpills(store_, spills, decoded.value()); !s.ok()) return s;
+
+                auto key = stats::MakeCabinKey(cabin_id, decoded.value()[col_pos]);
+                if (!key.has_value()) continue;  // NULL: never observable
+                auto bucket = collected.find(*key);
+                if (bucket == collected.end()) continue;  // not a seeded value
+
+                stats::CabinEntry entry;
+                entry.pk = row.pk;
+                entry.page_id = leaf;
+                entry.page_epoch = page_epoch;
+                entry.slot = row.slot;
+                entry.flags = stats::kCabinHintValid;
+                bucket->second.push_back(entry);
+            }
+            leaf = next;
         }
-
-        // Phase 2: decode and collect. Spill fetches are legal here - the
-        // page span is finished with - and they go through the ordinary
-        // path, never the ring.
-        for (const StagedRow& row : staged) {
-            std::vector<PendingSpill> spills;
-            auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);
-            if (!decoded.ok()) return decoded.status();
-            if (Status s = ResolveSpills(store_, spills, decoded.value()); !s.ok()) return s;
-
-            auto key = stats::MakeCabinKey(cabin_id, decoded.value()[col_pos]);
-            if (!key.has_value()) continue;  // NULL: never observable
-            auto bucket = collected.find(*key);
-            if (bucket == collected.end()) continue;  // not a seeded value
-
-            stats::CabinEntry entry;
-            entry.pk = row.pk;
-            entry.page_id = leaf;
-            entry.page_epoch = page_epoch;
-            entry.slot = row.slot;
-            entry.flags = stats::kCabinHintValid;
-            bucket->second.push_back(entry);
-        }
-        leaf = next;
     }
 
     // The walk completed - the superset invariant's precondition - so

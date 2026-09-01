@@ -248,10 +248,18 @@ void LogRangeDecline(Logger* log, std::uint32_t core_id, catalog::Oid rel_oid,
 // its own store over the shared device, so `FlushPages`/`EvictClean` -
 // which live only here - are what make the granted page readable by its
 // new owner and unwritable by its old one (CC7's flush-then-grant).
+//
+// `cabins` and `discards` are SB1's: the Observational discard runs inside
+// this call, after the gates and **before** the rows that publish the
+// boundary, so no path exists on which a grant precedes it. Both nullable,
+// and a caller that passes neither opens the range and drops nothing —
+// which is every fixture and every instance running `cabins = off`.
 StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
                                        storage::DevicePageStore& store, wal::WalManager* wal,
                                        const exec::AssertionEnforcer& enforcer,
                                        catalog::Oid rel_oid, std::uint64_t lo,
-                                       std::uint32_t owner_core, Logger* log);
+                                       std::uint32_t owner_core, Logger* log,
+                                       stats::CabinStore* cabins = nullptr,
+                                       CabinSplitDiscardCounters* discards = nullptr);
 
 }  // namespace kds::server

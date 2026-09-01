@@ -66,11 +66,19 @@ namespace kds::exec {
 // last as the youngest gate). A relation tripping several gates names the
 // first: the decline needs one true reason, and a fixed order keeps the
 // named gate deterministic for the log line that will eventually carry it.
+//
+// **Two of the seven no longer occur** (SB3, 2026-09-01): `kIndex` and
+// `kCabin`. Their values stay — the enum is a counter's detail key, and
+// renumbering would silently re-label a series that already exists — and
+// the argument for each removal, with what makes it owed again, is at the
+// removal site in `range_eligible.cpp` rather than here. One statement,
+// one home: three copies of it is three chances to drift, which is what
+// the first draft of this comment did.
 enum class RangeGate : std::uint8_t {
     kNone = 0,
     kBtree,       // D1: the shared-structure access mechanism is [OPEN]
-    kIndex,       // §6a: per-range vs global secondary index undecided
-    kCabin,       // §6a: entry sets core-resident; miss path does not self-heal
+    kIndex,       // never returned since SB3; owed again at D1 — range_eligible.cpp
+    kCabin,       // never returned since SB3; answered, not deferred — range_eligible.cpp
     kSpill,       // §6a: var-heap partition under a boundary undesigned
     kForeignKey,  // §6a: validation reads the linked relation
     kAssertion,   // §6a fifth gate (C2): one core's chain, one core's registry

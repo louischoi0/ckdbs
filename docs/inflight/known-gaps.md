@@ -952,10 +952,21 @@ still waits on its own gate, so:
   SA is what narrows the gate itself** (SA-T2 for the Cabin class —
   **done 2026-09-01 as work order SB**, SA-T3 for per-owner index builds,
   SA-T6 for FK), leaving UNIQUE and the Bound Cabin as the named
-  residue. `RangeEligible`'s `kIndex` arm went with SB's merge too and is
-  a comment naming IX11, where a `unique` flag on `IndexRef` will bring
-  it back: the arm tested a field that does not exist, so it admitted
-  every indexed relation and named nothing.
+  residue. `RangeEligible`'s `kIndex` arm went with SB's merge too, and
+  its removal is **behaviour-preserving because it was dead code**: a
+  secondary index is btree-only (IX3), so every relation that could trip
+  it was already declined by the D1 btree arm one line earlier. **It is
+  owed again when D1 lifts**, not at IX11 — SA-R2's narrowing to
+  UNIQUE-indexed shapes the re-added arm and waits on IX11's `unique`
+  flag, which is a condition on the arm and not the trigger for it.
+  `crosscore.md` §6a's index bullet carries the same amendment.
+
+  **Two more sites of the subset shape, gated and named** (SB's review):
+  `exec::CheckNoChildReferences` (`src/exec/fk_check.cpp`) serves an
+  authoritative FK verdict from a Cabin set with no scope check, and its
+  fall-back walks `child.desc_page_id` alone — both unreachable only
+  because `RangeEligible`'s `kForeignKey` arm still gates a split, and
+  both live the moment **SA-T6** lifts it.
 
   The other nine, each a path that answered before and refuses now, all in
   `src/server/command_dispatcher.cpp` unless named otherwise:

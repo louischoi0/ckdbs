@@ -3,6 +3,7 @@
 #include <string>
 
 #include "kds/exec/assertion_catalog.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/wal/log_page_handoff.hpp"
 
 namespace kds::server {
@@ -16,11 +17,60 @@ void LogRangeDecline(Logger* log, std::uint32_t core_id, catalog::Oid rel_oid,
                            std::string(why) + ")");
 }
 
+namespace {
+
+// The relation's Observational entry sets, dropped. CC10's pre-grant
+// discard, and **the whole of SB-R2's obligation as this tree can state
+// it**: the ordering is what matters - every set banked under the
+// whole-relation claim is gone before the grant that lets a second core
+// write - and a direct call on core 0 is the strongest form of it, since
+// the discard and the grant are then one task on one reactor with no
+// window between them at all.
+//
+// **Why this is not the acknowledged broadcast SB-R2 describes.** There is
+// exactly one `stats::CabinStore` in the engine, core 0's
+// (`Expeditor::cabin_store_`); every peer dispatcher and every fan-in
+// stage is constructed with none, which `docs/inflight/known-gaps.md`
+// already records from the other direction. So the acknowledgement set is
+// one core, and it is this one. The day a peer or a stage is given a
+// store, this becomes the broadcast and the grant waits on the
+// acknowledgements - the obligation is the ordering, and the mechanism is
+// whatever makes it true.
+//
+// Internal to this file: the one caller is below, and the mover (R5) can
+// export it when it is the second. A null store discards nothing and
+// counts nothing, which is what a fixture and a `cabins = off` instance
+// are.
+std::size_t DiscardObservationalCabins(const catalog::TableAccess& access,
+                                       stats::CabinStore* cabins,
+                                       CabinSplitDiscardCounters* discards) {
+    if (cabins == nullptr) return 0;
+    std::size_t sets = 0;
+    for (const catalog::TableAccess::CabinRef& cabin : access.cabin_ids) {
+        // `id == 0` is "this column has no Cabin" (schema.hpp), and it is
+        // most of the vector: `cabin_ids` is indexed by column position.
+        if (cabin.id == 0) continue;
+        sets += cabins->Discard(cabin.id);
+    }
+    // Counted per **value set** and only where there was one: the unit is
+    // what re-observation will have to rebuild, and a relation whose Cabin
+    // nobody has probed drops nothing. An entry at zero would make the
+    // series read as a cost that was never paid, which is `SHOW META`'s
+    // absent-rather-than-zeroed rule at the counter rather than at the
+    // print.
+    if (sets != 0 && discards != nullptr) discards->Add(access.oid, sets);
+    return sets;
+}
+
+}  // namespace
+
 StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
                                        storage::DevicePageStore& store, wal::WalManager* wal,
                                        const exec::AssertionEnforcer& enforcer,
                                        catalog::Oid rel_oid, std::uint64_t lo,
-                                       std::uint32_t owner_core, Logger* log) {
+                                       std::uint32_t owner_core, Logger* log,
+                                       stats::CabinStore* cabins,
+                                       CabinSplitDiscardCounters* discards) {
     // §9b's catalog-relation scope, **taken here** because RD4 declined to
     // invent a gate §6a does not list. Every one of §6a's five facts is
     // true of `sys.tables`, yet a catalog relation is categorically
@@ -118,6 +168,31 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
                             "durable sys.assertions row, which this core's registry cannot see");
             return kInvalidPageId;
         }
+    }
+
+    // ---- CC10's pre-grant window: the Observational discard (SB-R2) ----
+    //
+    // **Here, and not one line later.** Everything below publishes: the
+    // head page becomes durable, the rows go in, and the caller's reply is
+    // the grant that lets `owner_core` write. From that instant a set
+    // banked while this relation was whole is a subset, so it goes before
+    // the instant rather than after it (`docs/spec/cabin.md` §4b,
+    // `crosscore.md` CC10). Placed after the gates for the same reason it
+    // is placed before the steps: a relation the re-check declines is not
+    // splitting, and discarding its sets would charge re-observation for a
+    // boundary that never opened.
+    //
+    // Nothing below can fail in a way that puts the sets back, and nothing
+    // needs to: un-observing is always legal (§1's corollary), so a split
+    // that dies after this point and before the rows costs re-observation
+    // and never an answer. A mount replays nothing for it — the class is
+    // unlogged (§9).
+    if (const std::size_t sets = DiscardObservationalCabins(*access.value(), cabins, discards);
+        sets != 0 && log != nullptr && log->enabled(LogLevel::kInfo)) {
+        log->Info("range", "core 0 discarded " + std::to_string(sets) +
+                               " cabin entry set(s) on relation oid " + std::to_string(rel_oid) +
+                               " before granting a range at " + std::to_string(lo) +
+                               " to core " + std::to_string(owner_core));
     }
 
     // ---- CC10's steps, in CC10's order ------------------------------
