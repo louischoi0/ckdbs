@@ -708,7 +708,30 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     if (Status failed = !outcome.status.ok() ? outcome.status
                                              : StatusFromErrorReply(outcome.response);
         !failed.ok()) {
-        portal->sink.Reset();
+        // **XG-R8: the portal goes with the statement that failed.**
+        //
+        // It used to have its sink reset and its entry kept, and the client
+        // was expected to close it - which §5's skip-to-sync makes it
+        // unable to do: after this `Refuse` arms the skip, every frame up
+        // to the next `C_SYNC` is discarded, **including a `C_CLOSE` the
+        // client pipelined behind this statement**. So the close was
+        // dropped on exactly the statements that most needed it, the portal
+        // leaked, and at `kMaxSessionPortals` every further `C_BIND` was
+        // refused until the 60 s idle sweep freed one - a retrying client
+        // running at one statement per portal lifetime. Clients worked
+        // around it by sending `C_CLOSE` as its own frame after `S_READY`,
+        // at a round trip on every *successful* statement.
+        //
+        // Erased here rather than admitting `C_CLOSE` into the skip, which
+        // was the other option: this is where the portal is already in
+        // hand, it needs no new rule about what "skipping" means, and it
+        // makes the client's close a no-op instead of a requirement.
+        // `protocol.md` §7 states the lifecycle a client sees for it - a
+        // portal ceases to exist when its statement fails.
+        //
+        // No `sink.Reset()`: the whole portal goes, and `portal` dangles
+        // from here on - nothing below reads it.
+        portals_.erase(running_portal_);
         running_portal_.clear();
         (void)Refuse(out, wire::ErrorFromStatus(failed));
         return;

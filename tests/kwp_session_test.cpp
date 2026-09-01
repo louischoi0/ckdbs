@@ -368,6 +368,53 @@ TEST_F(KwpSessionTest, TheStatementAndPortalCapsRefuseWithTheirOwnDetail) {
     EXPECT_FALSE(err.value().retryable) << "a cap is not a race";
 }
 
+TEST_F(KwpSessionTest, AFailedStatementTakesItsPortalWithIt) {
+    // **XG-R8.** The leak this closes was not the client's to fix: §5's
+    // skip-to-sync discards every frame up to the next `C_SYNC`, so a
+    // `C_CLOSE` pipelined behind the statement that just failed is dropped
+    // on exactly the statements that most need it.
+    Handshake();
+    ASSERT_EQ(session_->portal_count(), 0u);
+
+    auto failed = RunStatement("SELECT id FROM no_such_relation");
+    ASSERT_EQ(failed.size(), 1u);
+    ASSERT_EQ(failed[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
+    EXPECT_EQ(session_->portal_count(), 0u)
+        << "a failed statement left its portal behind for a close that skip-to-sync eats";
+
+    // The lifecycle a client sees, per `protocol.md` §7: the name is gone,
+    // so a later `C_CLOSE` of it is the no-op it already is on an absent
+    // name rather than an error. Sent after the barrier, since the session
+    // is skipping to sync.
+    Feed(ClientFrameType::kSync, {});
+    EXPECT_TRUE(Feed(ClientFrameType::kClose, Handle(2, "p")).empty())
+        << "closing a portal that failed must not itself be an error";
+}
+
+TEST_F(KwpSessionTest, ErroringPastThePortalCapNoLongerWedgesTheSession) {
+    // The consequence, and the reason this was found by being stopped by
+    // it: a session that errors `kMaxSessionPortals` times used to hold 64
+    // dead portals and refuse every further `C_BIND` until the 60 s sweep
+    // freed one. A retry loop then ran at one statement per portal
+    // lifetime, which is what stalled an entire benchmark matrix.
+    Handshake();
+    for (std::size_t i = 0; i < kMaxSessionPortals + 8; ++i) {
+        auto failed = RunStatement("SELECT id FROM no_such_relation");
+        ASSERT_EQ(failed.size(), 1u) << "at attempt " << i;
+        ASSERT_EQ(failed[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+            << "at attempt " << i;
+        Feed(ClientFrameType::kSync, {});
+    }
+    EXPECT_EQ(session_->portal_count(), 0u);
+
+    // And the session still works, which is the whole point - the previous
+    // behaviour answered `RESOURCE_EXHAUSTED` here.
+    auto ok = RunStatement("SELECT id FROM t");
+    ASSERT_FALSE(ok.empty());
+    EXPECT_NE(ok[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << "the session was still wedged after erroring past the portal cap";
+}
+
 // ---- P08: the pipelining error contract (§5, §15-3) ----------------------
 
 TEST_F(KwpSessionTest, AfterAnErrorEveryFrameIsDiscardedUntilTheNextSync) {

@@ -1112,6 +1112,38 @@ python3 bench/xe4_crossowner_commit_probe.py --server /path/to/kds_server-<sha> 
 
 Results: `bench/v2.7.0/results-xe-ack-at-append-*.md`.
 
+### The portal-close tax probe (XG2, 2026-09-01)
+
+`bench/portal_close_tax_probe.py` — what the portal-close workaround cost
+per statement, and what removing it gives back.
+
+**Both arms live in this driver, not in `tools/kwp.py`**, and that is
+deliberate: `tools/kwp.py` is the thing under test, so a driver calling it
+would measure whichever way that file happens to be. The two framings are
+written out side by side and differ in exactly one thing —
+
+```
+batched   PARSE BIND EXECUTE CLOSE SYNC   -> one round trip
+trailing  PARSE BIND EXECUTE SYNC ; CLOSE SYNC  -> two
+```
+
+— so the delta is one loopback round trip and nothing else. Defaults to
+`--cores 1 --durability relaxed`, following XE §3's isolation cell: the
+quantity is a per-statement round trip and a device sync would drown it.
+Interleaves the arms itself, one repeat of each in turn.
+
+**Read the delta, not the absolutes.** A loopback round trip is not a
+portable constant: this measured 29.8 µs on the Azure host where XE
+measured 11.1 µs on an AWS one.
+
+```bash
+python3 bench/portal_close_tax_probe.py --server /path/to/kds_server \
+    --workdir ~/bench-xg --label xg2-tax --port 16400 \
+    --statements 2000 --repeats 3 --json out.json
+```
+
+Results: `bench/v2.7.2/results-xg2-portal-close-tax-*.md`.
+
 ### The R6-R read-half probes (RR2, 2026-08-28)
 
 Two more drivers, added when RR1 widened the read site (`HandleSelect`) to

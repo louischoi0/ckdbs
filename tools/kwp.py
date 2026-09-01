@@ -384,20 +384,30 @@ class Connection:
         # syscall each and, on a connection without TCP_NODELAY, a delayed
         # ACK between them.
         #
-        # **`C_CLOSE` never rides in this batch** (2026-08-31, XE4 -
-        # measured, not theorised: this was tried and leaked). §5's own
-        # skip-to-sync is why: a `C_CLOSE` queued right after a `PARSE`,
-        # `BIND` or `EXECUTE` that itself errors arrives while the server
-        # is already discarding frames up to the next `C_SYNC`
-        # (`kwp_session.cpp`'s `skipping_to_sync_`, "discarded, silently")
-        # - so a same-batch close is dropped on exactly the statements that
-        # most need it closed, and the portal leaks anyway. The trailing
-        # close below, sent as its own frame *after* this batch's `S_READY`
-        # has already been read, always lands on a session that has left
-        # skip-to-sync - the one guarantee `C_SYNC` gives.
+        # **`C_CLOSE` rides in this batch again** (2026-09-01, XG2).
+        #
+        # It was pulled out on 2026-08-31 because §5's skip-to-sync eats a
+        # `C_CLOSE` queued behind a `PARSE`/`BIND`/`EXECUTE` that errors -
+        # so a same-batch close was dropped on exactly the statements that
+        # most needed it and the portal leaked. That was a real defect and
+        # the workaround was the right call at the time; it cost a round
+        # trip on every *successful* statement, which is a tax every driver
+        # written against this server would have paid forever for a server
+        # behaviour.
+        #
+        # **The server closes it now** (XG-R8): a statement error erases the
+        # portal it was executing, so the close being eaten no longer leaks
+        # anything, and `protocol.md` §7 states that lifecycle for every
+        # client rather than leaving it to be discovered. A `C_CLOSE` in
+        # this batch is therefore honoured on the success path and harmless
+        # on the error path, where the name it addresses is already gone -
+        # `portals_.erase` on an absent name is silent.
+        #
+        # One write, four frames, one round trip.
         batch = frame(C_PARSE, _Writer().s("").text(sql).take())
         batch += frame(C_BIND, b.take())
         batch += frame(C_EXECUTE, _Writer().s(portal).u32(max_rows).take())
+        batch += frame(C_CLOSE, _Writer().u8(2).s(portal).take())
         batch += frame(C_SYNC)
         self.sock.sendall(batch)
 
@@ -433,18 +443,6 @@ class Connection:
         # an `S_ERROR` the server discards frames until it sees one, so a
         # client that skipped the read would meet that `S_READY` in front of
         # its next statement's answer.
-        while True:
-            ftype, _, _ = self._recv_frame()
-            if ftype == S_READY:
-                break
-        # **Always closed, unconditionally, as its own frame.** Not "on
-        # both arms" any more - the arm that bundled `C_CLOSE` into the
-        # first batch was the leaking one (see the comment above the
-        # batch), so there is now exactly one way this method closes a
-        # portal: after this statement's own `S_READY`, whether it carried
-        # a success or an `S_ERROR`.
-        self._send(C_CLOSE, _Writer().u8(2).s(portal).take())
-        self._send(C_SYNC)
         while True:
             ftype, _, _ = self._recv_frame()
             if ftype == S_READY:

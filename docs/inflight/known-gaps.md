@@ -2301,8 +2301,17 @@ still waits on its own gate, so:
   code wide and the refusal text is already accurate.
   `instructions/v2.7.1/ratification-xf5.md` is the argument it was decided
   on. `tools/kwp.py`'s workaround is reverted by XG2 and its ~11-12 µs tax
-  re-baselined in its own results file. **Built by XG2; this entry closes
-  when that lands.**
+  re-baselined in its own results file. **Built 2026-09-01 by XG2**, and
+  this entry stays only for what it records: the fix is the erase, the two
+  unit cells are `KwpSessionTest.AFailedStatementTakesItsPortalWithIt` and
+  `.ErroringPastThePortalCapNoLongerWedgesTheSession`, the client is
+  reverted, and the workaround's cost is re-baselined at **29.8 µs p50 on
+  this host** in
+  `bench/v2.7.2/results-xg2-portal-close-tax-v2.7.0-30-g9a4dd76.md`.
+  **Do not read that as the bridge between XE-era and XD-era absolutes**:
+  XE's 11-12 µs was another machine's, a loopback round trip is not a
+  portable constant, and the results file says so. XE's quarantine note
+  stands until both arms are re-run on one host.
 - **Nothing bounds an idle authenticated session.** KW-D3 set the
   *portal*-idle timeout at 60 s, which bounds how long an unread result set
   holds memory. A connection that completed its handshake and then sits

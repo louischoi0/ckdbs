@@ -220,7 +220,9 @@ building against a memory.
 | row | status |
 |---|---|
 | XG0 | **Done 2026-09-01.** `crosscore.md` gains **§4a** (the answer edge, the description's chunked own message kind, the sizing correction, the four-item residue) and its stale "the D5 encoder does not exist yet" claim is retracted; `client-manual.md` carries the per-row bound and the 976-byte statement cap; `protocol.md` §7 carries the portal lifecycle; `cross-owner-txn.md` §1a carries the read's dedup exemption and what it bounds; `known-gaps.md`'s three entries point here; the workplan moved to `in-progress/` |
-| XG1..XG5 | not started |
+| XG1 | not started |
+| XG2 | **Done 2026-09-01.** XG-R8's one-line erase at `OnStatementComplete`'s error arm, two unit cells, `tools/kwp.py` reverted to the batched `C_CLOSE`, and an end-to-end check that 100 failing statements no longer wedge a session. Re-baselined in `bench/v2.7.2/results-xg2-portal-close-tax-v2.7.0-30-g9a4dd76.md`: the refund is **29.8 µs p50** on this host against a 0.47% floor. **H-XG2 splits** - the mechanism reproduces (one round trip, flat across the distribution) and the magnitude does not transfer from XE's host, so **the bridge XG asked this cell to be does not exist** and XE's quarantine note must not be lifted on it |
+| XG3..XG5 | not started |
 
 **One thing XG0 settled that the order left to the builder**: a
 description chunk is **its own message kind with its own sequence**, not
