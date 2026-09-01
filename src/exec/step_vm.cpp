@@ -23,6 +23,12 @@
 
 namespace kds::exec {
 
+// The decoders' "everything" and the compiler's are one value, pinned here
+// because this is the only translation unit that sees both declarations
+// (row_codec.hpp deliberately knows nothing about a chain).
+static_assert(kAllColumnsMask == Step::kAllColumns,
+              "row_codec's kAllColumnsMask and Step::kAllColumns must agree");
+
 namespace {
 
 // ---- R1: the page-span guard --------------------------------------------
@@ -2113,23 +2119,15 @@ private:
         const bool recording_here =
             recording_ != nullptr && recording_->step_id == step.step_id;
         const bool partial = step.filter_columns != Step::kAllColumns;
-        if (partial) {
-            if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
-                                             step.filter_columns, &spills_);
-                !s.ok()) {
-                return s;
-            }
-        } else if (Status s = DecodeRowInto(access.schema, access.layout, version_, slots,
-                                            &spills_);
-                   !s.ok()) {
+        // Decoded and then, once nothing is live, resolved - one call,
+        // because the same three lines at four sites is how one of them
+        // drifts into handing back the previous row's value (row_codec.hpp).
+        if (Status s = DecodeAndResolve(store_, access.schema, access.layout, version_, slots,
+                                        step.filter_columns, spills_);
+            !s.ok()) {
             return s;
         }
-
-        // Now that nothing is live, the spilled values can be resolved.
-        if (!spills_.empty()) {
-            stats_.For(step.step_id).spill_fetches += spills_.size();
-            if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
-        }
+        stats_.For(step.step_id).spill_fetches += spills_.size();
 
         StepStats& step_stats = stats_.For(step.step_id);
         ++step_stats.rows_examined;
@@ -2287,15 +2285,12 @@ private:
         // becomes page iteration and a counter.
         const std::uint64_t rest = step.read_columns & ~step.filter_columns;
         if (partial && rest != 0) {
-            if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
-                                             rest, &spills_);
+            if (Status s = DecodeAndResolve(store_, access.schema, access.layout, version_, slots,
+                                            rest, spills_);
                 !s.ok()) {
                 return s;
             }
-            if (!spills_.empty()) {
-                stats_.For(step.step_id).spill_fetches += spills_.size();
-                if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
-            }
+            stats_.For(step.step_id).spill_fetches += spills_.size();
         }
 
         // Counted after the residual and *before* the sub-chains: this is

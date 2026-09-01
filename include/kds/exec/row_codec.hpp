@@ -145,6 +145,33 @@ struct VarHeapSink {
 Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>& spills,
                      std::span<parser::AstValue> out);
 
+// "Decode everything", spelled where the decoders live rather than where
+// the compiler does: `Step::kAllColumns` is the same value, and a
+// static_assert in step_vm.cpp - the one translation unit that holds
+// both headers - pins the two together so neither can move alone. row_codec does not depend on step_chain, and should not -
+// a decoder needs no opinion about chains.
+inline constexpr std::uint64_t kAllColumnsMask = ~std::uint64_t{0};
+
+// Decode `columns` of one row into `out`, then resolve whatever spilled.
+//
+// **One rule, one place.** Every walker that filters before it completes a
+// row spells the same three lines - kAllColumns takes the whole-row
+// decoder, anything else takes the masked one, and either way the pending
+// spills are fetched once nothing spans the page. It was written out at
+// four sites (the step VM's filter decode and its complement, UPDATE's and
+// DELETE's row bodies), and the fourth is the dangerous one: a site that
+// drifts from the others does not fail loudly, it hands the caller a slot
+// still holding the **previous row's value**.
+//
+// `scratch` is the caller's pending-spill buffer, hoisted so a row loop
+// allocates once rather than per row; the decoders clear it themselves. It
+// is left filled on return, which is what lets a caller count what it
+// fetched (the step VM's `spill_fetches`).
+Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema,
+                        const catalog::RowLayout& layout, std::span<const std::byte> payload,
+                        std::span<parser::AstValue> out, std::uint64_t columns,
+                        std::vector<PendingSpill>& scratch);
+
 // Rewrites a literal into the storage form of `col`'s type, in place
 // (docs/spec/types.md §3.1).
 //

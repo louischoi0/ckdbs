@@ -8114,6 +8114,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<std::byte> payload_copy;
     std::vector<exec::PendingSpill> frame_spills;
     std::vector<exec::PendingSpill> spills;
+    const std::uint64_t filter_mask = predicates.value().filter_columns;
 
     // ---- Which foreign keys this SET list touches (§2) -------------------
     //
@@ -8173,13 +8174,17 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
 
         // **The row is copied out of the page once, and decoded from the
-        // copy** - the step VM's own discipline (`version_`), and what
-        // makes the two-stage decode below legal: resolving a spill or
-        // evaluating a subquery fetches a page, and a store is free to move
-        // its frames when it hands one out, so a span into this page cannot
-        // be read afterwards. `payload_copy` is hoisted to the statement, so
-        // this is one memcpy of a schema-constant row size per scanned row
-        // and no allocation after the first.
+        // copy**, which is what makes the two-stage decode below legal
+        // under R1: stage 1 resolves spills and may evaluate a subquery,
+        // both of which fetch pages, and R1's rule is that no span into a
+        // tuple's page may be live across a nested fetch. The pin this walk
+        // holds would in fact keep the bytes valid - `PageRef::bytes()` is
+        // valid as long as the handle is - so this is the *discipline*
+        // rather than a dangling-pointer fix, and it is the discipline
+        // because this path has no PageSpanGuard to catch a violation of
+        // it. `payload_copy` is hoisted to the statement, so this is one
+        // memcpy of a schema-constant row size per scanned row and no
+        // allocation after the first.
         payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
         auto id = exec::RowKeystoneId(payload_copy);
         if (!id.ok()) return id.status();
@@ -8191,23 +8196,12 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // A statement that writes one row of two thousand used to decode
         // all two thousand, twice over, before testing anything - the same
         // defect AP01 measured at 75% of a SELECT's scan, left standing on
-        // the write path. `filter_columns` is the compiler's mask and is
+        // the write path. `filter_mask` is the compiler's, hoisted to the
+        // statement because that is what it is a fact about; it is
         // kAllColumns whenever a sub-chain or a >64-column relation makes a
         // partial decode unsound (step_compiler.cpp's CompileWhere).
-        const std::uint64_t mask = predicates.value().filter_columns;
-        frame_spills.clear();
-        if (mask == exec::Step::kAllColumns) {
-            if (Status s = exec::DecodeRowInto(ta.schema, ta.layout, payload_copy,
-                                                frame.SlotsFor(0), &frame_spills);
-                !s.ok()) {
-                return s;
-            }
-        } else if (Status s = exec::DecodeColumnsInto(ta.schema, ta.layout, payload_copy,
-                                                      frame.SlotsFor(0), mask, &frame_spills);
-                   !s.ok()) {
-            return s;
-        }
-        if (Status s = exec::ResolveSpills(page_store_, frame_spills, frame.SlotsFor(0));
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
+                                              frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
         }
@@ -8222,7 +8216,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // write hook; the frame is for evaluation only and is not read
         // again below. Decoded from `payload_copy`, whose bytes outlive
         // every page fetch stage 1 may have made.
-        spills.clear();
         auto row = exec::DecodeRow(ta.schema, ta.layout, payload_copy, &spills);
         if (!row.ok()) return row.status();
         if (Status s = exec::ResolveSpills(page_store_, spills, row.value()); !s.ok()) return s;
@@ -9118,6 +9111,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // cleared and refilled per scanned row, allocating only on the first.
     std::vector<std::byte> payload_copy;
     std::vector<exec::PendingSpill> frame_spills;
+    const std::uint64_t filter_mask = predicates.value().filter_columns;
 
     // Minted once per statement, for the reason UPDATE's copy records.
     txn::ReadView check_view = txn::ReadView::Everything();
@@ -9152,22 +9146,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // DELETE walks the whole relation exactly as UPDATE does, so it
         // decoded every row of it to mark one. The mask is the compiler's,
         // and is kAllColumns wherever a partial decode would be unsound.
-        const std::uint64_t mask = predicates.value().filter_columns;
-        frame_spills.clear();
-        if (mask == exec::Step::kAllColumns) {
-            if (Status s = exec::DecodeRowInto(ta.schema, ta.layout, payload_copy,
-                                                frame.SlotsFor(0), &frame_spills);
-                !s.ok()) {
-                return s;
-            }
-        } else if (Status s = exec::DecodeColumnsInto(ta.schema, ta.layout, payload_copy,
-                                                      frame.SlotsFor(0), mask, &frame_spills);
-                   !s.ok()) {
-            return s;
-        }
-        // Resolved only now, after everything that needed the tuple's own
-        // bytes is done with them - the same R1 split every read path uses.
-        if (Status s = exec::ResolveSpills(page_store_, frame_spills, frame.SlotsFor(0));
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
+                                              frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
         }
@@ -9183,23 +9163,18 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // be finished before anything downstream sees it, or a slot outside
         // the mask would hand over the *previous* row's value. The step VM
         // completes a matched row with the same complement decode.
-        if (mask != exec::Step::kAllColumns) {
-            const std::uint64_t declared =
-                ta.schema.columns.size() >= 64
-                    ? ~std::uint64_t{0}
-                    : (std::uint64_t{1} << ta.schema.columns.size()) - 1;
-            const std::uint64_t rest = declared & ~mask;
-            if (rest != 0) {
-                frame_spills.clear();
-                if (Status s = exec::DecodeColumnsInto(ta.schema, ta.layout, payload_copy,
-                                                        frame.SlotsFor(0), rest, &frame_spills);
-                    !s.ok()) {
-                    return s;
-                }
-                if (Status s = exec::ResolveSpills(page_store_, frame_spills, frame.SlotsFor(0));
-                    !s.ok()) {
-                    return s;
-                }
+        //
+        // The complement needs no width arithmetic of its own: the decoder
+        // clamps the mask to the relation's column count, so `~filter_mask`
+        // names the rest and nothing beyond it. Deliberately not gated on
+        // whether an assertion exists - that would couple the decode to one
+        // downstream reader, and the next reader added here would silently
+        // get stale slots.
+        if (filter_mask != exec::kAllColumnsMask) {
+            if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
+                                                  frame.SlotsFor(0), ~filter_mask, frame_spills);
+                !s.ok()) {
+                return s;
             }
         }
 

@@ -1078,6 +1078,20 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
     return Status::OK();
 }
 
+Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema,
+                        const catalog::RowLayout& layout, std::span<const std::byte> payload,
+                        std::span<parser::AstValue> out, std::uint64_t columns,
+                        std::vector<PendingSpill>& scratch) {
+    if (columns == kAllColumnsMask) {
+        if (Status s = DecodeRowInto(schema, layout, payload, out, &scratch); !s.ok()) return s;
+    } else if (Status s = DecodeColumnsInto(schema, layout, payload, out, columns, &scratch);
+               !s.ok()) {
+        return s;
+    }
+    if (scratch.empty()) return Status::OK();
+    return ResolveSpills(store, scratch, out);
+}
+
 StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value) {
     if (value.type != parser::ValueType::kInt) {
         return Status::InvalidArgument("expected an integer value");
