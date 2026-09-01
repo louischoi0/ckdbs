@@ -2742,13 +2742,29 @@ parent owner, a reference intent left behind — and two things do not:
   owner, each answering from its own Cabin or its own walk), which is not
   built. Colocating parent and child — a namespace, AF-P5 — avoids the
   refusal entirely.
+- **The crossing is unreachable in a running instance, behind a gate AH
+  did not name** — found 2026-09-01 by AH-T5's probe, which could not
+  reach its own crash point. `command_dispatcher.cpp`'s peer-writer
+  funding gate requires `fkeys_out.empty() && fkeys_in.empty()`, so a
+  relation with **any** foreign key takes no writes on any core but 0:
+  *"an FK-linked relation cannot take writes on core 2: validation reads
+  the linked relation, which this core may not fault
+  (workplan-peer-writer.md §4)"*. AH-T4 converted the *declaration*
+  refusal; this one refuses the *write*, so the forward check never runs
+  and the park is never entered. **Its stated reason is the one §2a
+  removed** — the check no longer reads the linked relation locally. The
+  arm belongs to `workplan-peer-writer.md` §4 and sits beside two
+  siblings whose refusals are still live (the cabined arm, and
+  `CannotEnforce`'s, which carries a measured Finding 2), so narrowing it
+  is that workplan's ratification and not AH's to assume.
 - **The dispatcher's park is proved by compilation and by the suite not
   regressing, and not yet by an end-to-end cell.** The wire has its own
   seven cells (`fk_probe_service_test.cpp`) and the reverse direction has
-  two, but no test yet drives a real cross-owner `INSERT` through the
-  fork's park, the probe round and the resume. It became *possible* with
-  this task's conversion; it is owed by AH-T6's measurement, which needs
-  the same fixture.
+  two, but no test drives a real cross-owner `INSERT` through the fork's
+  park, the probe round and the resume — and **this is the debt whose
+  landing hid the gate above**. It was handed from AH-T2 to AH-T4 and
+  from AH-T4 to AH-T6; it cannot be paid at all until the funding gate
+  narrows.
 
 **And the intent's crash window is stated but not demonstrated.** An
 intent-only participant writes no `TXN_PREPARE` record, so its intents die

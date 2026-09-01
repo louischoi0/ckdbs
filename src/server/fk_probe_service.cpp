@@ -3,6 +3,7 @@
 #include <cstring>
 #include <string>
 
+#include "kds/base/crash_point.hpp"
 #include "kds/sched/send_retry.hpp"
 
 namespace kds::server {
@@ -106,6 +107,17 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
         // it will do by probing again.
         if (verdict.value() == exec::FkVerdict::kPass) {
             intents_.Add(parent_oid, parent_pk, holder);
+            // AH-T5: the intent is granted and this participant has not
+            // prepared. **The window the whole memory-residency argument
+            // rests on** (AH-R5): the intent dies with the process, and
+            // what makes that safe is that a participant which restarts
+            // here cannot answer the prepare, so the coordinator's
+            // transaction fails rather than committing a child row whose
+            // parent nobody is holding still. A window in which the
+            // coordinator can still commit is a defect of AH, full stop -
+            // so this point exists to be killed at rather than to be
+            // reasoned about.
+            base::CrashPointHit("participant.fk_intent_granted_preprepare");
         }
         verdicts.push_back(verdict.value());
     }

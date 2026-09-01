@@ -211,7 +211,58 @@ counters reported beside every latency; results under
 | AH-T2 | **Third slice built 2026-09-01** — the park, the resume, and enrolment. The dispatcher now **sends** where it refused. **Not exercisable end to end until AH-T4**, and that is AH-R6's mark taking effect rather than a gap; see below. Full suite 3147/3147 green |
 | AH-T3 | **Built 2026-09-01 with AH-T4**, because it is AH-T4's gate for a correctness reason and not an ordering one: lifting F5 without it leaves a parent `DELETE` blind to foreign intents. The parent-side check consults `FkIntentTable` before anything local and answers busy |
 | AH-T4 | **Built 2026-09-01.** `CheckForeignKeyColocation` admits. F5 amended, §3a added, `known-gaps.md` opened. Full suite 3149/3149 green |
-| AH-T5, AH-T6 | not started |
+| AH-T5 | **Blocked 2026-09-01 by a gate AH did not know about** — the crash point is placed and the probe is written, and neither can run. §AH-T5 below. Its own gate (XG3's process-kill half) **is** repaid: `bench/v2.8.0/results-xg3-answer-edge-kill-v2.7.0-86-g6b18f69.md`, 3/3 across three passes |
+| AH-T6 | not started |
+
+### AH-T5 — the gate that makes the whole crossing unreachable
+
+**XG3's half is repaid.** The AH-T5 gate the operator set on
+2026-09-01 (item 4(b)) is discharged: the three answer-edge kill cells
+run and pass, three passes each, in `bench/shipped_answer_edge_kill_probe.py`.
+Five harness findings and two engine ones are written up with them.
+
+**Then AH-T5's own cell hit a wall, and the wall is the finding.**
+`participant.fk_intent_granted_preprepare` is placed
+(`fk_probe_service.cpp`, right after the grant) and
+`bench/fk_intent_crash_probe.py` is written. The probe cannot get as far
+as arming it, because the setup is refused:
+
+> `ERR NOT_IMPLEMENTED retryable=0 an FK-linked relation cannot take
+> writes on core 2: validation reads the linked relation, which this core
+> may not fault (workplan-peer-writer.md §4)`
+
+That is `command_dispatcher.cpp:5414`'s **peer-writer funding gate**:
+`funded_shape` requires `fkeys_out.empty() && fkeys_in.empty()`, so a
+relation with *any* foreign key — either direction — takes no writes on
+any core but 0.
+
+**What it means for AH, stated plainly.** AH-T4 converted the
+*declaration* refusal; a cross-owner `REFERENCES` is admitted. But a
+peer-owned relation on either end of it still cannot be **written**, so
+the forward check never runs, the park is never entered, and the probe
+never sends. **The crossing AH built is unreachable in a running
+instance**, behind a gate AH's own survey did not name.
+
+**And its stated reason is the one AH answered.** The gate's message —
+*"validation reads the linked relation, which this core may not fault"* —
+is exactly the defect §2a exists to remove: the forward check no longer
+reads the linked relation locally, it probes the owner. The gate is a
+year-appropriate refusal that AH made obsolete without noticing it
+existed.
+
+**This is what the missing end-to-end cell would have caught at AH-T2**,
+and it is the cost of that debt landing rather than being paid. The
+`known-gaps.md` entry AH-T4 opened is amended to say so.
+
+**Not lifted here, and the reason is not caution but ownership.** The
+arm sits beside two siblings whose refusals are still live — the cabined
+arm and `CannotEnforce`'s, the latter carrying a *measured* Finding 2
+(`bench/v2.2.0/results-shipping-part-a-*`: a shipped write put a second
+row in a group under `CHECK COUNT(*) <= 1`). Narrowing one arm of a
+funding gate is a change to what a peer core will admit, it belongs to
+`workplan-peer-writer.md` §4, and the argument for it — the forward check
+funds itself now, the reverse refuses by name (§3a) — should be ratified
+rather than assumed by the order that benefits from it.
 
 ### AH-T3 + AH-T4 — the conversion, and the two things it made live
 
