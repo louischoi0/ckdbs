@@ -955,10 +955,26 @@ still waits on its own gate, so:
   residue. `RangeEligible`'s `kIndex` arm went with SB's merge too, and
   its removal is **behaviour-preserving because it was dead code**: a
   secondary index is btree-only (IX3), so every relation that could trip
-  it was already declined by the D1 btree arm one line earlier. **It is
-  owed again when D1 lifts**, not at IX11 — SA-R2's narrowing to
-  UNIQUE-indexed shapes the re-added arm and waits on IX11's `unique`
-  flag, which is a condition on the arm and not the trigger for it.
+  it was already declined by the D1 btree arm one line earlier.
+
+  **That premise is retired 2026-09-01 by IB0, and the arm is owed
+  sooner than this entry said.** `docs/spec/index.md` §3 amends IX3 — a
+  heap-clustered relation carries a secondary index, resolving entries
+  by one batch walk. Heap is the *only* clustered type D1 lets split, so
+  the moment IX3 lifts, an indexed heap relation reaches `RangeEligible`
+  with no arm left to decline it, and the *index-then-split* order opens
+  while `RefuseAuxiliaryOnSplitRelation` still guards only
+  *split-then-index*. Index maintenance is owner-local against one index
+  root, so a peer writing its own range either appends nothing or
+  becomes a second writer of a granted page — either way IX1's superset
+  rule is gone, and an index missing an entry is wrong rather than slow.
+  So: **the arm is re-added by IB2, in the same commit that lifts IX3**
+  (IB-R7, `docs/inflight/in-progress/workplan-ib.md` §1.4), not when D1
+  lifts and not at IX11. SA-R2's narrowing to UNIQUE-indexed is
+  **withdrawn** with the rest of SA's range-shaped rulings
+  (`instructions/v2.8.0/ratification-ae.md` AE-3.4): the re-added arm
+  declines every indexed relation, unconditionally, because v2.8.0 does
+  not split relations and has nothing to trade the refusal for.
   `crosscore.md` §6a's index bullet carries the same amendment.
 
   **Two more sites of the subset shape — found by SB's review, closed

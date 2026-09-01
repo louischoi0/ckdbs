@@ -107,19 +107,71 @@ Cabin, and it is why v1 declines to also make it a constraint (IX11).
 
 ---
 
-## 3. Only a btree-clustered relation may carry one
+## 3. Which clustered types may carry one
 
-> **IX3 — `CREATE INDEX` on a heap-clustered relation is refused**, naming
-> the clustered type and the reason.
+> **IX3 — a heap-clustered relation carries a secondary index too**, and
+> resolves its entries by one batch walk rather than N chain scans.
+> `[AMENDED 2026-09-01 — IB0. The text is the contract; the code follows
+> at IB2 and this line says "amended", not "built", until it does.]`
 
-An entry's payload is the pk. Resolving a pk costs one descent on a btree
-relation and a **chain scan** on a heap one — so an index over a heap
-relation would turn one full scan into N partial ones. This is the identical
-rule and the identical argument as `foreign-keys.md` F1's refusal of a
-heap parent.
+**What IX3 said until now, and why it was right at the time.** An entry's
+payload is the pk. Resolving a pk costs one descent on a btree relation
+and a **chain scan** on a heap one — so an index over a heap relation
+"would turn one full scan into N partial ones", the identical argument as
+`foreign-keys.md` F1's refusal of a heap parent. The arithmetic was never
+wrong. What it assumed is that the N resolutions happen **one at a time**,
+and nothing forced that: the probe already collects the whole matching set
+before resolving any of it (§8's phase 1 / phase 2 split).
 
-Three consequences, all of them simplifications, and the reason this
-restriction is worth having rather than merely tolerable:
+**The mechanism, in one sentence.** A heap-backed probe descends the index
+exactly as a btree-backed one does, collects every matching entry's pk,
+sorts the set, and resolves it with **one chain walk** that tests each
+tuple's Keystone id against the set — so N partial scans become one scan,
+which is the whole of the refutation.
+
+Three things about that walk, stated here because each is a property a
+reader would otherwise assume wrongly:
+
+1. **It is bounded on one side only.** The walk stops at the first page
+   whose `min_key` exceeds `max(pk)` — §9's tail pruning, unchanged. It
+   does **not** skip the pages before `min(pk)`: the head seek that would
+   is a descent (`BtreeSeekLeaf`), and a heap relation has no **pk** index
+   to descend. Giving it a secondary index over some other column does not
+   give it one over the pk. So a probe whose rows sit near the end of the
+   relation walks nearly everything, and the tail bound pays only for rows
+   that sit early.
+2. **The saving that does not depend on where the rows sit is decode
+   avoidance.** A filter scan decodes the predicate's columns out of every
+   live tuple; this walk reads the Keystone id alone, tests membership,
+   and decodes only the rows that matched. At 1-in-1000 selectivity that
+   is the mechanism, and the page count is not.
+3. **The trail is consulted first and the walk takes the residue.** Every
+   collected pk is offered to its Waystone trail — a replay is one read —
+   and the single walk resolves what replay did not answer, re-recording
+   trails as it goes. That is the Cabin's own bulk-heal shape (§8's
+   fall-back-and-re-record), applied to the index. No threshold decides
+   between them: trails are always consulted, the walk always takes the
+   rest.
+
+**A heap-backed probe grants no key order — and neither does a
+btree-backed one.** Phase 1 collects in index-key order and sorts into
+**pk** order before resolving, because without that sort "creating an
+index would reorder a reply" (§8), which is an accelerator changing a
+query result. The heap arm lands on the same emission order for a
+different reason: a chain walk *is* pk order, page-wise by `min_key`
+(`heap-and-tuple.md` §3.1). Either way an `ORDER BY` on the key column
+keeps its sort step, and a planner that reads sortedness out of a
+`kIndexProbe` is reading something no arm of it ever promised.
+
+**F1 is not lifted by this.** `foreign-keys.md` F1 refuses a heap
+*parent*, and its argument reads identically to the one above — which is
+exactly why this must be said rather than left to inference. A foreign
+key's forward check asks about **one** pk per row written; there is no set
+to batch, so the mechanism that answers IX3 has nothing to offer F1. F1
+is a separate decision and stays refused.
+
+Three consequences of the entry format, unchanged by this amendment and
+still the reason the format is worth having:
 
 1. **The entry carries no location hint** — no `(page_id, slot)`, so nothing
    here can dangle and nothing needs healing.
@@ -129,8 +181,25 @@ restriction is worth having rather than merely tolerable:
 3. **Relayout cannot invalidate an index.** A pk is stable for life
    (invariant 11, K1), so moving a tuple moves nothing an index knows about.
 
-A heap relation keeps what it has: a Cabin, whose hint-plus-walk fallback
-exists precisely because a heap has no pk descent to heal with.
+A heap relation keeps what it had before this amendment as well: a Cabin,
+whose hint-plus-walk fallback exists precisely because a heap has no pk
+descent to heal with. The two now sit side by side on the same relation,
+and they are not redundant — a Cabin is authoritative for an **observed
+value**, an index answers a predicate nobody observed.
+
+**The gate this amendment must not open.** `RangeEligible`'s `kIndex` arm
+was removed as dead code on the premise that "a secondary index is
+btree-only (IX3), so every relation that could trip it was already
+declined by the btree arm". IX3 is what this section just amended, so the
+premise is retired with it: heap is the only clustered type D1 lets split,
+and an indexed heap relation would reach the gate with nothing left to
+decline it. The arm is therefore **live code again and re-added in the
+same commit that admits the index** (IB-R7,
+`docs/inflight/in-progress/workplan-ib.md` §1.4). Both arms are needed for
+"an index and a split do not meet" to stay true: this one refuses
+*split-after-index*, `RefuseAuxiliaryOnSplitRelation` refuses
+*index-after-split*, and one alone leaves the other order open. An index
+missing an entry is not slower, it is wrong (§2.1).
 
 ---
 
@@ -617,7 +686,9 @@ stays defined and unwritten, exactly as `UndoRecordType::kInsert` does.
 
 Also refused, each naming the reason:
 
-- **A heap-clustered relation** (IX3).
+- ~~**A heap-clustered relation** (IX3)~~ — **admitted 2026-09-01 by
+  IB0**, §3. What still refuses at the door is a relation of two or more
+  ranges, which is `RefuseAuxiliaryOnSplitRelation` and not this rule.
 - **An index on the primary key** — the clustered tree already is one.
 - **A `float` column** — nothing settled its encoding, so it is not
   declarable in the first place.
@@ -847,7 +918,20 @@ off is a catalog act: `DROP INDEX`.
   index should presumably never earn a Cabin; that belongs with the promotion
   policy in `cabin.md` §8.1, which nothing consumes yet.
 - **Per-range local vs global indexes under range ownership** (added
-  2026-08-24). `docs/spec/crosscore.md` §6a gates an indexed relation from
-  splitting until this decides; reading on record there: local per range,
-  broadcast probes cut by Cabin/Waystone — **not ratified**. Uniqueness
-  enforcement under either shape is part of the same decision.
+  2026-08-24, **restated 2026-09-01 by IB0**). Reading on record: local
+  per range, broadcast probes cut by Cabin/Waystone — **not ratified,
+  and not this version's question.**
+  `instructions/v2.8.0/ratification-ae.md` works at one range per
+  relation, so the question does not arise for anything v2.8.0 builds;
+  AE-3.4 withdraws SA-R1/SA-R2, which are the only rulings that ever
+  proposed an answer.
+
+  **What that costs, said plainly**: the gate stays up, permanently as
+  far as this version is concerned, and it now takes **two arms** to
+  stay honest rather than one. `RefuseAuxiliaryOnSplitRelation` refuses
+  an index on a split relation; `RangeEligible`'s `kIndex` arm refuses a
+  split of an indexed one. The second was removed as dead code on IX3's
+  strength and is re-added by IB2 (§3, IB-R7), because IX3 no longer
+  makes it dead. Uniqueness enforcement is no longer part of this
+  decision at all — IX11 below is a **single-relation** problem once a
+  relation has one range, which is what makes it v2.8.0's subject.
