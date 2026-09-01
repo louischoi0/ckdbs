@@ -228,7 +228,23 @@ call, not CLA's**. Working under the smaller step wastes nothing if the
 larger one is taken later. What does *not* fall under this paragraph is
 everything owner-granular: that is not "left standing", it is worked on.
 
-## AE-8 — The standing question this version opens
+## AE-8 — The standing question this version opens `[ANSWERED 2026-09-01 — AF]`
+
+**The answer arrived the same day and has its own document**, as this
+section required: `ratification-af-namespace.md`. A **namespace** — a
+logical grouping, no physical meaning — selects a relation's owner core
+at `CREATE`, fixed by the namespace's first relation, and the operator's
+best practice is to put highly-wired relations in one namespace. The
+parallelism a range split would have bought *inside* one relation is
+bought *between* groups of relations, with the grouping declared by the
+person who knows it. 2PC is untouched: a namespace is a placement
+declaration, never a boundary.
+
+What follows is the question as AE first stated it, kept because AF's
+argument is a reply to it and reads as one.
+
+---
+
 
 > range split을 통해 못얻는 병렬성을 다른 관점에서 해결하고자 함.
 
