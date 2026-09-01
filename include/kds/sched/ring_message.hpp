@@ -214,6 +214,25 @@ enum class RingMessageKind : std::uint16_t {
     // Control rather than data, like EOF and CREDIT: it carries no rows and
     // spends no credit.
     kShippedRowDesc = 40,
+
+    // child's core -> parent's owner: a foreign key's **forward check**
+    // across owners (SA-T4, `docs/spec/foreign-keys.md` F5 as SA-R6
+    // relaxes it). The request carries `server::FkProbeRequestPayload` -
+    // the parent relation, the pk the child references, and the
+    // coordinator's (session, transaction) - and the reply
+    // `FkProbeReplyPayload`, matched to its waiter by `request_id`.
+    //
+    // **Its own kind rather than a shipped statement**, and that is a
+    // capability difference rather than a taste: a shipped statement can
+    // answer "does this row exist" but cannot leave a **row-scoped
+    // reference intent** behind, which is the half that makes a parent's
+    // DELETE fail fast instead of racing the child's insert.
+    //
+    // There is no `done` leg. The intent is released by the transaction's
+    // **decide**, which every cross-owner transaction already sends, so a
+    // third message would be a second way to say what the decide says.
+    kFkProbeRequest = 41,
+    kFkProbeReply = 42,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -250,6 +269,8 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kTxnResolveRequest:
         case RingMessageKind::kTxnResolveReply:
         case RingMessageKind::kAccessStatsBatch:
+        case RingMessageKind::kFkProbeRequest:
+        case RingMessageKind::kFkProbeReply:
         case RingMessageKind::kShippedRowDesc:
             return true;
         case RingMessageKind::kUnset:
