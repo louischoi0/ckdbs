@@ -1631,8 +1631,11 @@ Status Catalog::RenameTable(Oid table_oid, std::string_view new_name) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.type_oid != kTypeTable || row.oid != table_oid) return false;
             // The catalog's own names are load-bearing for bootstrap and
-            // are nobody's to change (AL7).
-            if (row.namespace_oid != kNamespacePublic) {
+            // are nobody's to change (AL7). Asked as `IsSystemNamespace`
+            // rather than `!= kNamespacePublic` (well_known.hpp, AF-P3):
+            // a user relation in a user namespace is renamable, and the
+            // older spelling would have called it a system relation.
+            if (IsSystemNamespace(row.namespace_oid)) {
                 return Status::InvalidArgument("relation '" +
                                                 std::string(NameView(row.name)) +
                                                 "' is a system relation and cannot be renamed");
@@ -1714,7 +1717,8 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
         [&](SysObjectRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.type_oid != kTypeTable || row.oid != table_oid) return false;
-            if (row.namespace_oid != kNamespacePublic) {
+            // AF-P3, as at the rename above: identity, not permission.
+            if (IsSystemNamespace(row.namespace_oid)) {
                 return Status::InvalidArgument("relation '" +
                                                 std::string(NameView(row.name)) +
                                                 "' is a system relation and cannot be dropped");

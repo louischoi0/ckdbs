@@ -20,6 +20,29 @@ namespace kds::catalog {
 inline constexpr Oid kNamespaceSys = 0;
 inline constexpr Oid kNamespacePublic = 1;
 
+// Whether `namespace_oid` names the catalog's own namespace - the test
+// behind every "'x' is a system relation and cannot be ..." refusal.
+//
+// **Spelled `== kNamespaceSys`, not `!= kNamespacePublic`.** The two agree
+// only while `sys` and `public` are the only namespaces, and they disagree
+// about a *third* one in the direction that matters here: a user relation
+// in namespace `orders` is not a system relation, and the older spelling
+// refused to rename, drop or alter it while telling the user it was one -
+// a false refusal, and one with no way around it, since the relation could
+// not be moved back to `public` either.
+// (AF-P3, `instructions/v2.8.0/ratification-af-namespace.md`.)
+//
+// **A gate wants the opposite failure and must not call this.**
+// `server/range_alloc.cpp` keeps `!= kNamespacePublic` deliberately, so an
+// unknown namespace fails *closed* - it declines a split rather than
+// permitting one. The two spellings are two different questions that
+// happened to share an answer while there were only two namespaces; this
+// helper exists so the one that is about identity stops borrowing the
+// one that is about permission.
+constexpr bool IsSystemNamespace(Oid namespace_oid) noexcept {
+    return namespace_oid == kNamespaceSys;
+}
+
 inline constexpr Oid kTypeInt = 12;
 inline constexpr Oid kTypeVarchar = 13;
 inline constexpr Oid kTypeSchema = 14;

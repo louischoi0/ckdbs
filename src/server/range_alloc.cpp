@@ -86,11 +86,21 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
     // one a later change cannot remove by making the fill succeed.
     auto row = catalog.GetSysTableRow(rel_oid);
     if (!row.ok()) return row.status();
-    // `!= kNamespacePublic`, which is the engine's idiom for the question
-    // (AL7, DT3, `range_eligible.hpp`'s own scope note) and not `==
-    // kNamespaceSys`: the two agree only while `sys` and `public` are the
-    // only namespaces, and the difference between them is which way a
-    // third one fails. A gate must fail closed.
+    // `!= kNamespacePublic` and **not** `catalog::IsSystemNamespace`: the
+    // two agree only while `sys` and `public` are the only namespaces, and
+    // the difference between them is which way a third one fails. A gate
+    // must fail closed.
+    //
+    // **Kept deliberately when AF-P3 moved the other three sites**
+    // (`instructions/v2.8.0/ratification-af-namespace.md`). Those three
+    // ask *identity* — "is this the catalog's own relation" — and a false
+    // yes there is a user relation nobody can drop. This one asks
+    // *permission*, and under a user namespace it knowingly
+    // **over-declines**: a relation in namespace `orders` is refused a
+    // split it might have been eligible for. That costs nothing this
+    // version can reach — AE-3.2 works at one range per relation — and
+    // converting it for symmetry would turn a fail-closed into a
+    // fail-open, which is the one trade AE-5.1 forbids.
     if (row.value().namespace_oid != catalog::kNamespacePublic) {
         LogRangeDecline(log, catalog::kSystemCore, rel_oid, exec::RangeGate::kNone,
                         "a catalog relation's pages and chain head are core 0's by construction");

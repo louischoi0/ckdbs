@@ -109,6 +109,23 @@ protected:
     CabinSplitDiscardCounters discards_;
 };
 
+// AF-T0's other half: the gate keeps `!= kNamespacePublic` on purpose, so
+// a relation in a user namespace is **declined** where the three DDL
+// refusals now admit it (`ratification-af-namespace.md` AF-P3). That is
+// over-declining, and it is the correct direction for a gate - this cell
+// exists so converting it to `IsSystemNamespace` for symmetry fails here
+// rather than opening a split nobody argued for.
+TEST_F(RangeAllocTest, ARelationInAUserNamespaceIsDeclinedASplit) {
+    auto oid = catalog_.CreateTable(catalog::kUserOidStart + 1, "orders_line", PkSchema(),
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    auto entry = Open(oid.value(), 4096, 1);
+    ASSERT_TRUE(entry.ok()) << entry.status().message();
+    EXPECT_EQ(entry.value(), kInvalidPageId)
+        << "the fail-closed namespace gate admitted an unknown namespace";
+}
+
 TEST_F(RangeAllocTest, OpeningARangeWritesTheOpeningRowBesideIt) {
     const catalog::Oid oid = MakeHeap("spread");
     auto before = catalog_.InitTableAccess(oid);

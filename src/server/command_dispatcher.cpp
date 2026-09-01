@@ -2821,7 +2821,9 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
         return {ErrorReply(tables.status()), false, 0, tables.status()};
     }
     for (const auto& row : tables.value()) {
-        if (row.oid == oid.value() && row.namespace_oid != catalog::kNamespacePublic) {
+        // AF-P3: `IsSystemNamespace`, not `!= kNamespacePublic` - a user
+        // relation in a user namespace is alterable (well_known.hpp).
+        if (row.oid == oid.value() && catalog::IsSystemNamespace(row.namespace_oid)) {
             return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered",
                     false};
         }

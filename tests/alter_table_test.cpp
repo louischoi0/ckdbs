@@ -236,6 +236,35 @@ TEST_F(AlterTableTest, ASystemRelationIsRefused) {
     EXPECT_NE(out.find("system relation"), std::string::npos) << out;
 }
 
+// AF-T0: AL7's refusal is about the *catalog's own* relations, and a user
+// namespace is not the catalog (`ratification-af-namespace.md` AF-P3).
+// The dispatcher's guard is the third of the three sites that asked
+// `!= kNamespacePublic`; with that spelling this cell fails, refusing a
+// user relation as a system one.
+//
+// Reached without any namespace syntax, which does not exist yet: the
+// dispatcher hard-codes `kNamespacePublic` at its two CREATE sites, but
+// the catalog underneath has always taken the namespace as an argument.
+TEST_F(AlterTableTest, ARelationInAUserNamespaceIsNotASystemRelation) {
+    catalog::Schema schema;
+    catalog::SysColumnRow id{};
+    id.pos = 0;
+    catalog::SetName(id.name, "id");
+    id.type_val = catalog::kTypeValInt64;
+    id.len = 8;
+    id.notnull = true;
+    schema.columns.push_back(id);
+
+    auto oid = boot_->catalog.CreateTable(catalog::kUserOidStart + 1, "orders_line", schema,
+                                          catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    const std::string out = Run("ALTER TABLE orders_line RENAME TO orders_item");
+    EXPECT_EQ(out.find("system relation"), std::string::npos)
+        << "a user relation outside `public` was refused as a system relation: " << out;
+    EXPECT_EQ(out, "RENAMED TABLE orders_line TO orders_item") << out;
+}
+
 // AL5: the bump is global - a statement compiled after the rename sees
 // the new catalog, and DESCRIBE-class surfaces answer with the new name.
 TEST_F(AlterTableTest, SysViewsAnswerWithTheNewName) {

@@ -408,6 +408,52 @@ TEST_F(CatalogTest, DroppingARelationRetiresItsRangeRowsAndNoOthers) {
     EXPECT_EQ(kept.value().size(), 1u) << "the sweep took another relation's range";
 }
 
+// ---- AF-T0: a user namespace is not the system namespace ----------------
+//
+// `instructions/v2.8.0/ratification-af-namespace.md` AF-P3. Three DDL
+// refusals asked `namespace_oid != kNamespacePublic`, which is true of
+// **every** namespace but `public` - so the first relation created outside
+// it would have been undroppable and unrenamable, refused by a message
+// calling it a system relation. Both cells below fail on that spelling and
+// pass on `IsSystemNamespace`.
+//
+// No syntax is needed to reach the case: `CreateTable` has always taken
+// the namespace as its first argument, and only the dispatcher's two call
+// sites hard-code `kNamespacePublic`.
+constexpr Oid kAfTestNamespace = kUserOidStart + 1;
+
+TEST_F(CatalogTest, ARelationInAUserNamespaceIsRenamableAndDroppable) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto oid = catalog_.CreateTable(kAfTestNamespace, "orders_line", MinimalPkSchema(),
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    Status renamed = catalog_.RenameTable(oid.value(), "orders_item");
+    EXPECT_TRUE(renamed.ok())
+        << "a user relation outside `public` was refused a rename: " << renamed.message();
+
+    std::vector<std::uint64_t> dropped_cabins;
+    Status dropped = catalog_.DropTable(oid.value(), dropped_cabins);
+    EXPECT_TRUE(dropped.ok())
+        << "a user relation outside `public` was refused a drop: " << dropped.message();
+}
+
+TEST_F(CatalogTest, ACatalogsOwnRelationIsStillRefusedARenameAndADrop) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    // The half AF-T0 must not lose: narrowing the predicate is only safe
+    // if the thing it was written for still trips it.
+    Status renamed = catalog_.RenameTable(kSysTablesTable, "not_tables");
+    EXPECT_FALSE(renamed.ok()) << "sys.tables was renamed";
+    EXPECT_NE(renamed.message().find("system relation"), std::string::npos) << renamed.message();
+
+    std::vector<std::uint64_t> dropped_cabins;
+    Status dropped = catalog_.DropTable(kSysTablesTable, dropped_cabins);
+    EXPECT_FALSE(dropped.ok()) << "sys.tables was dropped";
+    EXPECT_NE(dropped.message().find("system relation"), std::string::npos) << dropped.message();
+}
+
 TEST_F(CatalogTest, ACachedAccessCarriesTheRelationsRangesAndTheyRepublishOnInsert) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 

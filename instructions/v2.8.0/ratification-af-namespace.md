@@ -164,7 +164,30 @@ that crosses correctly. It does not close the protocol question, because
 two relations *already* on two cores still cannot be linked; it makes the
 refusal actionable instead of arbitrary.**
 
-## AF-6 — What the operator still owns: the syntax
+## AF-6 — The syntax `[DECIDED 2026-09-01 — operator: shape (a)]`
+
+> **`CREATE NAMESPACE <name>;` plus qualified names `ns.table`.** An
+> unqualified name still means `public`, so every statement written
+> before AF means exactly what it meant.
+
+The operator took shape (a) below. What that binds:
+
+- `CREATE NAMESPACE` is a new keyword, and the qualified `ns.table` form
+  is a new name shape — **both fingerprint-visible**, so AF-T3 answers
+  `kFingerprintVersion` explicitly under `fingerprint.hpp`'s bump rule
+  with the golden corpus re-pinned, rather than discovering the question
+  when a stored waystone stops matching.
+- A qualified name is resolvable **everywhere a relation is named**, not
+  only at `CREATE TABLE`: `FROM`, `JOIN`, `INSERT INTO`, `UPDATE`,
+  `DELETE FROM`, `REFERENCES`, `CREATE INDEX ON`, `ALTER TABLE`, `DROP
+  TABLE`, and every `SHOW` that takes a relation.
+- **Implicit creation is refused** — `CREATE TABLE orders.customer` with
+  no `orders` namespace is an error naming the byte, not a namespace
+  springing into existence. That is the whole reason (a) was preferred
+  over (b): a typo must not be indistinguishable from an intent.
+
+The three shapes as they were put, kept because the argument for (a) is
+an argument against the other two:
 
 CLA does not pick this, and the reason is a rule rather than caution:
 **nothing new is reserved lightly** — keywords hash as identifiers and
@@ -190,10 +213,10 @@ Three shapes, with what each costs:
   placement declaration reads oddly as a table *option* when it is really
   part of the name.
 
-**CLA's recommendation is (a)**, on the grounds that placement is a
-naming fact and should be visible in the name a query writes, and that
-implicit creation (b) makes a typo indistinguishable from an intent. But
-this is the operator's call and nothing is built until it lands.
+CLA recommended (a) on the grounds that placement is a naming fact and
+should be visible in the name a query writes, and that implicit creation
+(b) makes a typo indistinguishable from an intent. **The operator took
+(a)**, which is what the box at the head of this section records.
 
 ## AF-7 — Tasks, in dependency order
 
@@ -234,7 +257,28 @@ it does not, AF is a convenience and not an answer to AE-8, and the
 results file says so. `bench/v2.8.0/`, `git describe --tags`,
 interleaved arms. Gate: AF-T3.
 
-## AF-8 — What this does not claim
+## AF-8 — Row status (CLA, appended as rows land)
+
+| row | status |
+|---|---|
+| AF-T0 | **Built 2026-09-01** on `worktree-v2.8.0-ratification-ae`. `catalog::IsSystemNamespace` (`include/kds/catalog/well_known.hpp`) carries the identity question; the three DDL refusals call it; `range_alloc.cpp`'s gate keeps `!= kNamespacePublic` and its comment now says it knowingly over-declines. Three cells, **each verified to fail with its own guard reverted**: `CatalogTest.ARelationInAUserNamespaceIsRenamableAndDroppable`, `AlterTableTest.ARelationInAUserNamespaceIsNotASystemRelation` (both refused the relation as a system one under the old spelling), and `RangeAllocTest.ARelationInAUserNamespaceIsDeclinedASplit` (admitted the split when the gate was converted for symmetry). `CatalogTest.ACatalogsOwnRelationIsStillRefusedARenameAndADrop` holds the other half. Full suite 3131/3131 green |
+| AF-T1..T5 | not started |
+
+**What AF-T0 found and AF-T3 inherits:** `Catalog::FindTableOidByName`
+(`include/kds/catalog/catalog.hpp:468`) takes a name and **no namespace**,
+and its own comment calls itself "the gate" — SQL reaches a relation by
+name and never by oid. So today a relation in namespace `orders` is
+reachable by the bare name `orders_line`, which is what let AF-T0's cells
+run with no syntax at all. Under AF-T3 that is a question rather than a
+convenience: either names stay instance-global and a namespace is
+placement-only, or names become namespace-scoped and this function grows
+a namespace argument along with every caller. **The first is smaller and
+is what AF-2 describes** — a namespace decides *where a relation lives*,
+not *what it is called* — but it means two relations in two namespaces
+still cannot share a name, which is the thing people usually expect a
+namespace to buy. Named here so AF-T3 decides it deliberately.
+
+## AF-9 — What this does not claim
 
 It does not partition anything, and it introduces no second unit of
 ownership: the owning unit stays the **relation**, and a namespace only
