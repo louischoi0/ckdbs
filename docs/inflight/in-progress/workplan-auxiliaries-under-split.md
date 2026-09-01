@@ -10,7 +10,7 @@ built on the `xf` worktree; every path:line below is `1b27d68`
 | SA-T1 | **Built** at `1b27d68` — `exec::RestructureForExecutingCore`, both remote shapes, correlated arms included |
 | SA-T2 | **Ruled 2026-09-01 and built as work order SB** (`instructions/v2.7.1/workorder-sb.md`). §2's proposal was ratified as SB-R1; §2.6 records what building it found. |
 | SA-T3, T5, T7, T8, T9 | not started |
-| SA-T4 | not started. The only trace in the tree is a comment (`src/server/shipped_statement_executor.cpp:704`) |
+| SA-T4 | **Surveyed 2026-09-01, not built — the forward check has no park point, and that is an architectural fork the order does not take.** §4 below |
 | SA-T6 | **Blocked on its own gate, and its two hazards are pre-emptively closed.** §3 below |
 
 ---
@@ -354,3 +354,113 @@ and four sites in `tests/core_runtime_test.cpp`. Consolidating it is out
 of this change's scope and is recorded here so the next one does not add
 an eighth silently; `SplitChild`'s `catalog::Catalog&` signature is the
 most reusable of the set and is the shape to lift.
+
+
+## 4. SA-T4 — surveyed 2026-09-01, and what it runs into
+
+SA-T4's own gate (SA-T0) **is** met, so unlike SA-T6 this task is not
+waiting on a sibling. It is waiting on three things the order's text does
+not address, one of which is structural.
+
+### 4.1 The blocker: the forward check has nowhere to wait
+
+SA-T4 requires the child-side probe to "resolve the parent pk through the
+range directory to one owner; if foreign, the statement's transaction
+enrols that owner as a participant". Enrolling and probing a peer is a
+**ring round trip**, and a round trip needs a park point.
+
+There is none where the check runs. `CheckForeignKeyOnWrite`
+(`src/server/command_dispatcher.cpp`) is a plain `Status` member; its
+callers are plain `DispatchOutcome` members —
+`SortedFillInner`, the UPDATE path, and the KWP load path — and the
+check happens **per row, inside an already-open `WriteScope`**, after the
+statement has begun mutating. Nothing on that stack is a coroutine and
+nothing can suspend.
+
+This is the same wall `RD5` hit and named: *"The core that discovers the
+demand is the relation's owner, which is a peer; it cannot write the row,
+and `Next()` is inside an INSERT that cannot await a round trip"*
+(`include/kds/server/range_alloc.hpp`). RD5's answer was to move the work
+to the drain tick — **not available here**, because an FK check must
+happen at the point of demand. That is what a constraint is.
+
+Where the engine *does* park for a cross-core write is the **dispatch
+fork**, before the write scope opens: `HandleInsert`/`HandleUpdate`
+return `pending_remote` and the session resumes on the reply. So the
+shapes available are:
+
+- **(a) Hoist the probes to the dispatch fork.** Every foreign parent pk
+  a statement will need is known before any row work — an INSERT's from
+  its `VALUES`, an UPDATE's from its `SET` body. Probe and enrol them all
+  in one batch at the fork, then run the statement synchronously against
+  the intents already held. Fits the existing park point exactly; costs a
+  second pass over the values and a rule for what happens when the set of
+  parents is not knowable up front (it always is, today, since F1 makes
+  the fk value a literal or a bound parameter).
+- **(b) Make the write path suspendable.** The general answer, and it is
+  P4d-4's open decision plus a rewrite of three statement paths. Out of
+  proportion to this task and not what the order asked for.
+- **(c) Ship the whole statement to the parent's owner.** Wrong shape —
+  the *child* is local and is what is being written.
+
+**(a) is CLA's recommendation** and it is a design the order does not
+contain, which is why this file stops here rather than building it.
+
+### 4.2 SA-R7 would reverse a decision the tree already recorded
+
+SA-R7 ratifies `kConstraintBusy` as a distinct status "was `[PROPOSED]`
+in F3 since FK-M1". It is not still proposed: **FK-M2 declined it**, and
+`docs/spec/foreign-keys.md` records the decline in those words — *"F3's
+`kConstraintBusy` was not added (decided at FK-M2)"*. The argument is in
+`include/kds/base/status.hpp` on `kFkViolation`, and it is still valid:
+
+> A check that meets an **in-flight** writer answers `kTxnConflict`,
+> because that one may succeed on a retry — which is the whole of F3's
+> fail-fast rule, **and why it needs no code of its own**. Splitting the
+> two verdicts across an existing retryable code and a new non-retryable
+> one keeps the wire's `retryable` bit — a compatibility surface — one
+> code wide.
+
+And SA-R7 itself says the new code is **"wire-spelled `TXN_CONFLICT`"** —
+the same spelling the engine already answers, through
+`FkVerdict::kBusy` → `Status::TxnConflict`. So against this tree SA-R7
+buys internal distinguishability only, at the price of a second name for
+a wire fact one name already expresses, and it reverses a recorded
+decision to do it.
+
+**Not blocking**: SA-T4 can be built entirely on `kTxnConflict`, which is
+what the busy path already answers, and the code can be added later
+without touching the protocol. Recorded so the reversal is the operator's
+to make deliberately rather than a side effect of building T4.
+
+### 4.3 What "intents live in the prepare footprint" means after SA-T0
+
+The order says intents "live in the participant's prepare footprint —
+SA-T0's clause". Under SA-T0 a participant that wrote nothing writes **no
+`TXN_PREPARE` record at all**, so an intent-only participant has no
+durable footprint to live in. That is not a contradiction, and
+`cross-owner-txn.md` §1a says why: such a participant is "still prepared,
+still in doubt, still decided by the coordinator, still counted" — the
+tracking is memory-resident, and only the *record* is skipped.
+
+The consequence to state rather than discover: **intents are
+memory-resident and die with their participant.** A participant that
+restarts mid-transaction loses its intents, and a parent DELETE arriving
+after that restart would no longer see one. Whether the coordinator's
+transaction is guaranteed to fail in that window is what makes this safe
+or not, and it is `prepared_resolver.hpp`'s territory — an SA-T4 design
+question the order leaves open, not a hazard the tree has today.
+
+### 4.4 What is *not* in the way
+
+Worth recording, because two of them looked like blockers and are not:
+
+- **The check is not a sub-chain.** F4 says FK checks "compile into the
+  step chain", and `step_vm.cpp` forbids a sub-chain from awaiting — but
+  the forward check does not run there. It runs in the dispatcher, which
+  is what makes §4.1's option (a) available at all.
+- **Writes already cross owners.** R6-8 ships them and RR1 enrols on
+  reads, so enrolment from a write path needs no new protocol — only a
+  new reason to enrol.
+- **SA-T6's guards are already in** (§3), so the reverse check that will
+  consult intents answers for the whole child or refuses.
