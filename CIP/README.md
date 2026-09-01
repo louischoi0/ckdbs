@@ -86,7 +86,7 @@ Seven fields, in this order. An entry missing one is not ready to build.
 |---|---|---|---|---|
 | [OPT-001](OPT-001-update-decode-order/proposal.md) | UPDATE/DELETE decode every scanned row before testing the WHERE | **built, reviewed, measured** | `opt-001-update-decode-order` | `e156b3d` |
 | [OPT-002](OPT-002-string-slot-assign/proposal.md) | Every decoded string costs a malloc+free the codec's own header says it should not | **built, measured** | `opt-002-string-slot-assign` | `55d2c0b` |
-| [OPT-003](OPT-003-walk-read-access/proposal.md) | UPDATE/DELETE walk the relation with `kWrite` and dirty every page they read | proposed | — | — |
+| [OPT-003](OPT-003-walk-read-access/proposal.md) | UPDATE/DELETE walk the relation with `kWrite` and dirty every page they read | **built, measured** | `opt-003-walk-read-access` | `31bc482` |
 | [OPT-004](OPT-004-decoderowinto-preconditions/proposal.md) | `DecodeRowInto` still pays the Status-constructing preconditions AP02 removed | **built**, A/B owed | `opt-004-decoderowinto-preconditions` | `b05925f` |
 | [OPT-005](OPT-005-btree-leaf-ref/proposal.md) | `BtreeLookup` drops the leaf pin and every caller re-fetches the same page | proposed | — | — |
 | [OPT-006](OPT-006-subchain-runner-reuse/proposal.md) | A correlated sub-chain rebuilds its whole runner per outer row | proposed | — | — |

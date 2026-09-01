@@ -1,0 +1,29 @@
+[setup] mode=plain rows=200 del_victims=129 seed=20260901
+[setup] done in 1.35s; first insert reply A='INSERTED oid=4000 id=1 page=129 slot=0' B='INSERTED oid=4000 id=1 page=129 slot=0'
+[correctness] post-load ok=True
+[raw latency pass] 25 rounds done in 1.34s
+[checkpoint pass] done in 0.55s
+[correctness] post-writes ok=True
+wrote /home/cdkbs/ckdbs/.claude/worktrees/path-optimizer/CIP/OPT-003-walk-read-access/archive/run200_plain.json
+
+arm:shape (raw lat)     ops      qps   mean us      p0     p25     p50     p95      p99  err
+A-select                375    7,207     138.8   104.2   121.7   129.9   193.1    234.0    0
+A-update                375      759    1316.8  1075.5  1175.6  1212.1  1443.1   5222.5    0
+A-delete                100      766    1306.0  1080.6  1162.9  1208.4  1415.7   4258.5    0
+B-select                375    7,422     134.7   104.3   121.7   128.5   183.0    232.8    0
+B-update                375      778    1285.6  1080.1  1166.6  1210.1  1455.9   3465.8    0
+B-delete                100      770    1298.2  1067.2  1161.0  1190.7  1453.4   3650.5    0
+Afloor1-select          187    6,999     142.9   111.0   122.7   130.7   190.7    234.0    0
+Afloor2-select          188    7,425     134.7   104.2   114.9   129.1   193.1    236.7    0
+Afloor1-update          187      748    1336.2  1086.9  1174.9  1210.9  1437.6   6854.0    0
+Afloor2-update          188      771    1297.5  1075.5  1176.0  1215.0  1446.8   5222.5    0
+Afloor1-delete           50      717    1395.4  1100.6  1164.9  1207.7  2556.7   4608.7    0
+Afloor2-delete           50      822    1216.6  1080.6  1159.0  1214.8  1334.4   1415.7    0
+
+op:side (ckpt)     n  bytes mean  bytes min  bytes max sync us mean
+select:A           0          -1         -1         -1       2811.3
+select:B           0          -1         -1         -1       2978.8
+update:A           0          -1         -1         -1       2858.2
+update:B           0          -1         -1         -1       1943.5
+delete:A           0          -1         -1         -1       2547.4
+delete:B           0          -1         -1         -1       2033.2
