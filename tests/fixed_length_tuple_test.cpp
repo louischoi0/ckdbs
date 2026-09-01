@@ -494,6 +494,12 @@ TEST_F(FixedLengthTupleTest, ACharValueTooLongForItsWidthIsRefusedNamingTheWidth
     const std::string reply = Run("INSERT INTO cw VALUES ('abcde')");
     EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
     EXPECT_NE(reply.find("char(4)"), std::string::npos) << reply;
+    // A value of exactly the declared width fills the cell with no NUL
+    // terminator at all, so the decoder's read-to-first-NUL scan finds
+    // none and the length must fall back to the full cell width. That is
+    // the one branch a shorter value never exercises: read it back.
+    const std::string sel = Run("SELECT code FROM cw");
+    EXPECT_NE(sel.find("abcd"), std::string::npos) << sel;
 }
 
 TEST_F(FixedLengthTupleTest, TheThreeNewTypesRoundTripThroughTheCatalog) {

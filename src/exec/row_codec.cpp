@@ -433,8 +433,12 @@ bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
 // Building a std::string and move-assigning it looks like an assign and is
 // not one: the move frees the slot's buffer and adopts a fresh one, so any
 // value past libstdc++'s 15-byte SSO cost a malloc and a free per string
-// column per decoded row - on every scan, and twice per row an UPDATE
-// rejects (OPT-002, docs/inflight/in-progress/cip-path-optimizer.md).
+// column per decoded row, on every scan
+// (CIP/OPT-002-string-slot-assign/proposal.md). The measured win was
+// largest on the UPDATE and DELETE walks, which then decoded every scanned
+// row whole before testing the WHERE; OPT-001 has since narrowed that to
+// the filter's columns, so the numbers in that entry's results file price
+// a decode order this tree no longer has.
 void AssignBytes(std::string& out, std::span<const std::byte> bytes) {
     if (bytes.empty()) {
         out.clear();
@@ -485,9 +489,14 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             out.int_val = static_cast<std::int64_t>(v);
             // The one case the text is needed for: above INT64_MAX the cast
             // above is lossy, so the digits are the only correct rendering
-            // and the only thing a re-encode can read back.
+            // and the only thing a re-encode can read back. to_chars into a
+            // stack buffer, then assign, for the reason AssignBytes states:
+            // 20 digits is past SSO, and move-assigning std::to_string's
+            // result would trade the slot's buffer for a fresh malloc.
             if (v > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-                out.raw_int_text = std::to_string(v);
+                char buf[20];  // max uint64 is 20 digits; to_chars writes no NUL
+                auto res = std::to_chars(buf, buf + sizeof(buf), v);
+                out.raw_int_text.assign(buf, static_cast<std::size_t>(res.ptr - buf));
             } else {
                 out.raw_int_text.clear();
             }
@@ -1002,8 +1011,8 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     // checkers directly constructed and destroyed a Status per decoded row
     // even when both passed, the cost AP02 removed from the sibling path
     // and left standing here; and stating the checks twice invited the two
-    // statements of them to drift (OPT-004,
-    // docs/inflight/in-progress/cip-path-optimizer.md).
+    // statements of them to drift
+    // (CIP/OPT-004-decoderowinto-preconditions/proposal.md).
     if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
 
     auto id = RowKeystoneId(payload);
