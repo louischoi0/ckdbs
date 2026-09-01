@@ -1,0 +1,40 @@
+--- /tmp/claude-1000/-home-cdkbs-ckdbs/e52ac4d4-a740-442c-8ac0-ad035bc82a3b/scratchpad/opt004/pair2/src-B/src/exec/row_codec.cpp	2026-09-01 00:16:07.000000000 +0000
++++ /tmp/claude-1000/-home-cdkbs-ckdbs/e52ac4d4-a740-442c-8ac0-ad035bc82a3b/scratchpad/opt004/pair2/src-A/src/exec/row_codec.cpp	2026-09-01 01:36:30.007098023 +0000
+@@ -997,14 +997,29 @@
+                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
+                      std::vector<PendingSpill>* spills) {
+     if (spills != nullptr) spills->clear();
+-    // The same four checks DecodeColumnsInto makes, through the same
+-    // function - which is the point. Calling the two Status-returning
+-    // checkers directly constructed and destroyed a Status per decoded row
+-    // even when both passed, the cost AP02 removed from the sibling path
+-    // and left standing here; and stating the checks twice invited the two
+-    // statements of them to drift (OPT-004,
+-    // docs/inflight/in-progress/cip-path-optimizer.md).
+-    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
++    // OPT-004 REVERTED FOR MEASUREMENT (pair 2, arm A): restored verbatim
++    // to the pre-OPT-004 form at 55d2c0b - the two direct Status-returning
++    // checker calls, plus the two-shot corruption check, in place of the
++    // CheckDecodeInputs call OPT-004 introduced. Nothing else in this file
++    // or this tree was touched; the diff against ea1d9d0 unmodified is
++    // exactly this block.
++    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
++    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
++    if (out.size() != schema.columns.size()) {
++        return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
++                                        " slot(s) for a schema of " +
++                                        std::to_string(schema.columns.size()) + " column(s)");
++    }
++
++    // Checked redundancy (invariant 13): the row size is a schema constant,
++    // so a stored payload of any other length is not a row this build can
++    // interpret - the slot's `length` and the header's `data_len` add no
++    // information the schema does not already give.
++    if (payload.size() != layout.row_size) {
++        return Status::Corruption("tuple payload is " + std::to_string(payload.size()) +
++                                   " bytes for a relation whose row size is " +
++                                   std::to_string(layout.row_size));
++    }
+ 
+     auto id = RowKeystoneId(payload);
+     if (!id.ok()) return id.status();

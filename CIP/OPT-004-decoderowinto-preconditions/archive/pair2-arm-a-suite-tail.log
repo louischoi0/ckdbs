@@ -1,0 +1,60 @@
+[       OK ] ScramTest.ScramPlusHelloRefusedAsNotImplemented (0 ms)
+[ RUN      ] ScramTest.AuthzidRefusedAsNotImplemented
+[       OK ] ScramTest.AuthzidRefusedAsNotImplemented (0 ms)
+[ RUN      ] ScramTest.StepsOutOfOrderRefused
+[       OK ] ScramTest.StepsOutOfOrderRefused (1 ms)
+[ RUN      ] ScramTest.ClientRejectsForgedServerSignature
+[       OK ] ScramTest.ClientRejectsForgedServerSignature (3 ms)
+[ RUN      ] ScramTest.UsernameEscapingRoundTrips
+[       OK ] ScramTest.UsernameEscapingRoundTrips (0 ms)
+[ RUN      ] ScramTest.MockSaltIsNotDistinguishableByItsAlphabet
+[       OK ] ScramTest.MockSaltIsNotDistinguishableByItsAlphabet (0 ms)
+[ RUN      ] ScramTest.ClientRefusesAServerFinalBeforeTheServerFirst
+[       OK ] ScramTest.ClientRefusesAServerFinalBeforeTheServerFirst (0 ms)
+[ RUN      ] ScramTest.MandatoryExtensionRefusedInEitherClientMessage
+[       OK ] ScramTest.MandatoryExtensionRefusedInEitherClientMessage (1 ms)
+[----------] 15 tests from ScramTest (21 ms total)
+
+[----------] 3 tests from ScramVerifierTest
+[ RUN      ] ScramVerifierTest.RandomSaltIsRawBytesOfTheDeclaredWidth
+[       OK ] ScramVerifierTest.RandomSaltIsRawBytesOfTheDeclaredWidth (0 ms)
+[ RUN      ] ScramVerifierTest.SerializeParseRoundTrip
+[       OK ] ScramVerifierTest.SerializeParseRoundTrip (1 ms)
+[ RUN      ] ScramVerifierTest.GarbageRefused
+[       OK ] ScramVerifierTest.GarbageRefused (0 ms)
+[----------] 3 tests from ScramVerifierTest (1 ms total)
+
+[----------] 5 tests from FileCredentialStoreTest
+[ RUN      ] FileCredentialStoreTest.ParsesUsersRolesAndComments
+[       OK ] FileCredentialStoreTest.ParsesUsersRolesAndComments (1 ms)
+[ RUN      ] FileCredentialStoreTest.DuplicateUserRefusedNamingTheLine
+[       OK ] FileCredentialStoreTest.DuplicateUserRefusedNamingTheLine (1 ms)
+[ RUN      ] FileCredentialStoreTest.MalformedVerifierRefusedNamingTheLine
+[       OK ] FileCredentialStoreTest.MalformedVerifierRefusedNamingTheLine (0 ms)
+[ RUN      ] FileCredentialStoreTest.PreAuthzTwoColumnFormatRefusedByName
+[       OK ] FileCredentialStoreTest.PreAuthzTwoColumnFormatRefusedByName (1 ms)
+[ RUN      ] FileCredentialStoreTest.UnknownRoleRefusedNamingTheLine
+[       OK ] FileCredentialStoreTest.UnknownRoleRefusedNamingTheLine (1 ms)
+[----------] 5 tests from FileCredentialStoreTest (5 ms total)
+
+[----------] 4 tests from GateTest
+[ RUN      ] GateTest.FullExchangeAuthenticates
+[       OK ] GateTest.FullExchangeAuthenticates (3 ms)
+[ RUN      ] GateTest.StatementBeforeAuthIsRefusedAndClosed
+[       OK ] GateTest.StatementBeforeAuthIsRefusedAndClosed (1 ms)
+[ RUN      ] GateTest.StopBeforeAuthIsRefused
+[       OK ] GateTest.StopBeforeAuthIsRefused (1 ms)
+[ RUN      ] GateTest.WrongPasswordClosesWithTheOneRefusal
+[       OK ] GateTest.WrongPasswordClosesWithTheOneRefusal (3 ms)
+[----------] 4 tests from GateTest (9 ms total)
+
+[----------] 2 tests from Storage/StepVmMvccStorageTest
+[ RUN      ] Storage/StepVmMvccStorageTest.ThePointPathAndTheScanAgreeUnderEveryView/HEAP
+[       OK ] Storage/StepVmMvccStorageTest.ThePointPathAndTheScanAgreeUnderEveryView/HEAP (0 ms)
+[ RUN      ] Storage/StepVmMvccStorageTest.ThePointPathAndTheScanAgreeUnderEveryView/BTREE
+[       OK ] Storage/StepVmMvccStorageTest.ThePointPathAndTheScanAgreeUnderEveryView/BTREE (0 ms)
+[----------] 2 tests from Storage/StepVmMvccStorageTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 3091 tests from 288 test suites ran. (79445 ms total)
+[  PASSED  ] 3091 tests.

@@ -1,0 +1,20 @@
+[ RUN      ] RowCodecKeystoneTest.PayloadStartsWithTheKeystoneWord
+[       OK ] RowCodecKeystoneTest.PayloadStartsWithTheKeystoneWord (0 ms)
+[ RUN      ] RowCodecKeystoneTest.RoundTripsWithThePrimaryKeyFirst
+[       OK ] RowCodecKeystoneTest.RoundTripsWithThePrimaryKeyFirst (0 ms)
+[ RUN      ] RowCodecKeystoneTest.ValueListCoversEveryColumnButThePrimaryKey
+[       OK ] RowCodecKeystoneTest.ValueListCoversEveryColumnButThePrimaryKey (0 ms)
+[ RUN      ] RowCodecKeystoneTest.AnIdBeyondFortyBitsIsRefused
+[       OK ] RowCodecKeystoneTest.AnIdBeyondFortyBitsIsRefused (0 ms)
+[ RUN      ] RowCodecKeystoneTest.DistinctIdsProduceDistinctPayloads
+[       OK ] RowCodecKeystoneTest.DistinctIdsProduceDistinctPayloads (0 ms)
+[ RUN      ] RowCodecKeystoneTest.APayloadTooShortForTheWordIsCorruption
+[       OK ] RowCodecKeystoneTest.APayloadTooShortForTheWordIsCorruption (0 ms)
+[ RUN      ] RowCodecKeystoneTest.ASchemaWithNoColumnsIsRefused
+[       OK ] RowCodecKeystoneTest.ASchemaWithNoColumnsIsRefused (0 ms)
+[ RUN      ] RowCodecKeystoneTest.ANonIntegerFirstColumnIsRefused
+[       OK ] RowCodecKeystoneTest.ANonIntegerFirstColumnIsRefused (0 ms)
+[ RUN      ] RowCodecKeystoneTest.EveryIntegerWidthIsAcceptedAsAPrimaryKey
+[       OK ] RowCodecKeystoneTest.EveryIntegerWidthIsAcceptedAsAPrimaryKey (0 ms)
+[ RUN      ] RowCodecKeystoneTest.ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth
+[       OK ] RowCodecKeystoneTest.ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth (0 ms)
