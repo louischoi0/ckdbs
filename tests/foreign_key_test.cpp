@@ -524,6 +524,53 @@ TEST_F(ForeignKeyCheckTest, ManyChildrenOfOneParentResolveItOnce) {
         << "the parent was resolved once per row rather than once: " << access;
 }
 
+// ---- AH-T2, first slice: a foreign parent is grouped, never descended ---
+//
+// `CheckParentPresent` descends `parent.desc_page_id` with no ownership
+// question anywhere in it, so on a parent this core does not own it would
+// fault a page it may not fault - or worse, answer from one. The extraction
+// pass now asks ownership **before** the descent and defers a foreign
+// parent into its owner's group; nothing sends that group yet, so the
+// statement is refused instead.
+//
+// **Tested here and not through the dispatcher, because the dispatcher path
+// is unreachable - behind two refusals that fire earlier.** Worth recording
+// rather than leaving to be discovered: `CheckForeignKeyColocation` refuses
+// a cross-owner declaration (it converts at AH-T4), and a dispatcher on a
+// core that owns neither relation is turned away first by the peer-write
+// refusal - *"this transaction's writes are bound to core 1 and relation
+// 'trades' is owned by core 0"*, which is what a first draft of this cell
+// caught while appearing to test the new code. A foreign parent therefore
+// arises only where migration separated an already-declared pair - AH-R6's
+// "relations split from their parents by history" - which nothing builds
+// for user relations yet.
+//
+// Same device as the colocation cell above, for the same stated reason. The
+// grouping it exercises is what AH-T2's sender consumes.
+TEST(FkParentVerdicts, ForeignParentsGroupByOwnerAndDeduplicate) {
+    exec::FkParentVerdicts held;
+    EXPECT_FALSE(held.has_foreign());
+
+    held.Defer(/*owner_core=*/1, /*parent_rel=*/4001, /*parent_pk=*/7);
+    held.Defer(/*owner_core=*/1, /*parent_rel=*/4001, /*parent_pk=*/7);  // second row, one parent
+    held.Defer(/*owner_core=*/1, /*parent_rel=*/4001, /*parent_pk=*/9);
+    held.Defer(/*owner_core=*/2, /*parent_rel=*/4002, /*parent_pk=*/7);  // same pk, other owner
+
+    ASSERT_TRUE(held.has_foreign());
+    // **Two groups, not four entries**: the unit is the owner, which is why
+    // a statement's cross-owner cost counts owners and not rows (AH-R2).
+    ASSERT_EQ(held.foreign().size(), 2u);
+    EXPECT_EQ(held.foreign()[0].owner_core, 1u);
+    EXPECT_EQ(held.foreign()[0].parents.size(), 2u);
+    EXPECT_EQ(held.foreign()[1].owner_core, 2u);
+    EXPECT_EQ(held.foreign()[1].parents.size(), 1u);
+
+    // Deferring does not resolve. A caller reading the absence of a verdict
+    // as a pass would be the exact hole this grouping exists to close.
+    EXPECT_EQ(held.Find(4001, 7), nullptr);
+    EXPECT_TRUE(held.empty());
+}
+
 // Latest state, not the statement's snapshot: a parent deleted and committed
 // is gone for a check even though a snapshot taken earlier could still see
 // it. This is the case §4 exists for.

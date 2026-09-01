@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <utility>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/schema.hpp"
@@ -138,7 +139,41 @@ public:
     std::size_t size() const noexcept { return entries_.size(); }
     bool empty() const noexcept { return entries_.empty(); }
 
+    // ---- The foreign half: one group per owner, not per pk (AH-R2) -----
+    //
+    // A parent whose owner is not this core cannot be resolved by
+    // descending - its pages are another core's - so it is *grouped* here
+    // instead, and the group is what one `kFkProbeRequest` carries. The
+    // unit is the **owner**, which is why a statement's cross-owner cost
+    // counts owners and not rows.
+    struct ForeignGroup {
+        std::uint32_t owner_core = 0;
+        // Deduplicated, in first-seen order. Order is not load-bearing for
+        // correctness - the reply is matched by pk - but it is stable,
+        // which keeps a refusal's message stable run to run.
+        std::vector<std::pair<catalog::Oid, std::uint64_t>> parents;
+    };
+
+    // Records that `(parent_rel, parent_pk)` lives on `owner_core`, which
+    // is not this core. Idempotent on a repeat, like `Put`.
+    void Defer(std::uint32_t owner_core, catalog::Oid parent_rel, std::uint64_t parent_pk) {
+        for (ForeignGroup& g : foreign_) {
+            if (g.owner_core != owner_core) continue;
+            for (const auto& [rel, pk] : g.parents) {
+                if (rel == parent_rel && pk == parent_pk) return;
+            }
+            g.parents.emplace_back(parent_rel, parent_pk);
+            return;
+        }
+        foreign_.push_back(ForeignGroup{owner_core, {{parent_rel, parent_pk}}});
+    }
+
+    const std::vector<ForeignGroup>& foreign() const noexcept { return foreign_; }
+    bool has_foreign() const noexcept { return !foreign_.empty(); }
+
 private:
+    std::vector<ForeignGroup> foreign_;
+
     // A vector with a linear scan, for `SysObjectRegistry`'s reason: the
     // set is one entry per distinct parent pk a *single statement* names,
     // which is small - and a map would cost an allocation per entry to save

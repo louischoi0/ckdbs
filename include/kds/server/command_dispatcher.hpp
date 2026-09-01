@@ -1139,6 +1139,12 @@ private:
                                      const txn::ReadView& check_view,
                                      exec::FkParentVerdicts& into);
 
+    // AH-T2, first slice: what the extraction pass deferred because its
+    // owner is not this core, and nothing sends yet. OK when there is
+    // none - which is every statement the DDL surface can produce today,
+    // `CheckForeignKeyColocation` still refusing a cross-owner declaration.
+    Status RefuseUnsentForeignKeyProbes(const exec::FkParentVerdicts& held);
+
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
     // columns after the pk, which is the shape every downstream consumer
     // takes. Mirrors `InsertOneRow`'s arity split without repeating its

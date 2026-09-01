@@ -206,7 +206,71 @@ counters reported beside every latency; results under
 |---|---|
 | AH-T0 | **Done 2026-09-01.** AH-R1..R7 recorded; AH-R6 carries the operator's mark below. Amendments landed: `foreign-keys.md` gains **§2a** (the crossing, the fork park, the per-owner round, AH-R3's fail-closed rule, AH-R5's invariant, AH-R7's load-path refusal), F3 carries AH-R4's non-reversal, F5 carries the conversion; `crosscore.md`'s FK bullet splits along AE-2's seam; `workplan-auxiliaries-under-split.md`'s SA-T4/SA-T6 rows retired into AH |
 | AH-T1 | **Built 2026-09-01**, no probe wired — the local path restructured only. `exec::FkParentVerdicts` (child-side, statement-scoped) holds one verdict per distinct (parent relation, pk); `CommandDispatcher::ResolveForeignKeyParents` is the extraction pass and `CheckForeignKeyOnWrite` starts no descent. All three callers converted. **The colocated A/B measurement (H-AH1's latency half) is not run** — see below. Full suite 3139/3139 green |
-| AH-T2..T6 | not started |
+| AH-T2 | **First slice built 2026-09-01** — owner resolution, per-owner grouping (`FkParentVerdicts::Defer`), and the fail-closed refusal at all three sites. **The wire is not built**: no payloads, no sender, no park/resume. AH-R7 is answered by survey and needed no code. Full suite 3140/3140 green |
+| AH-T3..T6 | not started |
+
+### AH-T2, first slice — what it built and what it corrected
+
+**Built.** The extraction pass asks the parent's `owner_core` **before**
+descending. A parent this core owns resolves as at AH-T1; a foreign one is
+deferred into its owner's group — `FkParentVerdicts::Defer`, deduplicated
+per (relation, pk) and grouped per **owner**, which is the object one
+`kFkProbeRequest` will carry. Nothing sends it, so all three sites then
+call `RefuseUnsentForeignKeyProbes`, which refuses `NotImplemented` naming
+the owners the statement would have had to ask.
+
+The refusal is the point of the slice. `CheckParentPresent` descends
+`parent.desc_page_id` with **no ownership question anywhere in it**
+(survey §3.1), so on a foreign parent it faults a page this core may not
+fault, or answers from one. Refusing is the only correct third option, and
+§1's rule — a constraint that silently does not run is not a degraded mode
+— is what rules out the other two.
+
+**Corrected, twice, and both corrections matter more than the code.**
+
+1. **This is defence in depth, not a live-bug fix.** A first framing of
+   this slice called the local descent on a foreign parent "a live
+   hazard". It is not reachable: `CheckForeignKeyColocation` refuses a
+   cross-owner declaration, and a dispatcher on a core owning neither
+   relation is turned away first by the peer-write refusal. A foreign
+   parent arises only where migration separated an already-declared pair —
+   AH-R6's "relations split from their parents by history" — which nothing
+   builds for user relations yet. The guard is right to have on the safe
+   side of a refusal (SB's precedent), and saying it closes something live
+   would overstate it.
+
+2. **The cell that "proved" it was catching a different refusal.** A first
+   draft ran the INSERT on a `core_id = 1` dispatcher and asserted a
+   refusal. It passed — on *"this transaction's writes are bound to core 1
+   and relation 'trades' is owned by core 0"*, the pre-existing peer-write
+   refusal, which fires before the extraction pass. The cell was green and
+   proved nothing about AH-T2. It is replaced by a unit cell on the
+   grouping itself (`FkParentVerdicts.ForeignParentsGroupByOwnerAndDeduplicate`),
+   at the same level and for the same stated reason the F5 colocation cell
+   already uses: there is no way to *create* a cross-core pair, and the
+   check exists for when there is.
+
+**AH-R7 is answered by survey, and the work order's premise was wrong.**
+The background names three callers as `SortedFillInner`, the UPDATE path
+and "the KWP load path". The third is `InsertOneRow`; there is **no
+separate load-path caller**. `KwpLoadServer::HandleLoadChunk` builds a
+`parser::InsertStmt` and calls `dispatcher_->ExecuteInsert` — the same
+function the extraction pass now lives in — so the load path inherits the
+hoist, the per-owner grouping and the refusal without a line of its own.
+AH-R7's fallback ("if no park-capable seam exists, refuse fail-closed") is
+satisfied structurally rather than by a special case, and the
+`known-gaps.md` entry it anticipated is not owed.
+
+**What the rest of AH-T2 still owes**, unchanged: the
+`FkProbeRequestPayload` / `FkProbeReplyPayload` structs (referenced by
+`ring_message.hpp:220-223` and never written), the sender, the peer
+handler that grants the intent into `FkIntentTable`, enrolment riding the
+round, and the park/resume. The resume's shape is the open design
+question: the engine's `pending_*` records all *finish* work, where a
+foreign FK must **re-enter the statement** with verdicts in hand — the
+candidate being a pending record carrying the statement line plus a member
+the extraction pass consults first, so the second pass resolves everything
+from held state and sends nothing.
 
 ### AH-T1 — what the hoist ran into
 

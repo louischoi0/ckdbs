@@ -3701,6 +3701,26 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
 
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
         if (!parent.ok()) return parent.status();
+
+        // ---- Owner resolution, before the descent (AH-R2, AH-T2) --------
+        //
+        // `CheckParentPresent` descends `parent.desc_page_id` with no
+        // ownership question anywhere in it. On a parent this core does not
+        // own that is a page it may not fault: the check faults or answers
+        // from nothing, and either way a constraint that silently does not
+        // run is not a degraded mode (§1). So ownership is asked **here**,
+        // where there is still somewhere to put the answer.
+        //
+        // A foreign parent is deferred into its owner's group rather than
+        // descended. The group is what one `kFkProbeRequest` will carry -
+        // one round per owner, never per row - and until that sender exists
+        // the statement is **refused** below rather than run against a
+        // parent nobody asked.
+        if (parent.value()->owner_core != core_id_) {
+            into.Defer(parent.value()->owner_core, fk.rel_oid, pk);
+            continue;
+        }
+
         auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), pk, check_view,
                                                 &budget_);
         if (!verdict.ok()) return verdict.status();
@@ -3713,6 +3733,36 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         into.Put(fk.rel_oid, pk, verdict.value());
     }
     return Status::OK();
+}
+
+Status CommandDispatcher::RefuseUnsentForeignKeyProbes(const exec::FkParentVerdicts& held) {
+    if (!held.has_foreign()) return Status::OK();
+
+    // AH-T2's first slice ends here: the grouping is built and nothing
+    // sends it yet. **Refused rather than descended**, which is the whole
+    // value of this slice - the alternative is `CheckParentPresent`
+    // faulting a page this core does not own, or worse answering from one,
+    // and a constraint that silently does not run is the one degraded mode
+    // §1 forbids.
+    //
+    // `NotImplemented` by the two-code rule: the architecture admits this
+    // (§2a specifies it, the wire's two kinds exist), nobody has built the
+    // sender. Reached today only by a relation separated from its parent by
+    // history - `CheckForeignKeyColocation` still refuses the declaration,
+    // and converts at AH-T4.
+    const auto& first = held.foreign().front();
+    std::string owners;
+    for (const auto& group : held.foreign()) {
+        if (!owners.empty()) owners += ", ";
+        owners += std::to_string(group.owner_core);
+    }
+    return Status::NotImplemented(
+        "the foreign key names parent row id=" + std::to_string(first.parents.front().second) +
+        " of '" + RelationNameOf(first.parents.front().first) + "', owned by core " +
+        std::to_string(first.owner_core) + " and not by core " + std::to_string(core_id_) +
+        " (owners this statement would have to ask: " + owners +
+        "); the cross-owner probe is not built (instructions/v2.8.0/workorder-ah.md AH-T2, "
+        "docs/spec/foreign-keys.md §2a)");
 }
 
 Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& child,
@@ -6016,6 +6066,9 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
                 return {ErrorReply(s), false, 0, s};
             }
         }
+        if (Status s = RefuseUnsentForeignKeyProbes(fk_held); !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
+        }
     }
 
     InsertRowResult first{};
@@ -6091,6 +6144,9 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             if (Status s = ResolveForeignKeyParents(ta, values, view.value(), fk_held); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
+        }
+        if (Status s = RefuseUnsentForeignKeyProbes(fk_held); !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
         }
     }
 
@@ -8515,6 +8571,13 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             if (Status s = ResolveForeignKeyParents(ta, one, check_view, fk_held); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
+        }
+        // Refused **at the fork**, before a single row qualifies - which is
+        // also why an UPDATE matching nothing still refuses here where it
+        // would not report a violation: an unaskable owner is a statement
+        // this build cannot run, not a verdict about a row.
+        if (Status s = RefuseUnsentForeignKeyProbes(fk_held); !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
         }
     }
 
