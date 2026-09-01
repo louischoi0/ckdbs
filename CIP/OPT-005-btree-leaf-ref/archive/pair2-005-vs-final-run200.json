@@ -1,0 +1,767 @@
+{
+  "rows": 200,
+  "matches": 6,
+  "range_span": 10,
+  "seed": 20260901,
+  "customers": 33,
+  "lat_rounds": 12,
+  "cpu_rounds": 10,
+  "lat_n": {
+    "point": 15,
+    "point_heap": 15,
+    "range": 8,
+    "join": 10,
+    "fk_insert": 5,
+    "plain_insert": 5
+  },
+  "cpu_n": {
+    "point": 1200,
+    "point_heap": 800,
+    "range": 500,
+    "join": 800,
+    "fk_insert": 300,
+    "plain_insert": 300
+  },
+  "pre_check": {
+    "label": "post-load",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_pt",
+        "hashes": {
+          "c578e29A": "d137db84fe5a449530cace014094887a053a1b6ee0c31cb26b8c0f42307f7283",
+          "finalB": "d137db84fe5a449530cace014094887a053a1b6ee0c31cb26b8c0f42307f7283"
+        },
+        "match": true
+      },
+      {
+        "check": "t_pt_heap",
+        "hashes": {
+          "c578e29A": "596245868242e33cf32f31201a8db5ca51cdba2949d0fd7e9fa6252b72152a82",
+          "finalB": "596245868242e33cf32f31201a8db5ca51cdba2949d0fd7e9fa6252b72152a82"
+        },
+        "match": true
+      },
+      {
+        "check": "t_rng",
+        "hashes": {
+          "c578e29A": "473ffd538d6523c768c4db8f06a2d5dc9a64949f7c391672b3cb98261f715156",
+          "finalB": "473ffd538d6523c768c4db8f06a2d5dc9a64949f7c391672b3cb98261f715156"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_parent",
+        "hashes": {
+          "c578e29A": "6f48f90d769aa36e34bc2160443d238fcceb7d625d53630dda8e61a8064e365b",
+          "finalB": "6f48f90d769aa36e34bc2160443d238fcceb7d625d53630dda8e61a8064e365b"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_child",
+        "hashes": {
+          "c578e29A": "0b0ab8155c641c416bad14f7842a17e93bd74d3b33cc23d6abfad4f1172916c2",
+          "finalB": "0b0ab8155c641c416bad14f7842a17e93bd74d3b33cc23d6abfad4f1172916c2"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_parent",
+        "hashes": {
+          "c578e29A": "a30c476aee335b4bd983643410aa5c4864eed9ce68e9e6749a22c2a833f258f1",
+          "finalB": "a30c476aee335b4bd983643410aa5c4864eed9ce68e9e6749a22c2a833f258f1"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_child",
+        "hashes": {
+          "c578e29A": "d35bfbde58528fc27ed04e67644632b4a496916adbade7752860c49919498fce",
+          "finalB": "d35bfbde58528fc27ed04e67644632b4a496916adbade7752860c49919498fce"
+        },
+        "match": true
+      },
+      {
+        "check": "t_plain_child",
+        "hashes": {
+          "c578e29A": "8f648321854677f3ab0126eb0f22b111b1a7e5fe3631f2091988a834294aab5a",
+          "finalB": "8f648321854677f3ab0126eb0f22b111b1a7e5fe3631f2091988a834294aab5a"
+        },
+        "match": true
+      }
+    ]
+  },
+  "post_check": {
+    "label": "post-writes",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_pt",
+        "hashes": {
+          "c578e29A": "d137db84fe5a449530cace014094887a053a1b6ee0c31cb26b8c0f42307f7283",
+          "finalB": "d137db84fe5a449530cace014094887a053a1b6ee0c31cb26b8c0f42307f7283"
+        },
+        "match": true
+      },
+      {
+        "check": "t_pt_heap",
+        "hashes": {
+          "c578e29A": "596245868242e33cf32f31201a8db5ca51cdba2949d0fd7e9fa6252b72152a82",
+          "finalB": "596245868242e33cf32f31201a8db5ca51cdba2949d0fd7e9fa6252b72152a82"
+        },
+        "match": true
+      },
+      {
+        "check": "t_rng",
+        "hashes": {
+          "c578e29A": "473ffd538d6523c768c4db8f06a2d5dc9a64949f7c391672b3cb98261f715156",
+          "finalB": "473ffd538d6523c768c4db8f06a2d5dc9a64949f7c391672b3cb98261f715156"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_parent",
+        "hashes": {
+          "c578e29A": "6f48f90d769aa36e34bc2160443d238fcceb7d625d53630dda8e61a8064e365b",
+          "finalB": "6f48f90d769aa36e34bc2160443d238fcceb7d625d53630dda8e61a8064e365b"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_child",
+        "hashes": {
+          "c578e29A": "0b0ab8155c641c416bad14f7842a17e93bd74d3b33cc23d6abfad4f1172916c2",
+          "finalB": "0b0ab8155c641c416bad14f7842a17e93bd74d3b33cc23d6abfad4f1172916c2"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_parent",
+        "hashes": {
+          "c578e29A": "a30c476aee335b4bd983643410aa5c4864eed9ce68e9e6749a22c2a833f258f1",
+          "finalB": "a30c476aee335b4bd983643410aa5c4864eed9ce68e9e6749a22c2a833f258f1"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_child",
+        "hashes": {
+          "c578e29A": "84255cf364ff7d7485fcee78636cd96a15621bddb418c2fd99f56db35773429a",
+          "finalB": "84255cf364ff7d7485fcee78636cd96a15621bddb418c2fd99f56db35773429a"
+        },
+        "match": true
+      },
+      {
+        "check": "t_plain_child",
+        "hashes": {
+          "c578e29A": "73419348589961eaa9dd0ddecf9de3ba866dfc8cc9f963e40d3e3576cf718cae",
+          "finalB": "73419348589961eaa9dd0ddecf9de3ba866dfc8cc9f963e40d3e3576cf718cae"
+        },
+        "match": true
+      }
+    ]
+  },
+  "analyze": {
+    "point": {
+      "c578e29A": {
+        "pages": [
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x2af5b49ca0dd18c1\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt opens=1 examined=1 matched=1 sel=100% pages=1"
+      },
+      "finalB": {
+        "pages": [
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x2af5b49ca0dd18c1\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt opens=1 examined=1 matched=1 sel=100% pages=1"
+      }
+    },
+    "point_heap": {
+      "c578e29A": {
+        "pages": [
+          3,
+          3
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=200 pages=3 opens=1 pattern_id=0x7fe1703c49fc6a75\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt_heap key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt_heap opens=1 examined=200 matched=1 sel=0% pages=3"
+      },
+      "finalB": {
+        "pages": [
+          3,
+          3
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=200 pages=3 opens=1 pattern_id=0x7fe1703c49fc6a75\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt_heap key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt_heap opens=1 examined=200 matched=1 sel=0% pages=3"
+      }
+    },
+    "range": {
+      "c578e29A": {
+        "pages": [
+          69,
+          69
+        ],
+        "index_resolved": [
+          68
+        ],
+        "raw_head": "analyze rows=68 class=JoinSelect steps=1 examined=68 pages=69 opens=1 pattern_id=0xc3ad6ace3721932d\nclass=JoinSelect steps=1 hoisted=0\nstep 0 IndexRange t_rng\n  filter 0:0.1 >= 0\n  filter 0:0.1 <= 10\nproject id=0:0.0, val=0:0.2\nstep 0 IndexRange t_rng opens=1 examined=68 matched=68 sel=100% pages=69 index_scanned=68 index_resolved=68"
+      },
+      "finalB": {
+        "pages": [
+          69,
+          69
+        ],
+        "index_resolved": [
+          68
+        ],
+        "raw_head": "analyze rows=68 class=JoinSelect steps=1 examined=68 pages=69 opens=1 pattern_id=0xc3ad6ace3721932d\nclass=JoinSelect steps=1 hoisted=0\nstep 0 IndexRange t_rng\n  filter 0:0.1 >= 0\n  filter 0:0.1 <= 10\nproject id=0:0.0, val=0:0.2\nstep 0 IndexRange t_rng opens=1 examined=68 matched=68 sel=100% pages=69 index_scanned=68 index_resolved=68"
+      }
+    },
+    "join": {
+      "c578e29A": {
+        "pages": [
+          2,
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0x35f2194b5227b221\nclass=JoinSelect steps=2 hoisted=0\nstep 0 Lookup t_join_child AS c key=1\n  filter 0:0.0 = 1\nstep 1 Probe t_join_parent AS p key=0:0.1\n  filter 0:0.1 = 0:1.0\nproject c.id=0:0.0, p.val=0:1.1\nstep 0 Lookup t_join_child AS c opens=1 examined=1 matched=1 sel=100% pages=1\nstep 1 Probe t_join_parent AS p opens=1 examined=1 matched=1 sel=100% pages=1"
+      },
+      "finalB": {
+        "pages": [
+          2,
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0x35f2194b5227b221\nclass=JoinSelect steps=2 hoisted=0\nstep 0 Lookup t_join_child AS c key=1\n  filter 0:0.0 = 1\nstep 1 Probe t_join_parent AS p key=0:0.1\n  filter 0:0.1 = 0:1.0\nproject c.id=0:0.0, p.val=0:1.1\nstep 0 Lookup t_join_child AS c opens=1 examined=1 matched=1 sel=100% pages=1\nstep 1 Probe t_join_parent AS p opens=1 examined=1 matched=1 sel=100% pages=1"
+      }
+    }
+  },
+  "phases": {
+    "c578e29A:point": {
+      "phase": "c578e29A-point",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.019562,
+      "qps": 9201.4,
+      "mean_us": 108.7,
+      "p0_us": 94.5,
+      "p25_us": 100.3,
+      "p50_us": 105.5,
+      "p95_us": 132.4,
+      "p99_us": 146.3,
+      "max_us": 175.8
+    },
+    "c578e29A:point_heap": {
+      "phase": "c578e29A-point_heap",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.021743,
+      "qps": 8278.5,
+      "mean_us": 120.8,
+      "p0_us": 98.9,
+      "p25_us": 116.2,
+      "p50_us": 119.6,
+      "p95_us": 136.2,
+      "p99_us": 145.7,
+      "max_us": 162.8
+    },
+    "c578e29A:range": {
+      "phase": "c578e29A-range",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.022991,
+      "qps": 4175.6,
+      "mean_us": 239.5,
+      "p0_us": 121.0,
+      "p25_us": 229.3,
+      "p50_us": 256.7,
+      "p95_us": 280.2,
+      "p99_us": 301.5,
+      "max_us": 301.5
+    },
+    "c578e29A:join": {
+      "phase": "c578e29A-join",
+      "detail": "",
+      "ops": 120,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.013471,
+      "qps": 8908.2,
+      "mean_us": 112.3,
+      "p0_us": 102.0,
+      "p25_us": 107.8,
+      "p50_us": 111.2,
+      "p95_us": 121.2,
+      "p99_us": 129.1,
+      "max_us": 129.7
+    },
+    "c578e29A:fk_insert": {
+      "phase": "c578e29A-fk_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.005332,
+      "qps": 11252.7,
+      "mean_us": 88.9,
+      "p0_us": 78.2,
+      "p25_us": 81.9,
+      "p50_us": 87.3,
+      "p95_us": 104.6,
+      "p99_us": 115.7,
+      "max_us": 115.7
+    },
+    "c578e29A:plain_insert": {
+      "phase": "c578e29A-plain_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.004941,
+      "qps": 12142.3,
+      "mean_us": 82.4,
+      "p0_us": 77.4,
+      "p25_us": 78.4,
+      "p50_us": 79.0,
+      "p95_us": 97.3,
+      "p99_us": 108.8,
+      "max_us": 108.8
+    },
+    "finalB:point": {
+      "phase": "finalB-point",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.019321,
+      "qps": 9316.1,
+      "mean_us": 107.3,
+      "p0_us": 97.0,
+      "p25_us": 99.8,
+      "p50_us": 104.8,
+      "p95_us": 124.8,
+      "p99_us": 145.8,
+      "max_us": 151.1
+    },
+    "finalB:point_heap": {
+      "phase": "finalB-point_heap",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.021599,
+      "qps": 8333.8,
+      "mean_us": 120.0,
+      "p0_us": 98.9,
+      "p25_us": 115.9,
+      "p50_us": 118.1,
+      "p95_us": 132.6,
+      "p99_us": 153.5,
+      "max_us": 157.8
+    },
+    "finalB:range": {
+      "phase": "finalB-range",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.022902,
+      "qps": 4191.7,
+      "mean_us": 238.6,
+      "p0_us": 110.6,
+      "p25_us": 229.4,
+      "p50_us": 255.8,
+      "p95_us": 278.2,
+      "p99_us": 287.5,
+      "max_us": 287.5
+    },
+    "finalB:join": {
+      "phase": "finalB-join",
+      "detail": "",
+      "ops": 120,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.013361,
+      "qps": 8981.6,
+      "mean_us": 111.3,
+      "p0_us": 97.3,
+      "p25_us": 107.2,
+      "p50_us": 108.9,
+      "p95_us": 125.2,
+      "p99_us": 134.4,
+      "max_us": 152.4
+    },
+    "finalB:fk_insert": {
+      "phase": "finalB-fk_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.005308,
+      "qps": 11303.4,
+      "mean_us": 88.5,
+      "p0_us": 77.2,
+      "p25_us": 82.5,
+      "p50_us": 87.0,
+      "p95_us": 101.9,
+      "p99_us": 108.7,
+      "max_us": 108.7
+    },
+    "finalB:plain_insert": {
+      "phase": "finalB-plain_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.004854,
+      "qps": 12360.7,
+      "mean_us": 80.9,
+      "p0_us": 77.6,
+      "p25_us": 78.5,
+      "p50_us": 78.9,
+      "p95_us": 89.5,
+      "p99_us": 97.9,
+      "max_us": 97.9
+    }
+  },
+  "floor": {
+    "c578e29Afloor1:point": {
+      "phase": "c578e29Afloor1-point",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.009729,
+      "qps": 9250.6,
+      "mean_us": 108.1,
+      "p0_us": 96.6,
+      "p25_us": 100.1,
+      "p50_us": 103.3,
+      "p95_us": 132.4,
+      "p99_us": 175.8,
+      "max_us": 175.8
+    },
+    "c578e29Afloor2:point": {
+      "phase": "c578e29Afloor2-point",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.009833,
+      "qps": 9152.8,
+      "mean_us": 109.3,
+      "p0_us": 94.5,
+      "p25_us": 101.1,
+      "p50_us": 106.9,
+      "p95_us": 133.9,
+      "p99_us": 141.2,
+      "max_us": 141.2
+    },
+    "c578e29Afloor1:point_heap": {
+      "phase": "c578e29Afloor1-point_heap",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.010871,
+      "qps": 8278.6,
+      "mean_us": 120.8,
+      "p0_us": 100.2,
+      "p25_us": 116.3,
+      "p50_us": 118.5,
+      "p95_us": 136.2,
+      "p99_us": 145.7,
+      "max_us": 145.7
+    },
+    "c578e29Afloor2:point_heap": {
+      "phase": "c578e29Afloor2-point_heap",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.010872,
+      "qps": 8278.4,
+      "mean_us": 120.8,
+      "p0_us": 98.9,
+      "p25_us": 116.2,
+      "p50_us": 119.7,
+      "p95_us": 137.1,
+      "p99_us": 162.8,
+      "max_us": 162.8
+    },
+    "c578e29Afloor1:range": {
+      "phase": "c578e29Afloor1-range",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.011295,
+      "qps": 4249.8,
+      "mean_us": 235.3,
+      "p0_us": 125.4,
+      "p25_us": 221.6,
+      "p50_us": 255.5,
+      "p95_us": 286.7,
+      "p99_us": 301.5,
+      "max_us": 301.5
+    },
+    "c578e29Afloor2:range": {
+      "phase": "c578e29Afloor2-range",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.011696,
+      "qps": 4103.9,
+      "mean_us": 243.7,
+      "p0_us": 121.0,
+      "p25_us": 233.6,
+      "p50_us": 257.2,
+      "p95_us": 276.9,
+      "p99_us": 293.2,
+      "max_us": 293.2
+    },
+    "c578e29Afloor1:join": {
+      "phase": "c578e29Afloor1-join",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.00678,
+      "qps": 8849.5,
+      "mean_us": 113.0,
+      "p0_us": 106.6,
+      "p25_us": 108.4,
+      "p50_us": 110.5,
+      "p95_us": 121.2,
+      "p99_us": 128.8,
+      "max_us": 128.8
+    },
+    "c578e29Afloor2:join": {
+      "phase": "c578e29Afloor2-join",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.006691,
+      "qps": 8967.7,
+      "mean_us": 111.5,
+      "p0_us": 102.0,
+      "p25_us": 107.0,
+      "p50_us": 111.2,
+      "p95_us": 120.6,
+      "p99_us": 129.7,
+      "max_us": 129.7
+    },
+    "c578e29Afloor1:fk_insert": {
+      "phase": "c578e29Afloor1-fk_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002681,
+      "qps": 11191.3,
+      "mean_us": 89.4,
+      "p0_us": 78.2,
+      "p25_us": 81.0,
+      "p50_us": 87.7,
+      "p95_us": 113.6,
+      "p99_us": 115.7,
+      "max_us": 115.7
+    },
+    "c578e29Afloor2:fk_insert": {
+      "phase": "c578e29Afloor2-fk_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002651,
+      "qps": 11314.8,
+      "mean_us": 88.4,
+      "p0_us": 78.5,
+      "p25_us": 82.9,
+      "p50_us": 87.0,
+      "p95_us": 100.0,
+      "p99_us": 104.6,
+      "max_us": 104.6
+    },
+    "c578e29Afloor1:plain_insert": {
+      "phase": "c578e29Afloor1-plain_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002414,
+      "qps": 12426.8,
+      "mean_us": 80.5,
+      "p0_us": 77.9,
+      "p25_us": 78.5,
+      "p50_us": 78.9,
+      "p95_us": 89.0,
+      "p99_us": 93.4,
+      "max_us": 93.4
+    },
+    "c578e29Afloor2:plain_insert": {
+      "phase": "c578e29Afloor2-plain_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002527,
+      "qps": 11870.6,
+      "mean_us": 84.2,
+      "p0_us": 77.4,
+      "p25_us": 78.4,
+      "p50_us": 79.2,
+      "p95_us": 104.7,
+      "p99_us": 108.8,
+      "max_us": 108.8
+    }
+  },
+  "cpu": {
+    "c578e29A:point": {
+      "cpu_s": 0.6399999999999993,
+      "ops": 12000,
+      "us_per_op": 53.33333333333328
+    },
+    "c578e29A:point_heap": {
+      "cpu_s": 0.42000000000000004,
+      "ops": 8000,
+      "us_per_op": 52.5
+    },
+    "c578e29A:range": {
+      "cpu_s": 0.3900000000000003,
+      "ops": 5000,
+      "us_per_op": 78.00000000000006
+    },
+    "c578e29A:join": {
+      "cpu_s": 0.5400000000000003,
+      "ops": 8000,
+      "us_per_op": 67.50000000000003
+    },
+    "c578e29A:fk_insert": {
+      "cpu_s": 0.14999999999999986,
+      "ops": 3000,
+      "us_per_op": 49.99999999999996
+    },
+    "c578e29A:plain_insert": {
+      "cpu_s": 0.1600000000000006,
+      "ops": 3000,
+      "us_per_op": 53.33333333333353
+    },
+    "finalB:point": {
+      "cpu_s": 0.69,
+      "ops": 12000,
+      "us_per_op": 57.49999999999999
+    },
+    "finalB:point_heap": {
+      "cpu_s": 0.47000000000000025,
+      "ops": 8000,
+      "us_per_op": 58.750000000000036
+    },
+    "finalB:range": {
+      "cpu_s": 0.41000000000000064,
+      "ops": 5000,
+      "us_per_op": 82.00000000000013
+    },
+    "finalB:join": {
+      "cpu_s": 0.4999999999999998,
+      "ops": 8000,
+      "us_per_op": 62.49999999999997
+    },
+    "finalB:fk_insert": {
+      "cpu_s": 0.11999999999999977,
+      "ops": 3000,
+      "us_per_op": 39.99999999999992
+    },
+    "finalB:plain_insert": {
+      "cpu_s": 0.16999999999999954,
+      "ops": 3000,
+      "us_per_op": 56.666666666666515
+    }
+  },
+  "cpu_floor": {
+    "c578e29Afloor1:point": {
+      "cpu_s": 0.2999999999999997,
+      "ops": 6000,
+      "us_per_op": 49.99999999999996
+    },
+    "c578e29Afloor2:point": {
+      "cpu_s": 0.33999999999999964,
+      "ops": 6000,
+      "us_per_op": 56.6666666666666
+    },
+    "c578e29Afloor1:point_heap": {
+      "cpu_s": 0.22000000000000008,
+      "ops": 4000,
+      "us_per_op": 55.00000000000002
+    },
+    "c578e29Afloor2:point_heap": {
+      "cpu_s": 0.19999999999999996,
+      "ops": 4000,
+      "us_per_op": 49.999999999999986
+    },
+    "c578e29Afloor1:range": {
+      "cpu_s": 0.20000000000000012,
+      "ops": 2500,
+      "us_per_op": 80.00000000000004
+    },
+    "c578e29Afloor2:range": {
+      "cpu_s": 0.19000000000000017,
+      "ops": 2500,
+      "us_per_op": 76.00000000000007
+    },
+    "c578e29Afloor1:join": {
+      "cpu_s": 0.29000000000000004,
+      "ops": 4000,
+      "us_per_op": 72.50000000000001
+    },
+    "c578e29Afloor2:join": {
+      "cpu_s": 0.2500000000000002,
+      "ops": 4000,
+      "us_per_op": 62.50000000000006
+    },
+    "c578e29Afloor1:fk_insert": {
+      "cpu_s": 0.07,
+      "ops": 1500,
+      "us_per_op": 46.66666666666667
+    },
+    "c578e29Afloor2:fk_insert": {
+      "cpu_s": 0.07999999999999985,
+      "ops": 1500,
+      "us_per_op": 53.33333333333323
+    },
+    "c578e29Afloor1:plain_insert": {
+      "cpu_s": 0.08000000000000007,
+      "ops": 1500,
+      "us_per_op": 53.33333333333338
+    },
+    "c578e29Afloor2:plain_insert": {
+      "cpu_s": 0.08000000000000052,
+      "ops": 1500,
+      "us_per_op": 53.33333333333368
+    }
+  },
+  "errors": {
+    "c578e29A": {
+      "count": 0,
+      "first": null
+    },
+    "finalB": {
+      "count": 0,
+      "first": null
+    }
+  }
+}

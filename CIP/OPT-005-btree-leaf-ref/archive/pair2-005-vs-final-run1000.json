@@ -1,0 +1,767 @@
+{
+  "rows": 1000,
+  "matches": 6,
+  "range_span": 10,
+  "seed": 20260901,
+  "customers": 166,
+  "lat_rounds": 12,
+  "cpu_rounds": 10,
+  "lat_n": {
+    "point": 15,
+    "point_heap": 15,
+    "range": 8,
+    "join": 10,
+    "fk_insert": 5,
+    "plain_insert": 5
+  },
+  "cpu_n": {
+    "point": 1200,
+    "point_heap": 800,
+    "range": 500,
+    "join": 800,
+    "fk_insert": 300,
+    "plain_insert": 300
+  },
+  "pre_check": {
+    "label": "post-load",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_pt",
+        "hashes": {
+          "c578e29A": "924c3065fefe935d53f60ecaa240a58ef0ecc1153ddedfa706a78fbda70e03d0",
+          "finalB": "924c3065fefe935d53f60ecaa240a58ef0ecc1153ddedfa706a78fbda70e03d0"
+        },
+        "match": true
+      },
+      {
+        "check": "t_pt_heap",
+        "hashes": {
+          "c578e29A": "ccd4ebc81857c3375d0c78b4fa41af28fdd50a5be4828c11beac2afa45686c45",
+          "finalB": "ccd4ebc81857c3375d0c78b4fa41af28fdd50a5be4828c11beac2afa45686c45"
+        },
+        "match": true
+      },
+      {
+        "check": "t_rng",
+        "hashes": {
+          "c578e29A": "318f4ab22544f4a037e38b5ae19ffe30e9aa9aec1daa77b8f71ce5112f3564c1",
+          "finalB": "318f4ab22544f4a037e38b5ae19ffe30e9aa9aec1daa77b8f71ce5112f3564c1"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_parent",
+        "hashes": {
+          "c578e29A": "9d6f85e9d759eb39710a1223853c3c1b8a095cafa5c3d526d44f600f978dde97",
+          "finalB": "9d6f85e9d759eb39710a1223853c3c1b8a095cafa5c3d526d44f600f978dde97"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_child",
+        "hashes": {
+          "c578e29A": "0cd660804134c656459cce0c17e48ee1afa049e2c27e624ff92d6159e3e9c80f",
+          "finalB": "0cd660804134c656459cce0c17e48ee1afa049e2c27e624ff92d6159e3e9c80f"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_parent",
+        "hashes": {
+          "c578e29A": "ec32b5f3afa423d693d518c898e35dd3e2d461ecc529471d8eb69e73207d6bb9",
+          "finalB": "ec32b5f3afa423d693d518c898e35dd3e2d461ecc529471d8eb69e73207d6bb9"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_child",
+        "hashes": {
+          "c578e29A": "10365a5d01ef086075b49fa63a4991607be78e8cd6fe0f36ed9d4fa228430ab9",
+          "finalB": "10365a5d01ef086075b49fa63a4991607be78e8cd6fe0f36ed9d4fa228430ab9"
+        },
+        "match": true
+      },
+      {
+        "check": "t_plain_child",
+        "hashes": {
+          "c578e29A": "bd37263d9edc515373f2fc19cefdb9c8e99b8ed4433f275db5c0d53d00d177a1",
+          "finalB": "bd37263d9edc515373f2fc19cefdb9c8e99b8ed4433f275db5c0d53d00d177a1"
+        },
+        "match": true
+      }
+    ]
+  },
+  "post_check": {
+    "label": "post-writes",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_pt",
+        "hashes": {
+          "c578e29A": "924c3065fefe935d53f60ecaa240a58ef0ecc1153ddedfa706a78fbda70e03d0",
+          "finalB": "924c3065fefe935d53f60ecaa240a58ef0ecc1153ddedfa706a78fbda70e03d0"
+        },
+        "match": true
+      },
+      {
+        "check": "t_pt_heap",
+        "hashes": {
+          "c578e29A": "ccd4ebc81857c3375d0c78b4fa41af28fdd50a5be4828c11beac2afa45686c45",
+          "finalB": "ccd4ebc81857c3375d0c78b4fa41af28fdd50a5be4828c11beac2afa45686c45"
+        },
+        "match": true
+      },
+      {
+        "check": "t_rng",
+        "hashes": {
+          "c578e29A": "318f4ab22544f4a037e38b5ae19ffe30e9aa9aec1daa77b8f71ce5112f3564c1",
+          "finalB": "318f4ab22544f4a037e38b5ae19ffe30e9aa9aec1daa77b8f71ce5112f3564c1"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_parent",
+        "hashes": {
+          "c578e29A": "9d6f85e9d759eb39710a1223853c3c1b8a095cafa5c3d526d44f600f978dde97",
+          "finalB": "9d6f85e9d759eb39710a1223853c3c1b8a095cafa5c3d526d44f600f978dde97"
+        },
+        "match": true
+      },
+      {
+        "check": "t_join_child",
+        "hashes": {
+          "c578e29A": "0cd660804134c656459cce0c17e48ee1afa049e2c27e624ff92d6159e3e9c80f",
+          "finalB": "0cd660804134c656459cce0c17e48ee1afa049e2c27e624ff92d6159e3e9c80f"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_parent",
+        "hashes": {
+          "c578e29A": "ec32b5f3afa423d693d518c898e35dd3e2d461ecc529471d8eb69e73207d6bb9",
+          "finalB": "ec32b5f3afa423d693d518c898e35dd3e2d461ecc529471d8eb69e73207d6bb9"
+        },
+        "match": true
+      },
+      {
+        "check": "t_fk_child",
+        "hashes": {
+          "c578e29A": "ad738d6a231e7b2e7763abff751f2eab518b8e57c7d1f18075bf93c00db03008",
+          "finalB": "ad738d6a231e7b2e7763abff751f2eab518b8e57c7d1f18075bf93c00db03008"
+        },
+        "match": true
+      },
+      {
+        "check": "t_plain_child",
+        "hashes": {
+          "c578e29A": "616762679aa87a9627b3a8b79240e36a6430b9b1522eff64e9a414243490595b",
+          "finalB": "616762679aa87a9627b3a8b79240e36a6430b9b1522eff64e9a414243490595b"
+        },
+        "match": true
+      }
+    ]
+  },
+  "analyze": {
+    "point": {
+      "c578e29A": {
+        "pages": [
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x2af5b49ca0dd18c1\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt opens=1 examined=1 matched=1 sel=100% pages=1"
+      },
+      "finalB": {
+        "pages": [
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x2af5b49ca0dd18c1\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt opens=1 examined=1 matched=1 sel=100% pages=1"
+      }
+    },
+    "point_heap": {
+      "c578e29A": {
+        "pages": [
+          13,
+          13
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=1000 pages=13 opens=1 pattern_id=0x7fe1703c49fc6a75\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt_heap key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt_heap opens=1 examined=1000 matched=1 sel=0% pages=13"
+      },
+      "finalB": {
+        "pages": [
+          13,
+          13
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=PointSelect steps=1 examined=1000 pages=13 opens=1 pattern_id=0x7fe1703c49fc6a75\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup t_pt_heap key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup t_pt_heap opens=1 examined=1000 matched=1 sel=0% pages=13"
+      }
+    },
+    "range": {
+      "c578e29A": {
+        "pages": [
+          71,
+          71
+        ],
+        "index_resolved": [
+          70
+        ],
+        "raw_head": "analyze rows=70 class=JoinSelect steps=1 examined=70 pages=71 opens=1 pattern_id=0xc3ad6ace3721932d\nclass=JoinSelect steps=1 hoisted=0\nstep 0 IndexRange t_rng\n  filter 0:0.1 >= 0\n  filter 0:0.1 <= 10\nproject id=0:0.0, val=0:0.2\nstep 0 IndexRange t_rng opens=1 examined=70 matched=70 sel=100% pages=71 index_scanned=70 index_resolved=70"
+      },
+      "finalB": {
+        "pages": [
+          71,
+          71
+        ],
+        "index_resolved": [
+          70
+        ],
+        "raw_head": "analyze rows=70 class=JoinSelect steps=1 examined=70 pages=71 opens=1 pattern_id=0xc3ad6ace3721932d\nclass=JoinSelect steps=1 hoisted=0\nstep 0 IndexRange t_rng\n  filter 0:0.1 >= 0\n  filter 0:0.1 <= 10\nproject id=0:0.0, val=0:0.2\nstep 0 IndexRange t_rng opens=1 examined=70 matched=70 sel=100% pages=71 index_scanned=70 index_resolved=70"
+      }
+    },
+    "join": {
+      "c578e29A": {
+        "pages": [
+          2,
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0x35f2194b5227b221\nclass=JoinSelect steps=2 hoisted=0\nstep 0 Lookup t_join_child AS c key=1\n  filter 0:0.0 = 1\nstep 1 Probe t_join_parent AS p key=0:0.1\n  filter 0:0.1 = 0:1.0\nproject c.id=0:0.0, p.val=0:1.1\nstep 0 Lookup t_join_child AS c opens=1 examined=1 matched=1 sel=100% pages=1\nstep 1 Probe t_join_parent AS p opens=1 examined=1 matched=1 sel=100% pages=1"
+      },
+      "finalB": {
+        "pages": [
+          2,
+          1,
+          1
+        ],
+        "index_resolved": [],
+        "raw_head": "analyze rows=1 class=JoinSelect steps=2 examined=2 pages=2 opens=2 pattern_id=0x35f2194b5227b221\nclass=JoinSelect steps=2 hoisted=0\nstep 0 Lookup t_join_child AS c key=1\n  filter 0:0.0 = 1\nstep 1 Probe t_join_parent AS p key=0:0.1\n  filter 0:0.1 = 0:1.0\nproject c.id=0:0.0, p.val=0:1.1\nstep 0 Lookup t_join_child AS c opens=1 examined=1 matched=1 sel=100% pages=1\nstep 1 Probe t_join_parent AS p opens=1 examined=1 matched=1 sel=100% pages=1"
+      }
+    }
+  },
+  "phases": {
+    "c578e29A:point": {
+      "phase": "c578e29A-point",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.019154,
+      "qps": 9397.6,
+      "mean_us": 106.4,
+      "p0_us": 96.7,
+      "p25_us": 99.6,
+      "p50_us": 102.0,
+      "p95_us": 127.7,
+      "p99_us": 153.3,
+      "max_us": 176.4
+    },
+    "c578e29A:point_heap": {
+      "phase": "c578e29A-point_heap",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.032025,
+      "qps": 5620.6,
+      "mean_us": 177.9,
+      "p0_us": 119.4,
+      "p25_us": 172.4,
+      "p50_us": 174.8,
+      "p95_us": 198.3,
+      "p99_us": 231.5,
+      "max_us": 235.0
+    },
+    "c578e29A:range": {
+      "phase": "c578e29A-range",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.025766,
+      "qps": 3725.9,
+      "mean_us": 268.4,
+      "p0_us": 133.9,
+      "p25_us": 260.7,
+      "p50_us": 265.8,
+      "p95_us": 299.1,
+      "p99_us": 384.0,
+      "max_us": 384.0
+    },
+    "c578e29A:join": {
+      "phase": "c578e29A-join",
+      "detail": "",
+      "ops": 120,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.013366,
+      "qps": 8978.3,
+      "mean_us": 111.4,
+      "p0_us": 105.6,
+      "p25_us": 107.3,
+      "p50_us": 109.0,
+      "p95_us": 124.7,
+      "p99_us": 131.1,
+      "max_us": 134.3
+    },
+    "c578e29A:fk_insert": {
+      "phase": "c578e29A-fk_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.005392,
+      "qps": 11127.8,
+      "mean_us": 89.9,
+      "p0_us": 78.1,
+      "p25_us": 85.5,
+      "p50_us": 87.8,
+      "p95_us": 105.1,
+      "p99_us": 130.7,
+      "max_us": 130.7
+    },
+    "c578e29A:plain_insert": {
+      "phase": "c578e29A-plain_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.004816,
+      "qps": 12457.5,
+      "mean_us": 80.3,
+      "p0_us": 77.9,
+      "p25_us": 78.4,
+      "p50_us": 78.8,
+      "p95_us": 89.6,
+      "p99_us": 97.8,
+      "max_us": 97.8
+    },
+    "finalB:point": {
+      "phase": "finalB-point",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.019343,
+      "qps": 9305.8,
+      "mean_us": 107.5,
+      "p0_us": 96.0,
+      "p25_us": 100.2,
+      "p50_us": 103.2,
+      "p95_us": 133.6,
+      "p99_us": 151.8,
+      "max_us": 157.5
+    },
+    "finalB:point_heap": {
+      "phase": "finalB-point_heap",
+      "detail": "",
+      "ops": 180,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.032288,
+      "qps": 5574.8,
+      "mean_us": 179.4,
+      "p0_us": 105.8,
+      "p25_us": 173.6,
+      "p50_us": 176.1,
+      "p95_us": 199.2,
+      "p99_us": 208.0,
+      "max_us": 211.1
+    },
+    "finalB:range": {
+      "phase": "finalB-range",
+      "detail": "",
+      "ops": 96,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.025609,
+      "qps": 3748.7,
+      "mean_us": 266.8,
+      "p0_us": 147.2,
+      "p25_us": 260.8,
+      "p50_us": 264.6,
+      "p95_us": 289.9,
+      "p99_us": 298.3,
+      "max_us": 298.3
+    },
+    "finalB:join": {
+      "phase": "finalB-join",
+      "detail": "",
+      "ops": 120,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.013455,
+      "qps": 8918.3,
+      "mean_us": 112.1,
+      "p0_us": 102.3,
+      "p25_us": 107.8,
+      "p50_us": 110.0,
+      "p95_us": 125.8,
+      "p99_us": 132.9,
+      "max_us": 150.2
+    },
+    "finalB:fk_insert": {
+      "phase": "finalB-fk_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.00548,
+      "qps": 10949.3,
+      "mean_us": 91.3,
+      "p0_us": 78.6,
+      "p25_us": 86.7,
+      "p50_us": 88.2,
+      "p95_us": 107.2,
+      "p99_us": 124.1,
+      "max_us": 124.1
+    },
+    "finalB:plain_insert": {
+      "phase": "finalB-plain_insert",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.004975,
+      "qps": 12059.3,
+      "mean_us": 82.9,
+      "p0_us": 78.0,
+      "p25_us": 79.0,
+      "p50_us": 79.7,
+      "p95_us": 97.5,
+      "p99_us": 107.5,
+      "max_us": 107.5
+    }
+  },
+  "floor": {
+    "c578e29Afloor1:point": {
+      "phase": "c578e29Afloor1-point",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.009499,
+      "qps": 9474.4,
+      "mean_us": 105.5,
+      "p0_us": 98.1,
+      "p25_us": 99.4,
+      "p50_us": 101.2,
+      "p95_us": 127.7,
+      "p99_us": 176.4,
+      "max_us": 176.4
+    },
+    "c578e29Afloor2:point": {
+      "phase": "c578e29Afloor2-point",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.009654,
+      "qps": 9322.1,
+      "mean_us": 107.3,
+      "p0_us": 96.7,
+      "p25_us": 100.2,
+      "p50_us": 102.8,
+      "p95_us": 129.5,
+      "p99_us": 153.3,
+      "max_us": 153.3
+    },
+    "c578e29Afloor1:point_heap": {
+      "phase": "c578e29Afloor1-point_heap",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.016025,
+      "qps": 5616.3,
+      "mean_us": 178.1,
+      "p0_us": 166.6,
+      "p25_us": 172.6,
+      "p50_us": 174.9,
+      "p95_us": 192.6,
+      "p99_us": 229.4,
+      "max_us": 229.4
+    },
+    "c578e29Afloor2:point_heap": {
+      "phase": "c578e29Afloor2-point_heap",
+      "detail": "",
+      "ops": 90,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.016001,
+      "qps": 5624.8,
+      "mean_us": 177.8,
+      "p0_us": 119.4,
+      "p25_us": 172.2,
+      "p50_us": 174.5,
+      "p95_us": 199.8,
+      "p99_us": 235.0,
+      "max_us": 235.0
+    },
+    "c578e29Afloor1:range": {
+      "phase": "c578e29Afloor1-range",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.01284,
+      "qps": 3738.4,
+      "mean_us": 267.5,
+      "p0_us": 186.1,
+      "p25_us": 261.3,
+      "p50_us": 266.6,
+      "p95_us": 288.1,
+      "p99_us": 314.9,
+      "max_us": 314.9
+    },
+    "c578e29Afloor2:range": {
+      "phase": "c578e29Afloor2-range",
+      "detail": "",
+      "ops": 48,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.012926,
+      "qps": 3713.4,
+      "mean_us": 269.3,
+      "p0_us": 133.9,
+      "p25_us": 260.3,
+      "p50_us": 265.0,
+      "p95_us": 299.1,
+      "p99_us": 384.0,
+      "max_us": 384.0
+    },
+    "c578e29Afloor1:join": {
+      "phase": "c578e29Afloor1-join",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.006697,
+      "qps": 8959.8,
+      "mean_us": 111.6,
+      "p0_us": 106.3,
+      "p25_us": 107.9,
+      "p50_us": 109.0,
+      "p95_us": 120.9,
+      "p99_us": 134.3,
+      "max_us": 134.3
+    },
+    "c578e29Afloor2:join": {
+      "phase": "c578e29Afloor2-join",
+      "detail": "",
+      "ops": 60,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.006669,
+      "qps": 8996.9,
+      "mean_us": 111.1,
+      "p0_us": 105.6,
+      "p25_us": 107.2,
+      "p50_us": 108.6,
+      "p95_us": 125.0,
+      "p99_us": 128.5,
+      "max_us": 128.5
+    },
+    "c578e29Afloor1:fk_insert": {
+      "phase": "c578e29Afloor1-fk_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002706,
+      "qps": 11087.0,
+      "mean_us": 90.2,
+      "p0_us": 78.1,
+      "p25_us": 81.2,
+      "p50_us": 87.8,
+      "p95_us": 108.6,
+      "p99_us": 130.7,
+      "max_us": 130.7
+    },
+    "c578e29Afloor2:fk_insert": {
+      "phase": "c578e29Afloor2-fk_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002686,
+      "qps": 11168.8,
+      "mean_us": 89.5,
+      "p0_us": 79.1,
+      "p25_us": 86.5,
+      "p50_us": 87.2,
+      "p95_us": 103.2,
+      "p99_us": 103.6,
+      "max_us": 103.6
+    },
+    "c578e29Afloor1:plain_insert": {
+      "phase": "c578e29Afloor1-plain_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002412,
+      "qps": 12438.6,
+      "mean_us": 80.4,
+      "p0_us": 78.1,
+      "p25_us": 78.4,
+      "p50_us": 78.9,
+      "p95_us": 91.2,
+      "p99_us": 97.8,
+      "max_us": 97.8
+    },
+    "c578e29Afloor2:plain_insert": {
+      "phase": "c578e29Afloor2-plain_insert",
+      "detail": "",
+      "ops": 30,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.002405,
+      "qps": 12476.4,
+      "mean_us": 80.2,
+      "p0_us": 77.9,
+      "p25_us": 78.4,
+      "p50_us": 78.6,
+      "p95_us": 89.3,
+      "p99_us": 92.0,
+      "max_us": 92.0
+    }
+  },
+  "cpu": {
+    "c578e29A:point": {
+      "cpu_s": 0.6799999999999999,
+      "ops": 12000,
+      "us_per_op": 56.666666666666664
+    },
+    "c578e29A:point_heap": {
+      "cpu_s": 0.6300000000000002,
+      "ops": 8000,
+      "us_per_op": 78.75000000000003
+    },
+    "c578e29A:range": {
+      "cpu_s": 0.43000000000000005,
+      "ops": 5000,
+      "us_per_op": 86.0
+    },
+    "c578e29A:join": {
+      "cpu_s": 0.5000000000000001,
+      "ops": 8000,
+      "us_per_op": 62.500000000000014
+    },
+    "c578e29A:fk_insert": {
+      "cpu_s": 0.1499999999999999,
+      "ops": 3000,
+      "us_per_op": 49.99999999999997
+    },
+    "c578e29A:plain_insert": {
+      "cpu_s": 0.12999999999999945,
+      "ops": 3000,
+      "us_per_op": 43.33333333333315
+    },
+    "finalB:point": {
+      "cpu_s": 0.6600000000000001,
+      "ops": 12000,
+      "us_per_op": 55.00000000000001
+    },
+    "finalB:point_heap": {
+      "cpu_s": 0.6699999999999999,
+      "ops": 8000,
+      "us_per_op": 83.74999999999999
+    },
+    "finalB:range": {
+      "cpu_s": 0.4399999999999997,
+      "ops": 5000,
+      "us_per_op": 87.99999999999994
+    },
+    "finalB:join": {
+      "cpu_s": 0.5099999999999993,
+      "ops": 8000,
+      "us_per_op": 63.74999999999992
+    },
+    "finalB:fk_insert": {
+      "cpu_s": 0.17000000000000037,
+      "ops": 3000,
+      "us_per_op": 56.66666666666679
+    },
+    "finalB:plain_insert": {
+      "cpu_s": 0.1600000000000006,
+      "ops": 3000,
+      "us_per_op": 53.33333333333353
+    }
+  },
+  "cpu_floor": {
+    "c578e29Afloor1:point": {
+      "cpu_s": 0.3499999999999997,
+      "ops": 6000,
+      "us_per_op": 58.333333333333286
+    },
+    "c578e29Afloor2:point": {
+      "cpu_s": 0.3300000000000003,
+      "ops": 6000,
+      "us_per_op": 55.00000000000005
+    },
+    "c578e29Afloor1:point_heap": {
+      "cpu_s": 0.37,
+      "ops": 4000,
+      "us_per_op": 92.5
+    },
+    "c578e29Afloor2:point_heap": {
+      "cpu_s": 0.26000000000000023,
+      "ops": 4000,
+      "us_per_op": 65.00000000000006
+    },
+    "c578e29Afloor1:range": {
+      "cpu_s": 0.20000000000000007,
+      "ops": 2500,
+      "us_per_op": 80.00000000000001
+    },
+    "c578e29Afloor2:range": {
+      "cpu_s": 0.22999999999999998,
+      "ops": 2500,
+      "us_per_op": 91.99999999999999
+    },
+    "c578e29Afloor1:join": {
+      "cpu_s": 0.2500000000000001,
+      "ops": 4000,
+      "us_per_op": 62.50000000000003
+    },
+    "c578e29Afloor2:join": {
+      "cpu_s": 0.25,
+      "ops": 4000,
+      "us_per_op": 62.5
+    },
+    "c578e29Afloor1:fk_insert": {
+      "cpu_s": 0.08000000000000007,
+      "ops": 1500,
+      "us_per_op": 53.33333333333338
+    },
+    "c578e29Afloor2:fk_insert": {
+      "cpu_s": 0.06999999999999984,
+      "ops": 1500,
+      "us_per_op": 46.666666666666565
+    },
+    "c578e29Afloor1:plain_insert": {
+      "cpu_s": 0.06000000000000005,
+      "ops": 1500,
+      "us_per_op": 40.000000000000036
+    },
+    "c578e29Afloor2:plain_insert": {
+      "cpu_s": 0.0699999999999994,
+      "ops": 1500,
+      "us_per_op": 46.666666666666266
+    }
+  },
+  "errors": {
+    "c578e29A": {
+      "count": 0,
+      "first": null
+    },
+    "finalB": {
+      "count": 0,
+      "first": null
+    }
+  }
+}

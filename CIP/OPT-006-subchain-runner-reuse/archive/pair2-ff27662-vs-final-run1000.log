@@ -1,0 +1,61 @@
+[setup] rows=1000 fanout=3 seed=20260901
+[setup] done in 0.71s
+[correctness] post-load ok=True
+[latency pass] 12 rounds done in 3.04s
+[cpu pass] 12 rounds done in 3.81s
+[correctness] post-writes ok=True
+wrote /home/cdkbs/ckdbs/.claude/worktrees/path-optimizer/CIP/OPT-006-subchain-runner-reuse/archive/pair2-ff27662-vs-final-run1000.json
+
+arm:shape                       ops      qps   mean us      p0     p25     p50     p95      p99  err
+ff27662A-exists                  96      259    3860.2  3758.2  3791.1  3815.0  4084.7   5197.5    0
+ff27662A-in_                     96      269    3713.0  3646.5  3680.5  3706.6  3802.4   3836.2    0
+ff27662A-scalar                  96      255    3927.4  3871.9  3907.5  3922.6  3974.8   4064.2    0
+ff27662A-control_hoisted         96    2,873     348.1   325.4   331.1   341.4   397.3    420.1    0
+ff27662A-control_update          96      249    4018.0  3901.3  3937.1  3956.1  4057.2   9145.6    0
+finalB-exists                    96      258    3877.3  3767.7  3809.0  3835.7  4128.3   4196.1    0
+finalB-in_                       96      264    3791.7  3654.6  3693.2  3733.7  4039.5   4174.1    0
+finalB-scalar                    96      253    3955.8  3870.1  3910.2  3938.4  4173.7   4238.3    0
+finalB-control_hoisted           96    2,873     348.1   321.8   331.5   342.3   395.8    405.0    0
+finalB-control_update            96      260    3847.6  3738.1  3767.9  3786.7  3857.5   8865.4    0
+ff27662Afloor1-exists            48      260    3849.0  3758.3  3810.4  3825.1  4067.4   4286.7    0
+ff27662Afloor2-exists            48      258    3871.4  3758.2  3779.9  3803.0  4144.2   5197.5    0
+ff27662Afloor1-in_               48      269    3719.2  3647.6  3686.5  3720.6  3786.0   3836.2    0
+ff27662Afloor2-in_               48      270    3706.7  3646.5  3678.5  3692.9  3813.9   3831.0    0
+ff27662Afloor1-scalar            48      254    3937.6  3882.7  3917.6  3937.8  3974.8   4020.1    0
+ff27662Afloor2-scalar            48      255    3917.2  3871.9  3898.3  3914.1  3961.2   4064.2    0
+ff27662Afloor1-control_hoisted     48    2,805     356.5   326.8   333.0   345.0   405.3    420.1    0
+ff27662Afloor2-control_hoisted     48    2,945     339.6   325.4   329.3   338.6   361.6    382.7    0
+ff27662Afloor1-control_update     48      252    3960.1  3905.1  3928.4  3956.0  4009.3   4063.1    0
+ff27662Afloor2-control_update     48      245    4075.9  3901.3  3938.8  3960.1  4099.1   9145.6    0
+
+arm:shape (cpu)                 ops       us/op    us/1k-outer-rows
+ff27662A:exists                 120     2500.00             2500.00
+ff27662A:in_                    120     2916.67             2916.67
+ff27662A:scalar                 120     3000.00             3000.00
+ff27662A:control_hoisted        120      500.00              500.00
+ff27662A:control_update         120     4000.00             4000.00
+finalB:exists                   120     2583.33             2583.33
+finalB:in_                      120     3083.33             3083.33
+finalB:scalar                   120     3083.33             3083.33
+finalB:control_hoisted          120      416.67              416.67
+finalB:control_update           120     3666.67             3666.67
+ff27662Afloor1:exists            60     2500.00             2500.00
+ff27662Afloor2:exists            60     2500.00             2500.00
+ff27662Afloor1:in_               60     2833.33             2833.33
+ff27662Afloor2:in_               60     3000.00             3000.00
+ff27662Afloor1:scalar            60     3000.00             3000.00
+ff27662Afloor2:scalar            60     3000.00             3000.00
+ff27662Afloor1:control_hoisted     60      833.33              833.33
+ff27662Afloor2:control_hoisted     60      166.67              166.67
+ff27662Afloor1:control_update     60     4000.00             4000.00
+ff27662Afloor2:control_update     60     4000.00             4000.00
+
+ANALYZE sub_runs=/examined= (memo_hits=/replays=/trail_misses= informational only):
+  exists            ff27662A sub_runs=[1000] examined=[2000, 1000, 1000] memo_hits=[] replays=[] trail_misses=[]
+  exists            finalB sub_runs=[1000] examined=[2000, 1000, 1000] memo_hits=[] replays=[] trail_misses=[]
+  in_               ff27662A sub_runs=[1000] examined=[3402, 1000, 2402] memo_hits=[] replays=[] trail_misses=[]
+  in_               finalB sub_runs=[1000] examined=[3402, 1000, 2402] memo_hits=[] replays=[] trail_misses=[]
+  scalar            ff27662A sub_runs=[1000] examined=[4000, 1000, 3000] memo_hits=[] replays=[] trail_misses=[]
+  scalar            finalB sub_runs=[1000] examined=[4000, 1000, 3000] memo_hits=[] replays=[] trail_misses=[]
+  control_hoisted   ff27662A sub_runs=[1] examined=[3000, 3000] memo_hits=[] replays=[] trail_misses=[]
+  control_hoisted   finalB sub_runs=[1] examined=[3000, 3000] memo_hits=[] replays=[] trail_misses=[]

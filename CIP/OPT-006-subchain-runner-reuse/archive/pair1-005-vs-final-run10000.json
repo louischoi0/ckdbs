@@ -1,0 +1,659 @@
+{
+  "rows": 10000,
+  "fanout": 3,
+  "seed": 20260901,
+  "lat_rounds": 8,
+  "cpu_rounds": 8,
+  "lat_ops": 2,
+  "cpu_ops": 3,
+  "pre_check": {
+    "label": "post-load",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_outer",
+        "hashes": {
+          "c578e29A": "9a8d3d8a47808da7555596f85fa872d4eb727ec21219a7c89852644dbf8117a2",
+          "finalB": "9a8d3d8a47808da7555596f85fa872d4eb727ec21219a7c89852644dbf8117a2"
+        },
+        "match": true
+      },
+      {
+        "check": "t_inner",
+        "hashes": {
+          "c578e29A": "275be12c25c8ba02e6a4f37e2579d3a7234eb2f1c8109f79a95db350f79f4297",
+          "finalB": "275be12c25c8ba02e6a4f37e2579d3a7234eb2f1c8109f79a95db350f79f4297"
+        },
+        "match": true
+      },
+      {
+        "check": "exists_result",
+        "hashes": {
+          "c578e29A": "fc8f3e030b9434c125634331d3290e91efa75136a305724248876bbf1ca35b10",
+          "finalB": "fc8f3e030b9434c125634331d3290e91efa75136a305724248876bbf1ca35b10"
+        },
+        "match": true
+      },
+      {
+        "check": "in_result",
+        "hashes": {
+          "c578e29A": "823db12c4ffff6d210969d940adbb1ffcf647297f4686897ad35195ba2d4e366",
+          "finalB": "823db12c4ffff6d210969d940adbb1ffcf647297f4686897ad35195ba2d4e366"
+        },
+        "match": true
+      },
+      {
+        "check": "scalar_result",
+        "hashes": {
+          "c578e29A": "4a417114a85766b3b222480c49d0bfcb6c22fb0fcd33f83cd63e72c6d333499e",
+          "finalB": "4a417114a85766b3b222480c49d0bfcb6c22fb0fcd33f83cd63e72c6d333499e"
+        },
+        "match": true
+      }
+    ]
+  },
+  "post_check": {
+    "label": "post-writes",
+    "ok": true,
+    "checks": [
+      {
+        "check": "t_outer",
+        "hashes": {
+          "c578e29A": "7372faac82e7eb0980fae990abf86ffdaf76b325b9b9fe7f66f1c2ce85718b5f",
+          "finalB": "7372faac82e7eb0980fae990abf86ffdaf76b325b9b9fe7f66f1c2ce85718b5f"
+        },
+        "match": true
+      },
+      {
+        "check": "t_inner",
+        "hashes": {
+          "c578e29A": "275be12c25c8ba02e6a4f37e2579d3a7234eb2f1c8109f79a95db350f79f4297",
+          "finalB": "275be12c25c8ba02e6a4f37e2579d3a7234eb2f1c8109f79a95db350f79f4297"
+        },
+        "match": true
+      },
+      {
+        "check": "exists_result",
+        "hashes": {
+          "c578e29A": "fc8f3e030b9434c125634331d3290e91efa75136a305724248876bbf1ca35b10",
+          "finalB": "fc8f3e030b9434c125634331d3290e91efa75136a305724248876bbf1ca35b10"
+        },
+        "match": true
+      },
+      {
+        "check": "in_result",
+        "hashes": {
+          "c578e29A": "823db12c4ffff6d210969d940adbb1ffcf647297f4686897ad35195ba2d4e366",
+          "finalB": "823db12c4ffff6d210969d940adbb1ffcf647297f4686897ad35195ba2d4e366"
+        },
+        "match": true
+      },
+      {
+        "check": "scalar_result",
+        "hashes": {
+          "c578e29A": "4a417114a85766b3b222480c49d0bfcb6c22fb0fcd33f83cd63e72c6d333499e",
+          "finalB": "4a417114a85766b3b222480c49d0bfcb6c22fb0fcd33f83cd63e72c6d333499e"
+        },
+        "match": true
+      }
+    ]
+  },
+  "analyze": {
+    "exists": {
+      "c578e29A": {
+        "sub_runs": [
+          10000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          20000,
+          10000,
+          10000
+        ],
+        "raw_head": "analyze rows=10000 class=JoinSelect steps=1 examined=20000 pages=20071 opens=10001 pattern_id=0x16cfa14cc6184398\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated EXISTS [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=10000 matched=10000 sel=100% pages=71\nstep 1 IndexProbe t_inner opens=10000 examined=10000 matched=10000 sel=100% pages=20000 sub_runs=10000 index_scanned=30000 index_resolved=10000"
+      },
+      "finalB": {
+        "sub_runs": [
+          10000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          20000,
+          10000,
+          10000
+        ],
+        "raw_head": "analyze rows=10000 class=JoinSelect steps=1 examined=20000 pages=20071 opens=10001 pattern_id=0x16cfa14cc6184398\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated EXISTS [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=10000 matched=10000 sel=100% pages=71\nstep 1 IndexProbe t_inner opens=10000 examined=10000 matched=10000 sel=100% pages=20000 sub_runs=10000 index_scanned=30000 index_resolved=10000"
+      }
+    },
+    "in_": {
+      "c578e29A": {
+        "sub_runs": [
+          10000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          34021,
+          10000,
+          24021
+        ],
+        "raw_head": "analyze rows=5976 class=JoinSelect steps=1 examined=34021 pages=34092 opens=10001 pattern_id=0x94620a7c4eebb84c\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated IN 0:0.1 <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=10000 matched=10000 sel=100% pages=71\nstep 1 IndexProbe t_inner opens=10000 examined=24021 matched=24021 sel=100% pages=34021 sub_runs=10000 index_scanned=30000 index_resolved=24021"
+      },
+      "finalB": {
+        "sub_runs": [
+          10000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          34021,
+          10000,
+          24021
+        ],
+        "raw_head": "analyze rows=5976 class=JoinSelect steps=1 examined=34021 pages=34092 opens=10001 pattern_id=0x94620a7c4eebb84c\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated IN 0:0.1 <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=10000 matched=10000 sel=100% pages=71\nstep 1 IndexProbe t_inner opens=10000 examined=24021 matched=24021 sel=100% pages=34021 sub_runs=10000 index_scanned=30000 index_resolved=24021"
+      }
+    },
+    "scalar": {
+      "c578e29A": {
+        "sub_runs": [
+          10000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          40000,
+          10000,
+          30000
+        ],
+        "raw_head": "analyze rows=6014 class=JoinSelect steps=1 examined=40000 pages=40071 opens=10001 pattern_id=0x64bb20ddcc1de2c4\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated scalar 0:0.2 = <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\n      filter 0:0.3 = 0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=10000 matched=10000 sel=100% pages=71\nstep 1 IndexProbe t_inner opens=10000 examined=30000 matched=10000 sel=33% pages=40000 sub_runs=10000 index_scanned=30000 index_resolved=30000"
+      },
+      "finalB": {
+        "sub_runs": [
+          10000
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          40000,
+          10000,
+          30000
+        ],
+        "raw_head": "analyze rows=6014 class=JoinSelect steps=1 examined=40000 pages=40071 opens=10001 pattern_id=0x64bb20ddcc1de2c4\nclass=JoinSelect steps=1 hoisted=0\nstep 0 Scan t_outer\n  correlated scalar 0:0.2 = <- 0:0.2 [correlated]\n    step 1 IndexProbe t_inner key=1:0.0\n      filter 0:0.1 = 1:0.0\n      filter 0:0.3 = 0\nproject id=0:0.0\nstep 0 Scan t_outer opens=1 examined=10000 matched=10000 sel=100% pages=71\nstep 1 IndexProbe t_inner opens=10000 examined=30000 matched=10000 sel=33% pages=40000 sub_runs=10000 index_scanned=30000 index_resolved=30000"
+      }
+    },
+    "control_hoisted": {
+      "c578e29A": {
+        "sub_runs": [
+          1
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          30000,
+          30000
+        ],
+        "raw_head": "analyze rows=0 class=JoinSelect steps=1 examined=30000 pages=197 opens=1 pattern_id=0x1dce7f926cc48d26\nclass=JoinSelect steps=1 hoisted=1\nhoisted EXISTS [uncorrelated]\n  step 1 FilterScan t_inner\n    filter 0:0.3 = 0\n    filter 0:0.2 < 5\nstep 0 Scan t_outer\nproject id=0:0.0\nstep 1 FilterScan t_inner opens=1 examined=30000 matched=0 sel=0% pages=197 sub_runs=1 corr_scans=1"
+      },
+      "finalB": {
+        "sub_runs": [
+          1
+        ],
+        "memo_hits": [],
+        "replays": [],
+        "trail_misses": [],
+        "examined": [
+          30000,
+          30000
+        ],
+        "raw_head": "analyze rows=0 class=JoinSelect steps=1 examined=30000 pages=197 opens=1 pattern_id=0x1dce7f926cc48d26\nclass=JoinSelect steps=1 hoisted=1\nhoisted EXISTS [uncorrelated]\n  step 1 FilterScan t_inner\n    filter 0:0.3 = 0\n    filter 0:0.2 < 5\nstep 0 Scan t_outer\nproject id=0:0.0\nstep 1 FilterScan t_inner opens=1 examined=30000 matched=0 sel=0% pages=197 sub_runs=1 corr_scans=1"
+      }
+    }
+  },
+  "phases": {
+    "c578e29A:exists": {
+      "phase": "c578e29A-exists",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.650171,
+      "qps": 24.6,
+      "mean_us": 40635.7,
+      "p0_us": 39867.4,
+      "p25_us": 40154.3,
+      "p50_us": 40637.2,
+      "p95_us": 42248.3,
+      "p99_us": 42248.3,
+      "max_us": 42248.3
+    },
+    "c578e29A:in_": {
+      "phase": "c578e29A-in_",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.631267,
+      "qps": 25.3,
+      "mean_us": 39454.2,
+      "p0_us": 38868.7,
+      "p25_us": 39098.7,
+      "p50_us": 39367.7,
+      "p95_us": 41776.6,
+      "p99_us": 41776.6,
+      "max_us": 41776.6
+    },
+    "c578e29A:scalar": {
+      "phase": "c578e29A-scalar",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.660176,
+      "qps": 24.2,
+      "mean_us": 41261.0,
+      "p0_us": 40590.0,
+      "p25_us": 40824.3,
+      "p50_us": 41204.6,
+      "p95_us": 42573.0,
+      "p99_us": 42573.0,
+      "max_us": 42573.0
+    },
+    "c578e29A:control_hoisted": {
+      "phase": "c578e29A-control_hoisted",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.040524,
+      "qps": 394.8,
+      "mean_us": 2532.8,
+      "p0_us": 2468.8,
+      "p25_us": 2491.7,
+      "p50_us": 2511.5,
+      "p95_us": 2613.4,
+      "p99_us": 2613.4,
+      "max_us": 2613.4
+    },
+    "c578e29A:control_update": {
+      "phase": "c578e29A-control_update",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.583508,
+      "qps": 27.4,
+      "mean_us": 36469.2,
+      "p0_us": 35820.3,
+      "p25_us": 36146.7,
+      "p50_us": 36514.2,
+      "p95_us": 37052.1,
+      "p99_us": 37052.1,
+      "max_us": 37052.1
+    },
+    "finalB:exists": {
+      "phase": "finalB-exists",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.59738,
+      "qps": 26.8,
+      "mean_us": 37336.3,
+      "p0_us": 36659.0,
+      "p25_us": 36766.7,
+      "p50_us": 37124.9,
+      "p95_us": 38835.8,
+      "p99_us": 38835.8,
+      "max_us": 38835.8
+    },
+    "finalB:in_": {
+      "phase": "finalB-in_",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.575368,
+      "qps": 27.8,
+      "mean_us": 35960.5,
+      "p0_us": 35462.9,
+      "p25_us": 35532.3,
+      "p50_us": 35693.3,
+      "p95_us": 37728.8,
+      "p99_us": 37728.8,
+      "max_us": 37728.8
+    },
+    "finalB:scalar": {
+      "phase": "finalB-scalar",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.612156,
+      "qps": 26.1,
+      "mean_us": 38259.7,
+      "p0_us": 37164.9,
+      "p25_us": 37347.2,
+      "p50_us": 37572.9,
+      "p95_us": 48240.8,
+      "p99_us": 48240.8,
+      "max_us": 48240.8
+    },
+    "finalB:control_hoisted": {
+      "phase": "finalB-control_hoisted",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.039643,
+      "qps": 403.6,
+      "mean_us": 2477.7,
+      "p0_us": 2403.7,
+      "p25_us": 2431.4,
+      "p50_us": 2454.6,
+      "p95_us": 2620.9,
+      "p99_us": 2620.9,
+      "max_us": 2620.9
+    },
+    "finalB:control_update": {
+      "phase": "finalB-control_update",
+      "detail": "",
+      "ops": 16,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.601552,
+      "qps": 26.6,
+      "mean_us": 37597.0,
+      "p0_us": 37019.6,
+      "p25_us": 37472.9,
+      "p50_us": 37573.2,
+      "p95_us": 38118.6,
+      "p99_us": 38118.6,
+      "max_us": 38118.6
+    }
+  },
+  "floor": {
+    "c578e29Afloor1:exists": {
+      "phase": "c578e29Afloor1-exists",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.323544,
+      "qps": 24.7,
+      "mean_us": 40443.0,
+      "p0_us": 39867.4,
+      "p25_us": 40022.2,
+      "p50_us": 40154.3,
+      "p95_us": 41014.5,
+      "p99_us": 41014.5,
+      "max_us": 41014.5
+    },
+    "c578e29Afloor2:exists": {
+      "phase": "c578e29Afloor2-exists",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.326627,
+      "qps": 24.5,
+      "mean_us": 40828.4,
+      "p0_us": 40207.7,
+      "p25_us": 40239.3,
+      "p50_us": 40696.0,
+      "p95_us": 42248.3,
+      "p99_us": 42248.3,
+      "max_us": 42248.3
+    },
+    "c578e29Afloor1:in_": {
+      "phase": "c578e29Afloor1-in_",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.315563,
+      "qps": 25.4,
+      "mean_us": 39445.3,
+      "p0_us": 38868.7,
+      "p25_us": 38877.4,
+      "p50_us": 39098.7,
+      "p95_us": 41776.6,
+      "p99_us": 41776.6,
+      "max_us": 41776.6
+    },
+    "c578e29Afloor2:in_": {
+      "phase": "c578e29Afloor2-in_",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.315704,
+      "qps": 25.3,
+      "mean_us": 39463.0,
+      "p0_us": 39312.2,
+      "p25_us": 39335.8,
+      "p50_us": 39398.6,
+      "p95_us": 39755.4,
+      "p99_us": 39755.4,
+      "max_us": 39755.4
+    },
+    "c578e29Afloor1:scalar": {
+      "phase": "c578e29Afloor1-scalar",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.328643,
+      "qps": 24.3,
+      "mean_us": 41080.4,
+      "p0_us": 40590.0,
+      "p25_us": 40724.9,
+      "p50_us": 40824.3,
+      "p95_us": 42573.0,
+      "p99_us": 42573.0,
+      "max_us": 42573.0
+    },
+    "c578e29Afloor2:scalar": {
+      "phase": "c578e29Afloor2-scalar",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.331533,
+      "qps": 24.1,
+      "mean_us": 41441.6,
+      "p0_us": 41108.9,
+      "p25_us": 41224.9,
+      "p50_us": 41461.1,
+      "p95_us": 41689.3,
+      "p99_us": 41689.3,
+      "max_us": 41689.3
+    },
+    "c578e29Afloor1:control_hoisted": {
+      "phase": "c578e29Afloor1-control_hoisted",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.020253,
+      "qps": 395.0,
+      "mean_us": 2531.6,
+      "p0_us": 2468.8,
+      "p25_us": 2486.8,
+      "p50_us": 2510.6,
+      "p95_us": 2613.4,
+      "p99_us": 2613.4,
+      "max_us": 2613.4
+    },
+    "c578e29Afloor2:control_hoisted": {
+      "phase": "c578e29Afloor2-control_hoisted",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.020271,
+      "qps": 394.6,
+      "mean_us": 2533.9,
+      "p0_us": 2476.6,
+      "p25_us": 2492.6,
+      "p50_us": 2511.5,
+      "p95_us": 2588.3,
+      "p99_us": 2588.3,
+      "max_us": 2588.3
+    },
+    "c578e29Afloor1:control_update": {
+      "phase": "c578e29Afloor1-control_update",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.29082,
+      "qps": 27.5,
+      "mean_us": 36352.5,
+      "p0_us": 35820.3,
+      "p25_us": 35991.3,
+      "p50_us": 36393.9,
+      "p95_us": 37052.1,
+      "p99_us": 37052.1,
+      "max_us": 37052.1
+    },
+    "c578e29Afloor2:control_update": {
+      "phase": "c578e29Afloor2-control_update",
+      "detail": "",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.292688,
+      "qps": 27.3,
+      "mean_us": 36585.9,
+      "p0_us": 36146.7,
+      "p25_us": 36375.7,
+      "p50_us": 36611.6,
+      "p95_us": 36983.6,
+      "p99_us": 36983.6,
+      "max_us": 36983.6
+    }
+  },
+  "cpu": {
+    "c578e29A:exists": {
+      "cpu_s": 0.6700000000000008,
+      "ops": 24,
+      "us_per_op": 27916.6666666667
+    },
+    "c578e29A:in_": {
+      "cpu_s": 0.799999999999998,
+      "ops": 24,
+      "us_per_op": 33333.33333333325
+    },
+    "c578e29A:scalar": {
+      "cpu_s": 0.8000000000000016,
+      "ops": 24,
+      "us_per_op": 33333.3333333334
+    },
+    "c578e29A:control_hoisted": {
+      "cpu_s": 0.08000000000000007,
+      "ops": 24,
+      "us_per_op": 3333.333333333336
+    },
+    "c578e29A:control_update": {
+      "cpu_s": 0.8699999999999992,
+      "ops": 24,
+      "us_per_op": 36249.99999999997
+    },
+    "finalB:exists": {
+      "cpu_s": 0.6099999999999994,
+      "ops": 24,
+      "us_per_op": 25416.666666666642
+    },
+    "finalB:in_": {
+      "cpu_s": 0.6900000000000004,
+      "ops": 24,
+      "us_per_op": 28750.000000000015
+    },
+    "finalB:scalar": {
+      "cpu_s": 0.7300000000000004,
+      "ops": 24,
+      "us_per_op": 30416.666666666686
+    },
+    "finalB:control_hoisted": {
+      "cpu_s": 0.07000000000000117,
+      "ops": 24,
+      "us_per_op": 2916.666666666715
+    },
+    "finalB:control_update": {
+      "cpu_s": 0.8999999999999986,
+      "ops": 24,
+      "us_per_op": 37499.99999999994
+    }
+  },
+  "cpu_floor": {
+    "c578e29Afloor1:exists": {
+      "cpu_s": 0.33999999999999986,
+      "ops": 12,
+      "us_per_op": 28333.33333333332
+    },
+    "c578e29Afloor2:exists": {
+      "cpu_s": 0.33000000000000096,
+      "ops": 12,
+      "us_per_op": 27500.00000000008
+    },
+    "c578e29Afloor1:in_": {
+      "cpu_s": 0.39999999999999947,
+      "ops": 12,
+      "us_per_op": 33333.33333333329
+    },
+    "c578e29Afloor2:in_": {
+      "cpu_s": 0.3999999999999986,
+      "ops": 12,
+      "us_per_op": 33333.33333333321
+    },
+    "c578e29Afloor1:scalar": {
+      "cpu_s": 0.40000000000000036,
+      "ops": 12,
+      "us_per_op": 33333.33333333336
+    },
+    "c578e29Afloor2:scalar": {
+      "cpu_s": 0.40000000000000124,
+      "ops": 12,
+      "us_per_op": 33333.33333333344
+    },
+    "c578e29Afloor1:control_hoisted": {
+      "cpu_s": 0.040000000000000036,
+      "ops": 12,
+      "us_per_op": 3333.333333333336
+    },
+    "c578e29Afloor2:control_hoisted": {
+      "cpu_s": 0.040000000000000036,
+      "ops": 12,
+      "us_per_op": 3333.333333333336
+    },
+    "c578e29Afloor1:control_update": {
+      "cpu_s": 0.4400000000000004,
+      "ops": 12,
+      "us_per_op": 36666.6666666667
+    },
+    "c578e29Afloor2:control_update": {
+      "cpu_s": 0.4299999999999988,
+      "ops": 12,
+      "us_per_op": 35833.33333333324
+    }
+  },
+  "errors": {
+    "c578e29A": {
+      "count": 0,
+      "first": null
+    },
+    "finalB": {
+      "count": 0,
+      "first": null
+    }
+  }
+}
