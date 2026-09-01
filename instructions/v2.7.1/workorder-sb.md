@@ -212,6 +212,40 @@ SA-R2's narrowing to UNIQUE-indexed shapes the re-added arm and waits on
 IX11's `unique` flag, which is a condition on the arm rather than the
 trigger for its return.
 
+**A4 — SB5's `bench/v2.7.3/` is not a directory CLA may open.** The
+version of record is `v2.7.0` and nothing has tagged v2.7.3; under
+Version Management the operator names `x` and `y`, and a results file
+lives under **its version's** directory. SB-M1 landed at
+`bench/v2.7.0/results-sbm1-cabin-scope-neutrality-v2.7.0-49-g71f92f6.md`.
+
+**SB-M1: measured 2026-09-01, and H-SB1 holds.** Two binaries, each from
+a clean `git archive` of its own commit — `e1897dc` (docs-only, so its
+code is the pre-SB base) against `71f92f6` — release, interleaved,
+`cores = 1`, ext4, three sizes 50x apart. Server CPU per cabin-served
+probe moved **-12.2% to +4.7%** (heap) and **-12.0% to +0.0%** (btree),
+against a control that cannot reach the changed code at all and itself
+moved **+3.4% to +6.3%** on the same host in the same run: the delta is
+unresolvable from noise, which is the finding rather than a hedge.
+Byte-identity held across 2,268,000 statements, 0 errors.
+
+**The instrument is what makes this more than "too small to see".**
+`SHOW CABINS`' `scope_declines` read **0 across 648,000 probes** to the
+cabin-declared relations, and `cabin_scope_fallthroughs` never appeared
+on `SHOW META` at all — so `CabinScopeCovers`' second branch
+(`ServableBy`, the range directory) is *provably* never reached on a
+one-range relation, rather than merely cheap. §4b rule 1's "write the
+one-range fast path first" is the reason a counter can read a clean
+zero here; a predicate written split-case-first would have been equally
+correct and would have had nothing to show. SB-R4's counters earned
+their place on their first use.
+
+One anomaly is reported in the results file rather than buried: an
+intermittent p50 elevation on `btree-cabin[10k]` in 2 of 4 sweeps, which
+vanished in three isolation runs and reproduces on the **uncabined**
+control at 1k rows — a shape SB1-SB4's diff cannot reach, which is what
+rules it out by construction. The driver is
+`tools/cabin_scope_ab_benchmark.py`, documented in `bench/docs/README.md`.
+
 **What SB4 and SB5 became under A1.** SB4's first ruled cell — probe
 versus in-flight split across broadcast/ack/grant scheduling points —
 has no seams to seed: the discard, the rows and the caller's reply are
@@ -221,7 +255,12 @@ two failure directions instead. The second cell (authority collapse) is
 asserted as far as the tree carries it: every boundary this path opens
 discards first, so a migration inherits the rule rather than needing a
 second one; the mover (R5) does not exist. SB5's SB-M2 has no
-acknowledged broadcast to price.
+acknowledged broadcast to price, and SB-M3's subject is structurally
+zero — a split relation is never read locally and every fan-in stage
+carries no Cabin store, so the serve/fall-through mix is 0%/100% by
+construction rather than by measurement. Both are recorded here as
+**not measurable yet** rather than answered with a number whose subject
+does not exist; SB-M3 becomes real the day a stage is given a store.
 
 **One defect found by lifting the gate, and it was reachable.**
 `CabinOptimizerExecutor::BuildSeededSets` walked `desc_page_id` alone.
