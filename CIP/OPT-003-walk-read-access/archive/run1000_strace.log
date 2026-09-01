@@ -1,0 +1,15 @@
+[setup] mode=strace rows=1000 del_victims=29 seed=20260901
+[setup] done in 6.79s; first insert reply A='INSERTED oid=4000 id=1 page=129 slot=0' B='INSERTED oid=4000 id=1 page=129 slot=0'
+[correctness] post-load ok=True
+[checkpoint pass] done in 0.63s
+[bytes] resolved from strace logs: A fd=4 B fd=4
+[correctness] post-writes ok=True
+wrote /home/cdkbs/ckdbs/.claude/worktrees/path-optimizer/CIP/OPT-003-walk-read-access/archive/run1000_strace.json
+
+op:side (ckpt)     n  bytes mean  bytes min  bytes max sync us mean
+select:A          25       10158       8192      57344       2949.3
+select:B          25       10158       8192      57344       3071.6
+update:A          25      122880     122880     122880       2915.4
+update:B          25       16384      16384      16384       2283.8
+delete:A          25      122880     122880     122880       3145.7
+delete:B          25       16384      16384      16384       2080.8
