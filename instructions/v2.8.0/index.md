@@ -3,16 +3,27 @@
 Opened 2026-09-01 on `worktree-v2.8.0-ratification-ae` at `ea49be1`
 (`v2.7.0-73-gea49be1`).
 
-**The version in one sentence:** v2.8.0 gives up parallelism, works at
-**one range per relation**, and finishes **assertions, the Cabin, foreign
-keys, secondary indexes and the UNIQUE index** — completeness first, then
-extreme performance optimization on the same five.
+**The version in one sentence:** v2.8.0 drops the **range split** — one
+range per relation, the mover (R5) not a priority — **keeps and pushes
+every other kind of parallelism**, cross-owner 2PC included, and finishes
+**assertions, the Cabin, foreign keys, secondary indexes and the UNIQUE
+index**: completeness first, then extreme performance optimization on the
+same five.
+
+The seam that governs everything filed here: **range**-granular
+parallelism (one relation cut across cores) is dropped;
+**owner**-granular parallelism (two relations, two cores, one
+transaction) is kept and maximized. A refusal that fires on a split
+relation is withdrawn work; a refusal that fires because two relations
+sit on two cores is this version's work.
 
 | document | what it is |
 |---|---|
-| `ratification-ae.md` | The governing direction. The operator's words verbatim, what they decide (AE-2), the removal inventory for the split-forcing work (AE-3), the line removal may not cross (AE-4), what one-range leaves standing (AE-5), and what each of the five subjects owes before it counts as finished (AE-6) |
+| `ratification-ae.md` | The governing direction. The operator's words verbatim (AE-1), the range/owner seam (AE-2), what it decides (AE-3), the removal inventory and what is explicitly kept (AE-4), the line removal may not cross (AE-5), what each of the five subjects owes (AE-6), the standing question this version opens (AE-8), and the correction record for AE's first draft (AE-9) |
 
-**Read AE before filing anything here.** It withdraws work orders SA and
-SB (`instructions/v2.7.1/`) as a programme, and it keeps work order IB
-(`instructions/v2.7.2/index.md`) — a single-core index feature — as this
-version's subject rather than a casualty of the withdrawal.
+**Read AE before filing anything here.** It withdraws the *range-shaped*
+half of work orders SA and SB (`instructions/v2.7.1/`) while keeping
+their owner-shaped parts as this version's work, and it keeps work order
+IB (`instructions/v2.7.2/index.md`) — a single-relation index feature —
+as a subject rather than a casualty. The IB workplan lives at
+`docs/inflight/in-progress/workplan-ib.md`.
