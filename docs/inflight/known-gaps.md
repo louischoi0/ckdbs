@@ -2759,19 +2759,26 @@ parent owner, a reference intent left behind — and two things do not:
   arm lives. **The two sibling arms are untouched and still refuse** —
   the cabined arm, whose Bound-Cabin grant question that same §4 leaves
   unverified, and `CannotEnforce`'s, which carries a measured Finding 2.
-- **The dispatcher's park is proved by compilation and by the suite not
-  regressing, and not yet by an end-to-end cell.** The wire has its own
-  seven cells (`fk_probe_service_test.cpp`) and the reverse direction has
-  two, but no test drives a real cross-owner `INSERT` through the fork's
-  park, the probe round and the resume — and **this is the debt whose
-  landing hid the gate above**. It was handed from AH-T2 to AH-T4 and
-  from AH-T4 to AH-T6. With the funding gate narrowed the debt is
-  **payable**, and AH-T6 is where it is owed. The in-process rig that
-  holds the existing shipped-write cells cannot pay it: it refills no
-  peer's transaction-id or row-id lease for a relation it did not open
-  itself, so a completed peer write meets `TXN_CONFLICT retryable=1`
-  there forever — a fixture limit, not an engine one. The cell therefore
-  rides AH-T6's two-process fixture.
+- ~~**The dispatcher's park is proved by compilation and by the suite not
+  regressing, and not yet by an end-to-end cell.**~~ **Paid 2026-09-02 by
+  AI-T2** (`instructions/v2.8.0/workorder-ai.md`).
+  `CoreRuntimeTest.ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildRow`
+  drives a real cross-owner `INSERT` — parent on core 0, child on the
+  peer — through the fork's park, one probe round, the owner's answer and
+  the resume, and reads the written row back on its owner. It runs
+  **in process**: the rig gained core 0's two probe halves and a
+  `FundPeerForRelation` helper (the fault extent, the write grants and a
+  row-id block), so the earlier "this needs AH-T6's two-process fixture"
+  reading was a fixture gap rather than a fixture limit. The debt that
+  was handed from AH-T2 to AH-T4 to AH-T6 is closed here.
+
+  **And it found what a deferred acceptance test is for.** The reference
+  intent is never released on an autocommit statement, a session whose
+  first cross-core contact is a probe has no shipping identity so its
+  transaction cannot commit, and every un-shipped session shares one
+  intent holder: `docs/inflight/bugs/fk-reference-intent-never-released-on-autocommit.md`,
+  open, with the fix shape for the first of the three named as a decision
+  rather than an oversight.
 
 **And the intent's crash window is stated but not demonstrated.** An
 intent-only participant writes no `TXN_PREPARE` record, so its intents die

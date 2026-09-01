@@ -241,7 +241,7 @@ comparison.
 | AI-R4 | **Ruled 2026-09-02: the end-to-end cell lands here, as AI-T2**, CLA's proposal — it is this order's acceptance test |
 | AI-T0 | **Done 2026-09-02.** Eight sites surveyed, H-AI3 **held**: no site outside the gate descends a relation this core does not own. Table below |
 | AI-T1 | **Complete 2026-09-02.** The lift itself and three of AI-R5's placements landed 2026-09-01 at `956f00d`; the remainder lands here — the one surviving stale contract claim corrected, H-AI2 answered by source-read, and AI-R3's re-point built. See "AI-T1's remainder" below |
-| AI-T2 | in progress — the rulings that gated it are ruled |
+| AI-T2 | **First slice built 2026-09-02, and it found three defects.** The end-to-end cross-owner INSERT runs in process and is pinned; H-AI1's four fixtures are not all built yet, and the intent's release cannot be asserted because it does not happen. See "AI-T2, first slice" below |
 | AI-T3 | not started |
 
 ### The order arrived after its own AI-T1
@@ -349,3 +349,52 @@ and `TXN_CONFLICT` — moved from the retired FK cell onto
 which until now asserted only that *a* refusal crossed. The group header
 records the move so the next reader does not have to reconstruct it.
 Both cells green.
+
+### AI-T2, first slice — the crossing runs, and three things behind it do not
+
+**The cell exists and passes**, which is the first time a real cross-owner
+`INSERT` has run in this repository:
+`CoreRuntimeTest.ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildRow`.
+Parent on core 0, child on the peer, the statement started on the **peer's**
+dispatcher: the first poll parks (the extraction pass runs before any row
+work, AH-R1), one pump carries the probe and core 0 answers, `probes()` goes
+to 1 and stays there, an intent appears on the parent's owner, the statement
+resumes and the row is written and readable through the peer's own
+dispatcher.
+
+**Two fixture pieces made it reachable, and neither is an engine change.**
+Core 0 in `ForeignIndexRig` is hand-built, so it needed the two probe halves
+production wires on every core (`CoreRuntime::AttachTransport`), plus
+`SetFkIntents`; and `FundPeerForRelation` applies
+`AFundedPeerInsertsIntoItsOwnRelationEndToEnd`'s recipe — fault extent, write
+grants over the two creation pages, a row-id block — to a relation created
+*after* the rig opened. The "a completed peer write meets `TXN_CONFLICT
+retryable=1` there forever" note carried at `956f00d` was therefore a
+**fixture gap, not a fixture limit**, and the corrected reading is in
+`known-gaps.md`. One ordering matters and is stated in the cell: sync core
+0's store **before** funding, because `AdmitWritePages` faults each granted
+page for read before restamping it and abandons the whole grant silently
+otherwise.
+
+**Two policies place a relation on each side of a two-core rig.** `kRotate`
+puts everything on core 1 at two cores (`kSystemCore + 1 + seq % (core_count
+- 1)`), so the parent takes `kCreatingCore` for the length of its `CREATE`.
+
+**What the slice found** is in
+`docs/inflight/bugs/fk-reference-intent-never-released-on-autocommit.md`,
+open: the intent is never released on an autocommit statement and the parent
+row becomes permanently un-deletable behind a `retryable=1` code (F1); a
+session whose first cross-core contact is a probe never mints a shipping
+identity, so a transaction carrying a cross-owner FK write refuses at
+`COMMIT` (F2); and every un-shipped session shares the holder key
+`(core, 0)`, so one decide would release another session's intents (F3). One
+root cause — the probe path uses the shipping identity without being one of
+the things that mints it, and the autocommit path assumes a decide its own
+enrolment rule prevents.
+
+**H-AI1 is therefore split rather than held or falsified.** The present-parent
+fixture holds end to end. The other three (absent parent, retired parent,
+in-flight parent) and the intent's release-after-decide are **not built
+here**, because two of them cannot be asserted until F1/F2 are answered: an
+explicit transaction cannot commit, and an autocommit's intent never ends.
+The remaining fixtures land with the fix.

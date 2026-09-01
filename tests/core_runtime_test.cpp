@@ -118,6 +118,16 @@ protected:
     // real ring, and the client the statement parks on.
     void OpenForeignIndexRig(struct ForeignIndexRig& rig, const char* table);
 
+    // Funds the peer for **one more** relation than the rig opened with
+    // (AI-T2). `OpenForeignIndexRig` funds exactly its own table, so a
+    // relation created afterwards through core 0's dispatcher is
+    // peer-*owned* and peer-*unfunded* - and an unfunded write refuses
+    // `TXN_CONFLICT retryable=1` forever, which reads like an engine
+    // refusal and is a fixture's. This is `AFundedPeerInsertsIntoItsOwn
+    // RelationEndToEnd`'s recipe, once: the fault extent, the write grants
+    // over the two creation pages, and a row-id block.
+    void FundPeerForRelation(struct ForeignIndexRig& rig, catalog::Oid oid);
+
     static inline int counter_ = 0;
     std::filesystem::path dir_;
     sched::SystemClock clock_;
@@ -4039,6 +4049,17 @@ struct ForeignIndexRig {
     // declared with `ship` and for its reason - the dispatcher holds a
     // pointer to it and must die first.
     std::optional<Txn2pcClient> txn2pc;
+    // **Core 0's two halves of the foreign-key probe** (AI-T2). Production
+    // wires both on every core (`CoreRuntime::AttachTransport`), because a
+    // relation is a foreign parent on one statement and a child on the
+    // next; this rig built core 0 by hand and so has to do the same, or a
+    // peer's cross-owner INSERT parks on a request nobody answers. The
+    // table is declared ahead of the server that fills it and ahead of the
+    // dispatcher that reads it, which is `core_runtime.hpp`'s own order and
+    // for its reason.
+    FkIntentTable fk_intents;
+    std::optional<FkProbeClient> fk_client;
+    std::optional<FkProbeServer> fk_server;
     std::optional<CommandDispatcher> dispatcher;
     // **Core 0's owner half of statement shipping** (SS1's wiring rule:
     // every core answers requests and every core receives replies). The
@@ -4068,6 +4089,15 @@ struct ForeignIndexRig {
                                            Session* session = nullptr) {
         return sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
                                    dispatcher->DispatchAsync(sql, session, &out));
+    }
+    // The **peer's** statement as its reactor would poll it (AI-T2). The
+    // rig's other cells drive core 0 because that is where a shipped
+    // statement starts; a cross-owner INSERT starts on the owner, and the
+    // owner is the peer.
+    std::unique_ptr<sched::CoroTask> StartOnPeer(const char* sql, DispatchOutcome& out,
+                                                 Session* session = nullptr) {
+        return sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                   peer->dispatcher().DispatchAsync(sql, session, &out));
     }
     // Polls `statement` between turns until it finishes; false if it does
     // not within `max_rounds`.
@@ -4165,6 +4195,27 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     ASSERT_TRUE(rig.txn2pc->RegisterReplyReceivers().ok());
     rig.dispatcher->SetTxn2pc(&*rig.txn2pc);
 
+    // **Core 0's foreign-key probe halves** (AI-T2, fk_probe_service.hpp).
+    // The client first and the receiver before the pointer, which is the
+    // ordering `core_runtime.cpp` states: a reply cannot arrive before
+    // there is somewhere to deliver it.
+    rig.fk_client.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.clock);
+    ASSERT_TRUE(rig.fk_client->RegisterReplyReceiver().ok());
+    rig.dispatcher->SetFkProbes(&*rig.fk_client);
+    rig.fk_server.emplace(*rig.catalog2, *core0_store_, /*core_id=*/0, rig.fk_intents, *rig.core0,
+                          rig.ring(), &*rig.txns, /*log=*/nullptr);
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(
+                        sched::RingMessageKind::kFkProbeRequest,
+                        [&rig](const sched::MessageHeader& header,
+                               std::span<const std::byte> payload) {
+                            rig.fk_server->OnRequest(header, payload);
+                        })
+                    .ok());
+    // The parent side's own half (AH-T3): core 0's DELETE consults what a
+    // foreign transaction is relying on before it may proceed.
+    rig.dispatcher->SetFkIntents(&rig.fk_intents);
+
     // **Core 0's owner half of statement shipping** (CB4). Production wires
     // both halves on every core (`CoreRuntime::AttachTransport`); this rig
     // built core 0 by hand and so has to do the same, or a DDL a peer ships
@@ -4202,6 +4253,19 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
             .Dispatch("INSERT INTO " + std::string(table) + " VALUES (10), (20), (30)")
             .response;
     ASSERT_NE(ins.rfind("ERR", 0), 0u) << ins;
+}
+
+void CoreRuntimeTest::FundPeerForRelation(ForeignIndexRig& rig, catalog::Oid oid) {
+    auto row = rig.catalog2->GetSysTableRow(oid);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    ASSERT_EQ(row.value().owner_core, 1u) << "only a peer-owned relation needs funding here";
+    rig.peer->GrantRelationFault(RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
+    rig.peer->GrantRelationWrite(pages);
+    ASSERT_TRUE(rig.peer->store().MayWrite(row.value().desc_page_id));
+    auto first = rig.catalog2->AllocateRowIdRange(oid, 16);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    rig.peer->row_id_leases().Grant(oid, first.value(), 16);
 }
 
 // ---- CR5 / CB4-CB6: a peer routes DDL to core 0 --------------------------
@@ -6563,6 +6627,89 @@ TEST_F(CoreRuntimeTest, AShippedWriteToACabinedPeerRelationIsRefusedByTheOwnersS
     EXPECT_EQ(cabin_out.response.find("retryable=1"), std::string::npos) << cabin_out.response;
     EXPECT_EQ(cabin_out.response.find("TXN_CONFLICT"), std::string::npos) << cabin_out.response;
 }
+
+// ---- AI-T2: the cross-owner INSERT, driven end to end -------------------
+//
+// The cell `known-gaps.md` has been owed since AH-T2 and that AH-T4 and
+// AH-T6 each deferred (`instructions/v2.8.0/workorder-ai.md`, AI-R4). Every
+// piece of the crossing has had its own unit cell - the wire's seven, the
+// intent's, the reverse check's two - and none of them drives a statement
+// through fork -> park -> probe -> resume -> row. That is what hid the
+// funding gate AH-T5 found: each piece was right and the path was
+// unreachable.
+//
+// **Two policies make a two-core rig hold one relation on each side.**
+// `kRotate` at two cores places *everything* on core 1 (the rotation is
+// `kSystemCore + 1 + seq % (core_count - 1)`, which is core 1 for every
+// seq), so a parent on core 0 needs `kCreatingCore` for the length of its
+// CREATE and nothing else.
+
+TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildRow) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ai_base");
+
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    ASSERT_EQ(rig.dispatcher->Dispatch("CREATE TABLE aiparent (id int64, v int64) BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    ASSERT_EQ(rig.dispatcher
+                  ->Dispatch("CREATE TABLE aichild (id int64, pid int64 REFERENCES aiparent) "
+                             "BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+
+    auto parent_oid = rig.catalog2->FindTableOidByName("aiparent");
+    ASSERT_TRUE(parent_oid.ok()) << parent_oid.status().message();
+    auto child_oid = rig.catalog2->FindTableOidByName("aichild");
+    ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
+    auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
+    ASSERT_TRUE(parent_row.ok());
+    ASSERT_EQ(parent_row.value().owner_core, 0u) << "the parent must be core 0's for this to cross";
+
+    // **Sync before funding, not after.** `AdmitWritePages` faults each
+    // granted page for read before it restamps it, so a creation page still
+    // only in core 0's cache abandons the whole grant silently and the peer
+    // is left owning a relation it may not write.
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+    FundPeerForRelation(rig, child_oid.value());
+
+    // A parent row with a **named** pk, so the child below references a
+    // value this test knows rather than one it parses back out of a reply.
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO aiparent VALUES (7, 5)").response.rfind("ERR",
+                                                                                            0),
+              0u);
+
+    DispatchOutcome out;
+    auto statement = rig.StartOnPeer("INSERT INTO aichild VALUES (7)", out);
+
+    // **Parked.** The first poll runs the extraction pass, finds the parent
+    // foreign, sends one probe and returns pending - before any row work,
+    // which is AH-R1's whole point.
+    ASSERT_EQ(statement->Poll(), sched::PollResult::kSuspended) << out.response;
+    EXPECT_EQ(rig.fk_server->probes(), 0u)
+        << "the request cannot have been handled before the ring was pumped";
+
+    // **The probe crosses, the owner answers, the intent is left behind.**
+    // One pump is the peer's send and core 0's handling of it.
+    rig.Pump();
+    EXPECT_EQ(rig.fk_server->probes(), 1u) << "core 0 never saw the probe";
+    EXPECT_EQ(rig.fk_intents.live_rows(), 1u)
+        << "a passing probe must leave a reference intent on the parent's owner";
+
+    // **Resumed, and the row is written.** One probe round for one
+    // statement, whatever its row count (AH-R2).
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_NE(out.response.rfind("ERR", 0), 0u) << "the cross-owner INSERT: " << out.response;
+    EXPECT_EQ(rig.fk_server->probes(), 1u) << "one round per distinct owner, not per row";
+
+    // The row is on the peer, readable through the peer's own dispatcher.
+    const std::string rows = rig.peer->dispatcher().Dispatch("SELECT pid FROM aichild").response;
+    EXPECT_EQ(rows.rfind("ERR", 0), std::string::npos) << rows;
+    EXPECT_NE(rows.find("7"), std::string::npos) << "the child row is not there: " << rows;
+}
+
 
 // **The finding this closes** (A5 of the post-SS5 verification order,
 // `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md` Finding 2):
