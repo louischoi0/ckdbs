@@ -283,6 +283,59 @@ private:
     std::vector<std::byte> rows_;
 };
 
+// ---- XG1: SHIPPED_ROW_DESC, the answer edge's description ---------------
+//
+// A shipped read answered in typed rows needs its **description** before
+// its rows, and only the owner has one - it compiled the statement, and a
+// projected read's field list is derivable from no relation's schema on
+// the arrival core.
+//
+// **Chunked, because the engine has no column-count cap.** A description
+// can exceed one ring message, so it crosses as an ordered sequence
+// reassembled before the receiver is armed. That is what answers the bound
+// XG-R3 was asked for: no ceiling is named and no constant is added.
+//
+// **Its own kind and its own sequence**, never a `kStepBatch` with a flag:
+// `StepBatchHeader::seq` is per-edge and asserted contiguous, so a
+// differently-shaped payload folded into it would break the assertion or
+// force chunks to be counted as batches.
+//
+// The bytes it carries are `wire::EncodeRowDescription`'s - the same
+// encoding an `S_ROW_DESC` frame holds - so a description has one encoder
+// in the engine exactly as a row does.
+struct ShippedRowDescHeader {
+    PipelineTag tag{};
+    // This chunk's index, from 0, and how many there are. `chunks` rides
+    // every chunk rather than only the first: a receiver that lost the
+    // first would otherwise not know it was assembling a description at
+    // all, and the ring's per-edge FIFO makes the two cheap to keep
+    // consistent.
+    std::uint32_t seq = 0;
+    std::uint32_t chunks = 0;
+};
+static_assert(sizeof(ShippedRowDescHeader) == 24);
+
+// The largest description chunk a transport whose slot carries
+// `max_message_bytes` can hold. `StepBatchCeiling`'s shape and its reason:
+// derived from the transport rather than declared beside it, because two
+// numbers that must agree and are written in two places are two numbers
+// that will disagree.
+constexpr std::size_t ShippedRowDescCeiling(std::size_t max_message_bytes) noexcept {
+    return max_message_bytes > sizeof(ShippedRowDescHeader)
+               ? max_message_bytes - sizeof(ShippedRowDescHeader)
+               : 0;
+}
+
+// Splits a SHIPPED_ROW_DESC payload into its header and its slice of the
+// encoded description.
+inline StatusOr<ShippedRowDescHeader> DecodeShippedRowDescHeader(
+    std::span<const std::byte> payload, std::span<const std::byte>& bytes_out) {
+    auto header = DecodePipelinePayload<ShippedRowDescHeader>(payload);
+    if (!header.ok()) return header.status();
+    bytes_out = payload.subspan(sizeof(ShippedRowDescHeader));
+    return header;
+}
+
 // Splits a STEP_BATCH payload back into its header and the row bytes the
 // KWP decoder takes. The row *contents* are DecodeRowBatch's business
 // (wire/row_codec.hpp) - one decoder, like one encoder.

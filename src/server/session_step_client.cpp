@@ -110,6 +110,33 @@ SessionStepClient::RemoteRead* SessionStepClient::Find(const PipelineTag& tag) {
     return nullptr;
 }
 
+void SessionStepClient::OnShippedRowDesc(std::span<const std::byte> payload) {
+    if (reads_.empty()) return;  // OnStepBatch's argument, unchanged
+    std::span<const std::byte> bytes;
+    auto header = DecodeShippedRowDescHeader(payload, bytes);
+    if (!header.ok()) return;
+    RemoteRead* read = Find(header.value().tag);
+    if (read == nullptr) return;  // §3's silent discard
+
+    // **In order, or not at all.** The ring is FIFO per edge, so a `seq`
+    // that is not the next one means the two ends disagree about the
+    // sequence rather than that a chunk is late - and a description
+    // assembled out of order would decode as plausible field widths, which
+    // is invariant 13's forbidden shape one layer up. Reported as a read
+    // error rather than dropped, because a description that never
+    // completes would park the statement to its deadline.
+    if (header.value().seq != read->desc_seen) {
+        read->error = Status::Corruption(
+            "a shipped read's description chunk arrived out of order: expected " +
+            std::to_string(read->desc_seen) + ", got " + std::to_string(header.value().seq));
+        read->done = true;
+        return;
+    }
+    read->desc_chunks = header.value().chunks;
+    ++read->desc_seen;
+    read->description.insert(read->description.end(), bytes.begin(), bytes.end());
+}
+
 void SessionStepClient::OnStepBatch(std::span<const std::byte> payload) {
     // **Absent, not zeroed** (R4-R/RS1, CS3). Since RR2 every core holds a
     // client, and `WireStepEndpoints` hands it every STEP_BATCH and STEP_EOF

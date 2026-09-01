@@ -14,6 +14,8 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/kwp_session.hpp"      // XG1: WireResultSink
+#include "kds/server/remote_step_service.hpp"  // XG1: the answer edge
 #include "kds/server/commit_phase_stats.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/statement_ship_service.hpp"
@@ -252,6 +254,13 @@ public:
     // directly, where an in-doubt context simply waits with nothing to ask.
     void SetTxn2pcServer(Txn2pcServer* server) noexcept { txn_2pc_server_ = server; }
 
+    // **Where a typed shipped read's rows go** (XG1). Unset on a core that
+    // serves no step server - every fixture that never ships one - and a
+    // typed request arriving at such a core is refused rather than answered
+    // in the wrong shape, which is the fail-closed posture the form byte
+    // itself takes.
+    void SetRemoteSteps(RemoteStepServer* server) noexcept { remote_steps_ = server; }
+
     // Statements this core ran on another core's behalf, and finished.
     std::uint64_t executed() const noexcept { return executed_; }
     // Duplicates answered from the record instead of run again (D4).
@@ -457,6 +466,25 @@ private:
         StatementShipServer::ReplyFn reply;
         // The identity's third component. The first two are the map key.
         std::uint64_t sequence = 0;
+
+        // ---- XG1: this statement's answer is typed -----------------------
+        //
+        // `sink` is installed on the session for the statement's life and
+        // must not move while `DispatchAsync` holds a pointer to it, which
+        // is why `Running` is held by `unique_ptr` (the reason stated where
+        // that choice is made). Its batches are sealed at the transport's
+        // `StepBatchCeiling` rather than the socket's 64 KiB - one sink
+        // class, one row encoding, two sealing bounds.
+        //
+        // **The rows are buffered here and shipped after the statement, not
+        // streamed row by row**, and that is forced rather than chosen: a
+        // `ResultSink` is called from inside the executor's row callback
+        // and has **no suspension point**, so nothing on that path can park
+        // on credit. What parks is `Finish`'s send, which drains under the
+        // ordinary credit protocol. `crosscore.md` §4a says so.
+        bool typed_answer = false;
+        PipelineTag answer_tag{};
+        WireResultSink sink;
 
         // Derived, not stored: the two constructors already say which case
         // this is, and a third could forget to set a flag. Deliberately not
@@ -708,6 +736,9 @@ private:
     // XF4. Written from the prepare and decide handlers only, which is what
     // makes a one-owner commit cost nothing: it reaches neither.
     ParticipantCommitStats commit_phase_;
+
+    // XG1's answer edge, or null where this core serves none.
+    RemoteStepServer* remote_steps_ = nullptr;
 
     // SA-T0. Prepares this core answered with no record and no sync because
     // the enrolment had written nothing. Counted on a logged instance only -

@@ -366,11 +366,13 @@ worse than not wiring it.
 | `SessionStepClient::RegisterInbound` | **built** — a receiver for a tag nothing here opened; no `STEP_OPEN` sent, `output_layout` left empty because the layout is the owner's to state |
 | `ShipStatement`: mint, register, ship, close-on-refusal | **built**, behind the gate |
 | `PendingShippedStatement` carries the tag across the park | **built** |
-| the owner's batch sink on the shipped session | **not built** |
-| the description message kind, its chunking and reassembly | **not built** |
-| shipping the batches under credit | **not built** |
-| the arrival core's forward into the session sink | **not built** |
-| the dedup exemption (XG-R2) | **not built** — see the finding below |
+| the owner's batch sink on the shipped session | **built** — `WireResultSink` reused with a settable byte target, sealed at the transport's `StepBatchCeiling` instead of the socket's 64 KiB. One sink class, one row encoding, two sealing bounds |
+| the answer edge on the owner | **built** — `RemoteStepServer::OpenAnswerEdge` / `PushAnswerBatch` / `CloseAnswerEdge`: a fifth producer on the existing pipeline, so credit, `Drain`, `OnStepCredit`, `OnStepCancel` and the EOF are reused unchanged |
+| the description message kind, its chunking and its send | **built** — `kShippedRowDesc` with its own header and sequence, chunked to `ShippedRowDescCeiling`, carrying `wire::EncodeRowDescription`'s bytes |
+| the description's reassembly on the arrival core | **built** — `SessionStepClient::OnShippedRowDesc`, in-order or refused, wired through `WireStepEndpoints` |
+| shipping the batches under credit | **built** — queued in `Finish`, drained on each `STEP_CREDIT` |
+| the dedup exemption (XG-R2) | **built**, narrowed to the typed arm — see the finding below |
+| **the arrival core's forward into the session sink** | **not built** — see §8b |
 
 **A finding the build turned up, and it narrows XG-R2 as specified.**
 XG-R2 exempts *a read* from the dedup record, but **the owner cannot tell
@@ -384,6 +386,43 @@ keeps its record, which is today's behaviour and is bounded at 992 bytes,
 so nothing is unbounded either way. Stated here rather than silently
 narrowed; it wants the operator's eye only if the wider exemption was
 wanted for its own sake.
+
+## 8b. The one piece left, and the decision inside it
+
+**What remains is the arrival core's forward**: on an OK terminator, take
+the reassembled description and the stored batches and put them into the
+session's `ResultSink`. Everything either side of it is built and green.
+
+**It is not a gap, it is a question the `ResultSink` seam does not
+answer.** XG-R1 says the session-side sink "forwards frames without
+re-encoding", and the rows on the edge are already in the D5 encoding a
+`WireResultSink` emits — so a byte-for-byte forward is exactly right *for
+that sink* and exactly wrong for a `TextResultSink`, which takes rendered
+text through the same `Emit`. The interface cannot currently tell the two
+apart, and `Emit`'s contract is "a row an `Encode*` call produced" —
+meaning *this* sink's encoder.
+
+Three ways out, and CLA recommends the second:
+
+1. **Decode and re-encode through the seam**, as `FinishRemoteReads` does
+   for the fan-in. Works for any sink and needs no interface change, but
+   it contradicts XG-R1's "without re-encoding", and it needs a
+   `FieldDescription` → `SysColumnRow` synthesis to reach
+   `wire::FieldToValueChecked` — which is where a `varchar`'s `len` and a
+   `type_mod` are not obviously the same field, and getting it wrong is a
+   mis-widthed value rather than an error.
+2. **Let the sink say whether it takes encoded rows.** A predicate on
+   `ResultSink`, false by default and true on `WireResultSink`, and the
+   forward is then a copy. Honours XG-R1 literally, costs three lines, and
+   the discriminated interface is honest rather than hidden — a text
+   session never reaches this path, because `typed_answer` requires a sink
+   and the text arm ships `form = 0`.
+3. **Hand the sealed batch to the sink whole**, since `WireResultSink`
+   already frames batches for delivery. Fewest copies of all, and the
+   largest interface change.
+
+Stopped here rather than guessed at, because option 1's synthesis is the
+kind of thing that produces plausible values instead of an error.
 
 ## 8. XF1's tasks, written against answers not yet given
 

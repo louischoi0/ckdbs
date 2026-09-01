@@ -144,6 +144,43 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
     // first statement - `mark_shipped` is idempotent.
     running->session->mark_shipped();
     running->sequence = statement.sequence;
+
+    // ---- XG1: a typed answer's edge, opened before the statement runs ----
+    //
+    // Before, because the sink has to be installed before the first row and
+    // the edge has to exist before the first batch. Refused rather than
+    // answered in the wrong shape where this core has no step server - the
+    // form byte's own posture, applied to the one core that could not
+    // honour it.
+    if (statement.typed_answer) {
+        if (remote_steps_ == nullptr) {
+            running->reply = std::move(reply);
+            Running* refused = running.get();
+            running_.emplace(key, std::move(running));
+            const Status s = Status::Unsupported(
+                "statement shipping: core " + std::to_string(core_id_) +
+                " has no cross-core read path and cannot answer a statement in typed rows");
+            refused->reply(s, {}, 0);
+            running_.erase(key);
+            return;
+        }
+        if (Status s = remote_steps_->OpenAnswerEdge(statement.answer_tag, statement.requester);
+            !s.ok()) {
+            running->reply = std::move(reply);
+            Running* refused = running.get();
+            running_.emplace(key, std::move(running));
+            refused->reply(s, {}, 0);
+            running_.erase(key);
+            return;
+        }
+        running->typed_answer = true;
+        running->answer_tag = statement.answer_tag;
+        // The transport's bound, not the socket's: these batches cross a
+        // ring slot, and `kRowBatchTargetBytes` is three orders of
+        // magnitude above it.
+        running->sink.set_batch_target_bytes(remote_steps_->batch_ceiling());
+        running->session->set_result_sink(&running->sink);
+    }
     running->reply = std::move(reply);
 
     Running* state = running.get();
@@ -257,7 +294,86 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
         text = {};
     }
 
-    Remember(key, state->sequence, status, text);
+    // ---- XG1: a typed answer's rows leave on the edge --------------------
+    //
+    // Everything below the sink is the pipeline's: `PushAnswerBatch` queues
+    // and drains what credit allows, `CloseAnswerEdge` turns the queue's
+    // emptiness into the EOF that closes the edge. Nothing here parks - the
+    // drain resumes on each `STEP_CREDIT` the arrival core grants as it
+    // stores a batch - so the terminator below may reach the arrival core
+    // ahead of the last batch, which is why that side waits for **both**
+    // the reply and the EOF (`command_dispatcher.cpp`'s pending-shipped
+    // park).
+    std::string typed_text_holder;
+    if (state->typed_answer && remote_steps_ != nullptr) {
+        if (status.ok()) {
+            state->sink.Finish();
+            // The description first and whole, chunked to the slot: the
+            // receiver arms on it before a row can be decoded, because the
+            // rows are typed by it.
+            std::vector<std::byte> described;
+            wire::EncodeRowDescription(state->sink.fields(), described);
+            if (Status sent = remote_steps_->SendAnswerDescription(state->answer_tag, described);
+                !sent.ok()) {
+                status = sent;
+            } else {
+                std::uint32_t seq = 0;
+                for (WireResultSink::Batch& batch : state->sink.batches()) {
+                    // `WireResultSink` frames a batch for a *socket* - a u16
+                    // row count then the rows - and the edge frames one for a
+                    // *ring*. The row bytes are the same D5 encoding in both,
+                    // which is the point: this re-frames, it never re-encodes.
+                    StepBatchHeader header{};
+                    header.tag = state->answer_tag;
+                    header.seq = seq++;
+                    header.row_count = batch.rows;
+                    const std::size_t rows_at = 2;  // past the sink's own count
+                    const std::size_t rows_len =
+                        batch.payload.size() > rows_at ? batch.payload.size() - rows_at : 0;
+                    std::vector<std::byte> framed(sizeof(header) + rows_len);
+                    std::memcpy(framed.data(), &header, sizeof(header));
+                    if (rows_len > 0) {
+                        std::memcpy(framed.data() + sizeof(header),
+                                    batch.payload.data() + rows_at, rows_len);
+                    }
+                    if (Status pushed =
+                            remote_steps_->PushAnswerBatch(state->answer_tag, std::move(framed));
+                        !pushed.ok()) {
+                        status = pushed;
+                        break;
+                    }
+                }
+            }
+        }
+        // On **every** exit, including a refusal: an edge left open holds
+        // its queue and its receiver for the session's life, and the
+        // arrival core is parked on its EOF.
+        remote_steps_->CloseAnswerEdge(state->answer_tag);
+        // The reply is the terminator now - it carries the status and the
+        // watermark and no rows, and `text` would be a rendering nobody
+        // asked for. Held in a local because `text` is a view.
+        typed_text_holder.clear();
+        text = typed_text_holder;
+    }
+
+    // **XG-R2: a typed read is exempt from the dedup record.** D4's record
+    // answers a duplicate from what the owner last replied so a lost reply
+    // cannot become a second execution - a rule written about a *write*
+    // against an engine-issued pk. A read has no side effect to guess
+    // about, so a duplicate re-executes; under READ COMMITTED it may answer
+    // different rows than the original, which two successive RC statements
+    // already may.
+    //
+    // It also keeps the record bounded by construction: a typed read's
+    // "answer" is the whole result set, and a record holding one would be a
+    // result-set cache `kShippedDedupMaxRecords` wide, which would need a
+    // cap - and a cap is a constant.
+    //
+    // **Narrower than XG-R2's letter, and the narrowing is the wire's**:
+    // this core cannot tell a *text-arm* read from a write, because nothing
+    // on the request says so. A text read therefore keeps its record, which
+    // is what it always had and is bounded at 992 bytes either way.
+    if (!state->typed_answer) Remember(key, state->sequence, status, text);
     state->reply(status, text, watermark);
 }
 

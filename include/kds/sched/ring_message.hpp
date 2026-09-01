@@ -196,6 +196,24 @@ enum class RingMessageKind : std::uint16_t {
     // stated here as well as at the send, because this enum is where a
     // reader looks to learn what a kind costs.
     kAccessStatsBatch = 39,
+
+    // owner -> arrival core: the **result description** of a shipped read
+    // answered in typed rows (XG1, `docs/spec/crosscore.md` §4a). Sent on
+    // the answer edge ahead of the first `kStepBatch`, and **chunked**: the
+    // engine has no column-count cap, so a description may exceed a ring
+    // message and crosses as an ordered sequence reassembled before the
+    // rows arrive.
+    //
+    // **Its own kind rather than a `kStepBatch` with a flag**, and that is
+    // a correctness choice: `StepBatchHeader::seq` is per-edge and asserted
+    // contiguous - a receiver that sees a gap has lost a batch - so folding
+    // a differently-shaped payload into that sequence would either break
+    // the assertion or force description chunks to be counted as batches.
+    // Two kinds, two sequences, one tag.
+    //
+    // Control rather than data, like EOF and CREDIT: it carries no rows and
+    // spends no credit.
+    kShippedRowDesc = 40,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -232,6 +250,7 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kTxnResolveRequest:
         case RingMessageKind::kTxnResolveReply:
         case RingMessageKind::kAccessStatsBatch:
+        case RingMessageKind::kShippedRowDesc:
             return true;
         case RingMessageKind::kUnset:
             return false;

@@ -260,7 +260,7 @@ Status WireResultSink::Emit(std::string_view row) {
     // is not a rounding error. One row wider than the whole target still
     // ships whole, because the alternative is a row nothing can send.
     if (open_rows_ > 0 &&
-        (open_.size() + row.size() > wire::kRowBatchTargetBytes ||
+        (open_.size() + row.size() > target_bytes_ ||
          open_rows_ == std::numeric_limits<std::uint16_t>::max() ||
          (batch_row_cap_ != 0 && open_rows_ >= batch_row_cap_))) {
         Seal();

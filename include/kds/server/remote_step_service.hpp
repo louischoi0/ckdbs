@@ -279,6 +279,10 @@ public:
           // branch here would only invite the reader to think the function
           // misbehaves at the sentinel.
           batch_ceiling_(StepBatchCeiling(seam.max_message_bytes)),
+          // XG1's description chunk bound, derived from the same slot and
+          // at the same moment as the batch ceiling above - two bounds on
+          // one transport, taken from one place so they cannot drift.
+          desc_ceiling_(ShippedRowDescCeiling(seam.max_message_bytes)),
           submit_(std::move(submit)),
           txns_(txns),
           budget_(budget) {}
@@ -309,6 +313,46 @@ public:
 
     // The kStepCancel handler: drops the pipeline whole, sends nothing.
     void OnStepCancel(std::span<const std::byte> payload);
+
+    // ---- XG1: the shipped read's answer edge ---------------------------
+    //
+    // A shipped read answered in typed rows sends its rows on a step edge
+    // the *arrival* core registered and named on the request, so there is
+    // no `STEP_OPEN` and no descriptor - but everything downstream of the
+    // open is the pipeline's and is reused unchanged: the credit
+    // accounting, `Drain`, `OnStepCredit`, `OnStepCancel`, the EOF that
+    // closes the edge, and the reentrancy latch that a synchronous send
+    // needs. That reuse is the whole of XG-R1: a fifth producer, not a
+    // second pipeline.
+    //
+    // **`producing` is set from the open**, because a shipped statement's
+    // rows arrive at the sink over the life of the statement and an edge
+    // that EOF'd on an empty queue would close before the first row. The
+    // executor calls `CloseAnswerEdge` when the statement is done, which is
+    // what turns the queue's emptiness into an EOF.
+    //
+    // The initial credit is `kInitialCreditsPerEdge`, the same allowance
+    // `STEP_OPEN` preallocates - both ends know the constant, so nothing
+    // has to grant it in a message that would race the request.
+    Status OpenAnswerEdge(const PipelineTag& tag, std::uint32_t downstream_core);
+
+    // Sends the result **description** on an open answer edge, chunked to
+    // the transport's slot. Control rather than data: it spends no credit,
+    // exactly as EOF and CREDIT do not.
+    Status SendAnswerDescription(const PipelineTag& tag, std::span<const std::byte> encoded);
+
+    // Queues one sealed `STEP_BATCH` payload and drains what credit allows.
+    Status PushAnswerBatch(const PipelineTag& tag, std::vector<std::byte> payload);
+
+    // The statement is finished: stop holding the edge open, and let the
+    // drain EOF once the queue empties. A tag with no pipeline is silently
+    // ignored - §3's teardown rule, and the case a cancel already erased.
+    void CloseAnswerEdge(const PipelineTag& tag);
+
+    // The largest `STEP_BATCH` payload this transport can carry. Read by
+    // XG1's owner-side sink to size its own sealing: one bound, asked of
+    // the layer that derived it from the slot.
+    std::size_t batch_ceiling() const noexcept { return batch_ceiling_; }
 
     std::size_t open_pipelines() const noexcept { return pipelines_.size(); }
 
@@ -485,6 +529,7 @@ private:
     // `kNoRingSlot` - not the target - when the seam named no ring, so a
     // fixture never seals on the ceiling and only production tightens.
     std::size_t batch_ceiling_;
+    std::size_t desc_ceiling_;
     SubmitFn submit_;
     // The manager whose committed state every stage on this core reads at
     // (crosscore.md CC4). **No view crosses a core**: each stage mints its

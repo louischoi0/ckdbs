@@ -161,6 +161,18 @@ public:
     // 0 is no cap, which is `max_rows`'s own meaning (§7).
     void set_batch_row_cap(std::uint32_t rows) noexcept { batch_row_cap_ = rows; }
 
+    // **The byte target a batch is sealed at**, defaulting to the socket's
+    // (`wire::kRowBatchTargetBytes`, 64 KiB, KW-D2).
+    //
+    // Settable because XG1 gave this sink a second consumer whose bound is
+    // three orders of magnitude smaller: a shipped read's rows cross on a
+    // **ring** message, and `StepBatchCeiling` of the shipped slot is about
+    // a kilobyte. Reusing this sink rather than writing a second one is the
+    // point - the row bytes are the same D5 encoding either way, and a
+    // second encoder is what `result_sink.hpp`'s header exists to forbid.
+    // Only the sealing bound differs, so only the sealing bound is a knob.
+    void set_batch_target_bytes(std::size_t bytes) noexcept { target_bytes_ = bytes; }
+
     // Seals whatever is still open. Call once, after the statement.
     void Finish();
 
@@ -188,6 +200,7 @@ private:
     std::uint16_t open_rows_ = 0;
     std::uint64_t rows_ = 0;
     std::uint32_t batch_row_cap_ = 0;
+    std::size_t target_bytes_ = wire::kRowBatchTargetBytes;
 };
 
 // What `OnFrame` asks of its caller.

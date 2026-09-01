@@ -72,6 +72,26 @@ public:
         // read completes on the reactor.
         std::vector<std::string> column_names;
         std::vector<std::uint32_t> projection_types;
+
+        // ---- XG1: a shipped read's description, reassembled --------------
+        //
+        // Only a shipped read's answer edge carries one: a step the session
+        // planned is described by the plan. Chunked because the engine has
+        // no column-count cap, so `chunks` says how many to expect and
+        // `seen` counts them - the pair is what tells a reader "whole"
+        // from "still arriving", which matters because the rows are typed
+        // by it and decoding one early would read the wrong widths.
+        //
+        // The ring's per-edge FIFO delivers chunks in order, so this
+        // appends rather than indexes; a `seq` that skips is a defect and
+        // is refused rather than filled in.
+        std::vector<std::byte> description;
+        std::uint32_t desc_chunks = 0;
+        std::uint32_t desc_seen = 0;
+
+        bool described() const noexcept {
+            return desc_chunks != 0 && desc_seen == desc_chunks;
+        }
     };
 
     // A computed two-step pipeline, ready to open (P4d-4b-3): the chained
@@ -110,6 +130,10 @@ public:
     void OnStepBatch(std::span<const std::byte> payload);
     void OnStepEof(std::span<const std::byte> payload);
     void OnStepError(std::span<const std::byte> payload);
+    // XG1: one chunk of a shipped read's result description. Discarded
+    // silently where the tag matches no open read - §3's teardown rule,
+    // and the same posture `OnStepBatch` takes.
+    void OnShippedRowDesc(std::span<const std::byte> payload);
 
     RemoteRead* Find(const PipelineTag& tag);
 

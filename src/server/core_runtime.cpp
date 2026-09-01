@@ -656,6 +656,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     dispatcher_->SetStatementShip(&*statement_ship_client_);
     // And the owner's half, for this core's `SHOW META` (D7).
     dispatcher_->SetShippedStatements(&*shipped_executor_);
+    // XG1: where a typed shipped read's rows leave from. Set here, beside
+    // the executor's own wiring, because both halves of the answer are this
+    // core's - the statement runs on the dispatcher and the rows go out on
+    // the step server, and neither exists on a core that serves no peer.
+    if (remote_steps_.has_value()) shipped_executor_->SetRemoteSteps(&*remote_steps_);
 
     // **The cross-owner commit, both halves** (R6-3), on statement
     // shipping's wiring rule and for its reason: every core is a

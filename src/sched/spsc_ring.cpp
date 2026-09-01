@@ -48,6 +48,12 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kTxnDecideReply: return "TXN_DECIDE_REPLY";
         case RingMessageKind::kTxnResolveRequest: return "TXN_RESOLVE_REQUEST";
         case RingMessageKind::kTxnResolveReply: return "TXN_RESOLVE_REPLY";
+        // Both were missing: `kAccessStatsBatch` since CR7 added it, and it
+        // read as "unknown" in every log line that named a kind. Added with
+        // XG1's own kind rather than left, because the next reader of this
+        // switch would have copied the omission.
+        case RingMessageKind::kAccessStatsBatch: return "ACCESS_STATS_BATCH";
+        case RingMessageKind::kShippedRowDesc: return "SHIPPED_ROW_DESC";
     }
     return "unknown";
 }

@@ -1118,6 +1118,85 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
     co_return Status::OK();
 }
 
+Status RemoteStepServer::OpenAnswerEdge(const PipelineTag& tag,
+                                        std::uint32_t downstream_core) {
+    if (Find(tag) != nullptr) {
+        // The collision every other tag-keyed registration refuses, for its
+        // reason: two producers on one tag would interleave their rows into
+        // one receiver's result.
+        return Status::InvalidArgument("an answer edge is already open on step " +
+                                       std::to_string(tag.step_id) + " of request " +
+                                       std::to_string(tag.request_id));
+    }
+    Pipeline pipe;
+    pipe.tag = tag;
+    pipe.downstream = downstream_core;
+    // Held open until the statement says otherwise: rows arrive over the
+    // life of the statement, and an edge that EOF'd on the first empty
+    // queue would close before the first one.
+    pipe.producing = true;
+    pipelines_.push_back(std::move(pipe));
+    return Status::OK();
+}
+
+Status RemoteStepServer::SendAnswerDescription(const PipelineTag& tag,
+                                               std::span<const std::byte> encoded) {
+    Pipeline* pipe = Find(tag);
+    if (pipe == nullptr) {
+        return Status::InvalidArgument("no answer edge is open on step " +
+                                       std::to_string(tag.step_id));
+    }
+    const std::uint32_t downstream = pipe->downstream;
+    const std::size_t ceiling = desc_ceiling_;
+    if (ceiling == 0) {
+        return Status::ResourceExhausted(
+            "the ring slot cannot hold a description chunk header");
+    }
+    // Ceiling arithmetic on the chunk count, and **at least one chunk even
+    // for an empty description**: a zero-column result is a real answer and
+    // the receiver arms on `chunks`, so a description that sent nothing
+    // would leave it waiting for a first chunk that never comes.
+    const std::size_t chunks = encoded.empty() ? 1 : (encoded.size() + ceiling - 1) / ceiling;
+    for (std::size_t i = 0; i < chunks; ++i) {
+        const std::size_t at = i * ceiling;
+        const std::size_t len = std::min(ceiling, encoded.size() - std::min(at, encoded.size()));
+        ShippedRowDescHeader header{};
+        header.tag = tag;
+        header.seq = static_cast<std::uint32_t>(i);
+        header.chunks = static_cast<std::uint32_t>(chunks);
+        std::vector<std::byte> payload(sizeof(header) + len);
+        std::memcpy(payload.data(), &header, sizeof(header));
+        if (len > 0) std::memcpy(payload.data() + sizeof(header), encoded.data() + at, len);
+        if (Status s = send_(downstream, sched::RingMessageKind::kShippedRowDesc,
+                             std::move(payload));
+            !s.ok()) {
+            return s;
+        }
+    }
+    return Status::OK();
+}
+
+Status RemoteStepServer::PushAnswerBatch(const PipelineTag& tag,
+                                         std::vector<std::byte> payload) {
+    Pipeline* pipe = Find(tag);
+    if (pipe == nullptr) {
+        // Cancelled or torn down under the statement. Not an error to the
+        // statement - its rows simply have nowhere to go, and the arrival
+        // core has already been told why by whatever tore it down.
+        return Status::OK();
+    }
+    pipe->batches.push_back(std::move(payload));
+    Drain(*pipe);
+    return Status::OK();
+}
+
+void RemoteStepServer::CloseAnswerEdge(const PipelineTag& tag) {
+    Pipeline* pipe = Find(tag);
+    if (pipe == nullptr) return;  // §3's teardown rule
+    pipe->producing = false;
+    Drain(*pipe);
+}
+
 void RemoteStepServer::Drain(Pipeline& pipe) {
     // **A cancelled pipeline ships nothing more.** Its entry outlives the
     // CANCEL only so the parked producer can erase it, and a credit
@@ -1284,6 +1363,16 @@ Status WireStepEndpoints(sched::Scheduler& scheduler, SessionStepClient& client,
                                std::span<const std::byte> payload) {
                 client.OnStepEof(payload);
                 server.OnStepEof(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    // XG1's description, the client's alone: only a shipped read's answer
+    // edge carries one, and only the client receives one.
+    if (Status s = scheduler.RegisterMessageHandler(
+            sched::RingMessageKind::kShippedRowDesc,
+            [&client](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                client.OnShippedRowDesc(payload);
             });
         !s.ok()) {
         return s;
