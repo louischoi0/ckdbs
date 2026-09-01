@@ -88,8 +88,59 @@ independent of how long the row body was suspended — wrong there is
 silent corruption, against a saving of one page-store lookup on matched
 rows only.
 
-**A/B owed.** OPT-002's run is the instrument, and its finding governs
-the shapes: `full-scan` cannot see a decode saving, so `update`,
-`delete` and `analyze-scan` are what to run. Expect OPT-002's own
-`update` number to *shrink* once this lands — that number was partly a
-measure of this defect.
+**Measured** —
+`results-opt001-update-decode-order-v2.7.0-38-gea1d9d0.md`, beside this
+file, with its driver and raw output under `archive/`. Arm A `004da62`
+(`v2.7.0-34-g004da62`, OPT-002 and OPT-004 present, OPT-001 absent)
+against arm B `ea1d9d0` (`v2.7.0-38-gea1d9d0`), both built from a clean
+`git archive` of their own commit, interleaved, one RNG stream driving
+both arms. Server CPU is the instrument, because there is no `ANALYZE`
+for an UPDATE.
+
+| Shape | 200 rows | 1,000 | 10,000 |
+|---|---|---|---|
+| `update` (point UPDATE by pk) | +35.0% | +99.5% | **+159.7%** |
+| `wide` (25-column relation) | +178.0% | +436.4% | **+672.4%** |
+| `delete` | +29.4% (in floor) | +50.0% (in floor) | **+33.0%** |
+| `select` (flat control) | +7.6% | -1.8% | -10.9% |
+| `subchain` (gated control) | +5.1% | +8.2% | +8.0% |
+
+**The hypothesis held, and the shape of it is the evidence.** The
+prediction was 2-4x on UPDATE's server CPU, more on wider relations. The
+win *grows monotonically with relation size* — 1.35x, 2.00x, 2.60x —
+which is what the mechanism requires: OPT-001 removes work from rejected
+rows, and the rejected-row count is exactly what N scales. A flat curve
+would have falsified it. On a 25-column relation it reaches **7.72x**,
+because the mask's benefit is the columns *not* decoded.
+
+**One control moved, and the brief that called it a control was wrong.**
+`subchain` was specified as "must show no change", since a sub-chain
+predicate is gated to `kAllColumns`. It gained 5-8%, clearing its floor
+at the two larger sizes — and the reason is in the diff rather than in
+the measurement: OPT-001 does **two** things, and only one of them is
+gated. The masking is gated (the new test proves the gate holds); the
+*decode-count* halving is not — `DecodeRow` + `DecodeRowInto` became one
+`DecodeAndResolve`, and a sub-chain UPDATE still gets that. The
+prediction of no change was wrong about this change's own shape;
+`select`, which never reaches the altered functions, is the honest flat
+control.
+
+**Left open rather than explained away:** `select` at 10,000 rows shows
+-10.9%, clearing its own floor, with no code-level mechanism — the read
+path does not reach anything OPT-001 touched. It is recorded in the
+results file as unexplained.
+
+**Correctness beside the timing:** both arms' tables were sha256-matched
+after the update phase — `t_main`, `t_wide` and `t_del`, core range and
+count, at all three sizes, plus verbatim spot rows. Zero mismatches,
+zero error replies across the run. That is the check that outranks every
+number above, because this change's failure mode is writing the *wrong*
+row, not crashing.
+
+**And it settles OPT-002's inflated reading.** Arm A here reproduces
+OPT-002's own earlier `update` number at 10,000 rows to within 0.6%
+(1999.2 us against 1987.7 us, from an independent session), and arm B
+drops ~60% below it. OPT-002's +18.87% on UPDATE was measuring this
+defect: with the mask in place, `WHERE id = ?` never decodes the string
+column of a rejected row at all. The CIP entry predicted that number
+would shrink once OPT-001 landed, and it did.
