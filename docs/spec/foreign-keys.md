@@ -304,6 +304,17 @@ that has lost the enrolment. AH-T5 proves it by killing the
 participant in exactly that window. A window in which the coordinator
 can still commit is a defect, not a documented limitation.
 
+**What makes this reachable at all** is a refusal in a different
+subsystem, narrowed 2026-09-01 on operator direction:
+`CheckWriteAffinity`'s peer-writer funding gate refused every write to an
+FK-linked relation on any core but 0, on the grounds that *"validation
+reads the linked relation, which this core may not fault"* — the exact
+defect this section removes. Its FK arm is struck and the narrowing is
+recorded in `workplan-peer-writer.md` §4; the gate's cabined and
+unenforceable-assertion arms are untouched and still refuse. Before that,
+a relation carrying a foreign key took no peer write, so nothing on this
+path ever ran in a live instance.
+
 **The load path is in scope** (AH-R7). `CheckForeignKeyOnWrite`'s
 third caller is the KWP load path, which has its own batch boundary
 and takes the same hoist there. If no park-capable seam exists in it,

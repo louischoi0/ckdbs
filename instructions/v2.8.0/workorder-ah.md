@@ -211,7 +211,7 @@ counters reported beside every latency; results under
 | AH-T2 | **Third slice built 2026-09-01** — the park, the resume, and enrolment. The dispatcher now **sends** where it refused. **Not exercisable end to end until AH-T4**, and that is AH-R6's mark taking effect rather than a gap; see below. Full suite 3147/3147 green |
 | AH-T3 | **Built 2026-09-01 with AH-T4**, because it is AH-T4's gate for a correctness reason and not an ordering one: lifting F5 without it leaves a parent `DELETE` blind to foreign intents. The parent-side check consults `FkIntentTable` before anything local and answers busy |
 | AH-T4 | **Built 2026-09-01.** `CheckForeignKeyColocation` admits. F5 amended, §3a added, `known-gaps.md` opened. Full suite 3149/3149 green |
-| AH-T5 | **Blocked 2026-09-01 by a gate AH did not know about** — the crash point is placed and the probe is written, and neither can run. §AH-T5 below. Its own gate (XG3's process-kill half) **is** repaid: `bench/v2.8.0/results-xg3-answer-edge-kill-v2.7.0-86-g6b18f69.md`, 3/3 across three passes |
+| AH-T5 | **Blocked 2026-09-01 by a gate AH did not know about**, then **unblocked and run the same day**. Its own gate (XG3's process-kill half) is repaid: `bench/v2.8.0/results-xg3-answer-edge-kill-v2.7.0-86-g6b18f69.md`, 3/3 across three passes. The gate it *found* — the peer-writer FK arm — is narrowed on operator direction, and with it narrowed the cell runs: **3/3 PASS**, parent on core 2, child on core 1, killed at `participant.fk_intent_granted_preprepare`, no child row after the restart. §AH-T5 below |
 | AH-T6 | not started |
 
 ### AH-T5 — the gate that makes the whole crossing unreachable
@@ -254,15 +254,48 @@ existed.
 and it is the cost of that debt landing rather than being paid. The
 `known-gaps.md` entry AH-T4 opened is amended to say so.
 
-**Not lifted here, and the reason is not caution but ownership.** The
-arm sits beside two siblings whose refusals are still live — the cabined
-arm and `CannotEnforce`'s, the latter carrying a *measured* Finding 2
-(`bench/v2.2.0/results-shipping-part-a-*`: a shipped write put a second
-row in a group under `CHECK COUNT(*) <= 1`). Narrowing one arm of a
-funding gate is a change to what a peer core will admit, it belongs to
-`workplan-peer-writer.md` §4, and the argument for it — the forward check
-funds itself now, the reverse refuses by name (§3a) — should be ratified
-rather than assumed by the order that benefits from it.
+**Not lifted by the order, and the reason was not caution but
+ownership.** The arm sits beside two siblings whose refusals are still
+live — the cabined arm and `CannotEnforce`'s, the latter carrying a
+*measured* Finding 2 (`bench/v2.2.0/results-shipping-part-a-*`: a
+shipped write put a second row in a group under `CHECK COUNT(*) <= 1`).
+Narrowing one arm of a funding gate is a change to what a peer core will
+admit, it belongs to `workplan-peer-writer.md` §4, and the argument for
+it — the forward check funds itself now, the reverse refuses by name
+(§3a) — should be ratified rather than assumed by the order that
+benefits from it.
+
+**The operator so directed on 2026-09-01, and the arm is narrowed.** The
+FK arm alone is struck from `funded_shape`; the cabined arm and
+`CannotEnforce`'s are untouched and still refuse. The record of the
+narrowing lives in `workplan-peer-writer.md` §4, where the arm lives,
+not here — this order is its beneficiary, not its owner. Its converse
+test cell replaces the old one in `core_runtime_test.cpp`: where
+`AShippedWriteToAnFkLinkedPeerRelationIsRefusedByTheOwnersShapeGate`
+asserted the refusal byte for byte,
+`AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate` asserts the owner's
+own dispatcher no longer answers with the FK arm, in both directions (a
+child carrying `fkeys_out`, a parent carrying `fkeys_in`). It
+deliberately does **not** drive the write to completion: the in-process
+rig refills no peer lease for a relation it did not open itself, so a
+completed peer write meets `TXN_CONFLICT retryable=1` there forever — a
+fixture limit, not an engine one, and the end-to-end cell rides AH-T6's
+two-process fixture.
+
+**And with the arm narrowed the AH-T5 cell runs, 3/3 PASS across three
+passes.** `bench/fk_intent_crash_probe.py` at `--cores 3` lands the
+parent on core 2 and the child on core 1, kills the instance at
+`participant.fk_intent_granted_preprepare` — after the grant, before any
+prepare — and the restart finds **no child row** while the parent row
+survives. The invariant AH-R5 asserts is the one thing this cell can
+falsify on one process, and it did not falsify it. Two honest bounds on
+what that proves. First, both cores are threads of one process, so the
+kill takes the coordinator with the participant: **a participant dying
+under a surviving coordinator is not staged here** and stays owed.
+Second, `SHOW META`'s `txn_in_doubt_unresolved` reads absent rather than
+`0` after the restart — that block prints only where something has been
+in doubt (`command_dispatcher.cpp`'s "absent rather than zeroed" rule),
+so absence *is* the zero and the check is satisfied rather than skipped.
 
 ### AH-T3 + AH-T4 — the conversion, and the two things it made live
 

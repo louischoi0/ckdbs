@@ -5410,16 +5410,42 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // (`bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
         // Finding 2: a shipped write put a second row in a group under
         // `CHECK COUNT(*) <= 1`).
-        const bool funded_shape = access.fkeys_out.empty() && access.fkeys_in.empty() &&
-                                  !any_cabin && !enforcer_.CannotEnforce(access.oid);
+        // **The foreign-key arm lifted 2026-09-01 (AH-T4, operator's
+        // ratification).** It refused a write to any FK-linked relation on
+        // any core but 0, and its reason was *"validation reads the linked
+        // relation, which this core may not fault"* - which was true, and
+        // is the exact defect `foreign-keys.md` §2a removed. Both
+        // directions are now either funded on this core's own pages or
+        // refused by name, and neither faults a page it may not:
+        //
+        //   - **forward** (`fkeys_out`): the check is hoisted out of the
+        //     write scope to the dispatch fork (§2a). A parent this core
+        //     owns descends this core's own pages; a parent it does not is
+        //     **probed on its owner** - one round per owner, an answer, and
+        //     a reference intent left behind. No local read of a foreign
+        //     relation remains on this path.
+        //   - **reverse** (`fkeys_in`): only a `DELETE` runs it, and
+        //     `CheckNoChildReferences` refuses `NotImplemented` the moment
+        //     `child.owner_core != core_id` (§3a). A child this core owns
+        //     is walked on its own chains; one it does not is not walked at
+        //     all. RESTRICT degrades to refusing the delete, which is
+        //     fail-closed.
+        //
+        // **The two sibling arms below are untouched and still live**, and
+        // that is the point of narrowing one rather than the test: the
+        // Cabin arm's question (whether a Bound Cabin's entry pages follow
+        // the grant) is unanswered, and `CannotEnforce`'s carries a
+        // *measured* failure - `bench/v2.2.0/results-shipping-part-a-*`
+        // Finding 2, a shipped write putting a second row in a group under
+        // `CHECK COUNT(*) <= 1`. Neither was ever the FK's question.
+        //
+        // What this admits, said plainly: a peer core now writes an
+        // FK-linked relation, which is what makes AH's crossing reachable
+        // at all - before it the forward check never ran, the fork never
+        // parked and the probe never sent, on any relation carrying a
+        // foreign key.
+        const bool funded_shape = !any_cabin && !enforcer_.CannotEnforce(access.oid);
         if (!funded_shape) {
-            if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
-                return Status::NotImplemented(
-                    "an FK-linked relation cannot take writes on core " +
-                    std::to_string(core_id_) +
-                    ": validation reads the linked relation, which this core may not fault "
-                    "(workplan-peer-writer.md §4)");
-            }
             if (any_cabin) {
                 return Status::NotImplemented(
                     "a cabined relation cannot take writes on core " +

@@ -2742,29 +2742,36 @@ parent owner, a reference intent left behind — and two things do not:
   owner, each answering from its own Cabin or its own walk), which is not
   built. Colocating parent and child — a namespace, AF-P5 — avoids the
   refusal entirely.
-- **The crossing is unreachable in a running instance, behind a gate AH
-  did not name** — found 2026-09-01 by AH-T5's probe, which could not
-  reach its own crash point. `command_dispatcher.cpp`'s peer-writer
-  funding gate requires `fkeys_out.empty() && fkeys_in.empty()`, so a
-  relation with **any** foreign key takes no writes on any core but 0:
-  *"an FK-linked relation cannot take writes on core 2: validation reads
-  the linked relation, which this core may not fault
-  (workplan-peer-writer.md §4)"*. AH-T4 converted the *declaration*
-  refusal; this one refuses the *write*, so the forward check never runs
-  and the park is never entered. **Its stated reason is the one §2a
-  removed** — the check no longer reads the linked relation locally. The
-  arm belongs to `workplan-peer-writer.md` §4 and sits beside two
-  siblings whose refusals are still live (the cabined arm, and
-  `CannotEnforce`'s, which carries a measured Finding 2), so narrowing it
-  is that workplan's ratification and not AH's to assume.
+- ~~**The crossing is unreachable in a running instance, behind a gate AH
+  did not name**~~ — found 2026-09-01 by AH-T5's probe, which could not
+  reach its own crash point, and **closed the same day on operator
+  direction**. `command_dispatcher.cpp`'s peer-writer funding gate
+  required `fkeys_out.empty() && fkeys_in.empty()`, so a relation with
+  **any** foreign key took no writes on any core but 0: *"an FK-linked
+  relation cannot take writes on core 2: validation reads the linked
+  relation, which this core may not fault (workplan-peer-writer.md
+  §4)"*. AH-T4 had converted the *declaration* refusal; this one refused
+  the *write*, so the forward check never ran and the park was never
+  entered. **Its stated reason was the one §2a removed** — the check no
+  longer reads the linked relation locally: it probes the owner
+  (forward) or refuses by name (reverse, §3a). The FK arm is struck and
+  the narrowing is recorded in `workplan-peer-writer.md` §4, where the
+  arm lives. **The two sibling arms are untouched and still refuse** —
+  the cabined arm, whose Bound-Cabin grant question that same §4 leaves
+  unverified, and `CannotEnforce`'s, which carries a measured Finding 2.
 - **The dispatcher's park is proved by compilation and by the suite not
   regressing, and not yet by an end-to-end cell.** The wire has its own
   seven cells (`fk_probe_service_test.cpp`) and the reverse direction has
   two, but no test drives a real cross-owner `INSERT` through the fork's
   park, the probe round and the resume — and **this is the debt whose
   landing hid the gate above**. It was handed from AH-T2 to AH-T4 and
-  from AH-T4 to AH-T6; it cannot be paid at all until the funding gate
-  narrows.
+  from AH-T4 to AH-T6. With the funding gate narrowed the debt is
+  **payable**, and AH-T6 is where it is owed. The in-process rig that
+  holds the existing shipped-write cells cannot pay it: it refills no
+  peer's transaction-id or row-id lease for a relation it did not open
+  itself, so a completed peer write meets `TXN_CONFLICT retryable=1`
+  there forever — a fixture limit, not an engine one. The cell therefore
+  rides AH-T6's two-process fixture.
 
 **And the intent's crash window is stated but not demonstrated.** An
 intent-only participant writes no `TXN_PREPARE` record, so its intents die

@@ -287,6 +287,39 @@ that is sound (`include/kds/server/remote_checkpoint_anchor.hpp`).
   Cabin's entry pages follow the CC7 grant was **not verified in this pass**;
   it must be before an assertion-carrying relation is placed on a peer.
 
+  **The FK half is narrowed 2026-09-01 (operator direction), and the
+  sentence above is why it could be.** `CheckWriteAffinity`'s `funded_shape`
+  required `fkeys_out.empty() && fkeys_in.empty()`, so a relation carrying
+  any foreign key in either direction took no write on any core but 0. Its
+  reason was the cross-core read this bullet names — *"validation reads the
+  linked relation, which this core may not fault"* — and that read no longer
+  happens. Both directions are now funded on the writing core's own pages or
+  refused by name:
+
+  - **forward** (`fkeys_out`): the check is hoisted out of the `WriteScope`
+    to the dispatch fork (`foreign-keys.md` §2a, work order AH). A parent
+    this core owns descends this core's own pages; a parent it does not is
+    **probed on its owner** — one round per distinct owner, an answer, and a
+    reference intent left behind. No local read of a foreign relation
+    survives on the path.
+  - **reverse** (`fkeys_in`): only a `DELETE` runs it, and
+    `CheckNoChildReferences` refuses `NotImplemented` the moment
+    `child.owner_core != core_id` (§3a). A child this core owns is walked on
+    its own chains; one it does not is not walked at all. RESTRICT degrades
+    to refusing the delete, which is fail-closed.
+
+  **The two sibling arms are untouched and still live**, which is the point
+  of narrowing one arm rather than the gate: the cabined arm's question is
+  the unverified Bound-Cabin grant this same bullet opens, and
+  `CannotEnforce`'s carries a *measured* failure
+  (`bench/v2.2.0/results-shipping-part-a-*` Finding 2 — a shipped write put
+  a second row in a group under `CHECK COUNT(*) <= 1`). Neither was ever the
+  foreign key's question. What the narrowing admits, said plainly: **a peer
+  core now writes an FK-linked relation**, which is what makes AH's crossing
+  reachable in a running instance at all — before it the forward check never
+  ran, the fork never parked and the probe never sent, on any relation
+  carrying a foreign key.
+
 ## 5. What per-core listeners do not buy
 
 `crosscore.md` M3 is already ratified — SO_REUSEPORT per-core listeners, the

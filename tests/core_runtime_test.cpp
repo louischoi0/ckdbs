@@ -6462,12 +6462,27 @@ TEST_F(CoreRuntimeTest, AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetri
 // cabined, assertion-covered) are the ones a shipped write newly reaches -
 // core 0 could write those relations itself, and a peer cannot.
 
-TEST_F(CoreRuntimeTest, AShippedWriteToAnFkLinkedPeerRelationIsRefusedByTheOwnersShapeGate) {
+TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_gate");
 
     // Both relations rotate onto the peer, so the child is a peer-owned
-    // FK-linked relation - a shape core 0 may write and a peer may not.
+    // FK-linked relation. **Until 2026-09-01 that shape was refused
+    // outright** - `funded_shape` required both fkey lists empty, on the
+    // grounds that "validation reads the linked relation, which this core
+    // may not fault". AH-T4 removed the reason: the forward check probes a
+    // foreign parent instead of reading it (§2a), and the reverse refuses
+    // by name on a foreign child (§3a). The arm lifted, and this cell is
+    // its converse.
+    //
+    // **What this cell proves and what it deliberately does not.** It
+    // asserts the peer's own dispatcher no longer answers the FK shape
+    // gate. It does *not* drive the write to completion: this rig does not
+    // refill a peer's transaction-id or row-id leases for a relation it
+    // did not open itself, so a completed peer write meets
+    // `TXN_CONFLICT retryable=1` forever here - a fixture limit, not an
+    // engine one. The end-to-end write is AH-T6's, which builds the
+    // two-process fixture for its measurement anyway.
     ASSERT_EQ(rig.dispatcher->Dispatch("CREATE TABLE fkparent (id int64, v int64) BTREE")
                   .response.substr(0, 3),
               "CRE");
@@ -6479,41 +6494,25 @@ TEST_F(CoreRuntimeTest, AShippedWriteToAnFkLinkedPeerRelationIsRefusedByTheOwner
     ASSERT_TRUE(core0_store_->Sync().ok());
     rig.peer->InvalidateCatalog();
 
-    DispatchOutcome out;
-    auto statement = rig.Start("INSERT INTO fkchild VALUES (1)", out);
-    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
-
-    // Refused, and by the FK gate itself rather than by an accident: the
-    // statement crossed, the owner ran it, and the owner's own rule
-    // answered. Nothing wrote.
-    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
-    EXPECT_NE(out.response.find("FK-linked relation cannot take writes"), std::string::npos)
-        << out.response;
-    // Byte for byte the line the owner writes itself - the property the
-    // round trip actually promises, and since 2026-08-31 it promises more
-    // than it used to: the refusal is `NOT_IMPLEMENTED`, a spelled token,
-    // so this equality now proves the *code* survived the ring rather than
-    // proving two bare lines match. `Status::FromWire` is where it would be
-    // lost, and an arm missing there degrades the code to IoError, which
-    // renders bare - which is exactly what this assertion catches.
-    EXPECT_EQ(out.response,
-              rig.peer->dispatcher().Dispatch("INSERT INTO fkchild VALUES (1)").response);
-
-    // **But the answer a client sees changed with the gate that answers
-    // it.** Before shipping, core 0's affinity check refused this statement
-    // `TXN_CONFLICT retryable=1` - "not mine, try elsewhere". It is now the
-    // owner's bare `ERR`, which carries no retryable bit and is therefore
-    // terminal by the client manual's rule. Truthful (no core can take this
-    // write today) and different, so it is asserted here rather than left
-    // for a client's retry loop to discover by going quiet.
-    EXPECT_EQ(out.response.find("retryable=1"), std::string::npos) << out.response;
-    EXPECT_EQ(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
+    // The owner's own answer, which is what the shape gate is a property
+    // of. Whatever refuses now, it is not the FK arm.
+    const std::string owner_says =
+        rig.peer->dispatcher().Dispatch("INSERT INTO fkchild VALUES (1)").response;
+    EXPECT_EQ(owner_says.find("FK-linked relation cannot take writes"), std::string::npos)
+        << "the peer-writer FK arm still refuses: " << owner_says;
+    // And a parent write, the other direction of the same arm: a relation
+    // with `fkeys_in` was refused by the identical test.
+    const std::string parent_says =
+        rig.peer->dispatcher().Dispatch("INSERT INTO fkparent VALUES (1, 5)").response;
+    EXPECT_EQ(parent_says.find("FK-linked relation cannot take writes"), std::string::npos)
+        << "the arm still refuses a relation that is only a parent: " << parent_says;
 }
 
 TEST_F(CoreRuntimeTest, AShippedWriteToACabinedPeerRelationIsRefusedByTheOwnersShapeGate) {
-    // The second arm of the same `funded_shape` gate. It fires for the same
-    // reason the FK arm does: `any_cabin` is read off `TableAccess`, which
-    // is catalog-derived and refreshed by the peer's catalog invalidation.
+    // The second arm of the same `funded_shape` gate, **and it is still
+    // live** where the FK arm lifted: `any_cabin` is read off
+    // `TableAccess`, which is catalog-derived and refreshed by the peer's
+    // catalog invalidation.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_gate2");
 
