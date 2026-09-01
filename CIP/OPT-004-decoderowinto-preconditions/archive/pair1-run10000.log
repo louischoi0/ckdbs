@@ -1,0 +1,43 @@
+[setup] rows=10000 seed=20260901
+[setup] done in 1.92s; first insert reply A='INSERTED oid=4000 id=1 page=129 slot=0' B='INSERTED oid=4000 id=1 page=129 slot=0'
+[correctness] post-load ok=True
+[latency pass] 15 rounds done in 13.99s
+[cpu pass] 20 rounds done in 86.05s
+[correctness] post-writes ok=True
+wrote /tmp/claude-1000/-home-cdkbs-ckdbs/e52ac4d4-a740-442c-8ac0-ad035bc82a3b/scratchpad/opt004/results/pair1-run10000.json
+
+arm:shape               ops      qps   mean us      p0     p25     p50     p95      p99  err
+A-full-scan             120       23   43341.3 41107.0 41771.1 42268.1 46017.6  65635.5    0
+A-analyze-scan          300      856    1167.6  1054.2  1072.1  1086.5  1762.1   1798.0    0
+A-update                300      488    2048.9  1963.0  1985.8  2016.0  2109.2   3427.4    0
+A-subchain               90      105    9525.5  9367.8  9433.6  9478.6  9841.9  11069.4    0
+B-full-scan             120       23   42923.0 41052.6 41810.9 42221.7 45368.2  52095.7    0
+B-analyze-scan          300      848    1178.9  1135.8  1156.0  1166.3  1252.8   1371.2    0
+B-update                300      500    2001.4  1931.9  1958.3  1973.7  2043.6   2668.9    0
+B-subchain               90      105    9498.0  9218.4  9301.6  9343.8  9629.1  17426.0    0
+Afloor1-full-scan        60       24   42365.4 41137.9 41649.6 42041.4 44356.0  45203.5    0
+Afloor2-full-scan        60       23   44317.3 41107.0 42015.7 42723.1 58377.5  69438.4    0
+Afloor1-analyze-scan    150      913    1095.1  1054.8  1072.1  1082.8  1214.8   1267.4    0
+Afloor2-analyze-scan    150      806    1240.0  1054.2  1072.8  1098.9  1775.8   1946.3    0
+Afloor1-update          150      482    2072.5  1963.0  1986.0  2015.2  2360.4   3628.6    0
+Afloor2-update          150      494    2025.3  1969.5  1985.6  2016.4  2101.2   2290.1    0
+Afloor1-subchain         45      105    9497.2  9367.8  9422.7  9459.1  9586.2  11069.4    0
+Afloor2-subchain         45      105    9553.8  9372.3  9474.0  9505.6  9877.7  10397.9    0
+
+arm:shape (cpu)         ops     us/op
+A:full-scan             500   2820.00
+A:analyze-scan         5000   1024.00
+A:update               6000   1975.00
+A:subchain              400   9450.00
+B:full-scan             500   2640.00
+B:analyze-scan         5000   1126.00
+B:update               6000   1960.00
+B:subchain              400   9425.00
+Afloor1:full-scan       250   2680.00
+Afloor2:full-scan       250   2960.00
+Afloor1:analyze-scan   2500   1024.00
+Afloor2:analyze-scan   2500   1024.00
+Afloor1:update         3000   1973.33
+Afloor2:update         3000   1976.67
+Afloor1:subchain        200   9300.00
+Afloor2:subchain        200   9600.00
