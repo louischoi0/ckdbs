@@ -293,5 +293,83 @@ TEST_F(FkProbeTest, ADeadlineSettlesTheWaiterWithNoReply) {
     EXPECT_FALSE(out->arrived);
 }
 
+
+// ---- AH-T4: the reverse direction, now that F5 is converted -------------
+//
+// Lifting the declaration refusal makes two things live that the refusal
+// was holding shut, and both are fail-closed rather than answered:
+//
+//   1. a **parent DELETE meeting a foreign intent** answers busy, because
+//      the row it would remove is one another core was told exists and is
+//      now writing a child against;
+//   2. a **reverse check over a child this core does not own** refuses,
+//      because RESTRICT needs an authoritative "no children" and this core
+//      cannot see them. `workplan-auxiliaries-under-split.md` §3.1 named
+//      this exposure and said the day F5 relaxes, both directions are
+//      owed - this is the owner direction being paid.
+
+TEST_F(FkProbeTest, AGrantedIntentIsWhatAParentDeleteWouldHaveToMeet) {
+    InstallServer(/*core_id=*/0);
+    ASSERT_TRUE(client_
+                    ->Request(/*owner_core=*/0, /*request_id=*/20, /*session_id=*/42,
+                              /*transaction_id=*/0, GroupOf({{accounts_, 1}}))
+                    .ok());
+    Pump();
+    ASSERT_EQ(intents_.live_rows(), 1u);
+
+    // The predicate the parent-side DELETE asks, with the holder that core
+    // would pass: its own, which matches nothing here because an intent on
+    // this table is always a foreign core's.
+    EXPECT_TRUE(intents_.HeldByAnotherThan(accounts_, 1, FkIntentHolder{0, 0}))
+        << "a granted intent is invisible to the delete that must respect it";
+    // And it is scoped to the row, not the relation: deleting any other
+    // parent row is unaffected.
+    EXPECT_FALSE(intents_.HeldByAnotherThan(accounts_, 2, FkIntentHolder{0, 0}));
+}
+
+TEST_F(FkProbeTest, AReverseCheckOverAChildAnotherCoreOwnsRefuses) {
+    // A child relation placed off core 0 by the same rotate device the
+    // stale-owner cell uses.
+    catalog::Catalog rotated(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2,
+                             /*core_id=*/0);
+    rotated.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    catalog::Schema schema;
+    catalog::SysColumnRow id{};
+    id.pos = 0;
+    catalog::SetName(id.name, "id");
+    id.type_val = catalog::kTypeValInt64;
+    id.len = 8;
+    id.notnull = true;
+    schema.columns.push_back(id);
+    catalog::SysColumnRow ref{};
+    ref.pos = 1;
+    catalog::SetName(ref.name, "account_id");
+    ref.type_val = catalog::kTypeValInt64;
+    ref.len = 8;
+    ref.notnull = true;
+    schema.columns.push_back(ref);
+    auto child = rotated.CreateTable(catalog::kNamespacePublic, "foreign_trades", schema,
+                                     catalog::ClusteredType::kBtree);
+    ASSERT_TRUE(child.ok()) << child.status().message();
+
+    auto access = boot_->catalog.InitTableAccess(child.value());
+    ASSERT_TRUE(access.ok());
+    ASSERT_NE(access.value()->owner_core, 0u) << "the fixture failed to place a child off core 0";
+
+    exec::FkReverseOptions options;
+    options.core_id = 0;
+    exec::Budget budget;
+    auto outcome = exec::CheckNoChildReferences(store_, *access.value(), /*child_column_no=*/1,
+                                                /*parent_pk=*/1, txn::ReadView::Everything(),
+                                                options, &budget);
+    EXPECT_FALSE(outcome.ok())
+        << "a reverse check walked a child relation this core does not own";
+    // `NotImplemented`, by the two-code rule: the architecture admits this
+    // - the fan-out is specified - and nobody built the sender.
+    EXPECT_EQ(outcome.status().code(), StatusCode::kNotImplemented) << outcome.status().message();
+    EXPECT_NE(outcome.status().message().find("owned by core"), std::string::npos)
+        << outcome.status().message();
+}
+
 }  // namespace
 }  // namespace kds::server

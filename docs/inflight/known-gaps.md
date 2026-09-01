@@ -2725,3 +2725,35 @@ All fixed by `b11cc81`; the suite is green.
   places rows above a boundary and fails if the totals do not move —
   fixing the call site alone would have looked identical and proved
   nothing.
+
+## Cross-owner foreign keys: what the crossing does not cover
+
+**Opened 2026-09-01 by AH-T4** (`instructions/v2.8.0/workorder-ah.md`,
+`docs/spec/foreign-keys.md` §2a/§3a). `CheckForeignKeyColocation` no
+longer refuses a parent and child on different cores. The forward check
+crosses — hoisted to the dispatch fork, one probe round per distinct
+parent owner, a reference intent left behind — and two things do not:
+
+- **A parent in a cross-owner foreign key cannot be deleted.** The
+  reverse check refuses `NotImplemented` when the child is owned by
+  another core, because RESTRICT needs an authoritative "no children" and
+  the parent's core cannot see them. Fail-closed, and not a wrong answer;
+  what would replace it is the fan-out (one boolean probe per child
+  owner, each answering from its own Cabin or its own walk), which is not
+  built. Colocating parent and child — a namespace, AF-P5 — avoids the
+  refusal entirely.
+- **The dispatcher's park is proved by compilation and by the suite not
+  regressing, and not yet by an end-to-end cell.** The wire has its own
+  seven cells (`fk_probe_service_test.cpp`) and the reverse direction has
+  two, but no test yet drives a real cross-owner `INSERT` through the
+  fork's park, the probe round and the resume. It became *possible* with
+  this task's conversion; it is owed by AH-T6's measurement, which needs
+  the same fixture.
+
+**And the intent's crash window is stated but not demonstrated.** An
+intent-only participant writes no `TXN_PREPARE` record, so its intents die
+with the process; what makes that safe is the claim that a participant
+restarting between granting an intent and its prepare leg forces the
+coordinator's transaction to fail. **AH-T5 is what proves it**, and it is
+gated behind the owed XG3 process-kill half. Until then the invariant is
+asserted by `fk_probe_service.hpp` and demonstrated by nothing.

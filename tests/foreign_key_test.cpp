@@ -338,13 +338,17 @@ TEST_F(ForeignKeyTest, TheCatalogRefusesADeclarationTheDdlSurfaceWouldHaveCaught
               StatusCode::kNotFound);
 }
 
-// ---- Colocation (F5) -----------------------------------------------------
+// ---- Colocation (F5), converted at AH-T4 ---------------------------------
 //
-// Tested against the check itself rather than through DDL, because
-// AssignOwnerCore() puts every relation on the creating core today: there is
-// no way to *create* a cross-core pair, and the check exists for when there
-// is.
-TEST(ForeignKeyColocation, RefusesRelationsOnDifferentCores) {
+// F5 read "parent and child must be owned by the same core" and refused
+// otherwise, because the forward check descended the parent locally and had
+// nowhere else to ask. It has somewhere now (§2a), so the pair is admitted
+// and colocation is advice - the cheaper shape, asked for with a namespace
+// (AF-P5) - rather than a gate.
+//
+// This cell is the conversion itself, kept where the refusal was: it fails
+// the day something re-refuses a cross-owner pair without amending F5.
+TEST(ForeignKeyColocation, AdmitsRelationsOnDifferentCores) {
     catalog::TableAccess parent{};
     parent.oid = 4001;
     parent.owner_core = 0;
@@ -352,12 +356,8 @@ TEST(ForeignKeyColocation, RefusesRelationsOnDifferentCores) {
     child.oid = 4002;
     child.owner_core = 1;
 
-    Status refused = catalog::CheckForeignKeyColocation(parent, child);
-    EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.code(), StatusCode::kNotImplemented);
-    // Both cores named, so the reply says what would have to move.
-    EXPECT_NE(refused.message().find("core 1"), std::string::npos) << refused.message();
-    EXPECT_NE(refused.message().find("core 0"), std::string::npos) << refused.message();
+    EXPECT_TRUE(catalog::CheckForeignKeyColocation(parent, child).ok())
+        << "a cross-owner foreign key was refused after AH-T4 converted F5";
 
     child.owner_core = 0;
     EXPECT_TRUE(catalog::CheckForeignKeyColocation(parent, child).ok());

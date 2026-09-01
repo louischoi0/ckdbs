@@ -160,6 +160,7 @@ class IndexBuildClient;
 class AssertionBuildClient;
 class StatementShipClient;
 class FkProbeClient;
+class FkIntentTable;
 class ShippedStatementExecutor;
 // Forward-declared rather than included: this header is included nearly
 // everywhere, and what it needs of the 2PC service is one pointer and one
@@ -1407,6 +1408,14 @@ public:
     // must outlive this.
     void SetFkProbes(FkProbeClient* client) noexcept { fk_probes_ = client; }
 
+    // This core's reference-intent table (AH-T3): what a foreign
+    // transaction left behind on a parent row this core owns, and what a
+    // local `DELETE` of that row must consult before it may proceed.
+    // Without one, a delete answers from local evidence alone - which is
+    // correct on every core that never grants an intent, and is what a
+    // unit fixture is. `intents` must outlive this.
+    void SetFkIntents(FkIntentTable* intents) noexcept { fk_intents_ = intents; }
+
     // Arms the foreign arm of CREATE INDEX (PW1c-6b-3,
     // index_build_service.hpp): a relation another core owns has its index
     // built there, with this dispatcher parked between the request and the
@@ -1952,6 +1961,11 @@ private:
     // `CoreRuntime` owns it, and the outlives-the-dispatcher rule the
     // other service pointers carry applies here too.
     FkProbeClient* fk_probes_ = nullptr;
+
+    // AH-T3's half: the intents foreign transactions hold on rows this
+    // core owns. Not owned - `CoreRuntime` declares it ahead of the server
+    // that fills it, for the reason stated there.
+    FkIntentTable* fk_intents_ = nullptr;
 
     // **The verdicts a parked statement came back with**, consulted by the
     // extraction pass before it resolves anything. Held on the dispatcher

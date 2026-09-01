@@ -3993,6 +3993,41 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,
                                                       std::uint64_t parent_pk,
                                                       const txn::ReadView& check_view) {
+    // ---- The foreign reliance, asked first (AH-T3, §2a) -----------------
+    //
+    // **A live reference intent on this row is an answer no local walk can
+    // give.** A transaction on another core probed this parent, was told it
+    // exists, and is now writing a child row that depends on it - a row
+    // this core cannot see, because it is not this core's relation. So the
+    // intent is the only evidence that deleting this row would dangle a
+    // reference, and it is checked ahead of everything local.
+    //
+    // **Busy, not violation**, and the distinction is the whole of F3: the
+    // foreign transaction has not committed, so the answer depends on how
+    // it ends, and the caller retries rather than being told it is wrong.
+    // `TxnConflict` is the one retryable code (AH-R4).
+    //
+    // **The self-exclusion is structurally vacuous here, and asked anyway.**
+    // `FkIntentTable::HeldByAnotherThan` exists so a transaction that met
+    // its own reliance is not told to retry forever; on *this* table it can
+    // never meet one, because an intent lands here only from a core whose
+    // extraction pass found this parent foreign - and a statement on this
+    // core never defers a parent this core owns. So the holder passed is
+    // this core's own, which matches nothing, and the call reads "is any
+    // intent held". Spelled through the same predicate rather than a second
+    // one, so the day a local grant becomes possible this site already
+    // asks the right question.
+    if (fk_intents_ != nullptr && !parent.fkeys_in.empty()) {
+        const FkIntentHolder self{core_id_, 0};
+        if (fk_intents_->HeldByAnotherThan(parent.oid, parent_pk, self)) {
+            fk_intents_->NoteRefusal();
+            return Status::TxnConflict(
+                "row id=" + std::to_string(parent_pk) + " of '" + RelationNameOf(parent.oid) +
+                "' is relied on by a foreign key check running on another core, so it cannot "
+                "be deleted yet (docs/spec/foreign-keys.md §2a)");
+        }
+    }
+
     // RESTRICT (F2): the first child that still references this row refuses
     // the delete. No action of any kind is taken on the child - v1 never
     // writes to the other relation, which is what CASCADE would start.

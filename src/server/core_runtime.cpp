@@ -738,6 +738,9 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // in that order, so a reply cannot arrive before there is anything to
     // deliver it to. R6-5's rule, and the index build's.
     dispatcher_->SetFkProbes(&*fk_probe_client_);
+    // The parent side's half (AH-T3): a local DELETE consults what foreign
+    // transactions are relying on before it may proceed.
+    dispatcher_->SetFkIntents(&fk_intents_);
 
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has

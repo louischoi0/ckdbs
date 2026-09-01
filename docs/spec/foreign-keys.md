@@ -75,18 +75,28 @@ Decisions proposed as v1:
   Unsupported (J2-style, no slow path); the FK graph becomes an input
   to placement policy (D3), not a runtime coordination problem.
 
-  **Amended 2026-09-01 by AH** (`instructions/v2.8.0/workorder-ah.md`,
-  operator's mark at AH-R6): colocation stops being a *prerequisite*
-  and becomes a **recommendation**, at AH-T4 and not before. The
-  refusal stands unchanged while AH-T1..T3 build the protocol — a
-  declaration admitted ahead of it would send `CheckParentPresent` to
-  `BtreeLookup` a page this core may not fault — and converts once the
-  crossing exists. What replaces it is §2a's forward check plus a
-  message naming **colocation by namespace** as the cheaper shape
-  (`ratification-af-namespace.md` AF-P5, AF-T4): a constraint that
-  never has to cross is cheaper than one that crosses correctly, and a
-  namespace is how a user says so. D3 keeps the FK graph as a
-  placement input either way.
+  **Converted 2026-09-01 by AH-T4** (`instructions/v2.8.0/workorder-ah.md`,
+  operator's mark at AH-R6). Colocation is no longer a *prerequisite*;
+  `CheckForeignKeyColocation` admits a cross-owner pair. What replaces
+  the refusal is §2a's forward check, and what survives of F5 is
+  **advice**: colocation is the cheaper shape, and a **namespace** is how
+  a user asks for it (`ratification-af-namespace.md` AF-P5) — a constraint
+  that never has to cross beats one that crosses correctly. D3 keeps the
+  FK graph as a placement input either way.
+
+  **What a cross-owner pair costs, so the admission is not read as
+  free**, both fail-closed and neither a wrong answer:
+
+  - every child `INSERT`/`UPDATE` pays **one ring round trip per distinct
+    parent owner**, at the dispatch fork, before any row work (§2a);
+  - a **`DELETE` of the parent is refused** while any child lives on
+    another core (§3a). RESTRICT needs an authoritative "no children" and
+    the parent's core cannot see them.
+
+  The refusal it replaced was correct for its time and its argument is
+  worth keeping: a declaration admitted before the crossing existed would
+  have sent `CheckParentPresent` to `BtreeLookup` a page this core may not
+  fault. That is why the conversion was ordered last rather than first.
 - **F6 — Reverse check is Cabin's territory.** Parent-delete's "does
   any child reference me" starts as a stoppable walk and is the
   designated beneficiary of a Cabin on the child fk column; an FK
@@ -300,6 +310,35 @@ and takes the same hoist there. If no park-capable seam exists in it,
 that path **refuses** a cross-owner-FK write with a message naming
 this order — never a silently local-only check, which is the one
 degraded mode §1 says a constraint may not have.
+
+## 3a. The reverse check across owners — a refusal, not a fan-out
+
+`[AMENDED 2026-09-01 — AH-T4.]`
+
+A parent's `DELETE` asks *"does any child still reference me"*, and
+RESTRICT needs that answer to be **authoritative**: a "no children" that
+saw only some of the children is a dangling foreign key with the
+constraint reporting success, which §1 names as the one degraded mode a
+constraint may not have.
+
+Once F5 converts, a child can live on another core, and this core cannot
+see its rows. So the reverse check **refuses** rather than walking what it
+can reach: `NotImplemented`, naming the child's owner. The consequence,
+stated plainly, is that **a parent in a cross-owner foreign key cannot be
+deleted** — an asymmetry with the forward direction, which crosses fine.
+
+What would replace the refusal is a **fan-out**: one boolean probe per
+child owner, each answering from its own Cabin (F6's nomination) or its
+own walk, over the existing fan-in shape. It is not built.
+
+**And before the walk, the intents.** A live reference intent on the row
+being deleted is evidence no local walk can produce: a transaction on
+another core probed this parent, was told it exists, and is writing a
+child against it — a row this core cannot see. Meeting one answers
+**busy** (`TxnConflict`, retryable, one code wide per F3 as amended),
+because the foreign transaction has not committed and the answer depends
+on how it ends. The intent is released by that transaction's decide and
+by nothing else (§2a).
 
 ## 3. Reverse check — parent DELETE
 

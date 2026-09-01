@@ -209,7 +209,55 @@ counters reported beside every latency; results under
 | AH-T2 | **First slice built 2026-09-01** — owner resolution, per-owner grouping (`FkParentVerdicts::Defer`), and the fail-closed refusal at all three sites. **The wire is not built**: no payloads, no sender, no park/resume. AH-R7 is answered by survey and needed no code. Full suite 3140/3140 green |
 | AH-T2 | **Second slice built 2026-09-01** — the wire: `FkProbeRequestPayload` / `FkProbeReplyPayload`, `FkProbeServer` (resolve, grant, reply), `FkProbeClient` (send, wait, read), both halves on every core, and the intent release wired to the 2PC decide. **The park/resume is not built**, so the fork's refusal still stands and nothing sends yet. Seven cells in `fk_probe_service_test.cpp`. Full suite 3147/3147 green |
 | AH-T2 | **Third slice built 2026-09-01** — the park, the resume, and enrolment. The dispatcher now **sends** where it refused. **Not exercisable end to end until AH-T4**, and that is AH-R6's mark taking effect rather than a gap; see below. Full suite 3147/3147 green |
-| AH-T3..T6 | not started |
+| AH-T3 | **Built 2026-09-01 with AH-T4**, because it is AH-T4's gate for a correctness reason and not an ordering one: lifting F5 without it leaves a parent `DELETE` blind to foreign intents. The parent-side check consults `FkIntentTable` before anything local and answers busy |
+| AH-T4 | **Built 2026-09-01.** `CheckForeignKeyColocation` admits. F5 amended, §3a added, `known-gaps.md` opened. Full suite 3149/3149 green |
+| AH-T5, AH-T6 | not started |
+
+### AH-T3 + AH-T4 — the conversion, and the two things it made live
+
+**AH-T3 was built with AH-T4 rather than before it**, because AH-T4's
+gate on it is a correctness statement: F5 lifted without the intent check
+is a parent `DELETE` that cannot see the foreign transaction relying on
+the row it removes. The two are one change.
+
+**The intent check comes first, ahead of everything local.** A live
+reference intent is evidence no local walk can produce — the child row it
+protects is on another core. Meeting one answers **busy**
+(`TxnConflict`, retryable, one code wide per AH-R4), because the foreign
+transaction has not committed and the answer depends on how it ends. The
+self-exclusion `HeldByAnotherThan` offers is **structurally vacuous on
+this table** — an intent lands here only from a core whose extraction
+pass found this parent foreign, and a statement never defers a parent its
+own core owns — and is asked through the same predicate anyway, so the
+day a local grant becomes possible the site already asks the right
+question.
+
+**The second live thing is the one the survey predicted.**
+`workplan-auxiliaries-under-split.md` §3.1 wrote it down and said the day
+F5 relaxes both directions are owed: the reverse check's scope guard was
+keyed on `!child.ranges.empty()`, so an **unsplit child owned by another
+core** was walked at `desc_page_id` with no scope question asked —
+correct only because of the refusal AH-T4 has now lifted. The owner
+direction is paid: `child.owner_core != core_id` refuses.
+
+**What that costs is an asymmetry, and it is stated rather than hidden**:
+the forward direction crosses, and a **parent in a cross-owner foreign
+key cannot be deleted**. RESTRICT degrades to refusing the delete, which
+is fail-closed and not a wrong answer; the fan-out that would replace it
+(one boolean probe per child owner) is not built, and colocating the pair
+— a namespace, AF-P5 — avoids it entirely. That trade is what makes
+F5-as-advice honest: colocation is not a style preference, it buys back a
+capability.
+
+**`CheckForeignKeyColocation` keeps its parameters and its callers.** It
+returns OK and says why in its own body, so the signature — and the two
+doors that call it — are unchanged the day a reason to refuse returns.
+
+**Owed, and named in `known-gaps.md` rather than left implicit**: the
+dispatcher's park still has no end-to-end cell. AH-T2 handed that debt to
+this task on the grounds that the statements were not declarable; they
+are declarable now, and the debt moves to **AH-T6**, which needs the same
+two-core fixture for its measurement and should build it once.
 
 ### AH-T2, third slice — the park that resumes by re-entering
 

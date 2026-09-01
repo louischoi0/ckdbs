@@ -164,11 +164,37 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // per child-range owner, each answering from its own Cabin or its own
     // walk.
     //
-    // **Unreachable today and deliberately built anyway.**
+    // **Two ways a child can be out of reach, and the second went live
+    // with AH-T4.**
+    //
+    // The *range* half was unreachable when it was written -
     // `RangeEligible`'s `kForeignKey` arm gates a split on either side of
-    // an FK, so no child reaches here with a directory. That gate is
-    // SA-T6's to lift, and this is the line that decides whether lifting it
-    // costs a refusal or a silently unenforced constraint.
+    // an FK - and stays so under v2.8.0, which splits nothing.
+    //
+    // The *owner* half is the one that matters now. Until AH-T4,
+    // `CheckForeignKeyColocation` forced parent and child onto one core,
+    // so `child.owner_core != core_id` could not happen and an unsplit
+    // foreign child was walked at `desc_page_id` with no scope question
+    // asked - correct only because of the refusal that has now been
+    // lifted. `workplan-auxiliaries-under-split.md` §3.1 named this exact
+    // exposure and said the day F5 relaxes, both directions are owed. This
+    // is that day, and this is the line that pays the owner direction.
+    //
+    // What it costs, stated rather than hidden: **a parent in a
+    // cross-owner foreign key cannot be deleted.** RESTRICT degrades to
+    // refusing the delete, which is fail-closed and not a wrong answer;
+    // what would replace it is the fan-out (SA-T5's shape) - one boolean
+    // probe per child owner, each answering from its own Cabin or its own
+    // walk. That is not built, and this refusal is what keeps its absence
+    // honest.
+    if (child.owner_core != options.core_id) {
+        return Status::NotImplemented(
+            "relation oid " + std::to_string(child.oid) + " is owned by core " +
+            std::to_string(child.owner_core) + " and core " + std::to_string(options.core_id) +
+            " cannot see its rows, but a foreign key's reverse check must see every child row "
+            "to answer 'no children'; a fan-out over the child's owner is not built "
+            "(docs/spec/foreign-keys.md §3a, instructions/v2.8.0/workorder-ah.md)");
+    }
     if (!child.ranges.empty() && !child.ServableBy(options.core_id)) {
         return Status::NotImplemented(
             "relation oid " + std::to_string(child.oid) +
