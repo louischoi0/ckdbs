@@ -3,6 +3,7 @@
 #include "kds/base/crash_point.hpp"  // RP7: the coordinator's three kill points
 
 #include "kds/server/assertion_build_service.hpp"
+#include "kds/server/fk_probe_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"  // SS4: SHOW META's owner-side half
 #include "kds/server/statement_ship_service.hpp"  // SS2: the fork ships through it
@@ -360,6 +361,72 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                 log_->Warn("2pc", refused.message());
             }
         }
+    }
+
+    if (out->pending_fk_probe.has_value() && fk_probes_ != nullptr) {
+        // **The one park that resumes by re-entering the statement.**
+        // Every other pending record finishes work; a probe answers a
+        // question the statement had before it started, so what follows
+        // the wait is the statement itself, run whole and locally.
+        const PendingFkProbe probe = std::move(*out->pending_fk_probe);
+        out->pending_fk_probe.reset();
+
+        // **One park over every owner**, not one per owner: k sequential
+        // parks would serialise on whichever owner the loop named first,
+        // turning a fan-out into a fan-out-then-queue. `pending_remote`'s
+        // rule (RD7), and for its reason.
+        const std::function<bool()> settled = [this, ids = probe.request_ids] {
+            for (const std::uint64_t id : ids) {
+                if (!fk_probes_->Settled(id)) return false;
+            }
+            return true;
+        };
+        co_await sched::WaitUntil{&settled};
+
+        // Collect, close, and only then decide. A deadline is settled
+        // without having arrived, which is a refusal and not a verdict:
+        // no row may be written on the strength of an answer nobody gave.
+        Status probe_status = Status::OK();
+        resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+        for (std::size_t g = 0; g < probe.request_ids.size(); ++g) {
+            const std::uint64_t id = probe.request_ids[g];
+            const FkProbeOutcome* reply = fk_probes_->Find(id);
+            if (reply == nullptr || !reply->arrived) {
+                if (probe_status.ok()) {
+                    probe_status = Status::TxnConflict(
+                        "a foreign key's parent owner did not answer within the probe deadline; "
+                        "retry (docs/spec/foreign-keys.md §2a)");
+                }
+            } else if (!reply->status.ok()) {
+                if (probe_status.ok()) probe_status = reply->status;
+            } else if (reply->verdicts.size() != probe.groups[g].parents.size()) {
+                if (probe_status.ok()) {
+                    probe_status = Status::Corruption(
+                        "a foreign-key probe reply answered " +
+                        std::to_string(reply->verdicts.size()) + " of " +
+                        std::to_string(probe.groups[g].parents.size()) + " parents");
+                }
+            } else {
+                for (std::size_t i = 0; i < reply->verdicts.size(); ++i) {
+                    resumed_fk_verdicts_.Put(probe.groups[g].parents[i].first,
+                                             probe.groups[g].parents[i].second,
+                                             reply->verdicts[i]);
+                }
+            }
+            fk_probes_->Close(id);
+        }
+
+        if (!probe_status.ok()) {
+            resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+            *out = {ErrorReply(probe_status), false, 0, probe_status};
+            co_return Status::OK();
+        }
+
+        // The resume. The extraction pass consults `resumed_fk_verdicts_`
+        // first, so this pass resolves everything from held state, groups
+        // nothing foreign and sends nothing - a plain local statement.
+        *out = DispatchAndStage(probe.line, session);
+        resumed_fk_verdicts_ = exec::FkParentVerdicts{};
     }
 
     if (out->pending_shipped.has_value() && statement_ship_ != nullptr) {
@@ -829,6 +896,22 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                     false};
         }
     }
+    if (outcome.pending_fk_probe.has_value()) {
+        // No reactor to pump the owner's replies through, so the park
+        // cannot complete. The waiters are closed and the statement
+        // refuses **retryably** - it did not run, and running it on a
+        // served connection will work.
+        if (fk_probes_ != nullptr) {
+            for (const std::uint64_t id : outcome.pending_fk_probe->request_ids) {
+                fk_probes_->Close(id);
+            }
+        }
+        return {ErrorReply(Status::TxnConflict(
+                    "a foreign key's parent is owned by another core and the probe needs the "
+                    "reactor path; retry on a served connection")),
+                false};
+    }
+
     if (outcome.pending_shipped.has_value()) {
         // Unreachable: `MayShip` refuses without `may_park_`, which only
         // `DispatchAsync` sets. Written as a refusal rather than left to a
@@ -3699,6 +3782,17 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         const auto pk = static_cast<std::uint64_t>(value.int_val);
         if (into.Find(fk.rel_oid, pk) != nullptr) continue;  // AH-R2's dedup
 
+        // **A resumed statement's verdicts come first** (AH-T2). A probe
+        // that parked answered this pk on the owner that holds it; taking
+        // the answer here is what makes the second pass a plain local
+        // statement that sends nothing, and it is why the owner check
+        // below is not consulted again for a parent already answered.
+        if (const exec::FkVerdict* resumed = resumed_fk_verdicts_.Find(fk.rel_oid, pk);
+            resumed != nullptr) {
+            into.Put(fk.rel_oid, pk, *resumed);
+            continue;
+        }
+
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
         if (!parent.ok()) return parent.status();
 
@@ -3732,6 +3826,58 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
         into.Put(fk.rel_oid, pk, verdict.value());
     }
+    return Status::OK();
+}
+
+Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& held,
+                                               Session& session, std::string_view line,
+                                               DispatchOutcome& out) {
+    if (!held.has_foreign()) return Status::OK();
+    // No client (no reactor) or no text to resume with: the refusal is the
+    // honest answer, and it is the same one both cases already get for a
+    // shipped statement.
+    if (fk_probes_ == nullptr || line.empty()) return RefuseUnsentForeignKeyProbes(held);
+
+    PendingFkProbe pending;
+    pending.line = std::string(line);
+    pending.request_ids.reserve(held.foreign().size());
+
+    const bool in_txn = session.in_explicit_txn();
+    for (const auto& group : held.foreign()) {
+        const std::uint64_t request_id = next_remote_request_++;
+        // `transaction_id` travels as 0: the intent's holder is
+        // **(coordinator core, session)**, which is what a decide releases
+        // by, and a transaction id minted on this core names nothing on
+        // the owner's. The field is on the wire for a reader of a captured
+        // frame, not for the protocol.
+            if (Status s = fk_probes_->Request(group.owner_core, request_id, session.ship_id(),
+                                           /*transaction_id=*/0, group);
+            !s.ok()) {
+            // Refused **before** anything left, exactly as `Ship` is: the
+            // requests already sent are abandoned by their own deadlines
+            // and the intents they may have granted are released by this
+            // transaction's decide, so nothing is held on a statement that
+            // is not going to run.
+            for (const std::uint64_t sent : pending.request_ids) fk_probes_->Close(sent);
+            return s;
+        }
+        pending.request_ids.push_back(request_id);
+        pending.groups.push_back(group);
+
+        // **The enrolment, recorded only once the request is on its way**
+        // - the shipping enrolment's rule and its reason: a participant
+        // recorded for a request that never left would be prepared for a
+        // transaction it holds nothing of. Idempotent, so a statement
+        // naming three parents on one owner enrols it once.
+        //
+        // Autocommit enrols nobody, which is right and is also what makes
+        // the intent safe there: an autocommit statement's transaction
+        // ends on this core, and the decide that releases the intent is
+        // the one this core's commit sends to every participant it has.
+        if (in_txn) session.EnrolParticipant(group.owner_core);
+    }
+
+    out.pending_fk_probe = std::move(pending);
     return Status::OK();
 }
 
@@ -4481,6 +4627,19 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     // statement that ran somewhere else. The scope was opened before the
     // parse that found the relation foreign, which is why there is one to
     // end at all.
+    // **A parked foreign-key probe ends its scope the way a shipped
+    // statement does** (AH-T2): this core wrote nothing, so the scope
+    // closes without committing and, crucially, without the failure arm
+    // that would poison an explicit transaction. Parking is not failing -
+    // the statement has not run yet, and it runs whole on the resume.
+    if (out.pending_fk_probe.has_value()) {
+        if (Status s = AbandonWriteForShipping(session, scope);
+            !s.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("fk", "the local scope of a parked foreign-key probe did not end "
+                             "cleanly: " + s.message());
+        }
+        return out;
+    }
     if (out.pending_shipped.has_value()) {
         if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
             // Not a refusal - the statement is already on its way to its
@@ -6046,7 +6205,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // counted at the top of this function, in the one pass R4's routing
     // also reads.
     if (bulk && every_row_omits_pk && SortedFillEligible(*ta, oid.value())) {
-        return SortedFillInner(stmt, oid.value(), *ta, scope);
+        return SortedFillInner(stmt, line, oid.value(), *ta, scope);
     }
 
     // ---- The extraction pass (foreign-keys.md §2a, AH-R1) ---------------
@@ -6066,9 +6225,16 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
                 return {ErrorReply(s), false, 0, s};
             }
         }
-        if (Status s = RefuseUnsentForeignKeyProbes(fk_held); !s.ok()) {
+        DispatchOutcome out_probe;
+        // **Sent, not refused** (AH-T2): one probe per foreign owner, the
+        // statement parked on their replies, and resumed with the verdicts
+        // in hand. `SendForeignKeyProbes` falls back to the refusal where
+        // there is no client or no text to resume with.
+        if (Status s = SendForeignKeyProbes(fk_held, *scope.session, line, out_probe);
+            !s.ok()) {
             return {ErrorReply(s), false, 0, s};
         }
+        if (out_probe.pending_fk_probe.has_value()) return out_probe;
     }
 
     InsertRowResult first{};
@@ -6121,6 +6287,7 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
 }
 
 DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stmt,
+                                                   std::string_view line,
                                                    catalog::Oid oid,
                                                    const catalog::TableAccess& ta,
                                                    WriteScope& scope) {
@@ -6145,9 +6312,16 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
                 return {ErrorReply(s), false, 0, s};
             }
         }
-        if (Status s = RefuseUnsentForeignKeyProbes(fk_held); !s.ok()) {
+        DispatchOutcome out_probe;
+        // **Sent, not refused** (AH-T2): one probe per foreign owner, the
+        // statement parked on their replies, and resumed with the verdicts
+        // in hand. `SendForeignKeyProbes` falls back to the refusal where
+        // there is no client or no text to resume with.
+        if (Status s = SendForeignKeyProbes(fk_held, *scope.session, line, out_probe);
+            !s.ok()) {
             return {ErrorReply(s), false, 0, s};
         }
+        if (out_probe.pending_fk_probe.has_value()) return out_probe;
     }
 
     // Admission-class checks for every row, before anything burns (BI9) -
@@ -8405,6 +8579,19 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     DispatchOutcome out = UpdateInner(line, scope, snapshot.value().snap);
 
     // Shipped: HandleInsert's branch, for its reason.
+    // **A parked foreign-key probe ends its scope the way a shipped
+    // statement does** (AH-T2): this core wrote nothing, so the scope
+    // closes without committing and, crucially, without the failure arm
+    // that would poison an explicit transaction. Parking is not failing -
+    // the statement has not run yet, and it runs whole on the resume.
+    if (out.pending_fk_probe.has_value()) {
+        if (Status s = AbandonWriteForShipping(session, scope);
+            !s.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("fk", "the local scope of a parked foreign-key probe did not end "
+                             "cleanly: " + s.message());
+        }
+        return out;
+    }
     if (out.pending_shipped.has_value()) {
         if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
             // Not a refusal - the statement is already on its way to its
@@ -8572,13 +8759,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 return {ErrorReply(s), false, 0, s};
             }
         }
-        // Refused **at the fork**, before a single row qualifies - which is
-        // also why an UPDATE matching nothing still refuses here where it
-        // would not report a violation: an unaskable owner is a statement
-        // this build cannot run, not a verdict about a row.
-        if (Status s = RefuseUnsentForeignKeyProbes(fk_held); !s.ok()) {
+        // Sent **at the fork**, before a single row qualifies - which is
+        // also why an UPDATE matching nothing still parks here where it
+        // would not report a violation: asking an owner is what the
+        // statement needs to run at all, not a verdict about a row.
+        DispatchOutcome out_probe;
+        // **Sent, not refused** (AH-T2): one probe per foreign owner, the
+        // statement parked on their replies, and resumed with the verdicts
+        // in hand. `SendForeignKeyProbes` falls back to the refusal where
+        // there is no client or no text to resume with.
+        if (Status s = SendForeignKeyProbes(fk_held, *scope.session, line, out_probe);
+            !s.ok()) {
             return {ErrorReply(s), false, 0, s};
         }
+        if (out_probe.pending_fk_probe.has_value()) return out_probe;
     }
 
     std::uint32_t updated = 0;

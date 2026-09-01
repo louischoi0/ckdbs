@@ -208,7 +208,65 @@ counters reported beside every latency; results under
 | AH-T1 | **Built 2026-09-01**, no probe wired — the local path restructured only. `exec::FkParentVerdicts` (child-side, statement-scoped) holds one verdict per distinct (parent relation, pk); `CommandDispatcher::ResolveForeignKeyParents` is the extraction pass and `CheckForeignKeyOnWrite` starts no descent. All three callers converted. **The colocated A/B measurement (H-AH1's latency half) is not run** — see below. Full suite 3139/3139 green |
 | AH-T2 | **First slice built 2026-09-01** — owner resolution, per-owner grouping (`FkParentVerdicts::Defer`), and the fail-closed refusal at all three sites. **The wire is not built**: no payloads, no sender, no park/resume. AH-R7 is answered by survey and needed no code. Full suite 3140/3140 green |
 | AH-T2 | **Second slice built 2026-09-01** — the wire: `FkProbeRequestPayload` / `FkProbeReplyPayload`, `FkProbeServer` (resolve, grant, reply), `FkProbeClient` (send, wait, read), both halves on every core, and the intent release wired to the 2PC decide. **The park/resume is not built**, so the fork's refusal still stands and nothing sends yet. Seven cells in `fk_probe_service_test.cpp`. Full suite 3147/3147 green |
+| AH-T2 | **Third slice built 2026-09-01** — the park, the resume, and enrolment. The dispatcher now **sends** where it refused. **Not exercisable end to end until AH-T4**, and that is AH-R6's mark taking effect rather than a gap; see below. Full suite 3147/3147 green |
 | AH-T3..T6 | not started |
+
+### AH-T2, third slice — the park that resumes by re-entering
+
+**Built.** `SendForeignKeyProbes` replaces the refusal at all three sites:
+one `kFkProbeRequest` per foreign owner, the request ids and their groups
+carried on a new `DispatchOutcome::pending_fk_probe`, and the statement
+returned unrun. `DispatchAsync` parks on **one** predicate over every
+owner — k sequential parks would serialise on whichever owner the loop
+named first, which is `pending_remote`'s rule (RD7) and its reason —
+collects the verdicts into `resumed_fk_verdicts_`, closes every waiter,
+and **re-dispatches the line**. The extraction pass consults those
+verdicts first, so the second pass resolves everything from held state,
+groups nothing foreign, and sends nothing: a plain local statement.
+
+**Parking is not failing, and that took a specific primitive.** The write
+scope opened before the parse has to close without committing *and*
+without the failure arm that poisons an explicit transaction.
+`AbandonWriteForShipping` is exactly that, and it already existed for the
+shipped statement — the foreign-key arm sits beside it in `HandleInsert`
+and `HandleUpdate` and says the same thing. Without it a parked statement
+inside a transaction would have poisoned the session for having waited.
+
+**Enrolment lands with the send**, after it and never before: a
+participant recorded for a request that never left would be prepared for
+a transaction it holds nothing of — the shipping enrolment's rule,
+quoted at the site. Autocommit enrols nobody, which is right and is also
+what makes the intent safe there: the decide this core's own commit sends
+is what releases it. **The second-slice leak is therefore closed.**
+
+**A deadline is a refusal, not a verdict.** A waiter settled without
+having arrived answers `TxnConflict` — retryable — and clears the
+verdicts before returning, so no row can be written on the strength of an
+answer nobody gave. The synchronous `Dispatch()` closes its waiters and
+refuses the same way: with no reactor the park cannot complete.
+
+`transaction_id` travels as 0 on the wire. The intent's holder is
+**(coordinator core, session)**, which is what a decide releases by, and
+an id minted on this core names nothing on the owner's; the field is
+there for a reader of a captured frame, not for the protocol.
+
+**What this slice does not have, stated plainly: an end-to-end cell.**
+The wire is proved by `fk_probe_service_test` (seven cells, both halves);
+the dispatcher plumbing is proved by compilation and by the suite not
+regressing, and by nothing else. It cannot be more than that yet, and the
+reason is AH-R6's own mark: `CheckForeignKeyColocation` refuses a
+cross-owner declaration until AH-T4, so **no statement this engine admits
+can reach the park**. The `kRotate` second-catalog trick that stages a
+relation off core 0 (second slice) cannot help, because the FK
+*declaration* is what refuses, not the write.
+
+So **AH-T4 inherits AH-T2's acceptance tests**, and this is a real
+consequence of ordering the conversion last rather than an oversight:
+the one-owner and two-owner fixtures, the probe-reply negative (parent
+absent → `kFkViolation` before any row is written) and the in-flight
+parent (→ `TXN_CONFLICT`) that AH-T2's task text asks for are all
+statements that must first be declarable. They land with the arm that
+makes them declarable.
 
 ### AH-T2, second slice — the wire, and the cap that had to be derived
 

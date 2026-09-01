@@ -159,6 +159,7 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 class IndexBuildClient;
 class AssertionBuildClient;
 class StatementShipClient;
+class FkProbeClient;
 class ShippedStatementExecutor;
 // Forward-declared rather than included: this header is included nearly
 // everywhere, and what it needs of the 2PC service is one pointer and one
@@ -212,6 +213,34 @@ struct PendingAssertionBuild {
 // with a rendered line, which is the failure the refusal existed to
 // prevent.
 inline constexpr bool kShippedTypedAnswerBuilt = true;
+
+// A statement parked on a foreign parent's owner answering its forward
+// check (AH-T2, `docs/spec/foreign-keys.md` §2a).
+//
+// **The one pending record that resumes by re-entering the statement**,
+// where every other one finishes work. There is nothing to finish here: a
+// probe answers a question the statement had before it started, so the
+// statement runs afterwards rather than being completed by the reply. The
+// verdicts land in `resumed_fk_verdicts_` and the line is dispatched
+// again, at which point the extraction pass resolves everything from held
+// state and sends nothing - the second pass is a plain local statement.
+//
+// The first pass wrote nothing: the probe is sent from the extraction pass,
+// which runs before any row work, and the write scope is abandoned exactly
+// as a shipped statement's is (`AbandonWriteForShipping`), so an explicit
+// transaction is neither poisoned nor committed by having parked.
+struct PendingFkProbe {
+    // One per foreign owner - AH-R2's round, and why these are vectors.
+    // `request_ids[g]` addresses the reply for `groups[g]`, whose
+    // `parents` give the verdicts their identity: the reply is positional,
+    // so the request's own order is what maps an answer back to a pk.
+    std::vector<std::uint64_t> request_ids;
+    std::vector<exec::FkParentVerdicts::ForeignGroup> groups;
+    // The statement to run once the verdicts are in. Empty is impossible
+    // here: a path with no text (the KWP load chunk) keeps the refusal
+    // instead, exactly as it keeps the shipping one.
+    std::string line;
+};
 
 struct PendingShippedStatement {
     std::uint64_t request_id = 0;
@@ -421,6 +450,12 @@ struct DispatchOutcome {
     // nowhere to deliver its answer - and the refusal `Dispatch()` would
     // have to invent could not be retryable (D4).
     std::optional<PendingShippedStatement> pending_shipped = std::nullopt;
+
+    // A foreign parent's forward check, sent and not yet answered (AH-T2).
+    // `DispatchAsync()` parks on every owner's reply under one deadline and
+    // then **re-dispatches the line**; the synchronous `Dispatch()` has no
+    // reactor to receive a reply on and refuses retryably.
+    std::optional<PendingFkProbe> pending_fk_probe = std::nullopt;
 
     // A cross-owner `COMMIT` whose prepare phase is in flight (R6-3). The
     // reply is not in `response` yet: `DispatchAsync()` runs the rest of
@@ -1139,10 +1174,25 @@ private:
                                      const txn::ReadView& check_view,
                                      exec::FkParentVerdicts& into);
 
-    // AH-T2, first slice: what the extraction pass deferred because its
-    // owner is not this core, and nothing sends yet. OK when there is
-    // none - which is every statement the DDL surface can produce today,
-    // `CheckForeignKeyColocation` still refusing a cross-owner declaration.
+    // What the extraction pass deferred because its owner is not this
+    // core: **sent** as one probe per owner, and the statement parked
+    // (AH-T2). `line` is the statement to resume with; empty means a
+    // caller with no text, which refuses instead - the KWP load chunk,
+    // which keeps its cross-core refusal exactly as it keeps the
+    // shipping one.
+    //
+    // Fills `out.pending_fk_probe` on success. Enrols each owner as a 2PC
+    // participant when this runs inside an explicit transaction, after the
+    // send, for the reason the shipping enrolment states: a participant
+    // recorded for a request that never left would be prepared for a
+    // transaction it holds nothing of.
+    Status SendForeignKeyProbes(const exec::FkParentVerdicts& held, Session& session,
+                                 std::string_view line, DispatchOutcome& out);
+
+    // The refusal that stands where a probe cannot be sent - no client
+    // (no reactor), or no text to resume with. Fail-closed: the
+    // alternative is `CheckParentPresent` descending a page this core may
+    // not fault.
     Status RefuseUnsentForeignKeyProbes(const exec::FkParentVerdicts& held);
 
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
@@ -1220,8 +1270,13 @@ private:
     // burns. Outside the gate the row loop runs, with byte-identical
     // replies and relation state - the equivalence test is the contract.
     bool SortedFillEligible(const catalog::TableAccess& ta, catalog::Oid oid) const;
-    DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt, catalog::Oid oid,
-                                    const catalog::TableAccess& ta, WriteScope& scope);
+    // `line` is carried only so a foreign-key probe has a statement to
+    // resume with (AH-T2). Empty for a caller with no text - the KWP load
+    // chunk - which then keeps the refusal, exactly as it keeps the
+    // shipping one.
+    DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt, std::string_view line,
+                                    catalog::Oid oid, const catalog::TableAccess& ta,
+                                    WriteScope& scope);
 
     // The already-parsed half of InsertInner: everything after the parse -
     // cap, manager guard, resolution, affinity, the T3 gate, the row loop.
@@ -1345,6 +1400,12 @@ public:
     void SetPendingIndexBuilds(const PendingIndexBuilds* builds) noexcept {
         pending_index_builds_ = builds;
     }
+
+    // The foreign-key probe client (AH-T2, fk_probe_service.hpp). Without
+    // one - a dispatcher with no reactor - a foreign parent is refused
+    // rather than asked, which is what every unit fixture sees. `client`
+    // must outlive this.
+    void SetFkProbes(FkProbeClient* client) noexcept { fk_probes_ = client; }
 
     // Arms the foreign arm of CREATE INDEX (PW1c-6b-3,
     // index_build_service.hpp): a relation another core owns has its index
@@ -1886,6 +1947,21 @@ private:
     RelationGrantDemand* grant_demand_ = nullptr;
     // PW1c-6b-2's window; null on the same cores.
     const PendingIndexBuilds* pending_index_builds_ = nullptr;
+
+    // AH-T2's client, or null where nothing pumps a reactor. Not owned -
+    // `CoreRuntime` owns it, and the outlives-the-dispatcher rule the
+    // other service pointers carry applies here too.
+    FkProbeClient* fk_probes_ = nullptr;
+
+    // **The verdicts a parked statement came back with**, consulted by the
+    // extraction pass before it resolves anything. Held on the dispatcher
+    // for `pending_commit_lsn_`'s reason: one statement runs at a time on
+    // a core, so there is no second value to confuse it with, and
+    // threading it through `HandleInsert` -> `InsertInner` ->
+    // `InsertParsed` -> `SortedFillInner` would put a parameter on four
+    // signatures for one path. Cleared at the top of every dispatch, so a
+    // statement that did not park sees an empty one.
+    exec::FkParentVerdicts resumed_fk_verdicts_;
     // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
     // stands (see SetIndexBuilds).
     IndexBuildClient* index_builds_ = nullptr;

@@ -734,6 +734,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     }
     fk_probe_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
     if (Status s = fk_probe_client_->RegisterReplyReceiver(); !s.ok()) return s;
+    // The receiver first, then the pointer the dispatcher asks through -
+    // in that order, so a reply cannot arrive before there is anything to
+    // deliver it to. R6-5's rule, and the index build's.
+    dispatcher_->SetFkProbes(&*fk_probe_client_);
 
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has
