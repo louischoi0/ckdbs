@@ -106,6 +106,27 @@ PG-shaped phases, KDS semantics:
 
 **What suspension means in v1, and what it does not** *(amended 2026-08-31; the previous reactor note said "a suspended portal is a suspended foreground task holding pins", and it is not one)*. This engine has no suspension point at a row boundary: a walk holds a page pin across every row of a page, and the one place a statement parks is a page boundary under the cross-core gate. So **`max_rows` bounds delivery, not execution** — the statement runs whole into the portal's buffered batches, and `max_rows` decides how many rows leave now. Three consequences, stated rather than discovered:
 
+- **A portal ceases to exist when its statement fails** *(amended
+  2026-09-01, XG-R8)*. The server closes it on the error path, where it
+  already has the portal in hand. So a `C_DESCRIBE` or `C_CONTINUE` naming
+  it afterwards answers "no such portal", and a later `C_CLOSE` is the
+  no-op it already is on an absent name.
+
+  This is a lifecycle statement and not an optimisation, so it is written
+  here rather than left to be inferred. **What it fixes**: §5's skip-to-sync
+  discards every frame up to the next `C_SYNC`, including a `C_CLOSE` a
+  client pipelined behind the statement that just failed — which is exactly
+  when the close matters. The portal leaked, and at `kMaxSessionPortals`
+  (64) every further `C_BIND` was refused until the 60 s portal-idle sweep
+  freed one, so a retrying client ran at one statement per portal
+  lifetime. Clients that worked around it by sending `C_CLOSE` as its own
+  frame after `S_READY` may stop; the workaround cost a round trip on every
+  successful statement.
+
+  Reaching 64 portals now means a client genuinely holds 64, which is a
+  client defect: the refusal stays `RESOURCE_EXHAUSTED` with
+  `retryable = 0`, and `IsRetryable` stays one code wide.
+
 - A suspended portal holds **memory**, not pins. That is not a regression: the newline protocol already materialised every result set into one reply string, so the bytes were always spent — a portal spends them in a better shape and releases them when it closes.
 - The portal-idle timeout (§10) therefore bounds memory rather than pins, which is why its refusal is `RESOURCE_EXHAUSTED` and not a protocol error.
 - A **true** cursor is reachable without redesigning this: the cross-core `RemoteStepServer` already streams a walk under credit and parks it at the page boundary, which is exactly the mechanism a row-bounded `C_EXECUTE` needs. A later task, not a different design.

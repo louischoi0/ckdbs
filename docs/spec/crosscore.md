@@ -184,13 +184,13 @@ silently; this is the teardown correctness rule, not an error.
 - A `STEP_BATCH` payload is rows in the **KWP binary encoding (protocol
   D5)** — the same encoder the wire path uses, applied to the forwarded
   column set. One encoder, two consumers; no second row format.
-  **That encoder does not exist yet**: `include/kds/wire/kwp.hpp` is the
-  frame codec alone, and the server still speaks the newline text protocol.
-  Settled 2026-08-04: the D5 row encoder is a **prerequisite of P4**, built
-  in `wire/` where both consumers reach it. An interim private batch format
-  is refused — it would be exactly the second row format this bullet
-  forbids, and the one that is hardest to remove later because a pipeline
-  would be written against it.
+  ~~That encoder does not exist yet~~ — **built, and it is the protocol the
+  server speaks** (milestone KW, 2026-08-31): `wire/row_codec.hpp` is the
+  D5 encoder and `include/kds/wire/kwp.hpp` the frame codec around it. The
+  2026-08-04 settlement held: it was built in `wire/` where both consumers
+  reach it, and the interim private batch format that was refused then is
+  still refused now — one row encoding in the engine, which is what lets a
+  shipped read's rows reach a KWP client without being re-encoded (§4a).
 - Batch size: `[PROPOSED]` 32 KiB target, always ≤ the ring's max message
   payload. A row larger than the target still ships alone (var-heap spill
   values are re-inlined into the batch by the producing step — the consumer
@@ -214,6 +214,105 @@ silently; this is the teardown correctness rule, not an error.
   sender. What it was worth is in `bench/v2.3.0/`: a cross-core round trip
   on an idle peer cost a flat ~1.06 ms before it and **20.0 µs** after,
   independent of `wal_drain_interval_us` over a 50× range.
+
+### 4a. The shipped read's answer edge (XG, 2026-09-01)
+
+**What this closes.** Statement shipping carries a statement to its owner
+as text and brings back the owner's **rendered reply line** — which a
+newline client can print and a typed client cannot use, so a shipped
+*read* was refused outright to any session carrying a result sink. Under
+KWP/1 every session carries one, so a typed client could not read foreign
+data inside a transaction at all, and the engine's own scenario-2 booking —
+which opens with exactly that read — could not run with peer listeners on.
+Ruled 2026-09-01 by XG-R1..R7 (`instructions/v2.7.2/workorder-xg.md`,
+surveyed in `docs/inflight/in-progress/workplan-shipped-read-typed.md`).
+
+**The rows cross on an answer edge over this same step wire, and nothing
+about that wire changes.** The arrival core mints the `PipelineTag` and
+registers the receiver *before* it ships; the request carries the tag; the
+owner installs a batch sink on the shipped session and streams
+`STEP_BATCH` under the existing credit protocol; the ship reply POD arrives
+last as the **terminator**, carrying the status and the watermark with
+`text_len = 0`. Codec, batch builder, credit grant, `STEP_CANCEL` and the
+ceiling are reused unchanged — this is a fifth consumer of the pipeline,
+not a second pipeline.
+
+*Why an edge and not a bigger reply.* Both ship PODs fill exactly one ring
+slot, so the reply carries **992 bytes** and cannot hold a result set at
+all; typing it without moving the rows would convert one refusal into
+another. The rows had to cross on something that batches, and this is the
+thing that already does.
+
+**The tag is minted by the arrival core, not the owner**, because
+`SessionStepClient` discards a batch whose tag matches no open read. The
+owner cannot name a receiver that does not exist yet, so registration
+precedes the ship and the tag rides the request.
+
+**The description crosses first, as its own message, chunked.** A
+projected read's field list is not derivable on the arrival core — only
+the owner compiled the statement — so it must cross, and it crosses ahead
+of the first batch. The engine has **no column-count cap**, so a
+description can exceed one ring message; it therefore crosses as an
+**ordered sequence of description chunks**, reassembled before the
+receiver is armed. No ceiling is named and no constant is added: chunking
+is what answers the bound.
+
+*A description chunk is its own message kind and carries its own
+sequence*, not a `STEP_BATCH` with a flag. `StepBatchHeader::seq` is
+per-edge and contiguous — "a receiver that sees a gap has lost a batch,
+which the ring's FIFO makes impossible per edge — asserted, not handled"
+(`step_pipeline.hpp`) — so folding a differently-shaped payload into that
+sequence would either break the assertion or force description chunks to be
+counted as batches. Two kinds, two sequences, one tag.
+
+**Sizing is the edge's own and unchanged**: `kStepBatchTargetBytes`
+(32 KiB) as the target, `StepBatchCeiling` of the transport's slot as the
+bound. KW-D2's 64 KiB is a **socket-side** quantity and bounds nothing on
+a ring; an earlier draft of this row cited it and the citation was wrong.
+
+**The request POD pays 16 bytes for the tag**, so the longest shippable
+statement is **976 bytes**, down from 992. That bound is client-visible and
+is stated in `client-manual.md` rather than discovered.
+
+**The text arm does not move a byte.** A session with no result sink ships
+`form = 0`, the owner installs no sink, and the rendered-text reply is
+byte-identical to what it always was — including its own 992-byte
+whole-reply cap, which is a debug surface's limit and stays one (KW-D6).
+That byte-identity is what makes the newline suite this change's regression
+proof, which is why it is kept out of the blast radius deliberately.
+
+**Fail closed, never misparse.** `form = 0` is rendered text and `form = 1`
+is typed; **any other value is refused by name**, and an owner that cannot
+serve `form = 1` answers `Unsupported` on the reply POD and opens no edge,
+so the arrival core refuses the statement rather than delivering a shape
+the client cannot branch on. The same posture the `role` byte on this wire
+already takes.
+
+**A duplicate read re-executes rather than being answered from a record**
+(XG-R2). D4's dedup record keeps running for every write; a read is exempt.
+See `cross-owner-txn.md` §1a for why, and for what it bounds.
+
+**What stays refused after this lands** (XG-R7), by name, so a client sees
+one rule rather than a surprise:
+
+1. **a row wider than `StepBatchCeiling`** — 1,000 bytes at the shipped
+   1,024-byte slot. The cap does not vanish; it **moves from the whole
+   reply to the widest row**. Thirty narrow rows go from refused to served;
+   one wide row does not move. Closing it needs a fragmented batch or §9's
+   ring sizing, and neither is this row's;
+2. **a result that misses the 10 s deadline** — `UnknownOutcome`,
+   unchanged, and for a read it still says the read returned nothing and
+   changed nothing;
+3. **`ANALYZE` of a foreign relation**, which would describe a run this
+   core did not perform;
+4. **a join over a spread relation**, which is R5's.
+
+**Cancellation has no new case.** The deadline closes the registered tag
+(`STEP_CANCEL` where the read is still open remotely), a mid-result owner
+failure means the reply carries a non-OK status and the arrival core
+forwards **nothing** — a partial result set must not reach a client as a
+whole one — and a client disconnect closes the tag on the path that already
+closes a pending shipped statement.
 
 ## 5. Isolation Semantics
 

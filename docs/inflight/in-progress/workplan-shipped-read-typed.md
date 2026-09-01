@@ -4,11 +4,27 @@ Work order XF, row **XF0**, surveyed on the `xf` worktree at `04403a1`
 (`git describe --tags` → `v2.7.0-22-g04403a1`). Every path:line below is
 that commit's.
 
-**This file is in `blocked/`, and the gate is named: XF1 does not start
-until the operator answers `instructions/v2.7.1/ratification-xf0.md`.**
-Six of its seven questions change a wire, and a wire settled by CLA
-picking the cheap option is a wire nobody ratified. §7 lists them against
-the sections that raise them.
+> **UNBLOCKED 2026-09-01.** All seven questions are answered by work
+> order XG's rulings (`instructions/v2.7.2/workorder-xg.md`, XG-R1..R7),
+> the design is landed as spec text in `docs/spec/crosscore.md` §4a, and
+> this file moved from `blocked/` to `in-progress/`. XF1's task rows are
+> XG1's; §8 is the plan they execute. Where a ruling changed what §4-§5
+> proposed, the ruling wins and the difference is noted in place.
+>
+> The answers, in one line each: **Q1** the answer edge over the existing
+> step wire (recommended, taken); **Q2** a read is exempt from the dedup
+> record, so a duplicate re-executes; **Q3** the description is its own
+> message, **chunked**, so no ceiling is named; **Q4** the text arm keeps
+> its 992-byte cap; **Q5** `kStepBatchTargetBytes` and `StepBatchCeiling`
+> reused, KW-D2's 64 KiB corrected as socket-side; **Q6** the shrink to
+> 976 bytes is accepted; **Q7** the four-item residue confirmed with
+> nothing added.
+>
+> One thing XG settled that this file only raised: a description chunk is
+> **its own message kind with its own sequence**, not a `STEP_BATCH` with
+> a flag — `StepBatchHeader::seq` is asserted contiguous per edge, so
+> folding a differently-shaped payload into it would break the assertion
+> or force chunks to be counted as batches.
 
 ## 1. What is refused today, and how wide the refusal actually is
 

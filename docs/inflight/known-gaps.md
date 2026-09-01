@@ -1511,6 +1511,14 @@ still waits on its own gate, so:
   `crosscore.md` §9's ring sizing — that spec's decision, not the
   pipeline's. `step_pipeline.hpp` carries the retraction beside the
   constant.
+
+  **Widened in reach 2026-09-01 without being widened in kind** (XG-R7(1)):
+  once a shipped read is answered on the answer edge (`crosscore.md` §4a),
+  this is the bound a *foreign* read meets too — the old 992-byte
+  whole-reply cap is replaced by this per-row one, which serves thirty
+  narrow rows where the reply cap refused them and does nothing at all for
+  one wide row. Named as surviving residue in §4a rather than left to be
+  met.
 - **What shipping deliberately does not carry, and where the residue is
   read** (2026-08-26; **third era 2026-08-28**). Refused, by scope and not
   by omission: ~~a statement **inside an explicit transaction**~~ —
@@ -2217,6 +2225,19 @@ still waits on its own gate, so:
   already solved (`FinishRemoteReads` decodes real values), so the shape
   exists and only shipping has not adopted it.
 
+  **Ruled 2026-09-01 (work order XG, XG-R1..R7,
+  `instructions/v2.7.2/workorder-xg.md`), and the design is now
+  `docs/spec/crosscore.md` §4a.** The rows cross on an **answer edge over
+  the existing step wire** — the arrival core mints the tag and registers
+  the receiver, the owner streams `STEP_BATCH` under the existing credit
+  protocol, and the ship reply POD becomes the terminator. The description
+  crosses first as its own message kind, **chunked**, which answers the
+  column-count bound without naming a ceiling. A read is exempt from D4's
+  dedup record; the text arm and its own 992-byte cap are untouched; the
+  longest shippable statement falls 992 → 976 bytes. The four refusals that
+  survive are listed by name in §4a. **Built by XG1; this entry closes when
+  that lands, and not before.**
+
   **Surveyed 2026-08-31 (work order XF, row XF0):
   `docs/inflight/blocked/workplan-shipped-read-typed.md`, with the ask at
   `instructions/v2.7.1/ratification-xf0.md`.** Three things the survey
@@ -2268,10 +2289,20 @@ still waits on its own gate, so:
   price**: `tools/kwp.py` now sends `C_CLOSE` as its own frame after the
   statement's `S_READY` (`tools/kwp.py:387-397`), costing **+11.1 µs p50 /
   +12.3 µs mean per statement** on the success path (XE §3's isolation
-  cell). Every driver reproducing that shape pays it. **Referred, not
-  decided**: `instructions/v2.7.1/ratification-xf5.md` prices the three
-  options and the sibling retryability question. Owner:
-  `docs/spec/protocol.md` §5 and §7.
+  cell). Every driver reproducing that shape pays it. **Ruled 2026-09-01 (XG-R8): option (b)** — a statement error
+  auto-closes the portal it was executing, the one-line erase at
+  `OnStatementComplete`'s error arm where the portal is already in hand.
+  The lifecycle change is now `docs/spec/protocol.md` §7: a portal ceases
+  to exist when its statement fails, so a later `C_DESCRIBE`/`C_CONTINUE`
+  answers "no such portal" and a later `C_CLOSE` is the no-op it already is
+  on an absent name. The sibling question closes by (iii)+(ii) — with the
+  leak fixed, reaching 64 portals means a client genuinely holds 64, which
+  is a client defect and correctly non-retryable; `IsRetryable` stays one
+  code wide and the refusal text is already accurate.
+  `instructions/v2.7.1/ratification-xf5.md` is the argument it was decided
+  on. `tools/kwp.py`'s workaround is reverted by XG2 and its ~11-12 µs tax
+  re-baselined in its own results file. **Built by XG2; this entry closes
+  when that lands.**
 - **Nothing bounds an idle authenticated session.** KW-D3 set the
   *portal*-idle timeout at 60 s, which bounds how long an unread result set
   holds memory. A connection that completed its handshake and then sits

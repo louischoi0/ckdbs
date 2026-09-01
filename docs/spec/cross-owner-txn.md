@@ -127,6 +127,23 @@ row-scoped FK reference intents land (SA-T4), a participant holding one is
 check racing the decide — so it fails the predicate and keeps its durable
 prepare. An FK-only enrolment is a writing enrolment for this purpose.
 
+**A shipped *read* is exempt from the dedup record** (XG-R2, 2026-09-01).
+D4's record answers a duplicate from what the owner last replied, so a lost
+reply cannot become a second execution — and that rule is written about a
+**write** against an engine-issued pk, where a blind retry is a second row.
+A read has no side effect to guess about, so a duplicate simply
+re-executes; under READ COMMITTED it may answer different rows than the
+original, which two successive RC statements already may. `Remember` keeps
+running for every write, untouched.
+
+*What the exemption also buys, stated because it is the reason the
+alternative was not taken*: a read's remembered answer used to be at most
+992 bytes of rendered text, and once a read is answered in typed rows on an
+answer edge (`crosscore.md` §4a) the "answer" is the whole result set. A
+record that kept it would be a result-set cache 4,096 entries wide, and
+bounding it would need a cap — a constant. Exempting the read bounds it by
+construction instead.
+
 `SHOW META` reports `shipped_readonly_prepares` where one has happened,
 absent otherwise. What remains of the original cost is the decide leg,
 which is still walked; `bench/v2.5.0/results-rr-read-half-*` is the file

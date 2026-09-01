@@ -311,11 +311,14 @@ newline manual said all of them and they are as true over frames.
   the order of two commits on two different cores. Relations whose ordering
   matters to an application must live on one core.
 
-  **One limit rides with it, and it is a size.** A read of another core's
-  relation *inside* a transaction is carried in a single message holding
-  992 bytes of reply. A larger answer is refused rather than truncated, and
-  the refusal does not end the transaction. The same read outside a
-  transaction has no such limit, because it takes a different route.
+  **One limit rides with it, and since 2026-09-01 it is a narrower one.**
+  A read of another core's relation *inside* a transaction is answered on
+  an **answer edge** that streams its rows in batches, so the old
+  whole-reply cap of 992 bytes is gone. What replaces it is a bound on the
+  **widest single row** — about 1,000 bytes — because a batch is one
+  cross-core message and no batching policy can split a row across two. A
+  row wider than that is refused rather than truncated, and the refusal
+  does not end the transaction.
 
   **`READ COMMITTED` makes no cross-core promise at all**, and it is the
   default. Not a weaker version of the above — the level's own contract
@@ -770,15 +773,29 @@ bytes are framed and how the answer is rendered.
   cores. If that ordering matters to an application, the relations it
   orders must live on one core.
 
-  **One limit comes with it, and it is a size.** A read of another core's
-  relation *inside a transaction* is carried to that core and its answer is
-  carried back in a **single message**, which holds 992 bytes of reply
-  text. A read whose answer is larger is refused — `ERR UNKNOWN_OUTCOME
-  ... the read returned nothing and changed nothing` — rather than answered
-  with part of the rows, and the refusal does not end the transaction. The
-  same read *outside* a transaction has no such limit, because it takes a
-  different route. Narrow it with a `WHERE`, or run it outside the
-  transaction.
+  **One limit comes with it, and since 2026-09-01 it is a narrower one**
+  (`docs/spec/crosscore.md` §4a). A read of another core's relation
+  *inside a transaction* is carried to that core, and its answer now comes
+  back on an **answer edge** that streams rows in batches under the same
+  credit protocol the cross-core read surface already uses. So the number
+  of rows is no longer bounded by a single message.
+
+  What is still bounded is **one row's width**: a batch is one cross-core
+  message, and no batching policy can split a row across two, so a row
+  wider than about 1,000 bytes is refused — not truncated, and not answered
+  with part of the rows. Reachable at defaults with roughly fifteen
+  full-width `varchar` columns. Project fewer columns, or narrow them.
+
+  Two other refusals stand and are worth knowing by name: an answer that
+  does not arrive within 10 s is `ERR UNKNOWN_OUTCOME … the read returned
+  nothing and changed nothing`, and `ANALYZE` of another core's relation is
+  refused because the answer would describe a run this core did not
+  perform.
+
+  **The longest statement that may be carried to another core is 976
+  bytes**, down from 992 on 2026-09-01: the answer edge's identity travels
+  on the request. A longer statement is refused by name rather than
+  truncated — a truncated statement is a different statement.
 
   **`READ COMMITTED` makes no cross-core promise at all**, and it is the
   default. That is not a weaker version of the above; it is the level's own
