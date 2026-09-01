@@ -9,9 +9,9 @@ built on the `xf` worktree; every path:line below is `1b27d68`
 | SA-T0 | **Built** at `1beda80` — a participant that wrote nothing writes no `TXN_PREPARE`. Spec: `cross-owner-txn.md` §1a |
 | SA-T1 | **Built** at `1b27d68` — `exec::RestructureForExecutingCore`, both remote shapes, correlated arms included |
 | SA-T2 | **Ruled 2026-09-01 and built as work order SB** (`instructions/v2.7.1/workorder-sb.md`). §2's proposal was ratified as SB-R1; §2.6 records what building it found. |
-| SA-T3, T5, T7, T8, T9 | not started |
-| SA-T4 | **Surveyed 2026-09-01, not built — the forward check has no park point, and that is an architectural fork the order does not take.** §4 below |
-| SA-T6 | **Blocked on its own gate, and its two hazards are pre-emptively closed.** §3 below |
+| SA-T3, T5, T7, T8, T9 | **Withdrawn 2026-09-01** — the range-shaped remainder of SA, retired by `instructions/v2.8.0/ratification-ae.md` AE-3.4/AE-4d. Never started; withdrawn on paper only |
+| SA-T4 | **Surveyed 2026-09-01, not built here — the forward check has no park point, and that is an architectural fork this order does not take** (§4 below). **Retired into work order AH** (`instructions/v2.8.0/workorder-ah.md`), which takes the fork: the park is the dispatch fork, one probe round per distinct owner. §4 is the survey AH answers and is kept for that |
+| SA-T6 | **Split in two by AE-2's seam, 2026-09-01.** Its *owner*-granular half — `CheckForeignKeyColocation`, which refuses on `owner_core` and not on a split — is **AH-T4**, and the operator's AH-R6 mark is that it *converts* there from constraint to recommendation. Its *range*-granular half — `RefuseAuxiliaryOnSplitRelation`'s FK arm and `RangeEligible`'s `kForeignKey` arm — is **withdrawn** with the rest (AE-4c). §3's two pre-emptively closed hazards stand either way and are guards AE-5.2 keeps |
 
 ---
 

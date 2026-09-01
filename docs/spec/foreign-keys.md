@@ -46,9 +46,24 @@ Decisions proposed as v1:
   retries). Commercial engines block on the writer's outcome; blocking
   is not expressible on a cooperative single-writer core, and the
   deterministic-error semantic is the same one adopted for unique
-  checks. New status code `kConstraintBusy` `[PROPOSED]`, distinct
+  checks. ~~New status code `kConstraintBusy` `[PROPOSED]`, distinct
   from `kFkViolation`, so clients can distinguish "retry" from
-  "wrong".
+  "wrong".~~
+
+  **`kConstraintBusy` is not enacted, and the crossing does not
+  reopen it** (AH-R4, 2026-09-01,
+  `instructions/v2.8.0/workorder-ah.md`). FK-M2 declined it and the
+  decline stands: the busy verdict is `FkVerdict::kBusy` →
+  `Status::TxnConflict`, wire-spelled `TXN_CONFLICT`, **one retryable
+  code wide**. SA-R7 proposed enacting it on the grounds that a
+  cross-core check makes the retry/wrong distinction load-bearing —
+  and it *is* load-bearing, but `TxnConflict` already carries it: what
+  a client does with a busy is retry, which is exactly what the code
+  it already has says. A second retryable code buys the client
+  nothing and costs the wire a permanent registry entry
+  (`status.hpp`'s standing argument on the width of the `retryable`
+  bit). If the *engine* ever wants to tell its own two busies apart,
+  that is a protocol-silent addition made then.
 - **F4 — Checks compile into the step chain.** No trigger subsystem,
   no SPI-style re-entry: the forward check is an implicit
   **correlated sub-chain** whose single step is a `kProbe` on the
@@ -59,6 +74,19 @@ Decisions proposed as v1:
   the same core. `CREATE`-time validation rejects a cross-core FK as
   Unsupported (J2-style, no slow path); the FK graph becomes an input
   to placement policy (D3), not a runtime coordination problem.
+
+  **Amended 2026-09-01 by AH** (`instructions/v2.8.0/workorder-ah.md`,
+  operator's mark at AH-R6): colocation stops being a *prerequisite*
+  and becomes a **recommendation**, at AH-T4 and not before. The
+  refusal stands unchanged while AH-T1..T3 build the protocol — a
+  declaration admitted ahead of it would send `CheckParentPresent` to
+  `BtreeLookup` a page this core may not fault — and converts once the
+  crossing exists. What replaces it is §2a's forward check plus a
+  message naming **colocation by namespace** as the cheaper shape
+  (`ratification-af-namespace.md` AF-P5, AF-T4): a constraint that
+  never has to cross is cheaper than one that crosses correctly, and a
+  namespace is how a user says so. D3 keeps the FK graph as a
+  placement input either way.
 - **F6 — Reverse check is Cabin's territory.** Parent-delete's "does
   any child reference me" starts as a stoppable walk and is the
   designated beneficiary of a Cabin on the child fk column; an FK
@@ -210,6 +238,68 @@ check-visibility mode through `AcceptTupleAt`.
   page touches — no separate accounting.
 - Later, the same probe position is exactly where trail replay and
   (C6) location hints already apply. Nothing FK-specific to build.
+
+## 2a. The forward check across owners — the park is at the dispatch fork
+
+`[AMENDED 2026-09-01 — AH-T0. The text is the contract; the code
+follows at AH-T1/T2 and this section says "amended", not "built",
+until it does.]`
+
+**The problem, in one sentence.** The check runs where nothing can
+wait. `CheckForeignKeyOnWrite` is a plain `Status` member called per
+row from inside an already-open `WriteScope`, and nothing on that
+stack suspends — so a check that has to ask another core cannot ask
+from where it stands.
+
+**The answer is to move the asking, not to make the write scope
+wait** (AH-R1). Every foreign parent pk a statement needs is extracted
+**before any row work** — an INSERT's from its `VALUES`, an UPDATE's
+from its `SET` body — and probed at the **dispatch fork**, the one
+place a write already knows how to park: `HandleInsert` /
+`HandleUpdate` return `pending_remote` and resume there today. The
+statement then runs **synchronously** against the intents it now
+holds, and the per-row check that remains inside the write scope
+answers from held intents and local state only. Nothing inside an open
+`WriteScope` ever initiates a ring round trip — RD5's wall is left
+untouched and unmet rather than negotiated with.
+
+**One round per distinct owner, never per row** (AH-R2). The extracted
+pks are deduplicated and grouped by resolved owner; each foreign owner
+gets **one** `kFkProbeRequest` carrying its whole set, and enrolling
+that owner as a participant rides the same round (RR1's
+enrol-on-first-contact). So a statement's foreign-FK cost is a
+function of **how many distinct owners its parents live on**, not of
+how many rows it writes — which is the property that makes a
+thousand-row insert against one foreign parent cost one round trip.
+
+**The parent set must be enumerable, and today it always is**
+(AH-R3). F1 makes an fk value a literal or a bound parameter, so the
+extraction pass is total. The rule is written for the day F1 moves: a
+statement whose parent set cannot be enumerated at the fork is
+**refused**, with the byte, rather than run against a partial set of
+intents. Fail-closed; in code an assert-and-refuse arm, not a handled
+path.
+
+**What the probe leaves behind is memory-resident, and that is safe
+for a stated reason** (AH-R5). The probe leaves a row-scoped
+**reference intent** on the parent's owner; a parent-side DELETE
+meeting a live foreign intent answers busy (§3, and one code wide per
+F3 as amended). Under `cross-owner-txn.md` §1a an intent-only
+participant writes no `TXN_PREPARE` record, so its intents die with
+the process. The invariant that makes that safe is not an argument
+but a testable statement: **a participant that restarts after granting
+an intent and before its prepare leg forces the coordinator's
+transaction to fail** — the prepare cannot be answered by a process
+that has lost the enrolment. AH-T5 proves it by killing the
+participant in exactly that window. A window in which the coordinator
+can still commit is a defect, not a documented limitation.
+
+**The load path is in scope** (AH-R7). `CheckForeignKeyOnWrite`'s
+third caller is the KWP load path, which has its own batch boundary
+and takes the same hoist there. If no park-capable seam exists in it,
+that path **refuses** a cross-owner-FK write with a message naming
+this order — never a silently local-only check, which is the one
+degraded mode §1 says a constraint may not have.
 
 ## 3. Reverse check — parent DELETE
 

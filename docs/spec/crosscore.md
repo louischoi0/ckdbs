@@ -533,6 +533,23 @@ did.
   deferred with 2PC `[OPEN]`. A split parent or child would make the
   validation cross-core, which is §6a's FK gate.
 
+  **Amended 2026-09-01 by AH** (`instructions/v2.8.0/workorder-ah.md`;
+  `foreign-keys.md` §2a is the contract). Two halves of that paragraph
+  now part company, and the seam is
+  `instructions/v2.8.0/ratification-ae.md` AE-2's:
+
+  - **Cross-owner FK is no longer deferred.** Parent and child on two
+    *relations* on two cores is owner-granular, which v2.8.0 keeps and
+    works on. The forward check hoists to the dispatch fork, probes one
+    round per distinct owner, and leaves a row-scoped reference intent;
+    the validation-to-commit window closes because a parent DELETE
+    meeting a live intent answers busy rather than racing it. Nothing
+    inside a `WriteScope` waits, so RD5's wall is untouched.
+  - **§6a's FK *split* gate stays**, and stays for the reason it always
+    had: a split parent or child is range-granular, which v2.8.0 does
+    not do (AE-3.2). AH widens what a foreign key may span by
+    *ownership*, not by boundary.
+
 ### 6a. Write-Coupled Auxiliaries — What May Split (v2)
 
 A split relation has no single owner core, so the v1 co-location rule
