@@ -196,6 +196,21 @@ struct PendingAssertionBuild {
 // A statement this core sent to the core that owns its relation (SS2,
 // statement_ship_service.hpp), between the send and the answer. What the
 // waiter needs to be found again, and what its refusals need to name.
+// **Whether the owner's half of the answer edge exists yet** (XG1).
+//
+// `false` until the owner can install a batch sink on a shipped session,
+// send the result description, and stream `STEP_BATCH` to the tag the
+// request carries. While it is false, `ShipStatement` keeps refusing a
+// shipped read to a typed client exactly as it did before XG1 - which is
+// the honest state, because shipping `form = 1` to an owner that renders
+// text would answer a typed client with a rendered line and that is the
+// failure the refusal exists to prevent.
+//
+// A named constant rather than a comment promising to remember: the
+// request side is built and tested behind it, and flipping this with the
+// owner's half is one line at one site.
+inline constexpr bool kShippedTypedAnswerBuilt = false;
+
 struct PendingShippedStatement {
     std::uint64_t request_id = 0;
     std::uint32_t owner_core = 0;
@@ -218,6 +233,21 @@ struct PendingShippedStatement {
     // answer is a success, because the invalidation broadcast is a task and
     // nothing orders it against this reply.
     bool ddl = false;
+
+    // **XG1: this read's answer is coming on an edge, and this is its
+    // tag.** Set at the read fork alongside `read`, and only where the
+    // session has a result sink - a text client's shipped read is answered
+    // on the reply POD exactly as it always was, and leaves this zeroed.
+    //
+    // Carried on the pending record rather than re-derived, because the
+    // statement parks between the ship and the answer and the tag has to
+    // survive that. `FinishShippedStatement` forwards the edge's rows on an
+    // OK terminator and closes the tag on **every** exit, success or not:
+    // a registered receiver nobody drains holds its batches for the
+    // session's life, which is the leak the fan-in's own `CloseAll` guard
+    // exists to prevent.
+    bool typed_answer = false;
+    PipelineTag answer_tag{};
 };
 
 // A `COMMIT` of a transaction whose writes touched more than one owner

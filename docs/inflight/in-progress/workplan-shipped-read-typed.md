@@ -349,6 +349,42 @@ file knows what is not settled.
 | Q6 | 16 bytes off the longest shippable statement | §4 |
 | Q7 | which shapes stay refused after this lands | §5d |
 
+## 8a. XG1's build status (2026-09-01)
+
+**The request side is built; the owner's half is not, and the refusal is
+still in place until it is.** `kShippedTypedAnswerBuilt`
+(`command_dispatcher.hpp`) is the one line that opens the gate, and it is
+`false`: shipping `form = 1` to an owner that renders text would answer a
+typed client with a rendered line on the reply POD, which is the exact
+failure the original refusal exists to prevent. Half-wiring it would be
+worse than not wiring it.
+
+| piece | state |
+|---|---|
+| the `form` byte, its two values, and the fail-closed decode | **built** — `ShippedAnswerTypedOf` refuses any other byte by name, which is also how an owner too old to serve a form answers |
+| `PipelineTag answer_tag` on the request POD | **built** — `kShippedStatementFixedBytes` 32 → 48, so `kShippedStatementTextMax` is **976**, asserted where it is derived |
+| `SessionStepClient::RegisterInbound` | **built** — a receiver for a tag nothing here opened; no `STEP_OPEN` sent, `output_layout` left empty because the layout is the owner's to state |
+| `ShipStatement`: mint, register, ship, close-on-refusal | **built**, behind the gate |
+| `PendingShippedStatement` carries the tag across the park | **built** |
+| the owner's batch sink on the shipped session | **not built** |
+| the description message kind, its chunking and reassembly | **not built** |
+| shipping the batches under credit | **not built** |
+| the arrival core's forward into the session sink | **not built** |
+| the dedup exemption (XG-R2) | **not built** — see the finding below |
+
+**A finding the build turned up, and it narrows XG-R2 as specified.**
+XG-R2 exempts *a read* from the dedup record, but **the owner cannot tell
+a read from a write**: nothing on the request says so, and the last spare
+byte on the POD went to `form`. What the owner can identify is a *typed*
+answer, which the arrival core sets only at the read fork — so the
+exemption is buildable exactly where XG-R2's own second paragraph argues
+for it (a typed read's "answer" is the whole result set, and a record
+keeping it would be a result-set cache needing a cap). A **text-arm** read
+keeps its record, which is today's behaviour and is bounded at 992 bytes,
+so nothing is unbounded either way. Stated here rather than silently
+narrowed; it wants the operator's eye only if the wider exemption was
+wanted for its own sake.
+
 ## 8. XF1's tasks, written against answers not yet given
 
 Listed so the ask is read against the work it authorizes. **None starts

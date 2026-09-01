@@ -128,6 +128,43 @@ protected:
     std::optional<SessionStepClient> client_;
 };
 
+TEST_F(SessionStepLoopbackTest, AnInboundReceiverRegistersWithoutOpeningAnything) {
+    // **XG1's receiver for a shipped read's answer edge**
+    // (`docs/spec/crosscore.md` §4a). The owner learns the tag from the
+    // shipped statement's own request, so this core sends nothing to open
+    // it - which is the whole difference from `Open`, and in this fixture
+    // is visible as the loopback server never being handed a `STEP_OPEN`:
+    // the send lambda would dispatch one straight into it.
+    const PipelineTag tag{41, 0, 0};
+    ASSERT_TRUE(client_->RegisterInbound(tag, /*owner_core=*/1, oid_).ok());
+    EXPECT_EQ(client_->open_reads(), 1u);
+
+    // It is an ordinary read in every other respect, which is the point -
+    // the batches, the EOF and the completion flag are the pipeline's.
+    SessionStepClient::RemoteRead* read = client_->Find(tag);
+    ASSERT_NE(read, nullptr);
+    EXPECT_EQ(read->owner_core, 1u);
+    EXPECT_FALSE(read->done);
+    EXPECT_TRUE(read->output_layout.empty())
+        << "a shipped read's layout is the owner's to state and arrives on the edge";
+    EXPECT_TRUE(read->stages.empty())
+        << "there is no upstream to cancel; the answer edge is addressed by tag";
+
+    client_->Close(tag);
+    EXPECT_EQ(client_->open_reads(), 0u);
+}
+
+TEST_F(SessionStepLoopbackTest, TwoReceiversOnOneTagAreRefusedRatherThanCrossed) {
+    // The collision `Ship` refuses for a request id, for its reason: two
+    // reads on one tag would deliver one's rows to the other, and the
+    // identity check that would catch it is by then the second read's.
+    const PipelineTag tag{42, 0, 0};
+    ASSERT_TRUE(client_->RegisterInbound(tag, 1, oid_).ok());
+    EXPECT_FALSE(client_->RegisterInbound(tag, 1, oid_).ok());
+    EXPECT_EQ(client_->open_reads(), 1u);
+    client_->Close(tag);
+}
+
 TEST_F(SessionStepLoopbackTest, ARemoteScanCompletesWithEveryRow) {
     auto tag = client_->Open(ScanStep(), /*owner_core=*/1, /*request_id=*/11);
     ASSERT_TRUE(tag.ok()) << tag.status().message();

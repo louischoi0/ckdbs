@@ -72,6 +72,37 @@ StatusOr<PipelineTag> SessionStepClient::OpenPipeline(PipelinePlan plan) {
     return tag;
 }
 
+Status SessionStepClient::RegisterInbound(const PipelineTag& tag, std::uint32_t owner_core,
+                                         catalog::Oid rel_oid) {
+    // The collision refusal `Ship` makes for a request id, for the same
+    // reason: two reads on one tag would deliver one's rows to the other,
+    // and the identity check that would otherwise catch it is by then the
+    // second read's. The tag is minted per statement, so this is a defect
+    // rather than a race - refused rather than made unreachable by
+    // convention.
+    if (Find(tag) != nullptr) {
+        return Status::InvalidArgument(
+            "a remote read is already registered on step " + std::to_string(tag.step_id) +
+            " of request " + std::to_string(tag.request_id));
+    }
+    // **No `STEP_OPEN`.** That is the whole difference from `Open` above:
+    // the owner learns this tag from the shipped statement's own request,
+    // so there is nothing for this core to send. `stages` stays empty for
+    // the same reason - there is no upstream to cancel, only the answer
+    // edge itself, and `Close` addresses that by tag.
+    //
+    // `output_layout` stays empty too, and that is not the P4c star-read
+    // meaning it has elsewhere: the layout of a shipped read's rows is the
+    // *owner's* to state, because only the owner compiled the statement,
+    // and it arrives on the edge ahead of the rows.
+    RemoteRead read;
+    read.tag = tag;
+    read.owner_core = owner_core;
+    read.rel_oid = rel_oid;
+    reads_.push_back(std::move(read));
+    return Status::OK();
+}
+
 SessionStepClient::RemoteRead* SessionStepClient::Find(const PipelineTag& tag) {
     for (RemoteRead& read : reads_) {
         if (read.tag == tag) return &read;

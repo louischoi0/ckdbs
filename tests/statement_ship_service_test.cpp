@@ -488,6 +488,61 @@ TEST_F(StatementShipTest, AWrongSizedRequestGetsNoReplyAndLeavesTheDeadlineToAns
     EXPECT_EQ(server_->replies(), 0u);
 }
 
+// ---- XG1: the answer form and the edge's tag on the request -------------
+
+TEST_F(StatementShipTest, TheAnswerFormAndItsTagRideTheRequest) {
+    // XG-R1/R6 (`docs/spec/crosscore.md` §4a). The wire field itself,
+    // ahead of anything crossing a ring.
+    auto text_arm = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1");
+    ASSERT_TRUE(text_arm.ok()) << text_arm.status().message();
+    EXPECT_EQ(text_arm.value().form, kShippedAnswerText);
+    EXPECT_EQ(text_arm.value().answer_tag, PipelineTag{})
+        << "the text arm must leave the tag zeroed; it is meaningless without the form";
+
+    const PipelineTag tag{7, 2, 0};
+    auto typed = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1",
+                                           /*retry=*/false, /*in_txn=*/false,
+                                           /*isolation=*/std::nullopt, /*join=*/false,
+                                           /*typed_answer=*/true, tag);
+    ASSERT_TRUE(typed.ok()) << typed.status().message();
+    EXPECT_EQ(typed.value().form, kShippedAnswerTyped);
+    EXPECT_EQ(typed.value().answer_tag, tag);
+}
+
+TEST_F(StatementShipTest, AnAnswerFormThisBuildDoesNotServeIsRefusedNotGuessed) {
+    // **The fail-closed rule, and the one field where guessing produces a
+    // *shape* rather than a permission**: an owner that rendered text for a
+    // caller expecting rows would answer one `SELECT` as a result set or as
+    // a block of text depending on which core owns the relation, which is
+    // invisible from the statement. It is also how an owner too old to
+    // serve a form answers - the byte it does not know is the byte it
+    // refuses.
+    auto forged = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1");
+    ASSERT_TRUE(forged.ok()) << forged.status().message();
+    ASSERT_TRUE(ShippedAnswerTypedOf(forged.value()).ok());  // as issued
+    forged.value().form = 99;
+    auto refused = ShippedAnswerTypedOf(forged.value());
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kUnsupported);
+    EXPECT_NE(refused.status().message().find("99"), std::string::npos)
+        << "the refusal names the byte: " << refused.status().message();
+}
+
+TEST_F(StatementShipTest, TheLongestShippableStatementIsTheSlotMinusTheHeader) {
+    // XG-R6's client-visible bound, asserted where it is derived rather
+    // than where it is documented: the tag cost sixteen bytes of statement
+    // and `client-manual.md` says 976 because of this.
+    EXPECT_EQ(kShippedStatementTextMax, 976u);
+    EXPECT_EQ(kShippedStatementTextMax,
+              sched::kCoreRingPayloadBytes - kShippedStatementFixedBytes);
+
+    const std::string longest(kShippedStatementTextMax, 'x');
+    EXPECT_TRUE(ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, longest).ok());
+    const std::string one_too_many(kShippedStatementTextMax + 1, 'x');
+    auto refused = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, one_too_many);
+    EXPECT_FALSE(refused.ok()) << "a statement is refused, never truncated";
+}
+
 TEST_F(StatementShipTest, ShippedStatementRequestOfEncodesTheRetryBit) {
     // R6-0 (`instructions/v2.4.0/2pc.md` §2): the wire field itself, ahead
     // of anything crossing a ring.

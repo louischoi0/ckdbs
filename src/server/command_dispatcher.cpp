@@ -4315,36 +4315,75 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
                                                  std::uint32_t owner_core,
                                                  std::string_view relation, Session& session,
                                                  bool read) {
-    // **A shipped *read* cannot answer a typed client** (2026-08-31, KW's
-    // review). The ship wire carries the owner's **rendered reply line**
-    // (SS3, `server/shipped_statement_executor.hpp`) - it is text, by
-    // design, because the arrival core re-renders through `ErrorReply` and
-    // the only structured thing that has to survive is the status code. A
-    // result sink wants *values*, and there are none to give it: the rows
-    // were formatted on the owner and this core holds only their rendering.
+    // ---- XG1: a typed client's shipped read is answered on an edge ------
     //
-    // So the honest answer is a refusal rather than a shape. Answering
-    // through the sink's diagnostic form - which is what happens without
-    // this - would make one `SELECT` come back as a typed result set or as
-    // a block of text depending on **which core owns the relation**, and a
-    // client cannot branch on that: it is invisible from the statement.
+    // **What this replaces.** Until 2026-09-01 a shipped *read* was refused
+    // outright to any session carrying a result sink, because the ship wire
+    // carries the owner's **rendered reply line** (SS3) and a sink wants
+    // values. Answering through the sink's diagnostic form would have made
+    // one `SELECT` come back as a typed result set or as a block of text
+    // depending on which core owns the relation - invisible from the
+    // statement, and impossible for a client to branch on. Under KWP/1
+    // every session has a sink, so that refusal was every typed client's
+    // foreign read inside a transaction.
     //
-    // Only reads, and only with a sink installed. A shipped write's answer
-    // *is* a completion tag, which is what a completion tag is for, so it
-    // ships unchanged; and the newline protocol installs no sink, so its
-    // behaviour is untouched on both.
+    // Now the rows cross on an **answer edge** over the step wire
+    // (`docs/spec/crosscore.md` §4a, XG-R1): this core mints the tag,
+    // registers the receiver, and the owner streams `STEP_BATCH` to it. The
+    // reply POD stays what it was and becomes the terminator.
     //
-    // The real fix is typed rows on the ship wire, which is `crosscore.md`'s
-    // and is the same problem the fan-in already solved
-    // (`FinishRemoteReads`). Registered in `known-gaps.md` against it.
-    if (read && session.result_sink() != nullptr) {
+    // **Registration precedes the ship and that ordering is load-bearing**:
+    // a batch whose tag matches no open read is discarded silently (§3's
+    // teardown rule), so a receiver created after the request could lose
+    // rows with nothing anywhere saying so.
+    //
+    // A shipped **write** is untouched - its answer *is* a completion tag,
+    // which is what a completion tag is for - and so is the newline
+    // surface, which installs no sink and therefore ships `form = 0` and
+    // gets the rendered line byte-identically.
+    //
+    // **The refusal below is still in place, and this is XG1's half-way
+    // point stated rather than hidden.** The request side is built - the
+    // form byte, the tag on the POD, the receiver registration, the
+    // pending record's carriage - and the *owner's* half is not: nothing
+    // yet installs a batch sink on the shipped session, sends the
+    // description, or streams the rows. Shipping `form = 1` to an owner
+    // that renders text would answer a typed client with a rendered line
+    // on the reply POD, which is the exact failure the original refusal
+    // existed to prevent. So the gate stays until the owner can honour the
+    // form, and `kShippedTypedAnswerBuilt` is the one line that opens it.
+    const bool typed_answer =
+        kShippedTypedAnswerBuilt && read && session.result_sink() != nullptr;
+    if (read && !typed_answer && session.result_sink() != nullptr) {
         return {ErrorReply(Status::Unsupported(
-                    "a read of relation '" + std::string(relation) +
-                    "', which core " + std::to_string(owner_core) +
+                    "a read of relation '" + std::string(relation) + "', which core " +
+                    std::to_string(owner_core) +
                     " owns, is carried to that core as text and cannot be answered as typed "
                     "rows; run it on a connection speaking the newline debug surface, or "
                     "narrow it so a local route answers it")),
                 false};
+    }
+    PipelineTag answer_tag{};
+    if (typed_answer) {
+        if (remote_reads_ == nullptr) {
+            // The one caller-shaped refusal left on this path: a dispatcher
+            // with no step client cannot receive an edge, so it cannot ask
+            // for one. Reached only by a fixture - every served core is
+            // wired - and refused rather than shipped with a tag nothing
+            // would answer, which would cost the statement its whole
+            // deadline before saying `UnknownOutcome` about a read that
+            // never ran.
+            return {ErrorReply(Status::Unsupported(
+                        "a read of relation '" + std::string(relation) + "', which core " +
+                        std::to_string(owner_core) +
+                        " owns, needs the cross-core read path to answer a typed client, and "
+                        "this core has none")),
+                    false};
+        }
+        answer_tag = PipelineTag{next_remote_request_++, core_id_, 0};
+        if (Status s = remote_reads_->RegisterInbound(answer_tag, owner_core, oid); !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
+        }
     }
 
     // The identity the owner's dedup record keys on (D4). Minted on the
@@ -4378,8 +4417,14 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     const bool join = in_txn && session.HasParticipant(owner_core);
     if (Status s = statement_ship_->Ship(owner_core, request_id, session.ship_id(), sequence,
                                          oid, session.role(), line, /*retry=*/false, in_txn,
-                                         isolation, join);
+                                         isolation, join, typed_answer, answer_tag);
         !s.ok()) {
+        // The receiver goes with the request that never left. `Ship`
+        // refuses only *before* it sends (the rule this function's header
+        // states), so there is nothing in flight that could still address
+        // this tag - and a registration left behind would hold its state
+        // for the session's life.
+        if (typed_answer) remote_reads_->Close(answer_tag);
         return {ErrorReply(s), false, 0, s};
     }
 
@@ -4408,7 +4453,8 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     }
     DispatchOutcome pending;
     pending.pending_shipped =
-        PendingShippedStatement{request_id, owner_core, std::string(relation), read};
+        PendingShippedStatement{request_id, owner_core, std::string(relation), read,
+                                /*ddl=*/false, typed_answer, answer_tag};
     return pending;
 }
 

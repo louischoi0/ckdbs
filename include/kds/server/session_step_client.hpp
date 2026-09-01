@@ -118,6 +118,29 @@ public:
     // state. Every Open is paired with exactly one Close.
     void Close(const PipelineTag& tag);
 
+    // **Registers a receiver for a tag nothing here opened** (XG1,
+    // `docs/spec/crosscore.md` §4a).
+    //
+    // A shipped read's rows come back on an answer edge, and the arrival
+    // core has to be ready for them *before* the request leaves: a batch
+    // whose tag matches no open read is discarded silently, which is §3's
+    // teardown rule and is correctness rather than an error. So the
+    // statement path mints the tag, calls this, and only then ships.
+    //
+    // Everything after registration is the ordinary pipeline: `OnStepBatch`
+    // stores and grants credit, `OnStepEof` and `OnStepError` complete,
+    // `Close` sends `STEP_CANCEL` if the far side is still open. What is
+    // different is only that **nothing was sent to open it** - the owner
+    // learns the tag from the shipped request instead of a `STEP_OPEN` -
+    // and that `output_layout` stays empty, because the layout is the
+    // owner's to state and arrives on the edge ahead of the rows.
+    //
+    // Refuses a tag already registered, for `Ship`'s reason: two reads on
+    // one tag would deliver one's rows to the other, and the tag is minted
+    // per statement so a collision is a defect rather than a race.
+    Status RegisterInbound(const PipelineTag& tag, std::uint32_t owner_core,
+                           catalog::Oid rel_oid);
+
     std::size_t open_reads() const noexcept { return reads_.size(); }
 
 private:

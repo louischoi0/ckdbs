@@ -16,6 +16,10 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/role.hpp"
+// XG1: the answer edge's identity travels on the request, so the tag
+// type comes with it. `step_pipeline.hpp` is the pure data-plane layer -
+// no scheduler, no executor - so this costs nothing but the definition.
+#include "kds/server/step_pipeline.hpp"
 // R6-8: the coordinator's isolation level crosses on the request, so the
 // wire needs the enum the engine spells it with rather than a second one.
 #include "kds/txn/manager.hpp"
@@ -143,7 +147,19 @@ namespace kds::server {
 // Bytes of statement text one request carries. Derived from the ring slot
 // rather than chosen, so a slot resize moves it and the static_assert below
 // keeps the two honest.
-inline constexpr std::size_t kShippedStatementFixedBytes = 32;
+// **48 since XG1, and the sixteen bytes are the answer edge's tag**
+// (XG-R6, `docs/spec/crosscore.md` §4a). A typed shipped read is answered
+// on a step edge whose `PipelineTag` the *arrival* core mints - it must,
+// because `SessionStepClient` discards a batch whose tag matches no open
+// read, so the receiver exists before the request leaves - and the tag
+// therefore rides the request.
+//
+// The cost is stated rather than absorbed: the longest shippable statement
+// falls **992 -> 976 bytes**, which is client-visible and is in
+// `client-manual.md`. The alternative was an 8-byte derived tag, refused
+// because a second tag shape in an engine whose no-second-name rule is
+// load-bearing is a worse trade than sixteen bytes of statement.
+inline constexpr std::size_t kShippedStatementFixedBytes = 48;
 inline constexpr std::size_t kShippedStatementTextMax =
     sched::kCoreRingPayloadBytes - kShippedStatementFixedBytes;
 
@@ -170,6 +186,14 @@ struct ShippedStatementRequestPayload {
     std::uint64_t session_id;
     std::uint64_t sequence;
     std::uint64_t target_oid;
+    // **XG1: where a typed answer's rows go.** Minted and registered by the
+    // arrival core before this request is sent (§4a), so the owner names a
+    // receiver that already exists. Zeroed and unread where `form == 0`,
+    // which is every text-arm statement and every write.
+    //
+    // Placed here, among the u64s, so the POD has no interior padding and
+    // the static_assert below stays a check rather than a coincidence.
+    PipelineTag answer_tag;
     std::uint16_t text_len;
     // The arrival core's **authenticated rank** (role.hpp), carried rather
     // than assumed (SS3). A `Session` holds `kAdmin` by default - the
@@ -251,7 +275,22 @@ struct ShippedStatementRequestPayload {
     // only ever mean one transaction, and "have you got it" is all that is
     // left to ask.
     std::uint8_t join;
-    std::uint8_t reserved0[1];
+    // **XG1: which shape this statement's answer must take.**
+    //
+    // `0` is the rendered reply line every sender wrote before this row and
+    // every text client still wants; `1` is typed rows on the answer edge
+    // named by `answer_tag`. **Any other value is refused by name**, never
+    // defaulted - the zero-collision, fail-closed reading the `role` byte
+    // above already takes, and the one that matters most here: an owner
+    // that silently rendered text for a caller expecting rows would deliver
+    // a shape the client cannot branch on, which is exactly what
+    // `ShipStatement`'s old refusal existed to prevent.
+    //
+    // The arrival core needs no configuration to decide it: a session
+    // either has a result sink or does not, and that *is* the question
+    // (`result_sink.hpp` - "that is how a caller tells a result set from a
+    // completion").
+    std::uint8_t form;
     char text[kShippedStatementTextMax];  // not NUL-terminated; text_len bounds it
 };
 static_assert(sizeof(ShippedStatementRequestPayload) == sched::kCoreRingPayloadBytes,
@@ -326,7 +365,27 @@ inline constexpr sched::MonoTimeNs kShippedStatementDeadlineNs = 10ull * 1'000'0
 StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(
     std::uint64_t session_id, std::uint64_t sequence, std::uint64_t target_oid, Role role,
     std::string_view text, bool retry = false, bool in_txn = false,
-    std::optional<txn::IsolationLevel> isolation = std::nullopt, bool join = false);
+    std::optional<txn::IsolationLevel> isolation = std::nullopt, bool join = false,
+    bool typed_answer = false, PipelineTag answer_tag = PipelineTag{});
+
+// ---- XG1: the two values `form` may take, and nothing else --------------
+//
+// Named rather than written as 0 and 1 at each site, and **exhaustive**:
+// the decode refuses any other byte by name (`ShippedAnswerFormOf`), which
+// is what makes an owner that cannot serve a form answer `Unsupported`
+// instead of rendering the wrong shape.
+inline constexpr std::uint8_t kShippedAnswerText = 0;
+inline constexpr std::uint8_t kShippedAnswerTyped = 1;
+
+// The answer shape a request asks for, or a refusal naming the byte.
+//
+// Fail-closed, for the reason §4a gives: an owner that quietly rendered
+// text where rows were asked for would make one `SELECT` come back as a
+// result set or as a block of text depending on which core owns the
+// relation - the difference `ShipStatement`'s original refusal existed to
+// prevent, and one a client cannot branch on because it is invisible from
+// the statement.
+StatusOr<bool> ShippedAnswerTypedOf(const ShippedStatementRequestPayload& request);
 
 // The isolation level a request states, or empty where it states none
 // (R6-8). **Refused rather than defaulted** when the byte names no level
@@ -435,6 +494,10 @@ public:
         // open one. False on the enrolling statement, true on every later
         // one of the same transaction to this owner.
         bool join = false;
+        // XG1: the answer's shape, and where a typed one goes. `false`
+        // leaves `answer_tag` unread - the whole text arm.
+        bool typed_answer = false;
+        PipelineTag answer_tag{};
         std::string text;
     };
     using ExecuteFn = std::function<void(ShippedStatement statement, ReplyFn reply)>;
@@ -528,11 +591,18 @@ public:
     // and a `request_id` that still has a statement parked on it - which
     // would otherwise replace that statement's waiter and let this one's
     // reply wake it.
+    //
+    // XG1's last two: `typed_answer` asks the owner for rows on the answer
+    // edge instead of a rendered line, and `answer_tag` says where. They
+    // are one fact in two fields and the second is meaningless without the
+    // first, so the caller that sets one sets both - `ShipStatement` does,
+    // and it registers the receiver before it calls this.
     Status Ship(std::uint32_t owner_core, std::uint64_t request_id, std::uint64_t session_id,
                 std::uint64_t sequence, std::uint64_t target_oid, Role role,
                 std::string_view text, bool retry = false, bool in_txn = false,
                 std::optional<txn::IsolationLevel> isolation = std::nullopt,
-                bool join = false);
+                bool join = false, bool typed_answer = false,
+                PipelineTag answer_tag = PipelineTag{});
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.

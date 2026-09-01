@@ -33,7 +33,8 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
                                                                    std::string_view text,
                                                                    bool retry, bool in_txn,
                                                                    std::optional<txn::IsolationLevel> isolation,
-                                                                   bool join) {
+                                                                   bool join, bool typed_answer,
+                                                                   PipelineTag answer_tag) {
     if (text.empty()) {
         return Status::InvalidArgument("statement shipping: an empty statement is not a statement");
     }
@@ -63,6 +64,12 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
     // caller that sets it without one is asking for nothing - the owner
     // reads it under `in_txn` alone.
     out.join = join ? 1 : 0;
+    // XG1. `form` and the tag are one fact: `kShippedAnswerText` leaves the
+    // tag zeroed and unread, which is every text-arm statement and every
+    // write, and is byte-identical on the wire to what every pre-XG1 sender
+    // produced in those bytes.
+    out.form = typed_answer ? kShippedAnswerTyped : kShippedAnswerText;
+    out.answer_tag = typed_answer ? answer_tag : PipelineTag{};
     out.text_len = static_cast<std::uint16_t>(text.size());
     std::memcpy(out.text, text.data(), text.size());
     return out;
@@ -154,6 +161,19 @@ StatusOr<Role> ShippedStatementRoleOf(const ShippedStatementRequestPayload& requ
                                    ", which is not a role this build knows");
 }
 
+StatusOr<bool> ShippedAnswerTypedOf(const ShippedStatementRequestPayload& request) {
+    if (request.form == kShippedAnswerText) return false;
+    if (request.form == kShippedAnswerTyped) return true;
+    // The `role` byte's rule, applied to the one field whose misreading is
+    // a *shape* rather than a permission: an owner that guessed here would
+    // answer a request for typed rows with a rendered line, or the
+    // reverse, and the client has no way to tell which it got. Refused by
+    // name, before anything runs.
+    return Status::Unsupported("statement shipping: request asks for answer form " +
+                               std::to_string(request.form) +
+                               ", which is not a form this build serves");
+}
+
 // ---- The owner's half ------------------------------------------------------
 
 void StatementShipServer::OnRequest(const sched::MessageHeader& header,
@@ -204,6 +224,17 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
         Reply(requester, request_id, session_id, sequence, isolation.status(), {}, 0);
         return;
     }
+    // XG1's form, on the same terms as the two above and for a reason of
+    // its own: this is the field whose misreading is a *shape*. An owner
+    // that guessed would answer a request for typed rows with a rendered
+    // line and the client could not tell. Refused before anything runs -
+    // which is also how an owner too old to serve the form answers, since
+    // the byte it does not know is exactly the byte it refuses.
+    auto typed_answer = ShippedAnswerTypedOf(request);
+    if (!typed_answer.ok()) {
+        Reply(requester, request_id, session_id, sequence, typed_answer.status(), {}, 0);
+        return;
+    }
     if (!execute_) {
         // SS1 ships the wire and nothing else. Stated as a refusal rather
         // than left to a null call, because a handler that crashes and a
@@ -228,6 +259,8 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     statement.retry = request.retry != 0;
     statement.in_txn = request.in_txn != 0;
     statement.isolation = isolation.value();
+    statement.typed_answer = typed_answer.value();
+    statement.answer_tag = request.answer_tag;
     statement.join = request.join != 0;
     statement.text.assign(text.value());
     execute_(std::move(statement),
@@ -407,7 +440,8 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
                                  std::uint64_t session_id, std::uint64_t sequence,
                                  std::uint64_t target_oid, Role role, std::string_view text,
                                  bool retry, bool in_txn,
-                                 std::optional<txn::IsolationLevel> isolation, bool join) {
+                                 std::optional<txn::IsolationLevel> isolation, bool join,
+                                 bool typed_answer, PipelineTag answer_tag) {
     // **One live waiter per request id.** Reusing an id that still has a
     // statement parked on it would replace that statement's waiter with
     // this one's, and the identity check on the reply path cannot catch it -
@@ -435,7 +469,7 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
     }
     auto request =
         ShippedStatementRequestOf(session_id, sequence, target_oid, role, text, retry, in_txn,
-                                  isolation, join);
+                                  isolation, join, typed_answer, answer_tag);
     // A statement the wire refuses opens no waiter: nothing was sent, so
     // nothing will answer, and a waiter would only cost the statement a
     // deadline before saying what is already known.
