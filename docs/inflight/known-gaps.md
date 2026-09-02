@@ -2809,6 +2809,30 @@ do, and one thing it does that nobody has decided:
   wrong once** — its first version said D2 formed no batch at all, from a
   measurement that stopped at two sessions and called a threshold an
   absence.
+
+  **`n/2` is exact, and the obvious fix does not touch it.** The law holds
+  at every point measured including the odd ones — 1.000, 1.000, 1.500,
+  2.000, 2.500, 3.000, 3.987 at 1/2/3/4/5/6/8 sessions — and the sync count
+  is `min(n, 2) x rows`, flat from two sessions upward. The first hypothesis
+  was the two-iteration commit pipeline: a commit stages and syncs in one
+  reactor iteration and its waiter observes `durable_lsn` in the next, so a
+  session is in the staging half only every other iteration. **Tried and
+  falsified 2026-09-02**: an extra `RunReadyTasks` round immediately after
+  the post-task hook's sync — so a durability waiter finishes in the same
+  iteration — moved the batch by **nothing** (1.000/1.000/1.500/2.000/3.000/
+  4.007, unchanged to three decimals). The change was reverted rather than
+  kept, being cost with no return.
+
+  What is left standing is that the hook syncs **twice per workload wave**
+  whatever `n` is, so each sync covers half the sessions. The reading that
+  fits, and is **not** measured: the sync runs on the reactor thread, so a
+  session whose reply has not yet gone out cannot have its next statement
+  staged, and half the population is always in that state. If that is right
+  the fix is not a scheduling tweak but **taking the D2 sync off the reactor
+  thread** — the writer thread exists on core 0 and is used only for D3's
+  tick today — which is a durability-ordering change and has not been
+  attempted. Confirming the reading first needs the distribution of commits
+  staged per hook call, which nothing collects.
 - **AF-T5's g7-c8 load gap is unexplained again** — `namespace` 29.7 s
   against `rotate` 13.4 s on the load phase, 2.35× on a re-run, collapsing
   to 1.02× under `relaxed`. It was explained as group-commit batching on
