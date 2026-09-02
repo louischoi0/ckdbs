@@ -674,10 +674,19 @@ name; the intent granted, released and crash-tested; the four hypotheses
 answered; the matrix measured. Its contract is `foreign-keys.md` §2a/§2b/§3a.
 
 **What it hands on**, all named in the results file's §6: the
-surviving-coordinator crash half, the legs' maxima behind the p99 tail,
-`strict` and concurrency, and the reverse direction's fan-out — a cross-owner
-parent still cannot be deleted, which `known-gaps.md` keeps as the crossing's
-one standing asymmetry.
+surviving-coordinator crash half, `strict` and concurrency, the cost of the
+participant-coordinated release, and the reverse direction's fan-out — a
+cross-owner parent still cannot be deleted, which `known-gaps.md` keeps as
+the crossing's one standing asymmetry.
+
+**One of them came back and closed**, 2026-09-02: the legs' maxima
+(`results-ah-t6-leg-maxima-v2.7.0-100-gea401d5.md`). The p99 tail is the
+write path's, not the crossing's — under `group` the crossing's p99 is
+**0.81×** the colocated arm's — and the 13× the matrix file reported was a
+sampling artifact of its own three blocks, which that file now says. The
+probe round's maximum is never the largest thing in a statement; the release
+decide's maximum tracks the statement's, which is the overlap §2 found at
+the mean, seen again at the maximum.
 
 ### The `critics-developer` review, and what it changed
 

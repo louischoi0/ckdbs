@@ -2795,8 +2795,14 @@ the shape AH-R5's sentence literally describes.
 
 **What the crossing still does not cover, after AH closed** (work order AH's
 verdict, `bench/v2.8.0/results-ah-t6-fk-crossing-matrix-v2.7.0-97-g199dabf.md`
-§6): the surviving-coordinator crash half above; the legs' maxima behind a p99
-that is 13× the colocated arm's at one row; `durability = strict` and any
-concurrency at all, every number being one client one statement at a time; and
+§6): the surviving-coordinator crash half above; `durability = strict` and any
+concurrency at all, every number being one client one statement at a time; the
+cost of the participant-coordinated release `foreign-keys.md` §2b names; and
 the reverse direction's fan-out, which is the first bullet of this entry and
-the crossing's one standing asymmetry.
+the crossing's one standing asymmetry. ~~The legs' maxima behind the p99
+tail~~ - **closed 2026-09-02**
+(`bench/v2.8.0/results-ah-t6-leg-maxima-v2.7.0-100-gea401d5.md`): the tail is
+the write path's and not the crossing's - under the shipped durability class
+the crossing's p99 is **0.81×** the colocated arm's - and both rounds' maxima
+are bounded. The 13× the matrix file reported was three blocks of a colocated
+arm that had not met its own worst case.

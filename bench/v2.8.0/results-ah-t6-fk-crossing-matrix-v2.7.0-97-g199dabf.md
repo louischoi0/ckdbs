@@ -142,6 +142,18 @@ What would settle it is the legs' **maxima** rather than their means
 read per block). Recorded as the next instrument step rather than a
 conclusion.
 
+**Answered 2026-09-02**, `results-ah-t6-leg-maxima-v2.7.0-100-gea401d5.md`,
+and the answer includes a correction to this section. **The tail is not the
+crossing's**: at six blocks the colocated arm's p99 is 1317 µs against the
+crossing's 1622 (`relaxed`, a ratio of 1.23× where the p50 ratio is 1.74×),
+and under `group` the crossing's p99 is **0.81×** the colocated arm's. The
+13× above is a sampling artifact of *this* file's three blocks - the crossing
+arm's p99 barely moved between the two runs (1684 → 1622) while the colocated
+arm's moved from 127 µs to 1317, because three blocks were not enough for the
+arm that meets its worst case more rarely. The probe round's maximum is
+bounded and never the largest thing in a statement; the release decide's
+maximum tracks the statement's, which is §2's overlap seen at the maximum.
+
 ## 5. Verdict on AH's four hypotheses
 
 | | verdict |

@@ -429,6 +429,19 @@ def crossing_run(args):
                         'release_decide_us': leg_mean_us(before[crossing_child_core],
                                                          after[crossing_child_core],
                                                          'fk_release_decide'),
+                        # **Running maxima, not per-block ones.** `PhaseLeg`
+                        # keeps a high-water mark that never resets, so the
+                        # honest reading is "did this block raise it" - the
+                        # before/after pair says that, and a difference
+                        # names the block the outlier was in. A per-block
+                        # maximum would need a reset the accumulator does
+                        # not have and should not grow for a benchmark.
+                        'probe_max_us_before': before[crossing_child_core]['fk_probe_round_max_us'],
+                        'probe_max_us_after': after[crossing_child_core]['fk_probe_round_max_us'],
+                        'decide_max_us_before':
+                            before[crossing_child_core]['fk_release_decide_max_us'],
+                        'decide_max_us_after':
+                            after[crossing_child_core]['fk_release_decide_max_us'],
                     })
     finally:
         if conns:
@@ -619,7 +632,9 @@ def main():
                 print(f'{cell["shape"]:>11} block {cell["block"]}: p50={p["p50"]:.1f}us '
                       f'p90={p["p90"]:.1f}us mean={p["mean"]:.1f}us '
                       f'probes={cell["probes_sent"]} retries={cell["retries"]} '
-                      f'probe_leg={cell["probe_round_us"]} decide_leg={cell["release_decide_us"]}')
+                      f'probe_leg={cell["probe_round_us"]} decide_leg={cell["release_decide_us"]} '
+                      f'probe_max={cell.get("probe_max_us_after")} '
+                      f'decide_max={cell.get("decide_max_us_after")}')
                 want = args.rows * (1 if cell['shape'] == 'one-owner' else 2)
                 if cell['probes_sent'] != want:
                     failed = True
