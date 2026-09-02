@@ -28,13 +28,12 @@ SuperBlock::SuperBlock() noexcept : fields_{} {}
 
 SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds,
                                    std::uint32_t inline_cell_width,
-                                   std::uint32_t core_count) noexcept {
+                                   std::uint32_t core_count,
+                                   std::uint32_t log_topology) noexcept {
     SuperBlockFields f{};
     f.magic = kSuperBlockMagic;
     f.version = kSuperBlockVersion;
-    // Every database this build creates still has one stream per core;
-    // the cutover (AL-S1c) is what writes kSingleStream here.
-    f.log_topology = kPerCoreStreams;
+    f.log_topology = log_topology;
     f.create_time = now_unix_seconds;
     f.last_mount_time = now_unix_seconds;
     f.wal_anchor_count = 0;

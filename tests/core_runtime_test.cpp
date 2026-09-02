@@ -79,7 +79,14 @@ protected:
         ASSERT_TRUE(store.ok()) << store.status().message();
         core0_store_ = std::move(store.value());
 
-        auto boot = bootstrap::BootstrapDatabase(*core0_store_, 1000);
+        // **Two cores, because that is what this fixture models.** Every
+        // test here builds core 0 plus a peer, and several place a relation
+        // on core 1 through a two-core catalog - but the superblock said
+        // one, and nothing checked until the anchor fold began asking which
+        // cores a volume has (AR0 M0, AL-S3). A volume that says one core
+        // has no core 1 to publish an anchor for, and the refusal is right.
+        auto boot = bootstrap::BootstrapDatabase(*core0_store_, 1000,
+                                                 storage::kDefaultInlineCellWidth, /*cores=*/2);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         core0_.emplace(std::move(boot.value()));
 
@@ -859,9 +866,19 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     // anchor slot never advanced, and every later mount rescanned its whole
     // stream - free while a peer could not write, and not free since PW1.
     //
-    // The property asserted is the end of that path, not the send: core 0's
-    // superblock carries core 1's anchor. `SuperBlockCheckpointAnchor` is
-    // the receiving half here exactly as it is in `Expeditor::Serve`.
+    // The property asserted is the end of that path, not the send: the
+    // peer's anchor reaches core 0 and is folded into the volume's one
+    // anchor. `SuperBlockCheckpointAnchor` is the receiving half here
+    // exactly as it is in `Expeditor::Serve`.
+    //
+    // **What "reaches core 0" means changed with AR0 M0**, and this test is
+    // where it shows. Under per-core streams the peer's number landed in
+    // *its own* slot, and the slot moving was the proof. Under one stream
+    // there is one anchor, slot 0, holding the minimum over every core - and
+    // it does not move until every core has published at least once, or it
+    // would advance past records a silent core still needs (AL-S3's
+    // warm-up). So the arrival is proved by the fold's own input, and the
+    // anchor's movement by completing the fold.
     auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
     ASSERT_TRUE(transport.ok()) << transport.status().message();
 
@@ -872,8 +889,9 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
     RegisterAnchorReceiver(core0, receiver);
 
-    ASSERT_EQ(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u)
-        << "core 1 should have no anchor before it checkpoints";
+    ASSERT_EQ(core0_->superblock.wal_anchor(0).checkpoint_lsn, 0u)
+        << "a fresh database has no anchor before anything checkpoints";
+    ASSERT_EQ(receiver.folded_cores(), 0u);
 
     CoreRuntime::Config config = ConfigFor(1);
     config.next_trx_id = core0_->superblock.next_trx_id();
@@ -889,20 +907,31 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
         core0.RunOnce();
     }
 
-    EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u)
-        << "the peer's completion checkpoint never reached core 0's superblock";
-    EXPECT_EQ(receiver.publishes(), 1u);
+    EXPECT_EQ(receiver.publishes(), 1u)
+        << "the peer's completion checkpoint never reached core 0";
+    EXPECT_EQ(receiver.folded_cores(), 1u)
+        << "it reached core 0 but is not in the fold, so it counts for nothing";
+    // Held, not advanced: core 0 has not published, so one core's number is
+    // not yet a floor for the instance.
+    EXPECT_EQ(core0_->superblock.wal_anchor(0).checkpoint_lsn, 0u);
+    // And no peer slot was written, which is the other half of one anchor.
+    EXPECT_EQ(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u);
 
-    // And a second checkpoint advances it rather than republishing the
-    // first - the cadence's whole purpose.
-    const std::uint64_t first = core0_->superblock.wal_anchor(1).checkpoint_lsn;
+    // Core 0 speaks, the warm-up ends, and the one anchor moves.
+    ASSERT_TRUE(receiver.Publish({/*core_id=*/0, 4096, 4096, 8192, 0}).ok());
+    EXPECT_EQ(receiver.folded_cores(), 2u);
+    const std::uint64_t folded = core0_->superblock.wal_anchor(0).checkpoint_lsn;
+    EXPECT_GT(folded, 0u) << "every core has published and the anchor still has not moved";
+
+    // A second checkpoint advances it rather than republishing the first -
+    // the cadence's whole purpose - and it is still slot 0 that moves.
     ASSERT_TRUE(peer.value()->Checkpoint().ok());
     for (int i = 0; i < 20; ++i) {
         peer.value()->scheduler().RunOnce();
         core0.RunOnce();
     }
-    EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn, first);
-    EXPECT_EQ(receiver.publishes(), 2u);
+    EXPECT_EQ(receiver.publishes(), 3u);
+    EXPECT_GE(core0_->superblock.wal_anchor(0).checkpoint_lsn, folded);
 }
 
 TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) {
@@ -954,7 +983,15 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
             core0.RunOnce();
         }
         ASSERT_EQ(receiver.publishes(), 1u);
-        const WalAnchorFields mount_anchor = core0_->superblock.wal_anchor(1);
+        // **Core 0 publishes too, as a running instance's cadence would.**
+        // The volume has one anchor and it is the minimum over every core,
+        // held where the mount found it until each has spoken (AL-S3's
+        // warm-up) - so a two-core volume where only the peer ever
+        // checkpoints keeps an anchor of zero, and the bound this test is
+        // about would never appear. That is the warm-up working, not a
+        // failure, and the fix is to model the core that was missing.
+        ASSERT_TRUE(receiver.Publish({/*core_id=*/0, 4096, 4096, 8192, 0}).ok());
+        const WalAnchorFields mount_anchor = core0_->superblock.wal_anchor(0);
         ASSERT_GT(mount_anchor.checkpoint_lsn, 0u);
 
         // Funded the ordinary way, then a run's worth of rows.
@@ -983,14 +1020,27 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         ASSERT_TRUE(peer.value()->Sync().ok());
         if (clean_stop) {
             ASSERT_TRUE(peer.value()->ShutdownCheckpoint(receiver).ok());
-            EXPECT_EQ(receiver.publishes(), 2u)
+            // **Core 0 checkpoints again, past the peer.** The one anchor
+            // is the *minimum* over cores, so a core that last checkpointed
+            // long ago holds the instance's replay range open however
+            // recent everyone else's is - which is true of one stream and
+            // is why AL-R4 leaves a single gathered checkpoint to M1. A
+            // stand-in that stayed at its first LSN would make this test
+            // measure that, rather than the bound it is about.
+            ASSERT_TRUE(receiver
+                            .Publish({/*core_id=*/0, /*checkpoint=*/1u << 30,
+                                      /*redo_start=*/1u << 30, /*durable=*/1u << 30, 0})
+                            .ok());
+            // Four now: the peer's mount checkpoint, core 0's two, and the
+            // shutdown anchor this line is about.
+            EXPECT_EQ(receiver.publishes(), 4u)
                 << "the shutdown anchor must reach page 0 with no reactor running";
-            EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn,
+            EXPECT_GT(core0_->superblock.wal_anchor(0).checkpoint_lsn,
                       mount_anchor.checkpoint_lsn);
         } else {
-            EXPECT_EQ(receiver.publishes(), 1u);
+            EXPECT_EQ(receiver.publishes(), 2u);  // the mount's, and core 0's
         }
-        const WalAnchorFields stop_anchor = core0_->superblock.wal_anchor(1);
+        const WalAnchorFields stop_anchor = core0_->superblock.wal_anchor(0);
         peer.value().reset();
 
         // The restart, with the anchor Expeditor copies out of the superblock.

@@ -108,14 +108,20 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     auto created = store.CreateAt(server::kSuperBlockPageId);
     if (!created.ok()) return created.status();
 
-    server::SuperBlock sb =
-        server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width, cores);
+    // **One WAL stream for the instance** (AR0 M0, AL-S1c's flip). Chosen
+    // here and pinned for the life of the volume: recovery reads it to know
+    // how many streams to look for, and no later mount may change it. A
+    // database created before this build says `kPerCoreStreams` and keeps
+    // every per-core rule, which is what lets the two be read side by side
+    // rather than one silently misread as the other.
+    server::SuperBlock sb = server::SuperBlock::CreateFresh(
+        now_unix_seconds, inline_cell_width, cores, server::kSingleStream);
     sb.Encode(created.value().bytes());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +
                                    std::to_string(sb.version()) + ", inline_cell_width " +
                                    std::to_string(inline_cell_width) + ", cores " +
-                                   std::to_string(cores) + ")");
+                                   std::to_string(cores) + ", one WAL stream)");
     }
 
     catalog::Catalog catalog(store, inline_cell_width, cores);

@@ -441,10 +441,16 @@ public:
     // `core_count` is pinned by the same rule and validated by the same
     // caller (CheckCoreCount), and its default is 1 for the same reason the
     // width's exists: callers that are not testing the count.
+    // `log_topology` is what the volume's log **is**, chosen once here and
+    // never again (AR0 M0). It defaults to `kPerCoreStreams` for the same
+    // reason `core_count` defaults to 1: a caller that is not testing the
+    // topology should get the shape that needs no other party to exist.
+    // Every database `BootstrapDatabase` creates is `kSingleStream`.
     static SuperBlock CreateFresh(
         std::uint64_t now_unix_seconds,
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
-        std::uint32_t core_count = 1) noexcept;
+        std::uint32_t core_count = 1,
+        std::uint32_t log_topology = kPerCoreStreams) noexcept;
 
     // Reads a superblock image out of a raw page buffer (e.g. just loaded
     // off disk). Fails with Corruption if the magic doesn't match
