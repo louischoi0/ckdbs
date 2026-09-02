@@ -148,9 +148,15 @@ def wait_for_port(port, stderr_path, deadline_s=15):
 
 
 def start_server(binary, workdir, tag, cores, port, placement="creating",
-                 peer_listeners=False):
+                 peer_listeners=False, durability=None):
     """Fresh data file + config, returns the process. `cores` is pinned into
-    the superblock at bootstrap, so each configuration needs its own file."""
+    the superblock at bootstrap, so each configuration needs its own file.
+
+    `durability` None leaves the key out, so the server takes its own default
+    (`group`, D2) and every caller written before this parameter existed is
+    byte-identical. Passing one is for an experiment that needs the class to
+    be a *variable* rather than a constant - AF-T5's follow-up, where the
+    question is whether a measurement is looking at a batch of one."""
     conf = os.path.join(workdir, f"{tag}.conf")
     data = os.path.join(workdir, f"{tag}.db")
     stderr_path = os.path.join(workdir, f"{tag}.stderr")
@@ -158,7 +164,8 @@ def start_server(binary, workdir, tag, cores, port, placement="creating",
         f.write(f"data_file = {data}\nport = {port}\ncores = {cores}\n"
                 f"placement = {placement}\n"
                 f"peer_listeners = {'on' if peer_listeners else 'off'}\n"
-                f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
+                + (f"durability = {durability}\n" if durability else "")
+                + f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
     with open(stderr_path, "w") as err:
         proc = subprocess.Popen([binary, "--config", conf],
                                 stdout=err, stderr=subprocess.STDOUT)

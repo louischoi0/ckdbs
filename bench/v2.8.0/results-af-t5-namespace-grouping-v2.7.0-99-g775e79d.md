@@ -204,6 +204,64 @@ different reps, so this is host noise rather than a within-rep effect, and
 the medians reported above exclude both. The `namespace` outlier is also
 where g7-c4's 13.2 ms p100 comes from.
 
+### 3b. The load anomaly, diagnosed: a batch of one
+
+§3a reported g7-c8's load phase at 29.7 s under `namespace` against 13.4 s
+under `rotate` and called it unexplained. It is explained, and the cause is
+not the crossing — it is **`group` durability losing its batch**.
+
+`kds.conf.sample` states the mechanism in its own words: D2 is *"one fsync
+amortized over a batch of concurrent committers … **a batch of one is a
+batch**"*. The batch is over the committers **on one core**. So what decides
+a write workload's sync count is not how many cores a placement uses but how
+many *sessions* each core is committing for — a number `distinct_owner_cores`
+cannot show, and which the probe now reports as `max_sessions_per_owner_core`.
+
+g7-c8 is the one cell where the two placements differ in it:
+
+| arm | groups | writer cores used | **sessions per core** | why |
+|---|---|---|---|---|
+| `creating` | 7 | 1 (core 0) | **7** | every session commits on core 0 |
+| `rotate` | 7 | 7 | **2** | a core's two relations come from two *different* groups |
+| `namespace` | 7 | 7 | **1** | a group's pair is on one core, so one core serves one session |
+
+**The A/B that settles it** (3 reps, same probe, `--durability`):
+
+| cell | class | `creating` load | `rotate` load | `namespace` load | load `ns`/`rot` |
+|---|---|---|---|---|---|
+| g7-c8 | `group` (default) | 12.02 s | 13.54 s | **31.86 s** | **2.35×** |
+| g7-c8 | `relaxed` | 1.51 s | 1.78 s | **1.81 s** | **1.02×** |
+| g3-c8 (control) | `relaxed` | 0.40 s | 0.71 s | 0.63 s | 0.88× |
+
+Take the per-commit sync away and **the gap vanishes** — 2.35× becomes 1.02×.
+The load also collapses from ~13–32 s to ~1.8 s, so under `group` this phase
+is almost entirely fsync wait, which is what makes the sync *count* the whole
+story.
+
+**And the sync count tracks sessions-per-core monotonically**, which is the
+confirmation rather than the hypothesis: 7 sessions per core → 12.02 s,
+2 → 13.54 s, 1 → **31.86 s**. Going from a batch of two to a batch of one
+doubles the syncs, and the measured ratio is 2.35×.
+
+**What this says about the engine, and it is not about namespaces.** It is a
+property of D2 meeting *any* placement that reduces sessions per core — but
+**AF's policy is the thing that makes it reachable by design**, because
+co-locating a group's relations is exactly what removes a core's second
+committer. A relation layout chosen to keep joins local can therefore double
+a write workload's fsync count against a layout that scatters it, and the
+shipped default is the one that co-locates. Nothing in the engine reports
+sessions per core, so an operator cannot see this coming.
+
+The negative control behaves as the mechanism requires: at g3-c8 both
+placements already give every core one session, and there both classes move
+the two arms together with no gap to explain.
+
+**One correction to §3a from this run.** g7-c8's join-side `namespace/rotate`
+reads 0.969× over these 3 reps against 0.900× over §3a's 5 — so the
+*throughput* loss at one group per writer core is smaller than §3a's number
+suggests and sits close to parity. The direction is unchanged; the size was
+noise-dominated, as §3a's overlapping ranges already warned.
+
 ---
 
 ## 4. What the engine looks like through these numbers
@@ -285,9 +343,12 @@ cores), which this probe does not explain and does not try to.
   two row-count variants at 7 groups (`--rows 200` and `--rows 10000`) were
   queued and never ran either, so nothing here separates the per-statement
   fixed cost from the per-row one at that sizing.
-- **g7-c8's load anomaly is unexplained** (§3a): 29.7 s under `namespace`
-  against 13.4 s under `rotate`, at no other point in the sweep. A read
-  benchmark cannot answer it and this one does not try.
+- ~~**g7-c8's load anomaly is unexplained**~~ — **diagnosed, §3b**: it is
+  `group` durability's batch falling to one, and the durability A/B closes
+  it (2.35× under `group`, 1.02× under `relaxed`). What is *not* measured is
+  how far the effect reaches: only one cell in this sweep has a placement
+  that leaves a core with a single committing session, so the shape of the
+  cost against sessions-per-core is three points, not a curve.
 - **This is a read measurement.** The load numbers in §4 are a by-product
   taken outside the timed window, not a write benchmark.
 - **No foreign key is declared in the workload.** A cross-owner FK adds a

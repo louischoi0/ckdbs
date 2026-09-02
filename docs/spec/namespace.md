@@ -320,6 +320,29 @@ stands, and AF is the reason it can — the parallelism a split would have
 found inside one relation is found between groups of relations instead,
 with the grouping declared by the person who knows it.
 
+**What co-location costs on the write side, measured 2026-09-02.** NS10 is
+stated as a read-side win and it is one; the write side has a cost nothing
+had priced. `group` durability (D2) amortises a commit's fsync over the
+concurrent committers **on one core**, and a batch of one is a batch. Putting
+a wired group's relations on one core is exactly what can leave that core
+with a single committing session, where a placement that scattered them would
+have given it two — so a co-located group's load can pay **twice the fsyncs**.
+Measured at 2.35× on a seven-group load under `group`, collapsing to 1.02×
+under `relaxed`, which is what identifies the sync as the whole of it
+(`bench/v2.8.0/results-af-t5-namespace-grouping-*` §3b).
+
+Three things follow, and none of them changes NS10's rule:
+
+- It is **not a namespace mechanism**. Any placement reducing sessions per
+  core does it; a namespace is simply the thing that makes it reachable on
+  purpose, and the shipped default is the co-locating one.
+- **The engine does not report the number it depends on.** No `SHOW`
+  surface says how many committing sessions a core holds, and `SHOW META`'s
+  `wal_syncs` answers for the *session's* core, not the owner's - so under a
+  single listener it cannot be read off the writers either.
+- It is a **throughput** cost on a write phase, not a correctness one, and
+  it does not touch the read side the grouping exists to accelerate.
+
 **The best practice is the point, not a footnote** (AF-2). Relations that
 are joined, foreign-keyed or read together belong in one namespace, so the
 wiring is core-local; relations that have nothing to do with each other

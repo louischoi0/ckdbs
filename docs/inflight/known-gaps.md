@@ -2790,12 +2790,23 @@ do, and one thing it does that nobody has decided:
   which side of that they are on. Two things left unmeasured: anything past
   2.33 groups per writer core (one point, not a curve), and the row-count
   axis at that sizing.
-- **g7-c8's load phase is 2.2× slower under `namespace` than under
-  `rotate`** (29.7 s against 13.4 s), at no other point in the AF-T5 sweep,
-  and both spreading arms carry a ~19 ms p100 there against ~1-3 ms
-  everywhere else. Seven sessions on seven cores does something the rest of
-  the sweep does not, and a read benchmark could not say what. Unexplained
-  and worth chasing before the number is quoted anywhere.
+- **Co-locating a group can double its write workload's fsync count, and
+  the shipped placement is the one that co-locates.** Diagnosed 2026-09-02
+  (`results-af-t5-namespace-grouping-*` §3b): `group` durability amortises a
+  commit's fsync over the concurrent committers **on one core**, and *"a
+  batch of one is a batch"* (`kds.conf.sample`). A placement that puts a
+  wired group's relations together can leave a core serving exactly one
+  committing session, which halves the batch against a placement that
+  scatters them — measured at **2.35× on the load phase** under `group` and
+  **1.02× under `relaxed`**, with the cost tracking sessions-per-core
+  monotonically (7 → 12.0 s, 2 → 13.5 s, 1 → 31.9 s).
+  **Nothing in the engine reports sessions per core**, so an operator
+  cannot see which side of this a workload is on, and `SHOW META`'s
+  `wal_syncs` answers for the *session's* core rather than the owner's — so
+  under a single listener it cannot be read off the writers either. Not a
+  correctness problem and not namespace-specific in mechanism; it is
+  namespace-specific in *reachability*, because co-location is what AF
+  exists to do. Unmeasured: how the cost scales past three points.
 - **No `sim/` cell covers a namespace.** The generator creates relations
   in `public` and nothing declares one, so the crash/restart harness has
   never mounted a file with a user namespace in it. The rows involved are
