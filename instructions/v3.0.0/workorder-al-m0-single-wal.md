@@ -458,7 +458,51 @@ first, which is what S1a now is.
 | AL-S3 | **Built 2026-09-02** on `worktree-v3.0.0-arch-revision`. `SuperBlockCheckpointAnchor::Publish` keys on the topology AL-S2 recorded: under per-core streams it writes slot `core_id`, exactly as before; under one stream it records the publishing core in an in-memory map and writes **slot 0** with the record whose `redo_start_lsn` is lowest — the whole record from that core, never a field-wise minimum, since four numbers from four cores would describe a checkpoint that never happened. The publish path already carried the publishing core (`remote_checkpoint_anchor` ships it, `expeditor.cpp` reconstructs it), so the fold needed no record change. **One defect found and fixed while building, and it is the reason this stage is not three lines**: a minimum over the map alone is a minimum over the cores that happen to have published *in this process lifetime*. At a fresh mount core 0 checkpoints first, cores 1..3 have not, and slot 0 would advance to core 0's redo start — past records the other cores' still-dirty pages need, which the next crash would then not replay. So the anchor is **held at the mount's own anchor until every core has published at least once**; that bound is sound because recovery replayed from it, so no core's earliest needed record can precede it. The cost is one checkpoint of warm-up per mount. **What is not here**: `core_id` on the two checkpoint records. Its only consumer is recovery rebuilding per-core tables out of one stream, and adding it now would cost a record-format event for nothing — it moves to AL-S4, and AL-R4 says so. Cells (`SuperBlockFoldTest`, and one added to `SuperBlockAnchorTest`): the lowest redo start wins over four cores; the winning core's whole set is carried; a core's later checkpoint replaces its own contribution and the anchor rises to the new laggard; the anchor does not move while a core has never published, then moves when the fourth speaks; the warm-up holds at the mount's anchor rather than resetting to the start of the log; a peer's publish succeeds rather than hitting AL-S2's slot refusal, which is the constraint the S2 review raised, discharged by building the fold *before* the flip; and nothing folds under per-core streams, which pins the no-change property. **Suite: 3229/3229** before the warm-up fix; re-run after it (`ctest -j8`, Debug). Overhead not measured (the interleaved A/B is suspended by operator decision) |
 | AL-S1c, S4..S9 | not started |
 
-## AL-7 — Review record
+## AL-7a — AL-S3's review record
+
+**Reviewed 2026-09-02** (`critics-developer`). **No incorrect advance of
+the anchor found**: it verified that the prepare floor is preserved
+structurally (each core's redo start is floored in `Checkpointer::Start`
+before publish, so a minimum over floored values is floored — the fold
+would have to become a *maximum* to break it); that `mount_anchor_` is
+captured after recovery and before the completion checkpoint, so it is
+exactly what recovery used; that `per_core_` is not raced, because all
+three `Publish` callers are core 0's reactor or a post-join shutdown
+thread; that whole-record-from-the-minimum is right, with `segment_no`
+the proof, since it is `redo_start / segment_size` **of the same core**
+and a field-wise minimum could name a segment that does not hold the
+LSN; and that the test fixture's byte-patching is a real decode, the
+superblock body carrying no checksum.
+
+Six findings applied:
+
+| finding | what was done |
+|---|---|
+| The warm-up gate counted map entries, which answers "how many anchors arrived", not "which cores have published" — and nothing bounds `core_id` on the way in (the ring path memcpys it out of a peer's payload). One out-of-range id would release the warm-up early and put a phantom core into the minimum | the state is a fixed array plus a `std::uint64_t` published mask, so the gate is `popcount(published_) == core_count` — a fact the type enforces; and `Publish` refuses `core_id >= core_count` under one stream |
+| The warm-up is load-bearing for the **prepare floor**, not only for dirty pages: a peer with a live `TXN_PREPARE` that has not checkpointed contributes nothing to the minimum | stated in the header, so that optimising the warm-up away has to answer that case too |
+| The warm-up is unbounded when `checkpoint_interval_ns` is 0, since no cadence tick is armed | the header says so rather than claiming "one checkpoint per mount" |
+| `per_core()` exposed a `std::map` in the API for two `.size()` calls | `folded_cores()` |
+| `UnderPerCoreStreamsNothingIsFolded` duplicated an existing cell for one extra assertion | cut; the assertion moved into `StreamsFromDifferentCoresDoNotOverwriteEachOther` |
+| No cell for a failed sync leaving the map ahead of the page — a state the fold created | added: core 3's publish fails its sync, republishes higher, and the fold still lands on the true minimum |
+
+**One finding was applied and then reverted, because building it proved
+it wrong.** The review proposed taking the mount floor as the minimum
+over *every* anchor slot rather than slot 0, to harden against a volume
+converted in place. Under one stream slots 1..63 are never written, so
+that minimum is 0 on every mount — which would pin the warm-up at
+replay-the-whole-log **and write that zero over the real anchor**. The
+existing warm-up cell failed immediately. The floor now takes the lowest
+slot that was ever *published into* (`redo_start_lsn != 0`, which
+`superblock.hpp` already defines as "never checkpointed"), which keeps
+the review's hardening and drops its defect, and a new cell pins it.
+
+Two findings declined. The `lowest == nullptr` branch in `FoldedAnchor`
+is provably dead and stays as a guard rather than a dereference. And the
+three hand-written conversions among the structs holding these four LSNs
+are real duplication, but collapsing them touches the ring payload path
+and belongs to AL-S4, which is named there rather than done here.
+
+## AL-7 — AL-S0's review record
 
 **The AL-S1a/S1b code, reviewed 2026-09-02** (`critics-developer`,
 against the post-S1b image). **No live durability, race or deadlock

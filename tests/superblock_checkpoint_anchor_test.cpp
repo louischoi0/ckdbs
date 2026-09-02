@@ -173,6 +173,9 @@ TEST_F(SuperBlockAnchorTest, StreamsFromDifferentCoresDoNotOverwriteEachOther) {
     EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 200u);
     EXPECT_EQ(reloaded.value().wal_anchor(3).redo_start_lsn, 500u);
     EXPECT_EQ(reloaded.value().wal_anchor_count(), 4u);
+    // And nothing folded: per-core streams keep one anchor per stream,
+    // which is the proof AL-S3 changed no behaviour a running instance has.
+    EXPECT_EQ(anchor.folded_cores(), 0u);
 }
 
 // ---- The fold under one stream (AR0 M0, work order AL's AL-R4) ----------
@@ -263,7 +266,7 @@ TEST_F(SuperBlockFoldTest, ACoresLaterCheckpointReplacesItsOwnContributionToTheF
     auto reloaded = Reload();
     ASSERT_TRUE(reloaded.ok());
     EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 800u);
-    EXPECT_EQ(anchor.per_core().size(), 4u);
+    EXPECT_EQ(anchor.folded_cores(), 4u);
 }
 
 // **The case the warm-up exists for.** Core 0 checkpoints first at a high
@@ -314,6 +317,87 @@ TEST_F(SuperBlockFoldTest, TheWarmUpHoldsAtTheMountAnchorRatherThanTheStartOfThe
         << "the warm-up must hold the mount's anchor, not reset to zero";
 }
 
+// A sync failure leaves the map ahead of the page - a state the fold
+// created and the per-core path never had. The map is the source of truth
+// and is monotone per core, so the next successful publish rewrites the
+// whole fold including the contribution whose sync failed.
+TEST_F(SuperBlockFoldTest, AFailedSyncKeepsTheCoresContributionForTheNextPublish) {
+    UnsyncablePageStore store;
+    auto page = store.CreateAtUnpinned(kSuperBlockPageId);
+    ASSERT_TRUE(page.ok());
+    superblock_ = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, /*cores=*/4);
+    {
+        std::array<std::byte, kPageSize> buf{};
+        superblock_.Encode(std::span<std::byte, kPageSize>(buf));
+        const std::uint32_t single = kSingleStream;
+        std::memcpy(buf.data() + kSuperBlockBodyOffset + kLogTopologyOffset, &single,
+                    sizeof(single));
+        auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(buf));
+        ASSERT_TRUE(decoded.ok());
+        superblock_ = std::move(decoded.value());
+    }
+    superblock_.Encode(page.value());
+
+    SuperBlockCheckpointAnchor anchor(superblock_, store);
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/0, 900, 800, 1000, 0}).ok());
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/1, 950, 850, 1050, 0}).ok());
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/2, 970, 870, 1070, 0}).ok());
+
+    // Core 3's publish reaches the map but not the platter.
+    store.FailSync(true);
+    EXPECT_FALSE(anchor.Publish({/*core_id=*/3, 500, 400, 600, 0}).ok());
+    EXPECT_EQ(anchor.folded_cores(), 4u);
+
+    // It republishes higher; the fold must still know 400 was superseded
+    // and land on core 0's 800 as the new minimum.
+    store.FailSync(false);
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/3, 2000, 1900, 2100, 0}).ok());
+
+    auto on_disk = store.GetUnpinned(kSuperBlockPageId);
+    ASSERT_TRUE(on_disk.ok());
+    auto reloaded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(on_disk.value()));
+    ASSERT_TRUE(reloaded.ok());
+    EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 800u);
+}
+
+// The warm-up gate asks *which* cores have published, not how many
+// anchors arrived. An id the volume has no core for would otherwise set a
+// bit `core_count` does not account for, release the warm-up early, and
+// put a phantom core's number into the minimum.
+TEST_F(SuperBlockFoldTest, AnAnchorNamingACoreTheVolumeDoesNotHaveIsRefused) {
+    MakeSingleStream(/*cores=*/4);
+    SuperBlockCheckpointAnchor anchor(superblock_, store_);
+
+    Status refused = anchor.Publish({/*core_id=*/9, 400, 200, 600, 0});
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(anchor.folded_cores(), 0u);
+    EXPECT_EQ(anchor.publishes(), 0u);
+}
+
+// The floor must ignore slots nobody ever published into. Under one
+// stream slots 1..63 hold zeros forever, and a minimum that counted them
+// would be 0 on every mount - pinning the warm-up at replay-the-whole-log
+// and writing that zero over the real anchor. This is the cell that caught
+// it when the floor was first widened to every slot.
+TEST_F(SuperBlockFoldTest, TheFloorIgnoresSlotsNobodyEverPublishedInto) {
+    MakeSingleStream(/*cores=*/4);
+    ASSERT_TRUE(superblock_.SetWalAnchor(0, WalAnchorFields{5000, 4000, 6000, 1}).ok());
+    {
+        auto page = store_.GetUnpinned(kSuperBlockPageId);
+        ASSERT_TRUE(page.ok());
+        superblock_.Encode(page.value());
+    }
+    // Slots 1..63 are all zero here, as they are on every single-stream
+    // volume, and the floor must still be core 0's 4000.
+    SuperBlockCheckpointAnchor anchor(superblock_, store_);
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/1, 9000, 8000, 9500, 2}).ok());
+
+    auto reloaded = Reload();
+    ASSERT_TRUE(reloaded.ok());
+    EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 4000u);
+}
+
 // One core is the degenerate fold, and it must be an identity - this is the
 // shape a single-core instance and, later, M1's gathered checkpoint take.
 TEST_F(SuperBlockFoldTest, OneCoreFoldsToItself) {
@@ -338,20 +422,6 @@ TEST_F(SuperBlockFoldTest, APeersPublishSucceedsRatherThanHittingTheSlotRefusal)
     Status s = anchor.Publish({/*core_id=*/5, 400, 200, 600, 0});
     EXPECT_TRUE(s.ok()) << s.message();
     EXPECT_EQ(anchor.publishes(), 1u);
-}
-
-// Nothing folds under per-core streams, and the table stays empty - the
-// proof that this stage changed no behaviour any running instance has.
-TEST_F(SuperBlockAnchorTest, UnderPerCoreStreamsNothingIsFolded) {
-    SuperBlockCheckpointAnchor anchor(superblock_, store_);
-    ASSERT_TRUE(anchor.Publish({/*core_id=*/0, 900, 800, 1000, 0}).ok());
-    ASSERT_TRUE(anchor.Publish({/*core_id=*/3, 400, 200, 600, 0}).ok());
-
-    EXPECT_TRUE(anchor.per_core().empty());
-    auto reloaded = Reload();
-    ASSERT_TRUE(reloaded.ok());
-    EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 800u);
-    EXPECT_EQ(reloaded.value().wal_anchor(3).redo_start_lsn, 200u);
 }
 
 TEST_F(SuperBlockAnchorTest, AFailedSyncIsReportedAndLeavesTheOldAnchorOnDisk) {

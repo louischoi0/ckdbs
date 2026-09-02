@@ -1,7 +1,8 @@
 #pragma once
 
+#include <array>
+#include <bit>
 #include <cstdint>
-#include <map>
 
 #include "kds/base/status.hpp"
 #include "kds/server/superblock.hpp"
@@ -58,9 +59,9 @@
 //
 // ---- The warm-up, and why it is not conservatism for its own sake -------
 //
-// The map is empty at construction and fills as cores checkpoint, so a
-// minimum taken over it alone is a minimum over the cores that *happen to
-// have published in this process lifetime*. Advancing on that would be
+// No core has published at construction, and the table fills as cores
+// checkpoint, so a minimum over it alone is a minimum over the cores that
+// *happen to have published in this process lifetime*. Advancing on that would be
 // wrong in a way no test of a settled system would show: at a fresh mount
 // core 0 checkpoints first, core 5 has not yet, and slot 0 would move to
 // core 0's redo start - past records core 5's still-dirty pages need. The
@@ -70,9 +71,20 @@
 // once**; until then the mount-time anchor is rewritten unchanged. That
 // bound is sound because recovery replayed from it, so every page any core
 // holds dirty was either redone from at-or-after it or dirtied later - no
-// core's earliest needed record can precede it. The cost is one
-// checkpoint's worth of warm-up per mount, and the alternative is a lost
-// page.
+// core's earliest needed record can precede it.
+//
+// **The warm-up is load-bearing for the prepare floor too, not only for
+// redo.** A peer holding a live `TXN_PREPARE` that has not checkpointed in
+// this run contributes nothing to the minimum, so without the warm-up slot
+// 0 could advance past its prepare record - `checkpointer.cpp`'s D4 hazard,
+// reached silently. Anyone optimising the warm-up away must answer that
+// case, not just the dirty-page one.
+//
+// The cost is the slowest core's first checkpoint - **and it is unbounded
+// where `checkpoint_interval_ns` is 0**, because then no core's cadence
+// tick is armed and the warm-up ends only at shutdown. A configuration
+// that turns checkpointing off keeps the anchor it mounted with, which is
+// the same bargain turning checkpointing off already makes.
 //
 // Buffer pools are per core in M0 (`page.md` section 6), so a dirty table
 // is a per-core fact and each core still runs its own fuzzy checkpoint. A
@@ -100,12 +112,11 @@ public:
     // tests assert against.
     std::uint64_t publishes() const noexcept { return publishes_; }
 
-    // The latest anchor each core published, as this object has seen them -
-    // the fold's input, empty under per-core streams because nothing folds
-    // there. Exposed for the tests and for a later `SHOW META` block; a
-    // core that has not checkpointed since this object was built is absent.
-    const std::map<std::uint32_t, wal::CheckpointAnchorRecord>& per_core() const noexcept {
-        return per_core_;
+    // How many distinct cores have published into the fold. The warm-up is
+    // over when this reaches the volume's core count; 0 under per-core
+    // streams, where nothing folds.
+    std::size_t folded_cores() const noexcept {
+        return static_cast<std::size_t>(std::popcount(published_));
     }
 
 private:
@@ -116,7 +127,20 @@ private:
     // anchor while any core is still to publish (the warm-up above).
     wal::CheckpointAnchorRecord FoldedAnchor() const noexcept;
 
-    // Slot 0 as the mount found it - the floor the warm-up holds to.
+    // The floor the warm-up holds to: the lowest redo start over the anchor
+    // slots the mount found **that were ever published into**. For a volume
+    // born single-stream that is slot 0 alone, since nothing else is ever
+    // written. It differs only for a volume converted in place, where a
+    // peer's old slot can sit below core 0's and a floor above it would
+    // reintroduce the hazard the warm-up closes. Nothing converts in place
+    // today (AL-R3); this costs one loop over 64 entries, once.
+    //
+    // **Skipping the never-published slots is not a detail.** A zero
+    // `redo_start_lsn` means "this core has never checkpointed"
+    // (`superblock.hpp`), not "an anchor at 0" - and under one stream slots
+    // 1..63 hold exactly that forever. Treating them as candidates makes
+    // the minimum 0 on every mount, which both pins the warm-up at
+    // replay-the-whole-log and writes that zero over the real anchor.
     static wal::CheckpointAnchorRecord MountAnchorOf(const SuperBlock& superblock) noexcept;
 
     SuperBlock& superblock_;
@@ -125,9 +149,14 @@ private:
     std::uint64_t publishes_ = 0;
     wal::CheckpointAnchorRecord mount_anchor_{};
 
-    // Ordered, so the fold and the log line are deterministic when two
-    // cores tie on the minimum.
-    std::map<std::uint32_t, wal::CheckpointAnchorRecord> per_core_;
+    // Indexed by core id, with a bit per core that has published. An array
+    // and a mask rather than a map, so that "every core has published" is
+    // `popcount(published_) == core_count` - a fact about *which* cores,
+    // where counting a map's entries would answer the same only if every
+    // key were in range, which nothing upstream guarantees.
+    std::array<wal::CheckpointAnchorRecord, kMaxWalCores> per_core_{};
+    std::uint64_t published_ = 0;
+    static_assert(kMaxWalCores == 64, "the published mask is one bit per core");
 };
 
 }  // namespace kds::server
