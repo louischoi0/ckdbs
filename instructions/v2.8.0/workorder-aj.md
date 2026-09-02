@@ -59,6 +59,26 @@ hoist for DELETE.
 AJ-R1..AJ-R4 are `[DECISION]`; nothing is built until they are ruled on.
 AJ-R5..R7 are CLA proposals accepted by default.
 
+## `[RATIFIED 2026-09-02 — operator: "go ahead for aj"]`
+
+**AJ-R1..AJ-R4 are ruled, as CLA proposed each.** The operator's words
+were given after the four proposals and the AJ-T0 survey below were put in
+front of them, and CLA read them as taking all four:
+
+- **AJ-R1 — build it**, in v2.8.0. Its stated sequencing gate (after
+  AF-T2..T5) is satisfied at `bab3f3a`.
+- **AJ-R2 — (i)**: bare pk equality crosses; every other `WHERE` keeps
+  `fk_check.cpp:190`'s refusal, **with AF-T4's namespace clause kept**.
+  The collect pass stays AJ-T6 and unsequenced.
+- **AJ-R3 — (a)**: a coordinator-local pending-delete set consulted by
+  `FkProbeServer`. Not (b); the child's owner is enrolled in nothing.
+- **AJ-R4 — accepted as stated**, pinned by AJ-T4's three kills.
+
+Recorded this plainly because AJ-R3 is the one this order marked *not*
+accepted by default — a wrong ordering there is a silent dangling
+reference, not a refusal — so the reading is written down where it can be
+corrected in one line rather than inferred from the code later.
+
 ## Background
 
 ### Why the reverse is not the forward with the arrows turned
@@ -380,6 +400,30 @@ only the collection branch at `:396`–`:420` needs a reverse arm that fills
 a `resumed_fk_reverse_verdicts_` member beside `resumed_fk_verdicts_`.
 This keeps AJ-R6's "a new pair rather than a direction flag" while adding
 no second park field and no second deadline path.
+
+**S4 — every clear site this order names is guarded by
+`has_intent_holders()`, which a reverse-only DELETE never satisfies.** All
+four — the autocommit decide (`:502`), `ReleaseIntentsWithoutWaiting`
+(`:4171`), and the explicit-transaction pair (`:9887`, `:9996`) — test it
+before doing anything. AJ-R5 says the reverse enrols nobody, so a DELETE
+whose only cross-core contact was a reverse round has **no holders**,
+enters none of those blocks, and never clears its entry: the row then
+answers busy to every forward probe for the life of the process. That is
+the exact defect AH already hit once from the other side (F1, whose site
+comment records "the intent granted a moment ago is never released and the
+parent row is un-deletable for the life of the process - behind a
+`retryable=1` code, which is a retry loop that cannot succeed").
+
+**The clear must therefore be unconditional on holders, and it goes
+somewhere else**: `EndWrite` (`:10199`) for the autocommit case, guarded on
+`!in_explicit_txn()`, and the explicit `COMMIT`/`ROLLBACK` paths for the
+other. Verified safe against the park: a parked probe ends its scope
+through `AbandonWriteForShipping` (`:5166`, `:9210`) and **not** through
+`EndWrite` — "parking is not failing… the statement runs whole on the
+resume" — so the fork's registration survives the park and the resume's
+`EndWrite` is what clears it. AJ-T1's task text ("cleared at the four
+decide sites and the shipped participant's own dispatch") is superseded by
+this paragraph and by S1's correction to the site count.
 
 **S3 — the reverse request's cap is derived, and the derivation differs.**
 `kFkProbeMaxParents` is 62, derived as
