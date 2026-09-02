@@ -961,6 +961,11 @@ TEST_F(InsertWalTest, ShowMetaReportsTheGroupCommitBatch) {
     // `1.000` knows the batching is buying nothing on this core, which is
     // what AF-T5 measured as 2.35x on a load phase.
     EXPECT_EQ(field(meta, "wal_mean_group_batch"), "1.000");
+    // The spread beside it: a batch that never varied has min == max, which
+    // is what a single serial committer must produce and what tells a
+    // uniform `n/2` apart from a mix averaging the same number.
+    EXPECT_EQ(field(meta, "wal_group_batch_max"), "1");
+    EXPECT_EQ(field(meta, "wal_group_batch_min"), "1");
 }
 
 TEST_F(InsertWalTest, TheBatchIsCountedPerClassAndRelaxedFormsNone) {
@@ -975,6 +980,10 @@ TEST_F(InsertWalTest, TheBatchIsCountedPerClassAndRelaxedFormsNone) {
     EXPECT_NE(meta.find(" wal_group_commits=0 "), std::string::npos) << meta;
     EXPECT_NE(meta.find(" wal_group_batches=0 "), std::string::npos) << meta;
     EXPECT_NE(meta.find(" wal_mean_group_batch=0.000"), std::string::npos) << meta;
+    // No batch completed, so the spread has nothing to report and says so
+    // with 0 rather than with a 1 that would read as "a batch of one".
+    EXPECT_NE(meta.find(" wal_group_batch_max=0 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" wal_group_batch_min=0"), std::string::npos) << meta;
 }
 
 }  // namespace

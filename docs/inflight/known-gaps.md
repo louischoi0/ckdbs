@@ -2831,8 +2831,17 @@ do, and one thing it does that nobody has decided:
   the fix is not a scheduling tweak but **taking the D2 sync off the reactor
   thread** — the writer thread exists on core 0 and is used only for D3's
   tick today — which is a durability-ordering change and has not been
-  attempted. Confirming the reading first needs the distribution of commits
-  staged per hook call, which nothing collects.
+  attempted.
+
+  **The instrument now exists and its first reading supports that reading.**
+  `SHOW META` gained `wal_group_batch_max` / `wal_group_batch_min`
+  (2026-09-02), and at 8 concurrent committers on one core the batch reads
+  mean 3.974, **min 1, max 5** — clustered near `n/2`, never reaching `n`,
+  dipping only at the run's edges. A scheduling artifact that merely delayed
+  staging would have let some batch reach 8; none did. Supporting, not
+  conclusive — extremes are not a distribution, and a histogram would settle
+  it. The off-reactor change has a testable prediction either way:
+  `wal_group_batch_max` should approach `n`.
 - **AF-T5's g7-c8 load gap is unexplained again** — `namespace` 29.7 s
   against `rotate` 13.4 s on the load phase, 2.35× on a re-run, collapsing
   to 1.02× under `relaxed`. It was explained as group-commit batching on

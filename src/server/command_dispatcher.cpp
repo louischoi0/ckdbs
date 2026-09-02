@@ -1630,7 +1630,14 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         os << " wal_group_commits=" << wal_stats.group_commits
            << " wal_group_batches=" << wal_stats.group_batches
            << " wal_mean_group_batch=" << std::fixed << std::setprecision(3)
-           << wal_stats.mean_group_batch_size() << std::defaultfloat;
+           << wal_stats.mean_group_batch_size() << std::defaultfloat
+           // The spread beside the mean, because the mean cannot say
+           // whether the amortisation was the same every time - and that
+           // is the whole question about D2's measured `n/2`
+           // (`manager.hpp`'s `group_batch_max`). `min` is over non-empty
+           // batches, so `min == max` is a batch that never varied.
+           << " wal_group_batch_max=" << wal_stats.group_batch_max
+           << " wal_group_batch_min=" << wal_stats.group_batch_min;
     }
 
     // A peer's lease refills and what each cost (lease_refill_stats.hpp):
