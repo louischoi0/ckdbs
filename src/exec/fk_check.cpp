@@ -188,12 +188,18 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // walk. That is not built, and this refusal is what keeps its absence
     // honest.
     if (child.owner_core != options.core_id) {
+        // **AF-T4 added the last clause, and it is the only actionable
+        // thing in this message.** Everything before it tells the operator
+        // why the engine cannot answer; a namespace is what they can
+        // actually do about it - a parent and child in one namespace are on
+        // one core (`namespace.md` NS10) and this refusal never fires.
         return Status::NotImplemented(
             "relation oid " + std::to_string(child.oid) + " is owned by core " +
             std::to_string(child.owner_core) + " and core " + std::to_string(options.core_id) +
             " cannot see its rows, but a foreign key's reverse check must see every child row "
             "to answer 'no children'; a fan-out over the child's owner is not built "
-            "(docs/spec/foreign-keys.md §3a, instructions/v2.8.0/workorder-ah.md)");
+            "(docs/spec/foreign-keys.md §3a, instructions/v2.8.0/workorder-ah.md) - create a "
+            "parent and its children in one namespace to keep the pair on one core");
     }
     if (!child.ranges.empty() && !child.ServableBy(options.core_id)) {
         return Status::NotImplemented(

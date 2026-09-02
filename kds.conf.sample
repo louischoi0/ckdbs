@@ -82,23 +82,32 @@ cores = 1
 # connections; a session lives on the core that accepted it, forever. A
 # peer-accepted session serves relations its core owns and refuses the
 # rest - the per-core benchmark shape, and a cliff for a general workload
-# (clients cannot choose their core). Requires `placement = rotate` and
-# cores > 1, and is refused in combination with tls or auth until the
-# credential store and TLS context can be shared across cores immutably.
-# Off by default.
+# (clients cannot choose their core). Needs cores > 1, and is refused in
+# combination with tls or auth until the credential store and TLS context
+# can be shared across cores immutably. The `placement = rotate`
+# requirement this line used to state was retired with the refusal itself
+# (expeditor.cpp's CheckPeerListenerConfig): statement shipping serves a
+# peer-accepted session under any placement. Off by default.
 # peer_listeners = off
 
-# Relation placement (docs/inflight/in-progress/workplan-crosscore.md P6c).
+# Relation placement (docs/inflight/in-progress/workplan-crosscore.md P6c,
+# docs/spec/namespace.md NS10).
 # `creating` pins every relation to the creating core - which is core 0,
 # since DDL is core 0's. `rotate` spreads user relations over the
-# non-system cores. At cores = 1 rotate degrades to creating.
+# non-system cores. `namespace` places a relation on its namespace's core,
+# fixed by that namespace's first relation. At cores = 1 both rotate and
+# namespace degrade to creating.
 #
-# `creating` is the ratified default (DA2, 2026-08-31), and the ground is a
-# measurement: rotation's crossover is a step at the first core to take a
-# second session, and past it rotation is negative at seven writer cores
+# `namespace` is the default since AF-T2 (2026-09-02), and it does not
+# reverse DA2: a relation in `public` - every relation until somebody
+# writes CREATE NAMESPACE - gets `creating`'s answer unchanged, because
+# only a declared namespace rotates. DA2's measurement stands for what it
+# measured: blind rotation's crossover is a step at the first core to take
+# a second session, and past it rotation is negative at seven writer cores
 # (0.51x) - bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md
-# section 6. `rotate` stays configurable; it is not the default.
-placement = creating
+# section 6. What `namespace` supplies is the grouping whose absence
+# produced that number.
+placement = namespace
 
 # ---- Network ---------------------------------------------------------------
 

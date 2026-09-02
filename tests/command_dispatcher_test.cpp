@@ -401,14 +401,17 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // agree - the dispatcher answers `DROP EVERYTHING` first, the parser
     // answers it for a caller that reaches `parser::Parse` directly.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    // `DROP NAMESPACE` joined the list at AF-T3 - the first edit in the
+    // *growing* direction, and the one the comment above did not schedule.
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
-              "ERR only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported");
+              "ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX and DROP ASSERTION "
+              "are supported");
     EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no table with this name");
 
     const auto parsed = parser::Parse("DROP EVERYTHING");
     ASSERT_FALSE(parsed.ok());
-    EXPECT_NE(parsed.status().message().find(
-                  "only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported"),
+    EXPECT_NE(parsed.status().message().find("only DROP TABLE, DROP NAMESPACE, DROP CABIN, "
+                                             "DROP INDEX and DROP ASSERTION are supported"),
               std::string::npos)
         << parsed.status().message();
 }
@@ -1098,12 +1101,184 @@ TEST_F(CommandDispatcherTest, ACatalogViewRefusesWhatItCannotDoAndSaysWhich) {
     auto bad_view = d.Dispatch("SELECT * FROM sys.nosuch");
     EXPECT_NE(bad_view.response.find("no catalog view named"), std::string::npos)
         << bad_view.response;
-    auto bad_schema = d.Dispatch("SELECT * FROM public.acct");
-    EXPECT_NE(bad_schema.response.find("unknown schema"), std::string::npos)
+    // **AF-T3 changed this one, and the change is the feature.** `public`
+    // is a namespace now, so `public.acct` names the relation an
+    // unqualified `acct` names and is answered rather than refused. What
+    // still refuses is a namespace that does not exist - and it refuses by
+    // name, with the byte.
+    auto qualified = d.Dispatch("SELECT * FROM public.acct");
+    EXPECT_NE(qualified.response.substr(0, 4), "ERR ") << qualified.response;
+    auto bad_schema = d.Dispatch("SELECT * FROM nosuchns.acct");
+    EXPECT_NE(bad_schema.response.find("no namespace named 'nosuchns'"), std::string::npos)
         << bad_schema.response;
 
     auto bad_column = d.Dispatch("SELECT * FROM sys.tables WHERE nosuchcol = 1");
     EXPECT_NE(bad_column.response.find("has no column"), std::string::npos) << bad_column.response;
+}
+
+// ---- AF-T3: the syntax ---------------------------------------------------
+//
+// `instructions/v2.8.0/ratification-af-namespace.md` AF-6, the operator's
+// shape (a): `CREATE NAMESPACE <name>` plus qualified names `ns.table`.
+// The decision AF-8 left to this task and these cells pin: **a relation's
+// name stays instance-global**, so a qualifier declares placement and never
+// identity (`parser/ast.hpp`'s namespace-qualifier rule).
+
+TEST_F(CommandDispatcherTest, ANamespaceIsCreatedListedAndDropped) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    // The two that exist before any DDL are listed by their SQL spellings,
+    // not by the registry names their rows carry.
+    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public");
+
+    auto created = d.Dispatch("CREATE NAMESPACE orders");
+    EXPECT_EQ(created.response.substr(0, 18), "CREATED NAMESPACE ") << created.response;
+    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public orders");
+
+    // Name-unique, and the second attempt says so rather than making a
+    // second namespace of one name.
+    EXPECT_NE(d.Dispatch("CREATE NAMESPACE orders").response.find("already exists"),
+              std::string::npos);
+
+    auto dropped = d.Dispatch("DROP NAMESPACE orders");
+    EXPECT_EQ(dropped.response.substr(0, 18), "DROPPED NAMESPACE ") << dropped.response;
+    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public");
+}
+
+TEST_F(CommandDispatcherTest, TheTwoReservedSpellingsAreRefusedAndSysStillMeansTheViews) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    for (const char* reserved : {"sys", "public"}) {
+        auto refused = d.Dispatch(std::string("CREATE NAMESPACE ") + reserved);
+        EXPECT_EQ(refused.response.substr(0, 4), "ERR ") << reserved << ": " << refused.response;
+        EXPECT_NE(refused.response.find("reserved"), std::string::npos) << refused.response;
+    }
+
+    // The older meaning of a qualifier is untouched: `sys.` still names the
+    // catalog views and nothing AF added shadows them.
+    auto view = d.Dispatch("SELECT * FROM sys.tables");
+    EXPECT_NE(view.response.substr(0, 4), "ERR ") << view.response;
+
+    // And a namespace does not nest - its own row carries its own oid.
+    auto nested = d.Dispatch("CREATE NAMESPACE public.orders");
+    EXPECT_EQ(nested.response.substr(0, 4), "ERR ") << nested.response;
+    EXPECT_NE(nested.response.find("do not nest"), std::string::npos) << nested.response;
+}
+
+TEST_F(CommandDispatcherTest, ACreatesQualifierSelectsTheNamespaceAndIsNeverImplicit) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE NAMESPACE orders").response.substr(0, 7), "CREATED");
+
+    ASSERT_EQ(d.Dispatch("CREATE TABLE orders.line (id int64, note varchar)").response.substr(0, 7),
+              "CREATED");
+    // An unqualified CREATE still lands in `public`, so every statement
+    // written before AF means what it meant.
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, note varchar)").response.substr(0, 7),
+              "CREATED");
+
+    auto placed = d.Dispatch("SELECT namespace_oid FROM sys.tables WHERE name = 'line'");
+    EXPECT_NE(placed.response.find(std::to_string(catalog::kUserOidStart)), std::string::npos)
+        << "a relation created in `orders` did not land in it: " << placed.response;
+
+    // **Implicit creation is refused**, which is the whole reason shape (a)
+    // beat shape (b): a typo must not be indistinguishable from an intent.
+    auto typo = d.Dispatch("CREATE TABLE ordrs.line2 (id int64)");
+    EXPECT_EQ(typo.response.substr(0, 4), "ERR ") << typo.response;
+    EXPECT_NE(typo.response.find("no namespace named 'ordrs'"), std::string::npos)
+        << typo.response;
+    EXPECT_NE(typo.response.find("byte "), std::string::npos)
+        << "the refusal carried no byte: " << typo.response;
+    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public orders")
+        << "a typo created a namespace";
+
+    // **And the typo is refused when the *name* already exists**, which is
+    // the arm the cell above cannot reach: `line2` did not exist, so the
+    // refusal above never had to beat the name-collision check. With a name
+    // that does exist, resolving the namespace after the collision made
+    // `EXISTS oid=n` the answer to a statement naming no namespace at all -
+    // the qualifier absorbed rather than verified, and AF-6's rule broken
+    // by the one arm that never reached the resolver.
+    for (const char* absorbed : {"CREATE TABLE ordrs.acct (id int64)",
+                                 "CREATE TABLE ordrs.acct",  // the bare debug form too
+                                 "CREATE TABLE sys.acct (id int64)"}) {
+        auto out = d.Dispatch(absorbed);
+        EXPECT_EQ(out.response.substr(0, 4), "ERR ") << absorbed << " -> " << out.response;
+        EXPECT_EQ(out.response.find("EXISTS"), std::string::npos)
+            << absorbed << " was answered about a relation in another namespace: "
+            << out.response;
+    }
+
+    // **The same arm with a namespace that *does* exist** (the review's
+    // finding 5). `orders.acct` cannot be created - names are
+    // instance-global and `public` holds `acct` - but `EXISTS` would assert
+    // that `orders.acct` exists, which is the one thing that is false. The
+    // reply names where the name actually is.
+    auto held = d.Dispatch("CREATE TABLE orders.acct (id int64)");
+    EXPECT_EQ(held.response.substr(0, 4), "ERR ") << held.response;
+    EXPECT_NE(held.response.find("is in namespace 'public'"), std::string::npos)
+        << held.response;
+
+    // And the unqualified form is untouched: it still answers the
+    // documented token, because about a bare name `EXISTS` is true.
+    EXPECT_EQ(d.Dispatch("CREATE TABLE acct (id int64)").response.substr(0, 6), "EXISTS");
+}
+
+TEST_F(CommandDispatcherTest, AQualifierIsCheckedWhereverARelationIsNamed) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE NAMESPACE orders").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE NAMESPACE ledger").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE orders.line (id int64, note varchar)").response.substr(0, 7),
+              "CREATED");
+
+    // The true qualifier is accepted everywhere the false one is refused,
+    // and the pairs below are the whole of AF-6's list that this surface
+    // reaches.
+    EXPECT_EQ(d.Dispatch("INSERT INTO orders.line VALUES ('a')").response.substr(0, 8),
+              "INSERTED");
+    EXPECT_NE(d.Dispatch("SELECT * FROM orders.line").response.find("a"), std::string::npos);
+    EXPECT_EQ(d.Dispatch("UPDATE orders.line SET note = 'b' WHERE id = 1").response.substr(0, 7),
+              "UPDATED");
+    EXPECT_NE(d.Dispatch("DESCRIBE orders.line").response.substr(0, 4), "ERR ");
+
+    const char* wrong[] = {
+        "INSERT INTO ledger.line VALUES ('c')",
+        "SELECT * FROM ledger.line",
+        "UPDATE ledger.line SET note = 'd' WHERE id = 1",
+        "DELETE FROM ledger.line WHERE id = 1",
+        "DESCRIBE ledger.line",
+        "ALTER TABLE ledger.line RENAME TO moved",
+        "CREATE INDEX ix ON ledger.line(note)",
+        "CREATE CABIN ON ledger.line(note)",
+        "DROP TABLE ledger.line",
+    };
+    for (const char* sql : wrong) {
+        auto out = d.Dispatch(sql);
+        EXPECT_EQ(out.response.substr(0, 4), "ERR ") << sql << " -> " << out.response;
+        // Names where the relation *is*, because the useful answer to a
+        // wrong placement assertion is the placement.
+        EXPECT_NE(out.response.find("is in namespace 'orders'"), std::string::npos)
+            << sql << " -> " << out.response;
+    }
+
+    // The relation is untouched by every one of those.
+    EXPECT_NE(d.Dispatch("SELECT * FROM line").response.find("b"), std::string::npos);
+}
+
+TEST_F(CommandDispatcherTest, ANamespaceHoldingARelationIsNotDropped) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE NAMESPACE orders").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE orders.line (id int64)").response.substr(0, 7), "CREATED");
+
+    // RESTRICT, and it names the relation that blocked it rather than a
+    // count - the user's next act is to drop that relation.
+    auto refused = d.Dispatch("DROP NAMESPACE orders");
+    EXPECT_EQ(refused.response.substr(0, 4), "ERR ") << refused.response;
+    EXPECT_NE(refused.response.find("line"), std::string::npos) << refused.response;
+
+    ASSERT_EQ(d.Dispatch("DROP TABLE orders.line").response.substr(0, 7), "DROPPED");
+    EXPECT_EQ(d.Dispatch("DROP NAMESPACE orders").response.substr(0, 18), "DROPPED NAMESPACE ");
+    EXPECT_NE(d.Dispatch("DROP NAMESPACE orders").response.find("no namespace named 'orders'"),
+              std::string::npos);
 }
 
 TEST_F(CommandDispatcherTest, AUserTableNamedLikeAViewIsUnaffected) {

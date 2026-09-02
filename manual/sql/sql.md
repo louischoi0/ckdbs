@@ -16,11 +16,11 @@ dispatcher's own commands):
 
 | Class | Statements |
 |---|---|
-| DDL | `CREATE TABLE`, `CREATE INDEX` / `DROP INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
+| DDL | `CREATE TABLE`, `CREATE NAMESPACE` / `DROP NAMESPACE`, `CREATE INDEX` / `DROP INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
 | DML | `INSERT`, `UPDATE`, `DELETE` |
 | Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
 | Transactions | `BEGIN`/`START`, `COMMIT`, `ROLLBACK`/`ABORT`, `SET ISOLATION LEVEL` |
-| Introspection | `SHOW META/TABLES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/RELAYOUT`, `DESCRIBE` |
+| Introspection | `SHOW META/TABLES/NAMESPACES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/RELAYOUT`, `DESCRIBE` |
 | Session | `PING`, `SYNC`, `STOP` |
 
 `DROP TABLE` and `ALTER TABLE` exist and are **catalog-only** (see their
@@ -32,6 +32,81 @@ from those, `DROP CABIN`, `DROP INDEX` and `DROP ASSERTION`.
 
 ## 1. DDL
 
+### CREATE NAMESPACE / DROP NAMESPACE
+
+```sql
+CREATE NAMESPACE ledger;
+CREATE TABLE ledger.accounts (id int64, owner varchar) BTREE;
+DROP NAMESPACE ledger;              -- only when nothing is in it
+```
+
+Grammar (verified):
+
+```
+CREATE NAMESPACE <name>;
+DROP   NAMESPACE <name>;
+```
+
+**A namespace decides which core owns the relations created in it, and
+nothing else.** It is not a separate storage area, it does not scope a
+transaction, and it does not scope a *name* — see "Qualified names" below.
+Two relations in one namespace are on one core, so a join or a foreign key
+between them never crosses; two relations in different namespaces are on
+different cores, so their work runs at the same time.
+
+**The best practice is the whole feature.** Put relations that are joined,
+foreign-keyed or read together in one namespace. Put groups that have
+nothing to do with each other in different namespaces.
+
+- A namespace's core is fixed by the **first relation created in it** and
+  never changes afterwards — not by dropping every relation in it, and not
+  by dropping and recreating the namespace.
+- `sys` and `public` are reserved and cannot be created or dropped. `sys`
+  names the catalog views; `public` is where an unqualified `CREATE TABLE`
+  lands, and a relation in `public` is owned by core 0 exactly as it was
+  before namespaces existed.
+- `DROP NAMESPACE` is **RESTRICT**: a namespace holding any relation is
+  refused, and the refusal names one of the relations that blocked it.
+  There is no `CASCADE`.
+- A namespace is never created by being mentioned. `CREATE TABLE
+  ordrs.line` when there is no `ordrs` is an error with the byte, not a new
+  namespace — so a typo cannot become a silent second namespace.
+
+```
+> CREATE NAMESPACE ledger
+CREATED NAMESPACE ledger oid=4001
+> SHOW NAMESPACES
+sys public ledger
+> DROP NAMESPACE ledger
+DROPPED NAMESPACE ledger oid=4001
+```
+
+### Qualified names
+
+Any relation name may be written `<namespace>.<relation>`, everywhere a
+relation is named: `FROM`, every `JOIN`, inside a subquery, `INSERT INTO`,
+`UPDATE`, `DELETE FROM`, `REFERENCES`, `ALTER TABLE`, `DROP TABLE`,
+`CREATE INDEX ON`, `CREATE CABIN ON`, `CREATE ASSERTION ON`, `DESCRIBE`
+and `SHOW RELAYOUT`.
+
+**A relation's name is unique across the whole instance, and a qualifier
+does not change which relation a name reaches.** Two namespaces cannot hold
+two relations called `orders`. What a qualifier does depends on where it is
+written:
+
+- at `CREATE TABLE ns.t` it **chooses** the namespace, and therefore the
+  core;
+- everywhere else it is **checked**. A qualifier that disagrees with where
+  the relation actually lives is refused, and the refusal says where it is:
+
+```
+> SELECT * FROM trading.accounts
+ERR no relation 'trading.accounts'; 'accounts' is in namespace 'ledger' (byte 14)
+```
+
+An unqualified name means exactly what it always meant, so every statement
+written before namespaces existed still means the same thing.
+
 ### CREATE TABLE
 
 ```sql
@@ -42,7 +117,8 @@ CREATE TABLE trades   (id int64, sym varchar, qty int64) BTREE;
 Grammar (verified):
 
 ```
-CREATE TABLE <name> ( <col> <type> [NULL | NOT NULL] [REFERENCES <parent>]
+CREATE TABLE [<namespace>.]<name>
+                    ( <col> <type> [NULL | NOT NULL] [REFERENCES <parent>]
                      [CABIN | CABIN AUTO | NO CABIN]
                      [, ...] ) [HEAP | BTREE] [EXPLICIT];
 ```
@@ -737,6 +813,7 @@ Dispatcher commands, not parser statements:
 |---|---|
 | `SHOW META` | instance metadata (superblock, format version, config), plus what the last mount's recovery did — records scanned, transactions committed and rolled back, per-phase timings, and `catalog_recovered=0`, which is a standing statement that DDL is unlogged rather than a number that will change (`docs/spec/client-manual.md` has the field list) |
 | `SHOW TABLES` | the relation list |
+| `SHOW NAMESPACES` | the namespace list, `sys` and `public` first. Names are the **SQL spellings**, which is what a statement writes |
 | `SHOW PAGE <id> [VALUES]` | one page's header and slots; `VALUES` hex-dumps tuple payloads |
 | `SHOW PATTERNS` | `sys.patterns` — registered patterns, ids, Waystone state |
 | `SHOW ACCESS` | `sys.access_stats` — one row per access shape `(kind, rel, columns)` |

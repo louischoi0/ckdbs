@@ -154,8 +154,17 @@ TEST(ExpeditorConfigTest, TheTwoRatifiedDefaultsAreWhatAnOmittedKeyLeaves) {
     EXPECT_EQ(config.range_size_ids, kRangeSizeOff)
         << "spreading ships off; a relation opts in, not an instance";
     EXPECT_EQ(config.range_size_ids, 0u) << "the value, not just the name";
-    EXPECT_EQ(config.placement, catalog::PlacementPolicy::kCreatingCore)
-        << "DA2 ships creating-core placement";
+    // **AF-T2 moved this default and DA2 survives it.** `kNamespace`
+    // answers exactly what `kCreatingCore` answers for a relation in
+    // `public`, which is every relation until somebody writes
+    // `CREATE NAMESPACE` - so what DA2 ratified is still what an instance
+    // that declares nothing does. The cell below proves that half.
+    EXPECT_EQ(config.placement, catalog::PlacementPolicy::kNamespace)
+        << "AF-T2 ships namespace placement";
+    EXPECT_EQ(catalog::AssignOwnerCore(config.placement, catalog::kSystemCore, /*core_count=*/8,
+                                       /*relation_seq=*/7),
+              catalog::kSystemCore)
+        << "the shipped default moved a relation nobody declared a namespace for";
 
     // The DA1 engine stays reachable, explicitly, which is what an operator
     // sets to get the measured configuration back - every
@@ -166,6 +175,27 @@ TEST(ExpeditorConfigTest, TheTwoRatifiedDefaultsAreWhatAnOmittedKeyLeaves) {
     ASSERT_TRUE(armed.ApplyFile(ParseOk("range_size_ids = 65536\n")).ok());
     EXPECT_EQ(armed.range_size_ids, kRangeSizeIdsDefault);
     EXPECT_EQ(armed.range_size_ids, 65536u);
+}
+
+// AF-T2: three spellings, and a wrong one that names all three back.
+TEST(ExpeditorConfigTest, EveryPlacementPolicyHasASpellingAndAWrongOneIsNamed) {
+    const std::pair<const char*, catalog::PlacementPolicy> cases[] = {
+        {"creating", catalog::PlacementPolicy::kCreatingCore},
+        {"rotate", catalog::PlacementPolicy::kRotate},
+        {"namespace", catalog::PlacementPolicy::kNamespace},
+    };
+    for (const auto& [text, policy] : cases) {
+        Expeditor::Config config;
+        ASSERT_TRUE(config.ApplyFile(ParseOk("placement = " + std::string(text) + "\n")).ok())
+            << text;
+        EXPECT_EQ(config.placement, policy) << text;
+    }
+
+    Expeditor::Config wrong;
+    Status refused = wrong.ApplyFile(ParseOk("placement = affinity\n"));
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument) << refused.message();
+    EXPECT_NE(refused.message().find("namespace"), std::string::npos)
+        << "the refusal did not offer the policy that ships: " << refused.message();
 }
 
 TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {

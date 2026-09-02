@@ -526,11 +526,18 @@ def main():
     ap.add_argument("--port", type=int, default=15460)
     ap.add_argument("--workdir", default=os.path.expanduser("~/mcbench"),
                     help="where the data files go - a block device, never tmpfs")
-    ap.add_argument("--placement", choices=("creating", "rotate"), default="creating",
-                    help="relation placement policy (docs/inflight/in-progress/workplan-crosscore.md P6c). "
+    ap.add_argument("--placement", choices=("creating", "rotate", "namespace"),
+                    default="creating",
+                    help="relation placement policy (docs/inflight/in-progress/workplan-crosscore.md P6c, "
+                         "docs/spec/namespace.md NS10). "
                          "`rotate` puts relations on peer cores; with --peer-listeners "
                          "each is written from a session on its owner core, without it "
-                         "the driver probes and reports NOT RUN.")
+                         "the driver probes and reports NOT RUN. `namespace` is the "
+                         "shipped default and is indistinguishable from `creating` here: "
+                         "this driver creates every relation unqualified, so they all land "
+                         "in `public`, which is never rotated. Use "
+                         "`bench/af_namespace_grouping_probe.py` to measure what `namespace` "
+                         "actually does.")
     ap.add_argument("--peer-listeners", action="store_true",
                     help="run the multi-core configuration with `peer_listeners = on` "
                          "(PW5) and one writer session per relation on its owner core "

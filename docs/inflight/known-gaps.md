@@ -2726,6 +2726,75 @@ All fixed by `b11cc81`; the suite is green.
   fixing the call site alone would have looked identical and proved
   nothing.
 
+## Namespaces: what AF-T3 declined and what AF-T2 leaves open
+
+**Opened 2026-09-02 by AF-T2/AF-T3** (`docs/spec/namespace.md` NS5, NS6,
+NS8, NS10; `instructions/v2.8.0/ratification-af-namespace.md`). A
+namespace decides placement and is built; what it deliberately does not
+do, and one thing it does that nobody has decided:
+
+- **Names are not namespace-scoped.** `Catalog::FindTableOidByName` takes
+  a name and no namespace, so two namespaces cannot hold two relations
+  called `orders` — the thing most people expect a namespace to buy. AF-9
+  declines it outright and AF-T3 took the smaller reading, so this is a
+  decision rather than an omission; what building it costs is a namespace
+  argument on that function and on every one of its ~20 callers, plus a
+  session current namespace (NS8) to give an unqualified name a meaning.
+  Marked in place in `namespace.md` rather than deleted.
+- **An empty namespace's core is not stable across a changed core count.**
+  A namespace with relations answers with its relations' `owner_core` and
+  cannot move; one with none re-derives from its declaration rank modulo
+  `cores - 1`, so a mount that changes `cores` can move it. Same class of
+  question as `wal.md` §3's recovery under a changed core count and not
+  answered ahead of it. Nothing is unsafe — the relations that exist keep
+  their owner — but an operator who drains a namespace and changes `cores`
+  gets a different core back.
+- **AF-P1's literal rule was corrected to make the policy work at all**
+  (AF-P1a): an unplaced namespace rotates on its declaration order rather
+  than taking "the creating core", which is always core 0 because DDL is
+  always core 0's. Recorded so the operator can take the other reading; if
+  a namespace's core should be *stated* at `CREATE NAMESPACE` instead,
+  that is the clause that changes.
+- **A namespace name is case-sensitive; the `sys` qualifier is not.**
+  `FindNamespaceOidByName` compares with `==`, which is
+  `FindTableOidByName`'s rule and therefore consistent with every relation
+  name in the engine — but the dispatcher's catalog-view arm has always
+  used `IEquals` for `sys`, so `SELECT * FROM SYS.tables` works while
+  `CREATE TABLE ORDERS.t` answers *"no namespace named 'ORDERS'"*. Neither
+  is a wrong answer; the two just disagree about case. Left as it is
+  deliberately: making namespaces case-insensitive would diverge from
+  relation names, and making `sys` case-sensitive would break a spelling
+  that works today. Found by the AF-T3 review.
+- **A qualifier on a name that does not resolve reports the name, not the
+  namespace.** `CheckRelationQualifier` runs after the relation is found,
+  so `SELECT * FROM orders.nosuch` answers *"no table with this name"*
+  rather than naming `orders`. Truthful, and the message a user would
+  rather have is the second one.
+- **No end-to-end cell for the shipped default.** Every `kNamespace` cell
+  drives `Catalog` directly, `AssignOwnerCore` as a `static_assert`, or a
+  dispatcher over a bare store; nothing exercises `Expeditor` →
+  `CREATE NAMESPACE` → CC7 publish → a statement served on the owner core
+  at `cores > 1`. That is the shape CLAUDE.md already names as a trap for
+  spreading — *"no test exercises a spreading `Expeditor` end to end, so a
+  green suite says nothing about the armed configuration"* — and unlike
+  spreading, **this one ships on by default**. What partly covers it is
+  `bench/af_namespace_grouping_probe.py`, which drives a real server and
+  reads placement back out of the catalog; a benchmark is not a test.
+- **AF-T5's sweep stops at one group per writer core.** Every cell in
+  `bench/v2.8.0/results-af-t5-namespace-grouping-v2.7.0-99-g775e79d.md` has
+  at most one declared group per writer core, which is the side of
+  `bench/v2.1.0/results-shipping-pretasks` §6's step where rotation still
+  wins. The 7-group cells that would cross it were queued and not run, and
+  the g3-c8 tie (namespace 0.99x of rotation on throughput, 4.5x better on
+  p100) is a warning that the answer past the step is not obvious.
+  `bench/af_namespace_grouping_probe.py --groups 7` at 4 and 8 cores is the
+  owed cell.
+- **No `sim/` cell covers a namespace.** The generator creates relations
+  in `public` and nothing declares one, so the crash/restart harness has
+  never mounted a file with a user namespace in it. The rows involved are
+  ordinary `sys.objects` rows written under a DDL transaction, so nothing
+  new is claimed — but nothing is proven either.
+
 ## Cross-owner foreign keys: what the crossing does not cover
 
 **Opened 2026-09-01 by AH-T4** (`instructions/v2.8.0/workorder-ah.md`,
@@ -2741,7 +2810,11 @@ parent owner, a reference intent left behind — and two things do not:
   what would replace it is the fan-out (one boolean probe per child
   owner, each answering from its own Cabin or its own walk), which is not
   built. Colocating parent and child — a namespace, AF-P5 — avoids the
-  refusal entirely.
+  refusal entirely, and **since AF-T4 (2026-09-02) the engine says so**:
+  the refusal's last clause names the remedy, and the `CREATE TABLE` that
+  declares a cross-owner foreign key emits a `WARN` naming both this and
+  the per-write probe cost. The gap is unchanged; what closed is the
+  operator having to know about it from a spec.
 - ~~**The crossing is unreachable in a running instance, behind a gate AH
   did not name**~~ — found 2026-09-01 by AH-T5's probe, which could not
   reach its own crash point, and **closed the same day on operator

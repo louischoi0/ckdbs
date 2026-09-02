@@ -24,6 +24,13 @@ StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& s
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
                                 std::to_string(stmt.byte_offset) + ")");
     }
+    // AF-T3: `ns.t` asserts where the relation lives, and a wrong assertion
+    // is refused rather than absorbed.
+    if (Status s = catalog.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                  stmt.byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();

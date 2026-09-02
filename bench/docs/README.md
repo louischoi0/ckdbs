@@ -1401,6 +1401,48 @@ bench/fanin_fold_cost_probe.py --server build-release/kds_server \
     --workdir ~/foldcost --reps 300 --rows 600
 ```
 
+### The AF-T5 namespace-grouping probe (2026-09-02)
+
+`bench/af_namespace_grouping_probe.py` — **whether declaring the grouping
+recovers rotation's parallelism without rotation's crossing cost**
+(`instructions/v2.8.0/ratification-af-namespace.md` AF-T5). DA2's 0.51x
+cannot be re-run to answer this: its driver (`tools/multicore_benchmark.py`)
+has no join and no foreign key, so nothing in that workload ever crosses a
+core, and creating every relation unqualified means `placement = namespace`
+would change nothing there either (`public` is never rotated). This probe
+instead builds `k` **wired** groups — `head_<g>`/`line_<g>`, joined on every
+read — and measures three placements of the same groups:
+
+| arm | shape |
+|---|---|
+| `creating` | every relation on core 0. The control: nothing crosses, nothing runs in parallel |
+| `rotate` | relations rotate over the peer cores in creation order, so a group's own pair lands on two different cores and every join in it crosses. DA2's blind policy |
+| `namespace` | one `CREATE NAMESPACE` per group holding both of the group's relations, so a group is on one core and different groups are on different cores |
+
+One session per group, all from one core-0 listener (no peer listeners, so
+no accept-distribution or session-hunting enters the numbers). Each session
+loads `--rows` rows into its group's two relations (untimed), then a
+`threading.Barrier` releases every session to run `--rows` point joins
+(`SELECT h.tag, l.amt FROM head JOIN line ON l.head_id = h.id WHERE h.id =
+<i>`), timed. The reported window is the **slowest** group's join phase
+(`max`, not mean — `bench/v2.1.0/results-shipping-pretasks` §6's own
+reasoning: the run finishes when the busiest core does). Arms are
+interleaved rep by rep, never block by block, and each rep gets a fresh
+server on a fresh data file. Owners are read back from `DESCRIBE`'s
+`owner_core=` field, never predicted — `split_groups` in the output is how
+many groups landed with their two relations on two different cores, and
+`distinct_owner_cores` is how many cores hold at least one relation, so the
+topology a run claims is what the catalog says rather than what the arm's
+name implies.
+
+```bash
+bench/af_namespace_grouping_probe.py --server build-release/kds_server \
+    --workdir ~/mcbench/af --cores 8 --groups 7 --rows 2000 --reps 5 \
+    --json bench/v2.8.0/archive/af-t5-namespace-grouping/g7-c8.json
+```
+
+Results: `bench/v2.8.0/results-af-t5-namespace-grouping-*.md`.
+
 ## The shared harness
 
 `bench_common.py` is the timing and reporting harness both engines' drivers

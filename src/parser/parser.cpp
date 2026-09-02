@@ -81,6 +81,31 @@ StatusOr<std::string> Parser::ParseIdent() {
     return std::string(tok.text);
 }
 
+Status Parser::ParseQualifiedName(std::string& schema, std::string& name,
+                                  std::uint32_t* offset) {
+    if (offset != nullptr) *offset = lexer_.Peek().byte_offset;
+
+    auto first = ParseIdent();
+    if (!first.ok()) return first.status();
+    name = std::move(first.value());
+    schema.clear();
+
+    // The dot is unambiguous here: a relation reference is a single name,
+    // so nothing else can follow one through a dot. Whether the qualifier
+    // names a namespace that exists is resolution's question, not this
+    // production's - see the declaration.
+    if (lexer_.Peek().type != TokenType::kDot) return Status::OK();
+    lexer_.Next();
+
+    auto qualified = ParseIdent();
+    if (!qualified.ok()) {
+        return qualified.status().WithContext("a namespace qualifier names a relation after it");
+    }
+    schema = std::move(name);
+    name = std::move(qualified.value());
+    return Status::OK();
+}
+
 StatusOr<std::uint32_t> Parser::ParseTypeArgument(std::string_view what) {
     const Token tok = lexer_.Next();
     if (tok.type != TokenType::kIntLit || tok.negative) {
@@ -408,9 +433,13 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
 
     CreateTableStmt stmt;
 
-    auto name = ParseIdent();
-    if (!name.ok()) return name.status();
-    stmt.table_name = std::move(name.value());
+    // The one qualifier in the grammar that *decides* something: it names
+    // the namespace the relation is created in, and through AF-T2 the core
+    // that will own it.
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
 
@@ -520,11 +549,10 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
             col.references_byte_offset = refs.byte_offset;
             lexer_.Next();
 
-            auto parent = ParseIdent();
-            if (!parent.ok()) {
-                return parent.status().WithContext("REFERENCES names the parent relation");
+            if (Status s = ParseQualifiedName(col.references_schema, col.references_table);
+                !s.ok()) {
+                return s.WithContext("REFERENCES names the parent relation");
             }
-            col.references_table = std::move(parent.value());
 
             // `REFERENCES parent(col)` is refused rather than parsed and
             // checked: the parent side is always the Keystone id (F1), so
@@ -674,10 +702,10 @@ StatusOr<CabinStmt> Parser::ParseCabin(bool drop) {
     }
     lexer_.Next();
 
-    stmt.byte_offset = lexer_.Peek().byte_offset;
-    auto table = ParseIdent();
-    if (!table.ok()) return table.status();
-    stmt.table_name = std::move(table.value());
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     if (Status s = ExpectToken(TokenType::kLParen, "'(' before the cabin's column"); !s.ok()) {
         return s;
@@ -771,10 +799,10 @@ StatusOr<IndexStmt> Parser::ParseIndex(bool drop) {
     }
     lexer_.Next();
 
-    stmt.table_byte_offset = lexer_.Peek().byte_offset;
-    auto table = ParseIdent();
-    if (!table.ok()) return table.status();
-    stmt.table_name = std::move(table.value());
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     if (Status s = ParseDeclaredColumnList(stmt.key_columns, "index key columns",
                                            catalog::kMaxIndexKeyColumns);
@@ -793,6 +821,42 @@ StatusOr<IndexStmt> Parser::ParseIndex(bool drop) {
             !s.ok()) {
             return s;
         }
+    }
+
+    ConsumeOptionalSemicolon();
+    return stmt;
+}
+
+// `{CREATE | DROP} NAMESPACE <name>` (AF-T3, AF-6's operator-taken shape
+// (a)), with both leading words already consumed.
+//
+// `NAMESPACE` is matched by text like every clause head this grammar has
+// grown, so **nothing is reserved by it**: a column may still be named
+// `namespace`, and `kFingerprintVersion` does not move - a keyword hashes
+// exactly as an identifier does (fingerprint.hpp's bump rule, which asks
+// whether an *already fingerprintable* statement would hash differently;
+// this statement did not parse at all before).
+//
+// There is no `IF NOT EXISTS`: implicit or absorbed creation is exactly
+// what made shape (b) lose, because it leaves a typo indistinguishable from
+// an intent.
+StatusOr<NamespaceStmt> Parser::ParseNamespace(bool drop) {
+    NamespaceStmt stmt;
+    stmt.drop = drop;
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.name = std::move(name.value());
+
+    // A namespace is not in a namespace - its own row says so by carrying
+    // its own oid (`catalog.cpp`'s CreateNamespace) - so a qualifier here
+    // is a mistake worth naming rather than a form to accept and ignore.
+    if (lexer_.Peek().type == TokenType::kDot) {
+        return Status::InvalidArgument(
+            "a namespace name is not qualified (byte " +
+            std::to_string(lexer_.Peek().byte_offset) +
+            "); namespaces do not nest - a namespace's own namespace is itself");
     }
 
     ConsumeOptionalSemicolon();
@@ -848,10 +912,10 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     }
     lexer_.Next();
 
-    stmt.table_byte_offset = lexer_.Peek().byte_offset;
-    auto table = ParseIdent();
-    if (!table.ok()) return table.status();
-    stmt.table_name = std::move(table.value());
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     // ---- GROUP BY (<column>, ...) ---------------------------------------
     //
@@ -1110,9 +1174,10 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
 
     InsertStmt stmt;
 
-    auto name = ParseIdent();
-    if (!name.ok()) return name.status();
-    stmt.table_name = std::move(name.value());
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;
 
@@ -1171,25 +1236,11 @@ StatusOr<RelationRef> Parser::ParseRelationRef() {
             "); derived tables and CTEs are not supported, only predicate-position subqueries");
     }
 
-    auto name = ParseIdent();
-    if (!name.ok()) return name.status();
-
+    // `sys.tables`, and since AF-T3 `orders.customer` too - one production
+    // for every relation name in the grammar.
     RelationRef rel;
-    rel.table_name = std::move(name.value());
+    if (Status s = ParseQualifiedName(rel.schema, rel.table_name); !s.ok()) return s;
     rel.byte_offset = offset;
-
-    // `sys.tables` - a schema-qualified relation. The dot is unambiguous
-    // here: a relation reference is a single name, so nothing else can
-    // follow one through a dot. Which schemas exist is the catalog's
-    // question, not this production's; an unknown one fails at resolution
-    // with a message that can name what does exist.
-    if (lexer_.Peek().type == TokenType::kDot) {
-        lexer_.Next();
-        auto qualified = ParseIdent();
-        if (!qualified.ok()) return qualified.status();
-        rel.schema = std::move(rel.table_name);
-        rel.table_name = std::move(qualified.value());
-    }
 
     // `AS <alias>`. The bare-alias form (`FROM t a`) is deliberately not
     // accepted: it makes a typo'd keyword read as an alias, and the two
@@ -1876,9 +1927,10 @@ StatusOr<DeleteStmt> Parser::ParseDelete() {
 
     if (Status s = ExpectKeyword("FROM"); !s.ok()) return s;
 
-    auto name = ParseIdent();
-    if (!name.ok()) return name.status();
-    stmt.table_name = std::move(name.value());
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     // Depth 0 and the same production UPDATE uses: a DELETE's WHERE is an
     // outermost query block, and a predicate-position subquery in it nests
@@ -1894,9 +1946,10 @@ StatusOr<DeleteStmt> Parser::ParseDelete() {
 StatusOr<UpdateStmt> Parser::ParseUpdate() {
     UpdateStmt stmt;
 
-    auto name = ParseIdent();
-    if (!name.ok()) return name.status();
-    stmt.table_name = std::move(name.value());
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     if (Status s = ExpectKeyword("SET"); !s.ok()) return s;
 
@@ -1981,6 +2034,11 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/false);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "NAMESPACE")) {
+            lexer_.Next();
+            auto s = ParseNamespace(/*drop=*/false);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else {
             auto s = ParseCreateTable();
             if (!s.ok()) return s.status();
@@ -2008,22 +2066,27 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/true);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "NAMESPACE")) {
+            lexer_.Next();
+            auto s = ParseNamespace(/*drop=*/true);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "TABLE")) {
             // docs/spec/drop-table.md DT6: catalog-scoped, oid tombstoned,
             // pages orphaned - the refusals live in the dispatcher, which
             // is the layer that can name a blocker.
             lexer_.Next();
             DropTableStmt drop;
-            drop.byte_offset = lexer_.Peek().byte_offset;
-            auto name = ParseIdent();
-            if (!name.ok()) return name.status();
-            drop.table_name = std::move(name.value());
+            if (Status s = ParseQualifiedName(drop.schema, drop.table_name, &drop.byte_offset);
+                !s.ok()) {
+                return s;
+            }
             ConsumeOptionalSemicolon();
             stmt = std::move(drop);
         } else {
             return Status::NotImplemented(
-                "only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported "
-                "(byte " +
+                "only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX and DROP ASSERTION "
+                "are supported (byte " +
                 std::to_string(what.byte_offset) + ")");
         }
     } else if (IEquals(tok.text, "INSERT")) {
@@ -2084,10 +2147,10 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     if (Status s = ExpectKeyword("TABLE"); !s.ok()) return s;
 
     AlterStmt stmt;
-    stmt.byte_offset = lexer_.Peek().byte_offset;
-    auto name = ParseIdent();
-    if (!name.ok()) return name.status();
-    stmt.table_name = std::move(name.value());
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.byte_offset);
+        !s.ok()) {
+        return s;
+    }
 
     const Token verb = lexer_.Peek();
     if (verb.type == TokenType::kIdent &&

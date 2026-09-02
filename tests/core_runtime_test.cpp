@@ -586,6 +586,35 @@ TEST(CorePlacementTest, RotationSkipsTheSystemCoreAndCreatingStaysPut) {
     static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 2, 5) == 1);
     // ...and degrades to the creating core when there is nowhere to rotate.
     static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 1, 5) == 0);
+
+    // AF-T2's seam, the shipped default. An undeclared namespace - `public`,
+    // which is every relation until somebody writes CREATE NAMESPACE - is
+    // `kCreatingCore`'s answer whatever the relation count, which is what
+    // keeps DA2 true under the new default.
+    using catalog::NamespacePlacement;
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 7) == 0);
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 7,
+                                  NamespacePlacement{}) == 0);
+    // A declared namespace nothing has placed rotates on its **declaration
+    // order**, not on the relation count - two relations in one namespace
+    // must not land on two cores.
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
+                                  NamespacePlacement{catalog::kUnplacedNamespace, 0, true}) == 1);
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
+                                  NamespacePlacement{catalog::kUnplacedNamespace, 1, true}) == 2);
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
+                                  NamespacePlacement{catalog::kUnplacedNamespace, 3, true}) == 1);
+    // A namespace its first relation already fixed answers that, and the
+    // rank is not consulted - AF-P4's "never rebalanced".
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
+                                  NamespacePlacement{3, 0, true}) == 3);
+    // Including back onto core 0, which is a legal answer and the reason
+    // absence needs a sentinel rather than a zero.
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 4, 99,
+                                  NamespacePlacement{0, 2, true}) == 0);
+    // One core has nowhere to rotate, exactly as `rotate` degrades.
+    static_assert(AssignOwnerCore(PlacementPolicy::kNamespace, 0, 1, 0,
+                                  NamespacePlacement{catalog::kUnplacedNamespace, 5, true}) == 0);
     SUCCEED();
 }
 

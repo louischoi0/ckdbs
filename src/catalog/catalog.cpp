@@ -1442,11 +1442,18 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // `[PROPOSED]`.
     auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
     if (!existing_relations.ok()) return existing_relations.status();
+    // AF-T2: what this relation's namespace already decided, or the rank
+    // that decides it now. Read from the same scan, and read on every
+    // policy rather than only on `kNamespace` - a branch here would put
+    // half the policy back in the catalog.
+    auto ns_placement = DeriveNamespacePlacement(namespace_oid, existing_relations.value());
+    if (!ns_placement.ok()) return ns_placement.status();
     // DDL runs on the system core and allocates from its free map, so the
     // relation's pages are the system core's - and a relation must be owned
     // by the core that can fault its pages (core_placement.hpp).
-    const std::uint32_t owner_core = AssignOwnerCore(placement_, kSystemCore, core_count_,
-                                                     existing_relations.value().size());
+    const std::uint32_t owner_core =
+        AssignOwnerCore(placement_, kSystemCore, core_count_,
+                        existing_relations.value().size(), ns_placement.value());
 
     // All three rows of a relation carry the *same* stamp: a reader that
     // could see the sys.tables row but not its sys.columns rows would see
@@ -1697,7 +1704,47 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
 
 // ---- Namespaces (AF-T1) ---------------------------------------------------
 
-StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name) {
+StatusOr<NamespacePlacement> Catalog::DeriveNamespacePlacement(
+    Oid namespace_oid, const std::vector<SysTableRow>& existing) {
+    NamespacePlacement out;
+    // The oid-range idiom, not `IsSystemNamespace`: that predicate answers
+    // an *identity* question (may this row be renamed, dropped, altered)
+    // and is true of `sys` alone, while what placement needs to know is
+    // whether anybody declared this namespace - which excludes `public`
+    // too. Two questions, two tests, said here so the next reader does not
+    // converge them.
+    out.declared = namespace_oid >= kUserOidStart;
+    if (!out.declared) return out;
+
+    // AF-P1: the lowest-oid relation already in the namespace is the one
+    // that fixed its core.
+    bool found = false;
+    Oid lowest = 0;
+    for (const SysTableRow& row : existing) {
+        if (row.namespace_oid != namespace_oid) continue;
+        if (found && row.oid >= lowest) continue;
+        lowest = row.oid;
+        out.settled_core = row.owner_core;
+        found = true;
+    }
+    if (found) return out;
+
+    // Nothing has fixed it, so this relation will - on the namespace's
+    // declaration order. Dropped namespace rows are counted with the live
+    // ones: they are never retired, so the rank of a given namespace can
+    // never change, which is the whole of AF-P4's immutability. Emptying a
+    // namespace and refilling it therefore lands on the same core.
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    if (!objects.ok()) return objects.status();
+    for (const SysObjectRow& row : objects.value()) {
+        if (row.type_oid != kTypeNamespace && row.type_oid != kTypeDroppedNamespace) continue;
+        if (row.oid < namespace_oid) ++out.rank;
+    }
+    return out;
+}
+
+StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name,
+                                              const txn::ReadView* view) {
     // The reserved spellings first, and **before** the page scan rather
     // than after it: `CreateNamespace` refuses these two names, so a row
     // carrying one cannot exist - and if a file written by some other
@@ -1707,7 +1754,7 @@ StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name) {
     if (name == kNamespaceSysName) return kNamespaceSys;
     if (name == kNamespacePublicName) return kNamespacePublic;
 
-    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
     if (!rows.ok()) return rows.status();
     for (const SysObjectRow& row : rows.value()) {
         // `kTypeNamespace` and not `kTypeDroppedNamespace`: the retype is
@@ -1720,8 +1767,59 @@ StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name) {
     return Status::NotFound("no namespace with this name");
 }
 
-StatusOr<std::vector<SysObjectRow>> Catalog::ListNamespaces() {
-    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+Status Catalog::CheckRelationQualifier(std::string_view qualifier, std::string_view rel_name,
+                                       Oid rel_oid, std::uint32_t byte_offset,
+                                       const txn::ReadView* view) {
+    if (qualifier.empty()) return Status::OK();
+
+    // Byte 0 is "nowhere", not a position: a statement's first token is its
+    // verb, so no relation name can sit there, and the debug surfaces that
+    // take a bare argument have no offsets to give. They get a refusal with
+    // no position rather than one pointing at byte 0.
+    const auto at = [byte_offset](Status s) {
+        return byte_offset == 0 ? s : s.WithContext("byte " + std::to_string(byte_offset));
+    };
+
+    auto ns = FindNamespaceOidByName(qualifier, view);
+    if (!ns.ok()) {
+        if (ns.status().code() != StatusCode::kNotFound) return ns.status();
+        return at(Status::NotFound("no namespace named '" + std::string(qualifier) + "'"));
+    }
+
+    // Through the **cached** access rather than `GetSysTableRow`, which
+    // scans the catalog page: this runs per statement on every qualified
+    // name, and the answer is a field `TableAccess` already carries. It is
+    // also that field's first reader - `schema.hpp` said AF would be, and
+    // said so precisely to keep this a decision rather than a discovery.
+    auto access = InitTableAccess(rel_oid);
+    if (!access.ok()) return access.status();
+    const Oid actual_oid = access.value()->namespace_oid;
+    if (actual_oid == ns.value()) return Status::OK();
+
+    // Names where it *is*, not only where it is not: the qualifier is a
+    // placement assertion, so the useful answer to a wrong one is the
+    // placement. A relation in `public` has no spelling of its own
+    // (`well_known.hpp`), which is why that case says so in words.
+    std::string actual;
+    if (actual_oid == kNamespaceSys) {
+        actual = kNamespaceSysName;
+    } else if (actual_oid == kNamespacePublic) {
+        actual = kNamespacePublicName;
+    } else {
+        actual = "oid " + std::to_string(actual_oid);
+        auto live = ListNamespaces(view);
+        if (!live.ok()) return live.status();
+        for (const SysObjectRow& ns_row : live.value()) {
+            if (ns_row.oid == actual_oid) actual = NameView(ns_row.name);
+        }
+    }
+    return at(Status::NotFound("no relation '" + std::string(qualifier) + "." +
+                               std::string(rel_name) + "'; '" + std::string(rel_name) +
+                               "' is in namespace '" + actual + "'"));
+}
+
+StatusOr<std::vector<SysObjectRow>> Catalog::ListNamespaces(const txn::ReadView* view) {
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
     if (!rows.ok()) return rows.status();
     std::vector<SysObjectRow> out;
     for (const SysObjectRow& row : rows.value()) {
@@ -1759,6 +1857,14 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
     // reader resolves a namespace under a view. **AF-T3 owes that check**
     // the moment `CREATE NAMESPACE` becomes a transactional statement two
     // sessions can run at once.
+    // **Unfiltered, and deliberately** - `CREATE TABLE`'s duplicate-name
+    // check for its reason (`ddl-transactional.md` §6): resolving this
+    // under a view would hide another transaction's uncommitted namespace
+    // of this name and let both creates succeed, leaving two rows claiming
+    // one name. Unfiltered, the second is refused while the first is open,
+    // which is the conservative half and the one that cannot corrupt
+    // anything. Every *resolution* route filters; this is a collision
+    // check, not a resolution.
     if (auto taken = FindNamespaceOidByName(name); taken.ok()) {
         return Status::AlreadyExists("a namespace named '" + std::string(name) +
                                       "' already exists");
@@ -1780,6 +1886,15 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
         !s.ok()) {
         return s;
     }
+    // **`InsertObjectRow` does not fill `oid`, and a trail entry without it
+    // cannot be rolled back.** `CreateTable` sets it by hand at each of its
+    // three inserts; this one did not, so the entry recorded pk 0, the
+    // abort found the row's real oid at that slot, decided it had moved,
+    // and asked `RowLocatorForRollback` to relocate a *catalog* row - which
+    // answers "no columns for this rel_id", because a bootstrap relation
+    // has no `sys.columns` entries. Unreachable until AF-T3 made
+    // `CREATE NAMESPACE` a statement a transaction could hold.
+    where.oid = new_oid;
     if (written != nullptr) written->push_back(where);
     return new_oid;
 }
