@@ -241,6 +241,11 @@ struct PendingFkProbe {
     // here: a path with no text (the KWP load chunk) keeps the refusal
     // instead, exactly as it keeps the shipping one.
     std::string line;
+    // **When the last round left** (AH-T6's leg). Stamped after every
+    // owner's request is away rather than before the first, because the
+    // leg being measured is the wait for the *slowest* owner and a stamp
+    // taken before the sends would charge the sending loop to it.
+    sched::MonoTimeNs sent_at_ns = 0;
 };
 
 struct PendingShippedStatement {
@@ -2248,6 +2253,10 @@ private:
     // ends inside this class's own parked commit block. Nothing else writes
     // it and nothing off this core reads it.
     CoordinatorCommitStats xowner_commit_;
+    // AH-T6's two legs. Walked only on a statement that crosses, so a
+    // colocated foreign key and a relation with none read no clock -
+    // `CoordinatorCommitStats`'s cost guard, unchanged.
+    ForeignKeyRoundStats fk_rounds_;
 
     // The physical optimizer's mode and R1 half-life (workplan PX06).
     // Shadow costs nothing at rest - the planner is pull-only, computed

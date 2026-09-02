@@ -382,6 +382,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             return true;
         };
         co_await sched::WaitUntil{&settled};
+        // **Leg 1 ends the instant the park resolves**, before a verdict is
+        // read, so nothing this core does with the answers is charged to
+        // the owners that gave them.
+        fk_rounds_.probe.Note(NowNs() - probe.sent_at_ns);
 
         // Collect, close, and only then decide. A deadline is settled
         // without having arrived, which is a refusal and not a verdict:
@@ -462,6 +466,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                                              ? TxnDecision::kAbort
                                              : TxnDecision::kCommit;
             const std::uint64_t request_id = next_remote_request_++;
+            const sched::MonoTimeNs decide_began_ns = NowNs();
             if (Status sent = txn_2pc_->Decide(request_id, deciding.ship_id(),
                                                deciding.last_txn_id(), decision, holders);
                 !sent.ok()) {
@@ -480,6 +485,11 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                     return txn_2pc_->Settled(request_id);
                 };
                 co_await sched::WaitUntil{&acked};
+                // **Leg 2**, and only where the decide was actually sent:
+                // the refusal arm above has nobody to wait for, and timing
+                // a leg nobody walked would report a fast release where
+                // there was none.
+                fk_rounds_.decide.Note(NowNs() - decide_began_ns);
                 txn_2pc_->Close(request_id);
             }
             deciding.ClearIntentHolders();
@@ -1519,6 +1529,14 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         leg("xowner_decision", xowner_commit_.decision);
         leg("xowner_decide", xowner_commit_.decide);
         leg("xowner_commit", xowner_commit_.whole);
+    }
+    if (fk_rounds_.observed()) {
+        // The two rounds `results-ai-t3-fk-crossing-cost` could only price
+        // together. `fk_release_decide_n` short of `fk_probe_round_n` is
+        // the transactions among them - their release rides the commit's
+        // own decide, which `xowner_decide` above already times.
+        leg("fk_probe_round", fk_rounds_.probe);
+        leg("fk_release_decide", fk_rounds_.decide);
     }
     if (shipped_statements_ != nullptr && shipped_statements_->commit_phase().observed()) {
         const ParticipantCommitStats& p = shipped_statements_->commit_phase();
@@ -4005,6 +4023,8 @@ Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& hel
         session.EnrolIntentHolder(group.owner_core);
     }
 
+    // Every request is away; the leg starts here (AH-T6).
+    pending.sent_at_ns = NowNs();
     out.pending_fk_probe = std::move(pending);
     return Status::OK();
 }

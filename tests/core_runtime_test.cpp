@@ -128,6 +128,14 @@ protected:
     // over the two creation pages, and a row-id block.
     void FundPeerForRelation(struct ForeignIndexRig& rig, catalog::Oid oid);
 
+    // A cross-owner foreign key pair, funded: `<base>p` on core 0 and
+    // `<base>c` on the peer, the child referencing the parent. The two
+    // placement policies are how a two-core rig puts one relation on each
+    // side - `kRotate` at two cores places *everything* on core 1, so the
+    // parent takes `kCreatingCore` for the length of its CREATE and nothing
+    // else (AH-T6).
+    void OpenCrossOwnerFkPair(struct ForeignIndexRig& rig, const std::string& base);
+
     static inline int counter_ = 0;
     std::filesystem::path dir_;
     sched::SystemClock clock_;
@@ -4294,6 +4302,33 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     ASSERT_NE(ins.rfind("ERR", 0), 0u) << ins;
 }
 
+void CoreRuntimeTest::OpenCrossOwnerFkPair(ForeignIndexRig& rig, const std::string& base) {
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    ASSERT_EQ(rig.dispatcher
+                  ->Dispatch("CREATE TABLE " + base + "p (id int64, v int64) BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    ASSERT_EQ(rig.dispatcher
+                  ->Dispatch("CREATE TABLE " + base + "c (id int64, pid int64 REFERENCES " +
+                             base + "p) BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+    auto parent_oid = rig.catalog2->FindTableOidByName(base + "p");
+    ASSERT_TRUE(parent_oid.ok()) << parent_oid.status().message();
+    auto child_oid = rig.catalog2->FindTableOidByName(base + "c");
+    ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
+    auto parent_row = rig.catalog2->GetSysTableRow(parent_oid.value());
+    ASSERT_TRUE(parent_row.ok());
+    ASSERT_EQ(parent_row.value().owner_core, 0u) << "the parent must be core 0's to cross";
+    // Sync before funding: `AdmitWritePages` faults each granted page for
+    // read before restamping it, and a creation page still only in core 0's
+    // cache abandons the whole grant silently.
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+    FundPeerForRelation(rig, child_oid.value());
+}
+
 void CoreRuntimeTest::FundPeerForRelation(ForeignIndexRig& rig, catalog::Oid oid) {
     auto row = rig.catalog2->GetSysTableRow(oid);
     ASSERT_TRUE(row.ok()) << row.status().message();
@@ -6778,6 +6813,12 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
     // statement (AH-R2), one intent granted and the same one released.
     const std::string peer_meta = rig.peer->dispatcher().Dispatch("SHOW META").response;
     EXPECT_NE(peer_meta.find("fk_probes_sent=1"), std::string::npos) << peer_meta;
+    // **And the two rounds are timed apart** (AH-T6). One probe round and
+    // one release decide, both walked by the core that owns the child -
+    // which is the split `results-ai-t3-fk-crossing-cost` priced together
+    // and named as owed.
+    EXPECT_NE(peer_meta.find("fk_probe_round_n=1"), std::string::npos) << peer_meta;
+    EXPECT_NE(peer_meta.find("fk_release_decide_n=1"), std::string::npos) << peer_meta;
     const std::string core0_meta = rig.dispatcher->Dispatch("SHOW META").response;
     EXPECT_NE(core0_meta.find("fk_intents_granted=1"), std::string::npos) << core0_meta;
     EXPECT_NE(core0_meta.find("fk_intents_released=1"), std::string::npos) << core0_meta;
@@ -6866,6 +6907,162 @@ TEST_F(CoreRuntimeTest, ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsT
     const std::string del =
         rig.dispatcher->Dispatch("DELETE FROM txnparent WHERE id = 7").response;
     EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
+}
+
+// ---- AH-T6: the verdicts the crossing carries, and the race it opens ----
+//
+// AI-T2 drove the *present-parent* fixture end to end and left the other
+// three of H-AH1's named, because two of them could not be asserted until
+// F1/F4 were fixed. They are here, and one of them turned out not to exist
+// in this shape at all - which is a finding rather than a gap, and is said
+// so in the cell that would have held it.
+
+TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnAbsentParentIsRefusedAndWritesNoRow) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ah6_absent");
+    OpenCrossOwnerFkPair(rig, "abs");
+
+    // No parent row was ever written, so the owner's answer is a verdict
+    // and not a wait: `kViolation` travels back over the ring and the
+    // child's core refuses on it.
+    DispatchOutcome out;
+    auto statement = rig.StartOnPeer("INSERT INTO absc VALUES (4242)", out);
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("FK_VIOLATION"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("which does not exist"), std::string::npos) << out.response;
+    // **Terminal, not retryable.** A violation re-run violates again, and a
+    // client that retried it would spin - which is the distinction F3 draws
+    // between this and the busy answer two cells below.
+    EXPECT_EQ(out.response.find("retryable=1"), std::string::npos) << out.response;
+
+    // And nothing was written. The check runs before the id is allocated
+    // (§2), so a refused row costs no Keystone id either - what this cell
+    // can see from outside is that the relation is empty.
+    const std::string rows = rig.peer->dispatcher().Dispatch("SELECT pid FROM absc").response;
+    EXPECT_EQ(rows.find("4242"), std::string::npos) << rows;
+
+    // **The intent is the other half of "nothing happened".** A violation
+    // promises nothing - there is no row to hold still - so the owner
+    // grants no intent, and a parent that was never vouched for is not
+    // pinned by a statement that failed.
+    const std::string meta = rig.dispatcher->Dispatch("SHOW META").response;
+    EXPECT_EQ(meta.find("fk_intents_granted=1"), std::string::npos) << meta;
+}
+
+TEST_F(CoreRuntimeTest, ACrossOwnerParentCannotBeRetiredAtAllSoThatFixtureCannotExist) {
+    // **H-AH1's "retired parent" cell, and the finding is that it has no
+    // cross-owner form.** Retiring a parent means deleting it, and §3a
+    // refuses a parent `DELETE` outright when the child lives on another
+    // core: RESTRICT needs an authoritative "no children" and this core
+    // cannot see them. So there is no way to *reach* the state the fixture
+    // describes, and a cell that pretended to would be asserting against a
+    // row it could not have retired.
+    //
+    // What is asserted instead is the reason: the delete is refused, by
+    // name, before it can create the state. The colocated form of the same
+    // fixture is reachable and is the pair below.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ah6_retire");
+    OpenCrossOwnerFkPair(rig, "ret");
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO retp VALUES (7, 5)").response.rfind("ERR", 0),
+              0u);
+
+    const std::string del = rig.dispatcher->Dispatch("DELETE FROM retp WHERE id = 7").response;
+    EXPECT_EQ(del.rfind("ERR ", 0), 0u) << del;
+    EXPECT_NE(del.find("cannot see its rows"), std::string::npos) << del;
+    EXPECT_NE(del.find("NOT_IMPLEMENTED"), std::string::npos) << del;
+
+    // The row is still there, which is what "fail-closed" means here: the
+    // refusal did not half-delete anything.
+    const std::string rows = rig.dispatcher->Dispatch("SELECT v FROM retp").response;
+    EXPECT_NE(rows.find("5"), std::string::npos) << rows;
+}
+
+TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnInFlightParentAnswersRetryable) {
+    // H-AH1's fourth fixture. The parent row exists but belongs to a
+    // transaction that has not ended, so the owner's check - which reads
+    // **latest state**, minted on the owner rather than carried on the wire
+    // (§4) - can say neither pass nor violation. F3's answer is busy, and
+    // busy is `TXN_CONFLICT` with the retryable bit set, because the right
+    // answer depends on how the other transaction ends.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ah6_inflight");
+    OpenCrossOwnerFkPair(rig, "infl");
+
+    // Core 0's own transaction, left open across the child's statement.
+    Session writer;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &writer);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+    DispatchOutcome wrote;
+    auto insert = rig.Start("INSERT INTO inflp VALUES (9, 5)", wrote, &writer);
+    ASSERT_TRUE(rig.Drive(*insert)) << wrote.response;
+    ASSERT_NE(wrote.response.rfind("ERR", 0), 0u) << wrote.response;
+
+    DispatchOutcome out;
+    auto child = rig.StartOnPeer("INSERT INTO inflc VALUES (9)", out);
+    ASSERT_TRUE(rig.Drive(*child)) << out.response;
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("retryable=1"), std::string::npos) << out.response;
+
+    // **And the busy answer granted nothing**, which is what makes it safe
+    // to retry: an intent taken on a row the check could not vouch for
+    // would pin a parent for a statement that never ran.
+    const std::string meta = rig.dispatcher->Dispatch("SHOW META").response;
+    EXPECT_EQ(meta.find("fk_intents_granted=1"), std::string::npos) << meta;
+
+    DispatchOutcome rolled;
+    auto rollback = rig.Start("ROLLBACK", rolled, &writer);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rolled.response;
+}
+
+TEST_F(CoreRuntimeTest, AParentDeleteMeetingALiveForeignIntentAnswersBusyBeforeAnythingElse) {
+    // **H-AH4, at the dispatcher rather than in miniature.** The unit cell
+    // `AGrantedIntentIsWhatAParentDeleteWouldHaveToMeet` puts an intent in
+    // the table by hand; this one has a real statement put it there, parked
+    // mid-flight, and asks what a parent `DELETE` does while it is held.
+    //
+    // The ordering is the assertion. `CheckNoChildrenBeforeDelete` consults
+    // `FkIntentTable` **before** the per-child loop, so the busy answer wins
+    // over §3a's "cannot see its rows" - and it must, because they say
+    // different things: the intent refusal is *retryable* (a transaction is
+    // in flight and the answer depends on how it ends) where §3a's is
+    // terminal (nothing built the fan-out). A client that got the terminal
+    // one here would stop retrying a statement that was about to succeed.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ah6_race");
+    OpenCrossOwnerFkPair(rig, "race");
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO racep VALUES (7, 5)").response.rfind("ERR", 0),
+              0u);
+
+    DispatchOutcome out;
+    auto statement = rig.StartOnPeer("INSERT INTO racec VALUES (7)", out);
+    ASSERT_EQ(statement->Poll(), sched::PollResult::kSuspended) << out.response;
+    rig.Pump();  // the probe crosses and is answered: the intent is live
+    ASSERT_EQ(rig.fk_intents.live_rows(), 1u) << "no intent to race";
+
+    const std::string busy =
+        rig.dispatcher->Dispatch("DELETE FROM racep WHERE id = 7").response;
+    EXPECT_EQ(busy.rfind("ERR ", 0), 0u) << busy;
+    EXPECT_NE(busy.find("relied on by a foreign key check running on another core"),
+              std::string::npos)
+        << busy;
+    EXPECT_NE(busy.find("retryable=1"), std::string::npos) << busy;
+    // Not the reverse check's refusal, which sits one step further on.
+    EXPECT_EQ(busy.find("cannot see its rows"), std::string::npos) << busy;
+
+    // The child's statement finishes and its decide releases the intent -
+    // and only then does the *other* refusal become the one a client sees.
+    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    ASSERT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
+    rig.Pump(8);
+    EXPECT_EQ(rig.fk_intents.live_rows(), 0u);
+    const std::string after =
+        rig.dispatcher->Dispatch("DELETE FROM racep WHERE id = 7").response;
+    EXPECT_NE(after.find("cannot see its rows"), std::string::npos)
+        << "the refusal did not hand over to §3a's: " << after;
 }
 
 

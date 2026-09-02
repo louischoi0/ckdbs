@@ -71,13 +71,15 @@ def write_conf(workdir, port, cores, durability=None):
             f.write(f"durability = {durability}\n")
         f.write(f"data_file = {os.path.join(workdir, 's.db')}\n"
                 f"port = {port}\ncores = {cores}\n"
-                # `rotate` never places on core 0, so relations land on peers
-                # and core 0 stays the client's - the arrangement a
-                # cross-owner foreign key needs. `peer_listeners` is what
-                # lets a session be opened *on* a named core, which is the
-                # only way to read that core's counters.
-                "placement = rotate\npeer_listeners = on\n"
                 f"log_file = s.log\nlog_dir = {workdir}\nlog_level = warn\n")
+        if cores > 1:
+            # `rotate` never places on core 0, so relations land on peers
+            # and core 0 stays the client's - the arrangement a cross-owner
+            # foreign key needs. `peer_listeners` is what lets a session be
+            # opened *on* a named core, which is the only way to read that
+            # core's counters, and it is refused at one core because there
+            # is no peer to listen.
+            f.write("placement = rotate\npeer_listeners = on\n")
     return conf
 
 
@@ -174,6 +176,19 @@ def time_inserts(conn, sql, rows):
     return samples, retries, None
 
 
+def values_of(table, pk, per_statement):
+    """One INSERT naming `per_statement` child rows, all against one parent.
+
+    **All against one parent on purpose** (H-AH2). The extraction pass
+    deduplicates by (parent relation, pk) before it groups by owner, so a
+    hundred rows naming one parent are one probe round - which is the
+    hypothesis, and a statement whose rows named a hundred different parents
+    would measure the cap instead.
+    """
+    tuples = ','.join(['(%s)' % pk] * per_statement)
+    return f'INSERT INTO {table} VALUES {tuples}'
+
+
 def fk_counters(conn):
     reply = conn.cmd('SHOW META')
     return {name: int(field(reply, name) or 0)
@@ -210,6 +225,63 @@ def gate_block(server, args, tag):
         if err:
             return {'error': err}
         return {'owner_core': owner, 'us': samples, 'retries': retries}
+    finally:
+        if conns:
+            for group in conns.values():
+                for c in group:
+                    c.close()
+        stop(proc, args.port)
+
+
+# ---- H-AH1: the hoist, on the colocated path it must not slow -------------
+
+def hoist_block(server, args, tag):
+    """One block of colocated foreign-key writes, on **one core**.
+
+    AH-T1 moved the forward check's descent out of the write scope: a
+    statement resolves every parent it names once, at the dispatch fork, and
+    the per-row check answers from what it holds. H-AH1 says that costs the
+    colocated path nothing - and the colocated path is where the population
+    lives, so a hoist that bought the crossing at its expense would be a bad
+    trade made quietly.
+
+    **One core, deliberately.** The pre-hoist arm refuses a peer write to an
+    FK-linked relation outright (the funding gate work order AI later
+    narrowed), so a peer-owned colocated pair is not a shape both arms admit.
+    A single-core instance has no gate, no ring and no shipping in the way,
+    and it exercises exactly the code the hoist moved.
+    """
+    workdir = os.path.join(args.workdir, f'hoist-{tag}')
+    shutil.rmtree(workdir, ignore_errors=True)
+    os.makedirs(workdir, exist_ok=True)
+    conf = write_conf(workdir, args.port, 1, args.durability)
+    proc = start(conf, workdir, server)
+    up, why = wait_up(args.port, proc, args.mount_timeout)
+    if not up:
+        stop(proc, args.port)
+        return {'error': f'mount: {why}'}
+    conns = None
+    try:
+        conns, _ = collect_connections(args.port, {0: 1}, args.max_connects)
+        client = conns[0][0]
+        for sql in ('CREATE TABLE hp (id int64, v int64) BTREE',
+                    'CREATE TABLE hc (id int64, pid int64 REFERENCES hp)'):
+            reply = retrying(client, sql)
+            if reply.startswith('ERR'):
+                return {'error': f'setup: {sql}: {reply[:160]}'}
+        reply = retrying(client, 'INSERT INTO hp VALUES (5)')
+        if reply.startswith('ERR'):
+            return {'error': f'seed: {reply[:160]}'}
+        parent_pk = field(reply, 'id')
+        cells = []
+        time_inserts(client, values_of('hc', parent_pk, 1), args.warm)
+        for per in args.per_statement:
+            samples, retries, err = time_inserts(
+                client, values_of('hc', parent_pk, per), args.rows)
+            if err:
+                return {'error': f'per={per}: {err}'}
+            cells.append({'per_statement': per, 'us': samples, 'retries': retries})
+        return {'cells': cells}
     finally:
         if conns:
             for group in conns.values():
@@ -295,30 +367,128 @@ def crossing_run(args):
         crossing_child_core = int(owners['cx'])
         watcher = {core: conns[core][0] for core in (parent_core, crossing_child_core)}
         parent_pk = owners['parent_pk']
-        shapes = {'colocated': f'INSERT INTO cc VALUES ({parent_pk})',
-                  'crossing': f'INSERT INTO cx VALUES ({parent_pk})'}
+        tables = {'colocated': 'cc', 'crossing': 'cx'}
+        for table in tables.values():
+            time_inserts(client, values_of(table, parent_pk, 1), args.warm)
+        for per in args.per_statement:
+            for block in range(args.blocks):
+                for name in ('colocated', 'crossing'):
+                    sql = values_of(tables[name], parent_pk, per)
+                    before = {c: fk_counters(w) for c, w in watcher.items()}
+                    samples, retries, err = time_inserts(client, sql, args.rows)
+                    after = {c: fk_counters(w) for c, w in watcher.items()}
+                    if err:
+                        out['error'] = f'{name} per={per}: {err}'
+                        return out
+                    out['blocks'].append({
+                        'shape': name,
+                        'per_statement': per,
+                        'block': block,
+                        'us': samples,
+                        'retries': retries,
+                        'probes_sent': (after[crossing_child_core]['fk_probes_sent'] -
+                                        before[crossing_child_core]['fk_probes_sent']),
+                        'intents_granted': (after[parent_core]['fk_intents_granted'] -
+                                            before[parent_core]['fk_intents_granted']),
+                        'intents_released': (after[parent_core]['fk_intents_released'] -
+                                             before[parent_core]['fk_intents_released']),
+                        'intents_live_after': after[parent_core]['fk_intents_live'],
+                    })
+    finally:
+        if conns:
+            for group in conns.values():
+                for c in group:
+                    c.close()
+        stop(proc, args.port)
+    return out
+
+
+# ---- H-AH2's other half: cost counts owners --------------------------------
+
+def owners_run(args):
+    """One foreign owner against two, at four cores.
+
+    AH-R2 says a statement's cross-owner cost is a function of **how many
+    distinct owners its parents live on**, never of its row count. The sweep
+    in `crossing` holds the owner count at one and varies the rows; this
+    holds the rows at one and varies the owners, which is the other axis of
+    the same claim.
+
+    Four cores, because three cannot pose the question: the child must sit
+    on a core that owns *neither* parent, so two foreign parents need three
+    peers. `rotate` cycles the non-system cores in create order, so the
+    order of the creates is again the placement, and it is asserted.
+
+    **Both children take two values and differ only in how many of them are
+    foreign keys.** `one`'s second column references nothing, so the two
+    statements are the same width, the same row count and the same work
+    everywhere except the number of owners that must be asked.
+    """
+    workdir = os.path.join(args.workdir, 'owners')
+    shutil.rmtree(workdir, ignore_errors=True)
+    os.makedirs(workdir, exist_ok=True)
+    conf = write_conf(workdir, args.port, 4, args.durability)
+    proc = start(conf, workdir, args.server)
+    up, why = wait_up(args.port, proc, args.mount_timeout)
+    if not up:
+        stop(proc, args.port)
+        return {'error': f'mount: {why}'}
+    out = {'blocks': []}
+    conns = None
+    try:
+        conns, attempts = collect_connections(args.port, {0: 1, 1: 1, 2: 1, 3: 1},
+                                              args.max_connects)
+        out['connect_attempts'] = attempts
+        client = conns[0][0]
+        stmts = [
+            'CREATE TABLE op1 (id int64, v int64) BTREE',                    # core 1
+            'CREATE TABLE op2 (id int64, v int64) BTREE',                    # core 2
+            'CREATE TABLE otwo (id int64, a int64 REFERENCES op1, '
+            'b int64 REFERENCES op2)',                                       # core 3
+            'CREATE TABLE osp4 (id int64, v int64)',                         # core 1
+            'CREATE TABLE osp5 (id int64, v int64)',                         # core 2
+            'CREATE TABLE oone (id int64, a int64 REFERENCES op1, b int64)',  # core 3
+        ]
+        for sql in stmts:
+            reply = retrying(client, sql)
+            if reply.startswith('ERR'):
+                out['error'] = f'setup: {sql}: {reply[:160]}'
+                return out
+        owners = {t: owner_of(client, t) for t in ('op1', 'op2', 'otwo', 'oone')}
+        out['owners'] = owners
+        if owners['otwo'] != owners['oone']:
+            out['error'] = f'the two children are not on one core: {owners}'
+            return out
+        if owners['otwo'] in (owners['op1'], owners['op2']):
+            out['error'] = f'a parent shares the child core: {owners}'
+            return out
+        if owners['op1'] == owners['op2']:
+            out['error'] = f'the two parents share an owner: {owners}'
+            return out
+        pks = {}
+        for parent in ('op1', 'op2'):
+            reply = retrying(client, f'INSERT INTO {parent} VALUES (5)')
+            if reply.startswith('ERR'):
+                out['error'] = f'seed {parent}: {reply[:160]}'
+                return out
+            pks[parent] = field(reply, 'id')
+        child_core = int(owners['otwo'])
+        watcher = conns[child_core][0]
+        shapes = {'one-owner': f"INSERT INTO oone VALUES ({pks['op1']}, 1)",
+                  'two-owners': f"INSERT INTO otwo VALUES ({pks['op1']}, {pks['op2']})"}
         for sql in shapes.values():
             time_inserts(client, sql, args.warm)
         for block in range(args.blocks):
-            for name in ('colocated', 'crossing'):
-                before = {c: fk_counters(w) for c, w in watcher.items()}
+            for name in ('one-owner', 'two-owners'):
+                before = fk_counters(watcher)
                 samples, retries, err = time_inserts(client, shapes[name], args.rows)
-                after = {c: fk_counters(w) for c, w in watcher.items()}
+                after = fk_counters(watcher)
                 if err:
                     out['error'] = f'{name}: {err}'
                     return out
                 out['blocks'].append({
-                    'shape': name,
-                    'block': block,
-                    'us': samples,
-                    'retries': retries,
-                    'probes_sent': (after[crossing_child_core]['fk_probes_sent'] -
-                                    before[crossing_child_core]['fk_probes_sent']),
-                    'intents_granted': (after[parent_core]['fk_intents_granted'] -
-                                        before[parent_core]['fk_intents_granted']),
-                    'intents_released': (after[parent_core]['fk_intents_released'] -
-                                         before[parent_core]['fk_intents_released']),
-                    'intents_live_after': after[parent_core]['fk_intents_live'],
+                    'shape': name, 'block': block, 'us': samples, 'retries': retries,
+                    'probes_sent': after['fk_probes_sent'] - before['fk_probes_sent'],
                 })
     finally:
         if conns:
@@ -331,13 +501,16 @@ def crossing_run(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--mode', choices=('gate-ab', 'crossing'), required=True)
+    ap.add_argument('--mode', choices=('gate-ab', 'crossing', 'hoist-ab', 'owners'),
+                    required=True)
     ap.add_argument('--server', default=os.path.join(ROOT, 'build-release', 'kds_server'))
     ap.add_argument('--server-a')
     ap.add_argument('--server-b')
     ap.add_argument('--cores', type=int, default=3)
     ap.add_argument('--port', type=int, default=15496)
     ap.add_argument('--rows', type=int, default=400)
+    ap.add_argument('--per-statement', default='1',
+                    help='comma-separated child rows per INSERT, all naming one parent')
     ap.add_argument('--warm', type=int, default=40)
     ap.add_argument('--blocks', type=int, default=3)
     ap.add_argument('--max-connects', type=int, default=64)
@@ -347,9 +520,11 @@ def main():
     ap.add_argument('--mount-timeout', type=float, default=30.0)
     ap.add_argument('--json', default=None)
     args = ap.parse_args()
+    args.per_statement = [int(v) for v in str(args.per_statement).split(',') if v]
 
     result = {'mode': args.mode, 'rows': args.rows, 'blocks': args.blocks,
-              'cores': args.cores, 'durability': args.durability or 'default'}
+              'cores': args.cores, 'durability': args.durability or 'default',
+              'per_statement': args.per_statement}
     failed = False
 
     if args.mode == 'gate-ab':
@@ -372,6 +547,44 @@ def main():
                           f'p90={p["p90"]:.1f}us mean={p["mean"]:.1f}us '
                           f'retries={cell["retries"]}')
                 result['blocks'].append(cell)
+    elif args.mode == 'hoist-ab':
+        if not args.server_a or not args.server_b:
+            print('hoist-ab needs --server-a and --server-b', file=sys.stderr)
+            return 2
+        arms = (('a-prehoist', args.server_a), ('b-posthoist', args.server_b))
+        result['blocks'] = []
+        for block in range(args.blocks):
+            for name, server in arms:
+                cell = hoist_block(server, args, f'{name}-{block}')
+                cell['arm'] = name
+                cell['block'] = block
+                if 'error' in cell:
+                    failed = True
+                    print(f'{name} block {block}: ERROR {cell["error"]}')
+                else:
+                    for inner in cell['cells']:
+                        p = percentiles(inner['us'])
+                        print(f'{name} per={inner["per_statement"]:<4} block {block}: '
+                              f'p50={p["p50"]:.1f}us p90={p["p90"]:.1f}us '
+                              f'mean={p["mean"]:.1f}us retries={inner["retries"]}')
+                result['blocks'].append(cell)
+    elif args.mode == 'owners':
+        run = owners_run(args)
+        result.update(run)
+        if 'error' in run:
+            failed = True
+            print(f'ERROR {run["error"]}')
+        else:
+            print(f'owners: {run["owners"]}')
+            for cell in run['blocks']:
+                p = percentiles(cell['us'])
+                print(f'{cell["shape"]:>11} block {cell["block"]}: p50={p["p50"]:.1f}us '
+                      f'p90={p["p90"]:.1f}us mean={p["mean"]:.1f}us '
+                      f'probes={cell["probes_sent"]} retries={cell["retries"]}')
+                want = args.rows * (1 if cell['shape'] == 'one-owner' else 2)
+                if cell['probes_sent'] != want:
+                    failed = True
+                    print(f'  FAIL: {cell["probes_sent"]} rounds where {want} were owed')
     else:
         run = crossing_run(args)
         result.update(run)
@@ -382,17 +595,20 @@ def main():
             print(f'owners: {run["owners"]}')
             for cell in run['blocks']:
                 p = percentiles(cell['us'])
-                print(f'{cell["shape"]:>9} block {cell["block"]}: p50={p["p50"]:.1f}us '
+                print(f'{cell["shape"]:>9} per={cell["per_statement"]:<4} '
+                      f'block {cell["block"]}: p50={p["p50"]:.1f}us '
                       f'p90={p["p90"]:.1f}us mean={p["mean"]:.1f}us '
                       f'probes={cell["probes_sent"]} granted={cell["intents_granted"]} '
                       f'live={cell["intents_live_after"]} retries={cell["retries"]}')
                 if cell['shape'] == 'colocated' and cell['probes_sent'] != 0:
                     failed = True
                     print('  FAIL: the colocated arm probed')
+                # **One round per statement, whatever its row count** - the
+                # hypothesis, checked rather than reported.
                 if cell['shape'] == 'crossing' and cell['probes_sent'] != args.rows:
                     failed = True
                     print(f'  FAIL: the crossing arm sent {cell["probes_sent"]} rounds '
-                          f'for {args.rows} statements')
+                          f'for {args.rows} statements of {cell["per_statement"]} rows')
                 if cell['shape'] == 'crossing' and cell['intents_live_after'] != 0:
                     failed = True
                     print('  FAIL: an intent outlived its autocommit statement')

@@ -121,4 +121,26 @@ struct ParticipantCommitStats {
     }
 };
 
+// **The foreign key's two rounds** (AH-T6, `foreign-keys.md` §2a/§2b).
+//
+//   fork: last probe sent ──(1)──> every owner's reply settled
+//   autocommit: decide sent ──(2)──> every holder acknowledged
+//
+// The same shape and the same reason as the commit legs above: three
+// results files could say a cross-owner write costs more and none could say
+// **which round**. `results-ai-t3-fk-crossing-cost` prices the two together
+// at +56.8 us and names the split as owed; these are what pay it.
+//
+// (2) exists only on an autocommit statement. Inside a transaction the
+// release rides the commit's own decide, which `CoordinatorCommitStats`
+// already times - so a transaction's release is not missing from the
+// instrument, it is in the leg above under a different name, and a reader
+// comparing the two shapes must not add them.
+struct ForeignKeyRoundStats {
+    PhaseLeg probe;   // (1)
+    PhaseLeg decide;  // (2)
+
+    bool observed() const noexcept { return probe.count != 0 || decide.count != 0; }
+};
+
 }  // namespace kds::server
