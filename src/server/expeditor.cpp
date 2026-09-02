@@ -796,7 +796,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // AL-S1c): the stream arms its latch, and every peer appends through it
     // rather than opening one of its own. Unshared otherwise, which is one
     // branch and no atomic on the `cores = 1` path.
-    wal_config.shared_stream = expeditor->database_->superblock.single_stream();
+    // **And only above one core.** `single_stream()` is true of every
+    // database this build creates, `cores = 1` included - the shipped
+    // default - and arming the latch there would put a mutex on every
+    // logged page mutation for a section no second thread can reach. AR0's
+    // G2 is that `cores = 1` pays nothing, and `latch.hpp` calls it a
+    // property of the code rather than of a build flag; this conjunct is
+    // where that stays true. `core_count` is pinned at bootstrap and
+    // validated at every mount, so it cannot disagree with the peers that
+    // actually exist, and `WalManager::Attach` refuses an unshared stream -
+    // so getting this wrong fails the mount loudly rather than racing.
+    wal_config.shared_stream = expeditor->database_->superblock.single_stream() &&
+                               expeditor->database_->superblock.core_count() > 1;
     auto wal = wal::WalManager::Open(expeditor->log_device_.get(), expeditor->clock_,
                                      /*core_id=*/0, wal_config);
     if (!wal.ok()) return wal.status();

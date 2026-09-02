@@ -918,10 +918,23 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     EXPECT_EQ(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u);
 
     // Core 0 speaks, the warm-up ends, and the one anchor moves.
-    ASSERT_TRUE(receiver.Publish({/*core_id=*/0, 4096, 4096, 8192, 0}).ok());
+    //
+    // **Above the peer, deliberately.** The fold selects the *lowest*
+    // `redo_start_lsn` and breaks a tie by ascending core id, so a stand-in
+    // sharing the peer's number would win it - and this test would then
+    // assert its own synthetic record back to itself while proving nothing
+    // about the peer's anchor reaching page 0, which is its whole subject.
+    const wal::Lsn peer_point = peer.value()->wal().appended_lsn();
+    ASSERT_TRUE(receiver
+                    .Publish({/*core_id=*/0, peer_point + 1, peer_point + 1, peer_point + 1, 0})
+                    .ok());
     EXPECT_EQ(receiver.folded_cores(), 2u);
     const std::uint64_t folded = core0_->superblock.wal_anchor(0).checkpoint_lsn;
     EXPECT_GT(folded, 0u) << "every core has published and the anchor still has not moved";
+    // And it is the *peer's* record that landed, not core 0's stand-in -
+    // which is the sentence this test's name makes.
+    EXPECT_NE(folded, peer_point + 1)
+        << "slot 0 carries the stand-in, so the peer's anchor never reached the superblock";
 
     // A second checkpoint advances it rather than republishing the first -
     // the cadence's whole purpose - and it is still slot 0 that moves.
@@ -1027,9 +1040,18 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
             // is why AL-R4 leaves a single gathered checkpoint to M1. A
             // stand-in that stayed at its first LSN would make this test
             // measure that, rather than the bound it is about.
+            //
+            // Just above the peer's own point, not an arbitrary large
+            // number: under one stream every core's anchor lives in one LSN
+            // space bounded by the instance's append point, and an anchor
+            // claiming a gigabyte is a record no core of this volume could
+            // have published. It is inert only while it loses the minimum -
+            // and if it ever won, `Analyze`'s honesty check would refuse
+            // the mount rather than fail this assertion.
+            const wal::Lsn peer_point = peer.value()->wal().appended_lsn();
             ASSERT_TRUE(receiver
-                            .Publish({/*core_id=*/0, /*checkpoint=*/1u << 30,
-                                      /*redo_start=*/1u << 30, /*durable=*/1u << 30, 0})
+                            .Publish({/*core_id=*/0, peer_point + 1, peer_point + 1,
+                                      peer_point + 1, 0})
                             .ok());
             // Four now: the peer's mount checkpoint, core 0's two, and the
             // shutdown anchor this line is about.
@@ -1146,6 +1168,49 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
 // attach to, must refuse. Opening one of its own would write records into
 // a file no mount of this volume ever replays - the failure would surface
 // as lost rows after a crash, arbitrarily later.
+// **The cell that would have caught the cutover's crash.** Under one stream
+// a peer opens no log device of its own, and the assertion resume was still
+// handed `*log_device_` - a reference formed from a null `unique_ptr`, then
+// a virtual call on it. Nothing found it because the resume short-circuits
+// when the catalog lists no assertions, and no test opened a single-stream
+// peer that owned one.
+//
+// The relation is core 0's here, so the peer counts the assertion as
+// foreign and adopts nothing - which is the point: the crash was in
+// *reaching* the scan, before any of that was decided.
+TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMounts) {
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "asserted",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(exec::InsertAssertion(core0_->catalog, *core0_store_, /*wal=*/nullptr,
+                                      /*id=*/1, oid.value(), "a_bound",
+                                      "CHECK COUNT(*) <= 100", kInvalidPageId)
+                    .ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    // The instance's log, as the cutover builds it.
+    auto shared_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
+    ASSERT_TRUE(shared_device.ok()) << shared_device.status().message();
+    wal::WalManagerConfig shared_config;
+    shared_config.shared_stream = true;
+    auto owner = wal::WalManager::Open(shared_device.value().get(), clock_, /*core_id=*/0,
+                                       shared_config);
+    ASSERT_TRUE(owner.ok()) << owner.status().message();
+    owner.value()->StartWriter();
+
+    CoreRuntime::Config config = ConfigFor(1);
+    config.next_trx_id = core0_->superblock.next_trx_id();
+    config.log_topology = kSingleStream;
+    config.shared_stream = owner.value()->stream();
+    config.shared_writer = owner.value()->writer();
+
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    // It reached the resume and came back: the assertion is core 0's, so
+    // this core counted it foreign rather than adopting it.
+    EXPECT_GE(peer.value()->recovery().assertions_foreign, 1u);
+}
+
 TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) {
     CoreRuntime::Config config = ConfigFor(1);
     config.log_topology = kSingleStream;  // and no shared_stream/shared_writer

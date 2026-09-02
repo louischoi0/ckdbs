@@ -472,6 +472,45 @@ first, which is what S1a now is.
 | AL-S5 | **Built 2026-09-02**, and the ruling it enacts was wrong about its own subject. AL-R6 said analysis's handoff erase "becomes a no-op and is deleted" under one stream. It does not become a no-op — it becomes **unsound**, which is a different reason and a sharper one. What licenses the erase per core is not the handoff but the sentence around it: *this stream* owes the page nothing below this LSN, which holds because a handoff is logged by the **receiver** as an acquisition and the receiver's stream has nothing for the page below it (`core_runtime.cpp`'s `AdmitWritePages` says so). One stream also holds the **giver's** records for that page, and erasing drops them from the dirty table — which makes redo's not-dirty filter skip every one of them. So the erase is skipped under one stream, and the handoff seeds nothing either, being an ownership fact rather than a mutation; `max_page_id` still takes it, which the erase never governed. Keeping the entry costs redo re-applying records the image may already hold, idempotent under the `page_lsn` gate: slower at worst, where the erase is wrong at worst. This also gives `AnalysisStart::single_stream` a reader in `Analyze`, which the AL-S4b review had objected it lacked. Cells: under one stream the giver's record still seeds the page, the handoff does not become its recLSN, a page named only by a handoff is still not dirty, and the high-water still rises past it — with the per-core erase cell unchanged beside it. `docs/spec/page-lsn-cross-stream.md` now carries a **superseded-in-part** header saying, rule by rule, what one stream keeps and what it drops — including that AR0 §7's flat "superseded" overstates it, since a pre-change volume is still governed by every word. **Suite: 3248/3248** (`ctest -j8`, Debug). Overhead not measured (the interleaved A/B is suspended by operator decision) |
 | AL-S6..S9 | not started |
 
+## AL-7c — AL-S1c's review record
+
+**Reviewed 2026-09-02** (`critics-developer`), and it found the worst
+defect of the milestone. It also verified independently what the cutover
+rests on: the lock ordering with the whole live set in play (no path holds
+the stream latch across a ring send, a park or a store operation), the
+watermark under two flushers, the group-commit bookkeeping across cores,
+the prepare floor surviving the fold, the crash path end to end, and that
+reverse-order destruction tears peers down before the stream they borrow.
+
+Three findings applied, all live on the default multi-core path:
+
+| finding | what was done |
+|---|---|
+| **A peer dereferences a null `log_device_`** — the cutover made it null on the attached branch, and the assertion resume was still handed `*log_device_`. A `cores > 1` volume with one assertion **segfaults at mount, deterministically**. Nothing caught it because the resume short-circuits on an empty assertion list and no test opened a single-stream peer that had one | the device now comes from the stream, which answers correctly in both topologies; and the cell that would have caught it exists |
+| **The assertion scan's floor was the fold's `checkpoint_lsn`** — a *third* conflation in that call, after the `owner_core`/`stream_core` pair. The fold selects on `redo_start_lsn`, so the record it carries belongs to whichever core had the lowest one, and its `checkpoint_lsn` can sit past an idle core's own snapshot. Missing the base is not a slow scan: it is `NoteUnenforceable` for every assertion that core owns | under one stream the scan starts at `redo_start_lsn`, the field the fold does bound — at or below every core's redo start, which is at or below every core's own `CHECKPOINT_BEGIN` |
+| **`cores = 1` armed the latch.** `single_stream()` is true of every new database including the shipped single-core default, so a mutex landed on every logged page mutation for a section no second thread can reach — retiring AR0's G2 silently, which `latch.hpp` calls a property of the code rather than of a build flag | one conjunct on `core_count() > 1` |
+
+Two test findings applied. The anchor cell had become a **tautology**: the
+stand-in core-0 publish tied the peer at 4096 and won the tie (strict `<`,
+ascending), so slot 0 carried the test's own synthetic record and the
+peer's anchor never reached the superblock the test is named for. It now
+publishes above the peer and pins the winner by identity. And the other
+test's `1u << 30` stand-in was inert but a landmine — an anchor no core of
+this volume could publish, which if it ever won the fold would refuse the
+mount through `Analyze`'s honesty check rather than fail an assertion; it
+is now just above the peer's own append point.
+
+**Recorded, not yet done.** `wal_syncs` is structurally 0 on a peer while
+`wal_interval_syncs` counts, so the block's own subtraction rule
+underflows — AL-S6's. An idle peer's drain no longer takes its early-out,
+because `appended_lsn()` is now the instance's, so every peer issues a
+sync request per D3 interval with nothing of its own staged — AL-S6's, and
+AL-S8 would otherwise measure it as noise it cannot attribute. Core 0's
+pool keeps clean frames for peer-owned pages after the mount pass, with no
+reachable stale read today. And **nothing in the tree constructs an
+`Expeditor`** — every server-level test hand-assembles the shape `Serve`
+uses, which is the gap both live defects sat in.
+
 ## AL-7b — AL-S4b's review record (in progress)
 
 **Reviewed 2026-09-02** (`critics-developer`) against the two pieces built

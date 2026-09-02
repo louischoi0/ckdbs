@@ -468,7 +468,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // scanned from, so the two cannot disagree about which checkpoint is
     // the base.
     runtime->recovery_ = ResumeAssertionsAfterRecovery(
-        *runtime->catalog_, *runtime->store_, *runtime->log_device_,
+        *runtime->catalog_, *runtime->store_,
+        // **The stream's device, not `log_device_`** - which is null under
+        // one stream, where this core opened none (`core_runtime.hpp`).
+        // Asking the stream is right in both topologies: it answers core
+        // 0's device when attached and this core's when not.
+        *runtime->wal_->stream()->device(),
         /*owner_core=*/config.core_id,
         // **The stream's core, which is not this core under one stream.**
         // The assertions are this core's to adopt - only their owner can
@@ -476,8 +481,26 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // and the scanner validates every segment header against the id it
         // is given (`mount_recovery.hpp` says what each answers).
         /*stream_core=*/config.log_topology == kSingleStream ? 0 : config.core_id,
-        config.anchor.checkpoint_lsn, runtime->dispatcher_->assertions(), runtime->recovery_,
-        log);
+        // **And `redo_start_lsn` under one stream, not `checkpoint_lsn`.**
+        // The scan must begin at or before *this* core's own first
+        // `ASSERT_SNAPSHOT`, which is written just after its own
+        // `CHECKPOINT_BEGIN`. Per core the anchor is this core's, so its
+        // `checkpoint_lsn` is exactly that point. Under one stream the
+        // anchor is the fold, and the fold selects on `redo_start_lsn`:
+        // the record it carries belongs to whichever core had the lowest
+        // one, so its `checkpoint_lsn` can sit *past* an idle core's
+        // snapshot. Missing the base is not a slow scan - it is
+        // `NoteUnenforceable` for every assertion that core owns, and the
+        // relation's writes refused for the life of the mount.
+        // `redo_start_lsn` is the field the fold does bound: it is at or
+        // below every core's redo start, which is at or below every core's
+        // own `CHECKPOINT_BEGIN`. Widening the scan is safe - the pass
+        // folds `ASSERT_*` records after whatever base it finds, and
+        // `DedupeEntryLinkage` exists for that overlap - and it is no wider
+        // than the redo pass that just ran.
+        config.log_topology == kSingleStream ? config.anchor.redo_start_lsn
+                                             : config.anchor.checkpoint_lsn,
+        runtime->dispatcher_->assertions(), runtime->recovery_, log);
 
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {
         log->Debug("core", "core " + std::to_string(config.core_id) +
