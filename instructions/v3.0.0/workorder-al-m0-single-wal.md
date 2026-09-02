@@ -208,19 +208,23 @@ lock. What M0 builds instead:
   a full buffer returns `OutOfSpace` (`:204-209`). A bare `fetch_add`
   can express none of the three — the roll is not reservable and a
   refused reservation would have to be unwound. So the shared stream
-  takes **one spin latch** (`base/spin_latch.hpp`) across the size
-  checks, the roll, the encode and the bump, and the LSN is fixed under
-  it. `StampPageLsn` and the frame's `recLSN` discipline (`page.md` §8)
+  takes **one latch** (`base/latch.hpp`) across the size checks, the
+  roll, the encode and the bump, and the LSN is fixed under it. `StampPageLsn` and the frame's `recLSN` discipline (`page.md` §8)
   are unchanged, the LSN still being known when `Append` returns.
   **At `cores = 1` the stream is opened unshared and the latch is a null
   pointer**: one branch per guard, which is `sched.md` §5's accepted
   cost class ("phase 3 costs one null test").
-- **What the latch covers, and the one cost it is not free of.** The
-  flush (staging buffer → segment) happens **under** the latch, so a
-  concurrent appender waits out a page-cache copy; the device **sync**
-  happens outside it, because milliseconds under a spin latch is not a
-  trade anything justifies. AL-S8 measures the spin; a swap-and-write
-  outside the latch is the follow-on if it shows.
+- **What the latch covers, and why it is a mutex.** The flush (staging
+  buffer → segment) happens **under** the latch, and so does the roll's
+  `CreateSegment` — which is a `posix_fallocate`, a full-segment
+  prewrite and two `fsync`s (`file_log_device.cpp:244-299`), not the
+  nanoseconds a spin is for. Against a holder inside `fsync`,
+  `sched_yield` returns immediately when nothing else is runnable on
+  that CPU, so N−1 pinned reactors would burn a core each for the length
+  of a segment creation; a futex sleep is the right wait and costs the
+  same single atomic operation uncontended. The device **sync** is
+  outside the latch. AL-S8 prices what remains; staging into a second
+  buffer and writing it unlatched is the follow-on if it shows.
 - One `WalWriter` for the instance, started by the expeditor
   (`writer.hpp:45` already promises it never touches the stream). The
   **flush** and the **drain** run on each core's own reactor tick as
@@ -348,7 +352,7 @@ review, the full suite, sync with `origin/main` on the branch, stop.
 | # | Stage | Cells (definition of done) | Size |
 |---|---|---|---|
 | AL-S0 | This document; `instructions/v3.0.0/index.md`; AR0 filed with AR0-V; `instructions/README.md` and `CLAUDE.md`'s one paragraph reopening `instructions/` | the five files at the commit that carries them | the hour |
-| AL-S1a | **The seam** — the mechanism only, no cutover. `WalStream` opens shared or unshared, the shared one serializing the staging state on a spin latch; `WalManager::Attach` over a borrowed stream and writer; a peer's `Sync` becomes a `RequestSync`; the batch bookkeeping closes against a watermark another thread moved | AL-R7's golden log at `cores = 1`; four threads interleaving appends, every record at the LSN its appender was handed, none twice, all scanning back in LSN order; the watermark never retreating under concurrent syncs; `Attach` refusing an unshared stream and a null writer; a peer's `strict` commit made durable by the writer with the peer's own `syncs` at 0; a peer's `group` batch closing on the drain after another core's sync | M |
+| AL-S1a | **The seam** — the mechanism only, no cutover. `WalStream` opens shared or unshared, the shared one serializing the staging state on one latch; `WalManager::Attach` over a borrowed stream and writer; a peer's `Sync` becomes a `RequestSync`; the batch bookkeeping closes against a watermark another thread moved | AL-R7's golden log at `cores = 1`; four threads interleaving appends, every record at the LSN its appender was handed, none twice, all scanning back in LSN order; the watermark never retreating under concurrent syncs; `Attach` refusing an unshared stream and a null writer; a peer's `strict` commit made durable by the writer with the peer's own `syncs` at 0; a peer's `group` batch closing on the drain after another core's sync | M |
 | AL-S1c | **The cutover.** `FileLogDevice::Open(wal_dir, 0)` the only open; the expeditor owns the stream and the writer; every `CoreRuntime` attaches; peer drains keep their tick but sync through the writer. **`FileLogDevice` needs no change for it** — source-read 2026-09-02 and recorded so the stage does not re-derive it: `CreateSegment` grows `segments_` under `segments_mutex_` (`:290-295`) while `Sync` copies the descriptors under the same lock and syncs outside it (`:365-396`), and the unlocked reads in `WriteAt` (`:303,313`) are safe because the shared stream's latch already serializes every `WriteAt` against every `CreateSegment`; concurrent `pwrite` and `fdatasync` on one descriptor need no lock, which is the header's own justification | at `cores = 4` a mount, a write on every core and a clean shutdown leave one `wal-0-*` segment set; `SHOW META` on a peer reports no device sync of its own | M |
 | AL-S1b | **The writer.** One `WalWriter` for the instance, started by the expeditor; `SyncAll` on core 0 covers the writer's in-flight sync | `wal_writer_test` unchanged (core-agnostic today); a peer's `strict` commit waits for the platter and no longer calls `fdatasync` on its own thread (`wal_syncs` on a peer reads 0) | S |
 | AL-S2 | **The superblock** (AL-R3): format 16, one anchor, `core_count` unpinned, version-15 refusal | `superblock_test`/`bootstrap_test`: a volume created at `cores = 1` mounts at 4 and back; a version-15 image is refused naming the format; `SetWalAnchor(1, …)` refused | S |
@@ -382,11 +386,49 @@ first, which is what S1a now is.
 | row | status |
 |---|---|
 | AL-S0 | **Written 2026-09-02** on `worktree-v3.0.0-arch-revision` at `d15b5ac`; the survey is source-read at that commit. No engine code changed; the suite was not executed for this row and is not claimed |
-| AL-S1a | **Built 2026-09-02** on `worktree-v3.0.0-arch-revision`. The seam, and nothing that cuts over to it. `WalStream::Open` takes `shared`; when set, one `SpinLatch` (`include/kds/base/spin_latch.hpp`, the primitive AR0's revised G1 admits) serializes the staging state, the gauges become relaxed atomics, `flushed_lsn_` becomes a field rather than `append_lsn_ - ring_used_`, and every public entry point takes the latch once and calls a `*Locked` half — so the roll inside `Append` reaches the seal and the flush without taking it twice. `Sync` holds the latch for the flush and **drops it for the device sync**, publishing the watermark it captured as a compare-exchange maximum. `WalManager::Attach` builds a manager over a borrowed stream and writer: it refuses an unshared stream and a null writer, its `Sync` is a `RequestSync` and never a device call, and `ResolveBatches` closes the group batch against a watermark another thread moved (the drain calls it every tick for that case). `MemoryLogDevice` takes a mutex, being the test double a shared stream writes to while the writer syncs; `log_device.hpp` states the pairing an implementation must accept. **Nothing is wired up**: the expeditor and every `CoreRuntime` still open their own device, and `Open`'s default is unshared, so `cores = 1` and `cores > 1` both run exactly the code they ran at `d15b5ac`. Cells: `tests/wal_golden_log_test.cpp` (AL-R7 — a 17-statement script over the simulator, clean shutdown, CRC32C over every log byte, pinned at `0x07b052c3` from the engine at `d15b5ac` **before** this change, and it did not move) and `tests/wal_shared_stream_test.cpp` (7 cells: the unshared default; four threads × 250 appends with every LSN issued once, every record on the device at an LSN its appender was handed, in order; the watermark never retreating under three concurrent syncers; the two `Attach` refusals; a peer's `strict` commit made durable by the writer with the peer's own `syncs` at 0; a peer's `group` batch closing on its drain after core 0's sync). One defect found and fixed while building: `WalManager::Append`'s single drain-and-retry is no longer a proof of progress on a shared stream, since another core can take the space the drain freed — now a bounded loop (`kRingDrainAttempts = 4`) that reports `OutOfSpace` rather than spinning. **Suite: 3214/3214**, re-run against the final tree after the retry fix (`ctest -j8`, Debug, 69.9 s). Overhead not measured (the interleaved A/B is suspended by operator decision). **Amendment**: the cutover left this stage and became AL-S1c, after recovery — see the note under the stage table |
+| AL-S1a | **Built 2026-09-02** on `worktree-v3.0.0-arch-revision`. The seam, and nothing that cuts over to it. `WalStream::Open` takes `shared`; when set, one latch (`include/kds/base/latch.hpp`, the primitive AR0's revised G1 admits) serializes the staging state, the gauges become relaxed atomics, `flushed_lsn_` becomes a field rather than `append_lsn_ - ring_used_`, and every public entry point takes the latch once and calls a `*Locked` half — so the roll inside `Append` reaches the seal and the flush without taking it twice. `Sync` holds the latch for the flush and **drops it for the device sync**, publishing the watermark it captured as a compare-exchange maximum. `WalManager::Attach` builds a manager over a borrowed stream and writer: it refuses an unshared stream and a null writer, its `Sync` is a `RequestSync` and never a device call, and `ResolveBatches` closes the group batch against a watermark another thread moved (the drain calls it every tick for that case). `MemoryLogDevice` takes a mutex, being the test double a shared stream writes to while the writer syncs; `log_device.hpp` states the pairing an implementation must accept. **Nothing is wired up**: the expeditor and every `CoreRuntime` still open their own device, and `Open`'s default is unshared, so `cores = 1` and `cores > 1` both run exactly the code they ran at `d15b5ac`. Cells: `tests/wal_golden_log_test.cpp` (AL-R7 — a 17-statement script over the simulator, clean shutdown, CRC32C over every log byte, pinned at `0x07b052c3` from the engine at `d15b5ac` **before** this change, and it did not move) and `tests/wal_shared_stream_test.cpp` (cells: the unshared default; four threads appending past both the ring and the segment, with every LSN issued once, every record on the device at an LSN its appender was handed, in order; the watermark never retreating under three concurrent syncers; the two `Attach` refusals; a peer's `strict` commit made durable by the writer with the peer's own `syncs` at 0; a peer's `group` batch closing on its drain after core 0's sync). One defect found and fixed while building: `WalManager::Append`'s single drain-and-retry is no longer a proof of progress on a shared stream, since another core can take the space the drain freed — now a bounded loop (`kRingDrainAttempts = 4`) that reports `OutOfSpace` rather than spinning. **Suite: 3214/3214**, re-run against the final tree after the retry fix (`ctest -j8`, Debug, 69.9 s). Overhead not measured (the interleaved A/B is suspended by operator decision). **Amendment**: the cutover left this stage and became AL-S1c, after recovery — see the note under the stage table |
 | AL-S1b | **Built 2026-09-02** on `worktree-v3.0.0-arch-revision`, and it closed a durability defect AL-S1a had left. S1a routed an attached manager's `Sync()` to `writer_->RequestSync` and returned — so on a peer, **`EnsureDurable` returned OK for a sync merely asked for**. That call is the WAL-before-data gate the page store takes before writing a dirty page (`device_page_store.cpp:1098`, `page_mgr.cpp:200`, wal.md §8-1), so a data page could have reached the platter ahead of its log record; a D1 commit and `SyncAll` were untrue in the same way. The path is now split by what the caller means: **`Sync()` blocks** — on the owner by syncing the device on its own thread as before, on a peer by flushing and waiting on the writer's watermark (`WalWriter::EnsureDurable`, the condition variable that class already had) — and serves the three callers whose whole meaning is "wait", a D1 commit, the gate, and `SyncAll`. **`RequestSyncNow()` does not block** and is the drain's path: a tick may not hold the reactor, because blocking it would stall every session on that core for another thread's `fdatasync`; the batch closes on a later tick at `DrainOnce`'s opening `ResolveBatches`. `writer_syncs()`/`writer_sync_failures()` now read the **owned** writer only, so a peer reports 0 rather than N cores each reporting the same shared count. One regression caught before it landed: routing the D3 interval tick through the new call would have put core 0's `fdatasync` back on its reactor (the stall whose removal took `relaxed`'s p99 from 2,208 µs to 194 µs), so `RequestSyncNow` hands off whenever a writer exists, owned or borrowed, and only a writerless manager syncs inline. Cells, all in `tests/wal_shared_stream_test.cpp`: a peer's `strict` commit durable when `Commit` returns with the peer's own `syncs` at 0 and its `writer_syncs()` at 0; `EnsureDurable` on a peer returning only once the record is on the platter; `SyncAll` on a peer leaving `durable_lsn == appended_lsn`; the drain asking without waiting and the batch closing on the next tick. `wal_writer_test` and `wal_manager_test` unchanged and green. **Suite: 3217/3217** (`ctest -j8`, Debug, 75.3 s). Overhead not measured (the interleaved A/B is suspended by operator decision). Not in this stage: the expeditor still starts the only writer it ever started, on core 0's own manager — one writer *for the instance* arrives with the cutover, AL-S1c |
 | AL-S1c..S9 | not started |
 
 ## AL-7 — Review record
+
+**The AL-S1a/S1b code, reviewed 2026-09-02** (`critics-developer`,
+against the post-S1b image). **No live durability, race or deadlock
+defect**, and it verified several things a reader would reasonably
+doubt: the `flushed_lsn_` invariant holds on all ten paths including the
+`OutOfSpace` return and a failed device write; no lock cycle exists, the
+device lock being innermost everywhere and the attached `Sync` correctly
+dropping the stream latch before its condition-variable wait (holding it
+there would hang the instance); the strict-vs-non-strict `IsDurable`
+mismatch between `WalDurability` and `WalWriter` produces no off-by-one
+on the attached path; `ResolveBatches` cannot double-count and its new
+call is provably unreachable on an unshared owning manager, so
+`cores = 1` behaviour is unchanged; the drain's D3 refactor is
+behaviour-identical on the owning path; no relaxed atomic sits in a loop
+condition or body; and the golden log is a real byte pin, deterministic
+because the record encoder zeroes its alignment padding and the
+simulator's clock never advances, so the D3 interval never fires.
+
+Six findings acted on:
+
+| finding | what was done |
+|---|---|
+| The latch is held across `CreateSegment` — `posix_fallocate`, a full-segment prewrite and two `fsync`s — while `spin_latch.hpp` justified itself as guarding nanoseconds. Against a holder in `fsync`, `sched_yield` returns immediately and N−1 pinned reactors burn a core each | `spin_latch.hpp` **deleted**; `base/latch.hpp` is a `std::mutex` behind the same null-pointer compile-out, so `cores = 1` is unchanged and a waiter sleeps. AL-R1 restated |
+| `EveryThreadsRecordLandsAtTheLsnItWasGiven` never filled the ring and never rolled: 232 KiB against a 1 MiB ring and segment, so the concurrent flush ran once after the join and the roll never ran at all | volume raised to ~4 MiB and the ring sized to the 64 KiB **minimum** — a ring as large as a segment can never fill, because the roll drains it first. Two `EXPECT_GT`s now fail the cell if either path stops being reached |
+| `WalStream::Sync`'s correctness silently depends on the device syncing **every** open segment, since a roll can land between the capture and the sync | named at both ends: `file_log_device.cpp`'s `Sync` says why it must not be narrowed to the tail, and `stream.hpp` states the dependency |
+| `stats_.flushes` under-reported on a peer — the attached `Sync` and `RequestSyncNow` call `stream_->Flush()` directly | both count their own flush; `DrainOnce`'s D3 branch no longer counts one for them |
+| `Attach` could not tell that the writer syncs the stream's device; the header stated it as a caller obligation | `WalWriter::device()` added and `Attach` refuses the mismatch, naming the wait that would never end |
+| `MemoryLogDevice`'s injection setters mutated state the mutex now protects; `FileLogDevice`'s header still declared itself core-local | the four setters take the lock; the header states what it actually satisfies |
+
+Two left as they are, with reasons. The `*Locked` suffix on two of five
+private methods was replaced by one line saying **every** private method
+runs latched and none may call a public one, which is shorter than the
+comment it replaces and covers all five. The review's remaining item —
+that `RequestSyncNow` and the attached `Sync` share three lines — is
+declined: they read as two named policies, and a `bool wait` parameter
+would make both call sites worse.
+
+
 
 **AL-S0's documents, reviewed 2026-09-02** (`critics-developer`, ~210
 citations re-opened at `d15b5ac`). Ten were wrong or overstated and the

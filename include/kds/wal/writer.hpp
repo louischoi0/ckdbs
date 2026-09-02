@@ -103,6 +103,12 @@ public:
     // retry. Guarded by the mutex because a Status carries a string.
     Status last_failure() const;
 
+    // The device this writer syncs. Exposed for one caller:
+    // `WalManager::Attach` refuses a writer that is not the one over the
+    // stream it was handed, which would otherwise be a comment the caller
+    // could quietly disobey and a durability wait that never completes.
+    const LogDevice* device() const noexcept { return device_; }
+
 private:
     void Run();
 

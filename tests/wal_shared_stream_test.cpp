@@ -80,20 +80,33 @@ TEST_F(SharedStreamTest, AnUnsharedStreamTakesNoLatchAndIsTheDefault) {
 // The seam's core property: N threads append concurrently, every record
 // lands exactly once, at the LSN its appender was handed, and the bytes
 // scan back in one unbroken LSN-ordered run.
+//
+// **The volume and the two sizes are chosen to cross both bounds, and
+// that is the point of them.** 4 x 500 x ~2 KiB is about 4 MiB against
+// 1 MiB segments, so the stream rolls several times; and the staging
+// buffer is deliberately the 64 KiB minimum rather than the 1 MiB default,
+// because a ring as large as a segment can never fill - the roll drains it
+// first, and `OutOfSpace` would be unreachable. Sized under either bound
+// this cell would prove only that the encode is serialised, never that a
+// concurrent flush or a concurrent segment roll is safe, which is the
+// harder half of the seam. The two `EXPECT_GT`s after the join are what
+// keep that true if the sizes are ever changed.
 TEST_F(SharedStreamTest, EveryThreadsRecordLandsAtTheLsnItWasGiven) {
-    auto opened = WalStream::Open(device_.get(), 0, kDefaultRingCapacity, /*shared=*/true);
+    auto opened = WalStream::Open(device_.get(), 0, kMinRingCapacity, /*shared=*/true);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     WalStream& stream = *opened.value();
     ASSERT_TRUE(stream.shared());
 
     constexpr int kThreads = 4;
-    constexpr int kPerThread = 250;
+    constexpr int kPerThread = 500;
+    constexpr std::size_t kBigPayload = 2000;
     std::vector<std::vector<Lsn>> issued(kThreads);
+    std::atomic<int> drains{0};
     std::vector<std::thread> threads;
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&, t] {
             for (int i = 0; i < kPerThread; ++i) {
-                const auto payload = Pattern(kPayloadSize, static_cast<std::uint8_t>(t));
+                const auto payload = Pattern(kBigPayload, static_cast<std::uint8_t>(t));
                 for (;;) {
                     auto lsn = stream.Append(HeapInsert(static_cast<std::uint64_t>(t) + 1,
                                                         static_cast<PageId>(i)),
@@ -106,6 +119,7 @@ TEST_F(SharedStreamTest, EveryThreadsRecordLandsAtTheLsnItWasGiven) {
                     // reactor's appender does (wal.md §6-4).
                     ASSERT_EQ(lsn.status().code(), StatusCode::kOutOfSpace)
                         << lsn.status().message();
+                    drains.fetch_add(1, std::memory_order_relaxed);
                     ASSERT_TRUE(stream.Flush().ok());
                 }
             }
@@ -113,6 +127,13 @@ TEST_F(SharedStreamTest, EveryThreadsRecordLandsAtTheLsnItWasGiven) {
     }
     for (std::thread& thread : threads) thread.join();
     ASSERT_TRUE(stream.Sync().ok());
+
+    // The two paths this volume exists to reach. Without them the cell
+    // below would pass on a stream that never flushed or rolled under
+    // contention, which is the case that matters.
+    EXPECT_GT(drains.load(), 0) << "the ring never filled; the concurrent flush went untested";
+    EXPECT_GT(device_->segment_count(), 1u)
+        << "the stream never rolled; the concurrent segment roll went untested";
 
     std::multiset<Lsn> handed_out;
     for (const auto& per_thread : issued) {
@@ -143,12 +164,15 @@ TEST_F(SharedStreamTest, TheDurableWatermarkNeverMovesBackwardsUnderConcurrentSy
     WalStream& stream = *opened.value();
 
     std::atomic<bool> stop{false};
-    std::atomic<Lsn> lowest_seen{0};
+    // A flag, not a watermark: 0 is both "never retreated" and a value a
+    // retreat could produce, so a sentinel here would read a retreat to
+    // zero as a pass.
+    std::atomic<bool> went_backwards{false};
     std::thread watcher([&] {
         Lsn last = 0;
         while (!stop.load(std::memory_order_relaxed)) {
             const Lsn now = stream.durable_lsn();
-            if (now < last) lowest_seen.store(now, std::memory_order_relaxed);
+            if (now < last) went_backwards.store(true, std::memory_order_relaxed);
             last = now;
         }
     });
@@ -167,7 +191,7 @@ TEST_F(SharedStreamTest, TheDurableWatermarkNeverMovesBackwardsUnderConcurrentSy
     stop.store(true, std::memory_order_relaxed);
     watcher.join();
 
-    EXPECT_EQ(lowest_seen.load(), 0u) << "durable_lsn went backwards";
+    EXPECT_FALSE(went_backwards.load()) << "durable_lsn went backwards";
     EXPECT_EQ(stream.durable_lsn(), stream.append_lsn());
 }
 

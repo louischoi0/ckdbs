@@ -89,6 +89,15 @@ StatusOr<std::unique_ptr<WalManager>> WalManager::Attach(WalStream* stream, WalW
         return Status::InvalidArgument("WalManager::Attach: core " + std::to_string(core_id) +
                                        " needs the instance's writer to make anything durable");
     }
+    if (writer->device() != stream->device()) {
+        // A writer over a different device would sync bytes nobody is
+        // waiting for while the wait never ends. Refused rather than
+        // documented, since the caller cannot see it go wrong.
+        return Status::InvalidArgument(
+            "WalManager::Attach: the writer syncs a different device than the stream writes; "
+            "core " +
+            std::to_string(core_id) + " would wait on a durability point that never arrives");
+    }
     return std::unique_ptr<WalManager>(new WalManager(stream, /*owned_stream=*/nullptr, writer,
                                                       clock, core_id, config));
 }
@@ -157,10 +166,12 @@ Status WalManager::Sync() {
     // left its reactor, which is the 94-98% AL-2 is about. The
     // non-blocking path is `RequestSyncNow()`, which the drain takes.
     if (attached()) {
+        const bool staged = stream_->ring_used() > 0;
         if (Status s = stream_->Flush(); !s.ok()) {
             ++stats_.sync_failures;
             return s;
         }
+        if (staged) ++stats_.flushes;
         const Lsn target = stream_->flushed_lsn();
         if (Status s = writer_->EnsureDurable(target); !s.ok()) {
             ++stats_.sync_failures;
@@ -212,10 +223,15 @@ Status WalManager::RequestSyncNow() {
         // this thread, exactly as it was before M0.
         return Sync();
     }
+    const bool staged = stream_->ring_used() > 0;
     if (Status s = stream_->Flush(); !s.ok()) {
         ++stats_.sync_failures;
         return s;
     }
+    // Counted here rather than by the caller, so every path through this
+    // function reports its flush. `DrainOnce`'s D3 branch therefore does
+    // not count one of its own.
+    if (staged) ++stats_.flushes;
     writer_->RequestSync(stream_->flushed_lsn());
     last_sync_ns_ = clock_.Now();
     // The batch is not resolved here: nothing is durable yet. A later
@@ -381,11 +397,11 @@ Status WalManager::DrainOnce() {
     // stall *was* this tick. `RequestSyncNow` is that hand-off, and its
     // no-writer arm is the inline sync a writerless manager still owes.
     if (clock_.Now() - last_sync_ns_ >= config_.relaxed_flush_interval_ns) {
-        const bool staged = stream_->ring_used() > 0;
+        // No flush counting here: `RequestSyncNow` counts its own on both
+        // arms (the writerless one through `Sync`).
         if (Status s = RequestSyncNow(); !s.ok()) {
             return s;
         }
-        if (staged && writer_ != nullptr) ++stats_.flushes;
         ++stats_.interval_syncs;
     }
     return Status::OK();

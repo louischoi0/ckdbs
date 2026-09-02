@@ -112,11 +112,25 @@ Status MemoryLogDevice::Sync() {
     return Status::OK();
 }
 
-void MemoryLogDevice::FailNextWrite(Status status) { fail_next_write_ = std::move(status); }
-void MemoryLogDevice::FailNextSync(Status status) { fail_next_sync_ = std::move(status); }
-void MemoryLogDevice::TearNextWrite(std::size_t prefix_bytes) { tear_next_write_ = prefix_bytes; }
+// The injection setters take the lock too: a shared stream writes to this
+// device while the writer thread syncs it, so arming a fault is a mutation
+// like any other. No test arms one concurrently today; the lock is what
+// makes that a supported use rather than an accident waiting.
+void MemoryLogDevice::FailNextWrite(Status status) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    fail_next_write_ = std::move(status);
+}
+void MemoryLogDevice::FailNextSync(Status status) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    fail_next_sync_ = std::move(status);
+}
+void MemoryLogDevice::TearNextWrite(std::size_t prefix_bytes) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    tear_next_write_ = prefix_bytes;
+}
 
 void MemoryLogDevice::ClearInjections() noexcept {
+    std::lock_guard<std::mutex> guard(mutex_);
     fail_next_write_.reset();
     fail_next_sync_.reset();
     tear_next_write_.reset();

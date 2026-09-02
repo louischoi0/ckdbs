@@ -149,7 +149,7 @@ Status WalStream::Roll() {
 }
 
 Status WalStream::Seal() {
-    SpinLatchGuard guard(latch_);
+    LatchGuard guard(latch_);
     return SealLocked();
 }
 
@@ -207,7 +207,7 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
                                        " bytes is larger than the ring");
     }
 
-    SpinLatchGuard guard(latch_);
+    LatchGuard guard(latch_);
 
     if (sealed() || SegmentRemaining() < total) {
         if (Status s = SealLocked(); !s.ok()) {
@@ -237,7 +237,7 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
 }
 
 Status WalStream::Flush() {
-    SpinLatchGuard guard(latch_);
+    LatchGuard guard(latch_);
     return FlushLocked();
 }
 
@@ -269,7 +269,7 @@ Status WalStream::Sync() {
     // latch - a later flush by another thread is not this sync's to claim.
     Lsn flushed = 0;
     {
-        SpinLatchGuard guard(latch_);
+        LatchGuard guard(latch_);
         if (Status s = FlushLocked(); !s.ok()) {
             return s;
         }

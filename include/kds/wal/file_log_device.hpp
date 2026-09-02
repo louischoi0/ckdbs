@@ -38,7 +38,15 @@
 // impose alignment requirements on the ring buffer that nothing satisfies
 // yet. Nothing here blocks it later.
 //
-// Concurrency: core-local, one device per stream.
+// Concurrency: one device per stream, and the stream is either one core's
+// or the instance's (`wal/stream.hpp`, `wal/log_device.hpp`'s contract).
+// This class already satisfies the shared case and needs no change for it:
+// `CreateSegment` grows `segments_` under `segments_mutex_` while `Sync`
+// copies the descriptors under the same lock and does its `fdatasync`s
+// outside it, and the unlocked reads in `WriteAt`/`ReadAt` are safe
+// because a shared stream serializes every one of them against every
+// `CreateSegment` with its own latch. Concurrent `pwrite` and `fdatasync`
+// on one descriptor need no lock at all (the note beside the mutex below).
 
 namespace kds::wal {
 

@@ -363,9 +363,18 @@ Status FileLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
 }
 
 Status FileLogDevice::Sync() {
-    // Every segment, not just the tail: a torn-page-style partial write to an
-    // earlier segment (recovery rewriting a record, an FPI landing late) is
-    // still pending until its own fd is synced.
+    // Every segment, not just the tail. Two reasons, and the second is a
+    // correctness dependency another file rests on:
+    //
+    //   - a torn-page-style partial write to an earlier segment (recovery
+    //     rewriting a record, an FPI landing late) is still pending until
+    //     its own fd is synced;
+    //   - **`WalStream::Sync` captures its flushed watermark, releases the
+    //     stream latch, and only then calls this** (`wal/stream.hpp`), so
+    //     another core can roll to a new segment in between. Narrowing
+    //     this to the newest fd would silently publish a watermark whose
+    //     bytes live in the previous segment and were never synced.
+    //     Do not "optimise" it to the tail.
     //
     // **The descriptors are copied out under the lock and synced without
     // it** (see the header's justification). This runs on the WAL writer

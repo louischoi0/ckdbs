@@ -7,7 +7,7 @@
 #include <span>
 #include <vector>
 
-#include "kds/base/spin_latch.hpp"
+#include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/record.hpp"
@@ -23,7 +23,9 @@
 // the `cores = 1` path and every in-process test - it is core-local like
 // the device under it (rules.md section 3): one thread, no latch taken, and
 // the gauges' relaxed atomics compile to the plain moves they replaced.
-// Opened **shared**, one spin latch guards the staging state:
+// Opened **shared**, one latch (`base/latch.hpp`) guards the staging
+// state. **Acquisition order: this latch is outermost** - the device's own
+// lock is taken under it and nothing else is:
 //
 //   - `Append`, from any thread: latch; size checks; the roll if the
 //     segment is full; encode into the staging buffer; bump the cursor;
@@ -31,21 +33,29 @@
 //     known before its bytes are visible to anyone else - `StampPageLsn`
 //     and the `recLSN` discipline (page.md section 8) are unchanged.
 //   - `Flush` and `Seal`, from any thread: the device write happens
-//     **under the latch**. Accepted for M0's first cut and named here: a
-//     flush is a page-cache copy of what was staged since the last one,
-//     microseconds against the 1 ms drain cadence, and a roll's segment
-//     creation is one per 64 MiB. AL-S8 measures the spin this costs; a
-//     swap-and-write outside the latch is the follow-on if it shows.
+//     **under the latch**, and so does the segment roll's `CreateSegment`
+//     - which is not microseconds but a `posix_fallocate`, a full-segment
+//     prewrite and two `fsync`s (`wal/file_log_device.cpp`). That is why
+//     the latch is a mutex and not a spin: a waiter sleeps for the length
+//     of a segment creation instead of burning a core through it.
+//     Moving the write out from under the latch (stage a second buffer,
+//     write it unlatched) is the follow-on if AL-S8 prices this as
+//     material; the roll cannot move without an in-flight-segment rule.
 //   - `Sync`, from any thread: the flush under the latch, the device sync
-//     **outside** it - milliseconds, and nobody may spin for those - and
-//     the durable watermark published as a maximum, so two syncers can
-//     never pull it back.
+//     **outside** it, and the durable watermark published as a maximum,
+//     so two syncers can never pull it back.
 //   - The gauges (`append_lsn`, `flushed_lsn`, `durable_lsn`, `ring_used`,
 //     `sealed`) are relaxed atomics: written under the latch, readable
 //     from any thread without it as the instantaneous values they are.
+//     Each is read alone; no caller combines two and none may.
 //
 // A device under a shared stream must accept `WriteAt`/`CreateSegment` on
-// one thread while `Sync` runs on another (log_device.hpp).
+// one thread while `Sync` runs on another (log_device.hpp). **`Sync`'s
+// correctness rests on that device syncing every open segment, not only
+// the newest**: a roll can land between this stream capturing its flushed
+// watermark and the device sync it then performs, so a sync narrowed to
+// the tail segment would leave the captured range uncovered. Both
+// implementations say so where they implement it.
 //
 // ---- LSN arithmetic ------------------------------------------------------
 //
@@ -107,6 +117,14 @@ inline constexpr std::size_t kMinRingCapacity = 64 * 1024;
 
 class WalStream {
 public:
+    // Neither copyable nor movable, and stated rather than inherited: the
+    // latch pointer points into this object, so a move would leave it
+    // aimed at the moved-from one.
+    WalStream(const WalStream&) = delete;
+    WalStream& operator=(const WalStream&) = delete;
+    WalStream(WalStream&&) = delete;
+    WalStream& operator=(WalStream&&) = delete;
+
     // Opens the stream on `device`, which must outlive it.
     //
     // An empty device is a fresh stream: segment 0 is created and its
@@ -203,10 +221,13 @@ private:
         return offset == 0 ? 0 : segment_size_ - offset;
     }
 
-    // The `*Locked` halves run with the latch held (or unshared). Every
-    // public entry point takes the latch once and calls one of them; the
-    // roll on Append's path reaches Flush and Seal through these, never
-    // through the public names, so the latch is never taken twice.
+    // **Every private method below runs with the latch already held**; the
+    // four public ones take it. The latch is not recursive, so a private
+    // method must never call a public one - which is why the roll on
+    // Append's path reaches the flush and the seal through the two
+    // `*Locked` names rather than through `Flush()` and `Seal()`.
+    // (`ScanTail` and the first `StartSegment` run from `Open`, where
+    // nothing else holds the stream yet.)
     Status StartSegment(std::uint64_t segment_no);
     Status Roll();
     Status FlushLocked();
@@ -232,8 +253,8 @@ private:
 
     // `latch_` points at `latch_storage_` when shared and is null when not
     // (spin_latch.hpp: a null guard costs one branch and no atomic).
-    SpinLatch latch_storage_;
-    SpinLatch* latch_ = nullptr;
+    Latch latch_storage_;
+    Latch* latch_ = nullptr;
 
     // Preallocated so writing a segment header never allocates.
     std::vector<std::byte> header_block_;
