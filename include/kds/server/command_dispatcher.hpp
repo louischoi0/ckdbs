@@ -301,6 +301,16 @@ struct PendingCrossOwnerCommit {
     std::uint64_t session_id = 0;
     std::uint64_t transaction_id = 0;
     std::vector<std::uint32_t> participants;
+    // **Who hears the decision**, which is not the same list as who is
+    // asked to prepare (work order AI, F4). A core holding only a
+    // foreign-key reference intent has no context to prepare and no vote to
+    // cast, and it must still be told the outcome, because the decide is
+    // the only thing that ends an intent. `participants` is the prepare's
+    // list; this is the decide's, and it is the union.
+    std::vector<std::uint32_t> decide_targets;
+    // Zero where **no prepare was sent** - a transaction whose only
+    // cross-owner contact was a probe. The parked half reads it as "there
+    // is no vote to collect", not as "the vote was lost".
 
     // **XF4's two coordinator-side stamps**, carried here because the
     // commit's two halves live in two functions: `PrepareAcrossOwners`

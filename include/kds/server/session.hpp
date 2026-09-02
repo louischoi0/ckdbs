@@ -193,6 +193,12 @@ public:
         // `kShippedDedupMaxRecords`, whose early eviction is counted.
         if (!participants_.empty()) ship_id_ = 0;
         participants_.clear();
+        // The intent holders end with the transaction for `participants_`'s
+        // reason and one of its own: an intent released by this
+        // transaction's decide must not be released a second time by the
+        // next one's, which would free an intent the next transaction is
+        // relying on.
+        intent_holders_.clear();
         watermarks_.clear();
         // The class this transaction was begun under, for `home_core_`'s
         // reason: `BEGIN ... DURABILITY strict` binds one transaction, and
@@ -288,6 +294,70 @@ public:
     // one participant, and prepares it once.
     void EnrolParticipant(std::uint32_t core_id) {
         if (!HasParticipant(core_id)) participants_.push_back(core_id);
+    }
+
+    // ---- The foreign key's intent holders (work order AI, F4) -----------
+    //
+    // **An intent holder is not a participant**, and the distinction is
+    // what the two lists exist to keep. A participant holds *rows* of this
+    // transaction: it opened a context when a statement shipped to it, it
+    // votes at the prepare, and a missing context there is an abort. A core
+    // that answered a foreign-key probe holds a **reference intent** and
+    // nothing else - no rows, no context, nothing to vote with - so
+    // prepared it is not, and asking it to prepare answers "holds no
+    // transaction for core N's session M" and aborts a transaction that had
+    // no reason to fail.
+    //
+    // What it does need is the **decide**, which is the only thing that
+    // ends an intent (`fk_probe_service.hpp`, AH-R5). So the two lists
+    // differ exactly where the protocol does: the prepare goes to
+    // `participants_`, the decide goes to both. One core can be in both -
+    // a transaction that shipped a write to an owner and also probed it -
+    // and is prepared once and decided once, which is why the decide's
+    // target list is a union and not a concatenation.
+    const std::vector<std::uint32_t>& intent_holders() const noexcept { return intent_holders_; }
+    bool has_intent_holders() const noexcept { return !intent_holders_.empty(); }
+
+    // Idempotent, `EnrolParticipant`'s rule: a statement naming three
+    // parents on one owner leaves one holder.
+    void EnrolIntentHolder(std::uint32_t core_id) {
+        for (std::uint32_t core : intent_holders_) {
+            if (core == core_id) return;
+        }
+        intent_holders_.push_back(core_id);
+    }
+
+    // Cleared where the decide has gone out for a statement that was its
+    // own transaction (F1). An explicit transaction's holders end with
+    // `Finish()` beside its participants; an autocommit statement has no
+    // `Finish()` to hang it on, because its transaction was born and died
+    // inside one statement.
+    void ClearIntentHolders() noexcept { intent_holders_.clear(); }
+
+    // **The transaction id an autocommit statement's decide names.** Its
+    // transaction is released inside `EndWrite`, before the decide that
+    // ends its intents is sent, so the id is kept here rather than read
+    // back off a transaction that is gone. Meaningful only between that
+    // release and that send.
+    std::uint64_t last_txn_id() const noexcept { return last_txn_id_; }
+    void set_last_txn_id(std::uint64_t id) noexcept { last_txn_id_ = id; }
+
+    // Every core this transaction must send its decision to: the ones that
+    // hold its rows and the ones that hold an intent on its behalf, each
+    // once.
+    std::vector<std::uint32_t> DecideTargets() const {
+        std::vector<std::uint32_t> targets = participants_;
+        for (std::uint32_t core : intent_holders_) {
+            bool seen = false;
+            for (std::uint32_t already : targets) {
+                if (already == core) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) targets.push_back(core);
+        }
+        return targets;
     }
 
     // **Whether this transaction has already shipped a statement to
@@ -390,6 +460,10 @@ private:
     // is the order the prepare messages go out in and the order a log line
     // names them in.
     std::vector<std::uint32_t> participants_;
+    // Cores holding a reference intent for this transaction (AI, F4). See
+    // `intent_holders()` for why this is not `participants_`.
+    std::vector<std::uint32_t> intent_holders_;
+    std::uint64_t last_txn_id_ = 0;
     std::vector<std::pair<std::uint32_t, std::uint64_t>> watermarks_;
 };
 

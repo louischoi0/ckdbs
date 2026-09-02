@@ -322,6 +322,62 @@ that path **refuses** a cross-owner-FK write with a message naming
 this order — never a silently local-only check, which is the one
 degraded mode §1 says a constraint may not have.
 
+## 2b. The intent's end — a holder is not a participant
+
+`[AMENDED 2026-09-02 — work order AI, AI-T2. Built, and pinned by
+`ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildRow` and
+`ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsTheIntent`.]`
+
+§2a says the intent is released by the transaction's **decide** and by
+nothing else. Two things about that sentence were wrong in the first
+build, and the end-to-end cell is what found them.
+
+**A core that answered a probe is an intent holder, not a participant.**
+The distinction is what the two lists exist to keep:
+
+| | participant | intent holder |
+|---|---|---|
+| what it holds | rows of this transaction | a reference intent, and nothing else |
+| how it got a context | a statement shipped to it | it answered a probe |
+| the prepare | votes, and a missing context is an **abort** | is not asked |
+| the decide | told | told |
+
+The first build enrolled the owner as a *participant*, and a participant
+is asked to prepare. An intent holder has no context to prepare with — the
+participant-side context lives in `ShippedStatementExecutor::enrolled_`,
+which a shipped statement fills — so the owner answered *"holds no
+transaction for core N's session M"* and the transaction aborted,
+retryably, forever. **A cross-owner foreign key write inside an explicit
+transaction could not commit at all.** The prepare now goes to the
+participants and the decide to the union, and a core in both lists is
+prepared once and decided once.
+
+**And the separation is what keeps RR0's join bit true.** `HasParticipant`
+is what a shipped statement reads to decide whether the owner *already
+holds a context* — true means it must join one rather than open a second.
+An intent holder holds none, so a probe that enrolled a participant would
+have told the next statement shipped to that owner to join a context that
+does not exist. Recording the holder on its own list answers `false` there,
+which is the truth.
+
+**An autocommit statement decides for itself.** Its transaction begins and
+ends inside one statement, so no `COMMIT` will ever run for it. The first
+build enrolled nobody there, reasoning that the decide "is the one this
+core's commit sends to every participant it has" — and with nobody
+enrolled there was no decide, so the intent was never released and the
+parent row was **un-deletable for the life of the process**, behind a
+`retryable=1` code a client's retry loop cannot get past. The statement
+now sends its own decide, after the write scope closes and never inside it
+(AH-R1), and waits for the acknowledgement.
+
+**Every cross-core contact mints the session's shipping identity**, not
+only a ship. The identity is what an intent's holder key is
+`(coordinator core, session id)` built from, so a session that had never
+shipped probed under id 0 — which made every un-shipped session on a core
+share one holder key, and left the coordinator holding participants it had
+no identity to address. `ShipStatement` and `SendForeignKeyProbes` are the
+two contacts, and both mint it.
+
 ## 3a. The reverse check across owners — a refusal, not a fan-out
 
 `[AMENDED 2026-09-01 — AH-T4.]`

@@ -241,7 +241,7 @@ comparison.
 | AI-R4 | **Ruled 2026-09-02: the end-to-end cell lands here, as AI-T2**, CLA's proposal — it is this order's acceptance test |
 | AI-T0 | **Done 2026-09-02.** Eight sites surveyed, H-AI3 **held**: no site outside the gate descends a relation this core does not own. Table below |
 | AI-T1 | **Complete 2026-09-02.** The lift itself and three of AI-R5's placements landed 2026-09-01 at `956f00d`; the remainder lands here — the one surviving stale contract claim corrected, H-AI2 answered by source-read, and AI-R3's re-point built. See "AI-T1's remainder" below |
-| AI-T2 | **Two slices built 2026-09-02, and they found four defects.** The end-to-end cross-owner INSERT runs in process and is pinned; F2/F3 are fixed on the operator's ruling and F4 was found behind them. H-AI1's remaining fixtures wait on F1/F4. See "AI-T2, first slice" and "AI-T2, second slice" below |
+| AI-T2 | **Built 2026-09-02.** The end-to-end cross-owner INSERT runs in process, autocommit and inside a transaction, and the four defects the cell found are fixed on the operator's rulings (F1 F2 F3 F4). Contract in `foreign-keys.md` §2b. H-AI1's three remaining fixtures (absent, retired and in-flight parent) are **not built** — the present-parent path and the intent's whole life are. See the three slice sections below |
 | AI-T3 | not started |
 
 ### The order arrived after its own AI-T1
@@ -438,3 +438,38 @@ wires it. Until the foreign-key probe nothing enrolled core 0 as a
 *participant* — a peer's shipped write makes core 0 the owner, not a
 participant of somebody else's transaction — so the rig had the coordinator
 half alone.
+
+### AI-T2, third slice — F1 and F4 fixed, and H-AI1's verdict
+
+**F4, ruled "an intent holder is not a participant":** `Session` grows a
+second list beside `participants_`. The prepare reads the first, the decide
+reads the union, and a core in both is prepared once and decided once. A
+transaction whose only cross-owner contact was a probe now sends **no
+prepare at all** — `prepare_request_id` stays 0 and the parked half reads
+that as "there is no vote to collect", not as "the vote was lost", so no
+leg is timed that nobody walked. `ROLLBACK`'s `AbortAndForget` takes the
+union for the same reason: a rollback that did not tell an intent holder
+would leave that parent row un-deletable.
+
+**F1, ruled "enrol in autocommit too":** the probe records the holder
+unconditionally, and an autocommit statement sends **its own decide** after
+`DispatchAndStage` returns — outside the write scope, which AH-R1 keeps
+free of anything that can wait — and waits for the acknowledgement. The
+transaction id it names is kept on the session by `EndWrite`, because the
+transaction is released before the decide is sent.
+
+**H-AI1 is split, and the split is the finding.** The *present-parent*
+fixture holds end to end, autocommit and in a transaction, and the
+intent's whole life is now observable: granted at the probe, live while
+the statement runs, gone when the decide lands, with the parent's
+deletability as the client-visible half. The other three fixtures —
+absent, retired and in-flight parent — are **not built**; they are the
+verdict path rather than the crossing, and the crossing is what four
+defects were hiding. They belong with AH-T6's matrix, which needs the same
+fixtures for its latency arms.
+
+**What AI-T3 should now measure**, restated because the subject changed:
+the lift's own overhead on a colocated peer write is still expected to be
+unmeasurable (two `empty()` tests), but the *interesting* number is no
+longer that — it is what the autocommit decide costs a cross-owner INSERT,
+since that round trip did not exist before this slice.

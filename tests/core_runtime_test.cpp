@@ -6747,31 +6747,49 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
     const std::string rows = rig.peer->dispatcher().Dispatch("SELECT pid FROM aichild").response;
     EXPECT_EQ(rows.rfind("ERR", 0), std::string::npos) << rows;
     EXPECT_NE(rows.find("7"), std::string::npos) << "the child row is not there: " << rows;
+
+    // **And the intent ended with the statement** (F1). An autocommit
+    // statement is its own transaction, so no `COMMIT` will ever run for it
+    // and the decide that releases its intents is the one it sends itself.
+    // Until 2026-09-02 it sent none: `live_rows` stayed at 1 for the life
+    // of the process and the parent row answered `TXN_CONFLICT
+    // retryable=1` to every `DELETE` - a retry loop that could not succeed.
+    rig.Pump(8);
+    EXPECT_EQ(rig.fk_intents.live_rows(), 0u)
+        << "the autocommit statement left its reference intent behind";
+    // The client-visible half of the same fact. The parent's `DELETE` is
+    // still refused - RESTRICT cannot see a child on another core, which is
+    // §3a's own refusal - but it is no longer refused *by the intent*, and
+    // the two are different sentences with different codes.
+    const std::string del =
+        rig.dispatcher->Dispatch("DELETE FROM aiparent WHERE id = 7").response;
+    EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
 }
 
-TEST_F(CoreRuntimeTest, ACrossOwnerFkProbeMintsTheSessionsShippingIdentityAndStopsAtThePrepare) {
+TEST_F(CoreRuntimeTest, ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsTheIntent) {
     // The same crossing inside an explicit transaction, which is where the
-    // intent's **end** would be observable - and where two defects sit, one
-    // fixed here and one named rather than fixed.
+    // intent's **end** is observable: the probe records the parent's owner
+    // as an intent holder, the COMMIT's decide reaches it, and the decide
+    // is the only thing that releases what the probe granted (AH-R5).
     //
-    // **F2, fixed 2026-09-02** (work order AI): the shipping identity was
-    // minted only by a ship, so a session whose first cross-core contact
-    // was a probe enrolled a participant under id 0. Its COMMIT refused *"a
-    // cross-owner transaction has participants but no shipping identity"* -
-    // a branch whose own comment called the state impossible, because it
-    // was written before anything but a ship could enrol. The probe mints
-    // the identity now, by the same rule and for the same reason.
+    // **Three defects sat between this statement and its commit**, all
+    // found by AI-T2 and all fixed 2026-09-02 on the operator's rulings:
     //
-    // **F4, open**: with an identity the commit reaches the prepare, and
-    // the prepare finds nothing to prepare. Enrolment by probe is
-    // *coordinator-side only* - `ShippedStatementExecutor::enrolled_` is
-    // filled by a shipped statement, and an intent-only participant never
-    // shipped one - so the owner answers "holds no transaction for core
-    // 1's session N" and the transaction aborts. **A cross-owner foreign
-    // key write inside an explicit transaction still cannot commit**, and
-    // this cell pins where it stops so the next attempt starts from the
-    // wall rather than from the top. The report is
-    // `docs/inflight/bugs/fk-reference-intent-never-released-on-autocommit.md`.
+    //   F2 the shipping identity was minted only by a ship, so a session
+    //      whose first cross-core contact was a probe had none, and its
+    //      COMMIT refused "a cross-owner transaction has participants but
+    //      no shipping identity" - a branch whose comment called its own
+    //      state impossible, because it was written before anything but a
+    //      ship could enrol.
+    //   F3 the same zero made every un-shipped session share the intent
+    //      holder key `(core, 0)`, so one decide would release another
+    //      session's intents.
+    //   F4 the probe enrolled a *participant*, and a participant is asked
+    //      to prepare. An intent holder has no rows and no context, so the
+    //      owner answered "holds no transaction for core 1's session N"
+    //      and the transaction aborted, retryably, forever. An intent
+    //      holder is not a participant: it takes the decide and not the
+    //      prepare.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "aitxn_base");
 
@@ -6806,24 +6824,30 @@ TEST_F(CoreRuntimeTest, ACrossOwnerFkProbeMintsTheSessionsShippingIdentityAndSto
     ASSERT_NE(wrote.response.rfind("ERR", 0), 0u) << "the cross-owner write: " << wrote.response;
     EXPECT_EQ(rig.fk_intents.live_rows(), 1u) << "the probe left no intent to release";
 
-    // **F2's assertion.** The identity exists because the probe minted it,
-    // and an enrolled participant with no identity cannot be addressed.
+    // F2's assertion: the identity exists because the probe minted it, and
+    // a holder with no identity cannot be told anything.
     EXPECT_NE(sess.ship_id(), 0u);
+    // F4's: the owner is on the decide's list and not on the prepare's.
+    EXPECT_FALSE(sess.has_participants()) << "an intent holder must not be prepared";
+    EXPECT_TRUE(sess.has_intent_holders());
 
     DispatchOutcome committed;
     auto commit = rig.StartOnPeer("COMMIT", committed, &sess);
     ASSERT_TRUE(rig.Drive(*commit, 512)) << committed.response;
-    EXPECT_EQ(committed.response.find("no shipping identity"), std::string::npos)
-        << "F2 is back: " << committed.response;
+    EXPECT_NE(committed.response.rfind("ERR", 0), 0u)
+        << "the cross-owner commit: " << committed.response;
 
-    // **F4's wall, pinned.** Delete these three lines with the fix, not
-    // around it: a green suite that stopped asserting this would be a
-    // transaction that silently started committing without anyone deciding
-    // how an intent-only participant prepares.
-    EXPECT_EQ(committed.response.rfind("ERR", 0), 0u) << committed.response;
-    EXPECT_NE(committed.response.find("holds no transaction for core"), std::string::npos)
-        << committed.response;
-    EXPECT_NE(committed.response.find("retryable=1"), std::string::npos) << committed.response;
+    // **And the intent is gone**, because the decide reached the owner that
+    // granted it.
+    rig.Pump(8);
+    EXPECT_EQ(rig.fk_intents.live_rows(), 0u)
+        << "the decide did not release the reference intent";
+
+    // The parent is deletable again, which is the client-visible statement
+    // of the intent's end and the thing the intent was holding still.
+    const std::string del =
+        rig.dispatcher->Dispatch("DELETE FROM txnparent WHERE id = 7").response;
+    EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
 }
 
 

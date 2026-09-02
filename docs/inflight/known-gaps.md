@@ -2772,13 +2772,17 @@ parent owner, a reference intent left behind — and two things do not:
   reading was a fixture gap rather than a fixture limit. The debt that
   was handed from AH-T2 to AH-T4 to AH-T6 is closed here.
 
-  **And it found what a deferred acceptance test is for.** The reference
-  intent is never released on an autocommit statement, a session whose
-  first cross-core contact is a probe has no shipping identity so its
-  transaction cannot commit, and every un-shipped session shares one
-  intent holder: `docs/inflight/bugs/fk-reference-intent-never-released-on-autocommit.md`,
-  open, with the fix shape for the first of the three named as a decision
-  rather than an oversight.
+  **And it found what a deferred acceptance test is for — four defects,
+  all fixed 2026-09-02 on the operator's rulings**, contract in
+  `foreign-keys.md` **§2b**: the reference intent was never released on an
+  autocommit statement (the parent row un-deletable for the life of the
+  process, behind a `retryable=1` code); a session whose first cross-core
+  contact was a probe minted no shipping identity, so its transaction
+  could not commit and every un-shipped session shared the holder key
+  `(core, 0)`; and the probe enrolled a *participant*, which is asked to
+  prepare, where an intent holder has no context to prepare with — so a
+  cross-owner foreign key write inside a transaction aborted, retryably,
+  forever. Each is pinned by one of AI-T2's two cells.
 
 **And the intent's crash window is stated but not demonstrated.** An
 intent-only participant writes no `TXN_PREPARE` record, so its intents die

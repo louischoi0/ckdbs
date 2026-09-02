@@ -416,17 +416,75 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             fk_probes_->Close(id);
         }
 
+        // **A refused probe still has intents to end.** One owner can pass
+        // and grant while another times out, and the statement then fails
+        // holding the first owner's intent - so the failure path falls
+        // through to the decide below rather than returning past it, and
+        // the decision it carries is abort.
         if (!probe_status.ok()) {
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
             *out = {ErrorReply(probe_status), false, 0, probe_status};
-            co_return Status::OK();
+            // No transaction ran for this statement, so the id the decide
+            // names is **zero and not the last one this session used** -
+            // reusing that id would key an abort record on a transaction
+            // that in fact committed.
+            if (session != nullptr) {
+                session->set_last_txn_id(0);
+            } else {
+                autocommit_session_.set_last_txn_id(0);
+            }
+        } else {
+            // The resume. The extraction pass consults
+            // `resumed_fk_verdicts_` first, so this pass resolves
+            // everything from held state, groups nothing foreign and sends
+            // nothing - a plain local statement.
+            *out = DispatchAndStage(probe.line, session);
+            resumed_fk_verdicts_ = exec::FkParentVerdicts{};
         }
 
-        // The resume. The extraction pass consults `resumed_fk_verdicts_`
-        // first, so this pass resolves everything from held state, groups
-        // nothing foreign and sends nothing - a plain local statement.
-        *out = DispatchAndStage(probe.line, session);
-        resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+        // **F1: an autocommit statement decides for itself.** Its
+        // transaction began and ended inside `DispatchAndStage`, so no
+        // `COMMIT` will ever run for it and nothing else will tell the
+        // cores holding its reference intents that it is over. Without this
+        // the intent granted a moment ago is never released and the parent
+        // row is un-deletable for the life of the process - behind a
+        // `retryable=1` code, which is a retry loop that cannot succeed.
+        //
+        // The decide only, never a prepare: an intent holder holds no rows
+        // and has no context to vote with (F4). And here rather than in
+        // `EndWrite`, because this is the first point outside the write
+        // scope, which AH-R1 keeps free of anything that can wait.
+        Session& deciding = session != nullptr ? *session : autocommit_session_;
+        if (!deciding.in_explicit_txn() && deciding.has_intent_holders() &&
+            txn_2pc_ != nullptr && deciding.ship_id() != 0) {
+            const std::vector<std::uint32_t> holders = deciding.intent_holders();
+            const TxnDecision decision = out->response.rfind("ERR ", 0) == 0
+                                             ? TxnDecision::kAbort
+                                             : TxnDecision::kCommit;
+            const std::uint64_t request_id = next_remote_request_++;
+            if (Status sent = txn_2pc_->Decide(request_id, deciding.ship_id(),
+                                               deciding.last_txn_id(), decision, holders);
+                !sent.ok()) {
+                // The statement's own outcome is already settled and
+                // durable, so this changes no answer. What it costs is the
+                // intents: a holder that never hears keeps them until this
+                // process ends. Logged, because nothing else would say so.
+                if (logging(LogLevel::kError)) {
+                    log_->Error("fk", "core " + std::to_string(core_id_) +
+                                          " could not tell " + std::to_string(holders.size()) +
+                                          " intent holder(s) that an autocommit statement ended: " +
+                                          sent.message());
+                }
+            } else {
+                const std::function<bool()> acked = [this, request_id] {
+                    return txn_2pc_->Settled(request_id);
+                };
+                co_await sched::WaitUntil{&acked};
+                txn_2pc_->Close(request_id);
+            }
+            deciding.ClearIntentHolders();
+        }
+        if (!probe_status.ok()) co_return Status::OK();
     }
 
     if (out->pending_shipped.has_value() && statement_ship_ != nullptr) {
@@ -533,21 +591,31 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // Phase 1. The predicate re-finds the waiter each poll and reads the
         // clock, so the deadline ends the park with nothing having to wake
         // it - `pending_shipped`'s shape, over N respondents instead of one.
-        const std::function<bool()> prepared = [this, id = pending.prepare_request_id] {
-            return txn_2pc_->Settled(id);
-        };
-        co_await sched::WaitUntil{&prepared};
-        // **XF4, leg 1: prepare sent -> every participant settled.** Taken
-        // the instant the park resolves, before the outcome is even read,
-        // so nothing this core does with the answer is charged to the
-        // participants.
-        xowner_commit_.prepare.Note(NowNs() - pending.prepare_sent_ns);
+        // **A transaction with no participants took no vote** (AI, F4):
+        // its cross-owner contact was a foreign-key probe, whose holder has
+        // no rows to prepare and nothing to say. There is no waiter to park
+        // on and no leg to time - timing one nobody walked would report a
+        // fast prepare where there was none - so the phase is unanimous by
+        // construction and the decide below is the whole protocol.
+        bool commit = true;
+        Status refusal = Status::OK();
+        if (pending.prepare_request_id != 0) {
+            const std::function<bool()> prepared = [this, id = pending.prepare_request_id] {
+                return txn_2pc_->Settled(id);
+            };
+            co_await sched::WaitUntil{&prepared};
+            // **XF4, leg 1: prepare sent -> every participant settled.**
+            // Taken the instant the park resolves, before the outcome is
+            // even read, so nothing this core does with the answer is
+            // charged to the participants.
+            xowner_commit_.prepare.Note(NowNs() - pending.prepare_sent_ns);
 
-        const TxnPhaseOutcome* phase = txn_2pc_->Find(pending.prepare_request_id);
-        bool commit = phase != nullptr && phase->AllPrepared();
-        // Built before the close, which frees what it reads.
-        const Status refusal = commit ? Status::OK() : DescribePrepareFailure(phase);
-        txn_2pc_->Close(pending.prepare_request_id);
+            const TxnPhaseOutcome* phase = txn_2pc_->Find(pending.prepare_request_id);
+            commit = phase != nullptr && phase->AllPrepared();
+            // Built before the close, which frees what it reads.
+            refusal = commit ? Status::OK() : DescribePrepareFailure(phase);
+            txn_2pc_->Close(pending.prepare_request_id);
+        }
 
         // RP7's third protocol point: every participant has answered - on
         // this arm as on the refusal arm, since the point fires whatever
@@ -647,7 +715,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         const sched::MonoTimeNs decide_began_ns = NowNs();
         if (Status sent = txn_2pc_->Decide(pending.decide_request_id, pending.session_id,
                                            pending.transaction_id, decision,
-                                           pending.participants);
+                                           pending.decide_targets);
             !sent.ok()) {
             // Nothing left to do about it here: the outcome is decided and
             // durable, and the participants that did not hear are in doubt
@@ -3858,7 +3926,6 @@ Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& hel
     pending.line = std::string(line);
     pending.request_ids.reserve(held.foreign().size());
 
-    const bool in_txn = session.in_explicit_txn();
     for (const auto& group : held.foreign()) {
         const std::uint64_t request_id = next_remote_request_++;
         // `transaction_id` travels as 0: the intent's holder is
@@ -3880,17 +3947,29 @@ Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& hel
         pending.request_ids.push_back(request_id);
         pending.groups.push_back(group);
 
-        // **The enrolment, recorded only once the request is on its way**
-        // - the shipping enrolment's rule and its reason: a participant
-        // recorded for a request that never left would be prepared for a
-        // transaction it holds nothing of. Idempotent, so a statement
-        // naming three parents on one owner enrols it once.
+        // **Recorded only once the request is on its way** - the shipping
+        // enrolment's rule and its reason: a core recorded for a request
+        // that never left would be told to release an intent it never
+        // granted. Idempotent, so a statement naming three parents on one
+        // owner records it once.
         //
-        // Autocommit enrols nobody, which is right and is also what makes
-        // the intent safe there: an autocommit statement's transaction
-        // ends on this core, and the decide that releases the intent is
-        // the one this core's commit sends to every participant it has.
-        if (in_txn) session.EnrolParticipant(group.owner_core);
+        // **An intent holder, not a participant** (work order AI, F4). It
+        // holds no rows of this transaction and has no context to prepare -
+        // asking it to vote answers "holds no transaction for core N's
+        // session M" and aborts a transaction that had no reason to fail.
+        // What it needs is the **decide**, which is the only thing that
+        // ends an intent (AH-R5), so it goes on the list the decide reads
+        // and not on the list the prepare does.
+        //
+        // **Recorded in autocommit too**, which is F1: the first draft
+        // enrolled only inside an explicit transaction, on the reasoning
+        // that "an autocommit statement's transaction ends on this core,
+        // and the decide that releases the intent is the one this core's
+        // commit sends to every participant it has" - and with nobody
+        // enrolled there was no decide, so the intent was never released
+        // and the parent row became un-deletable for the life of the
+        // process behind a `retryable=1` code.
+        session.EnrolIntentHolder(group.owner_core);
     }
 
     out.pending_fk_probe = std::move(pending);
@@ -4902,10 +4981,12 @@ DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
     }
     txn::Transaction* txn = session.transaction();
     if (session.ship_id() == 0) {
-        // A participant is enrolled only by a statement this session
-        // shipped, and shipping mints the id - so this cannot happen
-        // without the two having come apart. Refused rather than prepared
-        // under id 0, which no participant's enrolment is keyed on.
+        // Every cross-core contact mints the identity - a ship, and since
+        // work order AI a foreign-key probe - so this is now the one case
+        // that could not be reached at all rather than the one that was
+        // reachable and unhandled. Refused rather than prepared under id 0,
+        // which no participant's enrolment and no intent's holder is keyed
+        // on.
         return {ErrorReply(Status::InvalidArgument(
                     "a cross-owner transaction has participants but no shipping identity; its "
                     "participants cannot be addressed")),
@@ -4918,30 +4999,40 @@ DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
     // never sent a prepare contributes no leg and `xowner_commit_.whole`
     // counts commits that actually ran the protocol.
     pending.began_at_ns = NowNs();
-    pending.prepare_request_id = next_remote_request_++;
     pending.decide_request_id = next_remote_request_++;
     pending.session_id = session.ship_id();
     pending.transaction_id = txn->id();
     pending.participants = session.participants();
+    pending.decide_targets = session.DecideTargets();
 
-    // RP7's first protocol point: the coordinator dies with a transaction
-    // whose participants hold uncommitted writes and have never been asked
-    // for anything. Every participant stream is a loser at the next mount.
-    base::CrashPointHit("coordinator.before_prepare");
-    if (Status s = txn_2pc_->Prepare(pending.prepare_request_id, pending.session_id,
-                                     pending.transaction_id, pending.participants);
-        !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
-    // XF4's second stamp: the prepare is on its way. The send itself sits
-    // between the two stamps and so is charged to `whole` and to no leg -
-    // the prepare leg measures what the participants did, not the ring.
-    pending.prepare_sent_ns = NowNs();
-    if (logging(LogLevel::kDebug)) {
-        log_->Debug("2pc", "core " + std::to_string(core_id_) + " is preparing " +
-                               std::to_string(pending.participants.size()) +
-                               " participant(s) for transaction " +
-                               std::to_string(pending.transaction_id));
+    // **The prepare happens only where something holds rows** (AI, F4). A
+    // transaction whose only cross-owner contact was a foreign-key probe
+    // has intent holders and no participants: there is nothing to vote, so
+    // there is no vote to collect, and `prepare_request_id` stays 0 to say
+    // so. The decide still goes out - it is what ends the intents.
+    if (!pending.participants.empty()) {
+        pending.prepare_request_id = next_remote_request_++;
+        // RP7's first protocol point: the coordinator dies with a
+        // transaction whose participants hold uncommitted writes and have
+        // never been asked for anything. Every participant stream is a
+        // loser at the next mount.
+        base::CrashPointHit("coordinator.before_prepare");
+        if (Status s = txn_2pc_->Prepare(pending.prepare_request_id, pending.session_id,
+                                         pending.transaction_id, pending.participants);
+            !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
+        }
+        // XF4's second stamp: the prepare is on its way. The send itself
+        // sits between the two stamps and so is charged to `whole` and to
+        // no leg - the prepare leg measures what the participants did, not
+        // the ring.
+        pending.prepare_sent_ns = NowNs();
+        if (logging(LogLevel::kDebug)) {
+            log_->Debug("2pc", "core " + std::to_string(core_id_) + " is preparing " +
+                                   std::to_string(pending.participants.size()) +
+                                   " participant(s) for transaction " +
+                                   std::to_string(pending.transaction_id));
+        }
     }
     DispatchOutcome pending_out;
     pending_out.pending_cross_owner_commit = std::move(pending);
@@ -9332,7 +9423,9 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     // one test on a field the session already has in cache. That is what
     // R6's "the one-owner path pays nothing" means concretely, and it is
     // asserted from outside by `Txn2pcClient::prepare_messages()` staying 0.
-    if (session.has_participants()) return PrepareAcrossOwners(session);
+    if (session.has_participants() || session.has_intent_holders()) {
+        return PrepareAcrossOwners(session);
+    }
     return CommitLocal(session);
 }
 
@@ -9439,9 +9532,13 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     std::vector<std::uint32_t> participants;
     std::uint64_t session_id = 0;
     std::uint64_t transaction_id = 0;
-    if (session.has_participants() && txn_2pc_ != nullptr && session.ship_id() != 0 &&
-        session.transaction() != nullptr) {
-        participants = session.participants();
+    if ((session.has_participants() || session.has_intent_holders()) && txn_2pc_ != nullptr &&
+        session.ship_id() != 0 && session.transaction() != nullptr) {
+        // The union (AI, F4): an intent holder never prepared, so it is
+        // never in doubt - but it is holding a parent row still on this
+        // transaction's behalf, and a rollback that did not tell it would
+        // leave that row un-deletable for the life of the process.
+        participants = session.DecideTargets();
         session_id = session.ship_id();
         transaction_id = session.transaction()->id();
     }
@@ -9690,6 +9787,12 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
 
     // Autocommit: this statement is the whole transaction, so behaviour
     // here *is* statement-atomic - reservations included, on both arms.
+    // **The id an autocommit decide will name** (AI, F1): this transaction
+    // is released a few lines below, and the decide that ends the intents
+    // it took is sent after the statement returns - by which time there is
+    // no transaction to read it off. Set on both arms, because an aborted
+    // statement's intents need releasing exactly as a committed one's do.
+    session.set_last_txn_id(scope.txn->id());
     if (!result.ok()) {
         if (Status s = enforcer_.AbortTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
             return s;
