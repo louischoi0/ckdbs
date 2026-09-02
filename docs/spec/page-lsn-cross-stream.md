@@ -1,5 +1,27 @@
 # Page LSN Across Streams
 
+> **Superseded in part on 2026-09-02, by AR0 M0** (the single WAL stream;
+> `instructions/v3.0.0/workorder-al-m0-single-wal.md`, AL-R6). A database
+> created by this build or later has **one stream**, so the question this
+> document answers — what makes redo's idempotence test meaningful when a
+> page is written by more than one stream — does not arise for it. A volume
+> written before the change still says `kPerCoreStreams` in its superblock
+> and every rule below still governs it, which is why this document is
+> marked rather than deleted.
+>
+> What survives under one stream, and what does not:
+>
+> | | under one stream |
+> |---|---|
+> | **§6's rejection of PL-A** (one global LSN, "a shared atomic on the append path") | **Reversed.** PL-A is what M0 built. The atomic is real and is the cost AR0-2 accepts; `wal/stream.hpp` carries the latch's justification and AL-S8 prices it |
+> | **§9 rule 4**, the stamp riding the page_lsn | **Narrowed to a claim.** The stamp still says which core owns a page — `device_page_store`'s claim-at-fault reads it — but it no longer says which log the page's records are in, because there is one. Redo does not restamp, and the mount's undo phase does not either (`SetStampSuppressed`) |
+> | **§9 rules 5-6**, a foreign stamp is `Corruption` | **Not in force.** There is no other stream to have crossed from |
+> | **§9 rules 1-3**, the logged handoff over a flushed page | **Still in force**, because ownership is still per core in M0. What changed is analysis: the dirty-table erase is a per-core rule and is skipped, since the one log also holds the giver's records (AL-R6) |
+> | **§2's invariant chain** (one stream per core, LSNs never compared across streams) | **The premise, not the conclusion.** It is what M0 removed |
+>
+> AR0's own §7 lists this document as "superseded"; that overstates it, and
+> AL-R6 is the correction.
+
 The contract for a page that more than one WAL stream writes over its
 life: **PL-B, the logged handoff over a flushed page, with the PL-C
 guard, an owning-stream stamp in the page header.** §9 is the binding

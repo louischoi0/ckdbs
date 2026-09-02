@@ -174,6 +174,50 @@ TEST_F(AnalysisTest, APageHandoffRemovesThePageFromTheDirtyPageTable) {
     EXPECT_EQ(r.value().dirty_pages.count(900), 0u);
 }
 
+// **Under one stream the erase would drop the giver's records** (AR0 M0,
+// AL-R6 as amended). What licenses the erase per core is that a handoff is
+// logged by the *receiver*, whose stream holds nothing for the page below
+// it. One stream holds the giver's records for that page in the same log,
+// and dropping the entry makes redo's not-dirty filter skip every one of
+// them. Keeping it costs redo re-applying records the image may already
+// hold, which the page_lsn gate makes idempotent - slower at worst, where
+// the erase is wrong at worst.
+TEST_F(AnalysisTest, UnderOneStreamAHandoffLeavesTheDirtyPageTableAlone) {
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        // The giver's record, then the receiver's acquisition, then the
+        // receiver's own - all in the one log, which is the whole point.
+        ASSERT_TRUE(s.value()->Append({RecordType::kHeapOverwrite, 5, 800}).ok());
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 800}, handoff).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kHeapOverwrite, 6, 800}).ok());
+        // And a page the log names only by its handoff.
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 900}, handoff).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    AnalysisStart one_stream;
+    one_stream.single_stream = true;
+    auto r = Analyze(*device_, 0, one_stream);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+
+    // The giver's record still seeds the page, so redo will replay from it.
+    ASSERT_EQ(r.value().dirty_pages.count(800), 1u)
+        << "the giver's records were dropped from the one pass that must replay them";
+    // And the handoff did not become the page's recLSN: it is an ownership
+    // fact, not a mutation.
+    const auto seeded = r.value().dirty_pages.find(800);
+    ASSERT_NE(seeded, r.value().dirty_pages.end());
+    EXPECT_LT(seeded->second, r.value().end_lsn);
+
+    // A page named only by a handoff is still not dirty - nothing to redo.
+    EXPECT_EQ(r.value().dirty_pages.count(900), 0u);
+    // But the high-water still takes it, which the erase never governed.
+    EXPECT_GE(r.value().max_page_id, 900u);
+}
+
 TEST_F(AnalysisTest, ATransactionalPageHandoffIsCorruption) {
     // A handoff is an ownership event and belongs to no transaction
     // (log_page_handoff.hpp hardcodes 0); a nonzero txn_id would mint a

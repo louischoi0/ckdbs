@@ -130,9 +130,26 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // the one durable proof the id is in use, and the high-water must
         // rise past it (RV4's hazard, reopened for exactly the handed-off
         // page; raising it is monotone and free).
+        //
+        // **The erase is a per-core-stream rule and does not survive one
+        // stream** (AR0 M0, AL-R6, amended from building AL-S5). What
+        // licenses it is not the handoff itself but the sentence above it:
+        // *this stream* owes the page nothing below this LSN. That holds
+        // per core because a handoff is logged by the receiver as an
+        // acquisition, and the receiver's stream has nothing for the page
+        // below it. Under one stream the same log also holds the **giver's**
+        // records for that page, and erasing drops them from the dirty
+        // table - which makes redo's not-dirty filter skip every one of
+        // them. Keeping the entry costs redo re-applying records the image
+        // may already hold, which the `page_lsn` gate makes idempotent:
+        // slower at worst, where the erase is wrong at worst.
         if (record.header.page_id != kInvalidPageId) {
-            if (record.type() == RecordType::kPageHandoff) {
+            if (record.type() == RecordType::kPageHandoff && !start.single_stream) {
                 out.dirty_pages.erase(record.header.page_id);
+            } else if (record.type() == RecordType::kPageHandoff) {
+                // Neither erased nor seeded: the handoff is an ownership
+                // fact, not a mutation, so it must not become a page's
+                // recLSN either. `max_page_id` below still takes it.
             } else {
                 out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
             }
