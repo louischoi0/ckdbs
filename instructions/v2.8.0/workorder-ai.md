@@ -241,7 +241,7 @@ comparison.
 | AI-R4 | **Ruled 2026-09-02: the end-to-end cell lands here, as AI-T2**, CLA's proposal — it is this order's acceptance test |
 | AI-T0 | **Done 2026-09-02.** Eight sites surveyed, H-AI3 **held**: no site outside the gate descends a relation this core does not own. Table below |
 | AI-T1 | **Complete 2026-09-02.** The lift itself and three of AI-R5's placements landed 2026-09-01 at `956f00d`; the remainder lands here — the one surviving stale contract claim corrected, H-AI2 answered by source-read, and AI-R3's re-point built. See "AI-T1's remainder" below |
-| AI-T2 | **First slice built 2026-09-02, and it found three defects.** The end-to-end cross-owner INSERT runs in process and is pinned; H-AI1's four fixtures are not all built yet, and the intent's release cannot be asserted because it does not happen. See "AI-T2, first slice" below |
+| AI-T2 | **Two slices built 2026-09-02, and they found four defects.** The end-to-end cross-owner INSERT runs in process and is pinned; F2/F3 are fixed on the operator's ruling and F4 was found behind them. H-AI1's remaining fixtures wait on F1/F4. See "AI-T2, first slice" and "AI-T2, second slice" below |
 | AI-T3 | not started |
 
 ### The order arrived after its own AI-T1
@@ -398,3 +398,43 @@ in-flight parent) and the intent's release-after-decide are **not built
 here**, because two of them cannot be asserted until F1/F2 are answered: an
 explicit transaction cannot commit, and an autocommit's intent never ends.
 The remaining fixtures land with the fix.
+
+### AI-T2, second slice — two of the four fixed, and the third moved
+
+**F2 and F3 are fixed on the operator's ruling of 2026-09-02**: the
+shipping identity is minted at the first cross-core **contact** rather than
+at the first ship, which is the rule `ShipStatement`'s own comment already
+states applied to the other contact. One line in `SendForeignKeyProbes`,
+and the branch that refused *"a cross-owner transaction has participants
+but no shipping identity"* — whose comment called its own state impossible
+— is no longer reachable from a probe.
+
+**It did not make the transaction commit, because F4 was behind it.** With
+an identity the `COMMIT` reaches the prepare leg and the prepare finds
+nothing to prepare: enrolment by probe is **coordinator-side only**, and
+the participant's context lives in `ShippedStatementExecutor::enrolled_`,
+which a shipped statement fills and an intent-only participant never has.
+The owner answers *"holds no transaction for core 1's session N"* and the
+transaction aborts, retryably, forever.
+
+**F1's ruling inherits it.** The operator ruled that autocommit enrols too,
+so the existing decide leg releases the intent; whether that decide is
+reachable without a prepare is F4's answer, so F1 is ruled and blocked
+rather than built.
+
+**The wall is pinned, not worked around**:
+`ACrossOwnerFkProbeMintsTheSessionsShippingIdentityAndStopsAtThePrepare`
+asserts that F2 is fixed (an identity exists, and the identity refusal is
+gone) and that F4 is where the statement stops. Its three F4 assertions are
+to be **deleted with the fix, not around it** — a suite that quietly
+stopped asserting them would be a transaction that started committing
+without anyone deciding how an intent-only participant prepares. F4's three
+candidate shapes are in the bug file, and the choice between them is a
+design decision this order does not take.
+
+**The rig gained core 0's participant half of 2PC** for this slice, with
+the FK release riding the decide exactly as `CoreRuntime::AttachTransport`
+wires it. Until the foreign-key probe nothing enrolled core 0 as a
+*participant* — a peer's shipped write makes core 0 the owner, not a
+participant of somebody else's transaction — so the rig had the coordinator
+half alone.

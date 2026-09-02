@@ -3840,6 +3840,20 @@ Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& hel
     // shipped statement.
     if (fk_probes_ == nullptr || line.empty()) return RefuseUnsentForeignKeyProbes(held);
 
+    // **The identity the intent's holder is keyed on** (F2/F3, work order
+    // AI). `ShipStatement` mints this on the first ship and keeps it for
+    // the session's life; a probe is the session's *other* kind of
+    // cross-core contact and was not minting it, so a session that had
+    // never shipped probed under id 0 - which made every un-shipped
+    // session share the holder key `(core, 0)`, so one decide would
+    // release another session's intents, and left `HandleCommit` looking
+    // at participants with no identity to address them by. That refusal's
+    // own comment called the state impossible ("a participant is enrolled
+    // only by a statement this session shipped, and shipping mints the
+    // id"); the probe's enrolment is what came apart from shipping. Minted
+    // here for the same reason and by the same rule.
+    if (session.ship_id() == 0) session.set_ship_id(next_ship_session_id_++);
+
     PendingFkProbe pending;
     pending.line = std::string(line);
     pending.request_ids.reserve(held.foreign().size());

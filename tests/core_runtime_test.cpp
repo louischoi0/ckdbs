@@ -4069,6 +4069,15 @@ struct ForeignIndexRig {
     // reference to it, and the server holds the executor's seam.
     std::optional<ShippedStatementExecutor> executor;
     std::optional<StatementShipServer> ship_server;
+    // **Core 0's participant half of the cross-owner commit** (AI-T2). The
+    // rig had the coordinator half only, because until the foreign-key
+    // probe nothing enrolled core 0 as a *participant* - a peer's write
+    // shipped to core 0 makes core 0 the owner, not a participant of
+    // somebody else's transaction. A cross-owner FK write reverses the
+    // roles: the peer coordinates and core 0 holds the intent, so core 0
+    // has to answer prepare and decide. Declared after `executor`, whose
+    // seams it holds.
+    std::optional<Txn2pcServer> txn2pc_server;
     std::unique_ptr<CoreRuntime> peer;
     catalog::Oid oid = 0;
     catalog::SysTableRow row{};
@@ -4231,6 +4240,36 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
                         [&rig](const sched::MessageHeader& header,
                                std::span<const std::byte> payload) {
                             rig.ship_server->OnRequest(header, payload);
+                        })
+                    .ok());
+
+    // **Core 0's participant half of 2PC** (AI-T2), production's own wiring
+    // (`CoreRuntime::AttachTransport`) done by hand, **including the FK
+    // release that rides the decide** - which is where the intent ends and
+    // the only thing that ends it (AH-R5).
+    rig.txn2pc_server.emplace(/*core_id=*/0, *rig.core0, rig.ring(),
+                              rig.executor->PrepareSeam(), rig.executor->DecideSeam(),
+                              rig.executor->ResolveSeam(), /*log=*/nullptr);
+    ASSERT_TRUE(rig.txn2pc_server->RegisterResolveReplyReceiver().ok());
+    rig.executor->SetTxn2pcServer(&*rig.txn2pc_server);
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(
+                        sched::RingMessageKind::kTxnPrepareRequest,
+                        [&rig](const sched::MessageHeader& header,
+                               std::span<const std::byte> payload) {
+                            rig.txn2pc_server->OnPrepare(header, payload);
+                        })
+                    .ok());
+    ASSERT_TRUE(rig.core0
+                    ->RegisterMessageHandler(
+                        sched::RingMessageKind::kTxnDecideRequest,
+                        [&rig](const sched::MessageHeader& header,
+                               std::span<const std::byte> payload) {
+                            rig.txn2pc_server->OnDecide(header, payload);
+                            TxnDecideRequestPayload decide{};
+                            if (payload.size() != sizeof(decide)) return;
+                            std::memcpy(&decide, payload.data(), sizeof(decide));
+                            rig.fk_server->ReleaseIntents(header.src_core, decide.session_id);
                         })
                     .ok());
 
@@ -6708,6 +6747,83 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
     const std::string rows = rig.peer->dispatcher().Dispatch("SELECT pid FROM aichild").response;
     EXPECT_EQ(rows.rfind("ERR", 0), std::string::npos) << rows;
     EXPECT_NE(rows.find("7"), std::string::npos) << "the child row is not there: " << rows;
+}
+
+TEST_F(CoreRuntimeTest, ACrossOwnerFkProbeMintsTheSessionsShippingIdentityAndStopsAtThePrepare) {
+    // The same crossing inside an explicit transaction, which is where the
+    // intent's **end** would be observable - and where two defects sit, one
+    // fixed here and one named rather than fixed.
+    //
+    // **F2, fixed 2026-09-02** (work order AI): the shipping identity was
+    // minted only by a ship, so a session whose first cross-core contact
+    // was a probe enrolled a participant under id 0. Its COMMIT refused *"a
+    // cross-owner transaction has participants but no shipping identity"* -
+    // a branch whose own comment called the state impossible, because it
+    // was written before anything but a ship could enrol. The probe mints
+    // the identity now, by the same rule and for the same reason.
+    //
+    // **F4, open**: with an identity the commit reaches the prepare, and
+    // the prepare finds nothing to prepare. Enrolment by probe is
+    // *coordinator-side only* - `ShippedStatementExecutor::enrolled_` is
+    // filled by a shipped statement, and an intent-only participant never
+    // shipped one - so the owner answers "holds no transaction for core
+    // 1's session N" and the transaction aborts. **A cross-owner foreign
+    // key write inside an explicit transaction still cannot commit**, and
+    // this cell pins where it stops so the next attempt starts from the
+    // wall rather than from the top. The report is
+    // `docs/inflight/bugs/fk-reference-intent-never-released-on-autocommit.md`.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "aitxn_base");
+
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    ASSERT_EQ(rig.dispatcher->Dispatch("CREATE TABLE txnparent (id int64, v int64) BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    ASSERT_EQ(rig.dispatcher
+                  ->Dispatch("CREATE TABLE txnchild (id int64, pid int64 REFERENCES txnparent) "
+                             "BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+    auto child_oid = rig.catalog2->FindTableOidByName("txnchild");
+    ASSERT_TRUE(child_oid.ok()) << child_oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    rig.peer->InvalidateCatalog();
+    FundPeerForRelation(rig, child_oid.value());
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO txnparent VALUES (7, 5)").response.rfind("ERR",
+                                                                                             0),
+              0u);
+
+    Session sess;
+    DispatchOutcome begun;
+    auto begin = rig.StartOnPeer("BEGIN", begun, &sess);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+    ASSERT_EQ(begun.response.rfind("ERR", 0), std::string::npos) << begun.response;
+
+    DispatchOutcome wrote;
+    auto insert = rig.StartOnPeer("INSERT INTO txnchild VALUES (7)", wrote, &sess);
+    ASSERT_TRUE(rig.Drive(*insert)) << wrote.response;
+    ASSERT_NE(wrote.response.rfind("ERR", 0), 0u) << "the cross-owner write: " << wrote.response;
+    EXPECT_EQ(rig.fk_intents.live_rows(), 1u) << "the probe left no intent to release";
+
+    // **F2's assertion.** The identity exists because the probe minted it,
+    // and an enrolled participant with no identity cannot be addressed.
+    EXPECT_NE(sess.ship_id(), 0u);
+
+    DispatchOutcome committed;
+    auto commit = rig.StartOnPeer("COMMIT", committed, &sess);
+    ASSERT_TRUE(rig.Drive(*commit, 512)) << committed.response;
+    EXPECT_EQ(committed.response.find("no shipping identity"), std::string::npos)
+        << "F2 is back: " << committed.response;
+
+    // **F4's wall, pinned.** Delete these three lines with the fix, not
+    // around it: a green suite that stopped asserting this would be a
+    // transaction that silently started committing without anyone deciding
+    // how an intent-only participant prepares.
+    EXPECT_EQ(committed.response.rfind("ERR", 0), 0u) << committed.response;
+    EXPECT_NE(committed.response.find("holds no transaction for core"), std::string::npos)
+        << committed.response;
+    EXPECT_NE(committed.response.find("retryable=1"), std::string::npos) << committed.response;
 }
 
 
