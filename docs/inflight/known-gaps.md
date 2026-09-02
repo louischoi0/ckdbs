@@ -2780,15 +2780,22 @@ do, and one thing it does that nobody has decided:
   spreading, **this one ships on by default**. What partly covers it is
   `bench/af_namespace_grouping_probe.py`, which drives a real server and
   reads placement back out of the catalog; a benchmark is not a test.
-- **AF-T5's sweep stops at one group per writer core.** Every cell in
-  `bench/v2.8.0/results-af-t5-namespace-grouping-v2.7.0-99-g775e79d.md` has
-  at most one declared group per writer core, which is the side of
-  `bench/v2.1.0/results-shipping-pretasks` §6's step where rotation still
-  wins. The 7-group cells that would cross it were queued and not run, and
-  the g3-c8 tie (namespace 0.99x of rotation on throughput, 4.5x better on
-  p100) is a warning that the answer past the step is not obvious.
-  `bench/af_namespace_grouping_probe.py --groups 7` at 4 and 8 cores is the
-  owed cell.
+- **Namespace placement is measured, and what it buys depends on a number
+  nothing in the engine reports.** `bench/v2.8.0/results-af-t5-namespace-grouping-*`
+  §3a: against blind rotation the grouping is worth **1.22× at 2.33
+  declared groups per writer core** and **0.90× at 1.00** — it pays only
+  once cores are shared, and is at or slightly below parity whenever every
+  group can have a core of its own. Nothing in `SHOW META` or the catalog
+  says how many declared groups a core holds, so an operator cannot see
+  which side of that they are on. Two things left unmeasured: anything past
+  2.33 groups per writer core (one point, not a curve), and the row-count
+  axis at that sizing.
+- **g7-c8's load phase is 2.2× slower under `namespace` than under
+  `rotate`** (29.7 s against 13.4 s), at no other point in the AF-T5 sweep,
+  and both spreading arms carry a ~19 ms p100 there against ~1-3 ms
+  everywhere else. Seven sessions on seven cores does something the rest of
+  the sweep does not, and a read benchmark could not say what. Unexplained
+  and worth chasing before the number is quoted anywhere.
 - **No `sim/` cell covers a namespace.** The generator creates relations
   in `public` and nothing declares one, so the crash/restart harness has
   never mounted a file with a user namespace in it. The rows involved are

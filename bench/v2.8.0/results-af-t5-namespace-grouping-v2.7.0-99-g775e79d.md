@@ -1,19 +1,38 @@
 # AF-T5 — namespace placement measured on a workload that actually crosses
 
-Measured 2026-09-02 on `worktree-workorder-wf-te-t5` at
-`v2.7.0-99-g775e79d`, `build-release` (`-DCMAKE_BUILD_TYPE=Release`),
+Measured 2026-09-02 on `worktree-workorder-wf-te-t5`,
+`build-release` (`-DCMAKE_BUILD_TYPE=Release`),
 `bench/af_namespace_grouping_probe.py`, three interleaved arms, 5 reps per
 point, data file on a block device, `errors=0` in every run.
 
-**The verdict, in one sentence, because AF-T5 asked for it either way:**
-namespace placement **is** an answer to AE-8 rather than a convenience — it
-beats single-core placement by **1.12× at two groups and 1.38-1.39× at
-three**, and beats blind rotation by 5-10% in three of the four cells where
-the two are separable — but it is **not free at one group, where it costs
-19%**, and at eight cores with three groups it and rotation are a **tie on
-throughput**, separated only by the tail. What it buys is parallelism
-between declared groups, plus a p100 that does not blow out; it never buys
-a cheaper single group.
+**Two commits, and a bridge cell that licenses reading them together.**
+§3's first five cells were measured at **`v2.7.0-99-g775e79d`**; the
+7-group cells §3a adds were measured at **`v2.7.0-105-g154df22`**, after
+that branch merged `origin/main`'s AH-T6 follow-ups, which touched
+`command_dispatcher.cpp` and `txn_2pc_service.cpp`. `g3-c4` was therefore
+**re-run at the second commit** so the two tables are not being compared
+across an unmeasured gap: `namespace/creating` reads 1.391× at the first
+and 1.443× at the second, `rotate/creating` 1.320× and 1.423×. The
+absolute control moved (5,734 → 5,446 join/s, ~5% slower) and the ratios
+did not, which is what the bridge exists to establish.
+
+**The verdict, because AF-T5 asked for it either way:** namespace placement
+**is** an answer to AE-8 rather than a convenience — against single-core
+placement it is 1.12× at two groups, 1.38–1.44× at three and **1.95× at
+seven**, the last being the sizing AF actually exists for. Against *blind*
+rotation the answer is conditional, and the condition is the one thing this
+sweep settles:
+
+> **Keeping a wired pair together pays when cores are scarce relative to
+> declared groups, and pays nothing when they are not.** On four cores —
+> three writer cores — `namespace` beats `rotate` at every group count, and
+> the margin *widens* as groups pile up: 1.09× at one group, 1.06× at two,
+> 1.01–1.05× at three, **1.22× at seven**. On eight cores, where every group
+> can have a writer core of its own either way, it does not: 1.10× at two
+> groups, 0.99× at three, **0.90× at seven**.
+
+And it is **not free at one group, where it costs 19%** — the hop is real
+and only parallelism pays for it.
 
 ---
 
@@ -117,7 +136,7 @@ Ratios against each cell's own control:
 | g3-c4 (3 groups) | 1.320× | **1.391×** | 1.053× |
 | g3-c8 (3 groups) | 1.391× | **1.376×** | 0.989× |
 
-**The last row is the one that keeps this honest.** At eight cores with
+**The g3-c8 row is the one that keeps this honest.** At eight cores with
 three groups the two spreading arms are a tie: 7,872 against 7,787 join/s,
 ranges 7,754–7,946 and 7,756–7,919 — fully overlapping, so nothing here
 resolves them. Rotation split all three pairs and used six cores to do it;
@@ -125,6 +144,65 @@ namespace used three and kept them together; the throughput is the same.
 Read together with `g2-c8`'s 1.104×, that says the margin over rotation is
 **not** a pure crossing cost — it is a contention effect that appears when
 cores are scarce relative to the work and disappears when they are not.
+
+### 3a. The 7-group cells, at `v2.7.0-105-g154df22`
+
+The cells above all sit at **at most one declared group per writer core**,
+which is the side of `bench/v2.1.0` §6's step where rotation still wins.
+These three cross it. Same probe, same arms, same 5 reps; a second commit,
+and `g3-c4` re-run as the bridge (see the head of this file).
+
+| cell | cores | groups | groups per writer core | arm | join/s | range | p0 | p25 | p50 | p90 | p99 | p100 | split | cores used |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| g3-c4′ | 4 | 3 | 1.00 | `creating` | 5446 | 5139–5568 | 232.4 | 339.9 | 397.5 | 743.5 | 811.7 | 12654.7 | 0/3 | 1 |
+| g3-c4′ | 4 | 3 | 1.00 | `rotate` | 7750 | 7532–8067 | 280.8 | 361.5 | 374.1 | 425.7 | 514.0 | 1091.5 | 3/3 | 3 |
+| g3-c4′ | 4 | 3 | 1.00 | `namespace` | **7861** | 7666–8009 | 246.0 | 346.4 | 364.5 | 423.2 | 489.7 | 1371.6 | 0/3 | 3 |
+| g7-c4 | 4 | 7 | **2.33** | `creating` | 5609 | 3226–5682 | 293.9 | 1041.8 | 1058.8 | 2106.0 | 2188.7 | 3009.5 | 0/7 | 1 |
+| g7-c4 | 4 | 7 | **2.33** | `rotate` | 8954 | 8786–9126 | 294.4 | 608.0 | 695.2 | 1034.6 | 1413.7 | 2330.6 | 7/7 | 3 |
+| g7-c4 | 4 | 7 | **2.33** | `namespace` | **10962** | 5085–11161 | 257.9 | 505.2 | 545.5 | 728.5 | 1081.2 | 13194.3 | 0/7 | 3 |
+| g7-c8 | 8 | 7 | 1.00 | `creating` | 5386 | 5295–5592 | 261.3 | 1055.8 | 1087.4 | 2148.3 | 2273.3 | 3244.3 | 0/7 | 1 |
+| g7-c8 | 8 | 7 | 1.00 | `rotate` | **8655** | 7740–8808 | 295.3 | 633.7 | 747.4 | 1080.4 | 1624.0 | 19389.6 | 7/7 | 7 |
+| g7-c8 | 8 | 7 | 1.00 | `namespace` | 7792 | 6106–8797 | 269.7 | 649.6 | 808.3 | 1274.7 | 2148.0 | 18573.7 | 0/7 | 7 |
+
+| cell | `rotate` / `creating` | `namespace` / `creating` | `namespace` / `rotate` |
+|---|---|---|---|
+| g3-c4′ (3 groups, 4 cores) | 1.423× | **1.443×** | 1.014× |
+| g7-c4 (7 groups, 4 cores) | 1.596× | **1.954×** | **1.224×** |
+| g7-c8 (7 groups, 8 cores) | **1.607×** | 1.447× | **0.900×** |
+
+**g7-c4 is the cell AF was built for, and it is the strongest result in the
+sweep.** Seven declared groups over three writer cores: `namespace` puts
+them 3/2/2 — every core holds a second group, and one holds a third — while
+`rotate` splits all seven pairs across the same three cores. Same cores,
+same parallelism available; the only difference in the catalog is whether a
+group's own pair is together, and it is worth **22.4%**. The p50 tells the
+same story from the other side: 545.5 µs against 695.2 µs, because under
+rotation both steps of every join cross.
+
+**g7-c8 is the counter-cell, and it is why the verdict above is
+conditional.** Seven groups over *seven* writer cores: every group gets a
+core of its own under both policies, nothing is queued behind anything, and
+`namespace` then **loses** to rotation, 7,792 against 8,655 (0.900×). The
+ranges overlap (6,106–8,797 against 7,740–8,808), so the size of the loss is
+not well resolved — but the sign is consistent with g3-c8's 0.989× and the
+direction is unmistakable: **with spare cores, splitting a pair costs
+nothing, and rotation's finer-grained spreading is at worst equal.**
+
+**Two things in that cell are unexplained and are not glossed.** Its load
+phase — untimed, outside the join window — is **29.7 s under `namespace`
+against 13.4 s under `rotate`**, a 2.2× gap that appears at no other point
+in the sweep and that a read benchmark has no business explaining. And both
+spreading arms have a p100 near 19 ms there, an order of magnitude above
+every other cell. Something about seven sessions on seven cores is
+different, and this probe does not say what. **It is a finding to chase, not
+a number to quote.**
+
+**Variance, stated rather than smoothed.** Two arms carry exactly one
+outlying rep out of five — `creating` at g7-c4 (3,226 against 5,607–5,682)
+and `namespace` at g7-c4 (5,085 against 10,905–11,161). They fall in
+different reps, so this is host noise rather than a within-rep effect, and
+the medians reported above exclude both. The `namespace` outlier is also
+where g7-c4's 13.2 ms p100 comes from.
 
 ---
 
@@ -147,18 +225,27 @@ one and two groups, and it is a **statement about the session topology**, not
 about the workload size — every session here dispatches from core 0, so the
 hop is unavoidable the moment a relation leaves it.
 
-**`namespace` beats `rotate` by 5–10% in four cells and ties in the fifth,
-and the difference between those cases is contention, not crossing.** The
-two arms differ in the catalog only in whether a group's pair is together,
-so the margin is the price of splitting a wired pair — 1.09× at one group,
-1.06× and 1.10× at two, 1.05× at three on four cores. At three groups on
-*eight* cores it is 0.99×, a tie: rotation had six cores for six relations
-and nothing was waiting behind anything, so the extra hop cost nothing that
-the spare capacity did not absorb. The honest reading is that AF's
-throughput advantage over blind rotation is real where cores are the scarce
-resource and vanishes where they are not — and that the case AF actually
-exists for, a machine with more declared groups than cores, is **not
-measured here** (see §5).
+**`namespace`'s margin over `rotate` is a function of one number: declared
+groups per writer core.** The two arms differ in the catalog only in whether
+a group's pair is together, so that margin *is* the price of splitting a
+wired pair, and across the whole sweep it tracks contention rather than
+crossing:
+
+| groups per writer core | cells | `namespace` / `rotate` |
+|---|---|---|
+| 0.33 (1 group, 3 writer cores) | g1-c4 | 1.092× |
+| 0.29–0.67 (2 groups) | g2-c8, g2-c4 | 1.104×, 1.057× |
+| 0.43–1.00 (3 groups) | g3-c8, g3-c4, g3-c4′ | 0.989×, 1.053×, 1.014× |
+| 1.00 (7 groups, 7 writer cores) | g7-c8 | **0.900×** |
+| **2.33 (7 groups, 3 writer cores)** | **g7-c4** | **1.224×** |
+
+Read down the last column and the story is not "namespace always wins": it
+is **at or below parity wherever a group can have a core to itself, and it
+pulls away only once cores are shared.** g7-c4 is the only cell in the sweep
+where a core holds a second declared group, and it is the only cell where
+the margin exceeds 10%. That is the case AF exists for — a machine with more
+wired groups than cores — and it is also the case an operator will actually
+be in.
 
 **The tail is where the arms separate most consistently, and it is not
 subtle.** `creating`'s p100 is **12.3 ms at two groups on four cores and
@@ -191,17 +278,16 @@ cores), which this probe does not explain and does not try to.
 
 ## 5. What was not run, and what this does not claim
 
-- **The 7-group cells were queued and not run, and this is the gap that
-  matters.** The sweep was stopped after five of nine cells — `g7-c4`,
-  `g7-c8` and two row-count variants at 7 groups never ran. Every cell in
-  this file therefore has **at most one group per writer core**, which is
-  precisely the side of `bench/v2.1.0` §6's step where rotation still wins;
-  the point where a core takes a second group — where §6 found blind
-  rotation collapsing on the *unwired* workload, and where AF's grouping
-  argument should matter most — is **unmeasured**. Nothing here says what
-  happens past it, and the g3-c8 tie is a warning that the answer is not
-  obvious. Re-running `bench/af_namespace_grouping_probe.py --groups 7` at
-  4 and 8 cores is the owed cell.
+- ~~**The 7-group cells were queued and not run**~~ — **run 2026-09-02**,
+  §3a. What is still not measured is anything **past 2.33 groups per writer
+  core**: g7-c4 is the only cell where a core holds more than one declared
+  group, so the shape of the curve beyond it is one point, not a curve. The
+  two row-count variants at 7 groups (`--rows 200` and `--rows 10000`) were
+  queued and never ran either, so nothing here separates the per-statement
+  fixed cost from the per-row one at that sizing.
+- **g7-c8's load anomaly is unexplained** (§3a): 29.7 s under `namespace`
+  against 13.4 s under `rotate`, at no other point in the sweep. A read
+  benchmark cannot answer it and this one does not try.
 - **This is a read measurement.** The load numbers in §4 are a by-product
   taken outside the timed window, not a write benchmark.
 - **No foreign key is declared in the workload.** A cross-owner FK adds a
