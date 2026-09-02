@@ -244,16 +244,18 @@ public:
     // read and forgets it. The core running it is enrolled in nothing, gets
     // no decide and needs no release leg (AJ-R5) — what holds the window
     // open lives on the *deleting* core, in `FkPendingDeleteTable`.
-    // **It runs the walk inline on the message drain, and that is a known
-    // gap rather than a decision** (AJ-T2's review, finding 1). Unlike the
-    // forward - whose `CheckParentPresent` is a btree descent - a reverse
+    // **Validates on the drain, walks on a task**, which is the one
+    // structural difference from `OnRequest` above and the reason for it:
+    // the forward's `CheckParentPresent` is a btree descent, but a reverse
     // check without a Cabin is a stoppable walk of the *whole* child
     // relation, and up to `kFkReverseProbeMaxEntries` of them ride one
-    // message. `IndexBuildServer::OnRequest` is the engine's one precedent
-    // for relation-scale work arriving as a message and it validates inline
-    // then submits a `kSystem` task; this does not yet, so the walk delays
-    // the drain of every other message on this core and is charged to no
-    // scheduling group (`sched.md` §4). Owed before AJ-T5 measures it.
+    // message. Run inline that holds the reactor's message drain for the
+    // length of a relation scan - delaying every other core's decides and
+    // probes queued behind it - and is charged to no scheduling group at
+    // all (`sched.md` §4), so the cost AJ-T5 measures would be a cost
+    // `SHOW META` cannot locate. `IndexBuildServer::OnRequest` is the
+    // engine's one precedent for relation-scale work arriving as a message
+    // and it validates inline then submits; this follows it.
     void OnReverseRequest(const sched::MessageHeader& header,
                           std::span<const std::byte> payload);
 
@@ -272,6 +274,13 @@ private:
                const std::vector<exec::FkVerdict>& verdicts, const Status& status);
     void ReverseReply(std::uint32_t requester, std::uint64_t request_id, std::uint64_t session_id,
                       const std::vector<exec::FkVerdict>& verdicts, const Status& status);
+
+    // The walk itself, off the message drain. **By value**: the span it
+    // arrived in is the ring slot's, which is reused as soon as the drain
+    // moves on, so a task holding a reference to it would read whatever
+    // message landed next.
+    void AnswerReverse(std::uint32_t requester, std::uint64_t request_id,
+                       const FkReverseProbeRequestPayload& request);
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;

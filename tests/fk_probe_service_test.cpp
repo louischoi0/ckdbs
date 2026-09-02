@@ -81,9 +81,13 @@ protected:
     // says core 0, so a server built as core 5 owns nothing here, which is
     // the migration race in miniature. A handler is registered once, so
     // this may be called once.
-    void InstallServer(std::uint32_t core_id) {
+    // `cabins` non-null is core 0's configuration: `Expeditor` holds a
+    // `cabin_store_` and `CoreRuntime` passes a peer's dispatcher none, so
+    // the Cabin arm of the reverse check exists on one core and not the
+    // others. Both are worth a fixture.
+    void InstallServer(std::uint32_t core_id, stats::CabinStore* cabins = nullptr) {
         server_.emplace(boot_->catalog, store_, core_id, intents_, pending_deletes_, *owner_,
-                        *transport_);
+                        *transport_, /*txn=*/nullptr, /*log=*/nullptr, cabins);
         ASSERT_TRUE(owner_
                         ->RegisterMessageHandler(
                             sched::RingMessageKind::kFkProbeRequest,
@@ -785,6 +789,176 @@ TEST_F(FkReverseProbeTest, BothDirectionsShareOneWaiterMapWithoutColliding) {
     EXPECT_EQ(intents_.live_rows(), 1u);
     EXPECT_EQ(client_->requests(), 1u);
     EXPECT_EQ(client_->reverse_requests(), 1u);
+}
+
+// ---- AJ-T2: the Cabin-served reverse answer (F6) --------------------------
+//
+// **The highest-risk path in the pair**, and the reason it gets its own
+// fixture. Everything else here fails loudly: a wrong ownership check
+// refuses, a wrong cap refuses. This one fails *quietly* - F6 says a
+// verified-empty entry set is an **authoritative** "no children", so a
+// defect on this branch is a wrong `kPass`, which is a dropped constraint
+// and a dangling reference rather than an error anybody sees.
+//
+// `Stats::hits` against `Stats::misses` is what says which path answered.
+// Nothing is banked that disagrees with the relation - a set that lied
+// would pin behaviour under a precondition §6a forbids - so the
+// discriminator is the counter, not a rigged answer.
+class FkReverseCabinTest : public FkProbeTest {
+protected:
+    void SetUp() override {
+        FkProbeTest::SetUp();
+        ASSERT_EQ(dispatcher_
+                      ->Dispatch("CREATE TABLE trades (id int64, account_id int64 "
+                                 "REFERENCES accounts CABIN) BTREE")
+                      .response.substr(0, 7),
+                  "CREATED");
+        auto oid = boot_->catalog.FindTableOidByName("trades");
+        ASSERT_TRUE(oid.ok());
+        trades_ = oid.value();
+
+        auto access = boot_->catalog.InitTableAccess(trades_);
+        ASSERT_TRUE(access.ok());
+        cabin_id_ = access.value()->CabinOn(kAccountIdColumn).id;
+        ASSERT_NE(cabin_id_, 0u) << "the CABIN clause did not nominate a cabin on account_id";
+    }
+
+    std::optional<stats::CabinKey> KeyFor(std::uint64_t parent_pk) {
+        parser::AstValue v;
+        v.type = parser::ValueType::kInt;
+        v.int_val = static_cast<std::int64_t>(parent_pk);
+        return stats::MakeCabinKey(cabin_id_, v);
+    }
+
+    static constexpr std::uint16_t kAccountIdColumn = 1;
+
+    stats::CabinStore cabins_;
+    catalog::Oid trades_ = 0;
+    std::uint64_t cabin_id_ = 0;
+};
+
+TEST_F(FkReverseCabinTest, AnObservedEmptySetIsAnAuthoritativeNoChildren) {
+    InstallServer(/*core_id=*/0, &cabins_);
+    InstallReverseHandler();
+
+    // `trades` genuinely has no rows, so the banked set is true as well as
+    // empty - which is what §6a requires of anything banked at all.
+    auto key = KeyFor(1);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(cabins_.Commit(*key, {}));
+
+    ASSERT_TRUE(client_
+                    ->RequestReverse(/*owner_core=*/0, /*request_id=*/30, /*session_id=*/42,
+                                     /*transaction_id=*/9,
+                                     ReverseGroupOf({{trades_, 1, kAccountIdColumn}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(30);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived) << "the reverse reply never came back";
+    ASSERT_TRUE(out->status.ok()) << out->status.message();
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kPass);
+
+    // **The assertion that makes this cell mean anything.** Without it the
+    // test passes against a handler that never consults the Cabin at all -
+    // the walk of an empty relation answers `kPass` too. A hit and no miss
+    // is the store saying it served the answer.
+    EXPECT_EQ(cabins_.stats().hits, 1u) << "the reverse check did not consult the Cabin";
+    EXPECT_EQ(cabins_.stats().misses, 0u);
+}
+
+TEST_F(FkReverseCabinTest, AnObservedSetCarryingALiveChildAnswersViolation) {
+    InstallServer(/*core_id=*/0, &cabins_);
+    InstallReverseHandler();
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO trades VALUES (1)").response.substr(0, 8),
+              "INSERTED");
+
+    // **Banked by hand, and it has to be**: in production the write hook
+    // fills a set through the *dispatcher's* Cabin store, and this fixture's
+    // dispatcher has none - `cabins_` belongs to the probe server, which is
+    // exactly the split core 0 has. So the set is constructed as the hook
+    // would leave it: the real child's pk, with no hint, which sends the
+    // check through the btree descent that heals it. Nothing here disagrees
+    // with the relation, which is what §6a requires of anything banked.
+    auto key = KeyFor(1);
+    ASSERT_TRUE(key.has_value());
+    stats::CabinEntry entry;
+    entry.pk = 1;  // trade 1, the row the INSERT above placed
+    ASSERT_TRUE(cabins_.Commit(*key, {entry}));
+
+    ASSERT_TRUE(client_
+                    ->RequestReverse(/*owner_core=*/0, /*request_id=*/31, /*session_id=*/42,
+                                     /*transaction_id=*/9,
+                                     ReverseGroupOf({{trades_, 1, kAccountIdColumn}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(31);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    ASSERT_TRUE(out->status.ok()) << out->status.message();
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    // The set is a **superset**, so every entry is re-checked against the
+    // row and the key: a Cabin never turns a violation into a pass, it only
+    // saves the walk that would have found it.
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kViolation);
+    EXPECT_EQ(cabins_.stats().hits, 1u);
+}
+
+TEST_F(FkReverseCabinTest, AnUnobservedValueFallsThroughToTheWalk) {
+    InstallServer(/*core_id=*/0, &cabins_);
+    InstallReverseHandler();
+
+    // Nothing banked for account 7. `Find` returning null is not "no
+    // children" - it is "this Cabin knows nothing about that value" - and
+    // conflating the two is the wrong `kPass` this whole fixture guards.
+    auto key = KeyFor(7);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_EQ(cabins_.Find(*key), nullptr);
+
+    ASSERT_TRUE(client_
+                    ->RequestReverse(/*owner_core=*/0, /*request_id=*/32, /*session_id=*/42,
+                                     /*transaction_id=*/9,
+                                     ReverseGroupOf({{trades_, 7, kAccountIdColumn}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(32);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kPass);
+    // A miss, not a hit: the answer came from the walk.
+    EXPECT_EQ(cabins_.stats().hits, 0u);
+    EXPECT_EQ(cabins_.stats().misses, 1u);
+}
+
+TEST_F(FkReverseCabinTest, WithNoCabinStoreTheAnswerIsTheSameAndTheWalkDoesIt) {
+    // A **peer's** configuration, which is every core but 0:
+    // `CoreRuntime` passes `/*cabins=*/nullptr`. The answer must be
+    // identical - a Cabin is advisory - and the only difference is that
+    // nothing was consulted.
+    InstallServer(/*core_id=*/0, /*cabins=*/nullptr);
+    InstallReverseHandler();
+    auto key = KeyFor(1);
+    ASSERT_TRUE(key.has_value());
+    ASSERT_TRUE(cabins_.Commit(*key, {}));
+
+    ASSERT_TRUE(client_
+                    ->RequestReverse(/*owner_core=*/0, /*request_id=*/33, /*session_id=*/42,
+                                     /*transaction_id=*/9,
+                                     ReverseGroupOf({{trades_, 1, kAccountIdColumn}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(33);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kPass);
+    EXPECT_EQ(cabins_.stats().hits, 0u) << "a server given no store consulted one";
 }
 
 }  // namespace

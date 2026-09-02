@@ -1,6 +1,7 @@
 #include "kds/server/fk_probe_service.hpp"
 
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "kds/base/crash_point.hpp"
@@ -172,15 +173,34 @@ void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
     }
     std::memcpy(&request, payload.data(), sizeof(request));
 
-    std::vector<exec::FkVerdict> verdicts;
     if (request.count > kFkReverseProbeMaxEntries) {
-        ReverseReply(header.src_core, header.request_id, request.session_id, verdicts,
+        // Bounded, so it stays on the drain: a count past the cap is
+        // decided by looking at one integer, and answering it here costs
+        // the requester one fewer scheduling turn.
+        ReverseReply(header.src_core, header.request_id, request.session_id, {},
                      Status::InvalidArgument(
                          "a foreign-key reverse probe named " + std::to_string(request.count) +
                          " children, past the " + std::to_string(kFkReverseProbeMaxEntries) +
                          " one request carries"));
         return;
     }
+
+    // **Everything past here can walk a whole relation, so it leaves the
+    // drain.** `IndexBuildServer::OnRequest`'s shape and for its reason;
+    // `kSystem` because this is another core's constraint check and not
+    // this core's client's statement. The payload is copied into the task
+    // because the span belongs to the ring slot.
+    scheduler_.Submit(std::make_unique<sched::FunctionTask>(
+        sched::SchedulingGroup::kSystem,
+        [this, requester = header.src_core, request_id = header.request_id, request] {
+            AnswerReverse(requester, request_id, request);
+            return sched::PollResult::kDone;
+        }));
+}
+
+void FkProbeServer::AnswerReverse(std::uint32_t requester, std::uint64_t request_id,
+                                  const FkReverseProbeRequestPayload& request) {
+    std::vector<exec::FkVerdict> verdicts;
 
     // §4's one-MVCC rule, unchanged and for `OnRequest`'s reason: **this
     // core's own latest state**, minted here rather than carried on the
@@ -190,7 +210,7 @@ void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
     if (txn_ != nullptr) {
         auto minted = txn_->MintReadView(/*writer=*/0);
         if (!minted.ok()) {
-            ReverseReply(header.src_core, header.request_id, request.session_id, verdicts,
+            ReverseReply(requester, request_id, request.session_id, verdicts,
                          minted.status());
             return;
         }
@@ -204,7 +224,7 @@ void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
 
         auto child = catalog_.InitTableAccess(child_oid);
         if (!child.ok()) {
-            ReverseReply(header.src_core, header.request_id, request.session_id, verdicts,
+            ReverseReply(requester, request_id, request.session_id, verdicts,
                          child.status());
             return;
         }
@@ -215,7 +235,7 @@ void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
         // own is precisely the dangling reference the fan-out exists to
         // prevent, one hop further along.
         if (child.value()->owner_core != core_id_) {
-            ReverseReply(header.src_core, header.request_id, request.session_id, verdicts,
+            ReverseReply(requester, request_id, request.session_id, verdicts,
                          Status::TxnConflict("relation oid " + std::to_string(child_oid) +
                                              " is not owned by core " + std::to_string(core_id_) +
                                              " any more; re-resolve and retry"));
@@ -240,7 +260,7 @@ void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
             exec::CheckNoChildReferences(store_, *child.value(), request.child_column_no[i],
                                          request.parent_pk[i], check_view, options, &budget);
         if (!outcome.ok()) {
-            ReverseReply(header.src_core, header.request_id, request.session_id, verdicts,
+            ReverseReply(requester, request_id, request.session_id, verdicts,
                          outcome.status());
             return;
         }
@@ -251,7 +271,7 @@ void FkProbeServer::OnReverseRequest(const sched::MessageHeader& header,
         verdicts.push_back(outcome.value().verdict);
     }
 
-    ReverseReply(header.src_core, header.request_id, request.session_id, verdicts, Status::OK());
+    ReverseReply(requester, request_id, request.session_id, verdicts, Status::OK());
 }
 
 void FkProbeServer::ReverseReply(std::uint32_t requester, std::uint64_t request_id,
