@@ -386,12 +386,25 @@ coordinator's decision is applied by dispatching `COMMIT`/`ROLLBACK` through
 that session (`shipped_statement_executor.cpp`), which forks on
 `has_intent_holders()` like any other. So the participant sends its own
 decide, keyed `(its core, its ship id)`, which is exactly the key the intent
-carries. Two consequences are owed rather than hidden: **no test exercises
-it**, and that `COMMIT` takes the cross-owner parked path, whose durability
-wait is unconditional — so an intent-holding participant re-acquires the
-`fdatasync` wait XE1's `kAtAppend` removed, plus a decide round trip, before
-acknowledging its own coordinator. XE1's measured saving does not apply to
-this shape.
+carries — and the coordinator's own key, `(its core, its client session)`,
+is a different one, so the two do not collide.
+
+**Pinned since 2026-09-02** by
+`CoreRuntimeTest.AParticipantCoordinatesItsOwnIntentReleaseThroughTheDecidedCommit`,
+which takes apart what every other cell holds together: the core that probes
+is not the core that decides. It asserts that the coordinator records no
+holder of its own, that the intent is live while the transaction is, that it
+is gone after a `COMMIT` whose decide the *participant* sent, and that the
+holder reports no 2PC anomaly — the last of which fails when
+`Session::IntentOnlyTargets()` is neutered, which is how the cell is known to
+bite rather than merely to pass.
+
+What is still owed is the cost, not the correctness: that `COMMIT` takes the
+cross-owner parked path, whose durability wait is unconditional, so an
+intent-holding participant re-acquires the `fdatasync` wait XE1's
+`kAtAppend` removed, plus a decide round trip, before acknowledging its own
+coordinator. XE1's measured saving does not apply to this shape and nothing
+has measured what it does cost.
 
 **The autocommit decide is sent before this core's commit record is
 durable**, unlike the explicit-transaction path where the decision is durable
