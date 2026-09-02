@@ -75,24 +75,21 @@ stale claims found in docs — live in `docs/inflight/known-gaps.md`.
 
 ## How `docs/` is organized
 
-**`instructions/` is the operator's input; `docs/` and `bench/` are the
-output.** A work order or a blueprint's workplan arrives in
-`instructions/`; the prose building it produces lands in `docs/`, the
-measurement in `bench/<version>/`. Three buckets under `docs/`, one rule
-each:
+**Three trees left on 2026-09-02, ahead of the big-bang change to the
+architecture, rules and constraints: `bench/`, `instructions/` and
+`docs/inflight/`.** The last commit holding them is `1769487`;
+`git show 1769487:<path>` retrieves any file, and each directory keeps a
+`README.md` saying what was there and why it went. **Every citation to one
+of those paths — in this file, a spec, the manual, a test or a source
+comment — resolves against that commit.** Nothing new is written under any
+of the three until that change says what goes there. Two buckets remain
+under `docs/`, one rule each:
 
 - **`docs/spec/`** — what is confirmed and implemented. The authoritative
   specifications; when this file and a spec conflict, the spec wins.
 - **`docs/rules/`** — concepts and constraints that hold across the whole
   codebase: `rules.md`, the fixed-length-tuple rule, the Keystone id
   invariant and its findings.
-- **`docs/inflight/`** — what is not finished. `known-gaps.md` is the
-  engine-wide register; under it, **`in-progress/`** (open workplans that
-  nothing external blocks), **`blocked/`** (a named gate stops the next
-  task — say which, in the file), **`bugs/`** (defect reports, one file
-  per defect, open until the fix lands with its test), and
-  **`verified/`** (the output of a checklist run against the code — a
-  report, never a plan).
 
 **A closed workplan is deleted, not archived** (2026-08-26): a plan whose
 every task is built carries nothing the spec that owns the subsystem does

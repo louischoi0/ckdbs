@@ -178,52 +178,12 @@ endif()
 add_executable(kds_server src/server/main.cpp)
 target_link_libraries(kds_server PRIVATE kds)
 
-# The benchmark measures libkds, not its own translation unit, so
-# optimizing only this target would buy nothing - the numbers are only
-# meaningful when the whole tree is configured Release:
-#
-#     cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
-#     cmake --build build-release -j && ./build-release/kds_bench
-#
-# The binary says so at startup when it detects otherwise, rather than
-# printing Debug numbers someone might quote.
-option(KDS_BUILD_BENCH "Build ckdbs microbenchmarks" ON)
-if(KDS_BUILD_BENCH)
-    add_executable(kds_bench bench/bench_main.cpp)
-    target_link_libraries(kds_bench PRIVATE kds)
-
-    # Separate binary rather than a section of kds_bench: this one asks a
-    # question about one subsystem (keystoneid-invariant.md K0) and carries
-    # a prototype allocator that is not a candidate for merging. Keeping it
-    # apart is what keeps that distinction visible.
-    add_executable(kds_keystone_alloc_bench bench/keystone_alloc_bench.cpp)
-    target_link_libraries(kds_keystone_alloc_bench PRIVATE kds)
-
-    # A third binary, asking where a *transaction's* time goes rather than
-    # what one component costs: it drives the four statements
-    # tools/stress_business.py measures TPS for, and prices each layer.
-    add_executable(kds_txn_bench bench/txn_layers_bench.cpp)
-    target_link_libraries(kds_txn_bench PRIVATE kds)
-
-    # A fourth, and the only benchmark in this tree that cannot be a server
-    # driver: the cross-core pipeline runs only against a peer-owned
-    # relation, and a peer-owned relation cannot be populated over the wire
-    # (cross-core writes are refused, DML shipping is unbuilt, core 0 alone
-    # listens). It builds its rows in-process and runs one dataset through
-    # two dispatchers differing only in core_id - see the file header.
-    add_executable(kds_crosscore_bench bench/crosscore_pipeline_bench.cpp)
-    target_link_libraries(kds_crosscore_bench PRIVATE kds)
-
-    # A fifth, priced for the same reason the fourth is a loopback: DA-b
-    # (`instructions/v2.7.0/ratification-da.md`) asks whether 255 fan-in
-    # stages are affordable in session-core state, and this host's
-    # CoreRuntime count cannot drive a live fan-in past two ranges to find
-    # out. SessionStepClient's per-tag state does not depend on how many
-    # ranges a relation has, so this prices it directly - see the file
-    # header for what it does and does not cover.
-    add_executable(kds_session_step_state_bench bench/session_step_state_bench.cpp)
-    target_link_libraries(kds_session_step_state_bench PRIVATE kds)
-endif()
+# The microbenchmarks (kds_bench, kds_keystone_alloc_bench, kds_txn_bench,
+# kds_crosscore_bench, kds_session_step_state_bench) left the tree with
+# bench/ on 2026-09-02, ahead of the big-bang change; `git show
+# 1769487:bench/<file>` retrieves a source and bench/README.md says why.
+# KDS_BUILD_BENCH went with them: a configure line still passing it gets
+# CMake's unused-variable warning and nothing else.
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the
 # engine driven in-process through CommandDispatcher over crashable
