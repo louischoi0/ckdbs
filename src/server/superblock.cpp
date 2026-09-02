@@ -75,8 +75,9 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
         // defaulted: guessing the topology guesses how many streams
         // recovery must find.
         return Status::Corruption("superblock: log topology " +
-                                  std::to_string(f.log_topology) +
-                                  " is neither per-core (0) nor single (1)");
+                                  std::to_string(f.log_topology) + " is neither per-core (" +
+                                  std::to_string(kPerCoreStreams) + ") nor single (" +
+                                  std::to_string(kSingleStream) + ")");
     }
     std::memcpy(&f.create_time, base + kCreateTimeOffset, sizeof(f.create_time));
     std::memcpy(&f.last_mount_time, base + kLastMountTimeOffset, sizeof(f.last_mount_time));
@@ -197,9 +198,7 @@ Status SuperBlock::SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& an
                                        std::to_string(core_id) + " is at or above kMaxWalCores");
     }
     if (single_stream() && core_id != 0) {
-        // One stream, one place recovery starts (superblock.hpp). A peer's
-        // checkpoint reaches slot 0 through its publisher's fold, never
-        // through a slot of its own.
+        // superblock.hpp's SetWalAnchor comment carries the rule.
         return Status::InvalidArgument(
             "superblock: this database has one WAL stream, so core " + std::to_string(core_id) +
             " has no anchor slot; publish the fold into slot 0 instead");

@@ -73,7 +73,10 @@ TEST(SuperBlockTest, EncodeZeroesReservedTail) {
 // is about *bytes on a page*, not about a value in a struct.
 PageBuf PageWithTopology(std::uint32_t topology) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
-    PageBuf buf;
+    // Zeroed, not indeterminate: `Encode` reads the page's type byte to
+    // decide whether to format the header, so an uninitialized buffer is a
+    // real indeterminate-value read and a nondeterministic test.
+    PageBuf buf{};
     sb.Encode(AsSpan(buf));
     std::memcpy(buf.data() + kSuperBlockBodyOffset + kLogTopologyOffset, &topology,
                 sizeof(topology));
@@ -137,8 +140,6 @@ TEST(SuperBlockTopologyTest, AnUnknownTopologyIsRefusedRatherThanDefaulted) {
     EXPECT_NE(decoded.status().message().find("topology"), std::string::npos);
 }
 
-// One stream, one place recovery starts. A peer's checkpoint reaches slot 0
-// through its publisher's fold, never through a slot of its own.
 TEST(SuperBlockTopologyTest, UnderOneStreamOnlySlotZeroTakesAnAnchor) {
     PageBuf buf = PageWithTopology(kSingleStream);
     auto decoded = SuperBlock::Decode(AsConstSpan(buf));
@@ -152,8 +153,10 @@ TEST(SuperBlockTopologyTest, UnderOneStreamOnlySlotZeroTakesAnAnchor) {
     EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
     EXPECT_NE(refused.message().find("one WAL stream"), std::string::npos);
 
-    // And the slot a peer tried to take is untouched.
+    // And the refusal path mutated nothing: not the slot, and not the
+    // count recovery compares against the core count.
     EXPECT_EQ(one.wal_anchor(1).checkpoint_lsn, 0u);
+    EXPECT_EQ(one.wal_anchor_count(), 1u);
 }
 
 // The per-core arm is unchanged, which is what keeps every core's

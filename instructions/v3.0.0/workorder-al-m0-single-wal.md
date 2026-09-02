@@ -317,6 +317,18 @@ its `CHECKPOINT_BEGIN`/`END` payload gaining the publishing `core_id`
 `redo_start_lsn` is the **minimum** over the cores' latest completed
 checkpoints, floored by the oldest live `TXN_PREPARE` as today.
 
+**The fold and the first write of `kSingleStream` land in the same
+stage, and this is a hard constraint rather than a preference.**
+`SuperBlockCheckpointAnchor::Publish` passes a peer's own `core_id`
+straight to `SetWalAnchor` (`superblock_checkpoint_anchor.cpp:8`), which
+AL-S2's refusal now rejects under one stream. So the instant anything
+writes `kSingleStream`, every peer's checkpoint publish **fails** rather
+than degrading. The same stage owes the second half of that: a peer's
+`superblock_` is a default-constructed copy, so `single_stream()` reads
+false on every peer until the topology is carried on
+`CoreRuntime::Config` and applied at `Open`, the way `next_trx_id`
+already is (`superblock.hpp`'s accessor states the trap).
+
 **Who folds, and where** — the seam AL-R3's "refuses any core but 0"
 would otherwise leave unnamed. The publish path today writes
 `SetWalAnchor(anchor.core_id, …)` with the *peer's* id

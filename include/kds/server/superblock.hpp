@@ -195,21 +195,14 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // gated on D2) - the bump is not for what it holds but for where it sits,
 // and landing the epoch now, before R6's recovery fixtures exist, is the
 // ordering instructions/v2.4.0/range-foundation.md §0 argues costs nothing.
-// **No bump on 2026-09-02, and this one is worth recording because the
-// work order asked for one.** AR0 M0 (`instructions/v3.0.0/workorder-al-m0-single-wal.md`
-// AL-R3) called for a format event to record the log topology. It is not
-// one: the field lands in `reserved1`, the u32 at offset 12 that
-// `CreateFresh` has always zeroed and `Encode` has always written, and
-// **0 is exactly the value that means "per-core streams"** - what every
-// image ever written in fact has. That is the `page_header.hpp` precedent
-// verbatim (`relayout_epoch` and `owner_oid` consumed two reserved words
-// the same way, "every page ever written already carries 0 here, and 0
-// reads as never relayouted - so the arrival is not a format event").
-//
-// The bump D14 does owe arrives with the cutover and the stamp change
-// (AL-S1c, AL-S5), where the *pages* stop meaning what they meant. Landing
-// a version event here, ahead of any change in meaning, would refuse every
-// existing volume for the length of three stages and buy nothing.
+// **No bump on 2026-09-02, recorded because the work order asked for
+// one** (AR0 M0's AL-R3, which this contradicts). `log_topology` consumed
+// `reserved1`, the u32 at offset 12 that `CreateFresh` has zeroed and
+// `Encode` has written since the initial commit - and 0 is exactly
+// `kPerCoreStreams`, so every **v16** image already states the truth about
+// itself. (v16 is the only version that can reach the field: `Decode`
+// refuses any other before reading it.) Same move as
+// `page_header.hpp:58`, twice.
 inline constexpr std::uint32_t kSuperBlockVersion = 16;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
@@ -220,8 +213,7 @@ inline constexpr std::uint32_t kSuperBlockVersion = 16;
 // before AR0 M0 holds in this word, and it is what those images are.
 //
 // Nothing writes `kSingleStream` yet - the cutover (AL-S1c) does, at
-// bootstrap, and only for a database created by that build or later. So
-// every arm below that reads `kSingleStream` is unreachable in a running
+// bootstrap - so every arm reading it is unreachable in a running
 // instance today and is exercised at this layer's own tests.
 inline constexpr std::uint32_t kPerCoreStreams = 0;
 inline constexpr std::uint32_t kSingleStream = 1;
@@ -535,6 +527,17 @@ public:
     // How many WAL streams this database's log is: `kPerCoreStreams` or
     // `kSingleStream`. A durable fact recorded at bootstrap, never a
     // setting a mount may change.
+    //
+    // **On a peer core this reads `kPerCoreStreams` whatever the volume
+    // says, and that is a trap the cutover must spring deliberately.** A
+    // peer's `superblock_` is a *default-constructed copy*
+    // (`core_runtime.hpp`), zero everywhere, and zero is a legal value of
+    // this field - so the answer is silent and wrong rather than absent.
+    // It is exactly the shape PW1 hit with `next_trx_id`
+    // (`core_runtime.cpp`: *"a zero there is legal, silent and wrong"*),
+    // and the fix is the same one: carry it on `CoreRuntime::Config` and
+    // apply it at `Open`. Until AL-S1c does that, **only core 0 may ask
+    // this question**.
     std::uint32_t log_topology() const noexcept { return fields_.log_topology; }
     bool single_stream() const noexcept { return fields_.log_topology == kSingleStream; }
 
