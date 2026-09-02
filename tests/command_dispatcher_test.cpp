@@ -137,7 +137,12 @@ TEST_F(CommandDispatcherTest, ShowMetaReportsSuperblockFields) {
     auto out = d.Dispatch("SHOW META");
     EXPECT_NE(out.response.find("version=" + std::to_string(kSuperBlockVersion)),
               std::string::npos);
-    EXPECT_NE(out.response.find("wal_anchor_count=0"), std::string::npos);
+    // The fixture bootstraps a real database, so its log is the instance's
+    // one stream (AR0 M0) - and the anchor count then says nothing a reader
+    // could act on, always being 1, so the topology is printed instead.
+    EXPECT_NE(out.response.find("wal_topology=single"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("wal_anchor_count="), std::string::npos)
+        << "a field that can only ever say one thing: " << out.response;
     EXPECT_FALSE(out.should_stop);
 }
 

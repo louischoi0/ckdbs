@@ -393,7 +393,16 @@ Status WalManager::DrainOnce() {
     // stay open until this core happened to sync for itself.
     ResolveBatches();
 
-    if (appended_lsn() == durable_lsn()) {
+    // **The free-tick test is this core's own work, not the log's.** On an
+    // owning manager the two are the same: `appended_lsn()` is what this
+    // core appended. On an attached one it is the *instance's* append
+    // point, which core 0 moves constantly - so the equality is never true
+    // on a peer and every tick fell through to the interval branch below,
+    // issuing a sync request per interval with nothing of its own staged.
+    // What a peer has to do is close its own batches, which the
+    // `ResolveBatches` above just did, and ask for a sync only if somebody
+    // is parked on one.
+    if (!attached() && appended_lsn() == durable_lsn()) {
         return Status::OK();  // nothing to do; a tick must be free
     }
     if (pending_group_commits_ > 0 ||
@@ -409,6 +418,18 @@ Status WalManager::DrainOnce() {
         // other session on this core - for another thread's `fdatasync`.
         // The batch closes on a later tick, at the `ResolveBatches` above.
         return attached() ? RequestSyncNow() : Sync();
+    }
+
+    // **The loss window is the log's, and under one stream the log has one
+    // drain that bounds it** - core 0's, which runs on the same cadence
+    // (`expeditor.cpp`). A peer ticking it too would ask for a sync of
+    // bytes it does not own, every interval, forever: N-1 redundant
+    // `fdatasync`es that nobody is waiting for, and an `interval_syncs`
+    // count on every peer measuring the instance's cadence rather than any
+    // work of that core's. So an attached manager does not take this
+    // branch at all.
+    if (attached()) {
+        return Status::OK();
     }
 
     // No commit is waiting, so the only thing forcing a sync is the D3
