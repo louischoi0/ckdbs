@@ -177,4 +177,166 @@ private:
     Stats stats_;
 };
 
+// AJ-T1 — the **pending-delete set**, and the mirror of everything above
+// (work order `instructions/v2.8.0/workorder-aj.md` AJ-R3(a)).
+//
+// ---- What problem this exists for --------------------------------------
+//
+// `FkIntentTable` closes the window in which a parent's owner could delete
+// a row a foreign child is relying on. AJ opens the other direction — a
+// parent DELETE that fans out to the child's owner — and that has a window
+// of its own, running the other way:
+//
+//   1. a DELETE of parent `P` on this core probes the child's owner, which
+//      answers **no children**;
+//   2. a child INSERT on that owner probes *back* for `P`, finds it present
+//      and not yet marked, and is granted a reference intent;
+//   3. that INSERT commits, and its decide releases the intent;
+//   4. the DELETE's per-row check finds no intent, holds a "no children"
+//      that stopped being true at step 2, and marks `P`.
+//
+// The result is a dangling reference with RESTRICT reporting success —
+// which is the one outcome the whole crossing exists to prevent.
+//
+// **The fix is to register before probing.** A row named here is a row this
+// core is about to delete, and `FkProbeServer` consults this table *before*
+// it reads whether the row exists — so from the registration onward no new
+// reference intent on `P` can be granted, and step 2 is told busy instead.
+// A child that probed *before* the registration holds an intent, which is
+// the case `CheckNoChildrenBeforeDelete` already meets.
+//
+// ---- Why this side and not the child's ---------------------------------
+//
+// The symmetric design leaves a "P is being deleted" record on the child's
+// owner. That would make the child's owner an intent holder, and an
+// intent-holding participant coordinates its own release: measured at
+// **720x** a plain participant's acknowledgement leg (4.4 us -> 3.1 ms,
+// `bench/v2.8.0/results-ah-t6-participant-release-cost-*`). Registering on
+// the deleting core instead costs one map insert and one map erase, enrols
+// nobody, adds no decide target and needs no ring message to end — AJ-R5,
+// which is a ruling precisely so a later "symmetry" refactor cannot undo it
+// without saying so.
+//
+// ---- Lifecycle ---------------------------------------------------------
+//
+// Memory-resident, like the intents beside it, and cleared when the
+// deleting statement's transaction ends. **Not at the decide sites**, which
+// is where the work order first put it: every one of those is guarded by
+// `Session::has_intent_holders()`, and a DELETE whose only cross-core
+// contact was a reverse round holds none — so the entry would never be
+// cleared and the row would answer busy forever (AJ-T0's finding S4). The
+// clear is `CommandDispatcher::EndWrite` for an autocommit statement and
+// the explicit `COMMIT`/`ROLLBACK` paths for the other, both unconditional
+// - plus the two foreign-key probe paths that end a parked autocommit
+// statement without re-running it, which are `EndWrite`'s absence rather
+// than a third kind of site (`ClearPendingDeletes` names them).
+//
+// What a restart loses is answered by the WAL rather than by this table
+// (AJ-R4): a delete-mark this set covered is either committed — the row is
+// gone and a forward probe answers absent — or rolled back, and the row is
+// referenceable again. Neither outcome dangles.
+//
+// Concurrency: core-local, no synchronization (rules.md #3).
+class FkPendingDeleteTable {
+public:
+    // The row a pending delete names — the same shape `FkIntentTable::Key`
+    // has, and ordered for the same reason: what this table holds is
+    // reportable, and a report must be stable run to run (sched.md §8).
+    struct Key {
+        catalog::Oid parent_oid = 0;
+        std::uint64_t parent_pk = 0;
+
+        bool operator<(const Key& other) const noexcept {
+            if (parent_oid != other.parent_oid) return parent_oid < other.parent_oid;
+            return parent_pk < other.parent_pk;
+        }
+    };
+
+    // **The registrant is a session id alone, not an `FkIntentHolder`.**
+    // Every row here was registered by a statement running on *this* core —
+    // that is what "coordinator-local" means — so the core half of the
+    // identity would be the same constant in every entry, and the table
+    // itself is what carries it.
+    //
+    // A `set` rather than one id, for `FkIntentTable`'s reason: two
+    // sessions can both be mid-DELETE of the same row across a park, and
+    // one deciding must not clear the other's registration.
+    void Add(catalog::Oid parent_oid, std::uint64_t parent_pk, std::uint64_t session_id) {
+        pending_[Key{parent_oid, parent_pk}].insert(session_id);
+        ++stats_.recorded;
+    }
+
+    // Whether anyone is about to delete this row.
+    //
+    // **No self-exclusion, unlike `FkIntentTable::HeldByAnotherThan` beside
+    // it, and the asymmetry is forced rather than chosen.** The registrants
+    // here are *this* core's session ids; a forward probe carries the
+    // *asking* core's, and both are minted from a per-dispatcher counter
+    // that starts at 1 (`command_dispatcher.hpp`'s `next_ship_session_id_`).
+    // The two spaces therefore overlap numerically from the very first
+    // session on each core, so an exclusion comparing them would answer
+    // "not pending" for a row that *is* pending whenever the two numbers
+    // collided - and the probe would then be vouched for and granted an
+    // intent on a row on its way out. That is the dangling reference this
+    // table exists to prevent, reintroduced by the guard meant to be
+    // harmless.
+    //
+    // **Nothing is lost by dropping it.** A forward probe never originates
+    // on the core that answers it - `SendForeignKeyProbes` defers only a
+    // parent whose owner is *another* core - so no registrant of this table
+    // can ever be the asker. And a transaction meeting its own pending
+    // delete through a peer is answered `kBusy` by the delete-mark itself
+    // under `CheckParentPresent`, with or without this test, so even a
+    // working exclusion would not change that answer. The identity that
+    // could make one meaningful is the *coordinator's*, which this table
+    // does not store and which AJ-R5 gives it no reason to.
+    bool Pending(catalog::Oid parent_oid, std::uint64_t parent_pk) const {
+        // An entry is erased the moment its last registrant leaves
+        // (`Release`), so a key that is present is a row someone is
+        // deleting.
+        return pending_.find(Key{parent_oid, parent_pk}) != pending_.end();
+    }
+
+    // Every row this session registered, released. Returns how many rows it
+    // freed, which is what the counter reports.
+    //
+    // **Idempotent**, and it has to be: the clear runs at the end of every
+    // write statement and again when a transaction ends, so a session that
+    // registered nothing pays one empty walk and a session that did is not
+    // harmed by being told twice.
+    std::size_t Release(std::uint64_t session_id) {
+        std::size_t freed = 0;
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (it->second.erase(session_id) != 0) ++freed;
+            it = it->second.empty() ? pending_.erase(it) : std::next(it);
+        }
+        stats_.released += freed;
+        return freed;
+    }
+
+    // How many distinct rows are currently being deleted with a fan-out
+    // outstanding. A number with a cost rather than a rate: each one is a
+    // row a foreign child's INSERT is told to retry on.
+    std::size_t live_rows() const noexcept { return pending_.size(); }
+
+    struct Stats {
+        std::uint64_t recorded = 0;  // registrations (idempotent adds included)
+        std::uint64_t released = 0;  // rows freed by a clear
+        std::uint64_t refusals = 0;  // forward probes answered busy by a pending delete
+    };
+
+    void NoteRefusal() noexcept { ++stats_.refusals; }
+    const Stats& stats() const noexcept { return stats_; }
+
+    // **No whole-map accessor**, deliberately, where `FkIntentTable` has
+    // one: nothing reads it. `live_rows()` and `stats()` are what a report
+    // needs, and an accessor added against a reader that does not exist is
+    // surface to keep working for nobody. The day `SHOW META` grows a
+    // pending-delete block, it wants those two and not this.
+
+private:
+    std::map<Key, std::set<std::uint64_t>> pending_;
+    Stats stats_;
+};
+
 }  // namespace kds::server

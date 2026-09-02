@@ -537,6 +537,22 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             }
             deciding.ClearIntentHolders();
         }
+
+        // **AJ-T1: the registration made at the fork ends here too, and it
+        // has to.** The resume arm above re-runs the statement and its
+        // `EndWrite` clears - but the *refusal* arm does not run the
+        // statement at all, so nothing else on this path would ever clear
+        // what the fork registered. A pending-delete entry that outlives its
+        // statement answers busy to every forward probe for the row for the
+        // life of the process, which is F1's "retry loop that cannot
+        // succeed" from the other side. Unconditional on holders for AJ-T0's
+        // finding S4 (a reverse round enrols nobody) and idempotent, so the
+        // resume arm having already cleared costs one empty walk.
+        //
+        // Autocommit only, `ReleaseIntentsWithoutWaiting`'s rule and for its
+        // reason: inside a transaction the rows stay registered until the
+        // client's COMMIT or ROLLBACK, which is what actually decides them.
+        if (!deciding.in_explicit_txn()) ClearPendingDeletes(deciding);
         if (!probe_status.ok()) co_return Status::OK();
     }
 
@@ -1039,7 +1055,15 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
         // decides them with the rest; in autocommit this is the only decide
         // there will ever be, which is why it is sent whatever the session
         // and why the list is cleared either way.
-        ReleaseIntentsWithoutWaiting(session != nullptr ? *session : autocommit_session_);
+        Session& asking = session != nullptr ? *session : autocommit_session_;
+        ReleaseIntentsWithoutWaiting(asking);
+        // AJ-T1's half of the same sentence, in the other direction: the
+        // fork registered rows this statement is now not going to delete,
+        // and this path has no resume whose `EndWrite` would clear them.
+        // Left registered they would answer busy to every forward probe for
+        // the row until the process ends. Autocommit only, for
+        // `ReleaseIntentsWithoutWaiting`'s reason.
+        if (!asking.in_explicit_txn()) ClearPendingDeletes(asking);
         return {ErrorReply(Status::TxnConflict(
                     "a foreign key's parent is owned by another core and the probe needs the "
                     "reactor path; retry on a served connection")),
@@ -4188,6 +4212,48 @@ void CommandDispatcher::ReleaseIntentsWithoutWaiting(Session& session) {
     session.ClearIntentHolders();
 }
 
+void CommandDispatcher::ClearPendingDeletes(Session& session) {
+    // **Not at the decide sites, which is where work order AJ first put
+    // it** (AJ-T0's finding S4). Every one of those - the autocommit decide
+    // in `DispatchAsync`, `ReleaseIntentsWithoutWaiting` above, and the
+    // explicit pair in `HandleCommit`/`HandleRollback` - is guarded by
+    // `Session::has_intent_holders()`. A reverse fan-out enrols nobody
+    // (AJ-R5), so a DELETE whose only cross-core contact was a reverse
+    // round holds no intents, would enter none of those blocks, and would
+    // never clear: the row then answers busy to every forward probe for the
+    // life of the process. That is the same defect F1 fixed from the other
+    // side, and its site calls it what it is - "a retry loop that cannot
+    // succeed".
+    //
+    // So the clear is unconditional on holders and hangs off the
+    // transaction's end instead: `EndWrite` for an autocommit statement,
+    // `HandleCommit`/`HandleRollback` for an explicit one, and the two
+    // foreign-key probe paths that end a *parked* autocommit statement
+    // without ever re-running it - the refusal arm of `DispatchAsync`'s
+    // probe block, and `DispatchAndStage`'s no-reactor refusal. Those two
+    // are not a third kind of site; they are `EndWrite`'s absence, since
+    // `AbandonWriteForShipping` passes `statement_ends=false` precisely so
+    // the registration survives the park it was made for.
+    //
+    // **Clearing before the commit completes is safe, and that is not an
+    // accident of ordering.** By the time any caller reaches here the
+    // statement's delete-marks are already written, and an uncommitted
+    // delete-mark is evidence in its own right: `CheckParentPresent` reads
+    // it and answers `kBusy` without consulting this table at all. The
+    // registration only ever covered the window *before* the mark - between
+    // the fan-out's answer and the row being touched - and that window is
+    // closed by the time a transaction ends, whichever way it ends.
+    //
+    // **Session id 0 registered nothing.** A DELETE that fans out mints the
+    // identity first, by `SendForeignKeyProbes`' rule and for its reason: a
+    // session probing under 0 would share the key `(core, 0)` with every
+    // other un-shipped session, and one clear would then free another
+    // session's registrations. The guard states that invariant rather than
+    // relying on the walk being empty.
+    if (fk_pending_deletes_ == nullptr || session.ship_id() == 0) return;
+    fk_pending_deletes_->Release(session.ship_id());
+}
+
 Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& held,
                                                Session& session, std::string_view line,
                                                DispatchOutcome& out) {
@@ -5785,9 +5851,14 @@ Status CommandDispatcher::AbandonWriteForShipping(Session& session, WriteScope& 
         // the only unowned scope that has a transaction behind it.
         return Status::OK();
     }
+    // `statement_ends=false`: this ends the scope, not the statement. The
+    // statement is parking on a probe (it runs whole on the resume) or has
+    // gone to its owner, so per-statement state - AJ-T1's pending-delete
+    // registration, made at the fork *for* this park - must outlive it.
     return EndWrite(session, scope,
                     Status::Unsupported("the statement was shipped to the core that owns its "
-                                        "relation; this core wrote nothing"));
+                                        "relation; this core wrote nothing"),
+                    /*statement_ends=*/false);
 }
 
 Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
@@ -9878,6 +9949,14 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
         return {"ERR current transaction is aborted; ROLLBACK", false};
     }
 
+    // AJ-T1: the explicit transaction's half of the clear, past the two
+    // guards above because neither of them ends the transaction - a failed
+    // one is still open and its `ROLLBACK` is what clears it. Before the
+    // fork below rather than inside either arm, so the cross-owner path and
+    // the one-owner path clear identically and neither can be the arm
+    // somebody forgets.
+    ClearPendingDeletes(session);
+
     // **D1's fast path, and it is the first thing on the commit path.** A
     // transaction that touched one owner has no participants and takes the
     // line below unchanged - no prepare, no message, no branch beyond this
@@ -9975,6 +10054,13 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     if (!session.in_explicit_txn()) {
         return {"ERR no transaction is open", false};
     }
+
+    // AJ-T1, and this is the arm that matters most: a rolled-back DELETE
+    // never marked anything durably, so the rows it registered are
+    // referenceable again the moment this returns. Leaving them registered
+    // would refuse a perfectly valid child INSERT for the life of the
+    // process.
+    ClearPendingDeletes(session);
 
     // **A rollback tells its participants too** (R6-8, D4: *"any refusal or
     // timeout → ABORT. Either way it then tells the participants"*). The
@@ -10196,7 +10282,28 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     return verdict;
 }
 
-Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const Status& result) {
+Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const Status& result,
+                                   bool statement_ends) {
+    // AJ-T1's autocommit clear. Ahead of every arm below rather than
+    // duplicated into each of their returns, which `ClearPendingDeletes`
+    // argues is sound: the marks are written by now and speak for
+    // themselves. Inside an explicit transaction the registration must
+    // outlive the statement, so `HandleCommit` and `HandleRollback` own
+    // that half.
+    //
+    // **A parked statement does reach here, which is why `statement_ends`
+    // exists.** `AbandonWriteForShipping` ends an *owned* scope by calling
+    // this function - only the unowned, explicit-transaction scope returns
+    // early there - so an autocommit DELETE that parks on a reverse probe
+    // would otherwise clear its own registration at the fork, before the
+    // fan-out it registered for has even been answered. That is precisely
+    // the window AJ-R3(a) exists to close, reopened for the whole duration
+    // of the park. The registration must survive to the resume, whose own
+    // `EndWrite` - the one that runs after the marks are written - clears
+    // it; the refusal arm of `DispatchAsync`'s probe block clears the
+    // statement that never resumes.
+    if (statement_ends && !session.in_explicit_txn()) ClearPendingDeletes(session);
+
     if (scope.txn == nullptr) {
         // No manager: every statement is its own transaction under
         // kBootstrapXid, and this is its end - so its assertion

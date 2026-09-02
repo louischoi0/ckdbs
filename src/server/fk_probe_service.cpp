@@ -93,6 +93,33 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
             return;
         }
 
+        // **A row this core is about to delete is answered busy, ahead of
+        // reading whether it exists** (AJ-T1, AJ-R3(a)). It does exist —
+        // that is the point — and vouching for it is what would dangle the
+        // reference: the DELETE's own fan-out has already been told "no
+        // children" by this child's owner, so an intent granted now would
+        // be released by the child's commit before the DELETE's per-row
+        // check ever looks for it.
+        //
+        // **Busy and not violation**, which is F3 and the same distinction
+        // the intent table's mirror makes: the delete has not committed, so
+        // the answer depends on how it ends, and the caller retries rather
+        // than being told it is wrong. This is also exactly the verdict an
+        // uncommitted delete-mark already produces through
+        // `CheckParentPresent`, so the crossing gains no new answer — the
+        // registration only makes that answer available before the mark is
+        // written.
+        //
+        // Ahead of the existence read *and* of the grant below, because
+        // either one alone would be a window: reading first would let a
+        // pass be computed for a row already registered, and granting first
+        // would hand out the reliance this check exists to refuse.
+        if (pending_deletes_.Pending(parent_oid, parent_pk)) {
+            pending_deletes_.NoteRefusal();
+            verdicts.push_back(exec::FkVerdict::kBusy);
+            continue;
+        }
+
         auto verdict = exec::CheckParentPresent(store_, *parent.value(), parent_pk, check_view,
                                                 &budget);
         if (!verdict.ok()) {

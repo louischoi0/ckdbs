@@ -615,6 +615,10 @@ private:
     // outlives it, which is what lets a decide arriving after a teardown
     // find an empty table rather than a dangling one.
     FkIntentTable fk_intents_;
+    // AJ-T1's mirror, declared beside the intents and ahead of the server
+    // for the same reason: a probe arriving after a teardown must find an
+    // empty table rather than a dangling one.
+    FkPendingDeleteTable fk_pending_deletes_;
     std::optional<FkProbeServer> fk_probe_server_;
     std::optional<FkProbeClient> fk_probe_client_;
     // The client listener this core accepts on, when per-core listeners are

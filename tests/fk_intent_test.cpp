@@ -113,5 +113,80 @@ TEST(FkIntentTest, AnEmptyTableHoldsNothingAgainstAnybody) {
     EXPECT_EQ(table.stats().recorded, 0u);
 }
 
+// ---- AJ-T1: the pending-delete set ---------------------------------------
+//
+// The mirror above, and the same kind of file: what is interesting is the
+// rules, not the storage.
+
+TEST(FkPendingDeleteTest, ARegisteredRowIsPending) {
+    FkPendingDeleteTable table;
+    table.Add(/*parent_oid=*/900, /*parent_pk=*/7, /*session_id=*/3);
+
+    // **The registrant's own id does not exempt it**, and that is the
+    // design rather than an omission: the asker's session id comes from
+    // another core's counter and this table's from ours, both minted from
+    // 1, so a predicate that compared them would answer "not pending" on a
+    // collision - vouching for a row on its way out. The header carries the
+    // argument; here it is the reason the row is pending for a probe that
+    // happens to carry id 3 too.
+    EXPECT_TRUE(table.Pending(900, 7));
+    // Keyed on the row, not the relation.
+    EXPECT_FALSE(table.Pending(900, 8));
+    EXPECT_FALSE(table.Pending(901, 7));
+    EXPECT_EQ(table.live_rows(), 1u);
+}
+
+TEST(FkPendingDeleteTest, TwoSessionsOnOneRowAndOneDecidingDoesNotFreeTheOther) {
+    // The reason the value is a set: two DELETEs of the same row can be
+    // outstanding at once across a park, and the first to decide must not
+    // reopen the window the second is still relying on.
+    FkPendingDeleteTable table;
+    table.Add(900, 7, /*session_id=*/3);
+    table.Add(900, 7, /*session_id=*/4);
+    EXPECT_EQ(table.live_rows(), 1u);
+
+    EXPECT_EQ(table.Release(/*session_id=*/3), 1u);
+    EXPECT_EQ(table.live_rows(), 1u) << "session 4's registration was freed by session 3's clear";
+    EXPECT_TRUE(table.Pending(900, 7));
+
+    EXPECT_EQ(table.Release(/*session_id=*/4), 1u);
+    EXPECT_EQ(table.live_rows(), 0u);
+}
+
+TEST(FkPendingDeleteTest, AddIsIdempotentAndReleaseIsToo) {
+    FkPendingDeleteTable table;
+    // A DELETE that resumes after its park runs the whole statement again,
+    // registration included, so a second add of the same row by the same
+    // session is normal operation rather than a fault.
+    table.Add(900, 7, /*session_id=*/3);
+    table.Add(900, 7, /*session_id=*/3);
+    EXPECT_EQ(table.live_rows(), 1u);
+    EXPECT_EQ(table.stats().recorded, 2u) << "adds are counted, rows are not";
+
+    EXPECT_EQ(table.Release(/*session_id=*/3), 1u);
+    // **Twice**, because the clear runs at the end of every write statement
+    // and again when the transaction ends; the second must be free.
+    EXPECT_EQ(table.Release(/*session_id=*/3), 0u);
+    EXPECT_EQ(table.stats().released, 1u);
+}
+
+TEST(FkPendingDeleteTest, ASessionsWholeRegistrationEndsAtOnce) {
+    FkPendingDeleteTable table;
+    table.Add(900, 7, /*session_id=*/3);
+    table.Add(900, 8, /*session_id=*/3);
+    table.Add(901, 7, /*session_id=*/3);
+    EXPECT_EQ(table.live_rows(), 3u);
+
+    EXPECT_EQ(table.Release(/*session_id=*/3), 3u);
+    EXPECT_EQ(table.live_rows(), 0u);
+}
+
+TEST(FkPendingDeleteTest, AnEmptyTableHoldsNothingAgainstAnybody) {
+    const FkPendingDeleteTable table;
+    EXPECT_EQ(table.live_rows(), 0u);
+    EXPECT_FALSE(table.Pending(900, 7));
+    EXPECT_EQ(table.stats().recorded, 0u);
+}
+
 }  // namespace
 }  // namespace kds::server

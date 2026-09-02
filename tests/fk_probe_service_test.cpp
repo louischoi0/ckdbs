@@ -82,7 +82,8 @@ protected:
     // the migration race in miniature. A handler is registered once, so
     // this may be called once.
     void InstallServer(std::uint32_t core_id) {
-        server_.emplace(boot_->catalog, store_, core_id, intents_, *owner_, *transport_);
+        server_.emplace(boot_->catalog, store_, core_id, intents_, pending_deletes_, *owner_,
+                        *transport_);
         ASSERT_TRUE(owner_
                         ->RegisterMessageHandler(
                             sched::RingMessageKind::kFkProbeRequest,
@@ -98,6 +99,37 @@ protected:
             child_->RunOnce();
             owner_->RunOnce();
         }
+    }
+
+    // A relation whose `sys.tables` row says a core other than 0, placed
+    // there by a second catalog over the same store under `kRotate` - the
+    // one way this engine can currently produce a relation a given core
+    // does not own (`AssignOwnerCore` otherwise puts every relation on its
+    // creator). Asking core 0 about it is the migration race in miniature:
+    // the child's core resolved an owner from a catalog that had since
+    // moved on, and the core it asked must say so rather than answer from a
+    // relation that is not its own.
+    catalog::Oid MakeRelationOffCore0(const char* name) {
+        catalog::Catalog rotated(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2,
+                                 /*core_id=*/0);
+        rotated.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+        catalog::Schema schema;
+        catalog::SysColumnRow id{};
+        id.pos = 0;
+        catalog::SetName(id.name, "id");
+        id.type_val = catalog::kTypeValInt64;
+        id.len = 8;
+        id.notnull = true;
+        schema.columns.push_back(id);
+        auto oid = rotated.CreateTable(catalog::kNamespacePublic, name, schema,
+                                       catalog::ClusteredType::kBtree);
+        EXPECT_TRUE(oid.ok()) << oid.status().message();
+        if (!oid.ok()) return 0;
+        auto row = boot_->catalog.GetSysTableRow(oid.value());
+        EXPECT_TRUE(row.ok());
+        EXPECT_NE(row.value().owner_core, 0u)
+            << "the fixture failed to place a relation off core 0";
+        return oid.value();
     }
 
     exec::FkParentVerdicts::ForeignGroup GroupOf(
@@ -121,6 +153,7 @@ protected:
     catalog::Oid accounts_ = 0;
 
     FkIntentTable intents_;
+    FkPendingDeleteTable pending_deletes_;
     std::optional<FkProbeServer> server_;
     std::optional<FkProbeClient> client_;
 };
@@ -216,36 +249,12 @@ TEST_F(FkProbeTest, ADecideReleasesTheIntentAndNothingElseDoes) {
 TEST_F(FkProbeTest, AParentThisCoreDoesNotOwnIsRefusedRatherThanAnswered) {
     InstallServer(/*core_id=*/0);
 
-    // A relation whose `sys.tables` row says **core 1**, placed there by a
-    // second catalog over the same store under `kRotate` - the one way this
-    // engine can currently produce a relation a given core does not own
-    // (`AssignOwnerCore` otherwise puts every relation on its creator).
-    //
-    // Asking core 0 about it is the migration race in miniature: the child's
-    // core resolved an owner from a catalog that had since moved on, and the
-    // core it asked must say so rather than answer from a relation that is
-    // not its own.
-    catalog::Catalog rotated(store_, storage::kDefaultInlineCellWidth, /*core_count=*/2,
-                             /*core_id=*/0);
-    rotated.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-    catalog::Schema schema;
-    catalog::SysColumnRow id{};
-    id.pos = 0;
-    catalog::SetName(id.name, "id");
-    id.type_val = catalog::kTypeValInt64;
-    id.len = 8;
-    id.notnull = true;
-    schema.columns.push_back(id);
-    auto elsewhere = rotated.CreateTable(catalog::kNamespacePublic, "elsewhere", schema,
-                                         catalog::ClusteredType::kBtree);
-    ASSERT_TRUE(elsewhere.ok()) << elsewhere.status().message();
-    auto row = boot_->catalog.GetSysTableRow(elsewhere.value());
-    ASSERT_TRUE(row.ok());
-    ASSERT_NE(row.value().owner_core, 0u) << "the fixture failed to place a relation off core 0";
+    const catalog::Oid elsewhere = MakeRelationOffCore0("elsewhere");
+    ASSERT_NE(elsewhere, 0u);
 
     ASSERT_TRUE(client_
                     ->Request(/*owner_core=*/0, /*request_id=*/11, /*session_id=*/42,
-                              /*transaction_id=*/9, GroupOf({{elsewhere.value(), 1}}))
+                              /*transaction_id=*/9, GroupOf({{elsewhere, 1}}))
                     .ok());
     Pump();
 
@@ -369,6 +378,170 @@ TEST_F(FkProbeTest, AReverseCheckOverAChildAnotherCoreOwnsRefuses) {
     EXPECT_EQ(outcome.status().code(), StatusCode::kNotImplemented) << outcome.status().message();
     EXPECT_NE(outcome.status().message().find("owned by core"), std::string::npos)
         << outcome.status().message();
+}
+
+// ---- AJ-T1: the pending-delete set's consult ------------------------------
+//
+// The mirror of the intent above. These cells drive the table directly
+// rather than through a DELETE, because the statement that registers is
+// AJ-T3's and the consult is this task's - and a consult that only works
+// once its one caller exists is a consult nobody can regress.
+
+TEST_F(FkProbeTest, ARowThisCoreIsAboutToDeleteIsAnsweredBusy) {
+    InstallServer(/*core_id=*/0);
+    // The registration a DELETE makes at its dispatch fork, before it fans
+    // out to the child's owner. Row 1 exists and would otherwise pass -
+    // `APassIsAnsweredAndGrantsAnIntent` is the same request without this
+    // line.
+    //
+    // **Registered under the same session id the probe below carries**, and
+    // deliberately: the two numbers come from different cores' counters,
+    // both minted from 1, so this collision is the *common* case rather
+    // than a contrived one. A consult that excluded the asker's own id
+    // would answer "not pending" here and grant an intent on a row on its
+    // way out - which is why `FkPendingDeleteTable::Pending` takes no
+    // session at all. A registration under some other id would let that
+    // bug through unnoticed.
+    pending_deletes_.Add(accounts_, /*parent_pk=*/1, /*session_id=*/42);
+
+    ASSERT_TRUE(client_
+                    ->Request(/*owner_core=*/0, /*request_id=*/11, /*session_id=*/42,
+                              /*transaction_id=*/9, GroupOf({{accounts_, 1}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(11);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    ASSERT_TRUE(out->status.ok()) << out->status.message();
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    // Busy, not violation: the delete has not committed, so the answer
+    // depends on how it ends and the child retries. F3.
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kBusy);
+
+    // **And nothing was granted**, which is the whole point. An intent here
+    // would be a promise about a row on its way out - the child would
+    // commit on the strength of it and the DELETE's per-row check, which
+    // has already been told "no children", would mark the row anyway.
+    EXPECT_EQ(intents_.live_rows(), 0u);
+    EXPECT_EQ(pending_deletes_.stats().refusals, 1u);
+}
+
+TEST_F(FkProbeTest, APendingDeleteOnARowThatDoesNotExistStillAnswersBusy) {
+    // A wire-visible consequence of putting the consult ahead of the
+    // existence read, pinned rather than discovered. Row 999 is not there,
+    // so `AViolationIsAnsweredAndGrantsNothing` gets the terminal
+    // `kViolation` for it - but while a DELETE has registered that pk the
+    // answer is the retryable `kBusy` instead.
+    //
+    // **Correct, and self-resolving.** The registration ends with the
+    // deleting statement, after which the same probe answers `kViolation`
+    // again; and the ordering cannot be reversed, because reading first is
+    // exactly the window that lets a pass be computed for a row already on
+    // its way out. What a client sees is a retry that then gets the real
+    // answer, never a wrong one.
+    InstallServer(/*core_id=*/0);
+    pending_deletes_.Add(accounts_, /*parent_pk=*/999, /*session_id=*/7);
+
+    ASSERT_TRUE(client_
+                    ->Request(/*owner_core=*/0, /*request_id=*/16, /*session_id=*/42,
+                              /*transaction_id=*/9, GroupOf({{accounts_, 999}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(16);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kBusy);
+    EXPECT_EQ(intents_.live_rows(), 0u);
+}
+
+TEST_F(FkProbeTest, APendingDeleteOnAnotherRowDoesNotAffectThisOne) {
+    InstallServer(/*core_id=*/0);
+    // The negative half, and it is worth a cell of its own: a table keyed
+    // on the relation alone would refuse every probe against `accounts`
+    // while any of its rows was being deleted, which is a correctness-safe
+    // answer and a uselessly coarse one.
+    pending_deletes_.Add(accounts_, /*parent_pk=*/999, /*session_id=*/7);
+
+    ASSERT_TRUE(client_
+                    ->Request(/*owner_core=*/0, /*request_id=*/12, /*session_id=*/42,
+                              /*transaction_id=*/9, GroupOf({{accounts_, 1}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(12);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kPass);
+    EXPECT_EQ(intents_.live_rows(), 1u);
+    EXPECT_EQ(pending_deletes_.stats().refusals, 0u);
+}
+
+TEST_F(FkProbeTest, AClearedPendingDeleteLetsTheNextProbePass) {
+    InstallServer(/*core_id=*/0);
+    pending_deletes_.Add(accounts_, /*parent_pk=*/1, /*session_id=*/7);
+    ASSERT_TRUE(client_
+                    ->Request(/*owner_core=*/0, /*request_id=*/13, /*session_id=*/42,
+                              /*transaction_id=*/9, GroupOf({{accounts_, 1}}))
+                    .ok());
+    Pump();
+    ASSERT_EQ(client_->Find(13)->verdicts[0], exec::FkVerdict::kBusy);
+    client_->Close(13);
+
+    // What the deleting session's `COMMIT` or `ROLLBACK` does. The row is
+    // referenceable again immediately - a busy answer that outlived its
+    // cause is the "retry loop that cannot succeed" F1 already paid for
+    // once from the other direction.
+    EXPECT_EQ(pending_deletes_.Release(/*session_id=*/7), 1u);
+    EXPECT_EQ(pending_deletes_.live_rows(), 0u);
+
+    ASSERT_TRUE(client_
+                    ->Request(/*owner_core=*/0, /*request_id=*/14, /*session_id=*/42,
+                              /*transaction_id=*/9, GroupOf({{accounts_, 1}}))
+                    .ok());
+    Pump();
+    const FkProbeOutcome* out = client_->Find(14);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    ASSERT_EQ(out->verdicts.size(), 1u);
+    EXPECT_EQ(out->verdicts[0], exec::FkVerdict::kPass);
+    EXPECT_EQ(intents_.live_rows(), 1u);
+}
+
+TEST_F(FkProbeTest, TheOwnershipReCheckStillWinsOverAPendingDelete) {
+    // Ordering, pinned from outside. A pending delete must not turn the
+    // "not this core's relation" refusal into a busy verdict: busy tells
+    // the child to retry, and retrying a relation this core does not own is
+    // a condition that never clears here. The refusal has to survive.
+    //
+    // A server built as some other core could not reply at all - the
+    // transport has only the two cores this rig wires - so the relation is
+    // what moves, not the server.
+    InstallServer(/*core_id=*/0);
+    const catalog::Oid elsewhere = MakeRelationOffCore0("elsewhere_pending");
+    ASSERT_NE(elsewhere, 0u);
+
+    // A registration on the very row the probe names. It must change
+    // nothing: this core has no business answering about that relation at
+    // all, however much it believes it is deleting one of its rows.
+    pending_deletes_.Add(elsewhere, /*parent_pk=*/1, /*session_id=*/7);
+
+    ASSERT_TRUE(client_
+                    ->Request(/*owner_core=*/0, /*request_id=*/15, /*session_id=*/42,
+                              /*transaction_id=*/9, GroupOf({{elsewhere, 1}}))
+                    .ok());
+    Pump();
+
+    const FkProbeOutcome* out = client_->Find(15);
+    ASSERT_NE(out, nullptr);
+    ASSERT_TRUE(out->arrived);
+    EXPECT_FALSE(out->status.ok()) << "a probe answered from a relation this core does not own";
+    EXPECT_EQ(out->status.code(), StatusCode::kTxnConflict) << out->status.message();
+    EXPECT_TRUE(out->verdicts.empty()) << "a busy verdict displaced the ownership refusal";
+    EXPECT_EQ(pending_deletes_.stats().refusals, 0u);
 }
 
 }  // namespace

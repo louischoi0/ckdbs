@@ -130,13 +130,15 @@ inline constexpr sched::MonoTimeNs kFkProbeReplyDeadlineNs = 5ull * 1'000'000'00
 class FkProbeServer {
 public:
     FkProbeServer(catalog::Catalog& catalog, storage::PageStore& store, std::uint32_t core_id,
-                  FkIntentTable& intents, sched::Scheduler& scheduler,
+                  FkIntentTable& intents, FkPendingDeleteTable& pending_deletes,
+                  sched::Scheduler& scheduler,
                   sched::RingTransport& transport, txn::TransactionManager* txn = nullptr,
                   Logger* log = nullptr) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
           intents_(intents),
+          pending_deletes_(pending_deletes),
           scheduler_(scheduler),
           transport_(transport),
           txn_(txn),
@@ -165,6 +167,9 @@ private:
     storage::PageStore& store_;
     std::uint32_t core_id_;
     FkIntentTable& intents_;
+    // AJ-T1: what this core is about to delete, consulted **before** the
+    // existence read below so a row on its way out cannot be vouched for.
+    FkPendingDeleteTable& pending_deletes_;
     sched::Scheduler& scheduler_;
     sched::RingTransport& transport_;
     txn::TransactionManager* txn_;

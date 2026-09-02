@@ -806,6 +806,11 @@ private:
     // condition that could never clear. The table is declared ahead of the
     // server that fills it, `core_runtime.hpp`'s order and its reason.
     FkIntentTable fk_intents_;
+    // AJ-T1's mirror, on core 0 for the same reason the intents are here:
+    // core 0 is a parent owner like any other, and a DELETE it runs must
+    // register before it fans out or the window this table closes stays
+    // open on the one core the rest of the instance probes most.
+    FkPendingDeleteTable fk_pending_deletes_;
     std::optional<FkProbeServer> fk_probe_server_;
     std::optional<FkProbeClient> fk_probe_client_;
 

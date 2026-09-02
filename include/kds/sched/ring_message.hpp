@@ -233,6 +233,33 @@ enum class RingMessageKind : std::uint16_t {
     // third message would be a second way to say what the decide says.
     kFkProbeRequest = 41,
     kFkProbeReply = 42,
+
+    // parent's owner -> child's owner: a foreign key's **reverse check**
+    // across owners (AJ-T2, `docs/spec/foreign-keys.md` §3a). The mirror of
+    // the pair above and the other half of the crossing: the forward asks
+    // *"does parent row pk exist"*, this asks *"does any row of child
+    // relation R reference pk through column c"*, which is what RESTRICT
+    // needs before a parent row may be deleted.
+    //
+    // **Its own pair rather than a direction flag on the forward** (AJ-R6),
+    // because the two carry different questions and answer different
+    // things: the forward's entry is `(parent oid, pk)` and its verdicts
+    // are exist / absent / in-flight, this one's is `(child oid, fk column,
+    // parent pk)` and its verdicts are clear / violation / busy. One
+    // payload serving both would be two unions and a flag deciding which
+    // half is meaningful, and a reader of a captured frame could not tell
+    // them apart at all.
+    //
+    // **Nothing is left behind, and that is the asymmetry worth knowing.**
+    // A forward probe grants a reference intent, so the parent's owner is
+    // an intent holder that a later decide must reach. A reverse probe
+    // answers a read and forgets it: the child's owner records nothing, is
+    // enrolled in nothing, and needs no decide (AJ-R5). What holds the
+    // window open instead lives on the *deleting* core, in
+    // `server::FkPendingDeleteTable`, and is cleared where that core's own
+    // transaction ends.
+    kFkReverseProbeRequest = 43,
+    kFkReverseProbeReply = 44,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -271,6 +298,8 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kAccessStatsBatch:
         case RingMessageKind::kFkProbeRequest:
         case RingMessageKind::kFkProbeReply:
+        case RingMessageKind::kFkReverseProbeRequest:
+        case RingMessageKind::kFkReverseProbeReply:
         case RingMessageKind::kShippedRowDesc:
             return true;
         case RingMessageKind::kUnset:

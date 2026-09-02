@@ -1709,8 +1709,8 @@ Status Expeditor::Serve() {
         // its own nor consult an intent before deleting a parent. Reachable
         // wherever a catalog carries relations placed under more than one
         // `placement` setting.
-        fk_probe_server_.emplace(catalog(), *store_, /*core_id=*/0, fk_intents_, scheduler,
-                                 *transport_,
+        fk_probe_server_.emplace(catalog(), *store_, /*core_id=*/0, fk_intents_,
+                                 fk_pending_deletes_, scheduler, *transport_,
                                  txn_manager_.has_value() ? &*txn_manager_ : nullptr, &*logger_);
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kFkProbeRequest,
@@ -1726,6 +1726,7 @@ Status Expeditor::Serve() {
         // which is this file's rule everywhere above.
         dispatcher_->SetFkProbes(&*fk_probe_client_);
         dispatcher_->SetFkIntents(&fk_intents_);
+        dispatcher_->SetFkPendingDeletes(&fk_pending_deletes_);
 
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -

@@ -161,6 +161,7 @@ class AssertionBuildClient;
 class StatementShipClient;
 class FkProbeClient;
 class FkIntentTable;
+class FkPendingDeleteTable;
 class ShippedStatementExecutor;
 // Forward-declared rather than included: this header is included nearly
 // everywhere, and what it needs of the 2PC service is one pointer and one
@@ -899,7 +900,15 @@ private:
     // commits an owned scope, anything else aborts it. Inside an explicit
     // transaction a failure **poisons the session** rather than unwinding -
     // rows already written stay, and the client must ROLLBACK (section 6).
-    Status EndWrite(Session& session, WriteScope& scope, const Status& result);
+    //
+    // `statement_ends` is false on the one caller that ends a *scope*
+    // without ending the statement - `AbandonWriteForShipping`, where the
+    // statement is parking on a probe or has gone to another owner and will
+    // run whole somewhere else. Only per-statement state hangs off it
+    // (AJ-T1's pending-delete clear); the scope's own unwind is identical
+    // on both arms.
+    Status EndWrite(Session& session, WriteScope& scope, const Status& result,
+                    bool statement_ends = true);
 
     // The trx_id a write stamps: the scope's transaction, or
     // kBootstrapXid when there is no manager.
@@ -1226,6 +1235,12 @@ private:
     // not run has nothing to commit. Autocommit only; see the definition.
     void ReleaseIntentsWithoutWaiting(Session& session);
 
+    // AJ-T1: every row this session registered as about to be deleted,
+    // released. Called where the session's transaction ends and **not** at
+    // the decide sites beside `ReleaseIntentsWithoutWaiting` above, for the
+    // reason its definition states.
+    void ClearPendingDeletes(Session& session);
+
     Status SendForeignKeyProbes(const exec::FkParentVerdicts& held, Session& session,
                                  std::string_view line, DispatchOutcome& out);
 
@@ -1463,6 +1478,16 @@ public:
     // correct on every core that never grants an intent, and is what a
     // unit fixture is. `intents` must outlive this.
     void SetFkIntents(FkIntentTable* intents) noexcept { fk_intents_ = intents; }
+
+    // AJ-T1's half of the same mechanism, running the other way: the rows
+    // this core is about to delete, registered by a DELETE before it fans
+    // out to a foreign child's owner and consulted by `FkProbeServer`
+    // before it vouches for a parent. Without one a DELETE registers
+    // nothing, which is correct on a core no foreign child ever probes -
+    // and is what a unit fixture is. `pending` must outlive this.
+    void SetFkPendingDeletes(FkPendingDeleteTable* pending) noexcept {
+        fk_pending_deletes_ = pending;
+    }
 
     // Arms the foreign arm of CREATE INDEX (PW1c-6b-3,
     // index_build_service.hpp): a relation another core owns has its index
@@ -2014,6 +2039,10 @@ private:
     // core owns. Not owned - `CoreRuntime` declares it ahead of the server
     // that fills it, for the reason stated there.
     FkIntentTable* fk_intents_ = nullptr;
+
+    // AJ-T1's mirror: what this core is about to delete. Not owned, for
+    // `fk_intents_`'s reason and beside it in `CoreRuntime`.
+    FkPendingDeleteTable* fk_pending_deletes_ = nullptr;
 
     // **The verdicts a parked statement came back with**, consulted by the
     // extraction pass before it resolves anything. Held on the dispatcher
