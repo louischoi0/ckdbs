@@ -24,8 +24,14 @@
 // writes immediately whether or not they are durable, exactly like the
 // page device - a crash is what separates the two.
 //
-// Concurrency: core-local, like everything else (rules.md section 3). One
-// stream, one device, one core; nothing here is internally synchronized.
+// Concurrency: one device, one stream. Under an unshared stream every call
+// is one core's (rules.md section 3). Under the **shared** stream of AR0 M0
+// (wal/stream.hpp) the stream serializes `CreateSegment`/`WriteAt`/`ReadAt`
+// with its latch, and a `Sync` may run on another thread **concurrently
+// with them** - the writer thread's, or an inline syncer's. An
+// implementation must accept that pairing: `FileLogDevice` does by POSIX
+// semantics (`pwrite` beside `fdatasync` on one descriptor), and
+// `MemoryLogDevice` takes a mutex for it, being a test double.
 
 namespace kds::wal {
 

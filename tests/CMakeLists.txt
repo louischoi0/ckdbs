@@ -165,6 +165,8 @@ add_executable(kds_tests
     file_log_device_test.cpp
     sim_rng_test.cpp
     sim_loop_test.cpp
+    wal_golden_log_test.cpp
+    wal_shared_stream_test.cpp
 )
 target_link_libraries(kds_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main Threads::Threads)
 

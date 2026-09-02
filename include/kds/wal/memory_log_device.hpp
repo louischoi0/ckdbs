@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -49,10 +50,16 @@ public:
         std::uint64_t segment_size = kDefaultSegmentSize);
 
     std::uint64_t segment_size() const noexcept override { return segment_size_; }
-    std::uint64_t segment_count() const noexcept override { return base_.size(); }
+    std::uint64_t segment_count() const noexcept override {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return base_.size();
+    }
 
     // Segments durable as of the last Sync() - what Crash() reverts to.
-    std::uint64_t durable_segment_count() const noexcept { return durable_segment_count_; }
+    std::uint64_t durable_segment_count() const noexcept {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return durable_segment_count_;
+    }
 
     Status CreateSegment(std::uint64_t segment_no) override;
     Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
@@ -127,6 +134,11 @@ private:
     // quadratic.) Crash() drops the overlay and the segments created since
     // the last sync — the same observable semantics as before.
     std::uint64_t segment_size_;
+    // The one lock a test double takes (log_device.hpp): a shared stream
+    // writes under its latch while the writer thread syncs, and the maps
+    // below are not safe for that pairing on their own. Uncontended on
+    // every single-threaded path, so the simulator's cost is unchanged.
+    mutable std::mutex mutex_;
     std::vector<Segment> base_;     // content as of the last Sync()
     std::vector<Segment> pending_;  // writes since; parallel to base_
     std::uint64_t durable_segment_count_ = 0;

@@ -1,28 +1,56 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <vector>
 
+#include "kds/base/spin_latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/record.hpp"
 
-// One core's WAL stream (wal.md sections 3, 4.1, 6): the layer that turns
-// "append this record" into bytes at a place, and the only thing that knows
-// how an LSN maps onto a segment file.
+// The WAL stream (wal.md sections 3, 4.1, 6): the layer that turns "append
+// this record" into bytes at a place, and the only thing that knows how an
+// LSN maps onto a segment file.
 //
-// Concurrency: core-local, like the device under it (rules.md section 3).
-// One stream, one core, no internal synchronization - the whole point of
-// per-core streams is that the append path has no shared tail pointer, no
-// lock, and no atomic contention.
+// ---- Concurrency: one core's stream, or the instance's -------------------
+//
+// AR0 M0 (`instructions/v3.0.0/workorder-al-m0-single-wal.md`, AL-R1/AL-R2)
+// makes this the one stream every core appends to. Opened **unshared** -
+// the `cores = 1` path and every in-process test - it is core-local like
+// the device under it (rules.md section 3): one thread, no latch taken, and
+// the gauges' relaxed atomics compile to the plain moves they replaced.
+// Opened **shared**, one spin latch guards the staging state:
+//
+//   - `Append`, from any thread: latch; size checks; the roll if the
+//     segment is full; encode into the staging buffer; bump the cursor;
+//     unlatch. The LSN is fixed under the latch, so a record's address is
+//     known before its bytes are visible to anyone else - `StampPageLsn`
+//     and the `recLSN` discipline (page.md section 8) are unchanged.
+//   - `Flush` and `Seal`, from any thread: the device write happens
+//     **under the latch**. Accepted for M0's first cut and named here: a
+//     flush is a page-cache copy of what was staged since the last one,
+//     microseconds against the 1 ms drain cadence, and a roll's segment
+//     creation is one per 64 MiB. AL-S8 measures the spin this costs; a
+//     swap-and-write outside the latch is the follow-on if it shows.
+//   - `Sync`, from any thread: the flush under the latch, the device sync
+//     **outside** it - milliseconds, and nobody may spin for those - and
+//     the durable watermark published as a maximum, so two syncers can
+//     never pull it back.
+//   - The gauges (`append_lsn`, `flushed_lsn`, `durable_lsn`, `ring_used`,
+//     `sealed`) are relaxed atomics: written under the latch, readable
+//     from any thread without it as the instantaneous values they are.
+//
+// A device under a shared stream must accept `WriteAt`/`CreateSegment` on
+// one thread while `Sync` runs on another (log_device.hpp).
 //
 // ---- LSN arithmetic ------------------------------------------------------
 //
-// An LSN is a stream-local byte offset (wal.md section 3), counted across
-// segments including their headers:
+// An LSN is a byte offset into the stream, counted across segments
+// including their headers:
 //
 //     segment_no = lsn / segment_size
 //     offset     = lsn % segment_size
@@ -88,12 +116,16 @@ public:
     // section 4.2). A segment header that does not match this stream
     // (magic, format version, core_id, segment_no, start_lsn) is Corruption
     // rather than something to append past.
+    //
+    // `shared` arms the latch (the concurrency section above). Off, the
+    // stream is one thread's and the latch is never touched.
     static StatusOr<std::unique_ptr<WalStream>> Open(
         LogDevice* device, std::uint32_t core_id = 0,
-        std::size_t ring_capacity = kDefaultRingCapacity);
+        std::size_t ring_capacity = kDefaultRingCapacity, bool shared = false);
 
     std::uint32_t core_id() const noexcept { return core_id_; }
     std::uint64_t segment_size() const noexcept { return segment_size_; }
+    bool shared() const noexcept { return latch_ != nullptr; }
 
     // Bytes of a segment a record can actually occupy: everything after the
     // header block. No record may exceed this, since records never span
@@ -106,24 +138,24 @@ public:
     // current segment is sealed, in which case the next append rolls and
     // the LSN jumps to the next segment's first record. `sealed()` says
     // which.
-    Lsn append_lsn() const noexcept { return append_lsn_; }
+    Lsn append_lsn() const noexcept { return append_lsn_.load(std::memory_order_relaxed); }
 
     // Everything below this has been handed to the device; everything below
     // durable_lsn() has been synced by it. The gap between them is exactly
     // what a crash would lose.
-    Lsn flushed_lsn() const noexcept { return append_lsn_ - ring_used_; }
-    Lsn durable_lsn() const noexcept { return durable_lsn_; }
+    Lsn flushed_lsn() const noexcept { return flushed_lsn_.load(std::memory_order_relaxed); }
+    Lsn durable_lsn() const noexcept { return durable_lsn_.load(std::memory_order_acquire); }
 
-    bool sealed() const noexcept { return sealed_; }
-    std::size_t ring_used() const noexcept { return ring_used_; }
+    bool sealed() const noexcept { return sealed_.load(std::memory_order_relaxed); }
+    std::size_t ring_used() const noexcept { return ring_used_.load(std::memory_order_relaxed); }
     std::size_t ring_capacity() const noexcept { return ring_.size(); }
+    std::size_t ring_free() const noexcept { return ring_.size() - ring_used(); }
 
     // The device under this stream, for the one caller that has to reach it
     // past the stream: the WAL writer thread syncs the device while this
-    // stream keeps staging and writing on the reactor (wal/writer.hpp). It
-    // is deliberately not an owning handle - the device outlives both.
+    // stream keeps staging and writing (wal/writer.hpp). It is deliberately
+    // not an owning handle - the device outlives both.
     LogDevice* device() const noexcept { return device_; }
-    std::size_t ring_free() const noexcept { return ring_.size() - ring_used_; }
 
     // Stages one record and returns the LSN it was placed at.
     //
@@ -140,9 +172,9 @@ public:
     // Writes the staged bytes to the device. Not durable until Sync().
     Status Flush();
 
-    // Flush() plus a device sync; advances durable_lsn() to flushed_lsn()
-    // only if the device reports success, so a failed sync never moves the
-    // durable point.
+    // Flush() plus a device sync; advances durable_lsn() to what that flush
+    // had handed over, only if the device reports success, so a failed
+    // sync never moves the durable point.
     Status Sync();
 
     // Seals the current segment with a PAD marker and drains the ring, so
@@ -151,7 +183,7 @@ public:
     Status Seal();
 
 private:
-    WalStream(LogDevice* device, std::uint32_t core_id, std::size_t ring_capacity);
+    WalStream(LogDevice* device, std::uint32_t core_id, std::size_t ring_capacity, bool shared);
 
     std::uint64_t SegmentOf(Lsn lsn) const noexcept { return lsn / segment_size_; }
     std::uint64_t OffsetOf(Lsn lsn) const noexcept { return lsn % segment_size_; }
@@ -167,26 +199,41 @@ private:
     // segment that had never been created, and every later Flush refused
     // the boundary-spanning range - permanently, at ~300K logged rows.
     std::uint64_t SegmentRemaining() const noexcept {
-        const std::uint64_t offset = OffsetOf(append_lsn_);
+        const std::uint64_t offset = OffsetOf(append_lsn());
         return offset == 0 ? 0 : segment_size_ - offset;
     }
 
+    // The `*Locked` halves run with the latch held (or unshared). Every
+    // public entry point takes the latch once and calls one of them; the
+    // roll on Append's path reaches Flush and Seal through these, never
+    // through the public names, so the latch is never taken twice.
     Status StartSegment(std::uint64_t segment_no);
     Status Roll();
+    Status FlushLocked();
+    Status SealLocked();
     // Walks segment `segment_no` forward and leaves append_lsn_ at its
-    // durable end, or seals it if a PAD marker is found.
+    // durable end, or seals it if a PAD marker is found. Open() only.
     Status ScanTail(std::uint64_t segment_no);
+    // Moves the durable watermark forward to `lsn`, never back: a plain
+    // store unshared, a compare-exchange maximum shared.
+    void PublishDurable(Lsn lsn) noexcept;
 
     LogDevice* device_;
     std::uint32_t core_id_;
     std::uint64_t segment_size_ = 0;
 
     std::vector<std::byte> ring_;
-    std::size_t ring_used_ = 0;
+    std::atomic<std::size_t> ring_used_{0};
 
-    Lsn append_lsn_ = 0;
-    Lsn durable_lsn_ = 0;
-    bool sealed_ = false;
+    std::atomic<Lsn> append_lsn_{0};
+    std::atomic<Lsn> flushed_lsn_{0};
+    std::atomic<Lsn> durable_lsn_{0};
+    std::atomic<bool> sealed_{false};
+
+    // `latch_` points at `latch_storage_` when shared and is null when not
+    // (spin_latch.hpp: a null guard costs one branch and no atomic).
+    SpinLatch latch_storage_;
+    SpinLatch* latch_ = nullptr;
 
     // Preallocated so writing a segment header never allocates.
     std::vector<std::byte> header_block_;

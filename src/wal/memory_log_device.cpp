@@ -14,6 +14,7 @@ StatusOr<std::unique_ptr<MemoryLogDevice>> MemoryLogDevice::Create(std::uint64_t
 }
 
 Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no) {
+    std::lock_guard<std::mutex> guard(mutex_);
     if (segment_no != base_.size()) {
         return Status::InvalidArgument("MemoryLogDevice: segments are created in order (expected " +
                                        std::to_string(base_.size()) + ", got " +
@@ -28,6 +29,7 @@ Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no) {
 
 Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                                 std::span<const std::byte> in) {
+    std::lock_guard<std::mutex> guard(mutex_);
     if (Status s = CheckSegmentRange(segment_no, offset, in.size(), base_.size(), segment_size_);
         !s.ok()) {
         return s;
@@ -60,6 +62,7 @@ Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
 
 Status MemoryLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                                std::span<std::byte> out) {
+    std::lock_guard<std::mutex> guard(mutex_);
     if (Status s =
             CheckSegmentRange(segment_no, offset, out.size(), base_.size(), segment_size_);
         !s.ok()) {
@@ -86,6 +89,7 @@ Status MemoryLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
 }
 
 Status MemoryLogDevice::Sync() {
+    std::lock_guard<std::mutex> guard(mutex_);
     trace_.push_back({OpKind::kSync, 0, 0, 0});
 
     if (fail_next_sync_.has_value()) {
@@ -119,6 +123,7 @@ void MemoryLogDevice::ClearInjections() noexcept {
 }
 
 void MemoryLogDevice::Crash() {
+    std::lock_guard<std::mutex> guard(mutex_);
     // Everything un-synced dies: the overlay whole, and the segments
     // created since the last sync with it.
     base_.resize(durable_segment_count_);
@@ -127,6 +132,7 @@ void MemoryLogDevice::Crash() {
 }
 
 std::uint64_t MemoryLogDevice::UnsyncedBytes() const noexcept {
+    std::lock_guard<std::mutex> guard(mutex_);
     std::uint64_t total = 0;
     for (const Segment& segment : pending_) total += segment.size();
     return total;
@@ -158,6 +164,7 @@ void MemoryLogDevice::Crash(std::uint64_t keep_bytes) {
     // case is unrealistic for a power cut and that nothing in `wal.md` is
     // written against it, and this primitive keeps that scope: the cut is a
     // suffix truncation, never a scatter.
+    std::lock_guard<std::mutex> guard(mutex_);
     std::uint64_t kept = 0;
     for (std::size_t seg = 0; seg < pending_.size(); ++seg) {
         Segment& segment = pending_[seg];

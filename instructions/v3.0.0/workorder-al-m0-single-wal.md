@@ -1,0 +1,428 @@
+# Work order AL — AR0 M0: the single WAL stream
+
+Drafted 2026-09-02 by CLA on `worktree-v3.0.0-arch-revision` at `d15b5ac`
+(`v2.7.0-134-gd15b5ac`). Enacts AR0 §8 step 3 under the operator's
+go-ahead of the same day (AL-1). Governed by
+`instructions/v3.0.0/ar0-architecture-revision.md` (the body for the
+direction, AR0-V for what the tree says), `docs/spec/wal.md`,
+`docs/spec/page-lsn-cross-stream.md`, `docs/spec/cross-owner-txn.md` §2c,
+`docs/spec/sched.md` §5/§7, `docs/rules/rules.md` §3. "AR0 M0" is cited
+with the file, never as a bare "M0": `workplan-crosscore.md` at `1769487`
+already numbers its milestones M1–M6.
+
+## AL-1 — The direction, verbatim
+
+> set first milestone go ahead for it for an hour task
+
+Read as: AR0's first milestone is set; work on it starts now; the first
+task is sized to one hour. The hour is AL-S0 — this document, the
+source-read survey it carries, and the two lines that reopen
+`instructions/`. Nothing in the engine changes at AL-S0.
+
+## AL-2 — Where this sits against AR0
+
+**What AR0 M0 is** (§8 step 3): one WAL stream for the instance, **one
+flush and sync point** — every core still appends, which is where AL-R1
+departs from D3(a) — the `cores = 1` path unchanged, and a fresh
+baseline. **What it is not**: M0 keeps relation ownership, per-core
+buffer pools, the ring, the cross-owner protocol, per-core undo chains
+and the trx-id leases. M0 changes exactly one quantity — how many
+streams there are — and everything the survey (AL-3) lists follows from
+that one change.
+
+**D-items M0 consumes**, taken as ratified for M0's scope by the
+go-ahead and by AR0 §5's standing rule (CLA's proposal stands unless the
+operator says otherwise; constants are never CLA's):
+
+| D | how M0 takes it |
+|---|---|
+| D3 (log appender) | the *mechanism* is AL-R1, a proposal that differs from D3(a)'s letter for the reason AR0-V4 gives; the *constant* (the group-commit cadence) stays `wal_drain_interval_ns` at its current 1 ms and is re-measured at AL-S8 |
+| D4 (free-map / superblock authority) | untouched by M0: `crosscore.md` CC11 stands — core 0 alone writes the superblock, the free map and the catalog, and core 0 is also where the one log's drain runs (AL-R1). "The log core" of D4 *is* core 0 in M0 |
+| D14 (format) | AL-R3: superblock format 15 → 16; a version-15 image refuses the mount; nothing migrates in place |
+| D15 (baseline) | AL-R8, awaiting the operator on *where* a v3 measurement goes |
+
+**D-items M0 does not touch**: D1, D2, D5–D13, D16 beyond the citation
+rule above. The page header keeps its bytes (AR0-V3).
+
+**What the verification changed about M0's case.** AR0 §0 argued for
+the single log from scheduler latency; AR0-V1 shows the tree attributes
+the numbers to device syncs. The case for M0 is therefore the one
+`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8b makes
+at `1769487`: 94–98% of a writing reactor's wall time is charged to no
+group — "the WAL drain's `fdatasync` above all" — because a group-commit
+sync runs **on the reactor thread** and only core 0 starts a writer thread
+(`src/server/expeditor.cpp:800-812`; `core_runtime.cpp:113-123` starts
+none). One stream with one off-reactor sync point removes that from
+every core. The counter-measurement M0 owes: `src/wal/manager.cpp`'s
+`Sync()` comment records that handing a waited-on sync to another thread
+"doubled `group`'s p99 while barely moving its median" on a 2-core host
+— under one stream every core but the drain's pays that wake-up, and
+AL-S8 measures whether the tail moves.
+
+## AL-3 — The survey: every per-core-stream assumption at `d15b5ac`
+
+Source-read by CLA on 2026-09-02. One line per site; the stage that
+retires each is named in AL-5.
+
+**A. Stream identity.** There is no `stream_id`; the stream's identity
+is `core_id` everywhere. `record.hpp:366-387` persists `core_id` in the
+segment header (`kSegmentCoreIdOffset = 12`), `record.cpp:215,258`
+codes it. `file_log_device.hpp:15,47-53` names segments
+`wal-<core_id>-<segment_no>.log` and adopts only that core's;
+`file_log_device.cpp:48-49,150,179` builds and filters by the prefix.
+`stream.hpp:12-17,89-95,154,181` is "one core's WAL stream", refusing a
+header naming another core (`stream.cpp:67,95`). `manager.hpp:155,164`
+opens one manager per core (`manager.cpp:44-46`). `log_scanner.hpp:62-71,121,128`
+and `log_scanner.cpp:20-23,115,200-204` validate every segment against
+a core. The record header (`record.hpp:256-276`) carries **no** core id.
+
+**B. Superblock.** `superblock.hpp:212,315-338,341,343-360,363-372,377,466-503`:
+the per-core anchor table indexed by `core_id`, `kMaxWalCores = 64`,
+`wal_anchor_count`, `CheckCoreCount`, `wal_anchor(core_id)`,
+`SetWalAnchor`; `superblock.cpp:18-21,93,103-105,151-153,163-190` code
+and validate it. `bootstrap.cpp:19,68-78,112` pins `cores` and refuses
+a mismatch naming both numbers; `bootstrap.hpp:53-63` and
+`expeditor.hpp:523-545` state why. `command_dispatcher.cpp:1476` prints
+`wal_anchor_count=`.
+
+**C. Recovery.** `recovery.hpp:59-62,91-108,210`: "recovery is this
+function once per core", `RecoverCore(device, core_id, …)`;
+`recovery.cpp:33-42,56,147` and every message scoped "recovery of core
+N". `analysis.hpp:14,73-77,115-121,141-147,159-162,200-201,237` and
+`analysis.cpp:43,226,240`: one forward scan of a core's stream, the
+prepared set keyed by this stream, `PAGE_HANDOFF` removing a page from
+this stream's scope. `redo.hpp:91`. `mount_recovery.hpp:29-58,186-212,265-286,331`
+and `mount_recovery.cpp:16-21,35-40`: `RecoverCoreAtMount(core_id,
+anchor, …, wal_dir, anchors)`, the `CoordinatorStreamResolver` per
+participant, a completion checkpoint per core. `expeditor.cpp:840-843,863-869,1001-1003,1027`
+recovers core 0's stream; `core_runtime.cpp:175-177,420-421,824-825`
+each peer's. `checkpointer.hpp:179-192`, `checkpointer.cpp:240,256`:
+the anchor record carries `core_id`; `remote_checkpoint_anchor.{hpp,cpp}`
+and `expeditor.cpp:1451-1465` ship a peer's anchor to core 0.
+`assertion_recover.hpp:104`, `assertion_recover.cpp:123,285` scan one
+core's stream.
+
+**D. The PL-C stamp and the PL-B handoff.** `page_header.hpp:139-159`
+(`GetPageStreamStamp`, `SetPageStreamStamp`, `StreamStampFor(core_id)
+= core_id + 1`, `StampIsForeign`), `page_header.cpp:138-143`.
+`redo.cpp:359-373` refuses a foreign stamp inside this stream's scope
+as `Corruption`; `redo.cpp:478-479` **restamps every applied page** with
+`StreamStampFor(core_id)`. `device_page_store.cpp:702-725` claims a
+page at fault iff the stamp names this core (PW1c-7); `:1056-1062`
+stamps beside `page_lsn` in `StampPageLsn`, on the mutation path;
+`:417,440,448,482-486` refuse by stamp;
+`device_page_store.hpp:290-308,341-346,376-378,903-923` hold
+`core_id_` and `stamp_claims_`. `core_runtime.cpp:160-166,931-932`.
+Handoff: `record.hpp:161-175` (`kPageHandoff = 25`),
+`payload.hpp:84-104` (`incoming_core`), `log_page_handoff.hpp:11-41`
+the one emitter, `analysis.cpp:91-134`, `redo.cpp:43-48`,
+`core_runtime.cpp:935,962-992`, `relation_grant_service.hpp:24-30`,
+`ring_message.hpp:96`. Spec: `page.md:34,108`.
+
+**E. Cross-owner records.** `payload.hpp:128-163`: `TxnPreparePayload
+{coordinator_session_id, coordinator_txn_id, coordinator_core}`.
+`txn_2pc_service.hpp:20-26,41-53,66-95,102-152`: the verdict "lives in
+exactly one stream", the coordinator's whole stream scanned, another
+core's device opened at mount. `prepared_resolver.cpp:15-147`: groups
+by `coordinator_core`, opens `FileLogDevice(wal_dir_, coordinator_core)`,
+full scan from LSN 0, must reach the coordinator's anchor.
+`cross-owner-txn.md:229-262`: the file read, the prepared floor, the
+retention obligation.
+
+**F. Who syncs.** `writer.hpp:13-55`: the writer thread is the one
+boundary lock, one device per writer, and **stream-agnostic**
+(`:45`, "this class never touches the stream"). `manager.hpp:184-219,246-249,282-291,311-315`;
+`manager.cpp:75-77` (`StartWriter`), `:232-267` (`DrainOnce` hands the
+tick to the writer if present, else syncs inline). `expeditor.cpp:789-812`:
+core 0 opens its device and manager and **alone** calls `StartWriter()`;
+`:2009-2050` core 0's drain in the post-task hook and on
+`wal_drain_interval_ns`. `core_runtime.cpp:113-123,1078-1128`: each peer
+opens its own device and manager, no writer, drains inline on the same
+cadence. `sim/instance.cpp:36` opens one manager at core 0, no writer.
+
+**G. `cores = 1`.** No WAL-specific branch exists. The peer loop
+`expeditor.cpp:1492` never runs at 1, the ring matrix is skipped at
+`:1399-1401`, `core_runtime.cpp:788` skips the remote anchor for core
+0. At `cores = 1` the only WAL objects are core 0's, `wal_anchor(0)` is
+the only live slot, `StreamStampFor(0) == 1` the only stamp written,
+and no `PAGE_HANDOFF` or `TXN_PREPARE` is ever emitted. **A single-stream
+design keeps this path byte-identical iff it preserves `wal-0-N.log`,
+segment-header `core_id = 0`, and stamp value 1** — AL-R2/AL-R6.
+
+**H. Counters.** `manager.hpp:104-146`: `WalStats` per manager, so per
+core. `command_dispatcher.cpp:1483,1519-1551,1583-1593,2034-2097`:
+`core=`, `wal_syncs`/`wal_interval_syncs` core-local with the
+writer-on-core-0 comment, the group-commit block, the per-core recovery
+block; `client-manual.md:344-345`, `cross-owner-txn.md:391,430`.
+
+**I. Tests and the simulator.** Tests whose bodies name a core, a stream,
+an anchor or a stamp: `wal_stream_test` 23/23, `wal_analysis_test`
+19/21, `wal_redo_test` 14/21, `prepared_recovery_test` 15/16 (a fixture
+of **two** streams and two anchors, `:161,191-198,337,355`),
+`mount_recovery_test` 12/16, `wal_log_scanner_test` 13/14,
+`superblock_test` 13/16, `wal_recovery_test` 10/10,
+`file_log_device_test` 10/15 (literal `wal-0-*.log`),
+`wal_checkpointer_test` 9/17, `core_runtime_test` 46/131,
+`device_page_store_test` 12/48, `superblock_checkpoint_anchor_test`
+8/8, `txn_2pc_protocol_test` 9/53, `wal_record_test` 7/13,
+`assertion_recover_test` 6/13, `sim_loop_test` 6/45,
+`wal_high_water_test` 5/10, `bootstrap_test` 4/12, `insert_wal_test`
+3/33, `wal_payload_test` 3/41, `page_header_test` 1/19,
+`command_dispatcher_test:140` (`wal_anchor_count=0`). Core-agnostic
+today: `wal_manager_test`, `wal_writer_test`, `recovery_undo_test`,
+`high_water.{hpp,cpp}`. **The simulator already models one log**:
+`sim/instance.{hpp,cpp}` holds a single `MemoryLogDevice`, recovers at
+core 0, injects faults against the one device (`sim/faults.*`,
+`sim/loop.cpp:472,618,625`).
+
+**J. Spec sentences that state the topology as a rule.** `wal.md:7,35,42-49,127,131,178,192,196,214`;
+`page.md:34,104-108,196`; `sched.md:9,58,132-137,154,186`;
+`crosscore.md:37` (CC11: "no DDL can span two WAL streams");
+`cross-owner-txn.md:139,229-262`; `rules.md:23,25,51`;
+`page-lsn-cross-stream.md:25-33,47,96-100,226-232` — **§6 declines PL-A,
+"one global LSN", because it puts a shared atomic on the append path;
+PL-A is what M0 builds, and that cost is the one AR0-2 accepts and
+AL-S8 prices**; `CLAUDE.md:45`; `manual/server/server.md:53,77,78,156`.
+
+## AL-4 — Rulings AL-R1..AL-R8
+
+**AL-R1 — The append: reserve, copy, publish; one writer thread; the
+drain on core 0.** *CLA's proposal, in place of D3(a)'s letter.* D3(a)
+fans every append through the ring to a log core. The ring carries POD
+messages (a 32-byte header, `ring_message.hpp:354`) into a slot whose
+payload is `kCoreRingPayloadBytes = 1024` bytes
+(`ring_transport.hpp:224`; the text arm's cap is 992 of them,
+`crosscore.md` §4a), and a `FULL_PAGE_IMAGE` is 8 KiB, so D3(a) as
+written cannot carry the record every checkpoint cycle's first touch of
+a page logs. It would also put a
+ring hop and a wake on every record, which is the cost D2 rejects per
+lock. What M0 builds instead:
+
+- **A latch around the append, not a lock-free reservation.** *Amended
+  2026-09-02 from building AL-S1a; the first draft of this ruling said
+  `fetch_add` on the staging cursor, and it does not survive the code.*
+  `WalStream::Append` is not only a memcpy and a cursor bump: before the
+  bump it refuses an oversized record (`stream.cpp:186-193`), and it
+  **seals and rolls the segment** when the record does not fit
+  (`:195-202`), which does device I/O and moves `append_lsn_`; after it,
+  a full buffer returns `OutOfSpace` (`:204-209`). A bare `fetch_add`
+  can express none of the three — the roll is not reservable and a
+  refused reservation would have to be unwound. So the shared stream
+  takes **one spin latch** (`base/spin_latch.hpp`) across the size
+  checks, the roll, the encode and the bump, and the LSN is fixed under
+  it. `StampPageLsn` and the frame's `recLSN` discipline (`page.md` §8)
+  are unchanged, the LSN still being known when `Append` returns.
+  **At `cores = 1` the stream is opened unshared and the latch is a null
+  pointer**: one branch per guard, which is `sched.md` §5's accepted
+  cost class ("phase 3 costs one null test").
+- **What the latch covers, and the one cost it is not free of.** The
+  flush (staging buffer → segment) happens **under** the latch, so a
+  concurrent appender waits out a page-cache copy; the device **sync**
+  happens outside it, because milliseconds under a spin latch is not a
+  trade anything justifies. AL-S8 measures the spin; a swap-and-write
+  outside the latch is the follow-on if it shows.
+- One `WalWriter` for the instance, started by the expeditor
+  (`writer.hpp:45` already promises it never touches the stream). The
+  **flush** and the **drain** run on each core's own reactor tick as
+  they do today (`expeditor.cpp:2009-2050`, `core_runtime.cpp:1078-1096`),
+  but a peer's **sync** becomes a request to the writer. A peer's
+  committer parks on `IsDurable(lsn)`, which after M0 reads the writer's
+  atomic watermark rather than its own stream's plain field — new for a
+  peer, which owns no writer today. A peer no longer owns a device.
+- **Which of a peer's calls block, and why the distinction is
+  load-bearing** (AL-S1b). `EnsureDurable`, `SyncAll` and a D1 commit
+  wait on the writer's watermark: the first is the WAL-before-data gate
+  the page store calls before writing a dirty page (§8-1), so an OK
+  meaning "asked for" would let a data page overtake its log record —
+  a durability defect, not a latency one. The **drain** does not wait:
+  it runs once a tick on the reactor and blocking it would hold every
+  session on that core for another thread's `fdatasync`; it asks, and a
+  later tick closes the batch.
+- The staging buffer's capacity (`kDefaultRingCapacity`, 1 MiB) is now
+  shared by every core; a full buffer fails the append `OutOfSpace` as
+  today (`stream.hpp`, "Backpressure is a Status"). **One drain-and-retry
+  is no longer a proof of progress** — another core can take the space
+  it freed — so the retry is a bounded loop that reports rather than
+  spins. Whether one buffer suffices at eight cores is AL-S8's
+  `wal_ring_full` cell, not a constant decided here.
+
+What the ruling keeps viable: the latch sits behind the same
+`Append(record) → Lsn` signature every emitter uses today, so the
+unshared stream is one implementation of it and the shared one another;
+the operator may still choose D3(a) or D3(c) for the flush side without
+touching an emitter.
+
+**AL-R2 — The LSN is the instance's byte offset; the record *header* and
+the segment format do not change; the one stream is stream 0.** The
+record header carries no core id (`record.hpp:256-276`) and gains none —
+AL-R4's `core_id` goes in the two **checkpoint payloads**, which carry
+none today (`payload.hpp:507,538-543`), and nowhere else. Segments stay
+`wal-0-<segment_no>.log` with segment-header `core_id = 0`, which is
+what keeps the `cores = 1` bytes identical (AL-3 G) and makes a
+`cores = 1` log and a `cores = 8` log the same file set. `core_id` in
+the segment header is retained as the stream's number, always 0, and
+its `Corruption` check on a mismatch stays.
+
+**AL-R3 — The superblock: one anchor, `core_count` recorded and not
+pinned, format 15 → 16.** `wal_anchor(0)` is the anchor; slots 1..63
+stay in the layout as zeros (moving them is a second format event for
+nothing) and `SetWalAnchor` refuses any core but 0. `core_count`
+records what created the volume and stops refusing a mount; a mount at
+a different count is legal because one stream needs no reassignment
+(`superblock.hpp:255-295`'s `[OPEN]` closes with this). Per D14 a
+version-15 image is refused with a message naming the format, and no
+in-place migration exists. `kMaxWalCores` stays the anchor table's slot
+count and stops bounding `cores` (`expeditor.hpp:540-542`).
+
+**AL-R4 — Checkpoints in M0: per-core records in one stream, the anchor
+is the minimum.** Buffer pools stay per core in M0 (`page.md` §6, EV4),
+so a dirty-page table is a per-core fact and each core's checkpointer
+keeps running its fuzzy checkpoint (`wal.md` §11) — into the one stream,
+its `CHECKPOINT_BEGIN`/`END` payload gaining the publishing `core_id`
+(the in-memory `CheckpointAnchorRecord` already carries one,
+`checkpointer.hpp:180-191`, but it is not a log record). The anchor's
+`redo_start_lsn` is the **minimum** over the cores' latest completed
+checkpoints, floored by the oldest live `TXN_PREPARE` as today.
+
+**Who folds, and where** — the seam AL-R3's "refuses any core but 0"
+would otherwise leave unnamed. The publish path today writes
+`SetWalAnchor(anchor.core_id, …)` with the *peer's* id
+(`superblock_checkpoint_anchor.cpp:8`). Under M0 that call site keeps
+every core's latest published anchor in a core-indexed **in-memory**
+table on core 0, and writes slot 0 with the minimum over it; the
+peers' `RemoteCheckpointAnchor` ship stays as the mechanism that brings
+a peer's number there. `SetWalAnchor` itself refuses any core but 0, so
+the fold is the caller's and is testable on its own. A single gathered
+checkpoint is M1's, when the pools merge.
+
+**AL-R5 — Recovery in M0: one pass at mount, on core 0, before any peer
+opens.** Analysis scans the one stream from the anchor, building the
+dirty and active tables per `core_id` from each core's `CHECKPOINT_BEGIN`
+and the transaction table by `txn_id` (instance-unique already,
+`cross-owner-txn.md` §3). Redo applies by page id through core 0's
+store, which CC11 leaves ungated, and **does not restamp** (AL-R6).
+Undo rolls back every loser. `CoreRuntime::Open` no longer recovers
+anything. A participant's `TXN_PREPARE` and its coordinator's decision
+are now records of one stream, so `PreparedResolver`'s cross-file read
+becomes a forward lookup in the same scan; `cross-owner-txn.md` §2c's
+retention obligation collapses into the ordinary redo-start floor,
+because a decision-bearing segment is the prepare's own segment set.
+`SHOW META`'s recovery block becomes one block on core 0.
+
+**AL-R6 — The stamp keeps its claim meaning and loses its redo meaning;
+the handoff record stays.** Under one LSN space redo's idempotence test
+is `record.lsn > page_lsn` alone, so `redo.cpp:359-373`'s foreign-stamp
+`Corruption` goes and `redo.cpp:478-479`'s restamp goes — a restamp at
+mount would write stamp 1 onto every peer-owned page and defeat the
+claim-at-fault of `device_page_store.cpp:702-725`. The mutation-path
+stamp (`StampPageLsn`) and the claim stay until M1 replaces ownership
+with affinity.
+`PAGE_HANDOFF` stays as the logged ownership transfer (its analysis-side
+scope removal, `analysis.cpp:110-135`, becomes a no-op and is deleted).
+`page-lsn-cross-stream.md` is marked **superseded in part at M0**: its
+§9 rules 1–3 (handoff over a flushed page) stand, rule 4's stamp is a
+claim and not a stream, and its §6 PL-A is what M0 built.
+
+**AL-R7 — `cores = 1` is byte-identical, and a golden log proves it.**
+At `cores = 1` every WAL object is core 0's as today, behind AL-R1's
+single-core implementation. The gate: the contract suites byte-for-byte
+(`CLAUDE.md`, Working Rules), plus one new cell — the same statement
+script against a fresh volume at `d15b5ac` and after AL-S1 yields
+**identical `wal-0-*.log` bytes**, the superblock differing only in
+`format_version` and the fields AL-R3 names.
+
+**AL-R8 — Measurement: what a v3 number is and where it goes.**
+*Awaiting the operator; nothing is written under `bench/` until then.*
+CLA's proposal: `bench/v3.0.0/`, reopening `bench/` with its README
+restated for the new engine; the same drivers (`tools/scenario*`,
+`tools/*_benchmark.py`); this host — 8 cores, AMD EPYC 9V74, the host
+the v2.8.0 result files name — `build-release` only; every file named
+by `git describe --tags`; a **fresh series** with no delta against any
+v2.x number (D15). The M0 cells are AL-S8's.
+
+## AL-5 — Stages
+
+Sizes: S ≤ ½ day, M ≤ 2 days, L more. Every stage: `critics-developer`
+review, the full suite, sync with `origin/main` on the branch, stop.
+
+| # | Stage | Cells (definition of done) | Size |
+|---|---|---|---|
+| AL-S0 | This document; `instructions/v3.0.0/index.md`; AR0 filed with AR0-V; `instructions/README.md` and `CLAUDE.md`'s one paragraph reopening `instructions/` | the five files at the commit that carries them | the hour |
+| AL-S1a | **The seam** — the mechanism only, no cutover. `WalStream` opens shared or unshared, the shared one serializing the staging state on a spin latch; `WalManager::Attach` over a borrowed stream and writer; a peer's `Sync` becomes a `RequestSync`; the batch bookkeeping closes against a watermark another thread moved | AL-R7's golden log at `cores = 1`; four threads interleaving appends, every record at the LSN its appender was handed, none twice, all scanning back in LSN order; the watermark never retreating under concurrent syncs; `Attach` refusing an unshared stream and a null writer; a peer's `strict` commit made durable by the writer with the peer's own `syncs` at 0; a peer's `group` batch closing on the drain after another core's sync | M |
+| AL-S1c | **The cutover.** `FileLogDevice::Open(wal_dir, 0)` the only open; the expeditor owns the stream and the writer; every `CoreRuntime` attaches; peer drains keep their tick but sync through the writer. **`FileLogDevice` needs no change for it** — source-read 2026-09-02 and recorded so the stage does not re-derive it: `CreateSegment` grows `segments_` under `segments_mutex_` (`:290-295`) while `Sync` copies the descriptors under the same lock and syncs outside it (`:365-396`), and the unlocked reads in `WriteAt` (`:303,313`) are safe because the shared stream's latch already serializes every `WriteAt` against every `CreateSegment`; concurrent `pwrite` and `fdatasync` on one descriptor need no lock, which is the header's own justification | at `cores = 4` a mount, a write on every core and a clean shutdown leave one `wal-0-*` segment set; `SHOW META` on a peer reports no device sync of its own | M |
+| AL-S1b | **The writer.** One `WalWriter` for the instance, started by the expeditor; `SyncAll` on core 0 covers the writer's in-flight sync | `wal_writer_test` unchanged (core-agnostic today); a peer's `strict` commit waits for the platter and no longer calls `fdatasync` on its own thread (`wal_syncs` on a peer reads 0) | S |
+| AL-S2 | **The superblock** (AL-R3): format 16, one anchor, `core_count` unpinned, version-15 refusal | `superblock_test`/`bootstrap_test`: a volume created at `cores = 1` mounts at 4 and back; a version-15 image is refused naming the format; `SetWalAnchor(1, …)` refused | S |
+| AL-S3 | **Checkpoints** (AL-R4): `core_id` on `CHECKPOINT_BEGIN`/`END`, anchor = min over cores, floored by the oldest prepare | `wal_checkpointer_test`: two cores checkpoint at different LSNs and the anchor names the lower; the prepare floor holds across a peer's checkpoint | M |
+| AL-S4 | **Recovery** (AL-R5): one pass at mount on core 0; per-core tables from per-core checkpoint records; `PreparedResolver` becomes an in-stream lookup; `CoreRuntime::Open` recovers nothing; one `SHOW META` recovery block | `prepared_recovery_test`'s two-stream fixture rewritten as one stream with two cores' records; `mount_recovery_test`: a loser on core 2 is rolled back by the mount before core 2 opens; every `sim/` corpus seed reconciles (`scripts/sim.sh`) | M–L |
+| AL-S5 | **Stamp and handoff** (AL-R6): the foreign-stamp `Corruption` and the redo restamp removed; analysis's handoff scope removal deleted; `page-lsn-cross-stream.md` marked superseded in part | `wal_redo_test`: a page stamped by core 2 is redone by the mount pass and keeps stamp 3; `core_runtime_test:561-562` still holds; `device_page_store_test`'s own/foreign fixture unchanged; **and the case AL-R7's golden log cannot see** (AL-7) — a page carrying stamp 0, "never stamped", which the removed restamp used to set to 1: the cell is on the data file, since the golden log compares log bytes and the superblock only | S–M |
+| AL-S6 | **Observability**: instance-level `wal_*` counters on core 0, `wal_anchor_count` and the per-core `wal_syncs` comment gone; `client-manual.md` §3 rows | `command_dispatcher_test:140` updated; `SHOW META` on a peer prints no WAL block | S |
+| AL-S7 | **Simulator**: already one device (AL-3 I); the crash-at-op corpus re-run against the new mount pass, any seed that assumed a per-core anchor fixed | `scripts/sim.sh` green on the full corpus | S |
+| AL-S8 | **The baseline** (AL-R8, `ck-tester`, `build-release`): scenario 0 and scenario 2 at `cores = 1` and `cores = 8`, `group` and `strict`; the M0-specific cells — a peer's commit tail under `group` (the p99 claim of `manager.cpp`'s `Sync()` comment re-measured), `fdatasync` share of reactor wall time per core (§8b's instrument), `wal_ring_full` count at eight writers | one results file per cell, each carrying `git describe --tags`, p0–p100 with p25, the wait breakdown, and no delta to any v2.x number | M |
+| AL-S9 | **Prose, last**: `wal.md` §3/§11/§12/§16-9, `page.md` §6 line 108, `sched.md` §5's atomics sentence, `crosscore.md` CC11's "one stream" reasoning, `cross-owner-txn.md` §2c, `rules.md` §3, `page-lsn-cross-stream.md`'s status line, `CLAUDE.md`'s WAL and cross-core rows, `manual/server/server.md` `wal_dir`/`cores` rows | every sentence AL-3 J lists rewritten or struck; no spec states a per-core stream | M |
+
+**Order**: S1a → S1b → S2 → S3 → S4 → **S1c** → S5 → S6 → S7 → S8 → S9.
+S2 and S3 are independent of each other; S5 needs S4; S8 needs every
+earlier stage green on the full suite; S9 needs S8's numbers where a spec
+quotes one.
+
+**Why the cutover sits after recovery** (amended 2026-09-02, from
+building S1a). The first draft of this table put the whole of S1a
+— mechanism *and* cutover — before S2/S3/S4. That order cannot hold: a
+peer recovers its own stream at `CoreRuntime::Open`
+(`core_runtime.cpp:175-177`) and `ValidateSegmentHeader` refuses a
+segment whose header names another core (`log_scanner.cpp:20-23`), so
+the first mount at `cores > 1` after a cutover would fail in analysis on
+core 1 with a `Corruption` naming the segment. Recovery must be the
+single mount-time pass of AL-R5 **before** the peers stop opening their
+own devices. The mechanism is separable from the cutover and lands
+first, which is what S1a now is.
+
+## AL-6 — Row status (CLA, appended as rows land)
+
+| row | status |
+|---|---|
+| AL-S0 | **Written 2026-09-02** on `worktree-v3.0.0-arch-revision` at `d15b5ac`; the survey is source-read at that commit. No engine code changed; the suite was not executed for this row and is not claimed |
+| AL-S1a | **Built 2026-09-02** on `worktree-v3.0.0-arch-revision`. The seam, and nothing that cuts over to it. `WalStream::Open` takes `shared`; when set, one `SpinLatch` (`include/kds/base/spin_latch.hpp`, the primitive AR0's revised G1 admits) serializes the staging state, the gauges become relaxed atomics, `flushed_lsn_` becomes a field rather than `append_lsn_ - ring_used_`, and every public entry point takes the latch once and calls a `*Locked` half — so the roll inside `Append` reaches the seal and the flush without taking it twice. `Sync` holds the latch for the flush and **drops it for the device sync**, publishing the watermark it captured as a compare-exchange maximum. `WalManager::Attach` builds a manager over a borrowed stream and writer: it refuses an unshared stream and a null writer, its `Sync` is a `RequestSync` and never a device call, and `ResolveBatches` closes the group batch against a watermark another thread moved (the drain calls it every tick for that case). `MemoryLogDevice` takes a mutex, being the test double a shared stream writes to while the writer syncs; `log_device.hpp` states the pairing an implementation must accept. **Nothing is wired up**: the expeditor and every `CoreRuntime` still open their own device, and `Open`'s default is unshared, so `cores = 1` and `cores > 1` both run exactly the code they ran at `d15b5ac`. Cells: `tests/wal_golden_log_test.cpp` (AL-R7 — a 17-statement script over the simulator, clean shutdown, CRC32C over every log byte, pinned at `0x07b052c3` from the engine at `d15b5ac` **before** this change, and it did not move) and `tests/wal_shared_stream_test.cpp` (7 cells: the unshared default; four threads × 250 appends with every LSN issued once, every record on the device at an LSN its appender was handed, in order; the watermark never retreating under three concurrent syncers; the two `Attach` refusals; a peer's `strict` commit made durable by the writer with the peer's own `syncs` at 0; a peer's `group` batch closing on its drain after core 0's sync). One defect found and fixed while building: `WalManager::Append`'s single drain-and-retry is no longer a proof of progress on a shared stream, since another core can take the space the drain freed — now a bounded loop (`kRingDrainAttempts = 4`) that reports `OutOfSpace` rather than spinning. **Suite: 3214/3214**, re-run against the final tree after the retry fix (`ctest -j8`, Debug, 69.9 s). Overhead not measured (the interleaved A/B is suspended by operator decision). **Amendment**: the cutover left this stage and became AL-S1c, after recovery — see the note under the stage table |
+| AL-S1b | **Built 2026-09-02** on `worktree-v3.0.0-arch-revision`, and it closed a durability defect AL-S1a had left. S1a routed an attached manager's `Sync()` to `writer_->RequestSync` and returned — so on a peer, **`EnsureDurable` returned OK for a sync merely asked for**. That call is the WAL-before-data gate the page store takes before writing a dirty page (`device_page_store.cpp:1098`, `page_mgr.cpp:200`, wal.md §8-1), so a data page could have reached the platter ahead of its log record; a D1 commit and `SyncAll` were untrue in the same way. The path is now split by what the caller means: **`Sync()` blocks** — on the owner by syncing the device on its own thread as before, on a peer by flushing and waiting on the writer's watermark (`WalWriter::EnsureDurable`, the condition variable that class already had) — and serves the three callers whose whole meaning is "wait", a D1 commit, the gate, and `SyncAll`. **`RequestSyncNow()` does not block** and is the drain's path: a tick may not hold the reactor, because blocking it would stall every session on that core for another thread's `fdatasync`; the batch closes on a later tick at `DrainOnce`'s opening `ResolveBatches`. `writer_syncs()`/`writer_sync_failures()` now read the **owned** writer only, so a peer reports 0 rather than N cores each reporting the same shared count. One regression caught before it landed: routing the D3 interval tick through the new call would have put core 0's `fdatasync` back on its reactor (the stall whose removal took `relaxed`'s p99 from 2,208 µs to 194 µs), so `RequestSyncNow` hands off whenever a writer exists, owned or borrowed, and only a writerless manager syncs inline. Cells, all in `tests/wal_shared_stream_test.cpp`: a peer's `strict` commit durable when `Commit` returns with the peer's own `syncs` at 0 and its `writer_syncs()` at 0; `EnsureDurable` on a peer returning only once the record is on the platter; `SyncAll` on a peer leaving `durable_lsn == appended_lsn`; the drain asking without waiting and the batch closing on the next tick. `wal_writer_test` and `wal_manager_test` unchanged and green. **Suite: 3217/3217** (`ctest -j8`, Debug, 75.3 s). Overhead not measured (the interleaved A/B is suspended by operator decision). Not in this stage: the expeditor still starts the only writer it ever started, on core 0's own manager — one writer *for the instance* arrives with the cutover, AL-S1c |
+| AL-S1c..S9 | not started |
+
+## AL-7 — Review record
+
+**AL-S0's documents, reviewed 2026-09-02** (`critics-developer`, ~210
+citations re-opened at `d15b5ac`). Ten were wrong or overstated and the
+review fixed each in place: `device_page_store.cpp`'s stamp is on the
+mutation path in `StampPageLsn`, not at flush; the ring's payload bound
+is `kCoreRingPayloadBytes = 1024` at `ring_transport.hpp:224`, not
+anything in `ring_message.hpp`; §8b attributes the unaccounted time to
+`fdatasync` **above all** rather than wholly; four line ranges off by a
+few; "the four files" for a five-file row; and RW-C1 is *described* at
+one site while three later lists name it bare. Nine findings were left
+for CLA, of which this revision applies six:
+
+| finding | what was done |
+|---|---|
+| AL-R1's `fetch_add` reservation does not survive `Append`'s roll and `OutOfSpace` paths, and the implementation chose a latch | **AL-R1 rewritten** to the latch, naming the three things a bare reservation cannot express and the flush-under-latch cost |
+| AL-R2 ("formats do not change") contradicts AL-R4 (`core_id` on the checkpoint records) | AL-R2 narrowed to the record *header* and the segment format; the payload change named |
+| Nobody folds `core_id → 0` between AL-R3's refusal and AL-R4's per-core anchors | named: core 0 keeps an in-memory per-core table and writes slot 0 with the minimum; `SetWalAnchor` stays strict |
+| AL-2's "one appender" contradicts AL-R1 | "one flush and sync point" |
+| AR0-V4 said AR0-3 needs a global trx-id counter; ids are already instance-unique | corrected to the missing thing being commit **order**, with §1/§3's actual rejection cited |
+| `CLAUDE.md` made AL-R8 the gate reopening `bench/` and `docs/inflight/` | the operator is the gate; AL-R8 carries CLA's proposal |
+
+Two findings are **declined for now**, with reasons: AL-R1's "the
+watermark being an atomic it already reads" is fixed rather than
+declined (it now says a peer starts reading one at M0), and AL-3 E's
+`txn_2pc_service.hpp:66-95` citation stays, because that section's job
+is to enumerate per-core-stream *assumptions* and those lines carry one
+("keeps every stream's ids stream-local") even though they do not carry
+the sentence they sat beside. **AL-R7's golden log does not cover
+AL-R6's stamp change**, which is a real gap: the cell compares log bytes
+and the superblock, not the data file, so a page left at stamp 0 by the
+removed restamp would pass it. AL-S5 owes that cell, and its row now
+says so.
+
+The review's bloat findings (AL-1, AL-2's framing paragraphs, AL-R7/R8
+duplication, ~30 lines) are **not** applied: the document is an
+instruction that will be read once per stage by someone who did not
+write it, and the duplication it names is between a ruling and the stage
+that enacts it, which is where a reader looks. Recorded rather than
+silently dropped.

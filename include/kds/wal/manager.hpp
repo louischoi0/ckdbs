@@ -23,8 +23,23 @@
 // the split is what keeps "D2 batches, D1 does not" from being smeared
 // through the append path.
 //
-// Concurrency: core-local, like everything under it (rules.md section 3).
-// One manager, one core, one stream, no synchronization.
+// Concurrency: **one manager per core, over a stream that is either that
+// core's or the instance's** (AR0 M0, `instructions/v3.0.0/workorder-al-m0-single-wal.md`
+// AL-R1). Everything a manager holds itself - the statistics, the group
+// batch, the parked request, the D3 clock - is its core's and is touched
+// by no other thread. What crosses cores is below it: the shared stream's
+// latch and watermark (stream.hpp) and the writer's atomics (writer.hpp).
+// Two ways to construct one:
+//
+//   Open()    owns its stream (and, after StartWriter(), its writer). The
+//             `cores = 1` path, every in-process test, and core 0 of a
+//             shared instance, which syncs inline on its reactor as it
+//             always has.
+//   Attach()  borrows the instance's stream and writer. A peer core: it
+//             appends and flushes through the latch, and every sync it
+//             waits on is a request to the writer - it never touches the
+//             device itself, which is what takes `fdatasync` off its
+//             reactor (the case AL-2 makes).
 //
 // ---- The three classes (wal.md section 1) -------------------------------
 //
@@ -58,9 +73,9 @@
 // ---- What this layer does not do ----------------------------------------
 //
 // Checkpointing (section 11), recovery (section 12), and segment recycling
-// are separate subsystems that use this one. Cross-core commit is [OPEN]
-// (section 3) and deliberately not designed here: one manager owns one
-// stream, and a transaction that spans cores is not representable.
+// are separate subsystems that use this one. A cross-owner transaction is
+// `docs/spec/cross-owner-txn.md`'s, not this layer's: a manager knows one
+// core's commits, whichever stream they land in.
 
 namespace kds::wal {
 
@@ -94,6 +109,11 @@ struct WalManagerConfig {
     // drain", which makes D3 lossless and pointless, but is a legal
     // setting and a useful one in tests.
     sched::MonoTimeNs relaxed_flush_interval_ns = 10'000'000;  // 10 ms
+
+    // Open() arms the stream's latch so that Attach()ed managers on other
+    // threads may append to it (stream.hpp). Off - the default, and every
+    // `cores = 1` path - the stream is one thread's and pays nothing.
+    bool shared_stream = false;
 };
 
 // Observability that wal.md section 13 wants shipped *with* the first
@@ -155,13 +175,33 @@ public:
                                                       std::uint32_t core_id = 0,
                                                       WalManagerConfig config = {});
 
+    // A manager over a stream and a writer it does not own - a peer core's
+    // view of the instance's one log (the concurrency section above).
+    //
+    // **The owner outlives every attached manager**, because both borrowed
+    // pointers are the owner's: tear the peers down before core 0.
+    // `stream` must have been opened shared, `writer` must be the one over
+    // that stream's device, and both must outlive this. Neither may be
+    // null: an attached manager never touches the device, so the writer is
+    // its only route to durability. `config.ring_capacity` and
+    // `config.shared_stream` are the stream's and are ignored here.
+    static StatusOr<std::unique_ptr<WalManager>> Attach(WalStream* stream, WalWriter* writer,
+                                                        const sched::Clock& clock,
+                                                        std::uint32_t core_id,
+                                                        WalManagerConfig config = {});
+
     // Optional diagnostics. Null by default so the WAL unit tests stay
     // free of one. Record-level lines are Trace: an append happens per
     // page mutation, so logging one at any lower threshold would put a
     // write() syscall on the engine's hottest path.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
-    std::uint32_t core_id() const noexcept { return stream_->core_id(); }
+    // The core this manager serves - not the stream's number, which is
+    // 0 for the instance's shared stream whichever core appends (AL-R2).
+    std::uint32_t core_id() const noexcept { return core_id_; }
+    bool attached() const noexcept { return owned_stream_ == nullptr; }
+    WalStream* stream() const noexcept { return stream_; }
+    WalWriter* writer() const noexcept { return writer_; }
     std::uint64_t segment_size() const noexcept { return stream_->segment_size(); }
 
     // Bytes a single record's payload may occupy, for a caller that has to chunk
@@ -207,16 +247,23 @@ public:
     // happened by the time the call returns, and a thread would turn every
     // such assertion into a wait. The server starts one because the idle
     // tick must not block its reactor (bench/results-latency-matrix.md).
+    // A no-op on a manager that already has a writer, attached or owned.
     void StartWriter();
 
     // The writer thread's own device syncs and failures; 0 where no writer
     // was started (XD0, `instructions/v2.7.1/measurement-xd.md`). The
     // other half of this core's device cost - `stats().syncs` is the rest.
+    //
+    // **0 on an attached manager, and that is the truthful per-core
+    // answer**: the writer is the instance's, not this core's, and every
+    // reader of these is per core (`SHOW META`, whose fields are summed by
+    // nobody but would be wrong to sum if N cores each reported the same
+    // shared count). The instance's number lives on the owner.
     std::uint64_t writer_syncs() const noexcept {
-        return writer_ != nullptr ? writer_->syncs() : 0;
+        return owned_writer_ != nullptr ? owned_writer_->syncs() : 0;
     }
     std::uint64_t writer_sync_failures() const noexcept {
-        return writer_ != nullptr ? writer_->failures() : 0;
+        return owned_writer_ != nullptr ? owned_writer_->failures() : 0;
     }
     Status EnsureDurable(Lsn lsn) override;
 
@@ -301,19 +348,46 @@ public:
     Status SyncAll();
 
 private:
-    WalManager(std::unique_ptr<WalStream> stream, const sched::Clock& clock,
-               WalManagerConfig config);
+    WalManager(WalStream* stream, std::unique_ptr<WalStream> owned_stream, WalWriter* writer,
+               const sched::Clock& clock, std::uint32_t core_id, WalManagerConfig config);
 
+    // **Blocking**: on return every byte staged when the call began is on
+    // the platter, or a failure says why. On an owning manager that is the
+    // device sync, on this thread. On an attached one it is a flush, a
+    // request to the writer, and a wait on the writer's watermark - the
+    // same wait, one hand-off further away (AL-2 owes the measurement).
+    // The three callers are the ones whose whole meaning is "wait": a D1
+    // commit, `EnsureDurable`'s gate, and `SyncAll`.
     Status Sync();
 
-    std::unique_ptr<WalStream> stream_;
+    // **Non-blocking**: stages the bytes and asks for a sync, without
+    // waiting for one. The drain's path on an attached manager, where a
+    // tick may not hold the reactor. On an owning manager there is nobody
+    // to ask, so this is `Sync()`.
+    Status RequestSyncNow();
 
-    // Null until StartWriter(). When set, it takes D3's loss-window tick
+    // The batch and the parked request, closed against the durable
+    // watermark. Called after every sync this manager performs and, on an
+    // attached manager, on every drain tick - because there the watermark
+    // moves on other threads' syncs, and a batch made durable by one of
+    // them must still be counted and cleared here.
+    void ResolveBatches() noexcept;
+
+    // The stream: `owned_stream_` holds it after Open(), and is null after
+    // Attach(), where `stream_` points at the instance's.
+    WalStream* stream_;
+    std::unique_ptr<WalStream> owned_stream_;
+
+    // Null until StartWriter() on an owning manager; the instance's on an
+    // attached one. On an owning manager it takes D3's loss-window tick
     // and nothing else - every waited-on sync stays on the reactor, in
-    // Sync(). This comment claimed the opposite until XD0 read the code
-    // (`instructions/v2.7.1/measurement-xd.md`).
-    std::unique_ptr<WalWriter> writer_;
+    // Sync() (this comment claimed the opposite until XD0 read the code,
+    // `instructions/v2.7.1/measurement-xd.md`). On an attached manager it
+    // takes every sync, waited on or not.
+    WalWriter* writer_ = nullptr;
+    std::unique_ptr<WalWriter> owned_writer_;
     const sched::Clock& clock_;
+    std::uint32_t core_id_;
     WalManagerConfig config_;
     WalStats stats_;
 

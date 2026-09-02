@@ -1,4 +1,9 @@
-# `instructions/` — emptied 2026-09-02
+# `instructions/` — emptied 2026-09-02, reopened the same day for `v3.0.0/`
+
+**`v3.0.0/` holds the big-bang change's own instructions** — AR0, the
+governing draft with its verification record, and one work order per
+milestone, starting with AL (`v3.0.0/index.md`). Nothing else returns
+here: a `v2.x` citation still resolves at `1769487`.
 
 The operator's work orders, ratifications and blueprints for `v2.3.0`
 through `v2.8.0` left ahead of the big-bang change to the architecture,

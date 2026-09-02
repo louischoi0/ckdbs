@@ -83,8 +83,12 @@ stated in its spec as a fact, and nowhere here as a plan.
 `1769487`; `git show 1769487:<path>` retrieves any file, and each directory
 keeps a `README.md` saying what was there and why it went. **Every citation
 to one of those paths — in this file, a spec, the manual, a test or a source
-comment — resolves against that commit.** Nothing new is written under any
-of the three until the change says what goes there. Two buckets remain
+comment — resolves against that commit.** `instructions/v3.0.0/` reopened
+on 2026-09-02 with the change's own instructions — AR0 and one work order
+per milestone (`instructions/v3.0.0/index.md`); `bench/` and
+`docs/inflight/` stay closed until the operator says what a measurement
+of the new engine is and where it goes (work order AL's AL-R8 carries
+CLA's proposal). Two buckets remain
 under `docs/`, one rule each:
 
 - **`docs/spec/`** — what is confirmed and implemented. The authoritative
