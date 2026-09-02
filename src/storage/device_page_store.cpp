@@ -1058,8 +1058,15 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
     // the LSN stamp because the two answer one question - *whose* offset
     // is page_lsn - and a page stamped by one and not the other is what
     // rule 5 calls Corruption.
-    SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
-                       StreamStampFor(core_id_));
+    //
+    // **Unless this pass is recovering on every core's behalf** (AR0 M0;
+    // the header's `SetStampSuppressed` says why). The page_lsn above is
+    // still stamped, because idempotence is that field's job; what is
+    // withheld is the claim.
+    if (!stamp_suppressed_) {
+        SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
+                           StreamStampFor(core_id_));
+    }
     it->second.dirty = true;
     // First record since the frame was last written back wins: recLSN is
     // the *oldest* LSN redo must replay to make the page whole, so a later

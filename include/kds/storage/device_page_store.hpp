@@ -307,6 +307,29 @@ public:
 
     std::uint32_t core_id() const noexcept { return core_id_; }
 
+    // **Suppresses the PL-C stream stamp on the mutation path** for the
+    // length of a recovery pass that is not this core's own (AR0 M0,
+    // AL-R5/AL-R6). Under one stream core 0's mount pass replays and rolls
+    // back records belonging to *every* core, and the stamp is a claim on
+    // the page - `TryClaimByStamp` reads it at the next fault to decide who
+    // may write. Stamping core 0 onto a page core 2 owns therefore does not
+    // merely mislabel it: core 2 faults the page, is granted nothing, and
+    // **can never write its own page again**, because a heap data page is
+    // in no relation write grant and the extent lease is re-drawn each
+    // mount.
+    //
+    // Redo skips its own restamp under one stream (`wal/redo.cpp`), but
+    // undo's compensations reach this function through the ordinary
+    // mutation path (`txn/recovery_undo.cpp`), so the suppression has to
+    // live here, where every writer passes, rather than at each caller.
+    // The page_lsn is still stamped: idempotence is that field's job and it
+    // is not ownership.
+    //
+    // Set for the mount pass and cleared after it; a store serving
+    // statements never has it on, so the ordinary write path is unchanged.
+    void SetStampSuppressed(bool suppressed) noexcept { stamp_suppressed_ = suppressed; }
+    bool stamp_suppressed() const noexcept { return stamp_suppressed_; }
+
     // Whether this store's core may **read** `page_id`.
     //
     // Core 0 may reach anything - it owns the superblock, the free map, the
@@ -901,6 +924,9 @@ private:
     // Core ownership (see SetCoreOwnership). The defaults are core 0's, so
     // every construction site that predates multicore keeps its behaviour.
     std::uint32_t core_id_ = 0;
+    // See SetStampSuppressed. Off everywhere but inside a single-stream
+    // mount pass.
+    bool stamp_suppressed_ = false;
     LeasedIdSource* lease_ = nullptr;
     // The two rights sets a leased store holds beyond its lease, one bit
     // per page id in the free map's layout (the headerless map's

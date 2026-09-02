@@ -1493,5 +1493,63 @@ TEST(FreeMapRegionTest, MapPagesAreNeverReclaimCandidates) {
     EXPECT_TRUE(store->IsPinnedClass(HeaderlessMapPageIdFor(FreeMapRegionBase(9))));
 }
 
+// ---- The recovery pass writes without claiming (AR0 M0, AL-R6) ---------
+
+// Under one stream core 0's mount pass replays and rolls back records
+// belonging to every core, through core 0's store. Stamping core 0 onto a
+// page core 2 owns would not merely mislabel it: at the next mount core 2
+// faults the page, `TryClaimByStamp` grants nothing, and the page is
+// **unwritable by its owner for good** - a heap data page is in no relation
+// write grant and the extent lease is drawn fresh each mount.
+//
+// Redo skips its own restamp, but undo's compensations reach the store
+// through this same ordinary mutation path, which is why the suppression
+// lives here rather than at either phase.
+TEST(DevicePageStoreStampSuppressionTest, ASuppressedPassLeavesAnothersStampAlone) {
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    store->SetStreamCoreId(0);
+
+    auto created = store->CreateNew();
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    SetPageStreamStamp(created.value().second.bytes(), StreamStampFor(2));  // core 2's
+
+    store->SetStampSuppressed(true);
+    ASSERT_TRUE(store->StampPageLsn(page, 4096).ok());
+    store->SetStampSuppressed(false);
+
+    auto got = store->Get(page);
+    ASSERT_TRUE(got.ok());
+    EXPECT_EQ(GetPageStreamStamp(got.value().bytes()), StreamStampFor(2))
+        << "the recovery pass claimed a page it was only replaying";
+    // The page_lsn is still stamped: idempotence is that field's job and it
+    // is not ownership.
+    EXPECT_EQ(GetPageLsn(got.value().bytes()), 4096u);
+}
+
+// And with the suppression off - every path a serving instance takes - the
+// stamp is written exactly as before.
+TEST(DevicePageStoreStampSuppressionTest, AnOrdinaryWriteStillClaimsThePage) {
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    store->SetStreamCoreId(2);
+    EXPECT_FALSE(store->stamp_suppressed());
+
+    auto created = store->CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+
+    ASSERT_TRUE(store->StampPageLsn(page, 4096).ok());
+
+    auto got = store->Get(page);
+    ASSERT_TRUE(got.ok());
+    EXPECT_EQ(GetPageStreamStamp(got.value().bytes()), StreamStampFor(2));
+}
+
 }  // namespace
 }  // namespace kds::storage

@@ -469,6 +469,67 @@ first, which is what S1a now is.
 | AL-S4b | **In progress 2026-09-02** on `worktree-v3.0.0-arch-revision`. Two of its pieces are built. **A peer recovers nothing under one stream**: core 0 recovered the whole log before the peer was built, so a second pass would redo another core's pages through this core's store — outside the extent grants that say which pages are its to write — and undo losers already rolled back. `CoreRuntime::Config` carries the topology for it, the third field copied off core 0's superblock because a peer's own copy is default-constructed and `kPerCoreStreams` is 0, so a peer never told would conclude its own stream is its to recover; the peer's transaction-ceiling check now reads the stored report, so it is vacuously true rather than skipped. **And redo's stamp discipline**, pulled forward out of AL-S5 on an ordering defect this stage found: S5 sat after the cutover, so the first multi-core mount after S1c would have met a peer-stamped page and refused before S5 ever ran. Under one stream the foreign-stamp `Corruption` is meaningless — there is no other stream to have crossed from, so core 2's stamp met in core 0's pass is core 2 owning its page — and the restamp is harmful, since it would hand that page to core 0 and `device_page_store`'s claim-at-fault would read it that way at the next mount. `AnalysisStart` carries the fact down, a bool rather than the superblock's enum because `wal/` sits below `server/`. Cells: another core's stamp is not foreign under one stream **and still is under per-core**, the same bytes read both ways; and a record applied to an already-stamped page leaves the stamp alone while the page_lsn still moves. **And the prepared-transaction resolution**, which under one stream stops being a second file to open: the participant's `TXN_PREPARE` and its coordinator's decision are records of the same log, so resolving is a lookup of the coordinator's own transaction id in the table the pass just built. **Absence means aborted, and that is sound rather than a default** — the redo start is floored by the oldest live prepare (`checkpointer.cpp`) and the fold takes the minimum over cores, so a scan holding the prepare holds any decision made after it; this is `cross-owner-txn.md` §2c's retention obligation collapsing into the ordinary floor, there being no second stream whose segments could have been recycled out from under the question. Cells: a commit found in the same scan; an undecided prepare rolled back with undo called; a coordinator's abort reaching the same outcome by the other route; and the per-core path still refusing without a resolver, which is the promise a participant makes about not deciding for itself. **Suite: 3242/3242** (`ctest -j8`, Debug). Still owed by this stage: one `SHOW META` recovery block and the three peer-slot readers. Overhead not measured (the interleaved A/B is suspended by operator decision) |
 | AL-S1c, S4b remainder, S5..S9 | not started |
 
+## AL-7b — AL-S4b's review record (in progress)
+
+**Reviewed 2026-09-02** (`critics-developer`) against the two pieces built
+then. It confirmed the skip is safe on every point that worried CLA — the
+peer's ceiling check is vacuous rather than inverted; nothing after the
+skip depends on recovery having run; losing a peer's high-water repair
+costs nothing, because a leased store draws from its lease and never
+consults the floor; analysis already folds several cores' checkpoints
+correctly, `emplace` being first-wins; and core 0's completion checkpoint
+is ordered before the first peer is built, which is what makes the whole
+design work.
+
+**And it found the defect that gated the stage.** AL-S4b had stopped redo
+restamping a peer's page, and left **undo** doing exactly the same thing
+one phase later: every compensation reaches the store through the ordinary
+mutation path, whose `StampPageLsn` writes the stream stamp
+unconditionally. The failing case is an ordinary crash — a peer's
+uncommitted insert. Core 0 rolls it back, stamps the page 1, and at the
+next mount core 2 faults its own page, is granted nothing, and **can never
+write it again**: a heap data page is in no relation write grant and the
+extent lease is drawn fresh each mount. Fixed at the store, where every
+writer passes, rather than at either phase: `SetStampSuppressed` withholds
+the claim for the length of a pass that is recovering on every core's
+behalf, the page_lsn still being stamped because idempotence is that
+field's job and is not ownership. The mount sets it under an RAII guard, so
+a refused mount leaves the store as it found it.
+
+**Owed, and named rather than deferred silently:**
+
+- **A page redo *creates* ends unstamped, and stamp 0 is never a claim** —
+  so its owner cannot reclaim it either, by a different route to the same
+  end. Reachable by an ordinary crash: a peer allocates a page from its
+  lease, logs `PAGE_INIT` and inserts, and neither the page nor the free
+  map reaches the platter. **CLA's proposal, for the next iteration**:
+  `PAGE_INIT` names the owning core the way AL-S4a's checkpoint records do
+  — the envelope's `flags` byte, no format event, 0 meaning core 0 as it
+  already does — and redo stamps a page it creates for that core rather
+  than for the recovering one. The alternatives considered and not taken: a
+  server-layer post-redo sweep keyed on `sys.tables.owner_core` (puts the
+  catalog inside recovery), and the owner logging an acquisition when it
+  meets an unstamped page it should own (a write on the fault path).
+- **`ResumeAssertionsAfterRecovery` is the per-core log scan AL-R5 did not
+  remove.** It sits outside the topology branch, which is right — core 0
+  counts a peer's assertions as foreign and skips them, so only the peer
+  can resume its own — but it is handed `wal_anchor(core_id)`, which is
+  zero for every peer under one stream, so it rescans from the head of the
+  whole log at every mount; and after the cutover it calls `ScanLog` with
+  the peer's core id against a segment header that says 0, which refuses,
+  which marks every one of that peer's assertions unenforceable and stops
+  its writes. It needs the *folded* anchor and the *stream's* core id while
+  still filtering assertions by the peer's own — two core ids the one
+  parameter currently conflates. This lands with the peer-slot readers.
+- Smaller, all recorded: no cell yet sets `log_topology = kSingleStream` on
+  a `CoreRuntime`, so the skip itself is unexercised; `recovery_.timings.timed`
+  is false on a skipped peer, which hides a completion checkpoint that is
+  still measured; `AnalysisStart::single_stream` is read only by
+  `RecoverCore` and misleads on `Analyze`'s parameter struct;
+  `RecoverCoreAtMount` is at eleven parameters and wants the options object
+  that retires `wal_dir`/`anchors` too; and core 0's pool now holds clean
+  frames for peer-owned pages after the pass.
+
 ## AL-7a — AL-S3's review record
 
 **Reviewed 2026-09-02** (`critics-developer`). **No incorrect advance of
