@@ -484,6 +484,52 @@ struct CheckpointDirtyPage {
     Lsn rec_lsn;  // oldest LSN that must be replayed to make the page whole
 };
 
+// ---- Which core a checkpoint record came from (AR0 M0, AL-R4/AL-R5) -----
+//
+// Under per-core streams the answer is the stream, and these two helpers
+// are redundant. Under **one stream** every core's checkpoints are
+// interleaved in the same log, and analysis has to rebuild a dirty-page
+// table and an active-transaction table *per core* - so a `CHECKPOINT_BEGIN`
+// that cannot say whose it is cannot be replayed correctly.
+//
+// It rides the envelope's **per-type `flags` byte** (`record.hpp`), not the
+// payload. Three reasons, in order of weight:
+//
+//   - `CHECKPOINT_BEGIN`'s payload is a fixed header followed by two
+//     variable-length tables, so a field in the header shifts every entry
+//     and a field at the end is readable only by inferring its presence
+//     from the length. The envelope has a byte already set aside for
+//     exactly this kind of per-type fact, and `ASSERT_RESERVE` uses bit 0
+//     of it the same way.
+//   - **It is not a format event.** Both records have been appended with
+//     `flags = 0` since they existed and nothing has ever read the byte,
+//     so every record ever written already says "core 0" - which is what a
+//     record in core 0's stream *is*, and under per-core streams no reader
+//     consults this anyway. Same shape as the superblock's reserved word
+//     (`superblock.hpp`) and the page header's two consumed words.
+//   - One byte covers `kMaxWalCores`, which is 64.
+//
+// The WAL layer does not know what a core count is - that is the
+// superblock's - so the only bound here is the byte.
+inline constexpr std::uint32_t kMaxCheckpointCoreId = 0xFF;
+
+// Fails for a core id past what the byte holds, rather than truncating one
+// into another core's identity.
+inline StatusOr<std::uint8_t> CheckpointCoreFlag(std::uint32_t core_id) noexcept {
+    if (core_id > kMaxCheckpointCoreId) {
+        return Status::InvalidArgument("wal payload: core id " + std::to_string(core_id) +
+                                       " does not fit a checkpoint record's flags byte");
+    }
+    return static_cast<std::uint8_t>(core_id);
+}
+
+// The core a `CHECKPOINT_BEGIN`/`CHECKPOINT_END` was published by. 0 for
+// every record written before the byte carried this, which is what those
+// records mean.
+inline std::uint32_t CheckpointCoreOf(std::uint8_t flags) noexcept {
+    return static_cast<std::uint32_t>(flags);
+}
+
 // One live transaction, as a checkpoint records it.
 //
 // **`last_undo_ptr` was added at RV10** (docs/workplan-wal-recovery.md §4b)

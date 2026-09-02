@@ -21,7 +21,15 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
         return encoded.status();
     }
 
-    auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId, 0},
+    // The record says whose checkpoint it is (payload.hpp): under one
+    // stream analysis has no other way to attribute a dirty table to a
+    // core, and under per-core streams this is the stream's own id.
+    auto core_flag = CheckpointCoreFlag(wal_.core_id());
+    if (!core_flag.ok()) {
+        return core_flag.status();
+    }
+    auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId,
+                            core_flag.value()},
                            std::span(payload_scratch_).first(encoded.value()));
     if (!lsn.ok()) {
         return lsn.status();
@@ -223,7 +231,12 @@ Status Checkpointer::Complete() {
     if (!encoded.ok()) {
         return encoded.status();
     }
-    auto end_lsn = wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId, 0},
+    auto end_core_flag = CheckpointCoreFlag(wal_.core_id());
+    if (!end_core_flag.ok()) {
+        return end_core_flag.status();
+    }
+    auto end_lsn = wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId,
+                                end_core_flag.value()},
                                std::span(payload_scratch_).first(encoded.value()));
     if (!end_lsn.ok()) {
         return end_lsn.status();

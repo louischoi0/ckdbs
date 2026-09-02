@@ -410,5 +410,85 @@ TEST_F(CheckpointerTest, ASecondCheckpointOverACleanPoolAnchorsItself) {
     EXPECT_EQ(anchor_.publishes(), 2u);
 }
 
+// ---- Which core published a checkpoint (AR0 M0, AL-S4a) ----------------
+
+// Under one stream every core's checkpoints share a log, so a
+// CHECKPOINT_BEGIN that cannot say whose it is cannot be replayed
+// correctly. The record carries it in the envelope's per-type flags byte.
+TEST_F(CheckpointerTest, ACheckpointRecordNamesTheCoreThatPublishedIt) {
+    auto peer_device = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(peer_device.ok());
+    auto peer_wal = WalManager::Open(peer_device.value().get(), clock_, /*core_id=*/5);
+    ASSERT_TRUE(peer_wal.ok());
+
+    InMemoryCheckpointAnchor anchor;
+    Checkpointer checkpointer(*peer_wal.value(), target_, txns_, anchor);
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+    EXPECT_EQ(anchor.anchor().core_id, 5u);
+
+    bool saw_begin = false;
+    bool saw_end = false;
+    for (std::uint64_t seg = 0; seg < peer_device.value()->segment_count(); ++seg) {
+        std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
+        ASSERT_TRUE(peer_device.value()->ReadAt(seg, kSegmentHeaderSize, body).ok());
+        RecordReader reader(body, seg * kSegmentSize + kSegmentHeaderSize);
+        while (std::optional<DecodedRecord> record = reader.Next()) {
+            if (record->type() == RecordType::kPad) break;
+            if (record->type() == RecordType::kCheckpointBegin) {
+                saw_begin = true;
+                EXPECT_EQ(CheckpointCoreOf(record->header.flags), 5u);
+            }
+            if (record->type() == RecordType::kCheckpointEnd) {
+                saw_end = true;
+                EXPECT_EQ(CheckpointCoreOf(record->header.flags), 5u);
+            }
+        }
+    }
+    EXPECT_TRUE(saw_begin);
+    EXPECT_TRUE(saw_end);
+}
+
+// Core 0's records still hold a zero flags byte, which is why this needed
+// no format event: 0 is what every checkpoint record ever written holds,
+// and 0 is what core 0 means. A single-core instance's log is unchanged.
+TEST_F(CheckpointerTest, CoreZerosRecordsStillCarryAZeroFlagsByte) {
+    auto zero_device = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(zero_device.ok());
+    auto zero_wal = WalManager::Open(zero_device.value().get(), clock_, /*core_id=*/0);
+    ASSERT_TRUE(zero_wal.ok());
+
+    InMemoryCheckpointAnchor anchor;
+    Checkpointer checkpointer(*zero_wal.value(), target_, txns_, anchor);
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+
+    bool saw = false;
+    for (std::uint64_t seg = 0; seg < zero_device.value()->segment_count(); ++seg) {
+        std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
+        ASSERT_TRUE(zero_device.value()->ReadAt(seg, kSegmentHeaderSize, body).ok());
+        RecordReader reader(body, seg * kSegmentSize + kSegmentHeaderSize);
+        while (std::optional<DecodedRecord> record = reader.Next()) {
+            if (record->type() == RecordType::kPad) break;
+            if (record->type() == RecordType::kCheckpointBegin ||
+                record->type() == RecordType::kCheckpointEnd) {
+                saw = true;
+                EXPECT_EQ(record->header.flags, 0u);
+            }
+        }
+    }
+    EXPECT_TRUE(saw);
+}
+
+// A core id past the byte is refused rather than truncated into another
+// core's identity.
+TEST(CheckpointCoreFlagTest, ACoreIdPastTheByteIsRefusedNotTruncated) {
+    EXPECT_TRUE(CheckpointCoreFlag(0).ok());
+    EXPECT_EQ(CheckpointCoreFlag(63).value(), 63u);
+    EXPECT_EQ(CheckpointCoreFlag(kMaxCheckpointCoreId).value(), kMaxCheckpointCoreId);
+
+    auto refused = CheckpointCoreFlag(kMaxCheckpointCoreId + 1);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
+}
+
 }  // namespace
 }  // namespace kds::wal
