@@ -182,6 +182,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // zeroed, which is the truth for a core that recovered nothing, and
     // `SHOW META`'s block reads that way on a peer.
     if (config.log_topology == kSingleStream) {
+        // **Timed, though nothing was recovered.** `SHOW META` prints the
+        // whole `_us` block only where a clock was supplied
+        // (`command_dispatcher.cpp`), and this core still measures the
+        // completion checkpoint at `AttachTransport` - so leaving this false
+        // would hide a number that was taken, and print a peer's recovery
+        // block as a subset of core 0's rather than the same block reading
+        // zero.
+        runtime->recovery_.timings.timed = true;
         if (log != nullptr && log->enabled(LogLevel::kInfo)) {
             log->Info("recovery", "core " + std::to_string(config.core_id) +
                                       ": one stream, so core 0's mount pass covered this core's "

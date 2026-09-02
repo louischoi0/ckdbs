@@ -1025,6 +1025,42 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         // the only route by which `checkpoint_ns`, timed at AttachTransport,
         // is ever read.
         EXPECT_NE(meta.find("recovery_checkpoint_us="), std::string::npos) << meta;
+
+        // **AR0 M0, AL-R5: the same stop, mounted as one stream.** A third
+        // open of the same peer, differing only in what the volume says its
+        // log is. Core 0's pass would be the whole instance's there, so this
+        // core must recover nothing at all - and the clean-stop arm is what
+        // makes that checkable, because the pages are already on the platter
+        // and "recovered nothing" and "still serves its rows" are true at
+        // once. On the crash arm they would not be, which is exactly why the
+        // cutover may not precede this stage.
+        if (clean_stop) {
+            reopened.value().reset();
+            CoreRuntime::Config as_one_stream = ConfigFor(1);
+            as_one_stream.anchor = stop_anchor;
+            as_one_stream.next_trx_id = core0_->superblock.next_trx_id();
+            as_one_stream.log_topology = kSingleStream;
+            auto single = CoreRuntime::Open(as_one_stream, *device_, clock_, nullptr);
+            ASSERT_TRUE(single.ok()) << single.status().message();
+
+            const MountRecovery& skipped = single.value()->recovery();
+            EXPECT_EQ(skipped.records, 0u)
+                << "the peer re-read a log core 0's pass already covered";
+            EXPECT_EQ(skipped.redo_applied, 0u);
+            EXPECT_EQ(skipped.transactions_rolled_back, 0u);
+
+            const auto still =
+                single.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM " + name).response;
+            EXPECT_NE(still.find("200"), std::string::npos) << still;
+
+            // And the block still prints whole. This core measured a
+            // completion checkpoint even though it recovered nothing, and a
+            // `_us` field that was taken must not be hidden by the skip.
+            const auto one_meta =
+                single.value()->dispatcher().Dispatch("SHOW META").response;
+            EXPECT_NE(one_meta.find("recovery_records=0"), std::string::npos) << one_meta;
+            EXPECT_NE(one_meta.find("recovery_checkpoint_us="), std::string::npos) << one_meta;
+        }
     }
 }
 

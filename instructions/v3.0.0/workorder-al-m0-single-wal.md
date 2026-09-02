@@ -530,10 +530,22 @@ a refused mount leaves the store as it found it.
   0's anchor** rather than its own, which is all zeros under one stream and
   would have sent the scan to the head of the whole log at every mount.
 
-- Smaller, all recorded: no cell yet sets `log_topology = kSingleStream` on
-  a `CoreRuntime`, so the skip itself is unexercised; `recovery_.timings.timed`
-  is false on a skipped peer, which hides a completion checkpoint that is
-  still measured; `AnalysisStart::single_stream` is read only by
+- ~~No cell sets `log_topology = kSingleStream` on a `CoreRuntime`~~ and
+  ~~`timings.timed` is false on a skipped peer~~ — **both closed
+  2026-09-02**, together, because the second is only visible through the
+  first. The skip is now exercised as a **third open of the existing
+  restart test**, differing from the second only in what the volume says
+  its log is: the peer recovers nothing (`records == 0`, against a
+  clean-stop control that reads the checkpoint's own handful) and still
+  serves its 200 rows. Folding it into that test rather than writing a
+  standalone one was not only economy — the first attempt at a standalone
+  cell had the peer issue `CREATE TABLE`, which a peer refuses, and the
+  existing fixture is the thing that knows how to place a relation on core
+  1 from core 0's catalog and fund the peer for it. The skip arm now also
+  sets `timings.timed`, because that core measures a completion checkpoint
+  at `AttachTransport` even when it recovered nothing, and `SHOW META`
+  prints the whole `_us` block only where a clock was supplied — so leaving
+  it false hid a number that had been taken. Remaining smaller items: `AnalysisStart::single_stream` is read only by
   `RecoverCore` and misleads on `Analyze`'s parameter struct;
   `RecoverCoreAtMount` is at eleven parameters and wants the options object
   that retires `wal_dir`/`anchors` too; and core 0's pool now holds clean
