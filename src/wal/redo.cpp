@@ -249,7 +249,7 @@ Status ApplyIndexInsert(std::span<std::byte, kPageSize> page, const DecodedRecor
 }  // namespace
 
 StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::PageStore& store,
-                         const AnalysisResult& analysis) {
+                         const AnalysisResult& analysis, bool single_stream) {
     RedoStats stats;
     PoisonedPages poisoned;
 
@@ -363,8 +363,16 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // stream's records for the page exist, so there is no benign
         // foreign case left for redo to admit. An unstamped page (0)
         // takes the comparison below unchanged.
+        //
+        // **Not under one stream** (AR0 M0, AL-R5/R6). The rule asks "did
+        // this page cross into my stream without a logged handoff", and
+        // with one stream there is no other stream to have crossed from:
+        // every core's records are in this log by construction, so a page
+        // stamped by core 2 met in core 0's mount pass is not evidence of
+        // a lost handoff, it is core 2 owning its page. Left in force, it
+        // would refuse the first multi-core mount after the cutover.
         const std::uint16_t stamp = storage::GetPageStreamStamp(page);
-        if (storage::StampIsForeign(stamp, core_id)) {
+        if (!single_stream && storage::StampIsForeign(stamp, core_id)) {
             return Status::Corruption(
                 "redo: page " + std::to_string(page_id) + " is stamped by stream " +
                 std::to_string(stamp - 1) + " inside stream " + std::to_string(core_id) +
@@ -471,12 +479,20 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                                        " on page " + std::to_string(page_id));
         }
 
-        // The stamp is what makes the next pass skip this record, and it
+        // The page_lsn is what makes the next pass skip this record, and it
         // must follow the mutation: a stamp written first would mark the
-        // page done for a change that then failed. The stream stamp rides
-        // it (PL §9 rule 4).
+        // page done for a change that then failed.
         storage::SetPageLsn(page, record.header.lsn);
-        storage::SetPageStreamStamp(page, storage::StreamStampFor(core_id));
+        // The stream stamp rides it (PL §9 rule 4) - **under per-core
+        // streams only**. With one stream the recovering core is not the
+        // owning core, and restamping every page it redoes would hand core
+        // 2's pages to core 0, which is exactly what
+        // `device_page_store`'s claim-at-fault reads at the next mount.
+        // The stamp stays a claim; it stops being a statement about which
+        // log the page's records are in, because there is one.
+        if (!single_stream) {
+            storage::SetPageStreamStamp(page, storage::StreamStampFor(core_id));
+        }
         ++stats.applied;
         return Status::OK();
     };

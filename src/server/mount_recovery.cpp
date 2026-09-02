@@ -18,13 +18,17 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
                                           Logger* log, const sched::Clock* clock,
                                           const std::string& wal_dir,
-                                          const std::vector<WalAnchorFields>& anchors) {
+                                          const std::vector<WalAnchorFields>& anchors,
+                                          bool single_stream) {
     // A zeroed slot means no checkpoint was ever published: scan from the
     // head of the stream, and disable the durable-point check because there
     // is no published point to hold the scan to (`analysis.hpp`).
     wal::AnalysisStart start;
     start.redo_start_lsn = anchor.redo_start_lsn;
     start.anchor_durable_lsn = anchor.durable_lsn;
+    // What the volume's log is, threaded down so redo knows whether a
+    // page's stream stamp is a statement about *this* log (`analysis.hpp`).
+    start.single_stream = single_stream;
 
     txn::RecoveryUndo undo(undo_log, wal);
     // R6-4's resolver, built here for the reason the undo phase is: this is

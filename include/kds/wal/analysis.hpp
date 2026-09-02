@@ -228,6 +228,22 @@ struct AnalysisStart {
     // anchor was published. The scan must reach it. Zero disables the
     // check, which is the same "no anchor yet" case.
     Lsn anchor_durable_lsn = 0;
+
+    // **Whether this log is the instance's one stream** (AR0 M0, AL-R5/R6).
+    // A bool rather than the superblock's enum for the reason the two LSNs
+    // above are plain: `wal/` sits below `server/`, and the layer that owns
+    // the superblock is the one that reads it.
+    //
+    // What it changes is redo's stamp discipline, and only that. Under
+    // per-core streams a page carrying another core's stamp inside this
+    // stream's redo scope is `Corruption` - the crossing must have been
+    // logged - and every applied page is restamped for this stream. Under
+    // **one** stream both are wrong: every core's records are in this log
+    // by construction, so a peer's stamp is not foreign but simply true,
+    // and restamping it to the recovering core would take the page away
+    // from the core that owns it, which `device_page_store`'s claim-at-fault
+    // reads at the next mount.
+    bool single_stream = false;
 };
 
 // One forward pass. Fails with Corruption when the stream ends before the

@@ -144,7 +144,7 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
 
     // ---- 2. Redo: crash-time state, uncommitted writes included ---------
     PhaseTimer redo_timer(clock);
-    auto redone = Redo(device, core_id, store, out.analysis);
+    auto redone = Redo(device, core_id, store, out.analysis, start.single_stream);
     out.timings.redo_ns = redo_timer.Elapsed();
     if (!redone.ok()) {
         return redone.status().WithContext("recovery of core " + std::to_string(core_id) +

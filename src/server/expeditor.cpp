@@ -866,7 +866,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                         *expeditor->undo_log_, &*expeditor->wal_,
                                         &*expeditor->logger_, &expeditor->clock_,
                                         expeditor->config_.wal_dir,
-                                        expeditor->database_->superblock.wal_anchors());
+                                        expeditor->database_->superblock.wal_anchors(),
+                                        // Under one stream this pass is the
+                                        // whole instance's, so it meets
+                                        // pages every core owns (AL-R5/R6).
+                                        expeditor->database_->superblock.single_stream());
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
 

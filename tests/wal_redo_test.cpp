@@ -339,6 +339,67 @@ TEST_F(RedoTest, AnAnchorUpdateAgainstANonAnchorPageIsCorruption) {
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
 
+// ---- Under one stream (AR0 M0, AL-R5/AL-R6) ----------------------------
+
+// The rule asks "did this page cross into my stream without a logged
+// handoff". With one stream there is no other stream to have crossed
+// from, so a page stamped by core 2 met in core 0's mount pass is core 2
+// owning its page, not a lost handoff. Left in force, this refusal would
+// fail the first multi-core mount after the cutover.
+TEST_F(RedoTest, UnderOneStreamAnotherCoresStampIsNotForeign) {
+    WriteHeapStream(1);
+    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true).ok());
+    {
+        auto page = store_.Get(kPage);
+        ASSERT_TRUE(page.ok());
+        storage::SetPageStreamStamp(page.value().bytes(), 3);  // core 2's
+    }
+
+    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
+    EXPECT_TRUE(r.ok()) << r.status().message();
+
+    // And per-core streams still refuse it, which is the same bytes read
+    // under the other topology.
+    auto per_core = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/false);
+    ASSERT_FALSE(per_core.ok());
+    EXPECT_EQ(per_core.status().code(), StatusCode::kCorruption);
+}
+
+// Restamping every page it redoes would hand core 2's pages to core 0,
+// which `device_page_store`'s claim-at-fault reads at the next mount as
+// core 0 owning them. The stamp stays a claim; it stops being a statement
+// about which log the records are in, because there is one.
+TEST_F(RedoTest, UnderOneStreamRedoLeavesTheOwningCoresStampAlone) {
+    // The page must already exist and be stamped when a record is applied
+    // to it, so: replay once, hand the page to core 2, append a further
+    // record, and replay again. Stamping before the first pass would prove
+    // nothing - the replayed PAGE_INIT reformats the page and clears it.
+    WriteHeapStream(1);
+    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true).ok());
+    {
+        auto page = store_.Get(kPage);
+        ASSERT_TRUE(page.ok());
+        storage::SetPageStreamStamp(page.value().bytes(), 3);  // core 2 owns it
+    }
+
+    auto s2 = WalStream::Open(device_.get(), 0);
+    ASSERT_TRUE(s2.ok());
+    ASSERT_NE(AppendHeapInsert(*s2.value(), /*slot=*/1, 0xB2), 0u);
+    ASSERT_TRUE(s2.value()->Sync().ok());
+
+    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    ASSERT_GT(r.value().applied, 0u) << "nothing was applied, so nothing could restamp";
+
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 3u)
+        << "core 0's mount pass took a page away from the core that owns it";
+    // The page_lsn still moved: idempotence is that field's job, not the
+    // ownership byte's.
+    EXPECT_GT(storage::GetPageLsn(page.value().bytes()), 0u);
+}
+
 TEST_F(RedoTest, AForeignStampReachableByRedoRefusesTheMount) {
     // Rule 5, at full strength since rule 6 (the acquisition restamp): a
     // foreign stamp inside this stream's redo scope has no benign reading

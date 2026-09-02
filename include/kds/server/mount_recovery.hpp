@@ -215,7 +215,14 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
                                           Logger* log, const sched::Clock* clock = nullptr,
                                           const std::string& wal_dir = {},
-                                          const std::vector<WalAnchorFields>& anchors = {});
+                                          const std::vector<WalAnchorFields>& anchors = {},
+                                          // Whether this volume's log is the
+                                          // instance's one stream, which
+                                          // decides redo's stamp discipline
+                                          // (`wal/analysis.hpp`). False is
+                                          // per-core streams, every fixture's
+                                          // case and today's only one.
+                                          bool single_stream = false);
 
 // RV3's honest counter - **the half of it that can be computed**.
 //

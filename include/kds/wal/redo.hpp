@@ -88,7 +88,10 @@ struct RedoStats {
 // failed on: its records are skipped until an FPI restores it, and only if
 // the scan ends with one still poisoned is that Corruption. That ordering
 // is why the FPI exists.
+// `single_stream` is `AnalysisStart`'s, threaded through: it turns off the
+// foreign-stamp refusal and the restamp, which are per-core-stream rules
+// (that struct says why).
 StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::PageStore& store,
-                         const AnalysisResult& analysis);
+                         const AnalysisResult& analysis, bool single_stream = false);
 
 }  // namespace kds::wal
