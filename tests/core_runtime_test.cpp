@@ -7202,6 +7202,127 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteOnASynchronousPathIsRetryableNotT
         << "a refused fan-out left its pending-delete registration behind";
 }
 
+// ---- AK-S3: the reverse fan-out, driven, and the collect pass -------------
+//
+// AJ-T3 built the chain - fork, register, intent check, fan-out, park,
+// resume, per-row check from held verdicts - and landed with no cell that
+// drives it end to end. The first cell here is that owed cell for the shape
+// AJ-R2 admitted (a bare pk equality); the rest are AK-S3's: any other
+// WHERE collects its pks by a read-only pass and fans out over them, a set
+// too large for one message takes another round, and a row that appears
+// while the statement is parked is caught by the round that follows.
+
+TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPkFansOutAndDeletes) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ak3_pk");
+    OpenCrossOwnerFkPair(rig, "pk");
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO pkp VALUES (7, 5), (8, 5)").response.rfind("ERR", 0),
+              0u);
+    // A child of 8 on the peer, none of 7.
+    DispatchOutcome child;
+    auto wrote = rig.StartOnPeer("INSERT INTO pkc VALUES (8)", child);
+    ASSERT_TRUE(rig.Drive(*wrote)) << child.response;
+    ASSERT_NE(child.response.rfind("ERR", 0), 0u) << child.response;
+
+    // Unreferenced: the fan-out answers clear and the row goes.
+    DispatchOutcome gone;
+    auto del7 = rig.Start("DELETE FROM pkp WHERE id = 7", gone);
+    ASSERT_TRUE(rig.Drive(*del7)) << gone.response;
+    EXPECT_EQ(gone.response, "DELETED 1") << gone.response;
+    // Referenced from the peer: RESTRICT, answered by the child's owner and
+    // spelled as the local check spells it.
+    DispatchOutcome kept;
+    auto del8 = rig.Start("DELETE FROM pkp WHERE id = 8", kept);
+    ASSERT_TRUE(rig.Drive(*del8)) << kept.response;
+    EXPECT_NE(kept.response.find("FK_VIOLATION"), std::string::npos) << kept.response;
+    EXPECT_EQ(RowsWith(*rig.peer, "pkc", "8"), 1);
+    const std::string rows = rig.dispatcher->Dispatch("SELECT id FROM pkp").response;
+    EXPECT_EQ(rows.find("7"), std::string::npos) << rows;
+    EXPECT_NE(rows.find("8"), std::string::npos) << rows;
+    // Nothing left registered by either statement.
+    EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteByPredicateCollectsThenFansOut) {
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ak3_pred");
+    OpenCrossOwnerFkPair(rig, "pr");
+    ASSERT_NE(rig.dispatcher
+                  ->Dispatch("INSERT INTO prp VALUES (1, 5), (2, 5), (3, 5), (4, 6)")
+                  .response.rfind("ERR", 0),
+              0u);
+    DispatchOutcome child;
+    auto wrote = rig.StartOnPeer("INSERT INTO prc VALUES (4)", child);
+    ASSERT_TRUE(rig.Drive(*wrote)) << child.response;
+    ASSERT_NE(child.response.rfind("ERR", 0), 0u) << child.response;
+
+    // Three rows named by a non-pk predicate: collected, asked about on the
+    // peer in one round, deleted.
+    DispatchOutcome three;
+    auto del5 = rig.Start("DELETE FROM prp WHERE v = 5", three);
+    ASSERT_TRUE(rig.Drive(*del5)) << three.response;
+    EXPECT_EQ(three.response, "DELETED 3") << three.response;
+    // The referenced one, by the same shape: RESTRICT from the fan-out.
+    DispatchOutcome kept;
+    auto del6 = rig.Start("DELETE FROM prp WHERE v = 6", kept);
+    ASSERT_TRUE(rig.Drive(*del6)) << kept.response;
+    EXPECT_NE(kept.response.find("FK_VIOLATION"), std::string::npos) << kept.response;
+    // Nothing collected: nothing asked, nothing deleted, no refusal.
+    DispatchOutcome none;
+    auto del9 = rig.Start("DELETE FROM prp WHERE v = 99", none);
+    ASSERT_TRUE(rig.Drive(*del9)) << none.response;
+    EXPECT_EQ(none.response, "DELETED 0") << none.response;
+    EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u);
+    // The three unreferenced rows are gone and the referenced one stays.
+    const std::string rows = rig.dispatcher->Dispatch("SELECT id, v FROM prp").response;
+    EXPECT_EQ(CountOccurrences(rows, ",5"), 0) << rows;
+    EXPECT_EQ(CountOccurrences(rows, ",6"), 1) << rows;
+}
+
+TEST_F(CoreRuntimeTest, ACollectedSetPastOneMessageTakesAnotherRound) {
+    // More rows than one reverse message carries per owner: the first round
+    // asks about `kFkReverseProbeMaxEntries`, the resume finds those held,
+    // asks about the rest, and the walk deletes them all.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ak3_rounds");
+    OpenCrossOwnerFkPair(rig, "rd");
+    const int rows = static_cast<int>(kFkReverseProbeMaxEntries) + 5;
+    std::string values;
+    for (int i = 1; i <= rows; ++i) {
+        values += (i == 1 ? "(" : ", (") + std::to_string(i) + ", 5)";
+    }
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO rdp VALUES " + values).response.rfind("ERR", 0),
+              0u);
+
+    DispatchOutcome out;
+    auto del = rig.Start("DELETE FROM rdp WHERE v = 5", out);
+    ASSERT_TRUE(rig.Drive(*del, 1024)) << out.response;
+    EXPECT_EQ(out.response, "DELETED " + std::to_string(rows)) << out.response;
+    EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u);
+}
+
+TEST_F(CoreRuntimeTest, ARowAppearingWhileParkedIsCaughtByTheNextRound) {
+    // The collect pass ran under one snapshot; a row committed while the
+    // fan-out was out is not in it. The resume re-collects, finds the new
+    // row unanswered, asks about it in a second round, and deletes it too -
+    // never marking a row its children's owner was not asked about.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "ak3_race");
+    OpenCrossOwnerFkPair(rig, "rc");
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO rcp VALUES (1, 5)").response.rfind("ERR", 0),
+              0u);
+
+    DispatchOutcome out;
+    auto del = rig.Start("DELETE FROM rcp WHERE v = 5", out);
+    ASSERT_NE(del->Poll(), sched::PollResult::kDone) << "the fan-out did not park";
+    // Committed on core 0 while the DELETE is parked on the peer's answer.
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO rcp VALUES (2, 5)").response.rfind("ERR", 0),
+              0u);
+    ASSERT_TRUE(rig.Drive(*del)) << out.response;
+    EXPECT_EQ(out.response, "DELETED 2") << out.response;
+    EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u);
+}
+
 TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnInFlightParentAnswersRetryable) {
     // H-AH1's fourth fixture. The parent row exists but belongs to a
     // transaction that has not ended, so the owner's check - which reads

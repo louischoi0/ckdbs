@@ -2896,18 +2896,21 @@ longer refuses a parent and child on different cores. The forward check
 crosses — hoisted to the dispatch fork, one probe round per distinct
 parent owner, a reference intent left behind — and two things do not:
 
-- **A parent in a cross-owner foreign key cannot be deleted.** The
-  reverse check refuses `NotImplemented` when the child is owned by
+- ~~**A parent in a cross-owner foreign key cannot be deleted.**~~ The
+  reverse check refused `NotImplemented` when the child was owned by
   another core, because RESTRICT needs an authoritative "no children" and
-  the parent's core cannot see them. Fail-closed, and not a wrong answer;
-  what would replace it is the fan-out (one boolean probe per child
-  owner, each answering from its own Cabin or its own walk), which is not
-  built. Colocating parent and child — a namespace, AF-P5 — avoids the
-  refusal entirely, and **since AF-T4 (2026-09-02) the engine says so**:
-  the refusal's last clause names the remedy, and the `CREATE TABLE` that
-  declares a cross-owner foreign key emits a `WARN` naming both this and
-  the per-write probe cost. The gap is unchanged; what closed is the
-  operator having to know about it from a spec.
+  the parent's core cannot see them. **Closed in two steps on
+  2026-09-02**: AJ-T3 built the fan-out (one probe per child owner,
+  answered from that owner's Cabin or walk) for `DELETE … WHERE pk = k`,
+  and AK-S3 (`instructions/v2.8.0/workorder-ak.md`) widened it to every
+  `WHERE` by collecting the pks in a read-only pass under the statement's
+  snapshot first, and by letting one dispatch take as many probe rounds
+  as the set needs (bounded by `kFkProbeMaxRounds`, past which the answer
+  is retryable). What remains true: a DELETE of a parent with cross-owner
+  children costs one extra walk of the parent per round on the non-pk
+  shape, and `CREATE TABLE`'s `WARN` (AF-T4) still names the per-write
+  probe cost. What remains refused: a parent DELETE on the synchronous
+  path (no reactor to park on), retryably.
 - ~~**The crossing is unreachable in a running instance, behind a gate AH
   did not name**~~ — found 2026-09-01 by AH-T5's probe, which could not
   reach its own crash point, and **closed the same day on operator

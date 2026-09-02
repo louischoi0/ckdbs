@@ -244,9 +244,9 @@ struct PendingFkProbe {
     // themselves rather than a restriction: a DELETE runs no forward check
     // (`DeleteInner` mints its check view for `fkeys_in` alone) and an
     // INSERT or UPDATE runs no reverse one. One flag is therefore enough
-    // to say which vector the collect block should read, and a statement
-    // that ever needed both would need a second park, which
-    // `DispatchAsync` refuses by name.
+    // to say which vector the collect block should read. (A statement
+    // that ever needed both would resume into a second round, which
+    // `DispatchAsync` loops over since AK-S3; none does.)
     std::vector<exec::FkReverseProbeGroup> reverse_groups;
     bool reverse = false;
     // The statement to run once the verdicts are in. Empty is impossible
@@ -259,6 +259,15 @@ struct PendingFkProbe {
     // taken before the sends would charge the sending loop to it.
     sched::MonoTimeNs sent_at_ns = 0;
 };
+
+// AK-S3: how many probe rounds one dispatch may take before the statement
+// is refused retryably. A round carries at most `kFkReverseProbeMaxEntries`
+// questions per owner (`fk_probe_service.hpp`), so this bounds what one
+// DELETE can collect and ask about - sixty-four rounds of that is
+// thousands of rows per owner, past anything one OLTP statement names -
+// and it bounds a workload that keeps making rows visible between rounds,
+// which would otherwise never let the statement finish.
+inline constexpr std::uint32_t kFkProbeMaxRounds = 64;
 
 struct PendingShippedStatement {
     std::uint64_t request_id = 0;
@@ -1289,9 +1298,15 @@ private:
     // owner. Returns the groups still to send - empty when every foreign
     // child is already answered from a resumed round, which is what makes
     // the second pass a plain local statement.
+    // `collect` is the read-only pass that names the rows a non-pk WHERE
+    // deletes (AK-S3), built by `DeleteInner` from the walk's own stage-1
+    // match; called only when the WHERE is not a bare pk equality and a
+    // child lives on another core, which is what keeps every other DELETE
+    // at one walk.
     StatusOr<std::vector<exec::FkReverseProbeGroup>> HoistReverseForeignKeyChecks(
         const catalog::TableAccess& parent, const std::vector<parser::Condition>& where,
-        Session& session, exec::FkParentVerdicts& held);
+        Session& session, exec::FkParentVerdicts& held,
+        const std::function<StatusOr<std::vector<std::uint64_t>>()>& collect);
 
     // `reverse_held` carries AJ-T3's answers for children this core does
     // **not** own: one verdict per (child relation, parent pk), resolved at

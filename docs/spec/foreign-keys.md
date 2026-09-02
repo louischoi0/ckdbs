@@ -452,9 +452,9 @@ share one holder key, and left the coordinator holding participants it had
 no identity to address. `ShipStatement` and `SendForeignKeyProbes` are the
 two contacts, and both mint it.
 
-## 3a. The reverse check across owners — a refusal, not a fan-out
+## 3a. The reverse check across owners — the fan-out
 
-`[AMENDED 2026-09-01 — AH-T4.]`
+`[AMENDED 2026-09-01 — AH-T4; REWRITTEN 2026-09-02 — AJ-T3 and AK-S3.]`
 
 A parent's `DELETE` asks *"does any child still reference me"*, and
 RESTRICT needs that answer to be **authoritative**: a "no children" that
@@ -463,14 +463,48 @@ constraint reporting success, which §1 names as the one degraded mode a
 constraint may not have.
 
 Once F5 converts, a child can live on another core, and this core cannot
-see its rows. So the reverse check **refuses** rather than walking what it
-can reach: `NotImplemented`, naming the child's owner. The consequence,
-stated plainly, is that **a parent in a cross-owner foreign key cannot be
-deleted** — an asymmetry with the forward direction, which crosses fine.
+see its rows. From AH-T4 to AJ-T3 the reverse check therefore **refused**
+rather than walking what it could reach, and a parent in a cross-owner
+foreign key could not be deleted. **It fans out now**, at the dispatch
+fork, before the walk — the one place a write can still park (§2a's
+rule, applied to the direction it did not reach):
 
-What would replace the refusal is a **fan-out**: one boolean probe per
-child owner, each answering from its own Cabin (F6's nomination) or its
-own walk, over the existing fan-in shape. It is not built.
+1. **The rows.** A bare `WHERE pk = k` names the one row (AJ-R2 (i)). Any
+   other `WHERE` is the walk's answer, and the walk cannot park — so the
+   pks are **collected** first by a read-only pass under the statement's
+   own snapshot, applying exactly the walk's stage-1 match and marking
+   nothing (AK-S3). That is one extra walk of the parent per round, paid
+   only on this shape and only when a child lives on another core.
+2. **The registration**, before anything is asked (AJ-R3 (a)): every pk
+   goes into the coordinator-local pending-delete set, so from here on a
+   forward probe for one of these rows answers in-flight and no *new*
+   reference intent can be granted while the fan-out is out. Then this
+   core's own intent table is asked, and a pk a foreign check is already
+   relying on answers busy (`TxnConflict`, retryable).
+3. **The fan-out**: one reverse probe per distinct child owner, carrying
+   up to `kFkReverseProbeMaxEntries` (child, pk) questions, answered by
+   the code that owner already runs for a local parent —
+   `CheckNoChildReferences` with its own `core_id`, its Cabin (F6) first
+   — under its own current snapshot. The child's owner records nothing
+   and is enrolled in nothing.
+4. **The resume** re-enters the statement with the answers held. The
+   per-row check answers a foreign child from the held verdict and never
+   falls through to a local walk; a collected pk with no answer — a row
+   that became visible after the pass — is refused retryably, not
+   marked. A resume whose collected set outgrows one message per owner,
+   or that finds a row the last pass did not, groups only the unanswered
+   pks and parks again: **one dispatch takes as many rounds as the set
+   needs**, bounded by `kFkProbeMaxRounds`, past which the statement is
+   refused retryably with its held answers dropped.
+
+Verdicts map onto the reply as onto the local check: no visible child →
+clear; a committed visible child → `kFkViolation` (terminal); a row with
+a foreign `trx_id` → busy (F3). §4's one-MVCC rule is untouched.
+
+What stays refused: a DELETE on the synchronous path, which has no
+reactor to park on (retryable, never a local-only answer); a split child
+(AE-5.1); and a child owner that does not answer within
+`kFkProbeReplyDeadlineNs` (retryable).
 
 **And before the walk, the intents.** A live reference intent on the row
 being deleted is evidence no local walk can produce: a transaction on

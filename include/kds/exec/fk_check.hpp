@@ -139,6 +139,14 @@ public:
     std::size_t size() const noexcept { return entries_.size(); }
     bool empty() const noexcept { return entries_.empty(); }
 
+    // AK-S3: whether the pks this holds were **collected** by a read-only
+    // pass over the relation rather than named by the statement. It changes
+    // what a miss in the per-row check means: for a named pk a miss is the
+    // caller bug above; for a collected set it is a row that became visible
+    // after the pass, which is retryable and never a fall-through.
+    void set_collected() noexcept { collected_ = true; }
+    bool collected() const noexcept { return collected_; }
+
     // ---- The foreign half: one group per owner, not per pk (AH-R2) -----
     //
     // A parent whose owner is not this core cannot be resolved by
@@ -186,6 +194,7 @@ private:
         FkVerdict verdict;
     };
     std::vector<Entry> entries_;
+    bool collected_ = false;
 };
 
 // What the reverse check may use to answer without walking (F6, FK-M5).
