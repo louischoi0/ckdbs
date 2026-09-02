@@ -384,18 +384,21 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         co_await sched::WaitUntil{&settled};
         // **Leg 1 ends the instant the park resolves**, before a verdict is
         // read, so nothing this core does with the answers is charged to
-        // the owners that gave them.
-        fk_rounds_.probe.Note(NowNs() - probe.sent_at_ns);
+        // the owners that gave them. Whether it is *recorded* is decided
+        // after the collection below, for the reason stated there.
+        const sched::MonoTimeNs probe_settled_ns = NowNs();
 
         // Collect, close, and only then decide. A deadline is settled
         // without having arrived, which is a refusal and not a verdict:
         // no row may be written on the strength of an answer nobody gave.
         Status probe_status = Status::OK();
+        bool probe_timed_out = false;
         resumed_fk_verdicts_ = exec::FkParentVerdicts{};
         for (std::size_t g = 0; g < probe.request_ids.size(); ++g) {
             const std::uint64_t id = probe.request_ids[g];
             const FkProbeOutcome* reply = fk_probes_->Find(id);
             if (reply == nullptr || !reply->arrived) {
+                probe_timed_out = true;
                 if (probe_status.ok()) {
                     probe_status = Status::TxnConflict(
                         "a foreign key's parent owner did not answer within the probe deadline; "
@@ -420,23 +423,39 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             fk_probes_->Close(id);
         }
 
+        // **A deadline is not a round trip, and timing it as one would
+        // wreck the number.** A park resolves on the deadline as readily as
+        // on an answer, so a single unanswered owner would put
+        // `kFkProbeReplyDeadlineNs` - five seconds - into a leg whose whole
+        // population is tens of microseconds. The decide leg is already
+        // careful about exactly this ("timing a leg nobody walked would
+        // report a fast release where there was none"); this is that rule
+        // on the leg beside it. A refusal *reply* is still a round trip and
+        // is recorded: what is excluded is the round nobody completed.
+        if (!probe_timed_out) fk_rounds_.probe.Note(probe_settled_ns - probe.sent_at_ns);
+
         // **A refused probe still has intents to end.** One owner can pass
         // and grant while another times out, and the statement then fails
         // holding the first owner's intent - so the failure path falls
         // through to the decide below rather than returning past it, and
         // the decision it carries is abort.
+        Session& deciding = session != nullptr ? *session : autocommit_session_;
+        // **The id the decide will name is this statement's own or none.**
+        // Cleared here, before either arm, because `last_txn_id` is a
+        // session field that outlives the statement that set it: the
+        // refusal arm below runs no transaction at all, and the resume arm
+        // can fail *before* it opens a write scope (an affinity refusal, a
+        // spent lease, a compile error), in which case `EndWrite` never
+        // runs and the field still holds the id of the previous statement -
+        // one that committed. Naming it here would key an ABORT decision
+        // record on a committed transaction, which is the answer an
+        // in-doubt participant would then be given. Zero names nothing, and
+        // an intent is released by `(coordinator core, session)` alone
+        // (`fk_intent.hpp`), so nothing this decide has to do needs the id.
+        deciding.set_last_txn_id(0);
         if (!probe_status.ok()) {
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
             *out = {ErrorReply(probe_status), false, 0, probe_status};
-            // No transaction ran for this statement, so the id the decide
-            // names is **zero and not the last one this session used** -
-            // reusing that id would key an abort record on a transaction
-            // that in fact committed.
-            if (session != nullptr) {
-                session->set_last_txn_id(0);
-            } else {
-                autocommit_session_.set_last_txn_id(0);
-            }
         } else {
             // The resume. The extraction pass consults
             // `resumed_fk_verdicts_` first, so this pass resolves
@@ -444,6 +463,28 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // nothing - a plain local statement.
             *out = DispatchAndStage(probe.line, session);
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+            if (out->pending_fk_probe.has_value()) {
+                // **A second park in one dispatch, which this block is not
+                // a loop over.** The resume answers every parent from
+                // `resumed_fk_verdicts_` and `owner_core` is written once
+                // at CREATE, so nothing constructs this today - and if
+                // something ever did, the waiters would go unclosed and
+                // `out->response` would be *empty*, which the decide below
+                // reads as "no ERR prefix" and therefore as **commit** for
+                // a statement that never ran. Refused rather than left as a
+                // silent wrong answer.
+                if (fk_probes_ != nullptr) {
+                    for (const std::uint64_t id : out->pending_fk_probe->request_ids) {
+                        fk_probes_->Close(id);
+                    }
+                }
+                out->pending_fk_probe.reset();
+                const Status again = Status::NotImplemented(
+                    "a foreign-key probe resumed into a statement that needs another probe "
+                    "round; one park per dispatch is all this path has "
+                    "(docs/spec/foreign-keys.md §2a)");
+                *out = {ErrorReply(again), false, 0, again};
+            }
         }
 
         // **F1: an autocommit statement decides for itself.** Its
@@ -458,7 +499,6 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // and has no context to vote with (F4). And here rather than in
         // `EndWrite`, because this is the first point outside the write
         // scope, which AH-R1 keeps free of anything that can wait.
-        Session& deciding = session != nullptr ? *session : autocommit_session_;
         if (!deciding.in_explicit_txn() && deciding.has_intent_holders() &&
             txn_2pc_ != nullptr && deciding.ship_id() != 0) {
             const std::vector<std::uint32_t> holders = deciding.intent_holders();
@@ -467,8 +507,11 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                                              : TxnDecision::kCommit;
             const std::uint64_t request_id = next_remote_request_++;
             const sched::MonoTimeNs decide_began_ns = NowNs();
+            // Every target here holds an intent and nothing else: an
+            // autocommit statement enrols no participants at all.
             if (Status sent = txn_2pc_->Decide(request_id, deciding.ship_id(),
-                                               deciding.last_txn_id(), decision, holders);
+                                               deciding.last_txn_id(), decision, holders,
+                                               /*intent_only=*/holders);
                 !sent.ok()) {
                 // The statement's own outcome is already settled and
                 // durable, so this changes no answer. What it costs is the
@@ -725,7 +768,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         const sched::MonoTimeNs decide_began_ns = NowNs();
         if (Status sent = txn_2pc_->Decide(pending.decide_request_id, pending.session_id,
                                            pending.transaction_id, decision,
-                                           pending.decide_targets);
+                                           pending.decide_targets, pending.intent_only);
             !sent.ok()) {
             // Nothing left to do about it here: the outcome is decided and
             // durable, and the participants that did not hear are in doubt
@@ -984,6 +1027,19 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
                 fk_probes_->Close(id);
             }
         }
+        // **The requests already left, so an owner may already have granted
+        // an intent** - the waiter this core closed is its own bookkeeping
+        // and says nothing to the core holding the parent still. Told here,
+        // fire and forget, because this path has no reactor to wait on an
+        // acknowledgement with: an intent nobody ends is the F1 defect
+        // again, one refusal at a time, and it would pin a parent row for
+        // the life of the process.
+        //
+        // Inside a transaction the holders stay recorded and `ROLLBACK`
+        // decides them with the rest; in autocommit this is the only decide
+        // there will ever be, which is why it is sent whatever the session
+        // and why the list is cleared either way.
+        ReleaseIntentsWithoutWaiting(session != nullptr ? *session : autocommit_session_);
         return {ErrorReply(Status::TxnConflict(
                     "a foreign key's parent is owned by another core and the probe needs the "
                     "reactor path; retry on a served connection")),
@@ -1792,10 +1848,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // elsewhere, and it *grants* intents for parents it owns that another
     // core's child relies on.
     //
-    // Counted rather than inferred, XD0's rule on the leg AI added: a
-    // latency that assumed a probe crossed could not tell a crossing from a
-    // colocated statement that never left the core, and telling those two
-    // apart is the whole subject of the measurement.
+    // Counted rather than inferred, XD0's rule on the leg AI added; the
+    // argument for that is on `FkProbeClient::requests()`, where a reader
+    // of the number lands first.
     //
     // `fk_probes_sent` is rounds, not parents - one per distinct foreign
     // owner per statement (AH-R2), so a thousand-row INSERT against one
@@ -3950,6 +4005,38 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
     return Status::OK();
 }
 
+void CommandDispatcher::ReleaseIntentsWithoutWaiting(Session& session) {
+    // **The decide a path with nothing to park on can still send.** An
+    // intent holder never prepared, so it can never be in doubt and there
+    // is nothing to learn from its acknowledgement (`AbortAndForget`'s
+    // reasoning, on the leg beside it) - but the intent itself must end,
+    // or a parent row is pinned for the life of the process, which is F1
+    // one refusal at a time.
+    //
+    // **Autocommit only.** Inside a transaction the holders stay recorded
+    // and the client's `COMMIT` or `ROLLBACK` decides them with the rest;
+    // ending them early would release a parent the transaction is still
+    // relying on.
+    if (txn_2pc_ == nullptr || session.in_explicit_txn() || !session.has_intent_holders() ||
+        session.ship_id() == 0) {
+        return;
+    }
+    const std::vector<std::uint32_t> holders = session.intent_holders();
+    const std::uint64_t request_id = next_remote_request_++;
+    if (Status sent = txn_2pc_->Decide(request_id, session.ship_id(), /*transaction_id=*/0,
+                                       TxnDecision::kAbort, holders, /*intent_only=*/holders);
+        !sent.ok()) {
+        if (logging(LogLevel::kError)) {
+            log_->Error("fk", "core " + std::to_string(core_id_) + " could not release " +
+                                  std::to_string(holders.size()) +
+                                  " reference intent(s) after a statement that had already "
+                                  "probed refused: " + sent.message());
+        }
+    }
+    txn_2pc_->Close(request_id);
+    session.ClearIntentHolders();
+}
+
 Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& held,
                                                Session& session, std::string_view line,
                                                DispatchOutcome& out) {
@@ -3988,11 +4075,23 @@ Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& hel
                                            /*transaction_id=*/0, group);
             !s.ok()) {
             // Refused **before** anything left, exactly as `Ship` is: the
-            // requests already sent are abandoned by their own deadlines
-            // and the intents they may have granted are released by this
-            // transaction's decide, so nothing is held on a statement that
-            // is not going to run.
+            // requests already sent are abandoned by their own deadlines.
+            //
+            // **The intents they may have granted are another matter**, and
+            // the sentence that used to stand here - "released by this
+            // transaction's decide" - stopped being true when F1 made
+            // autocommit the case that needs one: this arm returns no
+            // `pending_fk_probe`, so `DispatchAsync`'s decide block is
+            // never entered and there is no such decide to inherit.
+            //
+            // Inside a transaction the holders stay recorded and the
+            // client's `ROLLBACK` decides them with everything else. In
+            // autocommit this is the last chance, so the abort goes out
+            // here - fire and forget, because the fork has nothing to wait
+            // on and nothing to learn: the outcome is abort whatever a
+            // holder answers.
             for (const std::uint64_t sent : pending.request_ids) fk_probes_->Close(sent);
+            ReleaseIntentsWithoutWaiting(session);
             return s;
         }
         pending.request_ids.push_back(request_id);
@@ -4032,18 +4131,18 @@ Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& hel
 Status CommandDispatcher::RefuseUnsentForeignKeyProbes(const exec::FkParentVerdicts& held) {
     if (!held.has_foreign()) return Status::OK();
 
-    // AH-T2's first slice ends here: the grouping is built and nothing
-    // sends it yet. **Refused rather than descended**, which is the whole
-    // value of this slice - the alternative is `CheckParentPresent`
-    // faulting a page this core does not own, or worse answering from one,
-    // and a constraint that silently does not run is the one degraded mode
-    // §1 forbids.
+    // **Refused rather than descended**: the alternative is
+    // `CheckParentPresent` faulting a page this core does not own, or worse
+    // answering from one, and a constraint that silently does not run is
+    // the one degraded mode §1 forbids.
     //
-    // `NotImplemented` by the two-code rule: the architecture admits this
-    // (§2a specifies it, the wire's two kinds exist), nobody has built the
-    // sender. Reached today only by a relation separated from its parent by
-    // history - `CheckForeignKeyColocation` still refuses the declaration,
-    // and converts at AH-T4.
+    // **The sender is built** (AH-T2) and the declaration is admitted
+    // (AH-T4), so this is no longer "nobody wrote it". What is left is the
+    // two shapes that cannot *send*: a dispatcher with no probe client -
+    // a fixture with no ring - and a statement with no text to resume
+    // with, which is the KWP load chunk. `NotImplemented` by the two-code
+    // rule either way: the architecture admits the crossing, this path has
+    // no way to reach it.
     const auto& first = held.foreign().front();
     std::string owners;
     for (const auto& group : held.foreign()) {
@@ -4055,8 +4154,8 @@ Status CommandDispatcher::RefuseUnsentForeignKeyProbes(const exec::FkParentVerdi
         " of '" + RelationNameOf(first.parents.front().first) + "', owned by core " +
         std::to_string(first.owner_core) + " and not by core " + std::to_string(core_id_) +
         " (owners this statement would have to ask: " + owners +
-        "); the cross-owner probe is not built (instructions/v2.8.0/workorder-ah.md AH-T2, "
-        "docs/spec/foreign-keys.md §2a)");
+        "); this statement cannot send a probe - it has no probe client or no "
+        "text to resume with (docs/spec/foreign-keys.md §2a)");
 }
 
 Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& child,
@@ -5057,6 +5156,7 @@ DispatchOutcome CommandDispatcher::PrepareAcrossOwners(Session& session) {
     pending.transaction_id = txn->id();
     pending.participants = session.participants();
     pending.decide_targets = session.DecideTargets();
+    pending.intent_only = session.IntentOnlyTargets();
 
     // **The prepare happens only where something holds rows** (AI, F4). A
     // transaction whose only cross-owner contact was a foreign-key probe
@@ -5598,12 +5698,6 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         // *measured* failure - `bench/v2.2.0/results-shipping-part-a-*`
         // Finding 2, a shipped write putting a second row in a group under
         // `CHECK COUNT(*) <= 1`. Neither was ever the FK's question.
-        //
-        // What this admits, said plainly: a peer core now writes an
-        // FK-linked relation, which is what makes AH's crossing reachable
-        // at all - before it the forward check never ran, the fork never
-        // parked and the probe never sent, on any relation carrying a
-        // foreign key.
         const bool funded_shape = !any_cabin && !enforcer_.CannotEnforce(access.oid);
         if (!funded_shape) {
             if (any_cabin) {

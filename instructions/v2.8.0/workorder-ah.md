@@ -678,3 +678,72 @@ surviving-coordinator crash half, the legs' maxima behind the p99 tail,
 `strict` and concurrency, and the reverse direction's fan-out — a cross-owner
 parent still cannot be deleted, which `known-gaps.md` keeps as the crossing's
 one standing asymmetry.
+
+### The `critics-developer` review, and what it changed
+
+Run 2026-09-02 over `546ddc8..8e5a3af` — work order AI's whole body plus
+AH-T6's — on the operator's instruction. Seven findings, five applied, one
+applied by the reviewer itself, one rejected.
+
+**C1, applied, and it is the one worth naming.** A pure intent holder was
+sent an ordinary decide, met no context, and took
+`ShippedStatementExecutor`'s **anomaly** arm: an `Error` line and
+`decide_refusals`, the counter that means a transaction half is lost — on
+the *success* path of every cross-owner foreign-key statement. The reviewer
+measured it (`decide_refusals=1` in both cells) rather than arguing it, and
+the tests were green throughout because they asserted the intent was
+released and never looked at what the release cost. Fixed by spending one
+byte of `TxnDecideRequestPayload::reserved0` on `intent_only`, set per
+target; the holder's arm now acknowledges and is placed ahead of the abort
+and retry arms, each for its own reason. Both cells now assert
+`decide_refusals() == 0`.
+
+**C2, applied.** `Expeditor` — core 0's production runtime, which is not a
+`CoreRuntime` — wired **no** foreign-key probe machinery: no server, no
+client, no intent table, no release on the decide. A peer child whose parent
+was core-0-owned sent a probe nobody handled and refused `TXN_CONFLICT
+retryable=1` naming a condition that could never clear. Both halves are now
+wired beside 2PC, and the fixture comment that concealed it — "production
+wires both on every core" was true of peers and false of core 0 — says so.
+
+**C3, applied by the reviewer.** `last_txn_id` is a session field that
+outlives the statement that set it, and the resume can fail before a write
+scope opens, so an ABORT decision record could be keyed on a transaction
+that committed. Cleared once, before both arms.
+
+**C4, applied.** Two paths sent probes and then refused with no decide to
+inherit — the synchronous dispatch and the fork's own send failure — which
+in autocommit left an intent nobody would ever end. One helper,
+`ReleaseIntentsWithoutWaiting`, sends the abort fire-and-forget on both;
+inside a transaction the holders stay for `ROLLBACK`, because ending them
+early would release a parent the transaction still relies on.
+
+**C5, applied.** The probe leg was noted the instant the park resolved — and
+a park resolves on the deadline as readily as on an answer, so one silent
+owner would have put five seconds into a leg whose population is tens of
+microseconds. A refusal *reply* is still a round trip and is still recorded;
+what is excluded is the round nobody completed.
+
+**C6 and C7, applied.** A guard against a second probe park in one dispatch,
+which was latent rather than reachable but whose empty response would have
+read as *commit*; and `RefuseUnsentForeignKeyProbes`'s text, which still
+said the sender was not built and the declaration still refused.
+
+**S2 and S3 applied** (one `AddUnique`, the counter's justification kept
+where a reader lands first). **S1 rejected**: the reviewer proposed one
+coroutine shared by the two decide blocks, partly to make C1 a one-place
+change — but C1 landed in the client, so that benefit did not materialise,
+and the two blocks differ in what they do with the outcome. A second parking
+helper in a path whose park discipline is documented line by line costs more
+clarity than ~25 duplicated lines do.
+
+**Three things the review found sound and unstated** are now in
+`foreign-keys.md` §2b, because they are load-bearing: a *participant*
+coordinates its own intent release through the `COMMIT` the decision
+dispatches (untested, and it re-acquires the `fdatasync` wait XE1 removed);
+the union can address a core that granted nothing, which is harmless because
+`Release` is idempotent; and the autocommit decide is sent before this core's
+commit record is durable, so a coordinator dying in that window leaves the
+released parent with no surviving referent.
+
+Full suite 3155/3155 green after all of it.

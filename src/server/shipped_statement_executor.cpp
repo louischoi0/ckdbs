@@ -907,6 +907,32 @@ void ShippedStatementExecutor::Decide(const Txn2pcServer::DecideAsk& ask,
     auto it = enrolled_.find(key);
 
     if (it == enrolled_.end()) {
+        if (ask.intent_only) {
+            // **A reference intent holder, and this is its healthy path**
+            // (work order AH's F4, `foreign-keys.md` §2b). It never
+            // prepared and holds no rows of this transaction: what the
+            // decide does here is *release the intent*, which the ring
+            // handler does immediately after this call returns, and there
+            // is nothing in this function left to apply.
+            //
+            // **First, ahead of every other arm**, and each for its own
+            // reason. Ahead of the abort arm, which would count a holder as
+            // `decides_aborted_` - an abort applied where none was. Ahead
+            // of the retry arm, whose line says "already applied and
+            // released", which a holder never did. And ahead of the anomaly
+            // arm below, which exists to report a missing transaction half
+            // and would report one on every healthy cross-owner
+            // foreign-key statement.
+            if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+                log_->Debug("2pc", "core " + std::to_string(core_id_) +
+                                       " acknowledged an intent-only decision for core " +
+                                       std::to_string(ask.coordinator) + "'s session " +
+                                       std::to_string(ask.session_id) +
+                                       "; it held a foreign-key reference intent and no rows");
+            }
+            reply(Status::OK());
+            return;
+        }
         if (!commit) {
             // **Benign, and acknowledged as such.** An abort for a context
             // that is already gone has nothing left to do: the sweep rolled

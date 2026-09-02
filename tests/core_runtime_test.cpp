@@ -4058,13 +4058,14 @@ struct ForeignIndexRig {
     // pointer to it and must die first.
     std::optional<Txn2pcClient> txn2pc;
     // **Core 0's two halves of the foreign-key probe** (AI-T2). Production
-    // wires both on every core (`CoreRuntime::AttachTransport`), because a
-    // relation is a foreign parent on one statement and a child on the
-    // next; this rig built core 0 by hand and so has to do the same, or a
-    // peer's cross-owner INSERT parks on a request nobody answers. The
-    // table is declared ahead of the server that fills it and ahead of the
-    // dispatcher that reads it, which is `core_runtime.hpp`'s own order and
-    // for its reason.
+    // wires both on every core, because a relation is a foreign parent on
+    // one statement and a child on the next - `CoreRuntime::AttachTransport`
+    // for a peer and `Expeditor::Serve` for core 0. **The second of those
+    // was missing until 2026-09-02** and this hand-wiring is what concealed
+    // it: every cell whose parent is core-0-owned passed against a rig that
+    // had what production did not. The table is declared ahead of the
+    // server that fills it and ahead of the dispatcher that reads it, which
+    // is `core_runtime.hpp`'s own order and for its reason.
     FkIntentTable fk_intents;
     std::optional<FkProbeClient> fk_client;
     std::optional<FkProbeServer> fk_server;
@@ -6819,6 +6820,18 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
     // and named as owed.
     EXPECT_NE(peer_meta.find("fk_probe_round_n=1"), std::string::npos) << peer_meta;
     EXPECT_NE(peer_meta.find("fk_release_decide_n=1"), std::string::npos) << peer_meta;
+
+    // **And the healthy path does not read as a lost transaction half.**
+    // A decide reaching a core with no context is `ShippedStatementExecutor`'s
+    // anomaly - it logs an Error and bumps `decide_refusals`, the counter
+    // that means a participant is missing - and an intent holder has no
+    // context by construction, so before the wire carried `intent_only`
+    // *every* cross-owner foreign-key statement tripped it on its success
+    // path. The tests were green throughout, because they asserted the
+    // intent was released and never looked at what the release cost.
+    EXPECT_EQ(rig.executor->decide_refusals(), 0u)
+        << "the parent's owner reported a 2PC anomaly on a healthy crossing";
+
     const std::string core0_meta = rig.dispatcher->Dispatch("SHOW META").response;
     EXPECT_NE(core0_meta.find("fk_intents_granted=1"), std::string::npos) << core0_meta;
     EXPECT_NE(core0_meta.find("fk_intents_released=1"), std::string::npos) << core0_meta;
@@ -6907,6 +6920,17 @@ TEST_F(CoreRuntimeTest, ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsT
     const std::string del =
         rig.dispatcher->Dispatch("DELETE FROM txnparent WHERE id = 7").response;
     EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
+
+    // **And the healthy path does not read as a lost transaction half.**
+    // A decide reaching a core with no context is `ShippedStatementExecutor`'s
+    // anomaly - it logs an Error and bumps `decide_refusals`, the counter
+    // that means a participant is missing - and an intent holder has no
+    // context by construction, so before the wire carried `intent_only`
+    // *every* cross-owner foreign-key statement tripped it on its success
+    // path. The tests were green throughout, because they asserted the
+    // intent was released and never looked at what the release cost.
+    EXPECT_EQ(rig.executor->decide_refusals(), 0u)
+        << "the parent's owner reported a 2PC anomaly on a healthy crossing";
 }
 
 // ---- AH-T6: the verdicts the crossing carries, and the race it opens ----

@@ -370,6 +370,35 @@ parent row was **un-deletable for the life of the process**, behind a
 now sends its own decide, after the write scope closes and never inside it
 (AH-R1), and waits for the acknowledgement.
 
+**A holder is told it is one, per target.** The decide carries
+`TxnDecideRequestPayload::intent_only`, set on the targets that hold an
+intent and no rows. Without it a holder's missing context is
+indistinguishable from a participant's, and `ShippedStatementExecutor`'s
+anomaly arm — the one that reports a lost transaction half — fired on the
+*success* path of every cross-owner foreign-key statement, logging an error
+and bumping `decide_refusals`. A core in **both** lists is a participant and
+takes the ordinary path; the bit is a per-target fact, not a per-decide one.
+
+**A participant coordinates its own release, and this is load-bearing.**
+When the write that probed was itself a *shipped* statement, the intent
+holder is enrolled on the participant's context session — and the
+coordinator's decision is applied by dispatching `COMMIT`/`ROLLBACK` through
+that session (`shipped_statement_executor.cpp`), which forks on
+`has_intent_holders()` like any other. So the participant sends its own
+decide, keyed `(its core, its ship id)`, which is exactly the key the intent
+carries. Two consequences are owed rather than hidden: **no test exercises
+it**, and that `COMMIT` takes the cross-owner parked path, whose durability
+wait is unconditional — so an intent-holding participant re-acquires the
+`fdatasync` wait XE1's `kAtAppend` removed, plus a decide round trip, before
+acknowledging its own coordinator. XE1's measured saving does not apply to
+this shape.
+
+**The autocommit decide is sent before this core's commit record is
+durable**, unlike the explicit-transaction path where the decision is durable
+first (D4). That is sound and worth saying: if the coordinator dies in that
+window its child row is lost at recovery, so the parent whose intent was just
+released has no surviving referent.
+
 **Every cross-core contact mints the session's shipping identity**, not
 only a ship. The identity is what an intent's holder key is
 `(coordinator core, session id)` built from, so a session that had never
