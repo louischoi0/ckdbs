@@ -190,6 +190,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // block as a subset of core 0's rather than the same block reading
         // zero.
         runtime->recovery_.timings.timed = true;
+        // Says why the numbers below it are zero: this core did not scan,
+        // rather than scanning and finding nothing.
+        runtime->recovery_.ran = false;
         if (log != nullptr && log->enabled(LogLevel::kInfo)) {
             log->Info("recovery", "core " + std::to_string(config.core_id) +
                                       ": one stream, so core 0's mount pass covered this core's "

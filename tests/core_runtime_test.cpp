@@ -1025,6 +1025,9 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         // the only route by which `checkpoint_ns`, timed at AttachTransport,
         // is ever read.
         EXPECT_NE(meta.find("recovery_checkpoint_us="), std::string::npos) << meta;
+        // A core that ran its own pass does not carry the marker: its
+        // absence is what says "these numbers are mine".
+        EXPECT_EQ(meta.find("recovery_by="), std::string::npos) << meta;
 
         // **AR0 M0, AL-R5: the same stop, mounted as one stream.** A third
         // open of the same peer, differing only in what the volume says its
@@ -1060,6 +1063,9 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
                 single.value()->dispatcher().Dispatch("SHOW META").response;
             EXPECT_NE(one_meta.find("recovery_records=0"), std::string::npos) << one_meta;
             EXPECT_NE(one_meta.find("recovery_checkpoint_us="), std::string::npos) << one_meta;
+            // And it says *why* those zeroes are zero, which is the whole
+            // difference between a measurement and an absence of one.
+            EXPECT_NE(one_meta.find("recovery_by=core0"), std::string::npos) << one_meta;
         }
     }
 }

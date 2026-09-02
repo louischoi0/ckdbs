@@ -2031,6 +2031,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // test) has not "recovered nothing", it has no answer, and printing zeroes
     // would be an answer.
     if (recovery_ != nullptr) {
+        // **Where the pass ran** (AR0 M0). Printed only where it was not
+        // here, the rule the cross-owner three below already keep: on every
+        // core of a per-core-stream instance, and on core 0 of a
+        // single-stream one, its absence means "these numbers are mine".
+        if (!recovery_->ran) {
+            os << " recovery_by=core0";
+        }
         os << " recovery_records=" << recovery_->records
            << " recovery_committed=" << recovery_->winners
            << " recovery_rolled_back=" << recovery_->transactions_rolled_back

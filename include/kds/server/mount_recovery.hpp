@@ -80,6 +80,16 @@ namespace kds::server {
 // the mount log line. Counted rather than inferred: a phase that silently
 // did nothing is the failure mode this whole plan is written against.
 struct MountRecovery {
+    // **Whether this core ran a pass at all** (AR0 M0, AL-R5). False on a
+    // peer under one stream, where core 0's pass covered every core's
+    // records and this one recovered nothing.
+    //
+    // It exists because the alternative reading of the zeroes below is
+    // "this mount found an empty log", which is what an operator would
+    // otherwise have to guess between. A zeroed block that says *why* it is
+    // zero is a measurement; one that does not is an absence of one.
+    bool ran = true;
+
     // ---- What the log held ----
     std::uint64_t records = 0;  // records analysis read
     // A torn tail is the *expected* shape of a crash, not a failure

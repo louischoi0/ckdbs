@@ -38,8 +38,17 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     // open a file by core id. Absent with no directory - and a stream that
     // then holds a prepared transaction refuses the mount rather than
     // guessing at its outcome (`prepared_resolver.hpp`).
+    //
+    // **Not built under one stream** (AR0 M0, AL-R5), where a prepare's
+    // verdict is a lookup in the pass's own table rather than another
+    // file's. Constructing one there would be harmless - `RecoverCore`
+    // takes the in-stream branch and never calls it - and misleading, which
+    // is the objection: a resolver present at a mount that cannot use it
+    // reads as a mount that might. This is also the last reader of the
+    // per-core `anchors` vector, so under one stream nothing consults a
+    // peer's anchor slot at all.
     std::optional<CoordinatorStreamResolver> resolver;
-    if (!wal_dir.empty() && !anchors.empty()) {
+    if (!single_stream && !wal_dir.empty() && !anchors.empty()) {
         resolver.emplace(wal_dir, device.segment_size(), core_id, anchors, log);
     }
     // **The whole pass writes without claiming, under one stream** (AR0 M0,
