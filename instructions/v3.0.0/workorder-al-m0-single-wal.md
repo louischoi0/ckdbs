@@ -498,18 +498,21 @@ a refused mount leaves the store as it found it.
 
 **Owed, and named rather than deferred silently:**
 
-- **A page redo *creates* ends unstamped, and stamp 0 is never a claim** —
-  so its owner cannot reclaim it either, by a different route to the same
-  end. Reachable by an ordinary crash: a peer allocates a page from its
-  lease, logs `PAGE_INIT` and inserts, and neither the page nor the free
-  map reaches the platter. **CLA's proposal, for the next iteration**:
-  `PAGE_INIT` names the owning core the way AL-S4a's checkpoint records do
-  — the envelope's `flags` byte, no format event, 0 meaning core 0 as it
-  already does — and redo stamps a page it creates for that core rather
-  than for the recovering one. The alternatives considered and not taken: a
-  server-layer post-redo sweep keyed on `sys.tables.owner_core` (puts the
-  catalog inside recovery), and the owner logging an acquisition when it
-  meets an unstamped page it should own (a write on the fault path).
+- ~~A page redo *creates* ends unstamped~~ — **closed 2026-09-02**, by
+  the proposal as stated: `PAGE_INIT` names the core that logged it, in
+  the same envelope byte AL-S4a used and with the same no-format-event
+  argument, and `ApplyPageInit` stamps the page it formats for that core
+  rather than for the recovering one. The two alternatives stay rejected
+  and recorded: a server-layer post-redo sweep keyed on
+  `sys.tables.owner_core` puts the catalog inside recovery, and having the
+  owner log an acquisition when it meets an unstamped page puts a write on
+  the fault path. The stamp is now written **inside** `ApplyPageInit`
+  rather than by redo's tail, because every format it dispatches to clears
+  the header's flags word; under per-core streams the record's core and the
+  replaying core are the same, so that path is unchanged. `CheckpointCoreOf`
+  became `LoggingCoreOf` in the same edit — one name for "which core
+  appended this record", rather than a second name arriving with the second
+  record type that needs it.
 - **`ResumeAssertionsAfterRecovery` is the per-core log scan AL-R5 did not
   remove.** It sits outside the topology branch, which is right — core 0
   counts a peer's assertions as foreign and skips them, so only the peer

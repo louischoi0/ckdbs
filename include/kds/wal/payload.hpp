@@ -473,12 +473,21 @@ StatusOr<std::size_t> EncodeFullPageImage(std::span<std::byte> out,
                                           std::span<const std::byte, kPageSize> page);
 StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::byte> in);
 
-// ---- Which core a checkpoint record came from (AR0 M0, AL-R4/AL-R5) -----
+// ---- Which core appended a record (AR0 M0, AL-R4/AL-R5/AL-R6) ----------
 //
 // Under per-core streams the answer is the stream. Under **one stream**
-// every core's checkpoints interleave in the same log, and a
-// `CHECKPOINT_BEGIN` that cannot say whose it is cannot be attributed to
-// the core whose dirty table it describes.
+// every core's records interleave in the same log, and two kinds of record
+// cannot do their job without saying whose they are:
+//
+//   `CHECKPOINT_BEGIN`/`END`  a dirty table belongs to one core's pool, so
+//                             a checkpoint that cannot be attributed cannot
+//                             be applied to the right one.
+//   `PAGE_INIT`               redo may have to *create* the page, and the
+//                             page it creates carries an ownership claim
+//                             (`device_page_store`'s stamp). Created for
+//                             the recovering core rather than the owning
+//                             one, the page is unreclaimable by its owner
+//                             at the next mount - stamp 0 is never a claim.
 //
 // It rides the envelope's **per-type `flags` byte** (`record.hpp`), not the
 // payload, and that is a departure from AL-R2's letter which AL-R4 records.
@@ -498,10 +507,10 @@ StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::by
 // `kMaxWalCores`, and the bound is enforced where a core id enters the WAL
 // layer at all - `WalManager::Open`/`Attach` - not here.
 
-// The core a `CHECKPOINT_BEGIN`/`CHECKPOINT_END` was published by. 0 for
-// every record written before the byte carried this, which is what those
-// records mean.
-inline std::uint32_t CheckpointCoreOf(std::uint8_t flags) noexcept {
+// The core that appended the record. 0 for every record written before the
+// byte carried this, which is what those records mean - they are in core
+// 0's stream, or in a per-core stream that answers the question itself.
+inline std::uint32_t LoggingCoreOf(std::uint8_t flags) noexcept {
     return static_cast<std::uint32_t>(flags);
 }
 

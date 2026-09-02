@@ -84,6 +84,26 @@ protected:
         ASSERT_TRUE(s.value()->Sync().ok());
     }
 
+    // PAGE_INIT + one insert, logged as `core` would log them - the record
+    // naming its core in the envelope's flags byte, which is what a peer
+    // appending to the instance's one stream produces.
+    void WriteHeapStreamLoggedBy(std::uint32_t core) {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(s.value()
+                        ->Append({RecordType::kPageInit, 1, kPage,
+                                  static_cast<std::uint8_t>(core)},
+                                 init)
+                        .ok());
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/0, 0xA1), 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
     AnalysisResult Analyzed() {
         auto a = Analyze((*device_), 0, AnalysisStart{});
         EXPECT_TRUE(a.ok()) << a.status().message();
@@ -337,6 +357,38 @@ TEST_F(RedoTest, AnAnchorUpdateAgainstANonAnchorPageIsCorruption) {
     auto r = Redo((*device_), 0, store_, Analyzed());
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+}
+
+// **The other half of the stamp problem.** Redo may have to *create* a page
+// whose allocation the crash lost. Created for the recovering core - or
+// left unstamped, which is never a claim - the page cannot be reclaimed by
+// the core that owns it at the next mount, by a different route to the same
+// dead end the restamp reached. So the record names its core, and the page
+// is created for that core.
+TEST_F(RedoTest, UnderOneStreamACreatedPageIsStampedForTheCoreThatLoggedIt) {
+    WriteHeapStreamLoggedBy(/*core=*/2);
+
+    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    ASSERT_GT(r.value().applied, 0u);
+
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), storage::StreamStampFor(2))
+        << "a page redo created was claimed by the recovering core, not its owner";
+}
+
+// Core 0's own records still produce core 0's stamp, so a single-core
+// instance's pages are unchanged.
+TEST_F(RedoTest, APageLoggedByCoreZeroIsStampedForCoreZero) {
+    WriteHeapStreamLoggedBy(/*core=*/0);
+
+    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), storage::StreamStampFor(0));
 }
 
 // ---- Under one stream (AR0 M0, AL-R5/AL-R6) ----------------------------

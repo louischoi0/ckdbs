@@ -462,7 +462,7 @@ TEST_F(CheckpointerTest, APeersCheckpointOnASharedStreamNamesItsOwnCore) {
     for (const RecordHeaderFields& header : RecordsOn(*owner_device.value())) {
         if (!IsCheckpointRecord(header)) continue;
         ++named;
-        EXPECT_EQ(CheckpointCoreOf(header.flags), 5u);
+        EXPECT_EQ(LoggingCoreOf(header.flags), 5u);
     }
     EXPECT_EQ(named, 2);
 }

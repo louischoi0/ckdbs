@@ -63,6 +63,12 @@ bool TouchesNoPage(RecordType type) noexcept {
     }
 }
 
+// Formats the page the record describes, then gives it the stamp of the
+// core that logged the record - **not** of the core replaying it. The two
+// are the same under per-core streams, where redo's tail restamps every
+// applied page anyway; they differ under one stream, and there the page's
+// owner is the only right answer, because the stamp is what
+// `device_page_store` reads at the next fault to decide who may write it.
 Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
     auto fields = DecodePageInit(record.payload);
     if (!fields.ok()) {
@@ -77,15 +83,23 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
     // decodes as owner 0, so replaying old log leaves old pages exactly as
     // unattributed as the build that wrote them did.
     const std::uint64_t owner_oid = fields.value().owner_oid;
+    // Every format below clears the header's flags word, which is where the
+    // stamp lives, so the stamp is written after whichever one ran.
+    const std::uint16_t stamp = storage::StreamStampFor(LoggingCoreOf(record.header.flags));
     if (type == PageType::kHeap || type == PageType::kBtreeLeaf) {
         auto view = heap::PageView::CreateEmptyAs(page, fields.value().min_key, type, owner_oid);
         if (!view.ok()) {
             return view.status();
         }
+        storage::SetPageStreamStamp(page, stamp);
         return Status::OK();
     }
     if (type == PageType::kVarHeap) {
-        return varheap::FormatPage(page, owner_oid);
+        if (Status s = varheap::FormatPage(page, owner_oid); !s.ok()) {
+            return s;
+        }
+        storage::SetPageStreamStamp(page, stamp);
+        return Status::OK();
     }
     if (type == PageType::kCabinBound) {
         // Not the generic arm below: BoundCabinPage::Format writes a body -
@@ -97,9 +111,14 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
         // The record's owner_oid is deliberately ignored: Format stamps 0,
         // Grow logs 0, and honoring a nonzero one here would be the
         // divergence, not the fidelity.
-        return storage::cabin::BoundCabinPage::Format(page);
+        if (Status s = storage::cabin::BoundCabinPage::Format(page); !s.ok()) {
+            return s;
+        }
+        storage::SetPageStreamStamp(page, stamp);
+        return Status::OK();
     }
     storage::FormatPage(page, type, /*flags=*/0, owner_oid);
+    storage::SetPageStreamStamp(page, stamp);
     return Status::OK();
 }
 

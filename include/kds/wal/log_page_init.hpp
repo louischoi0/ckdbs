@@ -10,9 +10,14 @@
 
 // The one PAGE_INIT emitter (the definition-rows review's finding: six
 // hand-copies of the same twelve lines, two added by that change alone).
-// Storage-free on purpose - a PAGE_INIT is deliberately unstamped at every
-// call site, because the first record that lands in the page stamps it,
-// and an empty formatted page is exactly what redo rebuilds. The one
+// Storage-free on purpose - a PAGE_INIT carries no page bytes, because an
+// empty formatted page is exactly what redo rebuilds.
+//
+// **The record names the core that logged it** (AR0 M0), in the envelope's
+// per-type `flags` byte, for the reason `payload.hpp` gives: under one
+// stream a page redo has to create would otherwise be created for the
+// recovering core rather than its owner, and an unstamped or wrongly
+// stamped page cannot be claimed by the core that owns it. The one
 // caller that needs the LSN anyway (the undo log's reclaim arm stamps
 // *before* the wipe) takes it from the return.
 //
@@ -29,7 +34,11 @@ inline StatusOr<Lsn> LogPageInit(WalManager* wal, std::uint64_t txn_id, PageId p
     const PageInitPayload fields{min_key, static_cast<std::uint8_t>(type), {0, 0, 0},
                                  /*reserved2=*/0, owner_oid};
     if (auto n = EncodePageInit(buf, fields); !n.ok()) return n.status();
-    return wal->Append(RecordSpec{RecordType::kPageInit, txn_id, page_id}, buf);
+    // The cast is safe because `WalManager::Open`/`Attach` refuse a core id
+    // the byte could not hold.
+    return wal->Append(RecordSpec{RecordType::kPageInit, txn_id, page_id,
+                                  static_cast<std::uint8_t>(wal->core_id())},
+                       buf);
 }
 
 }  // namespace kds::wal
