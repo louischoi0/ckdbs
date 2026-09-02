@@ -266,7 +266,16 @@ interleaved arms. Gate: AF-T3.
 | AF-T2 | **Built 2026-09-02** on `worktree-workorder-wf-te-t5`. `PlacementPolicy::kNamespace` (`include/kds/catalog/core_placement.hpp`), fed by `Catalog::DeriveNamespacePlacement` off the `sys.tables` scan `CreateTable` already makes. **It is the shipped default** (`Expeditor::Config`, `kds.conf.sample`, config key `placement = namespace`), and DA2 is not reversed by that: an undeclared namespace - `public`, every relation until somebody writes `CREATE NAMESPACE` - is `kCreatingCore`'s answer, asserted by a `static_assert` and by `ExpeditorConfigTest`. **AF-P1 needed a correction to work at all**, recorded as AF-P1a below and in `namespace.md` NS10 clause 3. Cells: four in `catalog_test.cpp` (`NamespacePlacementTest`), nine `static_assert`s in `core_runtime_test.cpp`, two in `config_file_test.cpp` |
 | AF-T3 | **Built 2026-09-02.** `CREATE NAMESPACE` / `DROP NAMESPACE` / `SHOW NAMESPACES`, and `ns.table` accepted at every relation name in the grammar through one production (`Parser::ParseQualifiedName`) and checked at two sites (`exec::CompileBlock`'s binding loop for every `SELECT` shape; `CommandDispatcher::QualifierRefusal` for the rest). **The naming question AF-8 left open is decided: names stay instance-global**, so a qualifier declares placement and never identity - `namespace.md` NS5/NS6 amended, NS8 declined. **`kFingerprintVersion` stays at 1**, answered explicitly rather than noticed: a keyword hashes as an identifier, `ns.t` is not a new *token* shape (the dot has lexed since the catalog views), and DDL is not patternable at all - `FingerprintTest.TheNamespaceSyntaxNeededNoFingerprintVersionBump` pins the argument and re-pins `sys.tables`' hash by value. Six cells in `command_dispatcher_test.cpp`; two pre-existing cells changed, both because the behaviour they pinned is what AF changed |
 | AF-T4 | **Built 2026-09-02**, and not where AF-T4 expected. `CheckForeignKeyColocation` no longer refuses (AH-T4), so a message on it would be a message nobody reads; the advice went to the two moments a user is choosing instead - a `WARN` line on the `CREATE TABLE` that declares a cross-owner foreign key, naming both costs and the remedy, and the last clause of the parent-`DELETE` refusal in `exec/fk_check.cpp`. `foreign-keys.md` F5 carries it. Two cells in `foreign_key_test.cpp` (`ForeignKeyPlacementTest`), the second of which is also the end-to-end proof that two namespaces are two cores through the dispatcher |
-| AF-T5 | see below |
+| AF-T5 | **Measured 2026-09-02**, `bench/v2.8.0/results-af-t5-namespace-grouping-v2.7.0-99-g775e79d.md`. **AF-T5's own instruction could not be followed and the reason is the finding**: the DA2 cell it names has no join and no foreign key in its workload, so nothing in it ever crosses a core (its own §6a says the 0.51x collapse "is entirely the denominator"), and its driver creates every relation unqualified, so `placement = namespace` would be `creating` under another name. A new probe measures *k* **wired** groups instead. **The hypothesis holds with one qualification**: namespace placement beats single-core placement 1.12x at two groups and 1.38-1.39x at three, and beats blind rotation by 5-10% in four cells of five - but it **costs 19% at one group** (the hop with nothing to overlap it), and at three groups on eight cores it **ties** rotation on throughput (0.99x, overlapping ranges) while keeping a 4.5x better p100. So the advantage over rotation is a contention effect, not a pure crossing cost. **Owed**: the 7-group cells, which are the only ones that would put a second group on a core - the side of `bench/v2.1.0` §6's step where rotation collapses - were queued and not run |
+
+## AF-P1a `[RATIFIED 2026-09-02 — operator: "AF-P1a 그대로 진행"]`
+
+The operator took the reading below as it stands. What that binds: a
+namespace nobody has placed rotates on its **declaration order**, and the
+alternative this section offered — a core stated by the operator at
+`CREATE NAMESPACE`, through a number or a `WITH (...)` option — is **not**
+taken. AF-P1's own words ("the creating core") are superseded for the
+unplaced case and stand for every other clause.
 
 ## AF-P1a — the correction AF-T2 had to make, stated rather than absorbed
 
@@ -296,11 +305,12 @@ missing half:
    because they are never retired, which is what makes the rank immutable
    and AF-P4 true through an emptying.
 
-**The operator may want the other reading**, which is why this is a
-numbered proposal and not a note: if a namespace's core should instead
-come from something the operator states at `CREATE NAMESPACE` — a core
-number, or a `WITH (...)` option — clause 3 is the one that changes and
-clauses 1 and 2 stand.
+~~**The operator may want the other reading**~~ — **ratified as written,
+2026-09-02** (the box at the head of this section). The alternative is
+recorded rather than deleted, because it is what a later re-design starts
+from: if a namespace's core should ever come from something the operator
+states at `CREATE NAMESPACE` — a core number, or a `WITH (...)` option —
+clause 3 is the one that changes and clauses 1 and 2 stand.
 
 **Two names decided at AF-T1 that AF-T3 inherits.** `sys` and `public`
 are **reserved**: `CREATE NAMESPACE` refuses both, and

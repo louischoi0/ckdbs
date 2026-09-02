@@ -2780,6 +2780,15 @@ do, and one thing it does that nobody has decided:
   spreading, **this one ships on by default**. What partly covers it is
   `bench/af_namespace_grouping_probe.py`, which drives a real server and
   reads placement back out of the catalog; a benchmark is not a test.
+- **AF-T5's sweep stops at one group per writer core.** Every cell in
+  `bench/v2.8.0/results-af-t5-namespace-grouping-v2.7.0-99-g775e79d.md` has
+  at most one declared group per writer core, which is the side of
+  `bench/v2.1.0/results-shipping-pretasks` §6's step where rotation still
+  wins. The 7-group cells that would cross it were queued and not run, and
+  the g3-c8 tie (namespace 0.99x of rotation on throughput, 4.5x better on
+  p100) is a warning that the answer past the step is not obvious.
+  `bench/af_namespace_grouping_probe.py --groups 7` at 4 and 8 cores is the
+  owed cell.
 - **No `sim/` cell covers a namespace.** The generator creates relations
   in `public` and nothing declares one, so the crash/restart harness has
   never mounted a file with a user namespace in it. The rows involved are

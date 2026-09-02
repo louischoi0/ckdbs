@@ -136,17 +136,21 @@ struct NamespacePlacement {
     // ones counted. The rotation input for a namespace no relation has
     // fixed yet.
     //
-    // **Why a rank and not the creating core.** AF-P1 as first written said
-    // an unfixed namespace takes the creating core; DDL runs on core 0 and
-    // only on core 0 (`CreateTable` passes `kSystemCore` for it), so that
-    // rule would place *every* namespace on core 0 and the policy would do
-    // nothing at all. AF-4 requires the opposite - "AF is rotation with the
-    // grouping supplied" - so the missing half is supplied here: a
-    // namespace nobody has placed rotates on its declaration order. Dropped
-    // rows count precisely because they are never retired
-    // (`well_known.hpp`'s `kTypeDroppedNamespace`), which makes the rank
-    // immutable and satisfies AF-P4 - emptying a namespace does not free it
-    // to move.
+    // **Why a rank and not the creating core** (AF-P1a, operator-ratified
+    // 2026-09-02). AF-P1 as first written said an unfixed namespace takes
+    // the creating core; DDL runs on core 0 and only on core 0
+    // (`CreateTable` passes `kSystemCore` for it), so that rule would place
+    // *every* namespace on core 0 and the policy would do nothing at all.
+    // AF-4 requires the opposite - "AF is rotation with the grouping
+    // supplied" - so the missing half is supplied here: a namespace nobody
+    // has placed rotates on its declaration order. Dropped rows count
+    // precisely because they are never retired (`well_known.hpp`'s
+    // `kTypeDroppedNamespace`), which makes the rank immutable and
+    // satisfies AF-P4 - emptying a namespace does not free it to move.
+    //
+    // The alternative the operator declined: a core *stated* at
+    // `CREATE NAMESPACE`. If that is ever wanted, this field is what it
+    // replaces and the other two are untouched.
     std::uint64_t rank = 0;
 
     // Whether anybody declared this namespace - `oid >= kUserOidStart`, the

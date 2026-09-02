@@ -300,15 +300,16 @@ written before AF mounts unchanged and means what it meant.
    which makes the rank immutable and is how AF-P4 survives someone
    emptying a namespace and refilling it.
 
-**Clause 3 is a correction to AF-P1 as first written, and it is stated as
-one.** AF-P1 said an unfixed namespace takes "the creating core". DDL runs
-on the system core and only there — `Catalog::CreateTable` passes
-`kSystemCore` — so that rule places *every* namespace on core 0 and the
-policy does nothing at all, which contradicts AF-4's own statement of what
-AF is ("rotation with the grouping supplied"). The rank supplies the
-missing half. Recorded here rather than fixed silently, because it is a
-change to a ratified proposal's mechanism and the operator may want the
-other reading.
+**Clause 3 is a correction to AF-P1 as first written, and the operator
+ratified it on 2026-09-02** (AF-P1a). AF-P1 said an unfixed namespace
+takes "the creating core". DDL runs on the system core and only there —
+`Catalog::CreateTable` passes `kSystemCore` — so that rule places *every*
+namespace on core 0 and the policy does nothing at all, which contradicts
+AF-4's own statement of what AF is ("rotation with the grouping
+supplied"). The rank supplies the missing half. The alternative the
+correction offered — a core the operator *states* at `CREATE NAMESPACE` —
+was **not** taken, and is kept in AF-P1a as what a re-design would start
+from.
 
 **What this does not claim.** It introduces no second unit of ownership:
 the owning unit stays the relation (NS1 as amended, AF-9). It does not make
