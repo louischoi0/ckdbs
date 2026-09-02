@@ -1004,7 +1004,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // so the two cannot disagree about which checkpoint that was.
     expeditor->recovery_ = ResumeAssertionsAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
-        /*core_id=*/0, expeditor->database_->superblock.wal_anchor(0).checkpoint_lsn,
+        /*owner_core=*/0, /*stream_core=*/0,
+        expeditor->database_->superblock.wal_anchor(0).checkpoint_lsn,
         expeditor->dispatcher_->assertions(), expeditor->recovery_, &*expeditor->logger_);
 
     // **The completion checkpoint** (RC08), which is what makes the next
@@ -1524,10 +1525,22 @@ Status Expeditor::Serve() {
             // publishes through core 0 (remote_checkpoint_anchor.hpp) - so
             // without this copy every peer would recover from the head of its
             // stream while core 0 recovered from its checkpoint.
-            core_config.anchor = database_->superblock.wal_anchor(core_id);
+            //
+            // **Slot 0 under one stream, this core's slot otherwise.** The
+            // fold puts every core's checkpoint into slot 0 and
+            // `SetWalAnchor` refuses any other (AL-R3/AL-R4), so a peer's
+            // own slot reads all zeros there - which means "no checkpoint
+            // ever", and would send the assertion resume scanning from the
+            // head of the whole log at every mount. The anchor a peer needs
+            // under one stream is the instance's.
+            core_config.anchor = database_->superblock.single_stream()
+                                     ? database_->superblock.wal_anchor(0)
+                                     : database_->superblock.wal_anchor(core_id);
             // Every core's, for R6-4: resolving a transaction this peer
             // prepared means scanning its coordinator's stream, and that
             // core's anchor is what says how far the scan must reach.
+            // Unread under one stream, where a peer recovers nothing and the
+            // resolution is an in-stream lookup (AL-R5).
             core_config.anchors = database_->superblock.wal_anchors();
             // And the ceiling this peer's recovery must not sit above (PW1).
             // Same copy, same thread, same reason as the anchor.

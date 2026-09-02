@@ -220,7 +220,8 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 
 MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
                                            storage::PageStore& store, wal::LogDevice& device,
-                                           std::uint32_t core_id, wal::Lsn from_lsn,
+                                           std::uint32_t owner_core, std::uint32_t stream_core,
+                                           wal::Lsn from_lsn,
                                            exec::AssertionEnforcer& enforcer,
                                            MountRecovery report, Logger* log) {
     auto defs = exec::ListAssertions(catalog, store);
@@ -243,7 +244,7 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
         if (!targets.ok()) return report;
         for (const exec::AssertionDef& target : targets.value()) {
             auto row = catalog.GetSysTableRow(target.target_oid);
-            if (!row.ok() || row.value().owner_core != core_id) {
+            if (!row.ok() || row.value().owner_core != owner_core) {
                 ++report.assertions_foreign;
                 continue;
             }
@@ -268,7 +269,7 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
         // where adopting a directory this core may not maintain costs a
         // constraint that reports enforcing and does not.
         auto row = catalog.GetSysTableRow(def.target_oid);
-        if (!row.ok() || row.value().owner_core != core_id) {
+        if (!row.ok() || row.value().owner_core != owner_core) {
             ++report.assertions_foreign;
             continue;
         }
@@ -296,7 +297,7 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
             if (log != nullptr) {
                 log->Error("recovery",
                            "assertion \"" + def.name + "\" on a relation core " +
-                               std::to_string(core_id) +
+                               std::to_string(owner_core) +
                                " owns has a Bound Cabin this core may not write (root page " +
                                std::to_string(live.value().chain.root()) +
                                "), so it cannot be enforced here and the relation's writes are "
@@ -321,7 +322,9 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
         targets.push_back(target);
     }
 
-    auto recovered = exec::RecoverAssertions(device, core_id, from_lsn, store, targets, log);
+    // The *stream's* core, not this core's: the scanner validates every
+    // segment header against it (the header says why the two differ).
+    auto recovered = exec::RecoverAssertions(device, stream_core, from_lsn, store, targets, log);
     if (!recovered.ok()) {
         // Reported, not fatal: a mount that refused here would refuse to open a
         // database whose *data* is intact over a constraint that can be rebuilt
@@ -364,7 +367,7 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
     }
 
     if (log != nullptr) {
-        log->Info("recovery", "assertions resumed on core " + std::to_string(core_id) + ": " +
+        log->Info("recovery", "assertions resumed on core " + std::to_string(owner_core) + ": " +
                                   std::to_string(report.assertions_enforcing) + " enforcing, " +
                                   std::to_string(report.assertions_foreign) +
                                   " on another core's relations, " +

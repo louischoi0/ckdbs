@@ -636,7 +636,7 @@ TEST_F(AssertionResumeTest, AFreshRegistryResumesEnforcingWithTheRecoveredAggreg
     AssertionEnforcer fresh;
     EXPECT_TRUE(fresh.empty());
     const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
-        boot_->catalog, *store_, *log_device_, /*core_id=*/0,
+        boot_->catalog, *store_, *log_device_, /*owner_core=*/0, /*stream_core=*/0,
         anchor.anchor().checkpoint_lsn, fresh, server::MountRecovery{}, /*log=*/nullptr);
 
     EXPECT_EQ(report.assertions_enforcing, 1u);
@@ -677,7 +677,8 @@ TEST_F(AssertionResumeTest, AnAssertionCreatedAfterTheLastCheckpointStillRecover
 
     AssertionEnforcer fresh;
     const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
-        boot_->catalog, *store_, *log_device_, /*core_id=*/0, /*from_lsn=*/0, fresh,
+        boot_->catalog, *store_, *log_device_, /*owner_core=*/0, /*stream_core=*/0,
+        /*from_lsn=*/0, fresh,
         server::MountRecovery{}, /*log=*/nullptr);
 
     EXPECT_EQ(report.assertions_enforcing, 1u);
@@ -722,7 +723,8 @@ TEST_F(AssertionResumeTest, WithNoBaseInRangeTheAssertionIsNotAdoptedAtAll) {
 
     AssertionEnforcer fresh;
     const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
-        boot_->catalog, *store_, *log_device_, /*core_id=*/0, after_create, fresh,
+        boot_->catalog, *store_, *log_device_, /*owner_core=*/0, /*stream_core=*/0, after_create,
+        fresh,
         server::MountRecovery{}, /*log=*/nullptr);
 
     EXPECT_EQ(report.assertions_enforcing, 0u);

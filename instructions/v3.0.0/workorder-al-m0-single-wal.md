@@ -513,17 +513,23 @@ a refused mount leaves the store as it found it.
   became `LoggingCoreOf` in the same edit — one name for "which core
   appended this record", rather than a second name arriving with the second
   record type that needs it.
-- **`ResumeAssertionsAfterRecovery` is the per-core log scan AL-R5 did not
-  remove.** It sits outside the topology branch, which is right — core 0
-  counts a peer's assertions as foreign and skips them, so only the peer
-  can resume its own — but it is handed `wal_anchor(core_id)`, which is
-  zero for every peer under one stream, so it rescans from the head of the
-  whole log at every mount; and after the cutover it calls `ScanLog` with
-  the peer's core id against a segment header that says 0, which refuses,
-  which marks every one of that peer's assertions unenforceable and stops
-  its writes. It needs the *folded* anchor and the *stream's* core id while
-  still filtering assertions by the peer's own — two core ids the one
-  parameter currently conflates. This lands with the peer-slot readers.
+- ~~`ResumeAssertionsAfterRecovery` is the per-core log scan AL-R5 did not
+  remove~~ — **closed 2026-09-02**. It was right to sit outside the
+  topology branch: core 0 counts a peer's assertions as foreign and skips
+  them, so only the peer can resume its own. What was wrong is that one
+  parameter answered two questions. **`owner_core`** is whose *relations*
+  these are, the filter that makes a core adopt its own and count everyone
+  else's as foreign; it is the calling core's under every topology.
+  **`stream_core`** is whose *log* is being scanned, which the scanner
+  validates every segment header against. Under per-core streams they are
+  one number, which is why they were one parameter; under one stream a
+  peer's assertions are the peer's and the log is stream 0's, so passing
+  the peer's id as both would have refused the scan on the segment header,
+  marked every one of that peer's assertions unenforceable, and stopped its
+  writes to every relation they cover. The peer also now receives **slot
+  0's anchor** rather than its own, which is all zeros under one stream and
+  would have sent the scan to the head of the whole log at every mount.
+
 - Smaller, all recorded: no cell yet sets `log_topology = kSingleStream` on
   a `CoreRuntime`, so the skip itself is unexercised; `recovery_.timings.timed`
   is false on a skipped peer, which hides a completion checkpoint that is

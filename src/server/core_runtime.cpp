@@ -438,7 +438,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // scanned from, so the two cannot disagree about which checkpoint is
     // the base.
     runtime->recovery_ = ResumeAssertionsAfterRecovery(
-        *runtime->catalog_, *runtime->store_, *runtime->log_device_, config.core_id,
+        *runtime->catalog_, *runtime->store_, *runtime->log_device_,
+        /*owner_core=*/config.core_id,
+        // **The stream's core, which is not this core under one stream.**
+        // The assertions are this core's to adopt - only their owner can
+        // enforce them - but the log they were recorded in is stream 0's,
+        // and the scanner validates every segment header against the id it
+        // is given (`mount_recovery.hpp` says what each answers).
+        /*stream_core=*/config.log_topology == kSingleStream ? 0 : config.core_id,
         config.anchor.checkpoint_lsn, runtime->dispatcher_->assertions(), runtime->recovery_,
         log);
 

@@ -288,9 +288,22 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 // Called after `RecoverCoreAtMount` and before the listener binds. `from_lsn` is
 // the anchor's `checkpoint_lsn`, which is what makes the scan AS6a's "from the
 // last checkpoint".
+//
+// **Two core ids, and they are not the same question** (AR0 M0, AL-R5).
+// `owner_core` is whose *relations* these are - the filter that makes a core
+// adopt its own assertions and count everyone else's as foreign - and it stays
+// the calling core's under every topology, because only the owner can enforce.
+// `stream_core` is whose *log* is being scanned, which the scanner validates
+// every segment header against. Under per-core streams they are one number.
+// Under one stream they are not: a peer's assertions are the peer's, and the
+// log they are recorded in is stream 0's. They were one parameter until AR0 M0,
+// and passing the peer's id as both would refuse the scan on the segment
+// header, mark every one of that peer's assertions unenforceable, and stop its
+// writes to every relation they cover.
 MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
                                            storage::PageStore& store, wal::LogDevice& device,
-                                           std::uint32_t core_id, wal::Lsn from_lsn,
+                                           std::uint32_t owner_core, std::uint32_t stream_core,
+                                           wal::Lsn from_lsn,
                                            exec::AssertionEnforcer& enforcer,
                                            MountRecovery report, Logger* log);
 
