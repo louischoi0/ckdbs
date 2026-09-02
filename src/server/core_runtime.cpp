@@ -110,16 +110,35 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->scheduler_.emplace(clock, *runtime->io_backend_);
     runtime->scheduler_->SetLogger(log);
 
-    // `wal-<core_id>-<segment_no>.log` in a shared directory - the naming
-    // predates multicore (file_log_device.hpp) and is why N streams need no
-    // per-core directory.
-    auto log_device = wal::FileLogDevice::Open(config.wal_dir, config.core_id);
-    if (!log_device.ok()) return log_device.status();
-    runtime->log_device_ = std::move(log_device.value());
+    // **One stream, or this core's own** (AR0 M0, AL-S1c). Attached, this
+    // core opens no device at all: it appends through core 0's stream under
+    // its latch and asks the writer for every sync, which is what takes
+    // `fdatasync` off this reactor (AL-2's case for the whole milestone).
+    // Unattached, it opens `wal-<core_id>-<segment_no>.log` in the shared
+    // directory - the naming predates multicore (file_log_device.hpp) and
+    // is why N streams need no per-core directory.
+    if (config.log_topology == kSingleStream) {
+        if (config.shared_stream == nullptr || config.shared_writer == nullptr) {
+            // A peer with no stream to attach to would silently open one of
+            // its own and write records nobody replays.
+            return Status::InvalidArgument(
+                "core " + std::to_string(config.core_id) +
+                ": this database has one WAL stream, but no stream and writer were handed to "
+                "this core to attach to");
+        }
+        auto wal = wal::WalManager::Attach(config.shared_stream, config.shared_writer, clock,
+                                           config.core_id);
+        if (!wal.ok()) return wal.status();
+        runtime->wal_ = std::move(wal.value());
+    } else {
+        auto log_device = wal::FileLogDevice::Open(config.wal_dir, config.core_id);
+        if (!log_device.ok()) return log_device.status();
+        runtime->log_device_ = std::move(log_device.value());
 
-    auto wal = wal::WalManager::Open(runtime->log_device_.get(), clock, config.core_id);
-    if (!wal.ok()) return wal.status();
-    runtime->wal_ = std::move(wal.value());
+        auto wal = wal::WalManager::Open(runtime->log_device_.get(), clock, config.core_id);
+        if (!wal.ok()) return wal.status();
+        runtime->wal_ = std::move(wal.value());
+    }
     runtime->wal_->SetLogger(log);
 
     // This core's own page store over the shared device. `first_new_page_id`

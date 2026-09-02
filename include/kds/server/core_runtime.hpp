@@ -242,6 +242,18 @@ public:
         // a log another core is already recovering. `superblock.hpp`'s
         // accessor names this trap; this field is the spring.
         std::uint32_t log_topology = kPerCoreStreams;
+
+        // **The instance's log, when there is one** (AR0 M0, AL-R1/AL-S1c).
+        // Both null under per-core streams, where this core opens its own
+        // device and manager as it always has. Both set under one stream,
+        // where core 0 owns them and this core attaches: it appends through
+        // the shared stream's latch and asks the writer for every sync,
+        // touching the device itself never.
+        //
+        // Borrowed and outliving every peer, the way `anchors` and the ring
+        // transport are.
+        wal::WalStream* shared_stream = nullptr;
+        wal::WalWriter* shared_writer = nullptr;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -497,6 +509,8 @@ private:
     // holds references into everything below it.
     std::unique_ptr<sched::IoBackend> io_backend_;
     std::optional<sched::Scheduler> scheduler_;
+    // Null under one stream: the device is core 0's and this core reaches
+    // it only through the borrowed stream.
     std::unique_ptr<wal::FileLogDevice> log_device_;
     std::unique_ptr<wal::WalManager> wal_;
 

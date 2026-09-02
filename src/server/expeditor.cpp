@@ -792,6 +792,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     wal::WalManagerConfig wal_config;
     wal_config.relaxed_flush_interval_ns = expeditor->config_.relaxed_flush_interval_ns;
+    // **Shared where the volume says its log is the instance's** (AR0 M0,
+    // AL-S1c): the stream arms its latch, and every peer appends through it
+    // rather than opening one of its own. Unshared otherwise, which is one
+    // branch and no atomic on the `cores = 1` path.
+    wal_config.shared_stream = expeditor->database_->superblock.single_stream();
     auto wal = wal::WalManager::Open(expeditor->log_device_.get(), expeditor->clock_,
                                      /*core_id=*/0, wal_config);
     if (!wal.ok()) return wal.status();
@@ -1550,6 +1555,14 @@ Status Expeditor::Serve() {
             // legal, silent and wrong (core_runtime.hpp). It decides
             // whether this core recovers a stream of its own at all.
             core_config.log_topology = database_->superblock.log_topology();
+            // The instance's log, where there is one. Core 0's manager owns
+            // both and outlives every peer, so these are borrowed rather
+            // than shared - and they are null under per-core streams, where
+            // this peer opens its own device (`core_runtime.hpp`).
+            if (database_->superblock.single_stream()) {
+                core_config.shared_stream = wal_->stream();
+                core_config.shared_writer = wal_->writer();
+            }
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

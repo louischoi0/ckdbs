@@ -1039,12 +1039,33 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         // cutover may not precede this stage.
         if (clean_stop) {
             reopened.value().reset();
+
+            // The instance's log, as `Expeditor::Open` builds it: one device
+            // at `wal-0-*`, a stream with its latch armed, and the writer
+            // every attached core asks for its syncs.
+            auto shared_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
+            ASSERT_TRUE(shared_device.ok()) << shared_device.status().message();
+            wal::WalManagerConfig shared_config;
+            shared_config.shared_stream = true;
+            auto owner = wal::WalManager::Open(shared_device.value().get(), clock_,
+                                               /*core_id=*/0, shared_config);
+            ASSERT_TRUE(owner.ok()) << owner.status().message();
+            owner.value()->StartWriter();
+
             CoreRuntime::Config as_one_stream = ConfigFor(1);
             as_one_stream.anchor = stop_anchor;
             as_one_stream.next_trx_id = core0_->superblock.next_trx_id();
             as_one_stream.log_topology = kSingleStream;
+            as_one_stream.shared_stream = owner.value()->stream();
+            as_one_stream.shared_writer = owner.value()->writer();
             auto single = CoreRuntime::Open(as_one_stream, *device_, clock_, nullptr);
             ASSERT_TRUE(single.ok()) << single.status().message();
+
+            // It opened no log of its own: the manager it holds is attached
+            // to core 0's, and its writes land in core 0's stream.
+            EXPECT_TRUE(single.value()->wal().attached())
+                << "the peer opened a second stream on a single-stream volume";
+            EXPECT_EQ(single.value()->wal().stream(), owner.value()->stream());
 
             const MountRecovery& skipped = single.value()->recovery();
             EXPECT_EQ(skipped.records, 0u)
@@ -1070,6 +1091,21 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
     }
 }
 
+
+// A peer that is told the volume has one stream, and handed nothing to
+// attach to, must refuse. Opening one of its own would write records into
+// a file no mount of this volume ever replays - the failure would surface
+// as lost rows after a crash, arbitrarily later.
+TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) {
+    CoreRuntime::Config config = ConfigFor(1);
+    config.log_topology = kSingleStream;  // and no shared_stream/shared_writer
+
+    auto opened = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_FALSE(opened.ok());
+    EXPECT_EQ(opened.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(opened.status().message().find("one WAL stream"), std::string::npos)
+        << opened.status().message();
+}
 
 TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) {
     // PW1b. `RequestRowIdLease` had no callers, so a peer's lease table was
