@@ -1,0 +1,64 @@
+==== g3-c4-at154df22 : 2026-09-02T04:33:56+00:00 ====
+AF-T5: 3 groups x 2 relations, cores=4, rows=2000, reps=5, arms interleaved
+(the docstring says why the DA2 cell itself cannot answer AF-T5)
+  rep 0 creating  wall=  1.105s   5429.6 join/s  p50=   397.5us  load=  9.72s  split=0/3 cores=1
+  rep 0 rotate    wall=  0.783s   7665.2 join/s  p50=   378.5us  load=  9.05s  split=3/3 cores=3
+  rep 0 namespace wall=  0.763s   7860.9 join/s  p50=   364.5us  load=  8.93s  split=0/3 cores=3
+  rep 1 creating  wall=  1.077s   5568.5 join/s  p50=   386.5us  load=  9.74s  split=0/3 cores=1
+  rep 1 rotate    wall=  0.797s   7532.5 join/s  p50=   389.0us  load=  8.98s  split=3/3 cores=3
+  rep 1 namespace wall=  0.783s   7665.6 join/s  p50=   373.2us  load=  8.89s  split=0/3 cores=3
+  rep 2 creating  wall=  1.168s   5138.9 join/s  p50=   409.5us  load= 10.29s  split=0/3 cores=1
+  rep 2 rotate    wall=  0.744s   8066.6 join/s  p50=   361.1us  load= 30.01s  split=3/3 cores=3
+  rep 2 namespace wall=  0.763s   7859.0 join/s  p50=   367.0us  load= 11.09s  split=0/3 cores=3
+  rep 3 creating  wall=  1.102s   5446.3 join/s  p50=   401.1us  load= 10.00s  split=0/3 cores=1
+  rep 3 rotate    wall=  0.774s   7749.9 join/s  p50=   374.1us  load=  8.63s  split=3/3 cores=3
+  rep 3 namespace wall=  0.749s   8009.3 join/s  p50=   358.1us  load=  8.53s  split=0/3 cores=3
+  rep 4 creating  wall=  1.081s   5552.8 join/s  p50=   371.5us  load=  9.89s  split=0/3 cores=1
+  rep 4 rotate    wall=  0.767s   7826.3 join/s  p50=   365.3us  load=  8.74s  split=3/3 cores=3
+  rep 4 namespace wall=  0.749s   8006.6 join/s  p50=   353.1us  load=  9.02s  split=0/3 cores=3
+
+arm         median join/s       min       max        p0       p25       p50       p90       p99      p100  split  cores  errors
+creating           5446.3    5138.9    5568.5     232.4     339.9     397.5     743.5     811.7   12654.7      0      1       0
+rotate             7749.9    7532.5    8066.6     280.8     361.5     374.1     425.7     514.0    1091.5      3      3       0
+namespace          7860.9    7665.6    8009.3     246.0     346.4     364.5     423.2     489.7    1371.6      0      3       0
+
+  rotate / creating = 1.423x
+  namespace / creating = 1.443x
+  namespace / rotate   = 1.014x
+
+wrote bench/v2.8.0/archive/af-t5-namespace-grouping/g3-c4-at154df22.json
+==== g3-c4-at154df22 done : 2026-09-02T04:37:36+00:00 ====
+==== g7-c4 : 2026-09-02T04:37:36+00:00 ====
+AF-T5: 7 groups x 2 relations, cores=4, rows=2000, reps=5, arms interleaved
+(the docstring says why the DA2 cell itself cannot answer AF-T5)
+  rep 0 creating  wall=  2.464s   5681.7 join/s  p50=  1058.8us  load= 10.53s  split=0/7 cores=1
+  rep 0 rotate    wall=  1.564s   8953.9 join/s  p50=   690.9us  load= 16.15s  split=7/7 cores=3
+  rep 0 namespace wall=  1.277s  10961.5 join/s  p50=   547.9us  load= 15.00s  split=0/7 cores=3
+  rep 1 creating  wall=  2.480s   5644.8 join/s  p50=  1058.4us  load= 11.16s  split=0/7 cores=1
+  rep 1 rotate    wall=  1.583s   8844.7 join/s  p50=   695.2us  load= 16.28s  split=7/7 cores=3
+  rep 1 namespace wall=  1.263s  11088.1 join/s  p50=   544.1us  load= 13.89s  split=0/7 cores=3
+  rep 2 creating  wall=  2.497s   5607.1 join/s  p50=  1073.6us  load= 10.86s  split=0/7 cores=1
+  rep 2 rotate    wall=  1.534s   9126.2 join/s  p50=   684.7us  load= 16.99s  split=7/7 cores=3
+  rep 2 namespace wall=  1.284s  10905.5 join/s  p50=   545.5us  load= 14.13s  split=0/7 cores=3
+  rep 3 creating  wall=  2.496s   5609.0 join/s  p50=  1056.1us  load= 20.00s  split=0/7 cores=1
+  rep 3 rotate    wall=  1.554s   9011.0 join/s  p50=   697.0us  load= 26.99s  split=7/7 cores=3
+  rep 3 namespace wall=  2.753s   5085.2 join/s  p50=  1110.8us  load= 19.32s  split=0/7 cores=3
+  rep 4 creating  wall=  4.340s   3226.2 join/s  p50=  1789.8us  load= 12.77s  split=0/7 cores=1
+  rep 4 rotate    wall=  1.593s   8786.2 join/s  p50=   701.5us  load= 18.98s  split=7/7 cores=3
+  rep 4 namespace wall=  1.254s  11161.0 join/s  p50=   543.3us  load= 13.57s  split=0/7 cores=3
+
+arm         median join/s       min       max        p0       p25       p50       p90       p99      p100  split  cores  errors
+creating           5609.0    3226.2    5681.7     293.9    1041.8    1058.8    2106.0    2188.7    3009.5      0      1       0
+rotate             8953.9    8786.2    9126.2     294.4     608.0     695.2    1034.6    1413.7    2330.6      7      3       0
+namespace         10961.5    5085.2   11161.0     257.9     505.2     545.5     728.5    1081.2   13194.3      0      3       0
+
+  rotate / creating = 1.596x
+  namespace / creating = 1.954x
+  namespace / rotate   = 1.224x
+
+wrote bench/v2.8.0/archive/af-t5-namespace-grouping/g7-c4.json
+==== g7-c4 done : 2026-09-02T04:42:50+00:00 ====
+==== g7-c8 : 2026-09-02T04:42:50+00:00 ====
+1-minute load is 5.82 on 8 core(s); wait for the box to go quiet, or pass --force
+==== g7-c8 done : 2026-09-02T04:42:51+00:00 ====
+G7 SWEEP COMPLETE 2026-09-02T04:42:51+00:00

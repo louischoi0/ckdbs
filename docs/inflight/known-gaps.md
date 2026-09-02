@@ -2780,15 +2780,42 @@ do, and one thing it does that nobody has decided:
   spreading, **this one ships on by default**. What partly covers it is
   `bench/af_namespace_grouping_probe.py`, which drives a real server and
   reads placement back out of the catalog; a benchmark is not a test.
-- **AF-T5's sweep stops at one group per writer core.** Every cell in
-  `bench/v2.8.0/results-af-t5-namespace-grouping-v2.7.0-99-g775e79d.md` has
-  at most one declared group per writer core, which is the side of
-  `bench/v2.1.0/results-shipping-pretasks` §6's step where rotation still
-  wins. The 7-group cells that would cross it were queued and not run, and
-  the g3-c8 tie (namespace 0.99x of rotation on throughput, 4.5x better on
-  p100) is a warning that the answer past the step is not obvious.
-  `bench/af_namespace_grouping_probe.py --groups 7` at 4 and 8 cores is the
-  owed cell.
+- **Namespace placement is measured, and what it buys depends on a number
+  nothing in the engine reports.** `bench/v2.8.0/results-af-t5-namespace-grouping-*`
+  §3a: against blind rotation the grouping is worth **1.22× at 2.33
+  declared groups per writer core** and **0.90× at 1.00** — it pays only
+  once cores are shared, and is at or slightly below parity whenever every
+  group can have a core of its own. Nothing in `SHOW META` or the catalog
+  says how many declared groups a core holds, so an operator cannot see
+  which side of that they are on. Two things left unmeasured: anything past
+  2.33 groups per writer core (one point, not a curve), and the row-count
+  axis at that sizing.
+- **`durability = group` forms no batch, so D2 pays D1's device cost.**
+  Found 2026-09-02 by `bench/peer_group_batch_probe.py`
+  (`bench/v2.8.0/results-af-t5-namespace-grouping-*` §3c) and confirmed in
+  source. `SHOW META`'s `wal_mean_group_batch` reads **1.000 on every core
+  at every concurrency measured** — one session or two, peer core or core 0
+  — and two concurrent sessions take twice as long for twice the work
+  rather than sharing a sync. The reason is that a D2 commit drains
+  **inline on the dispatching thread** right after staging its record
+  (`command_dispatcher.cpp`: *"the batch is whatever happened to be staged
+  already, which with no scheduler is this commit alone"*), and the reactor
+  does not yield between the append and the drain, so a second commit can
+  never join the first. `kds.conf.sample` describes D2 as *"one fsync
+  amortized over a batch of concurrent committers"*, which is the design and
+  not the behaviour. **Not a correctness problem** — the durability point is
+  unchanged and D2 is at worst as safe as D1 — and not measured beyond two
+  concurrent sessions on one core, which is where a batch should already
+  have formed.
+- **AF-T5's g7-c8 load gap is unexplained again** — `namespace` 29.7 s
+  against `rotate` 13.4 s on the load phase, 2.35× on a re-run, collapsing
+  to 1.02× under `relaxed`. It was explained as group-commit batching on
+  2026-09-02 and **that explanation was retracted the same day** by the
+  measurement above: there is no batch to lose. What the retraction rules
+  out is recorded at §3c along with an untested queueing hypothesis (a core
+  serving one synchronous session idles for a client round trip after every
+  reply; a core serving two does not). Confirming or killing that needs
+  per-core reactor utilisation during the phase.
 - **No `sim/` cell covers a namespace.** The generator creates relations
   in `public` and nothing declares one, so the crash/restart harness has
   never mounted a file with a user namespace in it. The rows involved are

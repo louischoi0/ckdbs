@@ -1,0 +1,41 @@
+{
+  "config": {
+    "server": "build-release/kds_server",
+    "workdir": "/home/cdkbs/mcbench/peerbatch0",
+    "cores": 4,
+    "rows": 400,
+    "port": 15930,
+    "max_connects": 256,
+    "placement": "creating",
+    "durability": "group",
+    "allow_core_zero": true,
+    "json": "bench/v2.8.0/archive/peer-group-batch/core0.json",
+    "force": true,
+    "retry_deadline": 10.0
+  },
+  "owners": {
+    "a": 0,
+    "b": 0
+  },
+  "connect_attempts": 25,
+  "reported_core": 0,
+  "reads_the_peer": true,
+  "serial": {
+    "wal_group_commits": 400,
+    "wal_group_batches": 400,
+    "wal_syncs": 400,
+    "mean_group_batch_over_phase": 1.0,
+    "wall_s": 0.4738321304321289,
+    "commits_per_s": 844.18082757538
+  },
+  "concurrent": {
+    "wal_group_commits": 800,
+    "wal_group_batches": 800,
+    "wal_syncs": 800,
+    "mean_group_batch_over_phase": 1.0,
+    "wall_s": 0.9258971214294434,
+    "commits_per_s": 864.0268788879292
+  },
+  "errors": [],
+  "error_count": 0
+}

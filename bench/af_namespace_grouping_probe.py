@@ -207,6 +207,25 @@ def group_worker(port, g, rows, barrier, out, lock, retry_deadline_s):
         out["join_s"].append(join_s)
 
 
+def max_sessions_per_core(owners, groups):
+    """The busiest owner core's session count.
+
+    One session drives one group, so a core's session count is how many
+    *distinct groups* have a relation on it - not how many relations it
+    holds. Under `namespace` a group's two relations sit on one core, so
+    seven groups over seven cores give every core exactly one session; under
+    `rotate` the same seven groups give every core two, because its two
+    relations come from two different groups. That difference is invisible
+    in `distinct_owner_cores`, and it is what `group` durability batches
+    over.
+    """
+    per_core = {}
+    for g in range(groups):
+        for rel in (f"head_{g}", f"line_{g}"):
+            per_core.setdefault(owners[rel], set()).add(g)
+    return max((len(v) for v in per_core.values()), default=0)
+
+
 def percentiles(latencies):
     if not latencies:
         return {}
@@ -220,7 +239,8 @@ def percentiles(latencies):
 
 def run_arm(args, arm, rep, port):
     tag = f"af-{arm}-{rep}"
-    proc = start_server(args.server, args.workdir, tag, args.cores, port, placement=arm)
+    proc = start_server(args.server, args.workdir, tag, args.cores, port, placement=arm,
+                        durability=args.durability)
     try:
         setup = Conn(port)
         try:
@@ -257,6 +277,12 @@ def run_arm(args, arm, rep, port):
             # in `wall`, and under two of the three arms it is a shipped
             # write.
             "load_max_s": max(out["load_s"]) if out["load_s"] else 0.0,
+            "durability": args.durability or "group (server default)",
+            # How many of this arm's sessions land on one owner core -
+            # the number the load time turns out to depend on. Under
+            # `group` a core with one session has no committer to batch
+            # with.
+            "max_sessions_per_owner_core": max_sessions_per_core(owners, args.groups),
             "owners": owners,
             "groups_split_across_cores": split,
             "distinct_owner_cores": len(set(owners.values())),
@@ -281,6 +307,15 @@ def main():
     ap.add_argument("--port", type=int, default=15480)
     ap.add_argument("--json", default="")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--durability", default="",
+                    help="durability class for every arm (`strict`/`group`/`relaxed`); "
+                         "empty leaves the server default, which is `group`. Why it "
+                         "exists: under `group` a commit's fsync is amortised over the "
+                         "concurrent committers *on that core*, and a batch of one is a "
+                         "batch (kds.conf.sample) - so a placement putting one session on "
+                         "a core pays a sync per commit where one putting two pays a sync "
+                         "per two. Running an arm under `relaxed` removes the per-commit "
+                         "sync and is how that is told apart from anything else.")
     ap.add_argument("--retry-deadline", type=float, default=DEFAULT_RETRY_DEADLINE_S)
     args = ap.parse_args()
 
@@ -304,7 +339,8 @@ def main():
                   f"{r['throughput_joins_s']:8.1f} join/s  "
                   f"p50={r.get('p50_us', 0):8.1f}us  load={r['load_max_s']:6.2f}s  "
                   f"split={r['groups_split_across_cores']}/{args.groups} "
-                  f"cores={r['distinct_owner_cores']}"
+                  f"cores={r['distinct_owner_cores']} "
+                  f"sess/core={r['max_sessions_per_owner_core']}"
                   + (f"  ERRORS={r['error_count']}" if r["error_count"] else ""))
             for e in r["errors"]:
                 print(f"      {e}")

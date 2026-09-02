@@ -927,5 +927,55 @@ TEST_F(InsertWalTest, ARolledBackDropWritesNoRecordAgainstACatalogPage) {
     }
 }
 
+// ---- The group-commit batch, in SHOW META -------------------------------
+//
+// AF-T5 §3b found that a placement's write cost turns on how many committing
+// sessions a core has, because D2 amortises one fsync over the concurrent
+// committers **on that core** and `kds.conf.sample`'s "a batch of one is a
+// batch" is the edge that bites. The engine already counted the batch and
+// `SHOW META` did not print it, so the number an operator needed to see the
+// cliff coming was unreachable. These cells pin the exposure.
+
+TEST_F(InsertWalTest, ShowMetaReportsTheGroupCommitBatch) {
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kGroup);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v int32)").response.substr(0, 7), "CREATED");
+
+    const auto field = [](const std::string& meta, const std::string& key) {
+        const std::size_t at = meta.find(" " + key + "=");
+        EXPECT_NE(at, std::string::npos) << key << " absent from: " << meta;
+        if (at == std::string::npos) return std::string();
+        const std::size_t from = at + key.size() + 2;
+        return meta.substr(from, meta.find(' ', from) - from);
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (7)").response.substr(0, 8), "INSERTED");
+    }
+
+    const std::string meta = d.Dispatch("SHOW META").response;
+    EXPECT_EQ(field(meta, "wal_group_commits"), "4");
+    EXPECT_EQ(field(meta, "wal_group_batches"), "4");
+    // **The cliff, and the whole reason this is printed.** One session
+    // commits serially, so every D2 commit is a batch of one and pays its
+    // own device sync - `strict` wearing `group`'s name. An operator reading
+    // `1.000` knows the batching is buying nothing on this core, which is
+    // what AF-T5 measured as 2.35x on a load phase.
+    EXPECT_EQ(field(meta, "wal_mean_group_batch"), "1.000");
+}
+
+TEST_F(InsertWalTest, TheBatchIsCountedPerClassAndRelaxedFormsNone) {
+    // The counters are D2's alone: `relaxed` registers no group commit, so
+    // its batch is 0.000 rather than 1.000 - "no batching happened" and
+    // "every batch held one" are different facts and must not print alike.
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kRelaxed);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v int32)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (7)").response.substr(0, 8), "INSERTED");
+
+    const std::string meta = d.Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find(" wal_group_commits=0 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" wal_group_batches=0 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" wal_mean_group_batch=0.000"), std::string::npos) << meta;
+}
+
 }  // namespace
 }  // namespace kds::server
