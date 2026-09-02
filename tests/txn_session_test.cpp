@@ -7,6 +7,7 @@
 
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/fk_intent.hpp"
 #include "kds/server/session.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
@@ -1350,6 +1351,122 @@ TEST_F(TxnSessionTest, RepeatableReadStillHoldsOneViewAcrossTheseRoutes) {
     ASSERT_EQ(Run(reader, "COMMIT").substr(0, 6), "COMMIT");
     EXPECT_EQ(Run(reader, "DESCRIBE after_rr").rfind("ERR", 0), std::string::npos);
     ASSERT_EQ(Run(holder, "ROLLBACK").substr(0, 8), "ROLLBACK");
+}
+
+// ---- AJ-T1: where the pending-delete set is cleared -----------------------
+//
+// The registration itself is AJ-T3's - the DELETE's fan-out has no sender
+// yet - so these cells register directly and test the half this task owns:
+// that a session's registrations end when its transaction does, whatever
+// ended it, and **without** the `has_intent_holders()` guard every decide
+// site carries. A reverse fan-out enrols nobody, so a clear that hung off
+// those sites would never fire (finding S4).
+
+class FkPendingDeleteClearTest : public TxnSessionTest {
+protected:
+    void SetUp() override {
+        TxnSessionTest::SetUp();
+        dispatcher_->SetFkPendingDeletes(&pending_);
+        ASSERT_EQ(Run(setup_, "CREATE TABLE parents (id int64, v int64)").substr(0, 7), "CREATED");
+    }
+
+    // What AJ-T3's fork will do, and what `SendForeignKeyProbes` already
+    // does for the forward direction: mint the identity, then register.
+    // Minting first is S1 - under id 0 every un-shipped session shares the
+    // key and one clear frees another session's rows.
+    void Register(Session& s, std::uint64_t pk) {
+        if (s.ship_id() == 0) s.set_ship_id(++next_ship_id_);
+        pending_.Add(/*parent_oid=*/900, pk, s.ship_id());
+    }
+
+    FkPendingDeleteTable pending_;
+    Session setup_;
+    std::uint64_t next_ship_id_ = 0;
+};
+
+TEST_F(FkPendingDeleteClearTest, AnAutocommitStatementClearsAtItsEnd) {
+    Session s;
+    Register(s, 1);
+    ASSERT_EQ(pending_.live_rows(), 1u);
+
+    // Any write of this session ends its autocommit transaction, and the
+    // clear rides `EndWrite` rather than a decide - which is the point:
+    // this session has no intent holders and never will.
+    ASSERT_EQ(Run(s, "INSERT INTO parents VALUES (5)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(pending_.live_rows(), 0u);
+    EXPECT_EQ(pending_.stats().released, 1u);
+}
+
+TEST_F(FkPendingDeleteClearTest, AStatementInsideATransactionDoesNotClear) {
+    // The guard that makes the autocommit clear safe. Inside an explicit
+    // transaction the registration must outlive the statement - the rows
+    // are not deleted until COMMIT, so releasing here would reopen the
+    // window for every statement that followed the DELETE.
+    Session s;
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    Register(s, 1);
+    ASSERT_EQ(Run(s, "INSERT INTO parents VALUES (6)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(pending_.live_rows(), 1u) << "a statement cleared a transaction's registration";
+
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_EQ(pending_.live_rows(), 0u);
+}
+
+TEST_F(FkPendingDeleteClearTest, RollbackClearsToo) {
+    // The arm that matters most: a rolled-back DELETE marked nothing, so
+    // its rows are referenceable again the moment this returns. Leaving
+    // them registered would refuse valid child INSERTs for the life of the
+    // process.
+    Session s;
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    Register(s, 1);
+    Register(s, 2);
+    ASSERT_EQ(pending_.live_rows(), 2u);
+
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    EXPECT_EQ(pending_.live_rows(), 0u);
+    EXPECT_EQ(pending_.stats().released, 2u);
+}
+
+TEST_F(FkPendingDeleteClearTest, AFailedStatementClearsAsAnAutocommitStatementDoes) {
+    // The refusal path. An autocommit statement that fails still ends its
+    // transaction, so its registrations end with it - `EndWrite` runs on
+    // both arms and the clear sits ahead of both.
+    Session s;
+    Register(s, 1);
+    EXPECT_EQ(Run(s, "INSERT INTO parents VALUES ('not an int')").rfind("ERR", 0), 0u);
+    EXPECT_EQ(pending_.live_rows(), 0u);
+}
+
+TEST_F(FkPendingDeleteClearTest, OneSessionsClearLeavesAnothersRegistrationStanding) {
+    // Two sessions, one dispatcher - this file's whole subject. A clear is
+    // keyed on the session, so ending one transaction must not reopen the
+    // window another is still holding.
+    Session a;
+    Session b;
+    Register(a, 1);
+    Register(b, 2);
+    ASSERT_EQ(pending_.live_rows(), 2u);
+
+    ASSERT_EQ(Run(a, "INSERT INTO parents VALUES (7)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(pending_.live_rows(), 1u);
+    EXPECT_TRUE(pending_.Pending(900, 2)) << "session a's clear freed session b's row";
+}
+
+TEST_F(FkPendingDeleteClearTest, ASessionThatNeverMintedAnIdentityClearsNothing) {
+    // S1 stated as a test. A session with `ship_id() == 0` registered
+    // nothing - the fork mints before it registers - so its clear must not
+    // walk into the entries some other session made under a key it never
+    // held.
+    Session registrar;
+    Register(registrar, 1);
+    ASSERT_EQ(pending_.live_rows(), 1u);
+
+    Session never_shipped;
+    ASSERT_EQ(never_shipped.ship_id(), 0u);
+    ASSERT_EQ(Run(never_shipped, "INSERT INTO parents VALUES (8)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(pending_.live_rows(), 1u);
+    EXPECT_EQ(pending_.stats().released, 0u);
 }
 
 }  // namespace

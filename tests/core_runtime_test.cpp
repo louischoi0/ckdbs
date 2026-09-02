@@ -4096,6 +4096,10 @@ struct ForeignIndexRig {
     // server that fills it and ahead of the dispatcher that reads it, which
     // is `core_runtime.hpp`'s own order and for its reason.
     FkIntentTable fk_intents;
+    // AJ-T1's mirror, in the rig for `fk_intents`' reason: the dispatcher
+    // reads it and the probe server consults it, so a rig without one would
+    // pass cells that production cannot.
+    FkPendingDeleteTable fk_pending_deletes;
     std::optional<FkProbeClient> fk_client;
     std::optional<FkProbeServer> fk_server;
     std::optional<CommandDispatcher> dispatcher;
@@ -4249,8 +4253,9 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.fk_client.emplace(/*core_id=*/0, *rig.core0, rig.ring(), rig.clock);
     ASSERT_TRUE(rig.fk_client->RegisterReplyReceiver().ok());
     rig.dispatcher->SetFkProbes(&*rig.fk_client);
-    rig.fk_server.emplace(*rig.catalog2, *core0_store_, /*core_id=*/0, rig.fk_intents, *rig.core0,
-                          rig.ring(), &*rig.txns, /*log=*/nullptr);
+    rig.fk_server.emplace(*rig.catalog2, *core0_store_, /*core_id=*/0, rig.fk_intents,
+                          rig.fk_pending_deletes, *rig.core0, rig.ring(), &*rig.txns,
+                          /*log=*/nullptr);
     ASSERT_TRUE(rig.core0
                     ->RegisterMessageHandler(
                         sched::RingMessageKind::kFkProbeRequest,
@@ -4262,6 +4267,7 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     // The parent side's own half (AH-T3): core 0's DELETE consults what a
     // foreign transaction is relying on before it may proceed.
     rig.dispatcher->SetFkIntents(&rig.fk_intents);
+    rig.dispatcher->SetFkPendingDeletes(&rig.fk_pending_deletes);
 
     // **Core 0's owner half of statement shipping** (CB4). Production wires
     // both halves on every core (`CoreRuntime::AttachTransport`); this rig

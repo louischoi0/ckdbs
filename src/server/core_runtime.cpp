@@ -722,12 +722,25 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // Registered here, beside 2PC, because the two are one mechanism: the
     // probe's intent is released by the transaction's **decide** and by
     // nothing else (AH-R5), which is the hook installed just below.
-    fk_probe_server_.emplace(*catalog_, *store_, config_.core_id, fk_intents_, *scheduler_,
-                             transport, txn_manager_.has_value() ? &*txn_manager_ : nullptr, log_);
+    fk_probe_server_.emplace(*catalog_, *store_, config_.core_id, fk_intents_, fk_pending_deletes_,
+                             *scheduler_, transport,
+                             txn_manager_.has_value() ? &*txn_manager_ : nullptr, log_);
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kFkProbeRequest,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
                 fk_probe_server_->OnRequest(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    // AJ-T2's direction. **Both halves on every core**, for the reason the
+    // forward's comment gives: a relation is a foreign parent on one
+    // statement and a foreign child on the next, so a core that answered
+    // only one direction would be a core some DELETE cannot complete.
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kFkReverseProbeRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                fk_probe_server_->OnReverseRequest(header, payload);
             });
         !s.ok()) {
         return s;
@@ -741,6 +754,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // The parent side's half (AH-T3): a local DELETE consults what foreign
     // transactions are relying on before it may proceed.
     dispatcher_->SetFkIntents(&fk_intents_);
+    // AJ-T1's other half: the DELETE registers here before it fans out, and
+    // clears at the end of its own transaction. The dispatcher owns both
+    // ends because both are this core's.
+    dispatcher_->SetFkPendingDeletes(&fk_pending_deletes_);
 
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has

@@ -59,6 +59,26 @@ hoist for DELETE.
 AJ-R1..AJ-R4 are `[DECISION]`; nothing is built until they are ruled on.
 AJ-R5..R7 are CLA proposals accepted by default.
 
+## `[RATIFIED 2026-09-02 — operator: "go ahead for aj"]`
+
+**AJ-R1..AJ-R4 are ruled, as CLA proposed each.** The operator's words
+were given after the four proposals and the AJ-T0 survey below were put in
+front of them, and CLA read them as taking all four:
+
+- **AJ-R1 — build it**, in v2.8.0. Its stated sequencing gate (after
+  AF-T2..T5) is satisfied at `bab3f3a`.
+- **AJ-R2 — (i)**: bare pk equality crosses; every other `WHERE` keeps
+  `fk_check.cpp:190`'s refusal, **with AF-T4's namespace clause kept**.
+  The collect pass stays AJ-T6 and unsequenced.
+- **AJ-R3 — (a)**: a coordinator-local pending-delete set consulted by
+  `FkProbeServer`. Not (b); the child's owner is enrolled in nothing.
+- **AJ-R4 — accepted as stated**, pinned by AJ-T4's three kills.
+
+Recorded this plainly because AJ-R3 is the one this order marked *not*
+accepted by default — a wrong ordering there is a silent dangling
+reference, not a refusal — so the reading is written down where it can be
+corrected in one line rather than inferred from the code later.
+
 ## Background
 
 ### Why the reverse is not the forward with the arrows turned
@@ -381,6 +401,30 @@ a `resumed_fk_reverse_verdicts_` member beside `resumed_fk_verdicts_`.
 This keeps AJ-R6's "a new pair rather than a direction flag" while adding
 no second park field and no second deadline path.
 
+**S4 — every clear site this order names is guarded by
+`has_intent_holders()`, which a reverse-only DELETE never satisfies.** All
+four — the autocommit decide (`:502`), `ReleaseIntentsWithoutWaiting`
+(`:4171`), and the explicit-transaction pair (`:9887`, `:9996`) — test it
+before doing anything. AJ-R5 says the reverse enrols nobody, so a DELETE
+whose only cross-core contact was a reverse round has **no holders**,
+enters none of those blocks, and never clears its entry: the row then
+answers busy to every forward probe for the life of the process. That is
+the exact defect AH already hit once from the other side (F1, whose site
+comment records "the intent granted a moment ago is never released and the
+parent row is un-deletable for the life of the process - behind a
+`retryable=1` code, which is a retry loop that cannot succeed").
+
+**The clear must therefore be unconditional on holders, and it goes
+somewhere else**: `EndWrite` (`:10199`) for the autocommit case, guarded on
+`!in_explicit_txn()`, and the explicit `COMMIT`/`ROLLBACK` paths for the
+other. Verified safe against the park: a parked probe ends its scope
+through `AbandonWriteForShipping` (`:5166`, `:9210`) and **not** through
+`EndWrite` — "parking is not failing… the statement runs whole on the
+resume" — so the fork's registration survives the park and the resume's
+`EndWrite` is what clears it. AJ-T1's task text ("cleared at the four
+decide sites and the shipped participant's own dispatch") is superseded by
+this paragraph and by S1's correction to the site count.
+
 **S3 — the reverse request's cap is derived, and the derivation differs.**
 `kFkProbeMaxParents` is 62, derived as
 `(kCoreRingPayloadBytes - kFkProbeRequestHeadBytes) / (2 * sizeof(uint64_t))`
@@ -400,5 +444,67 @@ fail-closed and names this order, as the forward's does.
 | AJ-R1..R4 | awaiting the operator's word |
 | AJ-T0 | **run 2026-09-02 on `worktree-workorder-aj` at `640afdf`, re-anchored at `bab3f3a`** after AF-T2..T5 merged. Run ahead of its gate because every answer is decision-independent. Table above; three findings (S1, S2, S3) amend AJ-T1, AJ-T2 and AJ-T3's premises. One premise in this order's own text is **corrected**: `shipped_statement_executor.cpp` does not fork on `has_intent_holders()` and has no clear site to add. AF's effect is checked and is two message obligations, not a design change |
 | Sequencing | **Satisfied at `bab3f3a`.** AF-T2..T5 are built, measured and ratified (AF-P1a), so this order's "after AF-T2..T5" gate is met; the AF merge is in this worktree |
-| AJ-T1..T5 | not started |
+| AJ-T1 | **Built and reviewed 2026-09-02.** `FkPendingDeleteTable` (`fk_intent.hpp`), the consult in `FkProbeServer::OnRequest` ahead of both the existence read and the grant, and the clear on all three runtimes. **The survey missed one owner**: `Expeditor` builds core 0's own `FkProbeServer` (`expeditor.cpp:1712`), so core 0 needed its own table — the compiler found it, not AJ-T0. `critics-developer` found **three correctness bugs, all real, all fixed**, recorded below as B1-B3. S-1 rejected with a reason; S-2, S-3 and the missing-cell finding applied. Suite green |
+| AJ-T2 | **In progress.** The wire kinds are landed (`kFkReverseProbeRequest = 43`, `kFkReverseProbeReply = 44`, in the enum, `IsKnownRingMessageKind` and `RingMessageKindName`). The payloads and c's handler are next. **S3's cap is corrected**: a reverse entry is `(child_oid, parent_pk, child_column_no)` and `child_column_no` is `uint16_t` — matching `SysFkeyRow` and `CheckNoChildReferences`' parameter, not the byte S3 assumed — so the entry is 18 bytes and the cap is `(1024 - 24) / 18 = 55`, not 58. Derived with its own `static_assert`, never restated as a number |
+| AJ-T3..T5 | not started |
+
+### AJ-T1's review, and the three defects it found
+
+`critics-developer`, run per the Session Workflow's step 2. All three are
+defects **this order's own text argued were impossible**, which is why they
+are recorded here and not only in the commit.
+
+- **B1 — the clear fired at the park, wiping the registration before the
+  fan-out was answered.** S4 claimed a parked statement does not reach
+  `EndWrite` because `AbandonWriteForShipping` ends its scope instead. That
+  is false: `AbandonWriteForShipping` returns early **only** for an
+  *unowned* scope (`scope.txn != nullptr && !scope.owned`), which
+  `BeginWrite` gives an explicit transaction. An **autocommit** scope has
+  `owned = true` and falls straight through to `EndWrite`. So an autocommit
+  `DELETE ... WHERE pk = k` would register, clear at the park, and spend the
+  whole five-second probe deadline with the row unprotected — the exact
+  Background race, restored. Fixed with a `statement_ends` parameter on
+  `EndWrite`, false from `AbandonWriteForShipping`; only the pending-delete
+  clear hangs off it, so the scope unwind is byte-identical on both arms.
+- **B2 — the self-exclusion compared session ids across two cores' id
+  spaces, which collide from session 1.** `PendingForAnotherThan` excluded
+  the asking session's id; registrants carry *this* core's `ship_id()` and a
+  probe carries the *asking* core's, and both are minted from a per-
+  dispatcher `next_ship_session_id_` initialised to 1. So core 0's session 1
+  and core 1's session 1 are equal, and the exclusion answered "not pending"
+  for a row that is pending — vouching for it and granting the intent, B1's
+  outcome by another route. The header's stated justification ("the two
+  spaces do not meet") was the reverse of the truth. Fixed: the predicate is
+  a bare `Pending(oid, pk)` lookup. Nothing is lost — a forward probe never
+  originates on the core that answers it, so no registrant can be the asker.
+- **B3 — two paths end a parked autocommit statement without reaching the
+  resume's `EndWrite`**: the probe-refusal arm in `DispatchAsync` (deadline,
+  owner refusal, verdict-count corruption), which `co_return`s without
+  re-running the statement, and the no-reactor refusal in
+  `DispatchAndStage`. Either would strand a registration for the life of the
+  process. Fixed with a clear at both, autocommit-only and idempotent — the
+  sites `ReleaseIntentsWithoutWaiting` already occupies for the mirror.
+
+**What the review cleared**, checked against the code rather than accepted:
+the consult's placement and its `continue` (positional verdicts are load-
+bearing — `DispatchAsync` treats a size mismatch as `Corruption`); the
+"clearing before the commit is safe" argument, verified through
+`CheckParentPresent` → `txn::CheckVisibility`, since the probe server mints
+`MintReadView(0)` and so cannot see the deleting transaction; the
+missed-site sweep (connection close, poisoned transactions, the shipped
+executor's three paths, the idle sweep — all covered); and `cores = 1`,
+where the pointer stays null, so H-AJ5 holds.
+
+**S-1 rejected, and the reason is the evidence for it.** The review proposed
+collapsing `FkPendingDeleteTable` and `FkIntentTable` into one template,
+arguing the copy is where B2 was introduced. But B2 was a **predicate** bug,
+and the predicate is exactly what a shared base does not carry —
+`HeldByAnotherThan` and `Pending` stay in the derived classes under any such
+refactor, so the template would not have prevented it. What is left is ~25
+lines of transparent map code weighed against a new shared concept in a
+header whose substance is its prose, and the prose is not shared. **S-2**
+(the dead whole-map accessor) and **S-3** (a `MakeRelationOffCore0` fixture
+helper) are applied, as is the review's missing cell: a registered pk that
+never existed answers `kBusy` rather than the terminal `kViolation`, which
+is a wire-visible consequence of the consult's ordering and now has a test.
 | AJ-T6 | not sequenced |
