@@ -2905,12 +2905,22 @@ parent owner, a reference intent left behind — and two things do not:
   and AK-S3 (`instructions/v2.8.0/workorder-ak.md`) widened it to every
   `WHERE` by collecting the pks in a read-only pass under the statement's
   snapshot first, and by letting one dispatch take as many probe rounds
-  as the set needs (bounded by `kFkProbeMaxRounds`, past which the answer
-  is retryable). What remains true: a DELETE of a parent with cross-owner
-  children costs one extra walk of the parent per round on the non-pk
-  shape, and `CREATE TABLE`'s `WARN` (AF-T4) still names the per-write
-  probe cost. What remains refused: a parent DELETE on the synchronous
-  path (no reactor to park on), retryably.
+  as the set needs — the rows are fixed by the first round and carried
+  through every re-entry, so the rounds are `ceil(rows × children /
+  kFkReverseProbeMaxEntries)` per owner and need no bound. What remains
+  true: a DELETE of a parent with cross-owner children costs one extra
+  walk of the parent on the non-pk shape (once, not per round), and
+  `CREATE TABLE`'s `WARN` (AF-T4) still names the per-write probe cost.
+  What remains refused, retryably: a parent DELETE on the synchronous
+  path (no reactor to park on), and a collected DELETE that meets a row
+  which became visible after its pass — `TxnConflict`, never a mark, and
+  the retry's pass sees the row. **Found by AK-S3's review and fixed the
+  same day**: `HandleDelete` had no `pending_fk_probe` arm from AJ-T3 on,
+  so a parked DELETE fell through to `EndWrite` as a success, committed
+  an empty transaction and released its pending-delete registration
+  before the owner had answered — the exact window AJ-R3(a) registers to
+  close, open for the whole park. `ARowAppearingWhileParkedIsRefusedRetryablyAndDeletedOnRetry`
+  pins the registration surviving the park.
 - ~~**The crossing is unreachable in a running instance, behind a gate AH
   did not name**~~ — found 2026-09-01 by AH-T5's probe, which could not
   reach its own crash point, and **closed the same day on operator

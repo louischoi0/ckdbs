@@ -487,15 +487,21 @@ rule, applied to the direction it did not reach):
    `CheckNoChildReferences` with its own `core_id`, its Cabin (F6) first
    — under its own current snapshot. The child's owner records nothing
    and is enrolled in nothing.
-4. **The resume** re-enters the statement with the answers held. The
-   per-row check answers a foreign child from the held verdict and never
-   falls through to a local walk; a collected pk with no answer — a row
-   that became visible after the pass — is refused retryably, not
-   marked. A resume whose collected set outgrows one message per owner,
-   or that finds a row the last pass did not, groups only the unanswered
-   pks and parks again: **one dispatch takes as many rounds as the set
-   needs**, bounded by `kFkProbeMaxRounds`, past which the statement is
-   refused retryably with its held answers dropped.
+4. **The resume** re-enters the statement with the answers held and
+   **the rows fixed** — a re-entry takes the pks its first round
+   collected rather than collecting again, so every round consumes one
+   known set. The per-row check answers a foreign child from the held
+   verdict and never falls through to a local walk; a collected pk with
+   no answer — a row that became visible after the pass — is refused
+   retryably (`TxnConflict`), not marked, and the retry's pass sees it.
+   A resume whose set outgrows one message per owner groups only the
+   unanswered pks and parks again: **one dispatch takes as many rounds
+   as the set needs**, `ceil(rows × children / kFkReverseProbeMaxEntries)`
+   per owner, and needs no bound because every round retires at least
+   one question from a finite set. The registration made at the fork
+   survives every park — a parked DELETE ends its scope without ending
+   the statement — which is what keeps a "no children" answered in round
+   one still true when the row is marked after round three.
 
 Verdicts map onto the reply as onto the local check: no visible child →
 clear; a committed visible child → `kFkViolation` (terminal); a row with

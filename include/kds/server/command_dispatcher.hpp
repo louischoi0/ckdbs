@@ -231,6 +231,17 @@ inline constexpr bool kShippedTypedAnswerBuilt = true;
 // which runs before any row work, and the write scope is abandoned exactly
 // as a shipped statement's is (`AbandonWriteForShipping`), so an explicit
 // transaction is neither poisoned nor committed by having parked.
+// AK-S3: the rows a parent DELETE deletes, as the reverse fan-out knows
+// them. `collected` says they came from a read-only pass over the relation
+// rather than from a `WHERE pk = k`, which is what decides what the walk
+// does with a row it meets that has no answer: a collected set can be
+// stale - a row visible now was not visible to the pass - and the walk
+// refuses that row retryably; a named pk with no answer is a caller bug.
+struct FkDeleteRows {
+    std::vector<std::uint64_t> pks;
+    bool collected = false;
+};
+
 struct PendingFkProbe {
     // One per foreign owner - AH-R2's round, and why these are vectors.
     // `request_ids[g]` addresses the reply for `groups[g]`, whose
@@ -258,16 +269,12 @@ struct PendingFkProbe {
     // leg being measured is the wait for the *slowest* owner and a stamp
     // taken before the sends would charge the sending loop to it.
     sched::MonoTimeNs sent_at_ns = 0;
+    // AK-S3: the rows a reverse round is about, fixed by the round that
+    // started the statement and carried through every re-entry, so a later
+    // round consumes a known set rather than re-deriving one under a new
+    // snapshot. Empty for a forward probe.
+    FkDeleteRows rows;
 };
-
-// AK-S3: how many probe rounds one dispatch may take before the statement
-// is refused retryably. A round carries at most `kFkReverseProbeMaxEntries`
-// questions per owner (`fk_probe_service.hpp`), so this bounds what one
-// DELETE can collect and ask about - sixty-four rounds of that is
-// thousands of rows per owner, past anything one OLTP statement names -
-// and it bounds a workload that keeps making rows visible between rounds,
-// which would otherwise never let the statement finish.
-inline constexpr std::uint32_t kFkProbeMaxRounds = 64;
 
 struct PendingShippedStatement {
     std::uint64_t request_id = 0;
@@ -1271,8 +1278,8 @@ private:
     // the window open is the pending-delete registration this core made
     // before calling here, which its own transaction's end clears.
     Status SendReverseForeignKeyProbes(const std::vector<exec::FkReverseProbeGroup>& groups,
-                                       Session& session, std::string_view line,
-                                       DispatchOutcome& out);
+                                       const FkDeleteRows& rows, Session& session,
+                                       std::string_view line, DispatchOutcome& out);
 
     Status SendForeignKeyProbes(const exec::FkParentVerdicts& held, Session& session,
                                  std::string_view line, DispatchOutcome& out);
@@ -1300,13 +1307,24 @@ private:
     // the second pass a plain local statement.
     // `collect` is the read-only pass that names the rows a non-pk WHERE
     // deletes (AK-S3), built by `DeleteInner` from the walk's own stage-1
-    // match; called only when the WHERE is not a bare pk equality and a
-    // child lives on another core, which is what keeps every other DELETE
-    // at one walk.
+    // match; called only when the WHERE is not a bare pk equality, a
+    // child lives on another core, and no earlier round already fixed the
+    // rows (`resumed_fk_rows_`) - which is what keeps every other DELETE
+    // at one walk. `rows` receives what the fan-out is about, for the
+    // pending record to carry.
     StatusOr<std::vector<exec::FkReverseProbeGroup>> HoistReverseForeignKeyChecks(
         const catalog::TableAccess& parent, const std::vector<parser::Condition>& where,
         Session& session, exec::FkParentVerdicts& held,
-        const std::function<StatusOr<std::vector<std::uint64_t>>()>& collect);
+        const std::function<StatusOr<std::vector<std::uint64_t>>()>& collect,
+        FkDeleteRows* rows);
+
+    // One probe round's replies, read into `forward` / `reverse` and every
+    // waiter closed. The status is the round's: OK, the first owner's own
+    // refusal, a retryable deadline (`*timed_out` set, so the caller does
+    // not time a leg nobody walked), or `Corruption` for a reply whose
+    // count does not match its question.
+    Status CollectProbeReplies(const PendingFkProbe& probe, exec::FkParentVerdicts& forward,
+                               exec::FkParentVerdicts& reverse, bool* timed_out);
 
     // `reverse_held` carries AJ-T3's answers for children this core does
     // **not** own: one verdict per (child relation, parent pk), resolved at
@@ -2106,8 +2124,12 @@ private:
     // a core, so there is no second value to confuse it with, and
     // threading it through `HandleInsert` -> `InsertInner` ->
     // `InsertParsed` -> `SortedFillInner` would put a parameter on four
-    // signatures for one path. Cleared at the top of every dispatch, so a
-    // statement that did not park sees an empty one.
+    // signatures for one path. **Set only around the synchronous resume**
+    // and cleared the moment it returns (AK-S3's rule, since a round loop
+    // now parks between rounds): a member filled across a `co_await` would
+    // be read as its own by whatever statement ran on this core meanwhile,
+    // so the answers accumulate in the coroutine's frame and land here for
+    // exactly one re-entry. A statement that did not park sees an empty one.
     exec::FkParentVerdicts resumed_fk_verdicts_;
 
     // AJ-T3's mirror, and it reuses `FkParentVerdicts` deliberately. What
@@ -2120,6 +2142,10 @@ private:
     // in `exec::FkReverseProbeGroup` - so nothing here has to pretend the
     // two directions ask the same question.
     exec::FkParentVerdicts resumed_fk_reverse_verdicts_;
+    // AK-S3: the rows the round that started a parent DELETE fixed, for the
+    // re-entry's hoist to consume instead of collecting again. Set and
+    // cleared with the two above, on the same rule.
+    std::optional<FkDeleteRows> resumed_fk_rows_;
     // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
     // stands (see SetIndexBuilds).
     IndexBuildClient* index_builds_ = nullptr;

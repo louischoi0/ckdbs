@@ -7301,11 +7301,15 @@ TEST_F(CoreRuntimeTest, ACollectedSetPastOneMessageTakesAnotherRound) {
     EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u);
 }
 
-TEST_F(CoreRuntimeTest, ARowAppearingWhileParkedIsCaughtByTheNextRound) {
-    // The collect pass ran under one snapshot; a row committed while the
-    // fan-out was out is not in it. The resume re-collects, finds the new
-    // row unanswered, asks about it in a second round, and deletes it too -
-    // never marking a row its children's owner was not asked about.
+TEST_F(CoreRuntimeTest, ARowAppearingWhileParkedIsRefusedRetryablyAndDeletedOnRetry) {
+    // The collect pass fixed the rows under one snapshot; a row committed
+    // while the fan-out was out is not among them and no owner was asked
+    // about it. The walk meets it with no answer and refuses retryably
+    // rather than marking it - never a row its children's owner was not
+    // asked about - and the retry's pass sees it. **And the registration
+    // survives the park** (the review's C1): before AK-S3's follow-up a
+    // parked DELETE fell through to `EndWrite` and released its rows before
+    // the owner had answered, which is the window AJ-R3(a) exists to close.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ak3_race");
     OpenCrossOwnerFkPair(rig, "rc");
@@ -7315,11 +7319,24 @@ TEST_F(CoreRuntimeTest, ARowAppearingWhileParkedIsCaughtByTheNextRound) {
     DispatchOutcome out;
     auto del = rig.Start("DELETE FROM rcp WHERE v = 5", out);
     ASSERT_NE(del->Poll(), sched::PollResult::kDone) << "the fan-out did not park";
+    EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 1u) << "the park released the registration";
     // Committed on core 0 while the DELETE is parked on the peer's answer.
     ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO rcp VALUES (2, 5)").response.rfind("ERR", 0),
               0u);
     ASSERT_TRUE(rig.Drive(*del)) << out.response;
-    EXPECT_EQ(out.response, "DELETED 2") << out.response;
+    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("retryable=1"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("became visible after"), std::string::npos) << out.response;
+    // Nothing half-deleted: the refusal took the statement back whole.
+    EXPECT_EQ(CountOccurrences(rig.dispatcher->Dispatch("SELECT id, v FROM rcp").response, ",5"),
+              2);
+    EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u);
+
+    DispatchOutcome again;
+    auto retry = rig.Start("DELETE FROM rcp WHERE v = 5", again);
+    ASSERT_TRUE(rig.Drive(*retry)) << again.response;
+    EXPECT_EQ(again.response, "DELETED 2") << again.response;
     EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u);
 }
 

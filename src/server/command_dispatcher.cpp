@@ -372,25 +372,25 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         out->pending_fk_probe.reset();
         Session& deciding = session != nullptr ? *session : autocommit_session_;
 
-        // Collect, close, and only then decide. A deadline is settled
-        // without having arrived, which is a refusal and not a verdict:
-        // no row may be written on the strength of an answer nobody gave.
-        Status probe_status = Status::OK();
-        // **The answers accumulate across rounds** (AK-S3) and are cleared
-        // once the statement is finished with them: a re-entry that finds a
-        // pk already answered groups nothing for it, so each round asks only
-        // what the last did not.
-        resumed_fk_verdicts_ = exec::FkParentVerdicts{};
-        resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
         // **Rounds** (AK-S3, `instructions/v2.8.0/workorder-ak.md`). One
         // dispatch used to allow one park and refuse a statement that
-        // resumed into a second. A DELETE whose collected pks outnumber
-        // what one reverse message carries, or that meets a row which
-        // became visible while it was parked, resumes into another round;
-        // the loop is bounded by `kFkProbeMaxRounds`, and reaching the
-        // bound is retryable - the held answers go with the statement and a
-        // retry starts afresh.
-        for (std::uint32_t round = 1;; ++round) {
+        // resumed into a second; a DELETE whose rows outnumber what one
+        // reverse message carries per owner resumes into another round
+        // instead. The rows are fixed by the round that started the
+        // statement (`PendingFkProbe::rows`, carried through every
+        // re-entry), each round answers what the earlier ones did not, and
+        // the loop ends when a resume has nothing left to ask - which is why
+        // it needs no bound: every round retires at least one question from
+        // a finite set.
+        //
+        // **The answers live in this frame across the park**, not on the
+        // dispatcher: a member filled before a `co_await` would be read as
+        // its own by whatever statement ran on this core meanwhile. They
+        // land on the members only around the synchronous resume.
+        exec::FkParentVerdicts held_forward;
+        exec::FkParentVerdicts held_reverse;
+        Status probe_status = Status::OK();
+        for (;;) {
             // **One park over every owner**, not one per owner: k sequential
             // parks would serialise on whichever owner the loop named first,
             // turning a fan-out into a fan-out-then-queue. `pending_remote`'s
@@ -402,113 +402,56 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                 return true;
             };
             co_await sched::WaitUntil{&settled};
-            // **Leg 1 ends the instant the park resolves**, before a verdict is
-            // read, so nothing this core does with the answers is charged to
-            // the owners that gave them. Whether it is *recorded* is decided
-            // after the collection below, for the reason stated there.
+            // **Leg 1 ends the instant the park resolves**, before a verdict
+            // is read, so nothing this core does with the answers is charged
+            // to the owners that gave them. Whether it is *recorded* is
+            // decided after the collection, for the reason stated there.
             const sched::MonoTimeNs probe_settled_ns = NowNs();
             bool probe_timed_out = false;
-            for (std::size_t g = 0; g < probe.request_ids.size(); ++g) {
-                const std::uint64_t id = probe.request_ids[g];
-                const FkProbeOutcome* reply = fk_probes_->Find(id);
-                // **How many answers this group asked for**, which is the one
-                // thing the two directions count differently: the forward's
-                // unit is a parent pk and the reverse's is a (child relation,
-                // pk) question. Read once so the size check and the fill below
-                // cannot drift apart.
-                const std::size_t asked = probe.reverse ? probe.reverse_groups[g].entries.size()
-                                                        : probe.groups[g].parents.size();
-                if (reply == nullptr || !reply->arrived) {
-                    probe_timed_out = true;
-                    if (probe_status.ok()) {
-                        probe_status = Status::TxnConflict(
-                            probe.reverse
-                                ? "a foreign key's child owner did not answer within the probe "
-                                  "deadline; retry (docs/spec/foreign-keys.md §3a)"
-                                : "a foreign key's parent owner did not answer within the probe "
-                                  "deadline; retry (docs/spec/foreign-keys.md §2a)");
-                    }
-                } else if (!reply->status.ok()) {
-                    if (probe_status.ok()) probe_status = reply->status;
-                } else if (reply->verdicts.size() != asked) {
-                    if (probe_status.ok()) {
-                        probe_status = Status::Corruption(
-                            "a foreign-key probe reply answered " +
-                            std::to_string(reply->verdicts.size()) + " of " + std::to_string(asked) +
-                            (probe.reverse ? " children" : " parents"));
-                    }
-                } else if (probe.reverse) {
-                    // **Keyed on the child relation**, which is what the
-                    // per-row check will ask for: one verdict per (child, pk)
-                    // question, so a parent with two foreign children gets two
-                    // entries and the DELETE needs both to pass.
-                    for (std::size_t i = 0; i < reply->verdicts.size(); ++i) {
-                        const exec::FkReverseProbeEntry& asked_about =
-                            probe.reverse_groups[g].entries[i];
-                        resumed_fk_reverse_verdicts_.Put(asked_about.child_oid, asked_about.parent_pk,
-                                                         reply->verdicts[i]);
-                    }
-                } else {
-                    for (std::size_t i = 0; i < reply->verdicts.size(); ++i) {
-                        resumed_fk_verdicts_.Put(probe.groups[g].parents[i].first,
-                                                 probe.groups[g].parents[i].second,
-                                                 reply->verdicts[i]);
-                    }
-                }
-                fk_probes_->Close(id);
-            }
-
+            probe_status =
+                CollectProbeReplies(probe, held_forward, held_reverse, &probe_timed_out);
             // **A deadline is not a round trip, and timing it as one would
-            // wreck the number.** A park resolves on the deadline as readily as
-            // on an answer, so a single unanswered owner would put
-            // `kFkProbeReplyDeadlineNs` - five seconds - into a leg whose whole
-            // population is tens of microseconds. The decide leg is already
-            // careful about exactly this ("timing a leg nobody walked would
-            // report a fast release where there was none"); this is that rule
-            // on the leg beside it. A refusal *reply* is still a round trip and
-            // is recorded: what is excluded is the round nobody completed.
+            // wreck the number.** A park resolves on the deadline as readily
+            // as on an answer, so a single unanswered owner would put
+            // `kFkProbeReplyDeadlineNs` - five seconds - into a leg whose
+            // whole population is tens of microseconds. The decide leg is
+            // already careful about exactly this ("timing a leg nobody
+            // walked would report a fast release where there was none");
+            // this is that rule on the leg beside it. A refusal *reply* is
+            // still a round trip and is recorded: what is excluded is the
+            // round nobody completed.
             if (!probe_timed_out) fk_rounds_.probe.Note(probe_settled_ns - probe.sent_at_ns);
             if (!probe_status.ok()) break;
 
-            // **The id the decide will name is this statement's own or none.**
-            // Cleared before each resume, because `last_txn_id` is a session
-            // field that outlives the statement that set it: a resume can fail
-            // *before* it opens a write scope (an affinity refusal, a spent
-            // lease, a compile error), in which case `EndWrite` never runs and
-            // the field still holds the id of the previous statement - one
-            // that committed. Naming it would key an ABORT decision record on
-            // a committed transaction, which is the answer an in-doubt
-            // participant would then be given. Zero names nothing, and an
-            // intent is released by `(coordinator core, session)` alone
-            // (`fk_intent.hpp`), so nothing this decide has to do needs the id.
+            // **The id the decide will name is this statement's own or
+            // none.** Cleared before each resume, because `last_txn_id` is a
+            // session field that outlives the statement that set it: a
+            // resume can fail *before* it opens a write scope (an affinity
+            // refusal, a spent lease, a compile error), in which case
+            // `EndWrite` never runs and the field still holds the id of the
+            // previous statement - one that committed. Naming it would key
+            // an ABORT decision record on a committed transaction, which is
+            // the answer an in-doubt participant would then be given. Zero
+            // names nothing, and an intent is released by `(coordinator
+            // core, session)` alone (`fk_intent.hpp`), so nothing this
+            // decide has to do needs the id.
             deciding.set_last_txn_id(0);
             // The resume. The extraction pass consults the resumed verdicts
-            // first, so this pass resolves everything answered so far from held
-            // state and groups only what is still unanswered - nothing, on the
-            // last round, which then runs as a plain local statement.
+            // first, so this pass resolves everything answered so far from
+            // held state and groups only what is still unanswered -
+            // nothing, on the last round, which then runs as a plain local
+            // statement.
+            resumed_fk_verdicts_ = held_forward;
+            resumed_fk_reverse_verdicts_ = held_reverse;
+            if (probe.reverse) resumed_fk_rows_ = probe.rows;
             *out = DispatchAndStage(probe.line, session);
+            resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+            resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
+            resumed_fk_rows_.reset();
             if (!out->pending_fk_probe.has_value()) break;
-            if (round >= kFkProbeMaxRounds) {
-                // The waiters are closed here rather than left, for the reason
-                // the old one-park refusal gave: unclosed, `out->response` is
-                // empty, which the decide below reads as commit for a statement
-                // that never ran.
-                for (const std::uint64_t id : out->pending_fk_probe->request_ids) {
-                    fk_probes_->Close(id);
-                }
-                out->pending_fk_probe.reset();
-                probe_status = Status::TxnConflict(
-                    "this statement needed more than " + std::to_string(kFkProbeMaxRounds) +
-                    " foreign-key probe rounds - rows kept becoming visible between rounds, or it "
-                    "names more rows than the rounds could ask about; retry, or delete in smaller "
-                    "statements (docs/spec/foreign-keys.md §3a)");
-                break;
-            }
             probe = std::move(*out->pending_fk_probe);
             out->pending_fk_probe.reset();
-        }  // rounds
-        resumed_fk_verdicts_ = exec::FkParentVerdicts{};
-        resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
+        }
 
         // **A refused probe still has intents to end.** One owner can pass
         // and grant while another times out, and the statement then fails
@@ -4332,9 +4275,66 @@ void CommandDispatcher::ClearPendingDeletes(Session& session) {
     fk_pending_deletes_->Release(session.ship_id());
 }
 
+Status CommandDispatcher::CollectProbeReplies(const PendingFkProbe& probe,
+                                              exec::FkParentVerdicts& forward,
+                                              exec::FkParentVerdicts& reverse, bool* timed_out) {
+    // Collect, close, and only then decide. A deadline is settled without
+    // having arrived, which is a refusal and not a verdict: no row may be
+    // written on the strength of an answer nobody gave.
+    Status probe_status = Status::OK();
+    *timed_out = false;
+    for (std::size_t g = 0; g < probe.request_ids.size(); ++g) {
+        const std::uint64_t id = probe.request_ids[g];
+        const FkProbeOutcome* reply = fk_probes_->Find(id);
+        // **How many answers this group asked for**, which is the one thing
+        // the two directions count differently: the forward's unit is a
+        // parent pk and the reverse's is a (child relation, pk) question.
+        // Read once so the size check and the fill below cannot drift apart.
+        const std::size_t asked = probe.reverse ? probe.reverse_groups[g].entries.size()
+                                                : probe.groups[g].parents.size();
+        if (reply == nullptr || !reply->arrived) {
+            *timed_out = true;
+            if (probe_status.ok()) {
+                probe_status = Status::TxnConflict(
+                    probe.reverse
+                        ? "a foreign key's child owner did not answer within the probe "
+                          "deadline; retry (docs/spec/foreign-keys.md §3a)"
+                        : "a foreign key's parent owner did not answer within the probe "
+                          "deadline; retry (docs/spec/foreign-keys.md §2a)");
+            }
+        } else if (!reply->status.ok()) {
+            if (probe_status.ok()) probe_status = reply->status;
+        } else if (reply->verdicts.size() != asked) {
+            if (probe_status.ok()) {
+                probe_status = Status::Corruption(
+                    "a foreign-key probe reply answered " +
+                    std::to_string(reply->verdicts.size()) + " of " + std::to_string(asked) +
+                    (probe.reverse ? " children" : " parents"));
+            }
+        } else if (probe.reverse) {
+            // **Keyed on the child relation**, which is what the per-row
+            // check will ask for: one verdict per (child, pk) question, so a
+            // parent with two foreign children gets two entries and the
+            // DELETE needs both to pass.
+            for (std::size_t i = 0; i < reply->verdicts.size(); ++i) {
+                const exec::FkReverseProbeEntry& asked_about = probe.reverse_groups[g].entries[i];
+                reverse.Put(asked_about.child_oid, asked_about.parent_pk, reply->verdicts[i]);
+            }
+        } else {
+            for (std::size_t i = 0; i < reply->verdicts.size(); ++i) {
+                forward.Put(probe.groups[g].parents[i].first, probe.groups[g].parents[i].second,
+                            reply->verdicts[i]);
+            }
+        }
+        fk_probes_->Close(id);
+    }
+    return probe_status;
+}
+
+
 Status CommandDispatcher::SendReverseForeignKeyProbes(
-    const std::vector<exec::FkReverseProbeGroup>& groups, Session& session, std::string_view line,
-    DispatchOutcome& out) {
+    const std::vector<exec::FkReverseProbeGroup>& groups, const FkDeleteRows& rows,
+    Session& session, std::string_view line, DispatchOutcome& out) {
     if (groups.empty()) return Status::OK();
     // No client (no reactor) or no text to resume with: the refusal is the
     // honest answer, and it is `SendForeignKeyProbes`' arm for its reason -
@@ -4386,6 +4386,7 @@ Status CommandDispatcher::SendReverseForeignKeyProbes(
     // rule and its reason: the leg is the wait for the slowest owner, and a
     // stamp taken before the sends would charge the sending loop to it.
     pending.sent_at_ns = NowNs();
+    pending.rows = rows;
     out.pending_fk_probe = std::move(pending);
     return Status::OK();
 }
@@ -4594,7 +4595,8 @@ StatusOr<std::vector<exec::FkReverseProbeGroup>>
 CommandDispatcher::HoistReverseForeignKeyChecks(
     const catalog::TableAccess& parent, const std::vector<parser::Condition>& where,
     Session& session, exec::FkParentVerdicts& held,
-    const std::function<StatusOr<std::vector<std::uint64_t>>()>& collect) {
+    const std::function<StatusOr<std::vector<std::uint64_t>>()>& collect,
+    FkDeleteRows* rows) {
     std::vector<exec::FkReverseProbeGroup> groups;
 
     // Which children are not this core's. Resolved before any row work, in
@@ -4615,20 +4617,28 @@ CommandDispatcher::HoistReverseForeignKeyChecks(
     // nothing can park - so the pks are **collected** first, by a
     // read-only pass under the statement's own snapshot that applies the
     // walk's stage-1 match and marks nothing, and the fan-out asks about
-    // those. A row that becomes visible after the pass reaches the walk
-    // with no answer, and `CheckNoChildrenBeforeDelete` answers that
-    // retryably for a collected set rather than falling through; a round
-    // that collects it asks (`DispatchAsync`'s rounds). Until AK-S3 this
-    // shape was refused, with AF-T4's namespace clause as the remedy.
-    std::vector<std::uint64_t> pks;
-    if (std::optional<std::uint64_t> pk = PkEqualityTarget(parent, where); pk.has_value()) {
-        pks.push_back(*pk);
+    // those. **Fixed by the round that started the statement**: a re-entry
+    // takes the rows its first round fixed (`resumed_fk_rows_`) rather than
+    // collecting again under a newer snapshot, so every round consumes one
+    // known set and the loop ends. A row that became visible after the
+    // pass reaches the walk with no answer, and `CheckNoChildrenBeforeDelete`
+    // answers that retryably for a collected set rather than falling
+    // through - the retry's pass sees it. Until AK-S3 this shape was
+    // refused, with AF-T4's namespace clause as the remedy.
+    if (resumed_fk_rows_.has_value()) {
+        *rows = *resumed_fk_rows_;
+    } else if (std::optional<std::uint64_t> pk = PkEqualityTarget(parent, where);
+               pk.has_value()) {
+        rows->pks.assign(1, *pk);
+        rows->collected = false;
     } else {
         auto collected = collect();
         if (!collected.ok()) return collected.status();
-        pks = std::move(collected.value());
-        held.set_collected();
+        rows->pks = std::move(collected.value());
+        rows->collected = true;
     }
+    if (rows->collected) held.set_collected();
+    const std::vector<std::uint64_t>& pks = rows->pks;
 
     // **The earlier rounds' answers come first** (`ResolveForeignKeyParents`'
     // rule and its reason): taking them here is what makes a later round
@@ -10709,6 +10719,24 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
     DispatchOutcome out = DeleteInner(line, scope, snapshot.value().snap);
 
+    // Parked on the reverse fan-out: `HandleUpdate`'s arm, for its reason -
+    // the scope closes without committing and, crucially, without ending
+    // the statement, because `EndWrite(statement_ends = true)` releases the
+    // pending-delete registration the fork just made, and a registration
+    // released at the park reopens AJ-R3(a)'s window for the whole wait.
+    // **Missing from AJ-T3 to AK-S3's review** (2026-09-02): a parked
+    // DELETE fell through to `EndWrite` as a success, committed an empty
+    // transaction per round, and un-registered its rows before the owner
+    // had answered.
+    if (out.pending_fk_probe.has_value()) {
+        if (Status s = AbandonWriteForShipping(session, scope);
+            !s.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("fk", "the local scope of a parked foreign-key probe did not end "
+                             "cleanly: " + s.message());
+        }
+        return out;
+    }
+
     // Shipped: HandleInsert's branch, for its reason.
     if (out.pending_shipped.has_value()) {
         if (Status s = AbandonWriteForShipping(session, scope); !s.ok() && logging(LogLevel::kWarn)) {
@@ -10872,12 +10900,13 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // A child on another core is asked about *now*, once per owner,
         // never per row - and the registration that keeps the answer true
         // is made before the first question leaves.
+        FkDeleteRows rows;
         auto groups = HoistReverseForeignKeyChecks(ta, stmt.where, *scope.session, reverse_held,
-                                                   collect);
+                                                   collect, &rows);
         if (!groups.ok()) return {ErrorReply(groups.status()), false, 0, groups.status()};
         if (!groups.value().empty()) {
             DispatchOutcome out_probe;
-            if (Status s = SendReverseForeignKeyProbes(groups.value(), *scope.session, line,
+            if (Status s = SendReverseForeignKeyProbes(groups.value(), rows, *scope.session, line,
                                                        out_probe);
                 !s.ok()) {
                 return {ErrorReply(s), false, 0, s};

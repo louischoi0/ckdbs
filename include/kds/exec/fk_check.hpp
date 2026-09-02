@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <vector>
 #include <utility>
 
@@ -120,10 +121,8 @@ public:
     // check it themselves, which would put a descent back inside the write
     // scope and make the crossing unreachable again.
     const FkVerdict* Find(catalog::Oid parent_rel, std::uint64_t parent_pk) const noexcept {
-        for (const Entry& e : entries_) {
-            if (e.parent_rel == parent_rel && e.parent_pk == parent_pk) return &e.verdict;
-        }
-        return nullptr;
+        auto at = entries_.find(Key{parent_rel, parent_pk});
+        return at == entries_.end() ? nullptr : &at->second;
     }
 
     // Records one resolution. Idempotent on a repeat of the same key - the
@@ -131,9 +130,7 @@ public:
     // statement naming one parent from twenty rows resolves it once.
     // Returns whether the key was new, so a caller can count descents.
     bool Put(catalog::Oid parent_rel, std::uint64_t parent_pk, FkVerdict verdict) {
-        if (Find(parent_rel, parent_pk) != nullptr) return false;
-        entries_.push_back(Entry{parent_rel, parent_pk, verdict});
-        return true;
+        return entries_.emplace(Key{parent_rel, parent_pk}, verdict).second;
     }
 
     std::size_t size() const noexcept { return entries_.size(); }
@@ -182,18 +179,14 @@ public:
 private:
     std::vector<ForeignGroup> foreign_;
 
-    // A vector with a linear scan, for `SysObjectRegistry`'s reason: the
-    // set is one entry per distinct parent pk a *single statement* names,
-    // which is small - and a map would cost an allocation per entry to save
-    // comparisons that are not being made. If a statement ever names
-    // thousands of distinct parents this is the line to revisit, and
-    // AH-T6's counters are what would say so.
-    struct Entry {
-        catalog::Oid parent_rel;
-        std::uint64_t parent_pk;
-        FkVerdict verdict;
-    };
-    std::vector<Entry> entries_;
+    // A map, since AK-S3 (2026-09-02). This was a vector with a linear scan
+    // while the set was one entry per distinct parent pk a single statement
+    // *names* - a handful. The reverse direction now keys it per collected
+    // row, thousands for one DELETE, and a linear `Find` under a `Put` that
+    // re-scanned made the hoist quadratic in the set inside a reactor's
+    // synchronous span (AK-S3's review, C4).
+    using Key = std::pair<catalog::Oid, std::uint64_t>;
+    std::map<Key, FkVerdict> entries_;
     bool collected_ = false;
 };
 
