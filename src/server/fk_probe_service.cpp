@@ -219,6 +219,10 @@ Status FkProbeClient::Request(std::uint32_t owner_core, std::uint64_t request_id
     outcome.verdicts.clear();
     outcome.deadline_ns = clock_.Now() + kFkProbeReplyDeadlineNs;
 
+    // Counted where the round actually leaves, not on entry: a request
+    // past the cap opens no waiter and sends nothing, and counting it would
+    // report a crossing that never happened.
+    ++requests_;
     sched::SubmitSendPod(scheduler_, transport_, core_id_, owner_core,
                          /*session_core=*/core_id_, request_id,
                          sched::RingMessageKind::kFkProbeRequest, request);

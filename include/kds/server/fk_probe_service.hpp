@@ -210,6 +210,13 @@ public:
 
     std::size_t waiting() const noexcept { return waiting_.size(); }
 
+    // **Rounds this core sent**, one per distinct foreign owner per
+    // statement (AH-R2). Counted rather than inferred: a measurement that
+    // reads a latency and *assumes* a probe crossed cannot tell a crossing
+    // from a colocated statement that never left, which is the whole
+    // subject of AI-T3. XD0's rule, on the leg AI added.
+    std::uint64_t requests() const noexcept { return requests_; }
+
 private:
     std::uint32_t core_id_;
     sched::Scheduler& scheduler_;
@@ -217,6 +224,7 @@ private:
     const sched::Clock& clock_;
     Logger* log_;
     std::map<std::uint64_t, FkProbeOutcome> waiting_;
+    std::uint64_t requests_ = 0;
 };
 
 }  // namespace kds::server

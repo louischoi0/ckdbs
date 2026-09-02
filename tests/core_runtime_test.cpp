@@ -6720,6 +6720,13 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
                                                                                             0),
               0u);
 
+    // **Absent rather than zeroed**, before anything crosses: an instance
+    // that has never probed carries no foreign-key block at all, so the
+    // five counters below are a statement that something happened rather
+    // than a row of zeroes on every `SHOW META` ever printed.
+    EXPECT_EQ(rig.peer->dispatcher().Dispatch("SHOW META").response.find("fk_probes_sent="),
+              std::string::npos);
+
     DispatchOutcome out;
     auto statement = rig.StartOnPeer("INSERT INTO aichild VALUES (7)", out);
 
@@ -6764,6 +6771,17 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
     const std::string del =
         rig.dispatcher->Dispatch("DELETE FROM aiparent WHERE id = 7").response;
     EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
+
+    // **Counted, not inferred** (AI-T3): the crossing is a fact on both
+    // cores' `SHOW META`, which is what lets a measurement tell a crossing
+    // from a colocated statement that never left. One round for one
+    // statement (AH-R2), one intent granted and the same one released.
+    const std::string peer_meta = rig.peer->dispatcher().Dispatch("SHOW META").response;
+    EXPECT_NE(peer_meta.find("fk_probes_sent=1"), std::string::npos) << peer_meta;
+    const std::string core0_meta = rig.dispatcher->Dispatch("SHOW META").response;
+    EXPECT_NE(core0_meta.find("fk_intents_granted=1"), std::string::npos) << core0_meta;
+    EXPECT_NE(core0_meta.find("fk_intents_released=1"), std::string::npos) << core0_meta;
+    EXPECT_NE(core0_meta.find("fk_intents_live=0"), std::string::npos) << core0_meta;
 }
 
 TEST_F(CoreRuntimeTest, ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsTheIntent) {

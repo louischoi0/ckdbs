@@ -1768,6 +1768,39 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " txn_in_doubt_unresolved=" << shipped_statements_->in_doubt_resolved_unknown();
         }
     }
+    // **The foreign key across owners** (AI-T3, `foreign-keys.md` §2a/§2b).
+    // Two halves of one mechanism on one line, because a core is both: it
+    // *sends* probe rounds for children it owns whose parents live
+    // elsewhere, and it *grants* intents for parents it owns that another
+    // core's child relies on.
+    //
+    // Counted rather than inferred, XD0's rule on the leg AI added: a
+    // latency that assumed a probe crossed could not tell a crossing from a
+    // colocated statement that never left the core, and telling those two
+    // apart is the whole subject of the measurement.
+    //
+    // `fk_probes_sent` is rounds, not parents - one per distinct foreign
+    // owner per statement (AH-R2), so a thousand-row INSERT against one
+    // parent adds one. `fk_intents_granted` minus `fk_intents_released` is
+    // not `fk_intents_live`: a grant is idempotent and counted every time,
+    // where the live figure counts distinct *rows*. A `fk_intents_live`
+    // that does not fall back to 0 when an instance goes idle is the shape
+    // of a leaked intent, which is what work order AI's F1 was.
+    //
+    // Printed only where something happened, the "absent rather than
+    // zeroed" rule this command follows: a single-owner instance and every
+    // relation with no foreign key would otherwise carry five zeroes.
+    {
+        const std::uint64_t probes_sent = fk_probes_ != nullptr ? fk_probes_->requests() : 0;
+        const FkIntentTable::Stats intents =
+            fk_intents_ != nullptr ? fk_intents_->stats() : FkIntentTable::Stats{};
+        const std::size_t live = fk_intents_ != nullptr ? fk_intents_->live_rows() : 0;
+        if (probes_sent != 0 || intents.recorded != 0 || intents.refusals != 0) {
+            os << " fk_probes_sent=" << probes_sent << " fk_intents_granted=" << intents.recorded
+               << " fk_intents_released=" << intents.released << " fk_intents_live=" << live
+               << " fk_intent_refusals=" << intents.refusals;
+        }
+    }
     if (txn_2pc_ != nullptr &&
         (txn_2pc_->decisions_held() != 0 || txn_2pc_->resolutions_answered() != 0 ||
          txn_2pc_->resolutions_unknown() != 0 || txn_2pc_->resolve_refusals() != 0 ||
