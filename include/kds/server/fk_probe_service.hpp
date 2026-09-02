@@ -285,15 +285,9 @@ private:
     // Cabin on the child's fk column is an authoritative "no children",
     // which turns a stoppable walk into a lookup.
     //
-    // **Null on every core but 0 as the engine ships**, and that is a
-    // deliberate configuration rather than an oversight here:
-    // `CoreRuntime` passes `/*cabins=*/nullptr` to a peer's dispatcher,
-    // reasoning that a peer "returns identical rows without them; what it
-    // loses is speed". The consequence for this handler is worth stating
-    // where it bites - a reverse probe answered by a **peer** is a walk,
-    // and only one answered by core 0 can be a Cabin lookup. H-AJ4's
-    // Cabin-versus-walk arm is therefore measurable in one placement and
-    // not the other, which AJ-T5 must arrange rather than assume.
+    // This core's own store, on every core since AK-S2 (`core_runtime.hpp`
+    // rule 3); before it a peer's reverse answer was always a walk. Null
+    // under `cabins = off`, everywhere alike.
     stats::CabinStore* cabins_;
     std::uint64_t probes_ = 0;
     std::uint64_t reverse_probes_ = 0;

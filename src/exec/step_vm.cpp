@@ -724,11 +724,12 @@ private:
     // maximal run of its core's ranges, and a set covering *all* of them
     // would hand that stage rows another stage is also sending.
     //
-    // Today no split relation reaches either arm - `HandleSelect` routes
-    // it to the fan-in and every stage is built with no Cabin store at all
-    // - so this predicate declines nothing that would otherwise have been
-    // wrong. It is built for the day a stage has one, when it is the
-    // difference between an answer and a silent subset.
+    // **Live since AK-S2 (2026-09-02)**: every stage and every core holds
+    // a Cabin store, so this predicate is what stands between an answer
+    // and a silent subset on a relation not wholly this core's - the one
+    // rule `cabin.md` §11 and `range_alloc.cpp` cite for a store's safety
+    // under a split. (Before AK-S2 no stage had a store and it declined
+    // nothing.)
     // The slice step `index` walks: RD7's stage assignment on the chain's
     // own first step, the whole space for every step below it. **One
     // spelling**, because the walk asks it too (`WalkHeadsFor`, below) and

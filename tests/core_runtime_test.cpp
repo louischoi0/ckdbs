@@ -4102,6 +4102,10 @@ struct ForeignIndexRig {
     FkPendingDeleteTable fk_pending_deletes;
     std::optional<FkProbeClient> fk_client;
     std::optional<FkProbeServer> fk_server;
+    // Core 0's Cabin store, so the rig's core 0 is built the way
+    // `Expeditor` builds it (AK-S2's cells read `SHOW CABINS` from it).
+    // Declared ahead of the dispatcher that borrows it.
+    std::optional<stats::CabinStore> cabins0;
     std::optional<CommandDispatcher> dispatcher;
     // **Core 0's owner half of statement shipping** (SS1's wiring rule:
     // every core answers requests and every core receives replies). The
@@ -4215,10 +4219,11 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     rig.peer->trx_id_lease().Grant(block.value().first, block.value().count);
     rig.undo.emplace(*core0_store_, /*wal=*/nullptr);
     rig.txns.emplace(*rig.ids, *rig.undo, *core0_store_, /*wal=*/nullptr);
+    rig.cabins0.emplace();
     rig.dispatcher.emplace(core0_->superblock, *rig.catalog2, *core0_store_, /*log=*/nullptr,
                            &rig.clock, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
                            exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
-                           /*access_statistics=*/false, /*cabins=*/nullptr, &*rig.txns,
+                           /*access_statistics=*/false, &*rig.cabins0, &*rig.txns,
                            txn::IsolationLevel::kReadCommitted, /*core_id=*/0);
     rig.client.emplace(*rig.core0, rig.ring(), rig.clock);
     ASSERT_TRUE(rig.client->RegisterReplyReceiver().ok());
@@ -4370,7 +4375,13 @@ void CoreRuntimeTest::FundPeerForRelation(ForeignIndexRig& rig, catalog::Oid oid
     ASSERT_TRUE(row.ok()) << row.status().message();
     ASSERT_EQ(row.value().owner_core, 1u) << "only a peer-owned relation needs funding here";
     rig.peer->GrantRelationFault(RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
-    const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
+    // The var-heap head too, where the schema has one (a `varchar` column):
+    // the rights probe asks for every page the relation's first write may
+    // touch, and a relation with no spill has `kInvalidPageId` there.
+    std::vector<PageId> pages = {row.value().desc_page_id, row.value().anchor_page_id};
+    if (row.value().varheap_page_id != kInvalidPageId) {
+        pages.push_back(row.value().varheap_page_id);
+    }
     rig.peer->GrantRelationWrite(pages);
     ASSERT_TRUE(rig.peer->store().MayWrite(row.value().desc_page_id));
     auto first = rig.catalog2->AllocateRowIdRange(oid, 16);
@@ -6181,14 +6192,18 @@ TEST_F(CoreRuntimeTest, AShippedStatementDoesNotShipOnward) {
 
 // How many rows of `SELECT *` carry `needle`. The row count is what A1
 // asks for: a status can be right while the relation holds two rows.
-static int RowsWith(CoreRuntime& owner, const std::string& table, const std::string& needle) {
-    const std::string rows = owner.dispatcher().Dispatch("SELECT * FROM " + table).response;
+static int CountOccurrences(const std::string& haystack, const std::string& needle) {
     int found = 0;
-    for (std::size_t at = rows.find(needle); at != std::string::npos;
-         at = rows.find(needle, at + 1)) {
+    for (std::size_t at = haystack.find(needle); at != std::string::npos;
+         at = haystack.find(needle, at + 1)) {
         ++found;
     }
     return found;
+}
+
+static int RowsWith(CoreRuntime& owner, const std::string& table, const std::string& needle) {
+    return CountOccurrences(owner.dispatcher().Dispatch("SELECT * FROM " + table).response,
+                            needle);
 }
 
 TEST_F(CoreRuntimeTest, TheSameShippedIdentityArrivingTwiceRunsOnceAndAnswersFromTheRecord) {
@@ -6632,18 +6647,18 @@ TEST_F(CoreRuntimeTest, AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetri
 // it *returns* - so everything above it has already run, and everything
 // below it is what the owner runs instead, through its own ordinary
 // dispatcher. The gates that could therefore be lost are the owner's, and
-// the peer-side shape gates (`workplan-peer-writer.md` §4: cabined,
-// assertion-covered - FK-linked lifted 2026-09-01, work order AI) are the
-// ones a shipped write newly reaches - core 0 could write those relations
-// itself, and a peer cannot.
+// the peer-side shape gate (`workplan-peer-writer.md` §4: assertion-covered
+// and unenforceable - FK-linked lifted 2026-09-01 by work order AI, cabined
+// lifted 2026-09-02 by AK-S2) is the one a shipped write newly reaches -
+// core 0 could write those relations itself, and a peer cannot.
 //
-// **The vehicle moved when the FK arm lifted, and the property did not**
-// (AI-R3). A5's real claim is *a shipped write is answered by the owner's
-// own gate, byte for byte, with no retryable bit invented on the way* -
-// which is independent of which arm answers. The FK shape proved it until
-// 2026-09-01 and now admits instead, so the **cabined** cell below carries
-// it, and the FK cell beside it proves the converse: that the arm which
-// used to answer no longer does.
+// **The vehicle moved twice, and the property did not** (AI-R3). A5's real
+// claim is *a shipped write is answered by the owner's own gate, byte for
+// byte, with no retryable bit invented on the way* - which is independent
+// of which arm answers. The FK shape proved it until 2026-09-01, the
+// cabined shape until 2026-09-02, and both admit now; the caller-supplied
+// pk refusal carries it (`AShippedRefusalCrossesTheRingByteIdenticalAndTerminal`),
+// and the two cells below prove the converse for each lifted arm.
 
 TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
     ForeignIndexRig rig(clock_);
@@ -6691,15 +6706,14 @@ TEST_F(CoreRuntimeTest, AnFkLinkedPeerRelationNoLongerMeetsTheShapeGate) {
         << "the arm still refuses a relation that is only a parent: " << parent_says;
 }
 
-TEST_F(CoreRuntimeTest, AShippedWriteToACabinedPeerRelationIsRefusedByTheOwnersShapeGate) {
-    // The second arm of the same `funded_shape` gate, **and it is still
-    // live** where the FK arm lifted: `any_cabin` is read off
-    // `TableAccess`, which is catalog-derived and refreshed by the peer's
-    // catalog invalidation.
-    //
-    // **This cell carries A5's property since 2026-09-01** (AI-R3): the FK
-    // shape used to be the vehicle and now admits, so the byte-identity
-    // and the retryable-bit assertions moved here with it.
+TEST_F(CoreRuntimeTest, ACabinedPeerRelationTakesWritesAndItsOwnerServesTheCabin) {
+    // AK-S2 (`instructions/v2.8.0/workorder-ak.md`): the funding gate's
+    // Cabin arm is gone, because its ground - a peer had no Cabin store, so
+    // a write there could append to no set - is gone: every core holds a
+    // store. What this cell pins is the whole of a Cabin's life on the
+    // core that owns the relation: the shipped write is admitted, the
+    // owner observes a probed value, serves the next probe from its set,
+    // appends the write that follows, and serves that too.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "shipped_gate2");
 
@@ -6709,33 +6723,88 @@ TEST_F(CoreRuntimeTest, AShippedWriteToACabinedPeerRelationIsRefusedByTheOwnersS
               "CRE");
     ASSERT_TRUE(core0_store_->Sync().ok());
     rig.peer->InvalidateCatalog();
+    auto oid = rig.catalog2->FindTableOidByName("cabined");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    FundPeerForRelation(rig, oid.value());
+    ASSERT_NE(rig.peer->cabins(), nullptr) << "the peer was built with no Cabin store";
 
-    DispatchOutcome cabin_out;
-    auto to_cabined = rig.Start("INSERT INTO cabined VALUES ('x')", cabin_out);
-    ASSERT_TRUE(rig.Drive(*to_cabined)) << cabin_out.response;
-    ASSERT_EQ(cabin_out.response.rfind("ERR ", 0), 0u) << cabin_out.response;
-    EXPECT_NE(cabin_out.response.find("cabined relation cannot take writes"), std::string::npos)
-        << cabin_out.response;
+    DispatchOutcome first_write;
+    auto to_cabined = rig.Start("INSERT INTO cabined VALUES ('zq')", first_write);
+    ASSERT_TRUE(rig.Drive(*to_cabined)) << first_write.response;
+    ASSERT_EQ(first_write.response.rfind("ERR", 0), std::string::npos) << first_write.response;
+    EXPECT_EQ(RowsWith(*rig.peer, "cabined", "zq"), 1) << first_write.response;
 
-    // Byte for byte the line the owner writes itself - the property the
-    // round trip actually promises, and it promises more than two bare
-    // lines matching: the refusal is `NOT_IMPLEMENTED`, a spelled token, so
-    // this equality proves the *code* survived the ring. `Status::FromWire`
-    // is where it would be lost, and an arm missing there degrades the code
-    // to IoError, which renders bare - which is what this assertion
-    // catches.
-    EXPECT_EQ(cabin_out.response,
-              rig.peer->dispatcher().Dispatch("INSERT INTO cabined VALUES ('x')").response);
+    // A declared Cabin records at n=1: the first probe walks and observes,
+    // the second is served from the owner's set. Asserted on the owner's
+    // store, which is the only place work-not-done leaves a trace.
+    const stats::CabinStore& owner_store = *rig.peer->cabins();
+    for (int probe = 0; probe < 2; ++probe) {
+        DispatchOutcome read;
+        auto select = rig.Start("SELECT * FROM cabined WHERE sym = 'zq'", read);
+        ASSERT_TRUE(rig.Drive(*select)) << read.response;
+        ASSERT_EQ(read.response.rfind("ERR", 0), std::string::npos) << read.response;
+        EXPECT_NE(read.response.find("zq"), std::string::npos) << read.response;
+    }
+    EXPECT_EQ(owner_store.stats().recordings, 1u) << "the owner never observed the value";
+    EXPECT_EQ(owner_store.stats().hits, 1u) << "the second probe was not served from the set";
 
-    // **And the answer a client sees is terminal, not a retry hint.**
-    // Before shipping, core 0's affinity check refused this statement
-    // `TXN_CONFLICT retryable=1` - "not mine, try elsewhere". It is now the
-    // owner's bare `ERR`, which carries no retryable bit and is therefore
-    // terminal by the client manual's rule. Truthful (no core can take this
-    // write today) and different, so it is asserted here rather than left
-    // for a client's retry loop to discover by going quiet.
-    EXPECT_EQ(cabin_out.response.find("retryable=1"), std::string::npos) << cabin_out.response;
-    EXPECT_EQ(cabin_out.response.find("TXN_CONFLICT"), std::string::npos) << cabin_out.response;
+    // The write after observation is the case the arm was guarding: it
+    // must append to the owner's set, or the set is a subset and the next
+    // served probe a wrong answer. Two rows served, both carried.
+    DispatchOutcome second_write;
+    auto again = rig.Start("INSERT INTO cabined VALUES ('zq')", second_write);
+    ASSERT_TRUE(rig.Drive(*again)) << second_write.response;
+    ASSERT_EQ(second_write.response.rfind("ERR", 0), std::string::npos) << second_write.response;
+    EXPECT_EQ(owner_store.stats().appends, 1u) << "the owner's write did not append to its set";
+    DispatchOutcome served;
+    auto third = rig.Start("SELECT * FROM cabined WHERE sym = 'zq'", served);
+    ASSERT_TRUE(rig.Drive(*third)) << served.response;
+    EXPECT_EQ(owner_store.stats().hits, 2u);
+    EXPECT_EQ(CountOccurrences(served.response, "zq"), 2) << served.response;
+    // The surface a client on the owner's own listener reads: ANALYZE's
+    // counters are the owner's store's. (ANALYZE does not ship - the typed
+    // read path serves a whole-row read and nothing else - so it is asked
+    // on the owner, which is where a client of that relation would be.)
+    const std::string analyzed =
+        rig.peer->dispatcher().Dispatch("ANALYZE SELECT * FROM cabined WHERE sym = 'zq'").response;
+    EXPECT_NE(analyzed.find("cabin_hits=1"), std::string::npos) << analyzed;
+
+    // `SHOW CABINS` tells the truth on both cores (the review's C1): the
+    // owner prints its store's counts, and core 0 - which holds no set for
+    // a relation it does not own - prints the dash arm naming the owner
+    // rather than zeros that would read as "never probed".
+    const std::string owner_says = rig.peer->dispatcher().Dispatch("SHOW CABINS").response;
+    EXPECT_NE(owner_says.find("rel=cabined"), std::string::npos) << owner_says;
+    EXPECT_NE(owner_says.find("hits=" + std::to_string(owner_store.stats().hits)),
+              std::string::npos)
+        << owner_says;
+    const std::string core0_says = rig.dispatcher->Dispatch("SHOW CABINS").response;
+    EXPECT_NE(core0_says.find("held by core 1"), std::string::npos) << core0_says;
+    EXPECT_EQ(core0_says.find("hits=0"), std::string::npos) << core0_says;
+}
+
+TEST_F(CoreRuntimeTest, AShippedRefusalCrossesTheRingByteIdenticalAndTerminal) {
+    // **A5's property** (AI-R3), which lived on the cabined shape until
+    // AK-S2 admitted it: a refusal the owner answers reaches the client
+    // byte for byte - the code is a spelled token, so equality proves the
+    // *code* survived the ring (`Status::FromWire` is where it would be
+    // lost, degrading to a bare IoError) - and it is terminal, not the
+    // `TXN_CONFLICT retryable=1` core 0's affinity check answered before
+    // shipping. The vehicle now is a caller-supplied primary key, which a
+    // peer refuses because admitting one writes the relation's catalog row
+    // (workplan-peer-writer.md §7a) - outside AK's scope, so it stays.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "shipped_gate2");
+
+    DispatchOutcome out;
+    auto keyed = rig.Start("INSERT INTO shipped_gate2 VALUES (900, 5)", out);
+    ASSERT_TRUE(rig.Drive(*keyed)) << out.response;
+    ASSERT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
+    EXPECT_NE(out.response.find("NOT_IMPLEMENTED"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response,
+              rig.peer->dispatcher().Dispatch("INSERT INTO shipped_gate2 VALUES (900, 5)").response);
+    EXPECT_EQ(out.response.find("retryable=1"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("TXN_CONFLICT"), std::string::npos) << out.response;
 }
 
 // ---- AI-T2: the cross-owner INSERT, driven end to end -------------------

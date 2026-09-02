@@ -168,16 +168,19 @@ letter.**
 
 **Finding A — there is one Cabin store, and it is core 0's.** §2.3 said "a
 set may live on any core that has read the relation (under
-`peer_listeners = on`, that is any core)". That is false against the tree:
-`Expeditor::cabin_store_` is the only `stats::CabinStore` the engine
-constructs; every peer dispatcher passes `/*cabins=*/nullptr`
-(`src/server/core_runtime.cpp`) and so does every fan-in stage
-(`src/server/remote_step_service.cpp`, three sites). `known-gaps.md`
-already recorded the same fact from the other direction — the four
-unbroadcast catalog relations are safe "only because a peer's dispatcher
-is built with no recorder, no replay, no access statistics and no cabins".
-So SB-R2's acknowledgement set is one core, and that core is the one
-performing the split. The operator ruled on 2026-09-01 that the discard is
+`peer_listeners = on`, that is any core)". That was false against the tree
+*as it stood on 2026-09-01*: `Expeditor::cabin_store_` was the only
+`stats::CabinStore` the engine constructed; every peer dispatcher passed
+`/*cabins=*/nullptr` (`src/server/core_runtime.cpp`) and so did every
+fan-in stage (`src/server/remote_step_service.cpp`, three sites), which
+`known-gaps.md` recorded from the other direction. So SB-R2's
+acknowledgement set was one core, and that core was the one performing
+the split. **Since AK-S2 (2026-09-02, `instructions/v2.8.0/workorder-ak.md`)
+every core holds a store**, and the sentence this survey called false is
+true again — which is exactly the case §2.3's ordering was written for.
+The discard still reaches core 0's store alone, and `range_alloc.cpp`
+says what makes that sufficient today (no range opens under v2.8.0) and
+what it owes the day one does. The operator ruled on 2026-09-01 that the discard is
 therefore a direct core-local `Forget` before the grant — no window at
 all, rather than a window closed by acknowledgements — with the broadcast
 named in `cabin.md` §4b and CC10 as what the obligation becomes the day a

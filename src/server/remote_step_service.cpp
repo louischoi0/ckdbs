@@ -469,7 +469,7 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
-        /*cabins=*/nullptr, &snapshot.value().snap);
+        cabins_, &snapshot.value().snap);
     if (!ran.ok()) {
         SendError(head.tag, session, ran);
         return;
@@ -903,7 +903,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                 &spend,
                 exec::Budget(bounded ? limit - used : exec::kUnlimitedRowTouchBudget),
                 /*trail=*/nullptr, /*replay=*/nullptr,
-                /*cabins=*/nullptr, &snapshot.value().snap, /*indexes=*/true, &output_ok,
+                cabins_, &snapshot.value().snap, /*indexes=*/true, &output_ok,
                 /*parent=*/&outer);
             if (!ran.ok()) {
                 fail(ran);
@@ -1093,7 +1093,7 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
-        /*cabins=*/nullptr, &snapshot.value().snap, /*indexes=*/true, &gate);
+        cabins_, &snapshot.value().snap, /*indexes=*/true, &gate);
 
     Pipeline* pipe = Find(tag);
     if (pipe == nullptr) co_return Status::OK();  // torn down mid-run; nothing to say

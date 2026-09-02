@@ -308,13 +308,17 @@ that is sound (`include/kds/server/remote_checkpoint_anchor.hpp`).
     its own chains; one it does not is not walked at all. RESTRICT degrades
     to refusing the delete, which is fail-closed.
 
-  **The two sibling arms are untouched and still live**, which is the point
-  of narrowing one arm rather than the gate: the cabined arm's question is
-  the unverified Bound-Cabin grant this same bullet opens, and
-  `CannotEnforce`'s carries a *measured* failure
-  (`bench/v2.2.0/results-shipping-part-a-*` Finding 2 — a shipped write put
-  a second row in a group under `CHECK COUNT(*) <= 1`). Neither was ever the
-  foreign key's question. What the narrowing admits, said plainly: **a peer
+  **The two sibling arms were untouched by this narrowing**, which is the
+  point of narrowing one arm rather than the gate; neither was ever the
+  foreign key's question. **The cabined arm lifted 2026-09-02 (AK-S2,
+  `instructions/v2.8.0/workorder-ak.md`)**: its message asked the
+  Bound-Cabin grant question this bullet opens, but its predicate was the
+  *Observational* class, and its real ground was that a peer had no
+  `stats::CabinStore` to append to — every core holds one now, so the
+  owner observes, appends and serves. `CannotEnforce`'s stays and carries
+  a *measured* failure (`bench/v2.2.0/results-shipping-part-a-*` Finding
+  2 — a shipped write put a second row in a group under
+  `CHECK COUNT(*) <= 1`); AK-S10 is its stage. What the narrowing admits, said plainly: **a peer
   core now writes an FK-linked relation**, which is what makes AH's crossing
   reachable in a running instance at all — before it the forward check never
   ran, the fork never parked and the probe never sent, on any relation

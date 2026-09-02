@@ -753,9 +753,21 @@ still waits on its own gate, so:
   `sys.access_stats` and `sys.assertions` (and `sys.pattern_defs`, until
   it was withdrawn on 2026-08-31, which makes it three). Core 0 can
   grow any of them onto an overflow page and tell no peer. It is safe only
-  because a peer's dispatcher is built with no recorder, no replay, no
-  access statistics and no cabins, and its assertion registry is never
-  resumed, so a peer reads none of the four. **Enable any one of them on a
+  because a peer's dispatcher is built with no recorder, no replay and no
+  access statistics, and its assertion registry is never resumed, so a
+  peer reads none of the four. (**A peer holds a Cabin store since AK-S2**,
+  2026-09-02, and that changes nothing here: a store reads no catalog page
+  — observation is memory-resident — and `sys.cabins`, the one relation
+  a Cabin is declared in, bumps and broadcasts on create and drop. What
+  AK-S2 does leave, found by its review: `DROP CABIN` and `DROP TABLE`
+  call `Forget` on core 0's store alone, so a peer-owned relation's
+  dropped sets stay in its owner's store — never served, because a
+  `cabin_id` is a K1 id never reissued and the serve path keys off the
+  refreshed `TableAccess`, but counted against the owner's
+  `cabin_max_values` until a restart, so a churn of `CREATE`/`DROP CABIN`
+  on peer-owned relations can starve live Cabins with `cap_refusals`.
+  A bounded cost, not a wrong answer; a `Forget` carried on the
+  invalidation is the fix if it is ever met.) **Enable any one of them on a
   peer and this bug returns on a chain nothing invalidates** — the refresh
   unions the whole region-0 map page, so a later bumping DDL would adopt
   the bits anyway, making it a window rather than a permanent state, but
@@ -1626,7 +1638,9 @@ still waits on its own gate, so:
   populated at mount (RC07) that `CoreRuntime::InvalidateCatalog` does not
   refresh: it refreshes the free map, evicts the catalog frames and
   invalidates the catalog cache, and nothing else. The FK and Cabin arms of
-  the same gate hold, because they read `TableAccess`, which *is* refreshed.
+  the same gate held for the opposite reason — they read `TableAccess`,
+  which *is* refreshed — until each was lifted (the FK arm by AI, the Cabin
+  arm by AK-S2 on 2026-09-02); `CannotEnforce`'s is the one arm left.
   **Not created by shipping** — a client on the peer's own listener could
   already reach it — and made ordinary by it, since every core-0 client's
   write for that relation now takes this path. The bound is a remount. The
@@ -2908,9 +2922,11 @@ parent owner, a reference intent left behind — and two things do not:
   longer reads the linked relation locally: it probes the owner
   (forward) or refuses by name (reverse, §3a). The FK arm is struck and
   the narrowing is recorded in `workplan-peer-writer.md` §4, where the
-  arm lives. **The two sibling arms are untouched and still refuse** —
-  the cabined arm, whose Bound-Cabin grant question that same §4 leaves
-  unverified, and `CannotEnforce`'s, which carries a measured Finding 2.
+  arm lives. **Of the two sibling arms, one is gone and one stays**: the
+  cabined arm lifted 2026-09-02 (AK-S2 — a Cabin store on every core made
+  its ground false; its message had asked a Bound question of the
+  Observational class), and `CannotEnforce`'s stays with its measured
+  Finding 2 until AK-S10.
 - ~~**The dispatcher's park is proved by compilation and by the suite not
   regressing, and not yet by an end-to-end cell.**~~ **Paid 2026-09-02 by
   AI-T2** (`instructions/v2.8.0/workorder-ai.md`).

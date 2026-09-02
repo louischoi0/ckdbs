@@ -27,15 +27,22 @@ namespace {
 // the discard and the grant are then one task on one reactor with no
 // window between them at all.
 //
-// **Why this is not the acknowledged broadcast SB-R2 describes.** There is
-// exactly one `stats::CabinStore` in the engine, core 0's
-// (`Expeditor::cabin_store_`); every peer dispatcher and every fan-in
-// stage is constructed with none, which `docs/inflight/known-gaps.md`
-// already records from the other direction. So the acknowledgement set is
-// one core, and it is this one. The day a peer or a stage is given a
-// store, this becomes the broadcast and the grant waits on the
-// acknowledgements - the obligation is the ordering, and the mechanism is
-// whatever makes it true.
+// **Why this is not the acknowledged broadcast SB-R2 describes.** When it
+// was written there was exactly one `stats::CabinStore` in the engine,
+// core 0's, so the acknowledgement set was one core and it was this one.
+// **Since AK-S2 (2026-09-02) every core holds a store**, and the set this
+// function discards from is still core 0's alone - a relation's owner
+// holds the sets that matter, and a peer-owned relation's owner is not
+// this core. That is sufficient for one reason only: a range never opens
+// under v2.8.0 (`ratification-ae.md` AE-3.2, `range_size_ids` off). The
+// serve site's scope rule (`cabin.md` §4b, `CabinScopeCovers`) is the
+// *second* half and not a substitute for the first - it declines on
+// `access.ranges`, which the owner's cache learns from the invalidation
+// broadcast, so between the grant and that refresh the owner would serve
+// a set the new range's writer never appended to. The day a range opens
+// with a store on its owner, this is the acknowledged broadcast SB-R2
+// describes and the grant waits on the acknowledgements; `known-gaps.md`
+// carries it.
 //
 // Internal to this file: the one caller is below, and the mover (R5) can
 // export it when it is the second. A null store discards nothing and

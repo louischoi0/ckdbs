@@ -14,6 +14,7 @@
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/ring_message.hpp"
 #include "kds/server/session_step_client.hpp"
@@ -267,7 +268,8 @@ public:
                      StepSendSeam seam, Logger* log = nullptr,
                      std::size_t batch_target_bytes = kStepBatchTargetBytes,
                      SubmitFn submit = {}, txn::TransactionManager* txns = nullptr,
-                     exec::Budget budget = exec::Budget()) noexcept
+                     exec::Budget budget = exec::Budget(),
+                     stats::CabinStore* cabins = nullptr) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
@@ -285,7 +287,8 @@ public:
           desc_ceiling_(ShippedRowDescCeiling(seam.max_message_bytes)),
           submit_(std::move(submit)),
           txns_(txns),
-          budget_(budget) {}
+          budget_(budget),
+          cabins_(cabins) {}
 
     // The kStepOpen handler: decode, validate the single-step class,
     // execute, queue, drain. A failure at any point answers STEP_ERROR to
@@ -545,6 +548,11 @@ private:
     // limit too; carrying the session's own across a heterogeneous one is
     // an envelope field, recorded in the workplan rather than guessed at.
     exec::Budget budget_;
+    // This core's Cabin store, the dispatcher's own (AK-S2; `core_runtime.hpp`
+    // rule 3). The serve site's scope rule (`cabin.md` §4b, `step_vm.cpp`'s
+    // `CabinScopeCovers`) is what keeps it honest on a relation that is not
+    // wholly this core's.
+    stats::CabinStore* cabins_;
     std::vector<Pipeline> pipelines_;
 };
 

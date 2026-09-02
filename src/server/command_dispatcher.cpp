@@ -3957,16 +3957,25 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         // do not cover the walk (`docs/spec/cabin.md` §4b rule 3) - the
         // third reading, which the first two cannot be distinguished from
         // without it.
-        if (cabins_ != nullptr) {
+        //
+        // **And only for a relation this core owns** (AK-S2): a set lives on
+        // its owner's store, so another core's store knows nothing of it,
+        // and `InfoFor` on an id it never met answers zeros - which would
+        // read as "never probed" for a Cabin serving thousands elsewhere.
+        const bool held_here = access.ok() && access.value()->owner_core == core_id_;
+        if (cabins_ != nullptr && held_here) {
             const stats::CabinStore::CabinInfo info = cabins_->InfoFor(row.cabin_id);
             os << " observed=" << info.values << " entries=" << info.entries
                << " hits=" << info.hits << " misses=" << info.misses
                << " scope_declines=" << info.scope_declines;
-        } else {
+        } else if (cabins_ == nullptr) {
             // Not "0": the store is off, so every count is unknown rather
             // than zero, and printing zeros would read as "nothing has
             // happened" when the truth is "nothing is being recorded".
             os << " observed=- entries=- hits=- misses=- scope_declines=- (cabins = off)";
+        } else {
+            os << " observed=- entries=- hits=- misses=- scope_declines=- (held by core "
+               << (access.ok() ? std::to_string(access.value()->owner_core) : "?") << ")";
         }
     }
     return {os.str(), false};
@@ -4038,7 +4047,9 @@ DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
         // Not an empty table: with no controller nothing is managing, and
         // an empty listing would read as "managing nothing yet" when the
         // truth is "not constructed" - SHOW CABINS' `cabins = off` rule.
-        return {"CABIN_OPTIMIZER absent (cabins = off)", false};
+        // Not "(cabins = off)" either, since AK-S2: a peer holds a Cabin
+        // store and no optimizer, so the reason has to name the optimizer.
+        return {"CABIN_OPTIMIZER absent (no cabin optimizer on this core)", false};
     }
 
     const stats::CabinOptimizerConfig& config = cabin_controller_->config();
@@ -6183,10 +6194,14 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     // added later is admitted by omission"), and the first form of this
     // gate repeated it one level down - it missed assertions, whose entry
     // pages are the system core's (the 25059bf review's C-3). Each named
-    // refusal cites the task that lifts it; the tail refusal is what makes
-    // a *future* secondary structure refuse rather than slip through.
-    // None poisons the session; the backstop below every admitted shape is
-    // the store's every-build MayWrite (device_page_store.cpp).
+    // refusal cites the task that lifts it. The tail refusal - what made a
+    // *future* secondary structure refuse rather than slip through - went
+    // with the Cabin arm (AK-S2, 2026-09-02): an Observational Cabin is
+    // owner-held since every core has a store, so nothing a peer-owned
+    // relation can carry is built or held anywhere but on its owner, and
+    // the one arm left is `CannotEnforce`'s. None poisons the session; the
+    // backstop below every admitted shape is the store's every-build
+    // MayWrite (device_page_store.cpp).
     if (catalog_read_only_) {
         // PW1c-6b-2's window (index_build_service.hpp): an index of this
         // relation is being built here, or built and not yet published by
@@ -6196,12 +6211,6 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         if (pending_index_builds_ != nullptr && pending_index_builds_->Covers(access.oid)) {
             return IndexBuildPending(core_id_, relation);
         }
-        // cabin_ids is per-column-parallel with id 0 meaning "no Cabin"
-        // (schema.hpp) - emptiness is the wrong test, and so is
-        // cabin_mask != 0: a Cabin on a column past 64 folds into no bit.
-        const bool any_cabin =
-            std::any_of(access.cabin_ids.begin(), access.cabin_ids.end(),
-                        [](const catalog::TableAccess::CabinRef& c) { return c.id != 0; });
         // The btree arm lifted 2026-08-24 (PW2-4): a root move writes the
         // relation's own granted anchor page and updates the cache in
         // place - no catalog write remains on the growth path. **The
@@ -6273,35 +6282,25 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         //     all. RESTRICT degrades to refusing the delete, which is
         //     fail-closed.
         //
-        // **The two sibling arms below are untouched and still live**, and
-        // that is the point of narrowing one rather than the test: the
-        // Cabin arm's question (whether a Bound Cabin's entry pages follow
-        // the grant) is unanswered, and `CannotEnforce`'s carries a
-        // *measured* failure - `bench/v2.2.0/results-shipping-part-a-*`
-        // Finding 2, a shipped write putting a second row in a group under
-        // `CHECK COUNT(*) <= 1`. Neither was ever the FK's question.
-        const bool funded_shape = !any_cabin && !enforcer_.CannotEnforce(access.oid);
-        if (!funded_shape) {
-            if (any_cabin) {
-                return Status::NotImplemented(
-                    "a cabined relation cannot take writes on core " +
-                    std::to_string(core_id_) +
-                    ": whether a Bound Cabin's entry pages follow the grant is unverified "
-                    "(workplan-peer-writer.md §4)");
-            }
-            if (enforcer_.CannotEnforce(access.oid)) {
-                return Status::NotImplemented(
-                    "a relation under an assertion this core cannot enforce cannot take "
-                    "writes on core " +
-                    std::to_string(core_id_) +
-                    ": the assertion's entry pages are the system core's and carry no write "
-                    "grant, so admitting the write would leave the constraint unchecked; "
-                    "re-create the assertion so its owner builds it "
-                    "(workplan-peer-writer.md §7d, PW1c-6c)");
-            }
+        // The Cabin arm lifted 2026-09-02 (AK-S2): every core holds a
+        // `stats::CabinStore`, so the owner observes, appends and serves,
+        // and the arm had nothing left to guard. The tail went with it -
+        // every secondary structure a peer-owned relation can carry is
+        // owner-built or owner-held, and a new one must be added here
+        // rather than admitted by omission. `workplan-peer-writer.md` §4
+        // has the account. **`CannotEnforce` stays** with its *measured*
+        // failure (`bench/v2.2.0/results-shipping-part-a-*` Finding 2, a
+        // shipped write putting a second row in a group under
+        // `CHECK COUNT(*) <= 1`); AK-S10 is its stage.
+        if (enforcer_.CannotEnforce(access.oid)) {
             return Status::NotImplemented(
-                "this relation's shape is not funded for writes on core " +
-                std::to_string(core_id_) + " (workplan-peer-writer.md §8)");
+                "a relation under an assertion this core cannot enforce cannot take "
+                "writes on core " +
+                std::to_string(core_id_) +
+                ": the assertion's entry pages are the system core's and carry no write "
+                "grant, so admitting the write would leave the constraint unchecked; "
+                "re-create the assertion so its owner builds it "
+                "(workplan-peer-writer.md §7d, PW1c-6c)");
         }
         // PW1c-7's rights probe. The shape is funded; whether the *rights*
         // are here is a separate question, because every grant is

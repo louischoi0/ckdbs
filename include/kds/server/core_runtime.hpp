@@ -16,6 +16,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/stats/access_batch.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/extent_lease_service.hpp"
@@ -71,7 +72,14 @@
 //      reading the next paragraph. **`access_statistics` is no longer in
 //      that sentence**: since CR7 (2026-08-31) a peer records its access
 //      shapes into a local batch and flushes them to core 0, which applies
-//      them to the one `sys.access_stats` only it may write.
+//      them to the one `sys.access_stats` only it may write. **Neither is
+//      the Cabin** (AK-S2, 2026-09-02): a peer holds its own
+//      `stats::CabinStore`. It reads no catalog page and writes none -
+//      observation is memory-resident on the core whose writes append to
+//      it - and a relation's one owner is exactly the core every write to
+//      it lands on and every shipped read of it runs on, so the owner's
+//      store is the only one that can observe a value *and* stay a
+//      superset through the writes that follow (`cabin.md` §4b).
 //
 // ---- Why a peer records nothing (P6's known cost) -----------------------
 //
@@ -140,6 +148,14 @@ public:
         wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
         txn::IsolationLevel isolation = txn::IsolationLevel::kReadCommitted;
         exec::Budget budget;
+
+        // The Cabin store's switch and caps, copied from core 0's like every
+        // other shared setting (AK-S2; rule 3 above says why a peer holds a
+        // store). On by default as `Expeditor::Config::cabins` is, so a
+        // fixture's peer is built the way a served one is; the caps carry
+        // `CabinLimits`' own defaults rather than restating them.
+        bool cabins = true;
+        stats::CabinLimits cabin_limits;
 
         // D5's in-doubt ceiling, from core 0's `in_doubt_ceiling_ms`
         // (R6-5). Copied like every other shared setting, because a peer is
@@ -442,6 +458,8 @@ public:
     wal::WalManager& wal() noexcept { return *wal_; }
     catalog::Catalog& catalog() noexcept { return *catalog_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
+    // This core's Cabin store, or null under `cabins = off` (AK-S2).
+    stats::CabinStore* cabins() noexcept { return cabin_store_ ? &*cabin_store_ : nullptr; }
 
     storage::DevicePageStore& store() noexcept { return *store_; }
 
@@ -529,6 +547,12 @@ private:
     bool grant_request_in_flight_ = false;
     std::uint32_t grant_request_age_ticks_ = 0;
     static constexpr std::uint32_t kRelationGrantRequestTicks = 1000;  // ~1 s at 1 ms
+
+    // This core's Cabin store (AK-S2; the header's rule 3 says why a peer
+    // holds one). Declared ahead of every borrower - the step server just
+    // below, the dispatcher and the probe server further down - so reverse
+    // destruction ends them before the store they point into.
+    std::optional<stats::CabinStore> cabin_store_;
 
     // The remote step server (P4b), armed at AttachTransport: this core
     // answers STEP_OPENs for relations it owns.

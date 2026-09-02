@@ -272,15 +272,19 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->txn_manager_.emplace(*runtime->trx_ids_, *runtime->undo_log_, *runtime->store_,
                                   &*runtime->wal_);
 
-    // Recording off, deliberately and not as a default - see the header.
-    // Both features are advisory, so a peer returns identical rows without
-    // them; what it loses is speed and the optimizer's input.
+    // Recording off, deliberately and not as a default - see the header:
+    // Waystone is advisory, so a peer returns identical rows without it and
+    // loses speed and the optimizer's input. The Cabin store is this core's
+    // own since AK-S2 (the header's rule 3): the owner observes, appends and
+    // serves, which is the whole of a Cabin's life at one range per relation.
+    if (config.cabins) runtime->cabin_store_.emplace(config.cabin_limits);
     runtime->dispatcher_.emplace(
         runtime->superblock_, *runtime->catalog_, *runtime->store_, log, &clock,
         &*runtime->wal_, config.durability, config.budget,
         /*recorder=*/nullptr, /*replay_enabled=*/false,
         /*access_statistics=*/false,
-        /*cabins=*/nullptr, &*runtime->txn_manager_, config.isolation, config.core_id);
+        runtime->cabin_store_ ? &*runtime->cabin_store_ : nullptr, &*runtime->txn_manager_,
+        config.isolation, config.core_id);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.
@@ -563,7 +567,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         // And this core's configured row-touch ceiling, which the server
         // ignored until P4d-4c's review - a shipped statement was bounded
         // only by whatever a fresh `exec::Budget()` defaulted to.
-        config_.budget);
+        config_.budget,
+        // And this core's Cabin store (AK-S2): a stage on a relation this
+        // core owns serves from the same sets the dispatcher does.
+        cabin_store_ ? &*cabin_store_ : nullptr);
     // All six kinds, in `remote_step_service.hpp`'s one home - including
     // the kStepBatch/kStepEof fan-out to both endpoints, which is the rule
     // that must not be written twice.
@@ -724,7 +731,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // nothing else (AH-R5), which is the hook installed just below.
     fk_probe_server_.emplace(*catalog_, *store_, config_.core_id, fk_intents_, fk_pending_deletes_,
                              *scheduler_, transport,
-                             txn_manager_.has_value() ? &*txn_manager_ : nullptr, log_);
+                             txn_manager_.has_value() ? &*txn_manager_ : nullptr, log_,
+                             // F6's lookup on this core too (AK-S2): a reverse
+                             // probe a peer answers can be a Cabin lookup where
+                             // its own store has observed the value.
+                             cabin_store_ ? &*cabin_store_ : nullptr);
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kFkProbeRequest,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

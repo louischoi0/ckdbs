@@ -675,8 +675,15 @@ drop on its own judgement.
   **Bound** class keeps its gate (SA-T7 owns its migration, and this
   ruling is Observational-only, SB-R5); **migration** of an Observational
   Cabin is discarded, not carried, so a moved relation's sets are rebuilt
-  by traffic; and the acceleration §4b authorizes is unreachable until a
-  fan-in stage is given a Cabin store, which nothing has ordered.
+  by traffic; and ~~the acceleration §4b authorizes is unreachable until a
+  fan-in stage is given a Cabin store, which nothing has ordered~~ —
+  **every core and every stage holds a store since AK-S2** (2026-09-02,
+  `instructions/v2.8.0/workorder-ak.md`), so a relation's owner observes,
+  appends and serves whether a statement reached it shipped, as a stage,
+  or on its own listener. What that does *not* reach is a split
+  relation: a stage serves only where `ServableBy` holds for the whole
+  relation, so §4b's per-range acceleration stays unreached, by the
+  serve site's own rule rather than by an absent store.
 
 ---
 

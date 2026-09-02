@@ -824,9 +824,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->database_->catalog.SetWal(expeditor->wal_.get());
 
     if (expeditor->config_.cabins) {
-        expeditor->cabin_store_.emplace(
-            stats::CabinLimits{expeditor->config_.cabin_max_values,
-                               expeditor->config_.cabin_max_entries_per_value});
+        expeditor->cabin_store_.emplace(expeditor->config_.CabinLimitsOf());
     }
     if (expeditor->config_.waystone_recording) {
         expeditor->trail_recorder_.emplace(expeditor->database_->catalog, *expeditor->store_,
@@ -1510,6 +1508,9 @@ Status Expeditor::Serve() {
             // CR7: the instance's switch reaches the peers now that they
             // have somewhere to put a shape.
             core_config.access_statistics = config_.access_statistics;
+            // AK-S2: and the Cabin's, now that a peer holds a store.
+            core_config.cabins = config_.cabins;
+            core_config.cabin_limits = config_.CabinLimitsOf();
             core_config.buffer_pool_frames =
                 FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
             core_config.lease = lease.value();
@@ -1585,7 +1586,10 @@ Status Expeditor::Serve() {
             txn_manager_.has_value() ? &*txn_manager_ : nullptr,
             // And the same row-touch ceiling every statement on this core
             // runs under (P4d-4c's review).
-            exec::Budget(config_.max_rows_touched));
+            exec::Budget(config_.max_rows_touched),
+            // And core 0's Cabin store (AK-S2), as a peer's step server
+            // takes its own (`core_runtime.cpp`).
+            cabin_store_ ? &*cabin_store_ : nullptr);
         // All six kinds, in `remote_step_service.hpp`'s one home. Core 0's
         // wiring and a peer's became identical when RR2 gave every core a
         // client, and the fan-out rule the block below used to state twice
@@ -1709,13 +1713,11 @@ Status Expeditor::Serve() {
         // its own nor consult an intent before deleting a parent. Reachable
         // wherever a catalog carries relations placed under more than one
         // `placement` setting.
-        // **Core 0 is the one core with a Cabin store** (`cabin_store_` is
-        // this class's; `CoreRuntime` passes a peer's dispatcher
-        // `/*cabins=*/nullptr` by decision), so it is the one core whose
-        // reverse answer can be F6's lookup rather than a walk. Passed here
-        // rather than left null so that the acceleration exists wherever it
-        // can - and `fk_probe_service.hpp` states the consequence for the
-        // cores where it cannot.
+        // Core 0's Cabin store, so its reverse answer can be F6's lookup
+        // rather than a walk. **Every core does the same since AK-S2**
+        // (2026-09-02): a peer's `CoreRuntime` holds its own store and
+        // passes it to its probe server, so the acceleration exists on
+        // whichever core owns the child.
         fk_probe_server_.emplace(catalog(), *store_, /*core_id=*/0, fk_intents_,
                                  fk_pending_deletes_, scheduler, *transport_,
                                  txn_manager_.has_value() ? &*txn_manager_ : nullptr, &*logger_,
@@ -1761,9 +1763,12 @@ Status Expeditor::Serve() {
         // The Cabin store and the discard counter are SB1's, and they are
         // this core's own: `OpenRangeOnSystemCore` drops the relation's
         // Observational sets before the reply that grants the range, on
-        // this task, so no grant can precede the discard. Core 0 is the
-        // only core that holds a store at all (`cabin.md` §4b), which is
-        // why passing one core's is passing every core's.
+        // this task, so no grant can precede the discard. **Passing core
+        // 0's store is no longer passing every core's** (AK-S2 gave each
+        // core one): the discard reaches only this store, and a peer-owned
+        // relation's sets are its owner's. `range_alloc.cpp` says what
+        // makes that sufficient today and what it owes the day a range
+        // opens.
         if (Status s = RegisterRowIdGrantHandler(
                 scheduler, *transport_, database_->catalog, &*logger_, store_.get(), wal_.get(),
                 &dispatcher_->assertions(), cabin_store_ ? &*cabin_store_ : nullptr,

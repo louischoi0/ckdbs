@@ -349,6 +349,12 @@ public:
         // T_amort stays the R1 half-life (§II.6's own default) with no key
         // of its own until a measured workload argues for one.
         stats::CabinOptimizerConfig CabinOptimizerSettings() const;
+        // The two caps as the store takes them - one place for the
+        // positional pair, so core 0's store and a peer's (AK-S2) cannot
+        // disagree on the order.
+        stats::CabinLimits CabinLimitsOf() const noexcept {
+            return stats::CabinLimits{cabin_max_values, cabin_max_entries_per_value};
+        }
 
         // ---- Cabin (docs/spec/cabin.md) ---------------------------------
 
