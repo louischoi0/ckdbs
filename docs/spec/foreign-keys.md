@@ -399,12 +399,25 @@ holder reports no 2PC anomaly — the last of which fails when
 `Session::IntentOnlyTargets()` is neutered, which is how the cell is known to
 bite rather than merely to pass.
 
-What is still owed is the cost, not the correctness: that `COMMIT` takes the
-cross-owner parked path, whose durability wait is unconditional, so an
-intent-holding participant re-acquires the `fdatasync` wait XE1's
-`kAtAppend` removed, plus a decide round trip, before acknowledging its own
-coordinator. XE1's measured saving does not apply to this shape and nothing
-has measured what it does cost.
+**Measured 2026-09-02**
+(`bench/v2.8.0/results-ah-t6-participant-release-cost-v2.7.0-101-ged47cfc.md`),
+and the measurement corrected the prediction. That `COMMIT` takes the
+cross-owner parked path, so the participant's own acknowledgement leg goes
+from **4.4 µs to 3.1 ms — 720×** — and XE1's `kAtAppend` saving is entirely
+lost for this shape. But it is **not** the `fdatasync` XE1 removed: under
+`relaxed`, which stages no group commit at all, the leg is the same order
+(2269 µs). What the participant pays is the cross-owner path's *own*
+decision-durability wait, which is unconditional on the class by design,
+plus its own decide round trip. **An intent-holding participant stops being
+a participant that acks cheaply and becomes a coordinator that must make its
+own decision durable**, and a coordinator's durability wait was never XE1's
+to remove.
+
+Whether a client feels it depends on what else is waiting: under the shipped
+class the 3 ms is invisible (−1.4%, inside noise) because the coordinator is
+already device-bound; under `relaxed` 1940 µs of it reaches the client
+(+53.8%). It is free today and would stop being free if the coordinator's
+own device wait went away.
 
 **The autocommit decide is sent before this core's commit record is
 durable**, unlike the explicit-transaction path where the decision is durable

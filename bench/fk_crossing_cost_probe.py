@@ -550,9 +550,147 @@ def owners_run(args):
     return out
 
 
+# ---- the participant-coordinated release, and what it costs ---------------
+
+def participant_counters(conn):
+    """The participant's own commit legs, plus its foreign-key counters.
+
+    `xowner_part_ack` is XE1's subject: the span from a decide arriving to
+    this core acknowledging it. Under `kAtAppend` the ack leaves at the
+    append and the leg is near-zero; `xowner_part_durable` is the record
+    actually reaching the device, which XE1 moved *off* the chain.
+    """
+    reply = conn.cmd('SHOW META')
+    names = ('xowner_part_prepare_n', 'xowner_part_prepare_us',
+             'xowner_part_ack_n', 'xowner_part_ack_us', 'xowner_part_ack_max_us',
+             'xowner_part_durable_n', 'xowner_part_durable_us',
+             'fk_probes_sent', 'fk_release_decide_n', 'fk_release_decide_us')
+    out = {}
+    for name in names:
+        out[name] = 0 if f' {name}=' not in ' ' + reply.replace('\\n', ' ') \
+            else int(field(reply, name) or 0)
+    return out
+
+
+def participant_release_run(args):
+    """What an intent-holding participant's own COMMIT costs it.
+
+    A cross-owner transaction's participant applies the coordinator's
+    decision by dispatching `COMMIT` on its context session, and that
+    dispatch carries `CommitAck::kAtAppend` - XE1's saving, the ack leaving
+    at the append rather than at the device. **Unless the participant also
+    holds a foreign-key reference intent**: then its own `COMMIT` forks into
+    the cross-owner path, whose decision-durability wait is unconditional on
+    the ack mode and on the durability class ("the decision is made durable
+    before anyone is told"). So the participant re-acquires the `fdatasync`
+    XE1 removed, and adds a decide round trip of its own on top.
+
+    The two arms differ in **one** thing: whether the shipped-to relation
+    carries a foreign key whose parent lives on a third core. Same client,
+    same coordinator, same participant core, same statement shape.
+
+    Four cores, because the participant must not own the parent: `rotate`
+    cycles 1..3 in create order, so the order of the creates is the
+    placement, and it is asserted.
+    """
+    workdir = os.path.join(args.workdir, 'partrelease')
+    shutil.rmtree(workdir, ignore_errors=True)
+    os.makedirs(workdir, exist_ok=True)
+    conf = write_conf(workdir, args.port, 4, args.durability)
+    proc = start(conf, workdir, args.server)
+    up, why = wait_up(args.port, proc, args.mount_timeout)
+    if not up:
+        stop(proc, args.port)
+        return {'error': f'mount: {why}'}
+    out = {'blocks': []}
+    conns = None
+    try:
+        conns, attempts = collect_connections(args.port, {0: 1, 1: 1, 2: 1, 3: 1},
+                                              args.max_connects)
+        out['connect_attempts'] = attempts
+        client = conns[0][0]
+        stmts = [
+            'CREATE TABLE pp (id int64, v int64) BTREE',                     # core 1
+            'CREATE TABLE psp2 (id int64, v int64)',                         # core 2
+            'CREATE TABLE pcfk (id int64, pid int64 REFERENCES pp)',         # core 3
+            'CREATE TABLE psp4 (id int64, v int64)',                         # core 1
+            'CREATE TABLE psp5 (id int64, v int64)',                         # core 2
+            'CREATE TABLE pcplain (id int64, v int64)',                      # core 3
+        ]
+        for sql in stmts:
+            reply = retrying(client, sql)
+            if reply.startswith('ERR'):
+                out['error'] = f'setup: {sql}: {reply[:160]}'
+                return out
+        owners = {t: owner_of(client, t) for t in ('pp', 'pcfk', 'pcplain')}
+        out['owners'] = owners
+        if owners['pcfk'] != owners['pcplain']:
+            out['error'] = f'the two children are not on one core: {owners}'
+            return out
+        if owners['pcfk'] == owners['pp'] or '0' in owners.values():
+            out['error'] = f'the parent shares the child core, or something is on core 0: {owners}'
+            return out
+        reply = retrying(client, 'INSERT INTO pp VALUES (5)')
+        if reply.startswith('ERR'):
+            out['error'] = f'seed pp: {reply[:160]}'
+            return out
+        parent_pk = field(reply, 'id')
+        participant = conns[int(owners['pcfk'])][0]
+        shapes = {'no-intent': f'INSERT INTO pcplain VALUES (1)',
+                  'intent-holding': f'INSERT INTO pcfk VALUES ({parent_pk})'}
+
+        def one_transaction(sql):
+            """BEGIN, the shipped write, then the **timed** COMMIT."""
+            if retrying(client, 'BEGIN').startswith('ERR'):
+                return None, 'begin'
+            wrote = retrying(client, sql)
+            if wrote.startswith('ERR'):
+                client.cmd('ROLLBACK')
+                return None, f'write: {wrote[:160]}'
+            began = time.perf_counter()
+            done = client.cmd('COMMIT')
+            elapsed_us = (time.perf_counter() - began) * 1e6
+            if done.startswith('ERR'):
+                return None, f'commit: {done[:160]}'
+            return elapsed_us, None
+
+        for name, sql in shapes.items():
+            for _ in range(args.warm):
+                one_transaction(sql)
+        for block in range(args.blocks):
+            for name in ('no-intent', 'intent-holding'):
+                before = participant_counters(participant)
+                samples = []
+                for _ in range(args.rows):
+                    elapsed, err = one_transaction(shapes[name])
+                    if err:
+                        out['error'] = f'{name}: {err}'
+                        return out
+                    samples.append(elapsed)
+                after = participant_counters(participant)
+                acks = after['xowner_part_ack_n'] - before['xowner_part_ack_n']
+                out['blocks'].append({
+                    'shape': name, 'block': block, 'us': samples,
+                    'part_acks': acks,
+                    'part_ack_us': ((after['xowner_part_ack_us'] - before['xowner_part_ack_us'])
+                                    / acks) if acks else None,
+                    'part_ack_max_us': after['xowner_part_ack_max_us'],
+                    'probes_sent': after['fk_probes_sent'] - before['fk_probes_sent'],
+                })
+    finally:
+        if conns:
+            for group in conns.values():
+                for c in group:
+                    c.close()
+        stop(proc, args.port)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--mode', choices=('gate-ab', 'crossing', 'hoist-ab', 'owners'),
+    ap.add_argument('--mode',
+                    choices=('gate-ab', 'crossing', 'hoist-ab', 'owners',
+                             'participant-release'),
                     required=True)
     ap.add_argument('--server', default=os.path.join(ROOT, 'build-release', 'kds_server'))
     ap.add_argument('--server-a')
@@ -619,6 +757,26 @@ def main():
                               f'p50={p["p50"]:.1f}us p90={p["p90"]:.1f}us '
                               f'mean={p["mean"]:.1f}us retries={inner["retries"]}')
                 result['blocks'].append(cell)
+    elif args.mode == 'participant-release':
+        run = participant_release_run(args)
+        result.update(run)
+        if 'error' in run:
+            failed = True
+            print(f'ERROR {run["error"]}')
+        else:
+            print(f'owners: {run["owners"]}')
+            for cell in run['blocks']:
+                p = percentiles(cell['us'])
+                print(f'{cell["shape"]:>15} block {cell["block"]}: commit p50={p["p50"]:.1f}us '
+                      f'p90={p["p90"]:.1f}us mean={p["mean"]:.1f}us '
+                      f'part_acks={cell["part_acks"]} part_ack_leg={cell["part_ack_us"]} '
+                      f'part_ack_max={cell["part_ack_max_us"]} probes={cell["probes_sent"]}')
+                if cell['shape'] == 'no-intent' and cell['probes_sent'] != 0:
+                    failed = True
+                    print('  FAIL: the no-intent arm probed')
+                if cell['shape'] == 'intent-holding' and cell['probes_sent'] != args.rows:
+                    failed = True
+                    print(f'  FAIL: {cell["probes_sent"]} rounds for {args.rows} transactions')
     elif args.mode == 'owners':
         run = owners_run(args)
         result.update(run)

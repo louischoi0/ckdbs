@@ -674,8 +674,8 @@ name; the intent granted, released and crash-tested; the four hypotheses
 answered; the matrix measured. Its contract is `foreign-keys.md` §2a/§2b/§3a.
 
 **What it hands on**, all named in the results file's §6: the
-surviving-coordinator crash half, `strict` and concurrency, the cost of the
-participant-coordinated release, and the reverse direction's fan-out — a
+surviving-coordinator crash half, `strict` and concurrency, and the reverse
+direction's fan-out — a
 cross-owner parent still cannot be deleted, which `known-gaps.md` keeps as
 the crossing's one standing asymmetry.
 
@@ -687,6 +687,20 @@ sampling artifact of its own three blocks, which that file now says. The
 probe round's maximum is never the largest thing in a statement; the release
 decide's maximum tracks the statement's, which is the overlap §2 found at
 the mean, seen again at the maximum.
+
+**And a second, 2026-09-02**: the participant-coordinated release's cost
+(`results-ah-t6-participant-release-cost-v2.7.0-101-ged47cfc.md`). An
+intent-holding participant's acknowledgement leg is **720×** a plain
+participant's — 4.4 µs to 3.1 ms — so XE1's `kAtAppend` saving is entirely
+lost for this shape. The measurement corrected its own prediction: it is
+**not** the `fdatasync` XE1 removed, because `relaxed` does not collapse it;
+it is the cross-owner path's own decision-durability wait, unconditional on
+the class by design, plus a decide round trip. An intent-holding participant
+stops being a participant that acks cheaply and becomes a coordinator that
+must make its own decision durable. Invisible to a client under the shipped
+class (−1.4%, inside noise, because the coordinator is already device-bound)
+and +53.8% under `relaxed` — the same "a leg is visible only where nothing
+else is waiting" this order has now met three times.
 
 ### The `critics-developer` review, and what it changed
 
