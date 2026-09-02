@@ -92,7 +92,103 @@ protected:
         }
         ASSERT_TRUE(s.value()->Sync().ok());
     }
+
+    // A participant's TXN_PREPARE under `participant_txn`, naming
+    // `coordinator_txn` on `coordinator_core`; then, if `decision` is not
+    // kPad, the coordinator's own terminal record for its transaction - in
+    // **this same stream**, which is what one stream means.
+    void WritePreparedPair(std::uint64_t participant_txn, std::uint64_t coordinator_txn,
+                           std::uint32_t coordinator_core, RecordType decision) {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+
+        std::vector<std::byte> buf(kTxnPreparePayloadSize + 8, std::byte{0});
+        const TxnPreparePayload prep{/*coordinator_session_id=*/42, coordinator_txn,
+                                     coordinator_core};
+        auto n = EncodeTxnPrepare(buf, prep);
+        ASSERT_TRUE(n.ok()) << n.status().message();
+        ASSERT_TRUE(s.value()
+                        ->Append({RecordType::kTxnPrepare, participant_txn, kInvalidPageId},
+                                 std::span(buf).first(n.value()))
+                        .ok());
+        if (decision != RecordType::kPad) {
+            ASSERT_TRUE(s.value()->Append({decision, coordinator_txn, kInvalidPageId}).ok());
+        }
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    AnalysisStart OneStream() {
+        AnalysisStart start;
+        start.single_stream = true;
+        return start;
+    }
 };
+
+// ---- Resolving a prepare under one stream (AR0 M0, AL-R5) --------------
+
+// The participant's TXN_PREPARE and the coordinator's decision are records
+// of the same log, so the scan that found the first found the second.
+// No second file is opened and no resolver is installed - the absence of
+// one is what the per-core path refuses on.
+TEST_F(RecoveryTest, UnderOneStreamACoordinatorsCommitIsFoundInTheSameScan) {
+    WritePreparedPair(/*participant_txn=*/11, /*coordinator_txn=*/77,
+                      /*coordinator_core=*/2, RecordType::kTxnCommit);
+
+    RecordingUndo undo;
+    auto r = RecoverCore(*device_, 0, store_, OneStream(), &undo, nullptr, /*resolver=*/nullptr);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().prepared, 1u);
+    EXPECT_EQ(r.value().prepared_committed, 1u);
+    EXPECT_EQ(r.value().prepared_aborted, 0u);
+    EXPECT_EQ(r.value().analysis.transactions[11].outcome, TxnOutcome::kWinner);
+}
+
+// **Absence is a decision, and only because of the floor.** The redo start
+// is floored by the oldest live prepare and the fold takes the minimum over
+// cores, so a scan that contains the prepare contains any decision made
+// after it. No decision in the scan therefore means none was ever made -
+// which is the retention obligation of `cross-owner-txn.md` §2c collapsing
+// into the ordinary floor, there being no second stream to have recycled.
+TEST_F(RecoveryTest, UnderOneStreamAnUndecidedPrepareIsARollback) {
+    WritePreparedPair(/*participant_txn=*/12, /*coordinator_txn=*/88,
+                      /*coordinator_core=*/3, RecordType::kPad);
+
+    RecordingUndo undo;
+    auto r = RecoverCore(*device_, 0, store_, OneStream(), &undo, nullptr, /*resolver=*/nullptr);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().prepared, 1u);
+    EXPECT_EQ(r.value().prepared_committed, 0u);
+    EXPECT_EQ(r.value().prepared_aborted, 1u);
+    EXPECT_EQ(r.value().analysis.transactions[12].outcome, TxnOutcome::kLoser);
+    EXPECT_EQ(undo.calls, 1) << "an aborted participant owes a rollback";
+}
+
+// A coordinator that aborted is not a coordinator that said nothing, but
+// both roll the participant back - the distinction the per-core resolver
+// draws costs nothing here, and the outcome must be the same either way.
+TEST_F(RecoveryTest, UnderOneStreamACoordinatorsAbortRollsTheParticipantBack) {
+    WritePreparedPair(/*participant_txn=*/13, /*coordinator_txn=*/99,
+                      /*coordinator_core=*/1, RecordType::kTxnAbort);
+
+    RecordingUndo undo;
+    auto r = RecoverCore(*device_, 0, store_, OneStream(), &undo, nullptr, /*resolver=*/nullptr);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().prepared_aborted, 1u);
+    EXPECT_EQ(r.value().analysis.transactions[13].outcome, TxnOutcome::kLoser);
+}
+
+// The per-core path is untouched: without a resolver it still refuses,
+// which is the promise a participant makes about not deciding for itself.
+TEST_F(RecoveryTest, UnderPerCoreStreamsAPrepareStillNeedsAResolver) {
+    WritePreparedPair(/*participant_txn=*/14, /*coordinator_txn=*/100,
+                      /*coordinator_core=*/1, RecordType::kTxnCommit);
+
+    RecordingUndo undo;
+    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, &undo, nullptr,
+                         /*resolver=*/nullptr);
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kNotImplemented) << r.status().message();
+}
 
 // ---- The refusal ---------------------------------------------------------
 

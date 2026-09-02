@@ -57,7 +57,46 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
     // stream's records say what to redo, the coordinator's say whether it
     // was committed. Guideline 3 is not approached, let alone crossed.
     out.prepared = out.analysis.prepared;
-    if (out.analysis.prepared != 0) {
+    if (out.analysis.prepared != 0 && start.single_stream) {
+        // **Under one stream the answer is already in hand** (AR0 M0,
+        // AL-R5). The participant's TXN_PREPARE and its coordinator's
+        // decision are records of the same log, so this scan saw both:
+        // resolving is a lookup of the coordinator's own transaction id in
+        // the table this pass just built, not a second file to open.
+        //
+        // **Absence means aborted, and that is sound rather than a
+        // default.** The checkpoint's redo start is floored by the oldest
+        // live TXN_PREPARE (`checkpointer.cpp`), and the fold takes the
+        // minimum over cores (`superblock_checkpoint_anchor.hpp`), so the
+        // scan begins at or before every undecided prepare. A decision is
+        // written after the prepare it decides, so if the prepare is in
+        // this scan and no decision is, none was ever made. This is
+        // `cross-owner-txn.md` §2c's retention obligation collapsing into
+        // the ordinary redo-start floor - there is no second stream whose
+        // segments could have been recycled out from under the question.
+        for (const auto& [participant_txn_id, prepared] : out.analysis.prepared_txns) {
+            auto state = out.analysis.transactions.find(participant_txn_id);
+            if (state == out.analysis.transactions.end()) {
+                return Status::Corruption(
+                    "recovery: prepared transaction " + std::to_string(participant_txn_id) +
+                    " has no analysis state");
+            }
+            const auto decision = out.analysis.transactions.find(prepared.coordinator_txn_id);
+            const bool committed = decision != out.analysis.transactions.end() &&
+                                   decision->second.outcome == TxnOutcome::kWinner;
+            if (committed) {
+                state->second.outcome = TxnOutcome::kWinner;
+                ++out.analysis.winners;
+                ++out.prepared_committed;
+            } else {
+                state->second.outcome = TxnOutcome::kLoser;
+                ++out.analysis.losers;
+                ++out.prepared_aborted;
+            }
+        }
+        out.analysis.prepared = 0;
+        out.analysis.prepared_txns.clear();
+    } else if (out.analysis.prepared != 0) {
         if (resolver == nullptr) {
             return Status::NotImplemented(
                 "recovery of core " + std::to_string(core_id) + ": " +
