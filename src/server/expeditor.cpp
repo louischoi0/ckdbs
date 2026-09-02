@@ -1709,13 +1709,32 @@ Status Expeditor::Serve() {
         // its own nor consult an intent before deleting a parent. Reachable
         // wherever a catalog carries relations placed under more than one
         // `placement` setting.
+        // **Core 0 is the one core with a Cabin store** (`cabin_store_` is
+        // this class's; `CoreRuntime` passes a peer's dispatcher
+        // `/*cabins=*/nullptr` by decision), so it is the one core whose
+        // reverse answer can be F6's lookup rather than a walk. Passed here
+        // rather than left null so that the acceleration exists wherever it
+        // can - and `fk_probe_service.hpp` states the consequence for the
+        // cores where it cannot.
         fk_probe_server_.emplace(catalog(), *store_, /*core_id=*/0, fk_intents_,
                                  fk_pending_deletes_, scheduler, *transport_,
-                                 txn_manager_.has_value() ? &*txn_manager_ : nullptr, &*logger_);
+                                 txn_manager_.has_value() ? &*txn_manager_ : nullptr, &*logger_,
+                                 cabin_store_.has_value() ? &*cabin_store_ : nullptr);
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kFkProbeRequest,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
                     fk_probe_server_->OnRequest(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        // AJ-T2's direction, on core 0 for the reason the forward is here:
+        // core 0 owns relations like any other core, so a DELETE elsewhere
+        // can need it to answer for a child of its own.
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kFkReverseProbeRequest,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    fk_probe_server_->OnReverseRequest(header, payload);
                 });
             !s.ok()) {
             return s;

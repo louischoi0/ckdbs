@@ -17,6 +17,7 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/fk_intent.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/manager.hpp"
 
@@ -99,6 +100,25 @@ static_assert(sizeof(FkProbeRequestPayload) <= sched::kCoreRingPayloadBytes,
               "budget, so a head that grew without the cap shrinking would refuse every send "
               "at run time instead of failing here");
 
+// ---- The reverse pair (AJ-T2, `docs/spec/foreign-keys.md` §3a) ------------
+//
+// One entry is one question: *"does any row of child relation `child_oid`
+// reference `parent_pk` through column `child_column_no`"*. The forward's
+// entry is a pair and this one is a triple, which is the whole reason
+// AJ-R6 gives them separate kinds rather than a direction flag.
+//
+// **Derived like the forward's cap and by the same rule, and the arithmetic
+// differs because the entry does.** `child_column_no` is a `std::uint16_t`
+// — `SysFkeyRow::child_column_no`'s type and `CheckNoChildReferences`'
+// parameter — so an entry is 8 + 8 + 2 = 18 bytes, not the 17 a byte-wide
+// column would give. The order's own survey wrote 58 from that wrong width;
+// the expression below is what makes the number follow the types instead of
+// a paragraph, and the `static_assert` is the real statement.
+inline constexpr std::size_t kFkReverseProbeRequestHeadBytes = 24;  // ids + count + reserved
+inline constexpr std::size_t kFkReverseProbeMaxEntries =
+    (sched::kCoreRingPayloadBytes - kFkReverseProbeRequestHeadBytes) /
+    (2 * sizeof(std::uint64_t) + sizeof(std::uint16_t));
+
 inline constexpr std::size_t kFkProbeReplyMessageBytes = 128;
 
 // parent's owner -> child's core. `status_code` non-zero means the whole
@@ -117,6 +137,68 @@ struct FkProbeReplyPayload {
 static_assert(sizeof(FkProbeReplyPayload) <= sched::kCoreRingPayloadBytes,
               "and so must a reply");
 
+// parent's owner -> child's owner. The three arrays are parallel and
+// `count` entries of each are meaningful, the forward request's shape for
+// its reason: a reader of a captured frame sees the questions in the order
+// the verdicts answer them.
+struct FkReverseProbeRequestPayload {
+    std::uint64_t session_id;
+    std::uint64_t transaction_id;
+    std::uint32_t count;
+    std::uint32_t reserved0;
+    std::uint64_t child_oid[kFkReverseProbeMaxEntries];
+    std::uint64_t parent_pk[kFkReverseProbeMaxEntries];
+    std::uint16_t child_column_no[kFkReverseProbeMaxEntries];
+};
+static_assert(sizeof(FkReverseProbeRequestPayload) <= sched::kCoreRingPayloadBytes,
+              "a reverse probe request must fit one ring payload; the cap above is derived from "
+              "that budget, so a head or an entry that grew without the cap shrinking would "
+              "refuse every send at run time instead of failing here");
+// **And the head the cap was derived from is the head the struct has.** The
+// size assert above does not say this: a fifth head field added without
+// moving `kFkReverseProbeRequestHeadBytes` shrinks the payload by one entry
+// and still fits, so the derivation would quietly stop being one while every
+// assert kept passing. This is the line that fails instead.
+static_assert(offsetof(FkReverseProbeRequestPayload, child_oid) ==
+                  kFkReverseProbeRequestHeadBytes,
+              "the declared head bytes must be the offset of the first entry array");
+
+// child's owner -> parent's owner. `status_code` non-zero means the whole
+// probe failed and no verdict is meaningful — the owner could not answer,
+// which is different from answering "no children". Verdicts are
+// **positional**, entry i answering request entry i.
+//
+// `kPass` here reads "no children" and is what lets the DELETE proceed;
+// `kViolation` is a committed visible child, terminal; `kBusy` is a child
+// row a foreign transaction is writing, retryable (F3). The same three
+// values the local reverse check produces, because it *is* the local
+// reverse check — run on the core that can see the rows.
+struct FkReverseProbeReplyPayload {
+    std::uint64_t session_id;
+    std::uint32_t count;
+    std::uint32_t status_code;
+    std::uint8_t verdict[kFkReverseProbeMaxEntries];
+    char message[kFkProbeReplyMessageBytes];  // NUL-terminated
+};
+static_assert(sizeof(FkReverseProbeReplyPayload) <= sched::kCoreRingPayloadBytes,
+              "and so must its reply");
+
+// What one reverse question is, on the sending side. Built by the parent
+// owner's dispatch fork (AJ-T3) out of the parent's `fkeys_in`.
+struct FkReverseProbeEntry {
+    catalog::Oid child_oid = 0;
+    std::uint64_t parent_pk = 0;
+    std::uint16_t child_column_no = 0;
+};
+
+// Every reverse question for one child owner, which is what one round is.
+// A parent with three foreign children on one core costs one message, not
+// three - AH-R2's deduplication rule, applied to the other direction.
+struct FkReverseProbeGroup {
+    std::uint32_t owner_core = 0;
+    std::vector<FkReverseProbeEntry> entries;
+};
+
 // How long the child's core waits for one owner's answer before giving up.
 // `[PROPOSED]`, and shorter than the index build's minute by two orders:
 // this is an OLTP write's inline cost, not a DDL build's, and a statement
@@ -133,7 +215,7 @@ public:
                   FkIntentTable& intents, FkPendingDeleteTable& pending_deletes,
                   sched::Scheduler& scheduler,
                   sched::RingTransport& transport, txn::TransactionManager* txn = nullptr,
-                  Logger* log = nullptr) noexcept
+                  Logger* log = nullptr, stats::CabinStore* cabins = nullptr) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
@@ -142,13 +224,38 @@ public:
           scheduler_(scheduler),
           transport_(transport),
           txn_(txn),
-          log_(log) {}
+          log_(log),
+          cabins_(cabins) {}
 
     // The `kFkProbeRequest` handler: bound the count, check that every
     // parent named is **this core's**, resolve each against latest state,
     // grant an intent per pass, reply. Every refusal is a reply — the
     // child's core is parked on one.
     void OnRequest(const sched::MessageHeader& header, std::span<const std::byte> payload);
+
+    // The `kFkReverseProbeRequest` handler (AJ-T2): bound the count, check
+    // that every **child** named is this core's, and run the reverse check
+    // this core already runs for its own parents — `CheckNoChildReferences`
+    // with `options.core_id = core_id_`, Cabin-first where the fk column
+    // carries one.
+    //
+    // **It leaves nothing behind, which is the asymmetry with `OnRequest`
+    // above.** A forward probe grants a reference intent; this answers a
+    // read and forgets it. The core running it is enrolled in nothing, gets
+    // no decide and needs no release leg (AJ-R5) — what holds the window
+    // open lives on the *deleting* core, in `FkPendingDeleteTable`.
+    // **It runs the walk inline on the message drain, and that is a known
+    // gap rather than a decision** (AJ-T2's review, finding 1). Unlike the
+    // forward - whose `CheckParentPresent` is a btree descent - a reverse
+    // check without a Cabin is a stoppable walk of the *whole* child
+    // relation, and up to `kFkReverseProbeMaxEntries` of them ride one
+    // message. `IndexBuildServer::OnRequest` is the engine's one precedent
+    // for relation-scale work arriving as a message and it validates inline
+    // then submits a `kSystem` task; this does not yet, so the walk delays
+    // the drain of every other message on this core and is charged to no
+    // scheduling group (`sched.md` §4). Owed before AJ-T5 measures it.
+    void OnReverseRequest(const sched::MessageHeader& header,
+                          std::span<const std::byte> payload);
 
     // Every intent a holder took, released. Wired to the 2PC decide, which
     // is the only thing that ends an intent (AH-R5): a decide is idempotent
@@ -158,10 +265,13 @@ public:
     }
 
     std::uint64_t probes() const noexcept { return probes_; }
+    std::uint64_t reverse_probes() const noexcept { return reverse_probes_; }
 
 private:
     void Reply(std::uint32_t requester, std::uint64_t request_id, std::uint64_t session_id,
                const std::vector<exec::FkVerdict>& verdicts, const Status& status);
+    void ReverseReply(std::uint32_t requester, std::uint64_t request_id, std::uint64_t session_id,
+                      const std::vector<exec::FkVerdict>& verdicts, const Status& status);
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
@@ -174,7 +284,22 @@ private:
     sched::RingTransport& transport_;
     txn::TransactionManager* txn_;
     Logger* log_;
+    // F6's half of the reverse check: the verified-empty entry set of a
+    // Cabin on the child's fk column is an authoritative "no children",
+    // which turns a stoppable walk into a lookup.
+    //
+    // **Null on every core but 0 as the engine ships**, and that is a
+    // deliberate configuration rather than an oversight here:
+    // `CoreRuntime` passes `/*cabins=*/nullptr` to a peer's dispatcher,
+    // reasoning that a peer "returns identical rows without them; what it
+    // loses is speed". The consequence for this handler is worth stating
+    // where it bites - a reverse probe answered by a **peer** is a walk,
+    // and only one answered by core 0 can be a Cabin lookup. H-AJ4's
+    // Cabin-versus-walk arm is therefore measurable in one placement and
+    // not the other, which AJ-T5 must arrange rather than assume.
+    stats::CabinStore* cabins_;
     std::uint64_t probes_ = 0;
+    std::uint64_t reverse_probes_ = 0;
 };
 
 // ---- The child core's half -----------------------------------------------
@@ -207,6 +332,20 @@ public:
                    std::uint64_t transaction_id,
                    const exec::FkParentVerdicts::ForeignGroup& group);
 
+    // The reverse direction's send (AJ-T2). Deliberately **the same waiter
+    // map and the same deadline**: `FkProbeOutcome` is `arrived`, a status
+    // and positional verdicts, none of which is forward-specific, so
+    // `DispatchAsync`'s settle-collect-decide block parks over a mixed set
+    // of request ids without knowing which direction each went. Request ids
+    // come from one per-core counter, so the two directions cannot collide.
+    //
+    // A group past `kFkReverseProbeMaxEntries` opens nothing and refuses,
+    // as the forward's does and for its reason: a request this core cannot
+    // phrase is a statement it cannot run, not one it runs partially.
+    Status RequestReverse(std::uint32_t owner_core, std::uint64_t request_id,
+                          std::uint64_t session_id, std::uint64_t transaction_id,
+                          const FkReverseProbeGroup& group);
+
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone.
     bool Settled(std::uint64_t request_id) const;
@@ -222,7 +361,28 @@ public:
     // subject of AI-T3. XD0's rule, on the leg AI added.
     std::uint64_t requests() const noexcept { return requests_; }
 
+    // Reverse rounds this core sent, counted separately from `requests()`:
+    // a statement's cost is one or the other, never both, and a single
+    // figure would make a DELETE's crossing indistinguishable from an
+    // INSERT's in `SHOW META`.
+    //
+    // **`SHOW META` does not carry it yet**, and saying so here is the
+    // difference between a counter and a claim: the block at
+    // `command_dispatcher.cpp`'s `fk_probes_sent` reads `requests()` alone,
+    // so a reverse round is invisible on that surface until AJ-T3 lands the
+    // sender and the field together. Nothing sends one before then, so the
+    // number is 0 rather than wrong - but it is not yet the distinction the
+    // paragraph above describes.
+    std::uint64_t reverse_requests() const noexcept { return reverse_requests_; }
+
 private:
+    // **Both directions land the same way**, so they land in one place: the
+    // waiter lookup, the status decode and the positional copy have nothing
+    // direction-specific in them, and only the payload each arrives in
+    // differs. Each receiver decodes its own POD and hands the pieces here.
+    void Land(std::uint64_t request_id, std::uint32_t status_code, const char* message,
+              const std::uint8_t* verdict, std::uint32_t count, std::uint32_t cap);
+
     std::uint32_t core_id_;
     sched::Scheduler& scheduler_;
     sched::RingTransport& transport_;
@@ -230,6 +390,7 @@ private:
     Logger* log_;
     std::map<std::uint64_t, FkProbeOutcome> waiting_;
     std::uint64_t requests_ = 0;
+    std::uint64_t reverse_requests_ = 0;
 };
 
 }  // namespace kds::server

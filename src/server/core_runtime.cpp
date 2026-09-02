@@ -733,6 +733,18 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         !s.ok()) {
         return s;
     }
+    // AJ-T2's direction. **Both halves on every core**, for the reason the
+    // forward's comment gives: a relation is a foreign parent on one
+    // statement and a foreign child on the next, so a core that answered
+    // only one direction would be a core some DELETE cannot complete.
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kFkReverseProbeRequest,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                fk_probe_server_->OnReverseRequest(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
     fk_probe_client_.emplace(config_.core_id, *scheduler_, transport, scheduler_->clock(), log_);
     if (Status s = fk_probe_client_->RegisterReplyReceiver(); !s.ok()) return s;
     // The receiver first, then the pointer the dispatcher asks through -
