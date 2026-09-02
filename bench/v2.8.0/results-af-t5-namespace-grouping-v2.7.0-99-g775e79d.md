@@ -208,13 +208,14 @@ where g7-c4's 13.2 ms p100 comes from.
 
 > **RETRACTED 2026-09-02, the same day it was written.** §3b explained
 > g7-c8's load gap as `group` durability's batch falling to one on a core
-> with a single committing session. **A direct measurement falsifies it**
-> (`bench/peer_group_batch_probe.py`, archived beside this file): the batch
-> is **1.000 on every core at every concurrency measured** — one session or
-> two, peer core or core 0 — so a placement cannot have lost a batching it
-> never had. The measured facts below stand; the *reason* given for them
-> does not, and g7-c8's 2.35× returns to **unexplained**. §3c is the
-> retraction and what replaced it.
+> with a single committing session, where `rotate`'s cores had two. **A
+> direct measurement falsifies exactly that** (`bench/peer_group_batch_probe.py`,
+> archived beside this file): **one and two committing sessions batch
+> identically — 1.000 against 1.000** — so the batch is not what separates
+> the two layouts. (The batch does move, at four sessions and above; §3c has
+> the sweep, and correcting its own first reading.) The measured facts below
+> stand; the *reason* given for them does not, and g7-c8's 2.35× returns to
+> **unexplained**.
 
 ### 3b (as written, mechanism false): a batch of one
 
@@ -274,62 +275,70 @@ reads 0.969× over these 3 reps against 0.900× over §3a's 5 — so the
 suggests and sits close to parity. The direction is unchanged; the size was
 noise-dominated, as §3a's overlapping ranges already warned.
 
-### 3c. What the retraction found instead: D2 forms no batch at all
+### 3c. What the retraction found: D2's batch needs four committers, not two
 
 `SHOW META` gained `wal_group_commits` / `wal_group_batches` /
 `wal_mean_group_batch` so §3b's claim could be *seen* rather than inferred.
-Pointing it at the claim killed it, and the replacement finding is larger.
+Pointing it at the claim killed it.
 
-**The measurement.** One namespace's two relations, co-located on one core by
-NS10; `peer_listeners = on` so a session can be accepted on that core;
-400 inserts from one session, then 400 each from two sessions committing at
-the same time. Same core, same relations, same statement count, same class —
-the arms differ only in how many sessions commit at once.
+**This section was itself wrong once and is corrected in place.** Its first
+version, from a two-point measurement, said D2 forms *no* batch at all.
+Sweeping the concurrency says otherwise, and the sweep is the honest
+instrument: one and two sessions was a boundary case, and stopping there
+called a threshold an absence.
 
-| owner core | placement | sessions committing | commits | batches | syncs | mean batch | commits/s |
-|---|---|---|---|---|---|---|---|
-| 1 (peer) | `namespace` | 1 | 400 | 400 | 400 | **1.000** | 860 |
-| 1 (peer) | `namespace` | 2 | 800 | 800 | 800 | **1.000** | 909 |
-| 0 | `creating` | 1 | 400 | 400 | 400 | **1.000** | 297 |
-| 0 | `creating` | 2 | 800 | 800 | 800 | **1.000** | 389 |
+**The measurement.** One namespace's two relations, co-located on one core
+by NS10; `peer_listeners = on` so sessions can be accepted on that core;
+300 inserts per session, at 1, 2, 4 and 8 sessions committing at once. Same
+core, same relations, same statement count, same class.
 
-**Every D2 commit performs its own device sync, whatever the concurrency and
-whichever core.** Two concurrent sessions do not halve the syncs and do not
-raise throughput per commit — they take twice as long for twice the work.
-`durability = group`, the shipped default, is paying `strict`'s device cost.
+| sessions committing | commits | syncs | **mean batch** | commits/s |
+|---|---|---|---|---|
+| 1 | 300 | 301 | **1.000** | 693–804 |
+| 2 | 600 | 600 | **1.000** | 804–818 |
+| 4 | 1200 | 600 | **2.000** | 1069–1597 |
+| 8 | 2400 | 600 | **~4.000** | 2839–2900 |
 
-**And the source says why, in its own comment.** A D2 commit stages its
-record and the dispatcher then drains **inline, on the dispatching thread**,
-immediately (`command_dispatcher.cpp`): *"Inline, on this thread: the batch
-is whatever happened to be staged already, which with no scheduler is this
-commit alone."* A batch of more than one therefore needs a second commit to
-be staged **between** the first's append and its drain — and the reactor
-does not yield in that window. So the batch is structurally one under any
-workload that commits through this path, which is what the four rows above
-show from the outside.
+Reproduced on a peer core and on core 0 with the same shape. Two readings
+matter:
 
-**What this does to §3b.** The batching mechanism is gone, so g7-c8's 2.35×
-is unexplained again. What the retraction *does* rule out is worth keeping,
-because it is what a next attempt should not re-try:
+- **The batch is `n/2` from four sessions upward, and flatly 1 below it.**
+  D2 works, and the sync count is pinned from two sessions on: 600 syncs
+  whether the core commits 600, 1,200 or 2,400 times.
+- **Two concurrent committers on a core get none of it.** Batch 1.000 and
+  818 commits/s against one session's 804 — a second session on a core buys
+  essentially nothing, where a fourth doubles and an eighth quadruples.
 
-- it is **not** group-commit batching (no batch exists to lose);
-- it is **not** sync *count* per core — with no batching anywhere, both arms
-  perform one sync per commit, and the per-core commit counts are equal;
-- it **is** sync-related, since `relaxed` collapses the gap to 1.02×.
+**Why two is the boundary**, from the design: the reactor's post-task hook
+syncs once per iteration, *after* the ready tasks (`Scheduler::SetPostTaskHook`),
+and the sync runs on the reactor thread. A request that arrives during a
+sync is polled on the next iteration — the one after the sync it just
+missed. With two closed-loop clients that anti-phases into one commit per
+iteration forever; with four or more, arrivals pile up during a sync and the
+next iteration stages them together, which is exactly the `n/2` the table
+shows.
 
-**A hypothesis, labelled as one because this section has already published a
-wrong mechanism once.** Under `namespace` a core serves exactly one
-synchronous session, so after each reply it idles for a full client round
-trip; under `rotate` two sessions target each core, so its queue is rarely
-empty. Equal syncs, unequal *idle*. That is consistent with everything
-measured — including `relaxed`, where service time collapses and both arms
-become round-trip-bound and equal — and **it is not measured**. Confirming
-it needs per-core reactor utilisation during the load phase, which
-`SHOW META`'s scheduling-group accounting could give and this probe does not.
+**What this does to §3b.** The retraction stands, and it is the *specific*
+mechanism that fails: §3b said `namespace` pays more because its cores have
+one committing session where `rotate`'s have two. **Two sessions batch
+exactly as badly as one** — 1.000 against 1.000 — so that cannot be the
+difference between the arms. g7-c8's 2.35× is unexplained.
 
-**What survives and is worth keeping.** `wal_mean_group_batch` is more
-useful after this, not less: it is the field that showed a documented
-mechanism was not happening, and `1.000` everywhere is the standing evidence.
+What the sweep rules in and out for a next attempt:
+
+- **not** the batch size at one-versus-two sessions per core: measured
+  equal;
+- **is** sync-related, since `relaxed` collapses the gap to 1.02×;
+- and the sweep *supports* §3b's replacement hypothesis without confirming
+  it: a second session on a core adds 1.7% of throughput, which is the
+  signature of a core that is idle waiting for a client round trip rather
+  than busy. Confirming that needs per-core reactor utilisation during the
+  load phase, which this probe does not collect.
+
+**What survives.** `wal_mean_group_batch` earned its place twice over: it
+falsified a mechanism, then corrected the falsification. `1.000` on a core
+means that core's D2 is paying D1's device cost, and it is now visible
+before a workload is designed around it.
 
 ---
 

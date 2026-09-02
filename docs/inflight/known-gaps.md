@@ -2790,32 +2790,36 @@ do, and one thing it does that nobody has decided:
   which side of that they are on. Two things left unmeasured: anything past
   2.33 groups per writer core (one point, not a curve), and the row-count
   axis at that sizing.
-- **`durability = group` forms no batch, so D2 pays D1's device cost.**
-  Found 2026-09-02 by `bench/peer_group_batch_probe.py`
-  (`bench/v2.8.0/results-af-t5-namespace-grouping-*` §3c) and confirmed in
-  source. `SHOW META`'s `wal_mean_group_batch` reads **1.000 on every core
-  at every concurrency measured** — one session or two, peer core or core 0
-  — and two concurrent sessions take twice as long for twice the work
-  rather than sharing a sync. The reason is that a D2 commit drains
-  **inline on the dispatching thread** right after staging its record
-  (`command_dispatcher.cpp`: *"the batch is whatever happened to be staged
-  already, which with no scheduler is this commit alone"*), and the reactor
-  does not yield between the append and the drain, so a second commit can
-  never join the first. `kds.conf.sample` describes D2 as *"one fsync
-  amortized over a batch of concurrent committers"*, which is the design and
-  not the behaviour. **Not a correctness problem** — the durability point is
-  unchanged and D2 is at worst as safe as D1 — and not measured beyond two
-  concurrent sessions on one core, which is where a batch should already
-  have formed.
+- **`durability = group` does not batch below four concurrent committers on
+  a core.** Measured 2026-09-02 by `bench/peer_group_batch_probe.py`
+  (`bench/v2.8.0/results-af-t5-namespace-grouping-*` §3c), on a peer core
+  and on core 0 alike: `wal_mean_group_batch` reads **1.000 at one session
+  and 1.000 at two**, 2.000 at four and ~4.000 at eight — the batch is `n/2`
+  from four upward and flat below. Throughput follows: a *second* session on
+  a core adds 1.7% (804 → 818 commits/s), a fourth doubles, an eighth
+  quadruples. So D2 works as designed once a core has four committers, and
+  **a core with one or two pays `strict`'s device cost under `group`'s
+  name**.
+  The shape follows from the design rather than contradicting it: the
+  reactor's post-task hook syncs once per iteration *after* the ready tasks,
+  on the reactor thread, so a request arriving during a sync is polled on
+  the next iteration — with two closed-loop clients that anti-phases into
+  one commit per iteration. Not a correctness problem: the durability point
+  is unchanged and D2 is at worst as safe as D1. **This entry was itself
+  wrong once** — its first version said D2 formed no batch at all, from a
+  measurement that stopped at two sessions and called a threshold an
+  absence.
 - **AF-T5's g7-c8 load gap is unexplained again** — `namespace` 29.7 s
   against `rotate` 13.4 s on the load phase, 2.35× on a re-run, collapsing
   to 1.02× under `relaxed`. It was explained as group-commit batching on
   2026-09-02 and **that explanation was retracted the same day** by the
-  measurement above: there is no batch to lose. What the retraction rules
-  out is recorded at §3c along with an untested queueing hypothesis (a core
-  serving one synchronous session idles for a client round trip after every
-  reply; a core serving two does not). Confirming or killing that needs
-  per-core reactor utilisation during the phase.
+  measurement above: one and two committers per core batch identically
+  (1.000 against 1.000), so the batch cannot be what separates the two
+  layouts. What the retraction rules out is recorded at §3c, along with an
+  untested queueing hypothesis the sweep *supports without confirming* — a
+  second session on a core adds 1.7% of throughput, the signature of a core
+  idle waiting for a client round trip rather than busy. Confirming or
+  killing it needs per-core reactor utilisation during the phase.
 - **No `sim/` cell covers a namespace.** The generator creates relations
   in `public` and nothing declares one, so the crash/restart harness has
   never mounted a file with a user namespace in it. The rows involved are

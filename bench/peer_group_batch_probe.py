@@ -14,15 +14,19 @@ Two claims, and the second is the one worth checking:
 
   1. **Readable.** A session the kernel accepted on core `c` gets core `c`'s
      counters back from `SHOW META`, not core 0's.
-  2. **It moves, on that core, for the reason claimed.** One session
-     committing serially on core `c` gives `wal_mean_group_batch = 1.000` -
-     the cliff, every commit paying its own device sync. Two sessions
-     committing concurrently on the same core give more than 1. If the field
-     cannot tell those two apart on a peer, it does not do the job it was
-     added for.
+  2. **It moves with concurrency, on that core.** The sweep runs 1, 2, 4 and
+     8 sessions committing at once against the same core and reads the batch
+     off each. What it found, on a peer and on core 0 alike: **1.000 at one
+     *and at two* sessions, 2.000 at four, ~4.000 at eight** - the batch is
+     `n/2` from four upward and flatly 1 below it, and throughput follows
+     (804 -> 818 -> 1597 -> 2890 commits/s). So D2 batches, and **two
+     concurrent committers on a core get none of it**.
 
-The two arms differ in **one** thing: how many sessions are committing on
-the core at once. Same core, same relation count, same statement count, same
+     Stopping at two sessions would have called that threshold an absence,
+     which is exactly the mistake this probe's first run made.
+
+Every sweep point differs in **one** thing: how many sessions are committing
+on the core at once. Same core, same relations, same statement count, same
 durability class - so a difference in the batch is the concurrency and
 nothing else.
 
@@ -113,6 +117,8 @@ def main():
     ap.add_argument("--rows", type=int, default=400)
     ap.add_argument("--port", type=int, default=15900)
     ap.add_argument("--max-connects", type=int, default=256)
+    ap.add_argument("--sweep", type=int, nargs="*", default=[1, 2, 4, 8],
+                    help="concurrent committing sessions to sweep on the owner core")
     ap.add_argument("--placement", default="namespace",
                     help="`namespace` co-locates the pair on a peer, which is the case under "
                          "test. `creating` puts them on core 0 - the control that says whether "
@@ -167,8 +173,9 @@ def main():
 
         # Three sessions on the owner: two for the concurrent arm, one kept
         # for the serial arm and for the readings.
-        got, attempts = collect_connections(args.port, {owner: 3}, args.max_connects)
-        print(f"opened {attempts} connections to get 3 sessions on core {owner}")
+        need = max([3] + list(args.sweep))
+        got, attempts = collect_connections(args.port, {owner: need}, args.max_connects)
+        print(f"opened {attempts} connections to get {need} sessions on core {owner}")
         out["connect_attempts"] = attempts
         conns = got[owner]
         try:
@@ -179,6 +186,43 @@ def main():
             out["reads_the_peer"] = reading["core"] == owner
 
             errors = []
+
+            # ---- The sweep: how many concurrent committers it takes ------
+            #
+            # Two sessions is the boundary case and a bad place to stop. The
+            # post-task hook batches whatever was staged **in one reactor
+            # iteration**, and the sync runs on the reactor thread *after*
+            # the tasks - so a request arriving during a sync is only polled
+            # on the next iteration, after the sync it just did. With two
+            # closed-loop clients that can anti-phase into one commit per
+            # iteration forever; with more, arrivals should pile up during a
+            # sync and the next iteration should stage all of them at once.
+            # This sweep is what tells those two apart, and stopping at two
+            # would have called a threshold an absence.
+            sweep = []
+            for n in args.sweep:
+                if n > len(conns):
+                    continue
+                before = batch_fields(conns[0])
+                t0 = time.time()
+                threads = [threading.Thread(
+                    target=insert_loop,
+                    args=(conns[i], "a" if i % 2 == 0 else "b", args.rows,
+                          args.retry_deadline, errors))
+                    for i in range(n)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                d = delta(before, batch_fields(conns[0]))
+                d["sessions"] = n
+                d["wall_s"] = time.time() - t0
+                d["commits_per_s"] = (n * args.rows) / d["wall_s"]
+                sweep.append(d)
+                print(f"  {n:2d} session(s): batch={d['mean_group_batch_over_phase']:6.3f} "
+                      f"commits={d['wal_group_commits']:6d} syncs={d['wal_syncs']:6d} "
+                      f"{d['commits_per_s']:8.1f} commits/s")
+            out["sweep"] = sweep
 
             # ---- Arm A: one session committing on this core --------------
             before = batch_fields(conns[0])
@@ -219,12 +263,15 @@ def main():
         print(f"claim 1 - a peer session reads its own core:  "
               f"{'YES' if out['reads_the_peer'] else 'NO'} "
               f"(asked core {owner}, got core {out['reported_core']})")
-        one = serial["mean_group_batch_over_phase"]
-        two = concurrent["mean_group_batch_over_phase"]
-        print(f"claim 2 - the batch moves with concurrency:   "
-              f"1 session = {one:.3f}, 2 sessions = {two:.3f}"
-              + ("  -> the field distinguishes them"
-                 if two > one else "  -> IT DOES NOT"))
+        # The verdict is the *sweep's*, not the two-session pair's: the
+        # batch is flat at 1 through two sessions and only moves at four, so
+        # a verdict read off one and two alone reports "it never moves".
+        by_n = {d["sessions"]: d["mean_group_batch_over_phase"] for d in out.get("sweep", [])}
+        moved = [n for n, b in sorted(by_n.items()) if b > 1.0]
+        print("claim 2 - the batch against concurrency:      "
+              + ", ".join(f"{n}->{by_n[n]:.3f}" for n in sorted(by_n))
+              + (f"  -> it moves, first at {moved[0]} sessions"
+                 if moved else "  -> it never moved in this sweep"))
         if errors:
             print(f"errors: {len(errors)}")
             for e in errors[:5]:
