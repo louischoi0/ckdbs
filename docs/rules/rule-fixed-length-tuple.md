@@ -1,17 +1,17 @@
 # Fixed-Length Tuples & the Var-Heap — Technical Specification
 
-**Status:** **Official specification**, decisions confirmed 2026-08-01. This document graduates a discussion draft (`quarry/fixed-length-tuples-discussion.md`) into normative design; per the quarry rule the draft was to remain as the argument record — **but it is not in this repository** (noted 2026-08-10), so this file is both the argument record and what implementers follow. The rationale retained inline below is therefore load-bearing rather than a summary of something else. Rationale is retained inline — every decision here carries its *why*. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/rules/rules.md`, `docs/spec/heap-and-tuple.md`, `docs/spec/wal.md`, `docs/spec/txn.md`, `docs/spec/waystone-concpets.md`, and `docs/spec/physical-optimizer.md` (the physical-optimizer spec — written 2026-08-09, backfilling the blueprint this line cited before one existed).
+**Status:** **Official specification.** Rationale is retained inline — every decision here carries its *why*, and this file is its own argument record. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/rules/rules.md`, `docs/spec/heap-and-tuple.md`, `docs/spec/wal.md`, `docs/spec/txn.md`, `docs/spec/types.md`, `docs/spec/waystone-concpets.md`, and `docs/spec/physical-optimizer.md`.
 
-## 0. Decision Record `[CONFIRMED 2026-08-01]`
+## 0. Decision Record `[CONFIRMED]`
 
 | # | Decision | Choice |
 |---|---|---|
 | V0 | The rule | **Every tuple is fixed-length.** Variable-width types occupy fixed-size tagged cells; oversize values live out of line in the **var-heap** |
-| V1 | Inline threshold | **Global configuration constant** (`kds.inline_cell_width`), pinned per instance at bootstrap — not a per-column declaration |
+| V1 | Inline width | **One quantity, `kds.inline_cell_width`**: an instance constant pinned at bootstrap is the default, and `varchar(N)` declares the same quantity for one column (§4). No second threshold and no second name for it |
 | V2 | Var-heap shape | **Immutable per version**: updates write a new value and swap the pointer; var-heap bytes are never rewritten or moved in place |
 | V3 | Var-heap durability | **Logged, headered, checksummed** — an ordinary authoritative page class (`kVarHeap`), not an advisory one |
-| V4 | Prefix-inline for spilled values | **No** (revisit trigger recorded in §9) |
-| V5 | Schema evolution | No width syntax exists (consequence of V1); changing the instance constant on existing data is **`Unsupported`** |
+| V4 | Prefix-inline for spilled values | **No** (§9) |
+| V5 | Schema evolution | Changing a cell's width on existing data rewrites every row of the relation, so it is **`Unsupported`**: the instance constant cannot change on an existing file, and there is no `ALTER … TYPE varchar(M)` |
 
 ## 1. Background & Rationale
 
@@ -21,18 +21,18 @@ Variable-length rows attack exactly this: an UPDATE that grows a row can force i
 
 Secondary gains, each real: relayout becomes cell-`memcpy` with exact fill-factor math; in-page slot addressing becomes index arithmetic; the row codec reads static offsets (the engine's existing fixed-record discipline — Waystone entries, trail pages, frame headers — extended to user tuples); and the threshold at which relayout pays drops because moves got cheaper.
 
-The honest cost, accepted knowingly: variable-length management is **relocated, not eliminated** — it moves into the var-heap (§5), and fixed cells spend space on padding for short values. The acceptance argument: the hot heap is where fixed length matters; the var-heap is deliberately boring (V2 makes it immovable); and on target OLTP schemas — short, uniform strings — a sane inline width keeps the common case entirely inline (§9 keeps the width's default value under measurement).
+The honest cost, accepted knowingly: variable-length management is **relocated, not eliminated** — it moves into the var-heap (§5), and fixed cells spend space on padding for short values. The acceptance argument: the hot heap is where fixed length matters; the var-heap is deliberately boring (V2 makes it immovable); and on target OLTP schemas — short, uniform strings — a sane inline width keeps the common case entirely inline.
 
 ## 2. The Rule (normative)
 
 - A relation's tuple layout is a sequence of fixed-size cells at offsets computable from the schema alone. Row size is a per-relation constant; in-page slot addressing is arithmetic.
-- Fixed-width types (integers, floats, bool, timestamps, the Keystone word, MVCC header) occupy their natural widths as today.
-- Every variable-width type (`TEXT`/`VARCHAR`, future blobs) occupies exactly **one tagged cell** (§3), regardless of the value stored. Its width is `kds.inline_cell_width` — the instance's, or **the column's own** when it was declared `varchar(N)` (§4, amended 2026-08-28).
+- Fixed-width types (integers, bool, dates, timestamps, decimals, `char(N)`, the Keystone word, the MVCC header) occupy their natural widths.
+- Every variable-width type (`TEXT`/`VARCHAR`, future blobs) occupies exactly **one tagged cell** (§3), regardless of the value stored. Its width is `kds.inline_cell_width` — the instance's, or **the column's own** when it was declared `varchar(N)` (§4).
 - No code path may produce a tuple whose size differs from its relation's constant. This is asserted in the row codec, not policed by convention.
 
 ## 3. The Tagged Cell `[CONFIRMED format; widths PROPOSED]`
 
-Cell width `W = kds.inline_cell_width`, which since 2026-08-28 is a **per-column** number with an instance default (§4). Layout (memcpy codec, `static_assert`ed, LE — rules.md §2/§5):
+Cell width `W = kds.inline_cell_width`, a **per-column** number with an instance default (§4). Layout (memcpy codec, `static_assert`ed, LE — rules.md §2/§5):
 
 | Tag (`u8` at offset 0) | Layout after tag | Meaning |
 |---|---|---|
@@ -46,53 +46,41 @@ Cell width `W = kds.inline_cell_width`, which since 2026-08-28 is a **per-column
 
 ## 4. The Instance Default and the Column Override `[CONFIRMED semantics; default PROPOSED]`
 
-**Amended 2026-08-28** (`instructions/v2.5.0/varchar-char-architecture.md` §3.2, operator-ratified). This section previously read "The Global Constant" and refused a per-column width outright; the v1 argument is kept below as history, because a reversal that erases what it reversed cannot be audited.
-
 `kds.inline_cell_width` is configuration-referenced but **instance-pinned**: read from configuration once at bootstrap, written into the superblock, and validated at every startup — a running configuration that disagrees with the superblock refuses to start (`InvalidArgument`, naming both values). It cannot be hot-changed; on-disk tuple layout depends on it, so changing it for existing data is a rebuild, which is `Unsupported` (V5).
 
-What changed is its **scope**, not its meaning. It is now the *default* a `varchar` column takes, and `varchar(N)` overrides it for that column:
+It is the *default* a `varchar` column takes, and `varchar(N)` overrides it for that column:
 
-- `N` **is** that column's `kds.inline_cell_width`. Same unit (cell bytes, tag and length included), same capacity formula `N − 3`, same three tags, same spill path. **There is no second threshold and no second name for one** — the operator's rule, stated twice; a review that finds a `max_inline_char_size` or any equivalent has found a defect.
+- `N` **is** that column's `kds.inline_cell_width`. Same unit (cell bytes, tag and length included), same capacity formula `N − 3`, same three tags, same spill path. **There is no second threshold and no second name for one** — a review that finds a `max_inline_char_size` or any equivalent has found a defect.
 - `N` is validated by `storage::CheckInlineCellWidth` and nothing else, so the bounds are the instance setting's: `[16, 4096]`. `varchar(8)` is therefore refused — the narrowest cell must still hold a 13-byte spilled descriptor (§3). That wart is accepted rather than patched with a second validator.
-- `N` is **not a length cap**. A value longer than `N − 3` spills; it is not refused. The only length refusal is one var-heap page (8144 bytes, §9).
-- A bare `varchar` stores `len = 0` in `sys.columns` and reads at the instance width. **This is the whole compatibility story**: every varchar column written before this amendment carries 0, 0 has always meant the instance width, so no format bumps and an existing file mounts byte-identical. `varchar(64)` under a 64-byte instance and a bare `varchar` are the same column in every byte but that one.
-- The width rides in `SysColumnRow::len`, the field TY9 already overloaded for a decimal's `(p, s)` and `char`'s width — which is why this costs no catalog format change either (`docs/spec/types.md` §4a).
+- `N` is **not a length cap**. A value longer than `N − 3` spills; it is not refused. The only length refusal is one var-heap page (8144 bytes, §8b).
+- A bare `varchar` stores `len = 0` in `sys.columns` and reads at the instance width. 0 has always meant the instance width, so a file written before the override existed mounts byte-identical; `varchar(64)` under a 64-byte instance and a bare `varchar` are the same column in every byte but that one.
+- The width rides in `SysColumnRow::len`, the field that also carries a decimal's `(p, s)` and `char`'s width (`docs/spec/types.md` §4a), so it costs no catalog format change.
 
-**V5 still holds, on its true reason.** `ALTER … TYPE varchar(M)` is permanently out because changing a cell's width rewrites every row of the relation (§2's constant), not — as the v1 text had it — because no per-column width exists to widen.
+**V5 holds on its true reason.** `ALTER … TYPE varchar(M)` is out because changing a cell's width rewrites every row of the relation (§2's constant) — not because no per-column width exists to widen. The row codec never reads the instance width per cell: it derives every cell's span from `RowLayout::offsets` (`CellOf`/`MutableCellOf`), so a per-column width threads through nothing below `RowLayout::ColumnWidth`.
 
-> **The v1 argument, kept as history.** *"Rationale for global-over-per-column (the decision that replaced the strawman): one number instead of a schema decision users can get wrong; one codec path instead of per-column widths threaded through every layout computation; no `VARCHAR(n)` grammar, no `ALTER … WIDEN` question — V5 falls out for free. The recorded cost: uniform padding overhead where a per-column width would have been tighter. Accepted as the simplicity trade."*
->
-> Two of its three claims survived the build and one did not. The `ALTER … WIDEN` question did fall out for free — V5 is unchanged, only its reason is corrected. The padding cost was real, and a per-column width is what removes it. **The "one codec path" claim was wrong**, and measurably so: the row codec never read the instance width per cell in the first place — it derives every cell's span from `RowLayout::offsets` (`CellOf`/`MutableCellOf`), so per-column widths threaded through nothing. The whole change below the parser was one line of `RowLayout::ColumnWidth`. The v1 decision was paying a padding cost to avoid a complexity that did not exist.
-
-Default: **64 bytes** `[PROPOSED]` — chosen so common OLTP strings (codes, names, references) never touch the var-heap; the honest counter-cost is 64 B per *undeclared* string column per row, which a declared width is now the way to avoid. The default stays `[PROPOSED]` until measured against real target-schema string-length distributions (§9); the *semantics* above are confirmed regardless of the number.
+Default: **64 bytes** `[PROPOSED]` — chosen so common OLTP strings (codes, names, references) never touch the var-heap; the counter-cost is 64 B per *undeclared* string column per row, which a declared width is the way to avoid. The default's value is §9's; the *semantics* above are confirmed regardless of the number.
 
 ## 5. The Var-Heap `[CONFIRMED]`
 
 The out-of-line value store. Its design goal is to be **boring**: the mobility problem was removed from the heap and must not reappear here.
 
-- **Immutable per version (V2).** Writing a spilled value appends `{len, bytes}` to a var-heap page and returns its pointer. Values are never rewritten and never moved. Consequences, which are the rationale: MVCC correctness is free — an old-version reader follows the old pointer to bytes that cannot have changed; pointers need no epoch, no validation, no forwarding; the var-heap is **relayout-exempt by construction** (the physical optimizer never touches `kVarHeap` pages); reclamation is not new machinery but a rider on purge — when a version dies, its values die with it. The accepted cost: churn-heavy string updates consume space until purge catches up, making purge cadence a sizing input (§9 metric).
-- **Logged and headered (V3).** `kVarHeap` joins the headered page-class enum: common header, `page_lsn`, CRC32C, full WAL participation via a `VARHEAP_APPEND` record. Rationale, stated because the recent reflex runs the other way: everything added lately (waystone/trail pages) was advisory, but a var-heap value is **authoritative data** — losing one loses a committed value, not a hint. The advisory rules do not apply and must not be pattern-matched onto this class.
-- Write ordering on the update path, **amended 2026-08-28**: `UNDO_WRITE{kVarHeapAppend}` (the append's own rollback) → `VARHEAP_APPEND` (new value) → heap cell overwrite (`HEAP_OVERWRITE`, old cell image into undo) — all in the same transaction, replayed by the ordinary winner/loser machinery. The undo record comes first for RV3's reason: redo alone must never resurrect an append the undo phase has no record to release. **A crash between the append and the tuple write is no longer an orphan** — this line used to say such a value was left "for purge's reclamation sweep to collect", and no sweep existed; the append is a link in the transaction's own chain now, so recovery's undo phase reaches it like any other loser write. No special recovery logic exists for the var-heap, which is what makes that possible rather than what it costs.
+- **Immutable per version (V2).** Writing a spilled value appends `{len, bytes}` to a var-heap page and returns its pointer. Values are never rewritten and never moved. Consequences, which are the rationale: MVCC correctness is free — an old-version reader follows the old pointer to bytes that cannot have changed; pointers need no epoch, no validation, no forwarding; the var-heap is **relayout-exempt by construction** (the physical optimizer never touches `kVarHeap` pages); reclamation is not new machinery but a rider on purge — when a version dies, its values die with it. The accepted cost: churn-heavy string updates consume space until purge catches up, making purge cadence a sizing input.
+- **Logged and headered (V3).** `kVarHeap` is a headered page class: common header, `page_lsn`, CRC32C, full WAL participation via a `VARHEAP_APPEND` record. Stated because the reflex runs the other way: waystone/trail pages are advisory, but a var-heap value is **authoritative data** — losing one loses a committed value, not a hint. The advisory rules do not apply and must not be pattern-matched onto this class.
+- Write ordering on the update path: `UNDO_WRITE{kVarHeapAppend}` (the append's own rollback) → `VARHEAP_APPEND` (new value) → heap cell overwrite (`HEAP_OVERWRITE`, old cell image into undo) — all in the same transaction, replayed by the ordinary winner/loser machinery. The undo record comes first because redo alone must never resurrect an append the undo phase has no record to release. A crash between the append and the tuple write leaves no orphan: the append is a link in the transaction's own chain, so recovery's undo phase reaches it like any other loser write. No special recovery logic exists for the var-heap, which is what makes that possible rather than what it costs.
 
 ## 6. Interactions with Confirmed Design
 
-- **min_key heap:** strengthened — tuple addresses now change only under deliberate relayout.
+- **min_key heap:** strengthened — tuple addresses change only under deliberate relayout.
 - **MVCC (`trx_id` + `undo_ptr`):** unchanged; the undo record's old-cell image is fixed-size like everything else, and under V2 it is just the old tag+bytes-or-pointer.
 - **Trails/Waystone:** pure beneficiary — fewer epoch bumps, higher validated-hit rates; no format impact.
 - **Physical optimizer:** moves get cheaper (cell memcpy) and `kVarHeap` is explicitly outside its jurisdiction.
-- **Parser/DDL:** *simplified* by V1 — no width syntax is added; `TEXT` stays as-is.
+- **Parser/DDL:** `varchar(N)` and `char(N)` are the only width syntax (`docs/spec/types.md` §2b); there is no `ALTER … TYPE` (V5). `TEXT` stays as-is.
 - **Wire protocol:** invisible, and must remain so: `TEXT` on the wire is length-prefixed bytes regardless of inline/spilled storage.
 - **Row codec/executor:** static-offset reads; only `kSpilled` branches to a var-heap fetch (one extra page touch, by design confined to oversize values).
 
 ## 7. Required Amendments (gate)
 
-1. **`docs/spec/heap-and-tuple.md`:** tuple layout section rewritten to fixed cells + tagged cell format; stamp the date; link the quarry draft as the argument record.
-2. **`docs/spec/wal.md`:** add `VARHEAP_APPEND` to the record catalog; note the §5 write-ordering and the no-special-recovery rule.
-3. **Page-class enum / `docs/spec/page.md`:** add `kVarHeap` to the headered, logged classes; note relayout exemption.
-4. **Superblock spec:** the pinned `inline_cell_width` field + startup validation rule.
-5. **Row codec (`src/exec/row_codec.*`):** tagged-cell implementation; fixed-size assertion per relation.
-6. **Client manual:** nothing user-visible changes except the absence of `VARCHAR(n)` syntax — state that explicitly.
-7. **`CLAUDE.md`:** invariant-adjacent summary ("tuples are fixed-length; oversize values spill to the immutable var-heap") + §9 opens.
+All landed. The rule's other homes: `docs/spec/heap-and-tuple.md` §3.3–§3.4 (tuple layout and the var-heap), `docs/spec/wal.md` §5.2 (`VARHEAP_APPEND` and the §5 ordering), `docs/spec/page.md` §5a (`kVarHeap`, relayout-exempt), the superblock's pinned `inline_cell_width` and its startup validation (`include/kds/server/superblock.hpp`, `src/bootstrap/bootstrap.cpp`), the row codec (`src/exec/row_codec.cpp`), and `docs/spec/client-manual.md`.
 
 ## 8. Testing Requirements
 
@@ -104,98 +92,40 @@ The out-of-line value store. Its design goal is to be **boring**: the mobility p
 6. **Invisibility:** wire-level golden sessions produce byte-identical results for inline vs spilled storage of the same logical value.
 7. **Advisory family unaffected:** the standing Waystone-off/dropped-trails equivalence suite passes over spilled-value workloads.
 
-## 8a. Implementation status — phase 1 landed 2026-08-01
+## 8a. Implementation status — the rule in code
 
-**Phase 1 is the rule without the var-heap.** Invariant 13 holds in code: a
-relation's row size is a schema constant, tuple addresses are stable across
-UPDATE, and the width is instance-pinned. What phase 1 does *not* do is
-spill — a value too long to inline is refused with `Unsupported` naming the
-var-heap, where before the rule it would have been stored (up to 65535
-bytes) as a variable-length field.
+Invariant 13 holds in code: a relation's row size is a schema constant, tuple addresses are stable across UPDATE, and the width is instance-pinned with a per-column override.
 
-Landed:
-
-| Gate item | Where |
+| Piece | Where |
 |---|---|
-| §7.1 `heap-and-tuple.md` | already written; §3.4 now marks spilling as specified-not-implemented |
-| §7.4 superblock pin + startup validation | `include/kds/server/superblock.hpp` (`inline_cell_width` at body offset 36, replacing `reserved2`; format version 3 → 4), `src/bootstrap/bootstrap.cpp` |
-| §7.5 row codec | `include/kds/storage/tagged_cell.hpp` (the cell format), `catalog::RowLayout` in `include/kds/catalog/schema.hpp` (the constant), `src/exec/row_codec.cpp` (static offsets) |
-| §7.6 client manual | done, including the explicit "there is no `VARCHAR(n)`" |
-| §7.7 `CLAUDE.md` | done |
-| §8.1, §8.2, §8.5, §8.6 tests | `tests/tagged_cell_test.cpp`, `tests/row_layout_test.cpp`, `tests/fixed_length_tuple_test.cpp`, `tests/bootstrap_test.cpp` |
+| Superblock pin + startup validation (§4) | `include/kds/server/superblock.hpp` (`inline_cell_width` in the body), `src/bootstrap/bootstrap.cpp` |
+| The cell format (§3) | `include/kds/storage/tagged_cell.hpp` |
+| The row constant (§2) | `catalog::RowLayout` in `include/kds/catalog/schema.hpp` |
+| Static-offset codec | `src/exec/row_codec.cpp` |
+| Tests §8.1, §8.2, §8.5, §8.6 | `tests/tagged_cell_test.cpp`, `tests/row_layout_test.cpp`, `tests/fixed_length_tuple_test.cpp`, `tests/bootstrap_test.cpp` |
 
-## 8b. Implementation status — phase 2 (the var-heap) landed 2026-08-01
+## 8b. Implementation status — the var-heap in code
 
-The remaining gate items are done. A value too long to inline now **spills**
-rather than being refused, and storage is invisible above the codec.
+A value too long to inline spills, and storage is invisible above the codec.
 
-| Gate item | Where |
+| Piece | Where |
 |---|---|
-| §7.2 `VARHEAP_APPEND` in the WAL record catalog | `RecordType::kVarHeapAppend = 16`, `include/kds/wal/payload.hpp`, `docs/spec/wal.md` §5.2 |
-| §7.3 `kVarHeap` in the page-class enum | `PageType::kVarHeap = 10`, `include/kds/storage/varheap.hpp`, `docs/spec/page.md` §5a |
+| `VARHEAP_APPEND` | `RecordType::kVarHeapAppend = 16`, `include/kds/wal/payload.hpp`, `docs/spec/wal.md` §5.2 |
+| `kVarHeap` | `PageType::kVarHeap = 10`, `include/kds/storage/varheap.hpp`, `docs/spec/page.md` §5a |
 | The spill path | `storage::EncodeSpilledCell` + `varheap::ChainAppend`, driven from `EncodeRow`'s `VarHeapSink` |
-| Catalog row change | `sys.tables` gained `varheap_page_id`, growing `SysTableRow::kOnDiskSize` — so the superblock format version went **4 → 5**. The row is not part of the superblock, but a catalog row format change is just as breaking, and without the bump a phase-1 database mounted and then failed on its first catalog read with an opaque size mismatch. |
+| The chain root | `sys.tables.varheap_page_id` |
 | The fetch path | `varheap::Fetch` via `exec::ResolveSpills` |
-| §8.3 tests, as far as reachable | `tests/varheap_test.cpp`, `tests/fixed_length_tuple_test.cpp` |
+| Tests §8.3 | `tests/varheap_test.cpp`, `tests/fixed_length_tuple_test.cpp` |
 
-Four design points worth having in one place:
+Four rules the implementation carries:
 
-- **Per-relation chain, root fixed at `CREATE TABLE`.** `sys.tables` gained
-  `varheap_page_id`, allocated eagerly for any schema that can spill and
-  `kInvalidPageId` otherwise, so a relation of plain integers costs no
-  var-heap page. Eager rather than on-first-spill because a lazily
-  allocated root would be a fact changing *without DDL*, and
-  `catalog_cache.hpp`'s rule says such a fact may not be cached — while
-  this one is cached on every `TableAccess`. Chain growth edits the tail's
-  link, never the root, so the root stays DDL-immutable.
-- **Decode does not resolve; it reports.** `DecodeRowInto` records a
-  spilled cell as a *pending* spill and the caller fetches afterwards
-  through `ResolveSpills`. This is `parser-v2.md` I15's rule R1 — no
-  page-frame span live across a nested fetch — and resolving inline would
-  have put a var-heap fetch under exactly the span the step VM's
-  `PageSpanGuard` exists to catch. A row with nothing spilled pays nothing
-  for the split.
-- **`VARHEAP_APPEND` precedes the `HEAP_INSERT` that points at it.** That
-  direction is the recovery story: a replay must never reach a cell whose
-  pointer resolves to nothing, whereas a value with no tuple is an
-  unreferenced value purge collects. No var-heap-specific recovery logic
-  exists, per §5.
-- **Max value is one page, 8144 bytes.** This is *not* the §9 cap being
-  decided — a larger value needs a multi-page representation, and inventing
-  one to answer an open question is what §9 forbids. Refused with
-  `Unsupported`; a future cap can be lower (policy above the layer) or
-  higher (chaining behind the same `Append`/`Fetch` pair).
+- **Per-relation chain, root fixed at `CREATE TABLE`.** `varheap_page_id` is allocated eagerly for any schema that can spill and is `kInvalidPageId` otherwise, so a relation of plain integers costs no var-heap page. Eager because a lazily allocated root would be a fact changing *without DDL*, which `catalog_cache.hpp`'s rule says may not be cached — and this one is cached on every `TableAccess`. Chain growth edits the tail's link, never the root, so the root stays DDL-immutable. A per-relation chain rather than one instance-wide chain: per-relation locality, and `DROP TABLE` reclaims one chain rather than sweeping a shared one.
+- **Decode does not resolve; it reports.** `DecodeRowInto` records a spilled cell as a *pending* spill and the caller fetches afterwards through `ResolveSpills` — `parser-v2.md` I15's rule R1, no page-frame span live across a nested fetch, which the step VM's `PageSpanGuard` exists to catch. A row with nothing spilled pays nothing for the split.
+- **`VARHEAP_APPEND` precedes the `HEAP_INSERT` that points at it.** A replay must never reach a cell whose pointer resolves to nothing, whereas a value with no tuple is merely unreferenced. No var-heap-specific recovery logic exists (§5).
+- **Max value is one page, 8144 bytes**, refused `Unsupported` by `varheap::ChainAppend`. This is *not* the §9 cap being decided: a larger value needs a multi-page representation, and a future cap can be lower (a policy check above the layer) or higher (chaining behind the same `Append`/`Fetch` pair).
 
-Still owed, and both blocked on machinery that does not exist:
-
-- **Nothing reclaims.** Reclamation rides on purge (§5) and there is no
-  purge, so a superseded value's bytes stay until there is. An UPDATE that
-  shortens a spilled value abandons the old one.
-- §8.4 (the crash matrix) and §8.7 (Waystone equivalence over spilled
-  workloads) need recovery and trail replay respectively, neither of which
-  is implemented.
-
-Two decisions this pass forced, recorded because neither is in §0:
-
-- **`float`/`decimal` columns are now refused at `CREATE TABLE`**
-  (`catalog::RowLayout::Build`). A fixed row size has to reserve a width for
-  every column, and neither type has a decided on-disk encoding; reserving
-  one would be half of settling it. Before the rule they could be declared
-  and never populated, which cost nothing because a row's size did not
-  depend on them.
-- **Var-heap layout, for phase 2 `[CONFIRMED 2026-08-01]`:** a
-  **per-relation chain** rooted at a new `varheap_page_id` field in
-  `sys.tables`, grown by tail append exactly as `heap_chain.cpp` grows a
-  heap. Chosen over one instance-wide chain for per-relation locality and
-  because `DROP TABLE`, when it exists, then reclaims one chain rather than
-  sweeping a shared one. The cost is a catalog row format change.
-
-Every existing data file stops mounting at superblock version 4. That is
-V5 working as intended: there is no migration path while the format moves.
+`float` columns are refused at `CREATE TABLE` (`catalog::RowLayout::Build`): a fixed row size has to reserve a width for every column, and `float` has no decided on-disk encoding.
 
 ## 9. Open Items — do not assume
 
-- **`kds.inline_cell_width` default value** (64 `[PROPOSED]`): settle against measured string-length distributions of target schemas; this is the number that decides whether common strings ever spill.
-- Spilled-value size cap (uncapped blobs are not obviously an OLTP feature). **Unsettled, and the implementation does not settle it**: `varheap::ChainAppend` refuses anything larger than one page (8144 bytes) with `Unsupported`, because a bigger value needs a multi-page representation and inventing one would answer this question by accident. A future cap can be lower (a policy check above the layer) or higher (chaining behind the same `Append`/`Fetch` pair).
-- V4 revisit trigger: adopt prefix-inline only if string-equality steps ever become a measured cost — recorded so the "no" has an exit condition.
-- Purge-cadence sizing metric for var-heap headroom (ties into the observability set).
+The decisions here are unrecorded in this file: the value of the `kds.inline_cell_width` default (64 `[PROPOSED]`); the spilled-value size cap (uncapped blobs are not obviously an OLTP feature — today's one-page limit, §8b, is the representation's and not this decision); V4's revisit (prefix-inline only if string-equality steps become a measured cost); and the purge-cadence sizing metric for var-heap headroom.

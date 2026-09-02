@@ -1,13 +1,12 @@
 # Secondary indexes: multi-column and covering
 
-Status: **built** (`IX01`-`IX16`, every milestone): the storage layer, the catalog,
-the grammar, the write hook, its WAL records, the backfill, the compiler, the
-read path and the `indexes` switch. A statement on an indexed column
-**descends the index**, and `tests/index_contract_test.cpp` is the suite that
-keeps it honest. Measured in `bench/results-index.md` and documented in `CLAUDE.md`,
-`docs/spec/client-manual.md` and `docs/spec/heap-and-tuple.md` §7. §13 lists what this
-spec deliberately does **not** settle.
-Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
+Status: **built** — the storage layer, the catalog, the grammar, the write
+hook, its WAL records, the backfill, the compiler, the read path and the
+`indexes` switch. A statement on an indexed column **descends the index**,
+and `tests/index_contract_test.cpp` is the suite that keeps it honest.
+Documented in `CLAUDE.md`, `docs/spec/client-manual.md` and
+`docs/spec/heap-and-tuple.md` §7. §13 names what this spec does **not**
+settle.
 
 This document owns the secondary index. It does **not** own the clustered
 primary-key tree (`include/kds/storage/btree/`), which is a relation's
@@ -84,14 +83,12 @@ Two rules ride along, and both are load-bearing rather than tidy:
 
 - **An UPDATE that touches no key or covered column of an index must not
   append to it.** Otherwise the entry set grows by one per write forever:
-  correct by IX1's superset rule, and useless. This is section 5's third row
-  in `cabin.md`, which `CabinContractTest.AnUpdateThatDoesNotTouchThe
-  KeyColumnAppendsNothing` already pins for the Cabin; the index gets the
-  same test.
+  correct by IX1's superset rule, and useless. This is `cabin.md` §5's
+  third row, and the index carries the same contract test.
 - **Nothing reclaims.** A superseded entry costs memory, a page, and a
-  read-time skip until purge exists — which it does not, because readers are
-  deliberately unregistered (`docs/spec/txn.md` §9). Same bargain the var-heap and
-  the undo log already strike, stated here so it is not discovered.
+  read-time skip; there is no purge of index entries, because readers are
+  deliberately unregistered (`docs/spec/txn.md` §9). Same bargain the
+  var-heap and the undo log strike, stated here so it is not discovered.
 
 ### 2.1 Failure on the write path
 
@@ -103,103 +100,35 @@ other statement failure does (`docs/spec/txn.md`: failure atomicity is per
 transaction, not per statement).
 
 This is the one place an index is more expensive to be correct about than a
-Cabin, and it is why v1 declines to also make it a constraint (IX11).
+Cabin, and it is why the index is not also a constraint (IX11).
 
 ---
 
 ## 3. Which clustered types may carry one
 
-> **IX3 — a heap-clustered relation carries a secondary index too**, and
-> resolves its entries by one batch walk rather than N chain scans.
-> `[AMENDED 2026-09-01 — IB0. The text is the contract; the code follows
-> at IB2 and this line says "amended", not "built", until it does.]`
+> **IX3 — a secondary index is built on a btree-clustered relation only.**
+> `CREATE INDEX` on a heap-clustered relation is refused
+> (`Catalog::CheckIndexDef`, `InvalidArgument`, naming this rule).
 
-**What IX3 said until now, and why it was right at the time.** An entry's
-payload is the pk. Resolving a pk costs one descent on a btree relation
-and a **chain scan** on a heap one — so an index over a heap relation
-"would turn one full scan into N partial ones", the identical argument as
-`foreign-keys.md` F1's refusal of a heap parent. The arithmetic was never
-wrong. What it assumed is that the N resolutions happen **one at a time**,
-and nothing forced that: the probe already collects the whole matching set
-before resolving any of it (§8's phase 1 / phase 2 split).
+An entry's payload is the pk. Resolving a pk costs one descent on a btree
+relation and a **chain scan** on a heap one, so an index over a heap
+relation would turn one full scan into N partial ones — the identical
+argument as `foreign-keys.md` F1's refusal of a heap parent. A heap
+relation's banked acceleration on a non-pk column is its Cabin
+(`cabin.md` §4a), whose hint-plus-walk fallback exists precisely because a
+heap has no pk descent to heal with.
 
-**The mechanism, in one sentence.** A heap-backed probe descends the index
-exactly as a btree-backed one does, collects every matching entry's pk,
-sorts the set, and resolves it with **one chain walk** that tests each
-tuple's Keystone id against the set — so N partial scans become one scan,
-which is the whole of the refutation.
+Three consequences of the entry format:
 
-Three things about that walk, stated here because each is a property a
-reader would otherwise assume wrongly:
-
-1. **It is bounded on one side only.** The walk stops at the first page
-   whose `min_key` exceeds `max(pk)` — §9's tail pruning, unchanged. It
-   does **not** skip the pages before `min(pk)`: the head seek that would
-   is a descent (`BtreeSeekLeaf`), and a heap relation has no **pk** index
-   to descend. Giving it a secondary index over some other column does not
-   give it one over the pk. So a probe whose rows sit near the end of the
-   relation walks nearly everything, and the tail bound pays only for rows
-   that sit early.
-2. **The saving that does not depend on where the rows sit is decode
-   avoidance.** A filter scan decodes the predicate's columns out of every
-   live tuple; this walk reads the Keystone id alone, tests membership,
-   and decodes only the rows that matched. At 1-in-1000 selectivity that
-   is the mechanism, and the page count is not.
-3. **The trail is consulted first and the walk takes the residue.** Every
-   collected pk is offered to its Waystone trail — a replay is one read —
-   and the single walk resolves what replay did not answer, re-recording
-   trails as it goes. That is the Cabin's own bulk-heal shape (§8's
-   fall-back-and-re-record), applied to the index. No threshold decides
-   between them: trails are always consulted, the walk always takes the
-   rest.
-
-**A heap-backed probe grants no key order — and neither does a
-btree-backed one.** Phase 1 collects in index-key order and sorts into
-**pk** order before resolving, because without that sort "creating an
-index would reorder a reply" (§8), which is an accelerator changing a
-query result. The heap arm lands on the same emission order for a
-different reason: a chain walk *is* pk order, page-wise by `min_key`
-(`heap-and-tuple.md` §3.1). Either way an `ORDER BY` on the key column
-keeps its sort step, and a planner that reads sortedness out of a
-`kIndexProbe` is reading something no arm of it ever promised.
-
-**F1 is not lifted by this.** `foreign-keys.md` F1 refuses a heap
-*parent*, and its argument reads identically to the one above — which is
-exactly why this must be said rather than left to inference. A foreign
-key's forward check asks about **one** pk per row written; there is no set
-to batch, so the mechanism that answers IX3 has nothing to offer F1. F1
-is a separate decision and stays refused.
-
-Three consequences of the entry format, unchanged by this amendment and
-still the reason the format is worth having:
-
-1. **The entry carries no location hint** — no `(page_id, slot)`, so nothing
-   here can dangle and nothing needs healing.
-2. **The index is not waiting on the page epoch.** Cabin is the second
-   subsystem blocked on it (`CabinEntry::page_epoch` is written 0 and its
-   check passes trivially); the index deliberately does not become the third.
-3. **Relayout cannot invalidate an index.** A pk is stable for life
+1. **The entry carries no location hint** — no `(page_id, slot)`, no
+   epoch — so nothing here can dangle and nothing needs healing.
+2. **Relayout cannot invalidate an index.** A pk is stable for life
    (invariant 11, K1), so moving a tuple moves nothing an index knows about.
-
-A heap relation keeps what it had before this amendment as well: a Cabin,
-whose hint-plus-walk fallback exists precisely because a heap has no pk
-descent to heal with. The two now sit side by side on the same relation,
-and they are not redundant — a Cabin is authoritative for an **observed
-value**, an index answers a predicate nobody observed.
-
-**The gate this amendment must not open.** `RangeEligible`'s `kIndex` arm
-was removed as dead code on the premise that "a secondary index is
-btree-only (IX3), so every relation that could trip it was already
-declined by the btree arm". IX3 is what this section just amended, so the
-premise is retired with it: heap is the only clustered type D1 lets split,
-and an indexed heap relation would reach the gate with nothing left to
-decline it. The arm is therefore **live code again and re-added in the
-same commit that admits the index** (IB-R7,
-`docs/inflight/in-progress/workplan-ib.md` §1.4). Both arms are needed for
-"an index and a split do not meet" to stay true: this one refuses
-*split-after-index*, `RefuseAuxiliaryOnSplitRelation` refuses
-*index-after-split*, and one alone leaves the other order open. An index
-missing an entry is not slower, it is wrong (§2.1).
+3. **An index step grants no key order.** Phase 1 collects in index-key
+   order and sorts into **pk** order before resolving (IX8a), so an
+   `ORDER BY` on the key column keeps its sort step, and a planner that
+   reads sortedness out of a `kIndexProbe` is reading something it never
+   promised.
 
 ---
 
@@ -209,30 +138,14 @@ missing an entry is not slower, it is wrong (§2.1).
 > 11`, `PageType::kIndexLeaf = 12`, and they split by dividing their
 > contents.**
 
-`storage/btree/btree.hpp` cannot host this, and not by accident. Its split
-was: *new leaf, low key = the id that caused the split, tuple goes there,
-nothing moved* — refusing `OutOfSpace` for any key below the target leaf's
-contents, on the grounds that dividing a page's contents would decide the
-open **heap page split policy**. That bargain held because invariant 11 made
-every pk monotonic.
-
-**Corrected 2026-08-11** (`docs/spec/heap-and-tuple.md` §4.1): the premise is
-gone. A caller may name a btree relation's keys and they need not ascend
-(the per-relation `EXPLICIT` mode then; per row since 2026-08-25, gated on
-the high-water mark), so the clustered btree now **does** divide a full leaf —
-`SplitLeafAndInsert` cuts the live versions at their median key, the old
-leaf keeping its `min_key` and the new one taking the split key. The
-refusal that remains is narrower and is about internal nodes, not leaves.
-
-**The conclusion below is unchanged, and now rests on the right reason.** It
-was never really the split: it is that an index page is a different *kind*
-of page. The clustered tree's leaf is a heap page holding tuples addressed
-by one Keystone id; an index page holds entries keyed by `key || pk`, with
-no Keystone word, no MVCC header and no `PageView`. Teaching the clustered
-module to also store entries would be the merge that costs both, and
-**a secondary key is not monotonic** — arbitrary-order arrival is the
-defining property of the thing, so its splits were mandatory from the first
-line rather than inherited from a decision that has since moved.
+`storage/btree/btree.hpp` cannot host this, and not by accident: an index
+page is a different *kind* of page. The clustered tree's leaf is a heap page
+holding tuples addressed by one Keystone id; an index page holds entries
+keyed by `key || pk`, with no Keystone word, no MVCC header and no
+`PageView`. Teaching the clustered module to also store entries would be the
+merge that costs both, and **a secondary key is not monotonic** —
+arbitrary-order arrival is the defining property of the thing, so its
+splits were mandatory from the first line.
 
 The escape is that an index page is **not a heap page**:
 
@@ -293,8 +206,8 @@ the tie and the total order is strict. That also makes an entry's position
 deterministic, which a split's arithmetic wants.
 
 > **IX4b — the tree routes on the whole `(key, pk)` sort key, and a probe
-> that knows less is zero-padded rather than compared short.** Found while
-> building IX02, and it is a correctness rule, not a convenience.
+> that knows less is zero-padded rather than compared short.** A
+> correctness rule, not a convenience.
 
 A secondary key is not unique, so a run of duplicates can span leaves. If a
 separator carried only the key, a probe for a duplicated key would compare
@@ -337,9 +250,10 @@ declared order and appends per column:
 | char / varchar | value bytes, zero-padded, **truncated** (§6) | `kIndexStringKeyBytes` |
 
 Each column is preceded by **one discriminator byte**: `0x00` for NULL,
-`0x01` for a value. NULL is not storable today (the row codec refuses to
-encode one), so the byte is always `0x01` and always costs — deliberately, so
-that NULLs becoming storable is a semantic change and not a **format** event.
+`0x01` for a value. A nullable key column is refused at `CREATE INDEX`
+(`docs/spec/null.md`), so the byte is always `0x01` and always costs —
+deliberately, so that admitting a NULL key would be a semantic change and
+not a **format** event.
 
 Big-endian with the sign bit flipped is the whole trick: `memcmp` over the
 concatenation then reproduces the tuple-wise ordering of the columns, so the
@@ -380,9 +294,9 @@ unconditional anyway.
 - A range on a truncated key is correct for the same reason and less precise
   in the same way: the walk returns a superset, the residual subtracts it.
 
-`kIndexStringKeyBytes` is `[PROPOSED] 32` and is an open decision (§12) on
-the same axis as `inline_cell_width`: it trades entry width against how often
-a probe pays a base descent it did not have to.
+`kIndexStringKeyBytes` is `[PROPOSED] 32` (`include/kds/exec/index_key.hpp`)
+and nothing may depend on the number: it trades entry width against how
+often a probe pays a base descent it did not have to.
 
 ---
 
@@ -392,9 +306,9 @@ Covered columns are stored in the entry after the pk, as their **inline cell
 bytes verbatim** — tag included, so a spilled covered value stores its spill
 pointer and reading it costs the var-heap fetch it would have cost anyway.
 
-> **IX7 — v1 has no index-only scan, and cannot have one. A covering index
-> avoids the *base descent for rows that will be filtered out*, not the base
-> read for rows that are returned.**
+> **IX7 — there is no index-only scan, and there cannot be one. A covering
+> index avoids the *base descent for rows that will be filtered out*, not
+> the base read for rows that are returned.**
 
 Visibility is decided at exactly one site, `ChainRunner::AcceptTupleAt`, from
 the tuple's MVCC header and its undo chain. There is **no visibility witness
@@ -415,31 +329,16 @@ On a probe returning 10 rows from 10,000 entries, that is the whole cost.
 columns avoided, and nothing else. If it is zero, a `COVERING` clause bought
 exactly the write cost it added.
 
-**Confirmed in both directions** (`bench/results-index.md`). Six configurations
-where `index_filtered = 0` came out +0.4, −0.2, −2.6, +0.7, +1.3, +0.2 % —
-straddling zero with no consistent sign. Where it filtered 60 of 69 entries the
-shape ran **21% faster**. A base descent prices out at **0.58–0.76 µs**, so
-covering's value is `index_filtered × ~0.7 µs` and `ANALYZE` reports it before
-anyone commits to the write cost.
-
-The absence of an index-only scan is measured rather than merely asserted:
-`COUNT(*)` over an indexed relation costs the same as fetching the rows (2.5%,
-inside the noise floor), where PostgreSQL's `Index Only Scan` with
-`Heap Fetches: 0` is 10% cheaper. That 10% is what a visibility witness would
-be worth here.
-
 The entry-side test is **conservative by construction**: it answers "drop
 this row" only when a residual predicate the entry's own values can decide
 says so. A predicate on an uncovered column, an operand that is not a
 literal, or a **spilled** covered value all keep the row and let the base
 read filter it — the last because resolving a spill would be a page fetch
-under the index leaf's span, which `parser-v2.md` I15's R1 forbids. Getting
-that direction wrong is the difference between a lost row and a wasted
-descent.
-
-Stated here so a benchmark does not have to discover it, and so nobody builds
-toward an index-only scan without first building the witness it needs. That
-witness is listed in §12.
+under the index leaf's span, which `parser-v2.md` I15's R1 forbids, and
+because the spill pointer an entry carries may name a var-heap slot a
+rollback has since released: entries are never compensated on rollback, and
+`CoveredRowSurvives` (`step_vm.cpp`) never follows the pointer. Getting that
+direction wrong is the difference between a lost row and a wasted descent.
 
 ---
 
@@ -458,9 +357,8 @@ The walk collects pks in *index key* order; a scan of the same relation emits
 them in pk order. Without a sort between the two phases, creating an index
 would **reorder a reply** — and "an accelerator may cost performance and must
 never change a query result" is the standard invariant 8 holds Waystone to,
-which an authoritative structure does not get to fall below. Found by the
-equivalence test, which compares byte for byte precisely so it could not be
-missed.
+which an authoritative structure does not get to fall below. The equivalence
+test compares byte for byte precisely so this cannot be missed.
 
 It costs one sort of the matched set against one descent per element of it,
 and it buys locality as well: on a btree relation pk order *is* leaf order,
@@ -472,13 +370,10 @@ since a trail was recorded is wrong in a way no per-tuple validation can
 detect, because absence has no witness *in the trail*. That is exactly why
 `kCabinProbe` is search-class despite the Cabin being authoritative, and the
 index inherits the reasoning unchanged. A trail may prefetch for an index
-step; it may never replace one.
+step; it may never replace one. There is no unique index (IX11), so no
+index step is lookup-class.
 
-Whether a **unique** index could ever be lookup-class is a genuine question
-and is left open in §12. v1 does not need to answer it, because v1 has no
-unique index (IX11).
-
-### 8a. The correlated probe `[AMENDED 2026-08-18 — IX17]`
+### 8a. The correlated probe
 
 > **IX17 — a `kIndexProbe` may be keyed by an earlier step's row.** When an
 > index's **leading** key column is bound by equality to a column of an
@@ -487,12 +382,9 @@ unique index (IX11).
 > the chain frame (`IndexProbe::key_from`), instead of the relation being
 > walked once per outer row.
 
-This is what an index-served inner join side is, and it is the fix for the
-shape equality propagation cannot reach: a join with **no literal** to
-propagate — `ON l.user_id = u.id WHERE u.id BETWEEN ? AND ?`, a correlated
-`EXISTS` — used to pay a full inner walk per outer row (~540 µs per outer
-row at 10,000 rows, measured before this landed) while the join column's
-index sat unused.
+This is what an index-served inner join side is, and it serves the shape
+equality propagation cannot reach: a join with **no literal** to propagate
+— `ON l.user_id = u.id WHERE u.id BETWEEN ? AND ?`, a correlated `EXISTS`.
 
 What it deliberately does not change:
 
@@ -516,26 +408,19 @@ What it deliberately does not change:
   descriptor makes that the encoding the index was built from. Any decline,
   at compile or per row, takes the walk and returns identical rows by the
   residual.
-- **Cross-core — shipped as its walk. `[CLOSED 2026-08-18, same day]`** An
-  index step cannot cross the descriptor (core-local structure state), and
-  before the fix that made a peer-owned join fall out of the pipeline onto
-  the affinity check — `CREATE INDEX` on a peer relation's join column
-  turned answers into `ERR`s, a hole opened by equality propagation
-  (`881f69a`) and widened by IX17. The session now applies a **ship-time
-  downgrade** (`ShippedForm`, `step_descriptor.cpp`) at every
+- **Cross-core — shipped as its walk.** An index step cannot cross the
+  descriptor (core-local structure state), so the session applies a
+  **ship-time downgrade** (`ShippedForm`, `step_descriptor.cpp`) at every
   encode seam: the shipped copy becomes the walk the step would fall back
   to anyway — `kScan`, aux dropped, residual intact — which cannot change
   a result, and the local half of the statement still takes the
-  structure. The peer therefore pays the walk the pre-index engine paid,
-  not an error — and that is *walk* cost, not local cost: a downgraded
-  correlated probe runs O(outer × inner) where the local form runs
+  structure. The same route carries the `kCabinProbe` case. The peer
+  therefore pays *walk* cost, not local cost: a downgraded correlated
+  probe runs O(outer × inner) where the local form runs
   O(outer × log inner), and the consuming stage's row-touch budget can
-  refuse a large enough shipped join that the local side answers.
-  Re-deriving the structure from the peer's own catalog is the recorded
-  improvement; the same route also closes the older, never-recorded
-  `kCabinProbe` case, broken since Cabins landed. The descriptor's
-  refusal stays as the backstop for callers that skip the sanctioned
-  route.
+  refuse a large enough shipped join that the local side answers. The
+  descriptor's refusal stays as the backstop for callers that skip the
+  sanctioned route.
 
 ---
 
@@ -553,16 +438,13 @@ not compile differently as the data changes, or `pattern_id` stops naming a
 plan. It is the same argument `CabinProbeOf` gives for taking the *first*
 cabined equality rather than the most selective one.
 
-**What it costs, measured** (`bench/results-index.md`): there is a crossover
-this rule cannot see, and below it the index is a loss. It is **not a tuning
-problem** — §1a records a phase-2 leaf memo that removed 95% of the descents
-at 200 rows without moving the latency, and cost 42% at 10,000 rows. A selective equality
-is 9.7× faster at 10,000 rows, 1.9× at 1,000, 1.11× at 200 — and a *range* at
-200 rows is **11% slower** with the index than without it. PostgreSQL declines
-its own index on the same shape at that size; KDS cannot, because declining
-needs the cardinality estimate IX9 refuses. That is the price of a stable
-plan, and it is small and bounded: the loss is one page's worth of rows, and
-the win grows without limit.
+There is a crossover this rule cannot see, and below it the index is a loss:
+measured against the `bench/` tree at `1769487`, a range at 200 rows ran 11%
+slower with the index than without it, while a selective equality was 9.7×
+faster at 10,000 rows. KDS cannot decline its own index at that size,
+because declining needs the cardinality estimate IX9 refuses. That is the
+price of a stable plan, and it is small and bounded: the loss is one page's
+worth of rows, and the win grows without limit.
 
 Two rules that keep every existing proof standing:
 
@@ -575,12 +457,8 @@ Two rules that keep every existing proof standing:
   INDEX` does not drop an existing Cabin — the Cabin simply stops being
   probed and its memory is the operator's to reclaim with `DROP CABIN`.
 
-`HasUnindexedEqualityFilter` in `src/exec/step_compiler.cpp` was written for
-this and had no production reader until now. It needed no widening — it needed
-the opposite: it asked `Catalog::FindIndexOnColumn`, a `sys.indexes` scan per
-equality per compile, and now reads the cached `index_mask` IX04 put on the
-relation. The mask names an index's **leading** key column only, which is
-exactly the right question.
+The compiler reads the relation's cached `index_mask` (§12), which names an
+index's **leading** key column only — exactly the right question.
 
 The two kinds **execute identically** — both walk the entries between two
 encoded bounds — so the split is a statistics distinction, the same one
@@ -592,10 +470,9 @@ encoding that follows it, so no per-row key building happens on the read path
 true bounds because a key column's discriminator byte is 1 for every value
 that exists.
 
-A value the key encoder refuses — an integer wider than its column, a `$param`
-in a declared pattern's body — **declines the index** rather than failing: the
-step falls through to the walk, which returns the identical rows because the
-residual is untouched.
+A value the key encoder refuses — an integer wider than its column —
+**declines the index** rather than failing: the step falls through to the
+walk, which returns the identical rows because the residual is untouched.
 
 ---
 
@@ -615,9 +492,8 @@ SHOW INDEXES
 > `kFingerprintVersion` does not move. The golden corpus is the evidence, and
 > every pre-existing line must pass unchanged.
 
-DDL is not transactional (`docs/spec/txn.md` §7): index catalog rows are stamped
-`kBootstrapXid` and `CREATE INDEX` inside a transaction is not rolled back.
-Unchanged by this work, restated so it is not assumed away.
+`CREATE INDEX` and `DROP INDEX` run under a transaction;
+`docs/spec/ddl-transactional.md` owns what each guarantees.
 
 An index's **name is unique instance-wide**, so `DROP INDEX` names only it.
 That is where an index and a Cabin differ and why: `(relation, column)`
@@ -641,14 +517,13 @@ non-obvious requirement:
 > per distinct key value across its versions**, not merely for the current
 > one — and it runs **before** the `sys.indexes` row exists.
 
-Because the index becomes visible to every reader at once (DDL is not
-transactional), a reader holding an older snapshot must find its version
-through the new index. Every version of a logical tuple shares one pk, so the
-walk is bounded by the chain and the entries are the same shape. Omitting it
-would make an old-snapshot read silently return fewer rows — the failure
-`cabin.md` §5 calls invisible without a baseline. A **delete-marked** row
-is walked like any other: gone for newer readers, still there for older ones,
-which is exactly the case the undo chain exists for.
+A reader holding an older snapshot must find its version through the new
+index. Every version of a logical tuple shares one pk, so the walk is bounded
+by the chain and the entries are the same shape. Omitting it would make an
+old-snapshot read silently return fewer rows — the failure `cabin.md` §5
+calls invisible without a baseline. A **delete-marked** row is walked like
+any other: gone for newer readers, still there for older ones, which is
+exactly the case the undo chain exists for.
 
 *Distinct* needs no bookkeeping: a version that did not move the key produces
 a byte-identical entry, and `IndexInsert` already reports one rather than
@@ -673,22 +548,24 @@ build.
 
 ---
 
-## 11. What v1 refuses, each with an exact byte
+## 11. What is refused, each with an exact byte
 
 > **IX11 — `UNIQUE` is refused.**
 
-Enforcing uniqueness makes the index a **constraint**, which needs the
+Enforcing uniqueness would make the index a **constraint**, which needs the
 visibility question `foreign-keys.md` §4 settled — latest state, never
 walks undo, an in-flight writer of the same key is *busy* rather than a
-violation — and a second write-conflict path on the insert hook. v1 is a read
-accelerator that cannot fail a write for a reason of its own. `kIndexFlagUnique`
-stays defined and unwritten, exactly as `UndoRecordType::kInsert` does.
+violation — and a second write-conflict path on the insert hook. The index
+is a read accelerator that cannot fail a write for a reason of its own.
+`kIndexFlagUnique` is defined and never written, exactly as
+`UndoRecordType::kInsert` is.
 
 Also refused, each naming the reason:
 
-- ~~**A heap-clustered relation** (IX3)~~ — **admitted 2026-09-01 by
-  IB0**, §3. What still refuses at the door is a relation of two or more
-  ranges, which is `RefuseAuxiliaryOnSplitRelation` and not this rule.
+- **A heap-clustered relation** (IX3, `InvalidArgument`).
+- **A relation of two or more ranges** (`RefuseAuxiliaryOnSplitRelation`,
+  `NotImplemented`); a split relation never gains an index.
+- **A nullable key column** (`NotImplemented`, `docs/spec/null.md`).
 - **An index on the primary key** — the clustered tree already is one.
 - **A `float` column** — nothing settled its encoding, so it is not
   declarable in the first place.
@@ -697,49 +574,31 @@ Also refused, each naming the reason:
   complete is a wrong answer with a right answer's shape. Same rule
   `aggregate_max_groups` follows, and the opposite of a Cabin cap, which may
   fall back because a Cabin is only ever a shortcut.
-- **`ORDER BY` served from an index. `[AMENDED 2026-08-11]`** The first
-  half of this entry is now false and the second is truer than when it was
-  written: an output sort exists (`docs/workplan-order-by.md`), and an
-  index still is not the missing half. Four reasons, each independent.
-  **IX8a** has `RunIndexStep` sort its matched pks *back* into pk order on
-  purpose, because creating an index must not reorder a reply. **IX2's
-  append-only maintenance** leaves an updated row with entries at two keys,
-  and the dedup keeps the lowest rather than the visible version's — which
-  today only picks an entry and would then pick a row's *position*.
-  **§5's 32-byte truncation** makes index order a prefix order, not a total
-  order on values, and IX6's "truncation cannot cost correctness" is an
-  argument about superset-plus-recheck that does not carry here.
-  **IX9's crossover** would be walked into deliberately by an index chosen
-  for its order rather than its selectivity, with no cardinality estimate
-  to see it coming.
-- **Expression, partial and descending indexes.** Out of v1; the key
-  encoding of §5 is ascending by construction and reversing a column is a
-  format-visible change, so it is a decision and not an omission.
+- **`ORDER BY` served from an index.** An output sort exists
+  (`docs/spec/parser-v2.md`), and an index is not it, for four independent
+  reasons. **IX8a** has `RunIndexStep` sort its matched pks *back* into pk
+  order on purpose, because creating an index must not reorder a reply.
+  **IX2's append-only maintenance** leaves an updated row with entries at
+  two keys, and the dedup keeps the lowest rather than the visible
+  version's — which today only picks an entry and would then pick a row's
+  *position*. **§6's 32-byte truncation** makes index order a prefix order,
+  not a total order on values, and IX6's "truncation cannot cost
+  correctness" is an argument about superset-plus-recheck that does not
+  carry here. **IX9's crossover** would be walked into deliberately by an
+  index chosen for its order rather than its selectivity, with no
+  cardinality estimate to see it coming.
+- **Expression, partial and descending indexes.** The key encoding of §5 is
+  ascending by construction and reversing a column is a format-visible
+  change, so this is a decision and not an omission.
 
 ---
 
 ## 12. Catalog, format and WAL
 
-> **IX12 — `SysIndexRow` grows, so the superblock format version goes
-> `11 → 12` and every pre-existing data file stops mounting.**
+> **IX12 — `SysIndexRow` is 116 bytes.** Its introduction was a superblock
+> format bump (`11 → 12`); a data file older than that does not mount.
 
-The old row was `{index_oid, table_oid, col_pos, col_type, flags}` — one
-column, no root page, no name — and nothing ever wrote it.
-
-**The reason for the bump is not the reason the four before it had**, and
-building IX03 is what made the difference visible. Those protected an
-existing file from a build that would misparse it. This one cannot: with no
-pre-existing sys.indexes row anywhere, a version-11 file would in fact mount
-and run correctly. What the bump protects is the **other direction** — an
-older binary opening a *newer* file, which finds rows whose size its `Decode`
-rejects and fails on every SELECT compile, because `HasUnindexedEqualityFilter`
-asks sys.indexes per statement. Turning that into a refusal naming both
-version numbers is what a version is for.
-
-The price is unchanged by any of that: every pre-existing data file stops
-mounting.
-
-New row (116 bytes, `include/kds/catalog/rows.hpp`):
+The row (`include/kds/catalog/rows.hpp`):
 
 ```
 index_oid, table_oid, root_page_id, key_width, entry_width,
@@ -758,16 +617,16 @@ byte cannot make every later reader index out of bounds.
 only. Not "contains": an index on `(a, b)` can serve an equality on `a` and
 cannot serve one on `b`, so answering yes for `b` would stop the compiler
 calling that step a filter scan while leaving it exactly as slow — a lie to
-the access statistics, which is that function's only consumer today.
+the access statistics, which is that function's only consumer.
 
 `Catalog::UpdateIndexRoot` is how a root split is recorded, the counterpart
 of `UpdateRelationDescPage` and for the same reason: the storage layer has no
 catalog, so it reports a new root and something above it writes one down.
 `DropIndex` **retires** the row rather than delete-marking it (a catalog read
-has no snapshot to filter a mark against) and **frees no page**, so a dropped
-index leaks its tree until page reclamation exists.
+has no snapshot to filter a mark against) and **frees no page**: a dropped
+index's tree is never reclaimed.
 
-`TableAccess` gains `index_mask` plus a `std::vector<IndexRef>`, built at
+`TableAccess` carries `index_mask` plus a `std::vector<IndexRef>`, built at
 `InitTableAccess()` on the same pattern as `cabin_mask` / `cabin_ids` — the
 compiler needs the bit, the executor needs the root page and the widths. The
 list is **sorted by `index_oid`**, so §9's lowest-oid tie-break is a property
@@ -782,29 +641,25 @@ does.
 A root split republishes the root from inside an ordinary INSERT. Bumping the
 catalog version there would drop every cached relation and dangle the
 `const TableAccess*` the running statement is holding — and a multi-row
-UPDATE would be holding it across every later row. That is not hypothetical:
-it is exactly the collateral damage the deleted per-relation Waystone caused,
-and the reason `catalog_cache.hpp` already has two in-place updates.
+UPDATE would be holding it across every later row. The fact qualifies by the
+same test `catalog_cache.hpp`'s other in-place updates pass: **a root belongs
+to one index and is read by nothing else**, so a global drop would be damage
+for nothing. So the pointer stays valid across the write hook, and every
+holder sees the new root immediately.
 
-The fact qualifies by the same test those two pass: **a root belongs to one
-index and is read by nothing else**, so a global drop would be damage for
-nothing. So the pointer stays valid across the write hook, and every holder
-sees the new root immediately.
-
-`desc_page_id` still has the older, harsher arrangement — a relation's root
-move *does* bump — and `InsertInner` handles it by relinking last and using
-only plain ids afterwards. Left alone here because changing it is a change to
-the clustered tree's contract, not this feature's.
+`desc_page_id` keeps the older, harsher arrangement — a relation's root move
+*does* bump — and `InsertInner` handles it by relinking last and using only
+plain ids afterwards; changing it would be a change to the clustered tree's
+contract, not this feature's.
 
 Building the list **fails shut**, on the foreign-key argument rather than the
 Cabin one: an index the *compiler* cannot see costs only speed, but an index
 the *write hook* cannot see is an entry never appended — and an index missing
 an entry is a row lost to every later probe. Both halves read this one list.
 
-**`Catalog::InsertIndexRow` must start bumping the version.** Its comment
-today reads *"No version bump: nothing cached is derived from sys.indexes"*,
-and this work makes that false. `CREATE INDEX` and `DROP INDEX` both go
-through `BumpVersion()`.
+`CREATE INDEX` and `DROP INDEX` both bump the catalog version
+(`BumpVersion()`), because the cached index list is derived from
+`sys.indexes`.
 
 ### 12.1 WAL
 
@@ -823,14 +678,13 @@ is a **lost row** the moment anything probes for it. Same reasoning that puts
 `kVarHeapAppend` before its `HEAP_INSERT`, arriving at the same order from the
 opposite pointer direction.
 
-> **§12.1's proposed `INDEX_PAGE_INIT` is not assigned, and will not be.**
+> **There is no `INDEX_PAGE_INIT` record, by decision.**
 
-The proposal assumed a new index page could be described by its header the way
-a new heap page is, with the following record filling it. A **dividing** split
-does not work that way: the new sibling leaves the operation already holding
-half the entries, so only a full page image describes it. So a split takes a
+A new index page cannot be described by its header the way a new heap page
+is: a **dividing** split leaves the new sibling already holding half the
+entries, so only a full page image describes it. So a split takes a
 `kFullPageImage` per page it created or rewrote — exactly what the clustered
-tree's internal nodes already do, and for the identical reason (no record type
+tree's internal nodes do, and for the identical reason (no record type
 describes an entry-array division).
 
 That gives one rule with no exceptions: **an append that split nothing logs an
@@ -840,10 +694,7 @@ images are taken after the entry is in, so emitting both would apply it twice.
 The hook **reports** its writes and the dispatcher emits them, which is
 `btree.cpp`'s division ("it mutates pages; it does not know about the WAL").
 Collection happens only when there is a log to write to, so the unlogged path
-is the code it always was.
-
-Recovery still does not exist. This fixes the record set so that when it does,
-the order is already right.
+is the code it always was. Redo of these records is `docs/spec/wal.md`'s.
 
 ### 12.2 Cross-core
 
@@ -874,64 +725,9 @@ off is a catalog act: `DROP INDEX`.
 
 ## 13. Open decisions this spec deliberately does not settle
 
-- **`kIndexStringKeyBytes`** (`[PROPOSED] 32`). Same axis as
-  `inline_cell_width` and settled by the same measurement: the string-length
-  distribution of target schemas. Trades entry width against how often a
-  probe pays a base descent it did not have to. Nothing may depend on the
-  number.
-- **The index leaf split point** (`[PROPOSED]` the midpoint) and fill factor.
-  A parameter of the split function, never a constant.
-- **`kMaxIndexKeyColumns` / `kMaxIndexCoveredColumns`** (`[PROPOSED]` 4 / 8).
-- **Reclamation of superseded entries.** Rides on purge with everything else,
-  and purge needs reader registration, which `txn.md` §9 deliberately does not
-  do. Until then an index grows monotonically with writes.
-- **The index-only scan**, gated entirely on a visibility witness (§7). Do not
-  attempt a partial one; the same instruction `txn.md` §8 gives about
-  recovery, and for the same reason.
-
-  **A second gate joined it 2026-08-28, and it is not about visibility.** A
-  covered `varchar` column's entry carries the `kSpilled` **pointer**
-  verbatim (`index_maintain.hpp`, `index_ddl.cpp` — deliberately, so a
-  spilled covered value resolves from the base row exactly as it would
-  have). Since the var-heap gained a release, that pointer can now name a
-  **released** slot: index entries are never compensated on rollback (no
-  `TrailAction` names one — IX1's superset rule, and entry reclamation is
-  the open item above), so a rolled-back INSERT leaves an entry pointing at
-  a dead value.
-
-  It is harmless *today*, and only because `CoveredRowSurvives`
-  (`step_vm.cpp`) refuses to resolve a spilled covered value and the base
-  read filters the retired row — measured: `index_scanned=1
-  index_resolved=1 examined=0 matched=0`, answers correct. **An index-only
-  scan is exactly the change that would follow that pointer**, and following
-  it would read a value the engine let go. So the witness is not the only
-  thing an index-only scan needs: it also needs covered spilled values to be
-  either excluded, re-resolved through the base row, or kept alive by
-  something that knows an entry references them. Recorded here rather than
-  discovered there.
-- **`UNIQUE`** (IX11), and with it whether a unique index probe could ever be
-  **lookup-class** for Waystone (§8) — which would be the first amendment to
-  invariant 9's trust table since it was written, and wants the argument in
-  full before the code.
-- **Descending, partial and expression indexes** (§11).
-- **Index maintenance cost as an input to `CABIN AUTO`.** A column with an
-  index should presumably never earn a Cabin; that belongs with the promotion
-  policy in `cabin.md` §8.1, which nothing consumes yet.
-- **Per-range local vs global indexes under range ownership** (added
-  2026-08-24, **restated 2026-09-01 by IB0**). Reading on record: local
-  per range, broadcast probes cut by Cabin/Waystone — **not ratified,
-  and not this version's question.**
-  `instructions/v2.8.0/ratification-ae.md` works at one range per
-  relation, so the question does not arise for anything v2.8.0 builds;
-  AE-3.4 withdraws SA-R1/SA-R2, which are the only rulings that ever
-  proposed an answer.
-
-  **What that costs, said plainly**: the gate stays up, permanently as
-  far as this version is concerned, and it now takes **two arms** to
-  stay honest rather than one. `RefuseAuxiliaryOnSplitRelation` refuses
-  an index on a split relation; `RangeEligible`'s `kIndex` arm refuses a
-  split of an indexed one. The second was removed as dead code on IX3's
-  strength and is re-added by IB2 (§3, IB-R7), because IX3 no longer
-  makes it dead. Uniqueness enforcement is no longer part of this
-  decision at all — IX11 below is a **single-relation** problem once a
-  relation has one range, which is what makes it v2.8.0's subject.
+The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
+split point and fill factor, the column caps, reclamation of superseded
+entries, an index-only scan, `UNIQUE`, descending/partial/expression
+indexes, index cost as a `CABIN AUTO` input, and per-range against global
+indexes under range ownership — are unrecorded here; the refusals that stand
+in their place are §11's.

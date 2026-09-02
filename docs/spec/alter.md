@@ -1,10 +1,9 @@
 # ALTER TABLE v1 — catalog-only mutations
 
-Decisions AL1-AL9. Workplan: `docs/workplan-alter.md` (`ALT01`-`ALT05`).
-Written 2026-08-10, before any code, on the model every recent feature
-followed: the spec is the argument, the workplan is the sequence, and a
-form outside the supported class is refused at the earliest layer that
-knows the byte.
+Decisions AL1-AL9. `ALTER TABLE` changes catalog facts and no tuple bytes;
+a form outside that class is refused at the earliest layer that knows the
+byte. `DROP TABLE` is its own feature (`docs/spec/drop-table.md`) and shares
+AL4's RESTRICT predicate.
 
 ## 1. AL1 — The class: mutations that change catalog facts and no tuple bytes
 
@@ -13,15 +12,11 @@ v1 is exactly two statements:
     ALTER TABLE <t> RENAME TO <new>
     ALTER TABLE <t> RENAME COLUMN <old> TO <new>
 
-Everything else spelled under `ALTER TABLE` is a form this engine
-**`[AMENDED 2026-08-31 - which refusal code]`** The data-moving verbs answer
-**`NotImplemented`**, not `Unsupported`: `ADD COLUMN`, `MODIFY`, `SET` and `DROP
-COLUMN` all cost a relation rewrite this release does not do, and a later one
-could. `Unsupported` is now reserved for what the architecture forbids
-(`include/kds/base/status.hpp`, `docs/spec/protocol.md` §11). The position and the
-reason in each message are unchanged.
-
-understands and declines — `Unsupported`, with a position and the reason:
+Everything else spelled under `ALTER TABLE` is understood and declined
+with a position and the reason. The data-moving verbs answer
+**`NotImplemented`**, not `Unsupported`: they cost a relation rewrite this
+engine does not do, and `Unsupported` is reserved for what the architecture
+forbids (`include/kds/base/status.hpp`, `docs/spec/protocol.md` §11).
 
 - **`ADD COLUMN` / `DROP COLUMN` / column type changes.** Invariant 13
   makes a relation's row size a schema constant; changing the column set
@@ -31,16 +26,11 @@ understands and declines — `Unsupported`, with a position and the reason:
   optimizer's gated territory (`physical-optimizer.md` §6), not a
   catalog edit. Refused, not deferred-and-half-done.
 - **Widening (`ALTER ... TYPE varchar(n)` / `char(n)` in any spelling).**
-  Permanently out, not open — **and its reason was corrected 2026-08-28**,
-  because the one this bullet used to give became false. It read: "the
-  tagged cell has no per-column width to widen". Since
-  `rule-fixed-length-tuple.md` §4's amendment a cell *does* have a
-  per-column width, declared by `varchar(N)`. What keeps widening out is
-  the same rule that keeps `ADD COLUMN` out, one bullet up: a cell's width
-  is part of the row-size constant (invariant 13), so changing it rewrites
-  every tuple of the relation. That is a mover's job and the physical
-  optimizer's gated territory, not a catalog edit — and refusing it is not
-  a statement about whether per-column widths exist.
+  Refused for the same reason: a cell's width is part of the row-size
+  constant (invariant 13; `rule-fixed-length-tuple.md` §4 gives
+  `varchar(N)` its per-column width), so changing it rewrites every tuple
+  of the relation. Refusing it is not a statement about whether per-column
+  widths exist.
 - **Constraint and default surfaces** (`ADD CONSTRAINT`, `SET DEFAULT`,
   …): each belongs to the feature that owns the object (`CREATE
   ASSERTION` exists; defaults do not), and a second spelling of an
@@ -67,33 +57,27 @@ stored patterns and their Waystone trails for old-name statements simply
 stop matching. That costs replay speed and nothing else — invariant 8 is
 the whole reason this is acceptable — and it is self-healing: new-name
 traffic registers new patterns on the ordinary n=2 path. **No pattern
-migration is attempted**, and since 2026-08-31 there is nothing that
-could be migrated: a declared pattern kept its old-name `source_text` in
-`sys.pattern_defs` and was skipped at boot-time re-registration when its
-relation no longer resolved, and both the relation and the statement were
-withdrawn with the feature. The reason the rewrite was refused holds for
-any revival — rewriting stored SQL text would make the catalog a second
-parser, and a wrong rewrite is a wrong canon forever.
+migration is attempted**: rewriting stored SQL text would make the catalog
+a second parser, and a wrong rewrite is a wrong canon forever.
 
 ## 4. AL4 — Assertions RESTRICT a rename
 
 `sys.assertions` stores the declaration's `source_text` as the one canon
-(AS10), and the recovery-side registry rebuild — unbuilt, but owed — will
-re-parse it. A renamed relation would leave an *enforcing* constraint
-whose canon names a table that no longer exists: unlike a pattern, an
-assertion is not allowed to die quietly. So `ALTER TABLE` on a relation
-with assertions is **refused**, naming the first assertion —
-`exec::AssertionsOnRelation()`'s first live call site (the predicate
-§8.3 built for a `DROP TABLE` that never came). Drop the assertion,
-rename, re-declare against the new name: three honest statements instead
-of one that silently breaks a constraint's canon.
+(AS10), and the mount-time registry rebuild re-parses it
+(`src/exec/assertion_catalog.cpp`). A renamed relation would leave an
+*enforcing* constraint whose canon names a table that no longer exists:
+unlike a pattern, an assertion is not allowed to die quietly. So `ALTER
+TABLE` on a relation with assertions is **refused**, naming the first
+assertion — `exec::AssertionsOnRelation()`, the predicate `DROP TABLE`
+shares. Drop the assertion, rename, re-declare against the new name: three
+honest statements instead of one that silently breaks a constraint's canon.
 
 The same argument does **not** restrict `RENAME COLUMN` for patterns
 (AL3's class), but does for assertions: a `GROUP BY` or `SUM` column
 named in an assertion's canon is the same canon problem, so the refusal
 checks column renames against assertion text too — conservatively, by
 relation, not by parsing the text to see whether the column matters. A
-finer check is a later relaxation; a coarser refusal is never wrong.
+coarser refusal is never wrong.
 
 ## 5. AL5 — Coherency: one bump, no exceptions
 
@@ -102,18 +86,20 @@ point — so every cached `name → oid` mapping, `TableAccess`, and bound
 statement stamped with an older `catalog_version` drops or revalidates.
 The in-place-update exceptions (`SetPatternWaystoneRoot`,
 `SetPatternOrigin`) do not apply: their argument was "read by nothing
-else", and a name is read by *resolution itself*. Cross-core, the built
-P6 machinery (flush + `kCatalogInvalidate` broadcast) carries the bump;
-this spec adds no new coherency mechanism.
+else", and a name is read by *resolution itself*. Cross-core, the
+flush + `kCatalogInvalidate` broadcast carries the bump; this spec adds no
+new coherency mechanism.
 
-## 6. AL6 — Unlogged and non-transactional, like all DDL
+## 6. AL6 — Logged and durable, not undone by ROLLBACK
 
-A rename is a catalog write: unlogged, not undone by `ROLLBACK`
-(`txn.md` §7's standing state), and lost by a crash after the fact like
-every other catalog mutation — `docs/inflight/known-gaps.md`'s class, not a new
-gap. It is admitted inside an explicit transaction exactly as `CREATE
-TABLE` is, and with the same caveat. Making DDL transactional is one
-decision for all DDL and does not start here.
+A rename is a catalog write: WAL-logged like every catalog write, and its
+records are synced before the acknowledgement
+(`CommandDispatcher::AwaitDdlDurability`, `docs/spec/ddl-transactional.md`
+§7), because a transactionless DDL statement has no commit record for the
+durability class to ride on. It is **not** undone by `ROLLBACK`: `ALTER
+TABLE` is outside the transactional-DDL set (`ddl-transactional.md` §5).
+It is admitted inside an explicit transaction, and the rename stands
+whichever way that transaction ends.
 
 ## 7. AL7 — Grammar and refusal bytes
 
@@ -124,8 +110,9 @@ position, `kFingerprintVersion` does not move, and — `ALTER` not being a
 patternable leading word — every corpus line for it carries `-` hashes.
 
 Refusals, each with a byte: a missing or non-identifier name is
-`InvalidArgument`; `ADD`/`DROP`/`MODIFY`/`ALTER`/`SET` after the table
-name is `Unsupported` with AL1's reason; `RENAME` to an existing name is
+`InvalidArgument`; `ADD`/`DROP`/`MODIFY`/`SET` after the table name is
+`NotImplemented` with AL1's reason, and any other verb there is
+`InvalidArgument` ("expected RENAME"); `RENAME` to an existing name is
 `AlreadyExists`; renaming a column to a sibling's name is
 `AlreadyExists`; a `sys.*` relation is refused outright (the catalog's
 names are load-bearing for bootstrap and are nobody's to change).
@@ -134,8 +121,7 @@ names are load-bearing for bootstrap and are nobody's to change).
 
 - New table name: non-empty, fits `kCatalogNameMax`, no existing relation
   carries it. The check and the write happen on the same core (DDL is
-  core 0's), so check-then-write is atomic by the event loop, CB's D3
-  argument.
+  core 0's), so check-then-write is atomic by the event loop.
 - New column name: same checks against the relation's own columns.
 - **The pk column may be renamed.** Identity is the Keystone word and
   position 0 (invariant 11), not the spelling; `CheckKeystoneColumn` is
@@ -154,8 +140,6 @@ one every bug in this class hides behind.
 
 ## 10. Out of scope, named so nothing drifts in
 
-`DROP TABLE` (its own feature: page-chain reclamation, the free-map
-question, the RESTRICT sweep across fkeys/indexes/cabins/assertions —
-AL4's predicate is shared with it, which is why it was built consultable),
-`ADD`/`DROP COLUMN` (AL1), any data-moving ALTER (AL1), transactional DDL
-(AL6), pattern migration (AL3), and renaming `sys.*` (AL7).
+`DROP TABLE` (`docs/spec/drop-table.md`), `ADD`/`DROP COLUMN` and any
+data-moving ALTER (AL1), rollback of a rename (AL6), pattern migration
+(AL3), and renaming `sys.*` (AL7).

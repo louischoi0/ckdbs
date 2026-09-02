@@ -44,16 +44,14 @@ Two things can supply that plan:
 
 - **A named instruction file** — open the session in a git worktree
   (`CLAUDE.md` §1), activate workflow mode, and name a file under
-  `instructions/`, ckdbs's own convention for a work order
-  (`instructions/v2.2.0-stmtshipping.md`, `instructions/v2.4.0/2pc.md`).
+  `instructions/`, ckdbs's own convention for a work order.
   `intermediary-agent` reads it once, sets the run's **goal** from what
   the file states it delivers, and registers the file's own task table —
   its gates/build rows, **ids kept verbatim** (`G1`, `SS1`) as the first
   token of each task's `title` — as the milestone's tasks. Those ids
-  still feed the issue-alias rule under "Documentation" below,
-  unchanged. Because the rows are now real cws tasks, they report through
-  `POST /tasks/{id}/results/` like any other task; the old exception that
-  said they had no `/tasks/{id}` to report against is gone.
+  feed the issue-alias rule under "Documentation" below. Because the
+  rows are real cws tasks, they report through
+  `POST /tasks/{id}/results/` like any other task.
 - **No instruction file** — the goal is whatever the invocation states,
   and the plan is `intermediary-agent`'s own breakdown of it into tasks
   under the new milestone. Nothing already sitting in the queue is
@@ -77,11 +75,10 @@ two agents:
 - **`intermediary-agent`** plans the run's milestone and tasks on its
   first iteration, then pulls one pending task **from that milestone**,
   works inside ckdbs on it, and reports a result back. It has no working
-  style of its
-  own inside ckdbs — it reads and follows `CLAUDE.md` and this project's
-  own subagents (`critics-developer`, `ck-tester`) exactly as an
-  interactive session would. Wrapping, not replacing: the loop decides
-  *which task*, never *how ckdbs work gets done*.
+  style of its own inside ckdbs — it reads and follows `CLAUDE.md` and
+  this project's own subagents (`critics-developer`, `ck-tester`) exactly
+  as an interactive session would. Wrapping, not replacing: the loop
+  decides *which task*, never *how ckdbs work gets done*.
 - **`reporter-agent`** runs after each `intermediary-agent` iteration —
   a completed task, a failed one, or none pending — and syncs ckdbs's
   local state, **`docs/` included**, back to cws's issue/task records.
@@ -121,15 +118,14 @@ agent file is a change like any other: reviewed, and named in the report.
 
 **Reasoning — done before the edit, and written down.** The loop's value
 is that thinking happens where the work does, not that edits arrive
-quickly. A task begins by reading the owning spec, `docs/inflight/`, the
-tests and the git history, and the reasoning is recorded before the first
-edit rather than reconstructed after it. `CLAUDE.md`'s standing rule
-applies unchanged and hardest here — **re-measure a premise before
-building the fix**, because no reviewer is watching the guess. A task
-whose report cannot state *why* this approach and *what was ruled out* is
-not finished, however green its suite; and the long form of that
-reasoning lands in the owning doc under "Documentation" above, not in the
-cws result field.
+quickly. A task begins by reading the owning spec, the tests and the git
+history, and the reasoning is recorded before the first edit rather than
+reconstructed after it. `CLAUDE.md`'s standing rule applies unchanged and
+hardest here — **re-measure a premise before building the fix**, because
+no reviewer is watching the guess. A task whose report cannot state *why*
+this approach and *what was ruled out* is not finished, however green its
+suite; and the long form of that reasoning lands in the owning doc under
+"Documentation" below, not in the cws result field.
 
 **Hypothesis, verification, and the plan that follows from it.** Most
 non-trivial tasks start from a guess — where the cost is, why the test
@@ -196,11 +192,11 @@ the go-ahead gate below:
   listed option viable" — and workflow mode always takes the second
   branch. Never the first: there is nobody to ask.
 - **Genuine ambiguity gets researched, not guessed.** Read the owning
-  spec, `docs/inflight/`, git history and existing tests before deciding
-  anything non-obvious — the same standing rule that governs every other
-  claim in this project ("measure, don't argue"). A decision reached
-  this way is not a shortcut around research; it is research
-  substituting for a conversation that cannot happen here.
+  spec, git history and existing tests before deciding anything
+  non-obvious — the same standing rule that governs every other claim in
+  this project ("measure, don't argue"). A decision reached this way is
+  not a shortcut around research; it is research substituting for a
+  conversation that cannot happen here.
 - **A decision workflow mode had to make on its own is never silent.**
   Where neither an interface nor further research removes the fork —
   the task genuinely requires picking one road — `intermediary-agent`
@@ -228,8 +224,8 @@ never optional, wherever one task's output feeds the next: **research,
 a follow-up fix, or a revision that continues inside one milestone must
 land its background, its reasoning and any measured metrics in the doc
 that owns the subsystem** — `docs/spec/` if the thing is decided and
-built, `docs/inflight/in-progress|blocked|bugs|verified/` if it is not
-(`CLAUDE.md`'s own taxonomy) — never only in the cws report. The next
+built, and otherwise the tree's bucket for unfinished work (`docs/inflight/`
+held it until `1769487`) — never only in the cws report. The next
 iteration that picks up where this one left off has no memory but what
 is written there.
 
@@ -245,18 +241,17 @@ unchecked.
 **Issue aliases reuse this project's own task-row ids, never a freshly
 invented slug.** ckdbs already names its units of work — `SS1`, `SS5`,
 `BM1`, `PW1c-6c`, `RC04`, and the like, scattered through `CLAUDE.md`'s
-milestone table and `docs/inflight/` workplans. When `reporter-agent`
-creates a cws issue (`POST {SERVER_URL}/issue/{project}/`) for something
-a task surfaced, its `alias` is that id, so the cws-side record and the
-doc-side record key off the same identifier. Where none exists yet
-because the work is new, `intermediary-agent` mints one in the owning
-doc first, in that doc's own lettering scheme, and the alias follows it.
-**`CLAUDE.md` already warns these ids collide across documents** —
-"three `P`-schemes, two `R1`s: cite the file, never the bare number" —
-and an alias inherits that risk: where the bare id is ambiguous, qualify
-it with the owning doc or scheme (e.g. `pw1c-6c`, not an unqualified
-second `r1`) rather than let cws hold a collision it has no file to
-disambiguate with.
+milestone table and the specs. When `reporter-agent` creates a cws issue
+(`POST {SERVER_URL}/issue/{project}/`) for something a task surfaced, its
+`alias` is that id, so the cws-side record and the doc-side record key
+off the same identifier. Where none exists yet because the work is new,
+`intermediary-agent` mints one in the owning doc first, in that doc's own
+lettering scheme, and the alias follows it. **`CLAUDE.md` already warns
+these ids collide across documents** — "three `P`-schemes, two `R1`s:
+cite the file, never the bare number" — and an alias inherits that risk:
+where the bare id is ambiguous, qualify it with the owning doc or scheme
+(e.g. `pw1c-6c`, not an unqualified second `r1`) rather than let cws hold
+a collision it has no file to disambiguate with.
 
 ## The loop, one iteration
 
@@ -333,86 +328,81 @@ exactly the point an interactive session would stop, and says so in its
 report to cws — it is never waved through because no human was
 watching.
 
-## Closed by `/help`, 2026-08-27
+## The cws surface the loop uses
 
-`GET {SERVER_URL}/help` was run against the server and answered the three
-endpoint gaps this section used to carry. All three are now written into
-the two agent files rather than left as intent:
+`GET {SERVER_URL}/help` describes the server; the endpoints and
+conventions the loop rests on are these.
 
-- **Creating tasks exists.** `POST {SERVER_URL}/tasks/` takes `version`,
+- **Creating tasks.** `POST {SERVER_URL}/tasks/` takes `version`,
   `title`, `content`, `type`, and optionally `derived_from` (a parent
   task id, checked app-side — KDS has no self-referencing FK),
   `milestone_id` (an engine-enforced FK — 400 if it doesn't exist) and
   `priority` (an integer with **no server-fixed direction**, hence this
   file's lower-runs-first convention). That is what both the planning
   iteration and `reporter-agent`'s subtask enqueue call.
-- **Updating a milestone exists.** `PATCH {SERVER_URL}/milestones/{id}/`
-  writes only the fields present, so advancing `state` alone restates
-  nothing else. `reporter-agent.md`'s old "there is currently no API to
-  update a milestone's `state`" was true when written and is not now.
+- **Updating a milestone.** `PATCH {SERVER_URL}/milestones/{id}/` writes
+  only the fields present, so advancing `state` alone restates nothing
+  else.
 - **The instruction-file tasks have real `/tasks/{id}` rows**, because
   iteration 1 registers them, so recording their outcome is the ordinary
   `POST /tasks/{id}/results/` — not an issue-shaped workaround. Issues
-  (`POST /issue/{project}/`) go back to meaning what `reporter-agent`
-  always used them for: problems the work surfaced.
+  (`POST /issue/{project}/`) mean what `reporter-agent` always used them
+  for: problems the work surfaced.
+- **Editing a task in place.** `PATCH {SERVER_URL}/tasks/{id}/` writes
+  only the keys present (an explicit `null` clears a nullable column, and
+  `raised_at`/`last_shipped_at`/`claimed_by`/`claimed_at` are refused by
+  name). That is what makes the re-plan under "What the loop optimizes
+  for" an operation and not an intention: a task whose premise this
+  iteration disproved gets its `content` and `priority` rewritten rather
+  than left to be built as planned. `reporter-agent` makes the call, per
+  the split — `intermediary-agent` decides the re-plan, the reporter
+  tells cws.
 
-- **Editing a task in place exists** — `PATCH {SERVER_URL}/tasks/{id}/`
-  writes only the keys present (an explicit `null` clears a nullable
-  column, and `raised_at`/`last_shipped_at`/`claimed_by`/`claimed_at` are
-  refused by name). That is what makes the re-plan under "What the loop
-  optimizes for" an operation and not an intention: a task whose premise
-  this iteration disproved gets its `content` and `priority` rewritten
-  rather than left to be built as planned. `reporter-agent` makes the
-  call, per the split — `intermediary-agent` decides the re-plan, the
-  reporter tells cws.
-
-**Phases** (2026-08-27): `intermediary-agent` cuts a milestone into
-phases before tasks, and **the phase — not the task — is the unit the
-target project's own development process wraps**: one working context per
-phase, the per-step gates per task, the landing gates at the phase's last
-task. **The phase's work is committed on its branch at the end of every
+**Phases.** `intermediary-agent` cuts a milestone into phases before
+tasks, and **the phase — not the task — is the unit the target project's
+own development process wraps**: one working context per phase, the
+per-step gates per task, the landing gates at the phase's last task.
+**The phase's work is committed on its branch at the end of every
 iteration and the loop moves straight on**: only the push to
 `origin main` waits for the operator, and waiting for it is not something
 the loop does — an uncommitted phase left behind while the next iteration
 opens a different working context is stranded work, which is the failure
-this rule exists to prevent. cws has no phase entity, so a
-phase is a convention carried in `priority` — phase N owns the band
+this rule exists to prevent. cws has no phase entity, so a phase is a
+convention carried in `priority` — phase N owns the band
 `N*100`…`N*100+99`, which composes with the loop's existing lower-runs-
 first order and needs no second field. A phase may be a single task.
 `intermediary-agent.md` states the procedure; this file states that the
 base process is applied at phase granularity rather than per task.
 
-**The `state` column is adopted** (2026-08-27): a task carries a workflow
-state — `init`, `pending`, `inprogress`, `done`, `blocked`, `cancelled` —
-moved only by `POST /tasks/{id}/state/`, since a transition is not a field
-edit and `POST /tasks/` and `PATCH` both refuse it. The loop's contract:
-**claim first, then `inprogress`, before any work** (the claim can lose a
-race and the state call cannot, so setting the label first would mislabel
+**The `state` column.** A task carries a workflow state — `init`,
+`pending`, `inprogress`, `done`, `blocked`, `cancelled` — moved only by
+`POST /tasks/{id}/state/`, since a transition is not a field edit and
+`POST /tasks/` and `PATCH` both refuse it. The loop's contract: **claim
+first, then `inprogress`, before any work** (the claim can lose a race
+and the state call cannot, so setting the label first would mislabel
 another session's task), and a **terminal state in the same breath as the
 result**, never a finished task left at `inprogress`. Note that
-`GET /tasks/?pending=true` is the *timestamp* derivation and `state=pending`
-is this column — two different things that read alike.
+`GET /tasks/?pending=true` is the *timestamp* derivation and
+`state=pending` is this column — two different things that read alike.
 
-**The claim lease is adopted** (2026-08-27): `POST /tasks/{id}/claim/`
-and `/release/`, an exclusive 30-minute lease so two sessions can't work
-one task at once, with `GET /tasks/?claimable=true` as its advisory
-filter. `intermediary-agent` claims at the moment work starts — step 4 of
-its work phase — because **a claim is how this schema says "in
-progress"**: a task row has no status column, `status` lives only on
-results, and a result is a finished signal that would drop the task out
-of the pending list mid-work. Re-claiming refreshes the lease, which a
-task outrunning 30 minutes must do or be stolen; reporting a result
-releases the lease on its own.
+**The claim lease.** `POST /tasks/{id}/claim/` and `/release/`, an
+exclusive 30-minute lease so two sessions can't work one task at once,
+with `GET /tasks/?claimable=true` as its advisory filter.
+`intermediary-agent` claims at the moment work starts — step 4 of its
+work phase — because **a claim is how this schema says "in progress"**:
+a task row has no status column, `status` lives only on results, and a
+result is a finished signal that would drop the task out of the pending
+list mid-work. Re-claiming refreshes the lease, which a task outrunning
+30 minutes must do or be stolen; reporting a result releases the lease on
+its own.
 
 ## Stopping and resuming a run
 
 Workflow mode is meant to run unattended, not irreversibly. A run is
-halted with the **`workflow-stop`** skill, never by simply abandoning the
-session: an abandoned loop leaves a task at `inprogress` that nothing
-clears, a claim lease held by a dead session, and possibly uncommitted
-work in a phase worktree that is on no branch.
-
-The skill stops the driver first (so no wakeup lands on top of the
+**halted, never abandoned**: an abandoned loop leaves a task at
+`inprogress` that nothing clears, a claim lease held by a dead session,
+and possibly uncommitted work in a phase worktree that is on no branch.
+A halt stops the driver first (so no wakeup lands on top of the
 wrap-up), settles the task in flight to a terminal state and releases its
 lease, verifies every phase worktree is committed, syncs through
 `reporter-agent` with the milestone id and the fact that this is a halt —
@@ -422,34 +412,23 @@ would otherwise be lost, since a subagent's report is never shown to the
 user. It does not push and does not delete worktrees; those stay separate
 decisions, and the second belongs to `worktree-safe-exit`.
 
-A stopped run is picked back up with **`workflow-resume`**, which adopts
-the existing milestone rather than planning a second one — **a duplicate
-milestone is permanent, since cws has no delete endpoint, and it splits
-the queue so neither half ever reads as finished.** It repairs what the
-stop left: an `inprogress` task whose lease has expired goes back to
-`pending`, while one whose lease is still live belongs to another session
-and is not touched at all. It also surfaces a gap the queue cannot see on
-its own — **a `blocked` task is excluded from every `pending=true` fetch**,
-because it was reported against, so a milestone can read as finished with
-blocked work still in it. `workflow-resume` lists those and asks; it never
-retries one on its own, since a task blocked for a real reason and retried
-automatically is a loop.
+A stopped run is resumed by **adopting the existing milestone** rather
+than planning a second one — **a duplicate milestone is permanent, since
+cws has no delete endpoint, and it splits the queue so neither half ever
+reads as finished.** Resumption repairs what the stop left: an
+`inprogress` task whose lease has expired goes back to `pending`, while
+one whose lease is still live belongs to another session and is not
+touched at all. One gap the queue cannot see on its own is surfaced
+rather than retried: **a `blocked` task is excluded from every
+`pending=true` fetch**, because it was reported against, so a milestone
+can read as finished with blocked work still in it. Those are listed and
+asked about; a task blocked for a real reason and retried automatically
+is a loop.
 
 ## Open
 
-- **The doc-trail check's depth.** `reporter-agent.md` now names the
-  check ("confirm the doc this task pointed at actually exists"), but
-  what counts as confirmation — the file existing, the section existing,
-  or the section actually saying what the task claimed — is not settled.
-  Today it reads as file-and-section.
-- **When the unpushed branches get pushed.** No task waits on this any
-  more (the outcome was removed 2026-08-27), so nothing stalls — but the
-  branches do accumulate, and who pushes them, on what cadence, is still
-  the operator's and still unstated.
-- **Worktree/branch naming for loop-driven work** — whether it needs a
-  marker distinct from ordinary work (e.g. carrying the cws task id)
-  beyond "name it for the work." Recommended above, not yet ratified as
-  a rule.
-- **How a task that names an `Open Decision`** in `CLAUDE.md` gets
-  reported — presumably as any other blocked task, but not yet stated
-  explicitly.
+The decisions here are unrecorded in this file: the doc-trail check's
+depth (today it reads as file-and-section), who pushes the accumulated
+branches and on what cadence, whether loop-driven worktrees carry a
+marker beyond "name it for the work", and how a task that names an
+`Open Decision` is reported.

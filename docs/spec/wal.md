@@ -1,17 +1,13 @@
 # KDS Write-Ahead Log (WAL)
 
-How KDS makes a mutation durable, and how it will replay one. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/spec/page.md` (page header, flush gate, file layout), `docs/spec/txn.md` (transactions and MVCC), `docs/spec/heap-and-tuple.md`, `docs/rules/rules.md`, `docs/spec/sched.md`.
+How KDS makes a mutation durable, and how it replays one. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/spec/page.md` (page header, flush gate, file layout), `docs/spec/txn.md` (transactions and MVCC), `docs/spec/cross-owner-txn.md` (the commit across cores), `docs/spec/heap-and-tuple.md`, `docs/rules/rules.md`, `docs/spec/sched.md`.
 
-**Status: every data mutation is logged, and recovery runs at mount.** The sentence this replaced — *"recovery is not implemented. Nothing reads the log back"* — was written before RC01-RC06 and stayed after them; it was false from the day `src/wal/analysis.cpp`, `redo.cpp`, `recovery.cpp` and `src/server/mount_recovery.cpp` landed (corrected 2026-08-29, H8).
+**Status: every data mutation is logged, and recovery runs at mount.** The boundary lives in `include/kds/wal/recovery.hpp`:
 
-The boundary that *is* true lives in `include/kds/wal/recovery.hpp` and is stated here rather than paraphrased, because a paraphrase is what drifted:
+- **Analysis, redo and the high-water repair run per core**, followed by a completion checkpoint; `SHOW META` prints the recovery block. The catalog recovers too, and a torn catalog page refuses the mount rather than being served corrupt.
+- **The undo phase is injected.** `RecoverStream` takes an `UndoPhase`; mount installs `txn::RecoveryUndo` (`src/server/mount_recovery.cpp`), so losers are rolled back. A stream that analysis found losers in, recovered **without** one, fails the mount — deliberately, because redo without undo is worse than no recovery at all: redo restores uncommitted writes, and a surviving uncommitted row reads as *committed* on the next boot (`txn.md` §4.1). A recovery that replays and stops has published every loser's writes.
 
-- **Built**: analysis, redo, and the high-water repair, per core, followed by a completion checkpoint; `SHOW META` prints the recovery block. The catalog recovers too, and a torn catalog page refuses the mount rather than being served corrupt.
-- **Not built**: RC05, the undo phase, as a *default*. `RecoverStream` takes an injected `UndoPhase`; with one installed, losers are rolled back. **Without one, a stream analysis found losers in fails the mount, naming RC05** — deliberately, because redo without undo is worse than no recovery at all: redo restores uncommitted writes, and `txn.md` §8's accepted gap is that a surviving uncommitted row reads as *committed* on the next boot. A recovery that replays and stops has not left the database as it found it; it has published every loser's writes.
-
-§11a states exactly which mutations are logged today; §12 specifies the replay.
-
-*(Corrected 2026-08-10. This line read "logging works for INSERT" from before the transaction work, and understated the first half by four subsystems while the second half — the important one — stayed right, which is probably why it went unrevised.)*
+§11a states exactly which mutations are logged; §12 specifies the replay.
 
 ---
 
@@ -35,8 +31,8 @@ Class is a per-transaction property (`C_TXN_BEGIN.durability`) with a session de
 
 ## 2. Architectural Position
 
-- **Redo log + undo pages.** WAL is a **physiological redo log** (page-oriented records: page_id + slot + bytes). MVCC history lives in undo chains reached via each tuple's `undo_ptr`; undo-page writes are themselves WAL-logged, so both roll-forward and roll-back state survive a crash. (InnoDB-shaped, deliberately not Postgres-shaped and not Oracle block/ITL-shaped — evaluated and settled with the MVCC header decision, §5.1.)
-- **WAL-before-data:** no modified page reaches disk before the log records describing the modification are durable. Enforcement moved from caller discipline into code: the per-core `BufferPool` holds a `WalDurability` seam and **refuses to flush a frame until `durable_lsn() ≥ page_lsn`** (`docs/spec/page.md` §8). This spec defines the rule; the pool implements it.
+- **Redo log + undo pages.** WAL is a **physiological redo log** (page-oriented records: page_id + slot + bytes). MVCC history lives in undo chains reached via each tuple's `undo_ptr`; undo-page writes are themselves WAL-logged, so both roll-forward and roll-back state survive a crash. (InnoDB-shaped, deliberately not Postgres-shaped and not Oracle block/ITL-shaped — settled with the MVCC header decision, §5.1.)
+- **WAL-before-data:** no modified page reaches disk before the log records describing the modification are durable. Enforced in code, not by caller discipline: the per-core `BufferPool` holds a `WalDurability` seam and **refuses to flush a frame until `durable_lsn() ≥ page_lsn`** (`docs/spec/page.md` §8). This spec defines the rule; the pool implements it.
 - **Who runs it:** foreground tasks *append* records as part of their page mutations; flushing, group-commit completion, checkpointing, and segment recycling run in the **`system` scheduling group**. WAL housekeeping never runs inside foreground tasks.
 - **I/O:** all WAL I/O goes through the injected `IoBackend` seam — never direct syscalls, never mmap (rejected engine-wide, `docs/spec/page.md` §15) — so every guarantee here is testable under deterministic simulation with fault injection (rules.md §4). The concrete backend remains `[OPEN]` and must not leak into WAL logic.
 - **Not via `PageStore`.** WAL segments are append-only streams; `PageStore`'s random-access `PageRef` semantics are the wrong shape. WAL owns its segment files directly through `IoBackend`. `PageStore` remains the seam for data/undo/catalog/Waystone pages only.
@@ -47,10 +43,10 @@ Class is a per-transaction property (`C_TXN_BEGIN.durability`) with a session de
 
 One WAL stream per core, matching shared-nothing ownership (and the per-core buffer pools of `docs/spec/page.md` §6): a core logs only mutations to state it owns — no shared tail pointer, no lock, no atomic contention on the append path.
 
-- **LSN** is a per-stream monotonically increasing `uint64_t` byte offset (stream-local). No global LSN; cross-stream ordering is not required while transactions are core-local.
+- **LSN** is a per-stream monotonically increasing `uint64_t` byte offset (stream-local). No global LSN; LSNs are never compared across streams.
 - The **superblock** (data-file page 0, `docs/spec/page.md` §4) records, per core, the stream's segment anchor and the last checkpoint's redo start (§14).
-- ~~**Cross-core transactions `[OPEN]`**~~ — **closed 2026-08-28**, and the protocol is `docs/spec/cross-owner-txn.md`. Commit is a coordination protocol across participating streams, as this line anticipated, with the one rule the record format made inevitable: **the decision lives in exactly one stream**, the coordinator's, and its `COMMIT` *is* the decision. LSNs stay stream-local and are never compared across cores, so nothing here is retracted; what a participant's stream carries is a `TXN_PREPARE` naming the coordinator's `(session_id, transaction_id)`, and what resolves it at mount is a read of the coordinator's **file**, never a cross-stream LSN comparison. §11-3's checkpoint floor is the one change this made to the topology's rules.
-- Core-count changes between runs `[OPEN]`: recovery with a different core count (stream reassignment) — flag, don't assume. **Narrowed 2026-08-28 by operator direction: *when* is settled, *how* is not.** The count may change **in both directions**, and the reorganisation is a **mount-time operation** — inside the window RV1 already establishes, after the superblock is read and before the listener binds. **Online change is not supported and is not a goal**; that is a scope decision and not an architectural exclusion, and it costs nothing a later online path would need (revocation and quiesce would layer onto the same reassignment logic rather than replace it — at mount there is no fault grant to revoke, because the store is built fresh, which is the constraint `device_page_store.hpp` states). Three constraints are not negotiable: **(1)** prepared transactions resolve **before** anything is reorganised (R6-4's `server::PreparedResolver`, run immediately after analysis and before redo) — reassigning or discarding a coordinator's stream destroys the evidence a prepare is resolved against, so an unresolved prepare **refuses the mount**; **(2)** the superblock's `core_count` is written **last**, so a crash mid-reorganisation reads as the old count and the work reruns — reassignment must therefore be **idempotent**; **(3)** **modulo is not required** — placement policy is open and belongs with the range mover, and correctness needs only that relations whose owner core no longer exists are moved. Until the reorganisation is built, `bootstrap.cpp`'s refusal at the door stands and is the answer R6-4's CP1 records (`docs/inflight/in-progress/workplan-cross-owner-txn.md`).
+- **Cross-core transactions** are `docs/spec/cross-owner-txn.md`. Commit is a coordination protocol across participating streams with one rule the record format makes inevitable: **the decision lives in exactly one stream**, the coordinator's, and its `COMMIT` *is* the decision. A participant's stream carries a `TXN_PREPARE` naming the coordinator's `(session_id, transaction_id)`, and what resolves it at mount is a read of the coordinator's **file**, never a cross-stream LSN comparison. §11-3's checkpoint floor is the one rule this adds to the topology.
+- **The core count is pinned.** The superblock records `core_count` at bootstrap, and a mount whose running `cores` disagrees is refused, naming both numbers (`superblock.hpp`): a database written by N cores holds N streams and N anchor slots, and a mount at M would leave |N − M| streams with nothing to replay them. Online core-count change is not supported.
 
 ## 4. Segment & Record Format
 
@@ -58,8 +54,8 @@ One WAL stream per core, matching shared-nothing ownership (and the per-core buf
 
 - A stream is a sequence of fixed-size **segment files** (default 64 MiB `[OPEN: size]`), named by `(core_id, segment_no)`.
 - Segment header (one 4 KiB block): magic, format version, `core_id`, `segment_no`, `start_lsn`, header CRC32C.
-- **Format version is 2 since 2026-08-12, and this build reads version 2 only** (`kSegmentFormatVersion`, `kMinReadableSegmentFormatVersion`). Two record payloads had moved under AS6a's licence "free today — no WAL stream has ever been read back": `AssertEntryPayload` gained `group_id` (16 → 20 bytes, so every byte after offset 16 shifted) and RC03's `UNDO_WRITE` correction. Recovery running at mount is what expired that licence, so the version moved with it. **A floor and not just a bump**: `DecodeSegmentHeader` refuses only what is *newer* than this build, so a version bump alone would have left a v1 segment accepted and mis-decoded rather than refused. The floor tracks the current version while no compatibility promise exists (pre-1.0); the day one does, it stops tracking and a decoder per supported version replaces it — with a migration story, which is a decision to take then and not a default to inherit.
-- The **"free today" argument may not be reused without re-checking that it is still true.** It was sound when written and false eight commits later; what makes a format touch free is that nothing reads the format back, and that property now has an expiry date.
+- **Format version is 2, and this build reads version 2 only** (`kSegmentFormatVersion`, `kMinReadableSegmentFormatVersion`). The minimum is a **floor and not just a version**: `DecodeSegmentHeader` refuses what is *newer* than this build, and the floor is what refuses what is older rather than accepting and mis-decoding it. The floor tracks the current version while no compatibility promise exists (pre-1.0); the day one does, a decoder per supported version replaces it, with a migration story.
+- **Any change to a record payload is a format-version event**, because recovery reads the log back. "Nothing reads this format back" is not an argument that may be reused without re-checking that it is still true.
 - Records are 8-byte aligned and **never span segments**: a non-fitting record pads the tail with `PAD` and seals the segment. Oversized payloads are a design error, not a spanning case.
 - A sealed segment is immutable — the unit of archiving (§13) and recycling (§11).
 
@@ -84,22 +80,22 @@ Torn-tail detection needs no commit marker: recovery walks forward; the first re
 
 ### 5.1 MVCC model the records serve
 
-The tuple header carries exactly **`trx_id` (writer, 48-bit) + `undo_ptr`** — there is **no `xmax` field**. A version's death is the next version's birth: walking the undo chain, the reader already knows the overwriting transaction when it arrives at an older version, so the chain itself encodes validity intervals; storing the boundary twice is redundant. DELETE is a **delete-mark** (slot/Keystone flag) plus the deleter's `trx_id` in the writer field — no separate field. Row locking is the Keystone lock byte, not a header field (so the Postgres-style secondary role of `xmax` as a lock slot is also covered). Consequences for WAL: every heap mutation record carries the writer `trx_id` it stamps; undo records carry the *prior* writer id, which is what makes the no-`xmax` reconstruction work. The 48-bit width bounds `txn_id` in §4.2; wraparound/epoch policy `[OPEN]` (owned by the transaction spec).
+The tuple header carries exactly **`trx_id` (writer, 48-bit) + `undo_ptr`** — there is **no `xmax` field**. A version's death is the next version's birth: walking the undo chain, the reader already knows the overwriting transaction when it arrives at an older version, so the chain itself encodes validity intervals; storing the boundary twice is redundant. DELETE is a **delete-mark** (slot/Keystone flag) plus the deleter's `trx_id` in the writer field — no separate field. Row locking is the Keystone lock byte, not a header field (so the Postgres-style secondary role of `xmax` as a lock slot is also covered). Consequences for WAL: every heap mutation record carries the writer `trx_id` it stamps; undo records carry the *prior* writer id, which is what makes the no-`xmax` reconstruction work. The 48-bit width bounds `txn_id` in §4.2; exhaustion is `OutOfRange`, never wrapped (`docs/spec/txn.md` §4.2).
 
 ### 5.2 Types `[PROPOSED]`
 
 Physiological redo: each record targets one page and is idempotently replayable (§9).
 
-- **Transaction:** `TXN_BEGIN`, `TXN_COMMIT`, `TXN_ABORT`.
-- **Heap:** `HEAP_INSERT` (slot, tuple bytes incl. Keystone word, writer `trx_id`, `undo_ptr`), `HEAP_OVERWRITE` (in-place new version; payload includes new writer id + new `undo_ptr`), `HEAP_DELETE_MARK` (sets the delete flag + writer id — the DELETE of §5.1), `SLOT_RETIRE` (physical retirement after purge — distinct from delete-mark), `PAGE_INIT` (new heap page: common header + `min_key`; `min_key` is immutable thereafter, so it appears only here). **Amended and built 2026-08-13** (`docs/spec/page.md` §2a): the payload gains `owner_oid` — the owning relation's oid, stamped into the common header at initialization — growing it 12 → 24 bytes (`owner_oid` at offset 16; four reserved bytes at 12 keep the codec's mirror struct naturally aligned, so the 12-byte legacy prefix is unchanged). Not a new type, a length-discriminated extension: the decoder accepts both forms, and the 12-byte legacy one decodes as owner 0 (unattributed), mirroring §2a's on-page zero-default. **The discriminator is a floor, not an equality** (corrected by review the same day): `DecodeRecord` returns the record's 8-byte-aligned tail rather than the exact payload — a 12-byte payload comes back as 16 bytes, a 24-byte one as 24 — so `>=` is the only test that reads a legacy record correctly, and it is the rule every payload codec in `wal/payload.cpp` already used.
+- **Transaction:** `TXN_BEGIN`, `TXN_COMMIT`, `TXN_ABORT`, and `TXN_PREPARE` (a participant's promise in a cross-owner commit, `docs/spec/cross-owner-txn.md` §2).
+- **Heap:** `HEAP_INSERT` (slot, tuple bytes incl. Keystone word, writer `trx_id`, `undo_ptr`), `HEAP_OVERWRITE` (in-place new version; payload includes new writer id + new `undo_ptr`), `HEAP_DELETE_MARK` (sets the delete flag + writer id — the DELETE of §5.1), `SLOT_RETIRE` (physical retirement after purge — distinct from delete-mark), `PAGE_INIT` (new heap page: common header + `min_key` + `owner_oid`, the owning relation's oid stamped into the common header at initialization, `docs/spec/page.md` §2a; `min_key` is immutable thereafter, so it appears only here). The `PAGE_INIT` payload is 24 bytes, `owner_oid` at offset 16 with four reserved bytes at 12 that keep the codec's mirror struct naturally aligned; a 12-byte legacy payload decodes as owner 0 (unattributed), mirroring §2a's on-page zero-default. **The length discriminator is a floor, not an equality**: `DecodeRecord` returns the record's 8-byte-aligned tail rather than the exact payload — a 12-byte payload comes back as 16 bytes, a 24-byte one as 24 — so `>=` is the only test that reads a legacy record correctly, and it is the rule every payload codec in `wal/payload.cpp` uses.
 - **B+ tree:** `BTREE_INSERT`, `BTREE_SPLIT` (one record per affected page).
-- **Undo:** `UNDO_WRITE` (undo-page append; payload = before-image + prior writer `trx_id` + prior `undo_ptr` — the chain link).
-- **Var-heap:** `VARHEAP_APPEND` (a spilled value landing in a `kVarHeap` page; payload = slot + value bytes, target page in the envelope — `docs/rules/rule-fixed-length-tuple.md` §5). The slot is recorded rather than re-derived because replay must reproduce the *exact* pointer the tuple's cell already carries; a pointer resolving to a different slot after recovery would be a value silently swapped for another. **Write ordering:** `VARHEAP_APPEND` precedes the `HEAP_INSERT`/`HEAP_OVERWRITE` whose cell points at it, in the same transaction, replayed by ordinary winner/loser machinery. A crash between the two leaves an unreferenced value for purge's sweep — the harmless direction, and the reason the ordering is that way round. **There is deliberately no var-heap-specific recovery logic, and none may be added.** Logged at all because a var-heap value is *authoritative data*: losing one loses a committed value, not a hint, which is what separates this class from the advisory waystone family.
-- **Allocation:** `ALLOC`, `FREE` — emitted by the SpaceManager (`docs/spec/page.md` §5); free-map pages are a **logged, headered page class** replayed like any other. `ALLOC` precedes file extension (growth ordering, `docs/spec/page.md` §14).
+- **Undo:** `UNDO_WRITE` (undo-page append; payload = the record's tail + prior writer `trx_id` + prior `undo_ptr` — the chain link; `docs/spec/txn.md` §3.5).
+- **Var-heap:** `VARHEAP_APPEND` (a spilled value landing in a `kVarHeap` page; payload = slot + value bytes, target page in the envelope — `docs/rules/rule-fixed-length-tuple.md` §5) and `VARHEAP_RELEASE` (its rollback compensation, `docs/spec/txn.md` §6). The slot is recorded rather than re-derived because replay must reproduce the *exact* pointer the tuple's cell already carries; a pointer resolving to a different slot after recovery would be a value silently swapped for another. **Write ordering:** `VARHEAP_APPEND` precedes the `HEAP_INSERT`/`HEAP_OVERWRITE` whose cell points at it, in the same transaction, replayed by ordinary winner/loser machinery. **There is deliberately no var-heap-specific recovery logic, and none may be added.** Logged at all because a var-heap value is *authoritative data*: losing one loses a committed value, not a hint, which is what separates this class from the advisory waystone family.
+- **Allocation:** `ALLOC`, `FREE` — reserved for the SpaceManager (`docs/spec/page.md` §5); free-map pages are a **logged, headered page class** replayed like any other. `ALLOC` precedes file extension (growth ordering, `docs/spec/page.md` §14).
 - **Catalog:** catalog-page mutations (DDL, Waystone flag changes) as ordinary page records.
 - **Control:** `CHECKPOINT_BEGIN` (payload: active-txn table + dirty-page table with recovery LSNs), `CHECKPOINT_END`, `FULL_PAGE_IMAGE` (§10), `PAD`.
 
-Adding a type is a format-version event; unknown types on replay are a hard recovery error, never skipped.
+Adding a type is a format-version event; unknown types on replay are a hard recovery error, never skipped. `record.hpp`'s enum is frozen and append-only.
 
 ## 6. Write Path `[PROPOSED]`
 
@@ -134,85 +130,52 @@ Adopted with the checksum decision (`docs/spec/page.md`): **full-page images.** 
 
 Fuzzy checkpoints, run as a `system`-group task per core:
 
-1. Emit `CHECKPOINT_BEGIN` carrying the active-transaction table and the dirty-page table (`BufferPool::DirtyTable()` — `{page_id → recLSN}`, `docs/spec/page.md` §8).
+1. Emit `CHECKPOINT_BEGIN` carrying the active-transaction table (each entry with the transaction's `last_undo_ptr`, `docs/spec/txn.md` §3.3) and the dirty-page table (`BufferPool::DirtyTable()` — `{page_id → recLSN}`, `docs/spec/page.md` §8).
 2. Flush dirty pages under §8-1, paced across the checkpoint window (`docs/spec/page.md` §13 checkpoint spreading) and SLO-throttled — the checkpointer never floods the foreground.
-3. Emit `CHECKPOINT_END`; **after it is durable**, persist the redo start (`min(recLSN)`) into the superblock anchor (§14-3). recLSN 0 — a page dirtied but described by no record — is skipped, not `min()`ed in; with no logged page in the snapshot the redo start is the `CHECKPOINT_BEGIN` LSN itself. **Revised 2026-08-28 (R6-3, `docs/spec/cross-owner-txn.md` §2c): the redo start also floors at the oldest live `TXN_PREPARE`** (`ActiveTransactions::OldestPreparedLsn`), so a prepared cross-owner participant's record stays inside every future replay range until the transaction is decided. Without the floor, that record leaves the range as soon as the transaction's pages are written back; the next mount then scans from the checkpoint, never sees the prepare, reads the active-list entry as an ordinary loser, and **rolls back a transaction its coordinator may have committed** — the one disagreement two-phase commit exists to prevent, reached with no message and no refusal anywhere. The price is the standard one: an in-doubt transaction pins the log, and `in_doubt_ceiling_ms` is what bounds how much — which is why that ceiling is chosen against log retention as well as against writer stall.
-4. Segments wholly below the redo start are recyclable once archived (§13).
+3. Emit `CHECKPOINT_END`; **after it is durable**, persist the redo start (`min(recLSN)`) into the superblock anchor (§14-3). recLSN 0 — a page dirtied but described by no record — is skipped, not `min()`ed in; with no logged page in the snapshot the redo start is the `CHECKPOINT_BEGIN` LSN itself. **The redo start also floors at the oldest live `TXN_PREPARE`** (`ActiveTransactions::OldestPreparedLsn`), so a prepared cross-owner participant's record stays inside every future replay range until the transaction is decided (`docs/spec/cross-owner-txn.md` §2c). Without the floor, that record leaves the range as soon as the transaction's pages are written back; the next mount then reads the active-list entry as an ordinary loser and **rolls back a transaction its coordinator may have committed**. An in-doubt transaction therefore pins the log, and `cross-owner-txn.md` §2b's ceiling bounds how much.
+4. Segments wholly below the redo start are recyclable once archived (§13) — **except that a coordinator's stream may not recycle a segment holding a cross-owner decision until every participant of that transaction has made its own terminal record durable**, and a participant's pre-durable acknowledgement does not discharge this (`docs/spec/cross-owner-txn.md` §2c). A retention policy keyed on a core's own checkpoint alone is locally correct and silently recovers another core's committed transaction as aborted.
 
 Cadence is the RTO knob: more frequent ⇒ shorter recovery + more FPI volume.
 
 ## 11a. What logs today
 
-**Every data mutation, and — since 2026-08-19 (RV3,
-`docs/workplan-rv3-catalog-recovery.md`) — every catalog mutation too**,
-as the ordinary record types the "Catalog" line above always planned:
-`kHeapInsert`/`kHeapOverwrite`/`kHeapDeleteMark`/`kSlotRetire` per row,
-`PAGE_INIT` for a catalog overflow page, a relation's root and its
-var-heap root, a `FULL_PAGE_IMAGE` for a chain-link edit and for each
-page of a backfilled index tree. No new record type, no format bump.
-*(Corrected 2026-08-10 — this section read "`INSERT` and nothing else",
-which was true before `docs/spec/txn.md`'s work and has not been since;
-corrected again 2026-08-19 when "no catalog mutation" fell.)*
+**Every data mutation and every catalog mutation**, as the ordinary record types: `kHeapInsert`/`kHeapOverwrite`/`kHeapDeleteMark`/`kSlotRetire` per row, `PAGE_INIT` for a catalog overflow page, a relation's root and its var-heap root, a `FULL_PAGE_IMAGE` for a chain-link edit and for each page of a backfilled index tree. There is no catalog-specific record type.
 
 Verified against the emission sites:
 
 | Path | Records |
 |---|---|
-| `INSERT` | `TXN_BEGIN` → (`FULL_PAGE_IMAGE` + `PAGE_INIT` when the heap chain grows) → **`UNDO_WRITE{kVarHeapAppend}` per spilled cell** → `VARHEAP_APPEND` per spilled cell → `INDEX_INSERT` per index → `HEAP_OVERWRITE` of the `sys.tables` id bump (RV3 — the record that makes K1's ceiling durable, and a per-INSERT cost the measurement prices) → `HEAP_INSERT` → `TXN_COMMIT` |
+| `INSERT` | `TXN_BEGIN` → (`FULL_PAGE_IMAGE` + `PAGE_INIT` when the heap chain grows) → **`UNDO_WRITE{kVarHeapAppend}` per spilled cell** → `VARHEAP_APPEND` per spilled cell → `INDEX_INSERT` per index → `HEAP_OVERWRITE` of the `sys.tables` id bump (the record that makes the id ceiling durable, `docs/rules/keystoneid-k0-findings.md`) → `HEAP_INSERT` → `TXN_COMMIT` |
 | `UPDATE` | `UNDO_WRITE` (before-image) → **`UNDO_WRITE{kVarHeapAppend}` per spilled cell** → `VARHEAP_APPEND` per spilled cell → `INDEX_INSERT` per touched index → `HEAP_OVERWRITE` |
 | `DELETE` | `UNDO_WRITE` → `HEAP_DELETE_MARK` |
 | rollback | the compensations of `docs/spec/txn.md` §6 — `SLOT_RETIRE` / `HEAP_OVERWRITE` / `HEAP_DELETE_MARK` / `VARHEAP_RELEASE` — then `TXN_ABORT` |
 | assertions | `ASSERT_BUILD` at CREATE, `ASSERT_RESERVE` / `ASSERT_COMMIT` / `ASSERT_ROLLBACK` on the write paths, `ASSERT_DROP` at teardown |
 | checkpointer | `CHECKPOINT_BEGIN` / `CHECKPOINT_END` |
 
-A third ordering rule joined the two below on **2026-08-28**, and it is RV3's applied to the var-heap: **an `UNDO_WRITE{kVarHeapAppend}` precedes the `VARHEAP_APPEND` it can undo**, so redo alone can never resurrect an append the undo phase has no record to release. What it closes is the orphan `docs/rules/rule-fixed-length-tuple.md` §5 used to hand to "purge's reclamation sweep": a crash between a spill and its tuple write now rolls back like any other loser write, and no sweep is owed. The one gap left is stated rather than implied — a spill logged with `kNoTxnId` (`LogChainInsert`'s path, taken by the assertion catalog and, until 2026-08-31, by `sys.pattern_defs`) has no transaction to chain to and no record, so a rolled-back one leaks until a mount-time sweep exists.
+**Ordering rules**, each load-bearing and enforced:
 
-Ordering rules that are load-bearing and already enforced: `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/spec/index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one. RV3 adds two more: a catalog write's `UNDO_WRITE` precedes its row record (redo alone must never resurrect a row the undo phase has no record to retire), and a catalog record's **envelope names the acting transaction or `kNoTxnId`, never the header's writer** — analysis notes every named envelope as a loser until a commit in range says otherwise, so a `next_id` bump logged under the relation's long-committed creator invented phantom crash losers (the RV3 review's B1). One safety note the relation-root `PAGE_INIT`s rest on: they are deliberately unstamped (the first row record stamps the page), and a root that never receives a row is protected by the **checkpointer flushing every page in its snapshot** before `CHECKPOINT_END` — the safety lives in that flush, not in a stamp.
+1. `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/spec/index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one.
+2. An `UNDO_WRITE{kVarHeapAppend}` precedes the `VARHEAP_APPEND` it can undo, so redo alone can never resurrect an append the undo phase has no record to release; a crash between a spill and its tuple write rolls back like any other loser write. **Gap:** a spill logged with `kNoTxnId` (`LogChainInsert`'s path, taken by the assertion catalog) has no transaction to chain to and no record, so a rolled-back one leaks; nothing sweeps it.
+3. A catalog write's `UNDO_WRITE` precedes its row record — redo alone must never resurrect a row the undo phase has no record to retire.
+4. A catalog record's **envelope names the acting transaction or `kNoTxnId`, never the header's writer**: analysis notes every named envelope as a loser until a commit in range says otherwise, so a `next_id` bump logged under the relation's long-committed creator would invent phantom crash losers.
 
-~~**Still outside the log**: `CREATE TABLE` and every other DDL~~ —
-**closed 2026-08-19** (RV3): DDL runs under a real transaction (autocommit
-included), its catalog writes log the ordinary types with undo records a
-crash loser's mount rolls back through, and `SHOW META` prints
-`ddl_durable=1 catalog_recovered=1`. The `sys.tables.next_id` bump logs
-with everything else, which closes the unlogged-ceiling half of
-`docs/rules/keystoneid-k0-findings.md` §4's K1 exposure. Still outside the log,
-precisely: `ALLOC`/`FREE`, reserved in the record enum and emitted by
-nothing (the SpaceManager of `docs/spec/page.md` §5 is unbuilt), and the
-**advisory Waystone classes** — trail pages (`stats/trail_store.cpp`)
-and directory pages (`stats/waystone_dir.cpp`) — which invariant 8
-exempts by construction: deleting them wholesale must never change a
-result, so they owe the log nothing. Nothing *authoritative* is outside.
-The **row-codec definition relations** (`sys.assertions`' source rows,
-and `sys.pattern_defs`' until it was withdrawn on 2026-08-31) joined on
-2026-08-19 through `exec/wal_row_log.hpp` — the same order rules,
-`kNoTxnId` envelopes —
-which closed the last silent crash loss: an acknowledged
-`CREATE ASSERTION` now survives and **enforces** after a crash. Two
-pre-existing holes fell out of proving that end to end (both
-unobservable while the row itself always died with the crash): every
-transactionless DDL statement — pattern, assertion, cabin, ALTER — had
-no commit record for the durability class to ride, so `kStrict` **and
-`kGroup`, whose documented durability point is D1's**, now sync at the
-acknowledgement (`AwaitDdlDurability`); and redo gained a `kCabinBound`
-arm (`BoundCabinPage::Format` writes a body whose `next_page_id` a
-zeroed page misreads as page 0 — `AdoptChain` on a redone root walked
-into the superblock). A genesis arm for assertion recovery was built and
-deleted the same day — the publish-time `ASSERT_SNAPSHOT`
-(`assertion_catalog.cpp`, AS6a) already covers a declaration born after
-the last checkpoint, and the arm's ordering could adopt an under-counted
-base over that better one; the refusal site records the reasoning.
+One safety note the relation-root `PAGE_INIT`s rest on: they are deliberately unstamped (the first row record stamps the page), and a root that never receives a row is protected by the **checkpointer flushing every page in its snapshot** before `CHECKPOINT_END` — the safety lives in that flush, not in a stamp.
 
-Three properties of the INSERT path are worth stating, because they are the shape the remaining paths should copy or deliberately not copy:
+**DDL logs.** DDL runs under a real transaction (autocommit included), its catalog writes log the ordinary types with undo records a crash loser's mount rolls back through, and `SHOW META` prints `ddl_durable=1 catalog_recovered=1` (`docs/spec/txn.md` §7, `docs/spec/ddl-transactional.md`). The **row-codec definition relations** (`sys.assertions`' source rows) log through `exec/wal_row_log.hpp` — the same order rules, `kNoTxnId` envelopes — so an acknowledged `CREATE ASSERTION` survives and **enforces** after a crash. Two rules ride with that: every transactionless DDL statement — assertion, cabin, ALTER — has no commit record for the durability class to ride, so `kStrict` **and `kGroup`, whose durability point is D1's**, sync at the acknowledgement (`AwaitDdlDurability`); and redo has a `kCabinBound` arm, because `BoundCabinPage::Format` writes a body whose `next_page_id` a zeroed page misreads as page 0. There is no genesis arm for assertion recovery: the publish-time `ASSERT_SNAPSHOT` (`assertion_catalog.cpp`) covers a declaration born after the last checkpoint, and an arm ordering itself before it could adopt an under-counted base over that better one.
 
-- **The `FULL_PAGE_IMAGE` on chain growth is a placeholder for a missing record type.** Growth mutates two pages: the new page, and the *old* tail whose `next_page_id` now reaches it. §5.2 has no record for a link edit, so the old tail is logged whole. It costs one page of log per page of heap — about +50% log volume on small rows, paid once per 8 KB of tuples, never per tuple. A `HEAP_CHAIN_LINK` record type would remove it and is the obvious first entry the next time the record enum is extended (record.hpp's enum is frozen and append-only, so it is a format-version event and not something the insert path decides on its own).
+**Outside the log, precisely:** `ALLOC`/`FREE`, reserved in the record enum and emitted by nothing, and the **advisory Waystone classes** — trail pages (`stats/trail_store.cpp`) and directory pages (`stats/waystone_dir.cpp`) — which invariant 8 exempts by construction: deleting them wholesale must never change a result, so they owe the log nothing. Nothing *authoritative* is outside.
+
+Three properties of the INSERT path are the shape the other paths copy or deliberately do not copy:
+
+- **The `FULL_PAGE_IMAGE` on chain growth stands in for a missing record type.** Growth mutates two pages: the new page, and the *old* tail whose `next_page_id` now reaches it. §5.2 has no record for a link edit, so the old tail is logged whole. It costs one page of log per page of heap — about +50% log volume on small rows, paid once per 8 KB of tuples, never per tuple. A link-edit record type would be a format-version event.
 - **Records are appended after the page is mutated, not while it is latched.** §8-1 asks for the latter. What makes the former sound *here* is narrow: the server is a single cooperative thread, no flush can interleave between the mutation and the `page_lsn` stamp, and the store's gate covers every instant after it. Any path that suspends mid-statement must generate its record under the latch instead.
-- **A failed append used to leave the tuple in the page.** The client got an `ERR`, and with no transaction manager to unwind the heap insert the row existed and was unlogged — a lost write on a crash, not a wrong answer now. **`docs/spec/txn.md` closed this**: the statement runs inside a write scope, and a failed append aborts it, which retires the slot through the ordinary rollback compensation. It holds only where a `TransactionManager` is wired in; a dispatcher built without one still leaves the row.
+- **A failed append aborts the write scope.** The statement runs inside one, and a failed append aborts it, which retires the slot through the ordinary rollback compensation — so the row does not survive unlogged. It holds only where a `TransactionManager` is wired in; a dispatcher built without one leaves the row.
 
-Transaction ids come from `docs/spec/txn.md` §2's block-reserved allocator over a superblock field, and the abort path lives there too (`docs/spec/txn.md` §6). Because recovery does not exist, an uncommitted row surviving a crash reads as *committed* on the next boot — stated precisely in `docs/spec/txn.md` §8.
+Transaction ids come from `docs/spec/txn.md` §4.2's block-reserved allocator over a superblock field, and the abort path lives there too (`docs/spec/txn.md` §6).
 
 ## 12. Recovery `[PROPOSED]`
 
-Per-core, parallel, restartable — each stream recovers independently (valid while transactions are core-local):
+Per-core, parallel, restartable — each stream recovers independently (a cross-owner participant's prepared transaction is resolved by reading its coordinator's file, `docs/spec/cross-owner-txn.md` §2c):
 
 1. **Analysis:** from the superblock's redo start, scan to the durable end (§4.2 torn-tail rule); rebuild dirty-page and transaction tables; classify winners (commit record seen) and losers.
 2. **Redo:** replay idempotently (§9), restoring `FULL_PAGE_IMAGE`s first per page; a checksum-failed page (`docs/spec/page.md` §10) with an available FPI is restored from it. Redo reconstructs crash-time state including uncommitted changes and undo pages.
@@ -223,7 +186,7 @@ A crash during recovery at any point resumes correctly — enforced by the test 
 
 ## 13. Business & Operational Features
 
-- **Configuration:** global durability class + per-transaction override (wire-protocol §9); `D3` flush interval; segment size; checkpoint cadence; retention; **undo retention** (§15 — the snapshot-too-old knob).
+- **Configuration:** global durability class + per-transaction override (wire-protocol §9); `D3` flush interval; segment size; checkpoint cadence; retention.
 - **Archiving / PITR `[PROPOSED]`:** sealing a segment fires an archive hook (callback seam). Archived streams + a base backup give point-in-time recovery; the log is designed to be sufficient for it (complete, checksummed, self-delimiting).
 - **Replication readiness:** the sealed-segment/stream tap is the future log-shipping source. No format concession needed now; the constraint is only "never break §4 self-description".
 - **Observability (ship with the first flush path):** durable-vs-appended LSN per core, flush latency percentiles, group-commit batch sizes, ring-full stall time, checkpoint duration, FPI volume share, undo retention headroom, recovery phase timings. Financial operators tune RPO/RTO with these; they are product features, not debug aids.
@@ -232,17 +195,9 @@ A crash during recovery at any point resumes correctly — enforced by the test 
 
 The tuple MVCC header, `PAGE_INIT` as the sole logger of `min_key`, the per-core superblock anchors, and the undo page layout are all specified and built — see `docs/spec/heap-and-tuple.md` §3.2, §11a here, `include/kds/server/superblock.hpp`, and `docs/spec/txn.md` §3 respectively.
 
-What remains outstanding is carried in `docs/spec/txn.md` §9: undo retention policy, snapshot-too-old semantics, and 48-bit txn-id wraparound.
-
 ## 15. Open Decisions — do not assume
 
-- Segment size; ring capacity; `D3` flush interval defaults.
-- ~~Cross-core transaction commit protocol~~ — **closed 2026-08-28**, `docs/spec/cross-owner-txn.md`, at relation granularity; multi-*range* transactions inherit it unchanged. Recovery under changed core counts (§3) stays open, narrowed to *how* rather than *when*.
-- I/O backend (inherited); the seam's durability verb (FUA/fsync semantics) — define with the backend.
-- **Undo retention policy** and `SnapshotTooOld` surfacing (error class, retryability) — undo-based MVCC's structural trade, owned by `docs/spec/txn.md` §9 but constraining WAL segment and undo recycling here.
-- 48-bit `trx_id` wraparound and epoch handling. Exhaustion is `OutOfRange`, never wrapped (`docs/spec/txn.md` §9).
-- Archive hook transport (filesystem copy vs pluggable).
-- **Segment retention and recycling** — open, and it now carries one rule that is *not* open. A cross-owner participant is resolved at mount by reading its **coordinator's** stream whole, and an absent decision there reads as ABORT, so: **a coordinator's stream may not recycle a segment holding a decision until every participant of that transaction has made its own terminal record durable**, and a pre-durable acknowledgement does not discharge it (`docs/spec/cross-owner-txn.md` §2c, ratified 2026-08-31, `instructions/v2.7.1/ratification-xd1.md`). Written here because whoever builds retention will be reading this list and not that spec, and because the policy that would break it — retention keyed on a core's own checkpoint — is locally correct and fails silently, as a committed transaction recovered as aborted.
+The open decisions of this subsystem are unrecorded here. The one retention rule that is *not* open — a coordinator's stream may not recycle a segment holding a decision until every participant's terminal record is durable — is §11-4.
 
 ## 16. Testing Requirements
 
