@@ -394,24 +394,46 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         Status probe_status = Status::OK();
         bool probe_timed_out = false;
         resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+        resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
         for (std::size_t g = 0; g < probe.request_ids.size(); ++g) {
             const std::uint64_t id = probe.request_ids[g];
             const FkProbeOutcome* reply = fk_probes_->Find(id);
+            // **How many answers this group asked for**, which is the one
+            // thing the two directions count differently: the forward's
+            // unit is a parent pk and the reverse's is a (child relation,
+            // pk) question. Read once so the size check and the fill below
+            // cannot drift apart.
+            const std::size_t asked = probe.reverse ? probe.reverse_groups[g].entries.size()
+                                                    : probe.groups[g].parents.size();
             if (reply == nullptr || !reply->arrived) {
                 probe_timed_out = true;
                 if (probe_status.ok()) {
                     probe_status = Status::TxnConflict(
-                        "a foreign key's parent owner did not answer within the probe deadline; "
-                        "retry (docs/spec/foreign-keys.md §2a)");
+                        probe.reverse
+                            ? "a foreign key's child owner did not answer within the probe "
+                              "deadline; retry (docs/spec/foreign-keys.md §3a)"
+                            : "a foreign key's parent owner did not answer within the probe "
+                              "deadline; retry (docs/spec/foreign-keys.md §2a)");
                 }
             } else if (!reply->status.ok()) {
                 if (probe_status.ok()) probe_status = reply->status;
-            } else if (reply->verdicts.size() != probe.groups[g].parents.size()) {
+            } else if (reply->verdicts.size() != asked) {
                 if (probe_status.ok()) {
                     probe_status = Status::Corruption(
                         "a foreign-key probe reply answered " +
-                        std::to_string(reply->verdicts.size()) + " of " +
-                        std::to_string(probe.groups[g].parents.size()) + " parents");
+                        std::to_string(reply->verdicts.size()) + " of " + std::to_string(asked) +
+                        (probe.reverse ? " children" : " parents"));
+                }
+            } else if (probe.reverse) {
+                // **Keyed on the child relation**, which is what the
+                // per-row check will ask for: one verdict per (child, pk)
+                // question, so a parent with two foreign children gets two
+                // entries and the DELETE needs both to pass.
+                for (std::size_t i = 0; i < reply->verdicts.size(); ++i) {
+                    const exec::FkReverseProbeEntry& asked_about =
+                        probe.reverse_groups[g].entries[i];
+                    resumed_fk_reverse_verdicts_.Put(asked_about.child_oid, asked_about.parent_pk,
+                                                     reply->verdicts[i]);
                 }
             } else {
                 for (std::size_t i = 0; i < reply->verdicts.size(); ++i) {
@@ -455,6 +477,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         deciding.set_last_txn_id(0);
         if (!probe_status.ok()) {
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+            resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
             *out = {ErrorReply(probe_status), false, 0, probe_status};
         } else {
             // The resume. The extraction pass consults
@@ -463,6 +486,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // nothing - a plain local statement.
             *out = DispatchAndStage(probe.line, session);
             resumed_fk_verdicts_ = exec::FkParentVerdicts{};
+            resumed_fk_reverse_verdicts_ = exec::FkParentVerdicts{};
             if (out->pending_fk_probe.has_value()) {
                 // **A second park in one dispatch, which this block is not
                 // a loop over.** The resume answers every parent from
@@ -1064,9 +1088,18 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
         // the row until the process ends. Autocommit only, for
         // `ReleaseIntentsWithoutWaiting`'s reason.
         if (!asking.in_explicit_txn()) ClearPendingDeletes(asking);
+        // **Which side is elsewhere depends on the direction**, and saying
+        // the wrong one sends the reader to the wrong relation: a forward
+        // round is a write whose *parent* is another core's, a reverse
+        // round (AJ-T3) is a DELETE whose *children* are. Same code and
+        // same retryability - the statement did not run, and a served
+        // connection will run it - so only the sentence differs.
+        const bool reverse = outcome.pending_fk_probe->reverse;
         return {ErrorReply(Status::TxnConflict(
-                    "a foreign key's parent is owned by another core and the probe needs the "
-                    "reactor path; retry on a served connection")),
+                    reverse ? "a foreign key's children are owned by another core and the "
+                              "reverse probe needs the reactor path; retry on a served connection"
+                            : "a foreign key's parent is owned by another core and the probe "
+                              "needs the reactor path; retry on a served connection")),
                 false};
     }
 
@@ -4287,6 +4320,64 @@ void CommandDispatcher::ClearPendingDeletes(Session& session) {
     fk_pending_deletes_->Release(session.ship_id());
 }
 
+Status CommandDispatcher::SendReverseForeignKeyProbes(
+    const std::vector<exec::FkReverseProbeGroup>& groups, Session& session, std::string_view line,
+    DispatchOutcome& out) {
+    if (groups.empty()) return Status::OK();
+    // No client (no reactor) or no text to resume with: the refusal is the
+    // honest answer, and it is `SendForeignKeyProbes`' arm for its reason -
+    // a statement that cannot park cannot be answered by a peer, and
+    // answering it locally would be the wrong answer this order exists to
+    // remove.
+    if (fk_probes_ == nullptr || line.empty()) {
+        return Status::NotImplemented(
+            "this DELETE's parent has children on another core and this path cannot park on "
+            "their owners' answers, so 'no children' cannot be established "
+            "(docs/spec/foreign-keys.md §3a, instructions/v2.8.0/workorder-aj.md) - create a "
+            "parent and its children in one namespace to keep the pair on one core");
+    }
+
+    // **The identity, minted before anything is sent** - and here it is
+    // load-bearing in a way the forward's is not. The pending-delete
+    // registration this core just made is keyed on `ship_id()`, and a
+    // session that never shipped and never probed still has 0; under 0
+    // every un-shipped session on this core shares the key, so one
+    // session's clear would free another's registration and reopen the
+    // window. `SendForeignKeyProbes` mints for the mirror of this reason
+    // (work order AI, F2/F3) and this is the same rule on the other side.
+    if (session.ship_id() == 0) session.set_ship_id(next_ship_session_id_++);
+
+    PendingFkProbe pending;
+    pending.line = std::string(line);
+    pending.reverse = true;
+    pending.request_ids.reserve(groups.size());
+
+    for (const exec::FkReverseProbeGroup& group : groups) {
+        const std::uint64_t request_id = next_remote_request_++;
+        if (Status s = fk_probes_->RequestReverse(group.owner_core, request_id, session.ship_id(),
+                                                  /*transaction_id=*/0, group);
+            !s.ok()) {
+            // Refused before anything left, `Request`'s rule. **And with
+            // nothing to release**: the reverse grants no intent on the
+            // owner it asked, so unlike the forward's arm there is no
+            // `ReleaseIntentsWithoutWaiting` owed here. The registration on
+            // *this* core is ended by this statement's own transaction, on
+            // the refusal path exactly as on the success one.
+            for (const std::uint64_t sent : pending.request_ids) fk_probes_->Close(sent);
+            return s;
+        }
+        pending.request_ids.push_back(request_id);
+        pending.reverse_groups.push_back(group);
+    }
+
+    // The stamp goes after every request is away, `SendForeignKeyProbes`'
+    // rule and its reason: the leg is the wait for the slowest owner, and a
+    // stamp taken before the sends would charge the sending loop to it.
+    pending.sent_at_ns = NowNs();
+    out.pending_fk_probe = std::move(pending);
+    return Status::OK();
+}
+
 Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& held,
                                                Session& session, std::string_view line,
                                                DispatchOutcome& out) {
@@ -4487,9 +4578,114 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
                                RelationNameOf(fk.rel_oid) + "', which does not exist");
 }
 
+StatusOr<std::vector<exec::FkReverseProbeGroup>>
+CommandDispatcher::HoistReverseForeignKeyChecks(const catalog::TableAccess& parent,
+                                                const std::vector<parser::Condition>& where,
+                                                Session& session, exec::FkParentVerdicts& held) {
+    std::vector<exec::FkReverseProbeGroup> groups;
+
+    // Which children are not this core's. Resolved before any row work, in
+    // the one place a write can still park - AH-R1's rule, applied to the
+    // direction it did not reach.
+    std::vector<std::pair<catalog::Oid, std::uint16_t>> foreign;
+    for (const catalog::ForeignKeyRef& fk : parent.fkeys_in) {
+        auto child = catalog_.InitTableAccess(fk.rel_oid);
+        if (!child.ok()) return child.status();
+        if (child.value()->owner_core != core_id_) foreign.emplace_back(fk.rel_oid, fk.column_no);
+    }
+    if (foreign.empty()) return groups;  // every child is this core's: nothing crosses
+
+    // ---- AJ-R2(i): the shapes that cross ---------------------------------
+    //
+    // **A bare pk equality names the one row this statement deletes, and
+    // nothing else can be known here.** Any other WHERE's row set is the
+    // walk's answer, and the walk is where nothing can park - so the pks
+    // would have to be collected by a first read-only pass (AJ-T6, built
+    // only if a benchmark asks). Until then the refusal stands, and it
+    // **keeps AF-T4's last clause**, which `foreign-keys.md` F5 calls the
+    // only actionable thing in the message.
+    std::optional<std::uint64_t> pk = PkEqualityTarget(parent, where);
+    if (!pk.has_value()) {
+        return Status::NotImplemented(
+            "relation '" + RelationNameOf(parent.oid) +
+            "' has foreign-key children on another core, and this DELETE does not name a single "
+            "row by primary key - so the rows it would delete cannot be known before the walk "
+            "that deletes them, and the check that must ask their children's owners has nothing "
+            "to ask about (docs/spec/foreign-keys.md §3a, "
+            "instructions/v2.8.0/workorder-aj.md AJ-R2) - delete by primary key, or create a "
+            "parent and its children in one namespace to keep the pair on one core");
+    }
+
+    // **The resumed round's answers come first** (`ResolveForeignKeyParents`'
+    // rule and its reason): taking them here is what makes the second pass
+    // group nothing, send nothing and run as a plain local statement.
+    bool any_to_send = false;
+    for (const auto& [child_oid, column_no] : foreign) {
+        if (const exec::FkVerdict* resumed = resumed_fk_reverse_verdicts_.Find(child_oid, *pk);
+            resumed != nullptr) {
+            held.Put(child_oid, *pk, *resumed);
+            continue;
+        }
+        any_to_send = true;
+    }
+    if (!any_to_send) return groups;
+
+    // ---- The registration, before anything is asked ----------------------
+    //
+    // **Order is the whole mechanism** (AJ-R3(a)). From here on
+    // `FkProbeServer` answers busy for this row, so no *new* reference
+    // intent can be granted on it while the fan-out is out - which is the
+    // step-2 window in the order's Background, and closing it is what makes
+    // a "no children" answer still true when the row is finally marked.
+    // The identity is minted by `SendReverseForeignKeyProbes` below, whose
+    // comment says why it must exist before this key is used.
+    if (fk_pending_deletes_ != nullptr) {
+        if (session.ship_id() == 0) session.set_ship_id(next_ship_session_id_++);
+        fk_pending_deletes_->Add(parent.oid, *pk, session.ship_id());
+    }
+
+    // **And then this core's own intent table**, which catches the other
+    // side of the same race: a child that probed *before* the registration
+    // holds an intent, and its transaction may still commit a row that
+    // references this one. Busy, retryably - the per-row check asks the
+    // same question again, and asking here as well is what stops a fan-out
+    // being paid for an answer already known.
+    if (fk_intents_ != nullptr) {
+        const FkIntentHolder self{core_id_, 0};
+        if (fk_intents_->HeldByAnotherThan(parent.oid, *pk, self)) {
+            fk_intents_->NoteRefusal();
+            return Status::TxnConflict(
+                "row id=" + std::to_string(*pk) + " of '" + RelationNameOf(parent.oid) +
+                "' is relied on by a foreign key check running on another core, so it cannot "
+                "be deleted yet (docs/spec/foreign-keys.md §2a)");
+        }
+    }
+
+    // One group per distinct child owner - AH-R2's rule in this direction,
+    // which is why a parent with three foreign children on one core costs
+    // one message rather than three.
+    for (const auto& [child_oid, column_no] : foreign) {
+        if (held.Find(child_oid, *pk) != nullptr) continue;  // answered by the resumed round
+        auto child = catalog_.InitTableAccess(child_oid);
+        if (!child.ok()) return child.status();
+        const std::uint32_t owner = child.value()->owner_core;
+        auto at = std::find_if(groups.begin(), groups.end(),
+                               [owner](const exec::FkReverseProbeGroup& g) {
+                                   return g.owner_core == owner;
+                               });
+        if (at == groups.end()) {
+            groups.push_back(exec::FkReverseProbeGroup{owner, {}});
+            at = std::prev(groups.end());
+        }
+        at->entries.push_back(exec::FkReverseProbeEntry{child_oid, *pk, column_no});
+    }
+    return groups;
+}
+
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,
                                                       std::uint64_t parent_pk,
-                                                      const txn::ReadView& check_view) {
+                                                      const txn::ReadView& check_view,
+                                                      const exec::FkParentVerdicts& reverse_held) {
     // ---- The foreign reliance, asked first (AH-T3, §2a) -----------------
     //
     // **A live reference intent on this row is an answer no local walk can
@@ -4531,6 +4727,48 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
     for (const catalog::ForeignKeyRef& fk : parent.fkeys_in) {
         auto child = catalog_.InitTableAccess(fk.rel_oid);
         if (!child.ok()) return child.status();
+
+        // ---- A child on another core is answered from the fan-out -------
+        //
+        // AJ-T3. The verdict was resolved at the dispatch fork by the core
+        // that owns the child, under its own read view, and is read here
+        // rather than recomputed - `CheckNoChildReferences` below would
+        // refuse this child outright, which is the refusal this order
+        // converts into a result.
+        //
+        // **A miss is a caller bug, never a fall-back**, the rule
+        // `FkParentVerdicts` states for the forward: falling through to the
+        // local check would walk a relation this core cannot see whole and
+        // answer "no children" from it, which is the dangling reference the
+        // whole crossing exists to prevent.
+        if (child.value()->owner_core != core_id_) {
+            const exec::FkVerdict* answered = reverse_held.Find(fk.rel_oid, parent_pk);
+            if (answered == nullptr) {
+                return Status::NotImplemented(
+                    "relation oid " + std::to_string(fk.rel_oid) + " is owned by core " +
+                    std::to_string(child.value()->owner_core) +
+                    " and this DELETE reached its row check without an answer from that core "
+                    "(docs/spec/foreign-keys.md §3a, instructions/v2.8.0/workorder-aj.md)");
+            }
+            const std::string column =
+                fk.column_no < child.value()->schema.columns.size()
+                    ? std::string(
+                          catalog::NameView(child.value()->schema.columns[fk.column_no].name))
+                    : std::to_string(fk.column_no);
+            switch (*answered) {
+                case exec::FkVerdict::kPass:
+                    continue;
+                case exec::FkVerdict::kBusy:
+                    return Status::TxnConflict("a row of '" + RelationNameOf(fk.rel_oid) +
+                                               "' referencing id=" + std::to_string(parent_pk) +
+                                               " is being written by another transaction");
+                case exec::FkVerdict::kViolation:
+                    return Status::FkViolation("row id=" + std::to_string(parent_pk) +
+                                               " is still referenced by '" +
+                                               RelationNameOf(fk.rel_oid) + "." + column + "'");
+            }
+            continue;
+        }
 
         exec::FkReverseOptions options;
         // The scope the answer is good for (`fk_check.hpp`): a reverse
@@ -10536,10 +10774,30 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
     // Minted once per statement, for the reason UPDATE's copy records.
     txn::ReadView check_view = txn::ReadView::Everything();
+    exec::FkParentVerdicts reverse_held;
     if (!ta.fkeys_in.empty()) {
         auto view = CheckView(scope);
         if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
         check_view = view.value();
+
+        // ---- The reverse hoist (AJ-T3, foreign-keys.md §3a) -------------
+        //
+        // Here for AH-R1's reason, one direction over: this is the last
+        // point before the walk, and the walk is where nothing can park.
+        // A child on another core is asked about *now*, once per owner,
+        // never per row - and the registration that keeps the answer true
+        // is made before the first question leaves.
+        auto groups = HoistReverseForeignKeyChecks(ta, stmt.where, *scope.session, reverse_held);
+        if (!groups.ok()) return {ErrorReply(groups.status()), false, 0, groups.status()};
+        if (!groups.value().empty()) {
+            DispatchOutcome out_probe;
+            if (Status s = SendReverseForeignKeyProbes(groups.value(), *scope.session, line,
+                                                       out_probe);
+                !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
+            if (out_probe.pending_fk_probe.has_value()) return out_probe;
+        }
     }
 
     std::uint32_t deleted = 0;
@@ -10613,7 +10871,9 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // check-before-write ordering INSERT uses, and here it also means a
         // refused delete leaves no undo record behind.
         if (!ta.fkeys_in.empty()) {
-            if (Status s = CheckNoChildrenBeforeDelete(ta, id.value(), check_view); !s.ok()) {
+            if (Status s = CheckNoChildrenBeforeDelete(ta, id.value(), check_view,
+                                                       reverse_held);
+                !s.ok()) {
                 return s;
             }
         }

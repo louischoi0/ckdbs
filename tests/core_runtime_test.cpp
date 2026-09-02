@@ -7087,18 +7087,22 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnAbsentParentIsRefusedAndWritesN
     EXPECT_EQ(meta.find("fk_intents_granted=1"), std::string::npos) << meta;
 }
 
-TEST_F(CoreRuntimeTest, ACrossOwnerParentCannotBeRetiredAtAllSoThatFixtureCannotExist) {
-    // **H-AH1's "retired parent" cell, and the finding is that it has no
-    // cross-owner form.** Retiring a parent means deleting it, and §3a
-    // refuses a parent `DELETE` outright when the child lives on another
-    // core: RESTRICT needs an authoritative "no children" and this core
-    // cannot see them. So there is no way to *reach* the state the fixture
-    // describes, and a cell that pretended to would be asserting against a
-    // row it could not have retired.
+TEST_F(CoreRuntimeTest, ACrossOwnerParentDeleteOnASynchronousPathIsRetryableNotTerminal) {
+    // **This cell used to say the fixture could not exist.** Its former
+    // name - `ACrossOwnerParentCannotBeRetiredAtAllSoThatFixtureCannotExist`
+    // - recorded §3a's old refusal: a parent `DELETE` was refused outright
+    // when the child lived on another core, because RESTRICT needs an
+    // authoritative "no children" and this core cannot see them. **AJ-T3
+    // converts that refusal into a result**, so the assertion it carried is
+    // now false by design and the cell says the new thing instead.
     //
-    // What is asserted instead is the reason: the delete is refused, by
-    // name, before it can create the state. The colocated form of the same
-    // fixture is reachable and is the pair below.
+    // What is left here is the *synchronous* path, which is a different
+    // refusal with a different meaning. `Dispatch` has no reactor, so the
+    // fan-out cannot park on its answers - and the answer is therefore
+    // **retryable**: the statement did not run, and a served connection
+    // will run it. The old refusal was `NOT_IMPLEMENTED` and terminal,
+    // which is the one thing a client must no longer be told, because
+    // retrying now works.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ah6_retire");
     OpenCrossOwnerFkPair(rig, "ret");
@@ -7107,13 +7111,26 @@ TEST_F(CoreRuntimeTest, ACrossOwnerParentCannotBeRetiredAtAllSoThatFixtureCannot
 
     const std::string del = rig.dispatcher->Dispatch("DELETE FROM retp WHERE id = 7").response;
     EXPECT_EQ(del.rfind("ERR ", 0), 0u) << del;
-    EXPECT_NE(del.find("cannot see its rows"), std::string::npos) << del;
-    EXPECT_NE(del.find("NOT_IMPLEMENTED"), std::string::npos) << del;
+    EXPECT_NE(del.find("retryable=1"), std::string::npos) << del;
+    EXPECT_NE(del.find("reverse probe needs the reactor path"), std::string::npos) << del;
+    // The wording names the side that is elsewhere, and for a DELETE that
+    // is the children - the parent is this core's.
+    EXPECT_EQ(del.find("parent is owned by another core"), std::string::npos) << del;
+    EXPECT_EQ(del.find("NOT_IMPLEMENTED"), std::string::npos)
+        << "the terminal refusal survived AJ-T3: " << del;
 
     // The row is still there, which is what "fail-closed" means here: the
     // refusal did not half-delete anything.
     const std::string rows = rig.dispatcher->Dispatch("SELECT v FROM retp").response;
     EXPECT_NE(rows.find("5"), std::string::npos) << rows;
+
+    // **And nothing was left registered.** The fork registered the row
+    // before it sent, and this path has no resume whose `EndWrite` would
+    // clear it - so `DispatchAndStage`'s refusal arm clears it instead
+    // (AJ-T1's B3). Left behind, it would answer busy to every forward
+    // probe for this row until the process ended.
+    EXPECT_EQ(rig.fk_pending_deletes.live_rows(), 0u)
+        << "a refused fan-out left its pending-delete registration behind";
 }
 
 TEST_F(CoreRuntimeTest, ACrossOwnerInsertNamingAnInFlightParentAnswersRetryable) {
@@ -7187,8 +7204,8 @@ TEST_F(CoreRuntimeTest, AParentDeleteMeetingALiveForeignIntentAnswersBusyBeforeA
               std::string::npos)
         << busy;
     EXPECT_NE(busy.find("retryable=1"), std::string::npos) << busy;
-    // Not the reverse check's refusal, which sits one step further on.
-    EXPECT_EQ(busy.find("cannot see its rows"), std::string::npos) << busy;
+    // Not the reverse fan-out's refusal, which sits one step further on.
+    EXPECT_EQ(busy.find("reverse probe needs the reactor path"), std::string::npos) << busy;
 
     // The child's statement finishes and its decide releases the intent -
     // and only then does the *other* refusal become the one a client sees.
@@ -7198,8 +7215,19 @@ TEST_F(CoreRuntimeTest, AParentDeleteMeetingALiveForeignIntentAnswersBusyBeforeA
     EXPECT_EQ(rig.fk_intents.live_rows(), 0u);
     const std::string after =
         rig.dispatcher->Dispatch("DELETE FROM racep WHERE id = 7").response;
-    EXPECT_NE(after.find("cannot see its rows"), std::string::npos)
-        << "the refusal did not hand over to §3a's: " << after;
+    // **Which refusal it hands over to changed at AJ-T3 and the ordering it
+    // proves did not.** §3a's "cannot see its rows" is gone - the fan-out
+    // replaced it - so what stands one step further on is the synchronous
+    // path's inability to *park* on the fan-out's answers. Both are still
+    // `TXN_CONFLICT`, so the point of the cell is now sharper rather than
+    // weaker: the two retryable refusals must still be told apart, because
+    // one clears when a transaction ends and the other when the client
+    // moves to a served connection.
+    EXPECT_NE(after.find("reverse probe needs the reactor path"), std::string::npos)
+        << "the intent refusal did not hand over to the fan-out's: " << after;
+    EXPECT_EQ(after.find("relied on by a foreign key check running on another core"),
+              std::string::npos)
+        << "the released intent was still being reported: " << after;
 }
 
 

@@ -112,9 +112,9 @@ protected:
                         .ok());
     }
 
-    FkReverseProbeGroup ReverseGroupOf(
-        std::initializer_list<FkReverseProbeEntry> entries) {
-        FkReverseProbeGroup g;
+    exec::FkReverseProbeGroup ReverseGroupOf(
+        std::initializer_list<exec::FkReverseProbeEntry> entries) {
+        exec::FkReverseProbeGroup g;
         g.owner_core = 0;
         for (const auto& e : entries) g.entries.push_back(e);
         return g;
@@ -736,7 +736,7 @@ TEST_F(FkReverseProbeTest, AChildThisCoreDoesNotOwnIsRefusedRatherThanAnswered) 
 TEST_F(FkReverseProbeTest, AGroupPastTheCapOpensNoWaiterAndRefuses) {
     InstallServer(/*core_id=*/0);
     InstallReverseHandler();
-    FkReverseProbeGroup group;
+    exec::FkReverseProbeGroup group;
     group.owner_core = 0;
     for (std::size_t i = 0; i <= kFkReverseProbeMaxEntries; ++i) {
         group.entries.push_back({trades_, i + 1, kAccountIdColumn});

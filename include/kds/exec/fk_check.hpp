@@ -189,6 +189,32 @@ private:
 };
 
 // What the reverse check may use to answer without walking (F6, FK-M5).
+// ---- The reverse fan-out's groups (AJ-T2/AJ-T3) --------------------------
+//
+// The mirror of `FkParentVerdicts::ForeignGroup` above, and here beside it
+// for the same reason: the *sender* is the dispatch fork, so the shape it
+// builds belongs where the forward's does rather than in the wire service
+// that carries it. `command_dispatcher.hpp` includes this header and
+// deliberately not `server/fk_probe_service.hpp`.
+//
+// One entry is one question - *"does any row of `child_oid` reference
+// `parent_pk` through column `child_column_no`"* - which is a triple where
+// the forward's is a pair, and is why AJ-R6 gives the two directions
+// separate wire kinds rather than one with a flag.
+struct FkReverseProbeEntry {
+    catalog::Oid child_oid = 0;
+    std::uint64_t parent_pk = 0;
+    std::uint16_t child_column_no = 0;
+};
+
+// Every reverse question for one child owner, which is what one round is. A
+// parent with three foreign children on one core costs one message, not
+// three - AH-R2's deduplication rule, applied to the other direction.
+struct FkReverseProbeGroup {
+    std::uint32_t owner_core = 0;
+    std::vector<FkReverseProbeEntry> entries;
+};
+
 struct FkReverseOptions {
     // The core-local Cabin store, or null when cabins are off.
     stats::CabinStore* cabins = nullptr;

@@ -238,6 +238,17 @@ struct PendingFkProbe {
     // so the request's own order is what maps an answer back to a pk.
     std::vector<std::uint64_t> request_ids;
     std::vector<exec::FkParentVerdicts::ForeignGroup> groups;
+    // AJ-T3: the reverse round's groups, filled instead of `groups` when
+    // `reverse` is set. **A statement's round is one direction or the
+    // other and never both**, which is a property of the statements
+    // themselves rather than a restriction: a DELETE runs no forward check
+    // (`DeleteInner` mints its check view for `fkeys_in` alone) and an
+    // INSERT or UPDATE runs no reverse one. One flag is therefore enough
+    // to say which vector the collect block should read, and a statement
+    // that ever needed both would need a second park, which
+    // `DispatchAsync` refuses by name.
+    std::vector<exec::FkReverseProbeGroup> reverse_groups;
+    bool reverse = false;
     // The statement to run once the verdicts are in. Empty is impossible
     // here: a path with no text (the KWP load chunk) keeps the refusal
     // instead, exactly as it keeps the shipping one.
@@ -1241,6 +1252,16 @@ private:
     // reason its definition states.
     void ClearPendingDeletes(Session& session);
 
+    // AJ-T3's sender. The reverse's counterpart to `SendForeignKeyProbes`
+    // below, and shorter by everything the forward does about intents:
+    // a reverse round **enrols nobody** (AJ-R5), so there is no
+    // `EnrolIntentHolder`, no decide target and no release leg. What holds
+    // the window open is the pending-delete registration this core made
+    // before calling here, which its own transaction's end clears.
+    Status SendReverseForeignKeyProbes(const std::vector<exec::FkReverseProbeGroup>& groups,
+                                       Session& session, std::string_view line,
+                                       DispatchOutcome& out);
+
     Status SendForeignKeyProbes(const exec::FkParentVerdicts& held, Session& session,
                                  std::string_view line, DispatchOutcome& out);
 
@@ -1260,8 +1281,25 @@ private:
 
     // The reverse check for every foreign key pointing at `parent` (§3),
     // run per row about to be delete-marked.
+    // AJ-T3: resolve which of `parent`'s children live on other cores, and
+    // if any do, register the row and build one reverse group per foreign
+    // owner. Returns the groups still to send - empty when every foreign
+    // child is already answered from a resumed round, which is what makes
+    // the second pass a plain local statement.
+    StatusOr<std::vector<exec::FkReverseProbeGroup>> HoistReverseForeignKeyChecks(
+        const catalog::TableAccess& parent, const std::vector<parser::Condition>& where,
+        Session& session, exec::FkParentVerdicts& held);
+
+    // `reverse_held` carries AJ-T3's answers for children this core does
+    // **not** own: one verdict per (child relation, parent pk), resolved at
+    // the fork and read here. A foreign child with no entry is a caller
+    // bug and is refused rather than checked locally - the same rule
+    // `FkParentVerdicts` states for the forward, and for the same reason:
+    // checking locally is precisely the wrong answer, because this core
+    // cannot see the rows.
     Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
-                                       const txn::ReadView& check_view);
+                                       const txn::ReadView& check_view,
+                                       const exec::FkParentVerdicts& reverse_held);
 
     // One access shape, recorded by hand because a check is not a step
     // (FK-M4). Never fails a write.
@@ -2053,6 +2091,17 @@ private:
     // signatures for one path. Cleared at the top of every dispatch, so a
     // statement that did not park sees an empty one.
     exec::FkParentVerdicts resumed_fk_verdicts_;
+
+    // AJ-T3's mirror, and it reuses `FkParentVerdicts` deliberately. What
+    // that class actually is - stripped of the forward's naming - is
+    // **(relation oid, pk) -> verdict**, resolved once at a fork and read
+    // per row, which is exactly what the reverse needs too. The forward
+    // reads the oid as the *parent* relation; here it is the **child**
+    // relation, and the pk is the parent row being deleted. Only `Find` and
+    // `Put` are shared - the grouping half is direction-specific and lives
+    // in `exec::FkReverseProbeGroup` - so nothing here has to pretend the
+    // two directions ask the same question.
+    exec::FkParentVerdicts resumed_fk_reverse_verdicts_;
     // PW1c-6b-3's client, core 0's; null everywhere the PW1c-6 refusal
     // stands (see SetIndexBuilds).
     IndexBuildClient* index_builds_ = nullptr;

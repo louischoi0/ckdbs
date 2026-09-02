@@ -436,7 +436,7 @@ Status FkProbeClient::Request(std::uint32_t owner_core, std::uint64_t request_id
 
 Status FkProbeClient::RequestReverse(std::uint32_t owner_core, std::uint64_t request_id,
                                      std::uint64_t session_id, std::uint64_t transaction_id,
-                                     const FkReverseProbeGroup& group) {
+                                     const exec::FkReverseProbeGroup& group) {
     if (group.entries.size() > kFkReverseProbeMaxEntries) {
         // Fail-closed and no waiter opened, `Request`'s rule: a request this
         // core cannot phrase is a statement it cannot run, not one it runs

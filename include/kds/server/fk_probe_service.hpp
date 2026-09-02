@@ -183,28 +183,16 @@ struct FkReverseProbeReplyPayload {
 static_assert(sizeof(FkReverseProbeReplyPayload) <= sched::kCoreRingPayloadBytes,
               "and so must its reply");
 
-// What one reverse question is, on the sending side. Built by the parent
-// owner's dispatch fork (AJ-T3) out of the parent's `fkeys_in`.
-struct FkReverseProbeEntry {
-    catalog::Oid child_oid = 0;
-    std::uint64_t parent_pk = 0;
-    std::uint16_t child_column_no = 0;
-};
-
-// Every reverse question for one child owner, which is what one round is.
-// A parent with three foreign children on one core costs one message, not
-// three - AH-R2's deduplication rule, applied to the other direction.
-struct FkReverseProbeGroup {
-    std::uint32_t owner_core = 0;
-    std::vector<FkReverseProbeEntry> entries;
-};
-
 // How long the child's core waits for one owner's answer before giving up.
 // `[PROPOSED]`, and shorter than the index build's minute by two orders:
 // this is an OLTP write's inline cost, not a DDL build's, and a statement
 // that waited a minute for a constraint check has already failed the
 // client. A timeout answers `TxnConflict` — retryable, because the owner
 // being slow is not the statement being wrong.
+//
+// **Both directions share it**, because both are the same statement's
+// inline wait: a DELETE parked on a reverse round has failed its client at
+// the same point an INSERT parked on a forward one has.
 inline constexpr sched::MonoTimeNs kFkProbeReplyDeadlineNs = 5ull * 1'000'000'000ull;
 
 // ---- The parent owner's half ---------------------------------------------
@@ -353,7 +341,7 @@ public:
     // phrase is a statement it cannot run, not one it runs partially.
     Status RequestReverse(std::uint32_t owner_core, std::uint64_t request_id,
                           std::uint64_t session_id, std::uint64_t transaction_id,
-                          const FkReverseProbeGroup& group);
+                          const exec::FkReverseProbeGroup& group);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone.
