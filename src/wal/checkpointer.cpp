@@ -21,15 +21,11 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
         return encoded.status();
     }
 
-    // The record says whose checkpoint it is (payload.hpp): under one
-    // stream analysis has no other way to attribute a dirty table to a
-    // core, and under per-core streams this is the stream's own id.
-    auto core_flag = CheckpointCoreFlag(wal_.core_id());
-    if (!core_flag.ok()) {
-        return core_flag.status();
-    }
+    // The record says whose checkpoint it is (payload.hpp). The cast is
+    // safe because `WalManager::Open`/`Attach` refuse a core id the byte
+    // could not hold, so a manager that exists has one that fits.
     auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId,
-                            core_flag.value()},
+                            static_cast<std::uint8_t>(wal_.core_id())},
                            std::span(payload_scratch_).first(encoded.value()));
     if (!lsn.ok()) {
         return lsn.status();
@@ -231,12 +227,8 @@ Status Checkpointer::Complete() {
     if (!encoded.ok()) {
         return encoded.status();
     }
-    auto end_core_flag = CheckpointCoreFlag(wal_.core_id());
-    if (!end_core_flag.ok()) {
-        return end_core_flag.status();
-    }
     auto end_lsn = wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId,
-                                end_core_flag.value()},
+                                static_cast<std::uint8_t>(wal_.core_id())},
                                std::span(payload_scratch_).first(encoded.value()));
     if (!end_lsn.ok()) {
         return end_lsn.status();

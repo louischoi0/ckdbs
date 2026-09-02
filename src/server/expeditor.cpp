@@ -1528,6 +1528,11 @@ Status Expeditor::Serve() {
             // And the ceiling this peer's recovery must not sit above (PW1).
             // Same copy, same thread, same reason as the anchor.
             core_config.next_trx_id = database_->superblock.next_trx_id();
+            // The third field copied off core 0's superblock because a
+            // peer's own copy is default-constructed and a zero here is
+            // legal, silent and wrong (core_runtime.hpp). It decides
+            // whether this core recovers a stream of its own at all.
+            core_config.log_topology = database_->superblock.log_topology();
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

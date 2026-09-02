@@ -172,14 +172,31 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The wal dir goes in too (R6-4): a transaction this core prepared and
     // never heard the outcome of is resolved by reading its coordinator's
     // stream, which is another file in that same directory.
-    auto recovered = RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
-                                        *runtime->store_, *runtime->undo_log_, &*runtime->wal_,
-                                        log, &clock, config.wal_dir, config.anchors);
-    if (!recovered.ok()) return recovered.status();
-    // Kept, not discarded: the dispatcher's `SHOW META` prints it and a test
-    // reads it (PW3b) - the one field that says whether the last stop
-    // bounded this mount.
-    runtime->recovery_ = recovered.value();
+    //
+    // **Under one stream a peer recovers nothing** (AR0 M0, AL-R5). There
+    // is one log, core 0 recovered it whole before this core was built, and
+    // a second pass over the same records would not merely be wasted work:
+    // this core would redo another core's pages through its own store,
+    // outside the extent grants that say which pages are its to write, and
+    // undo losers core 0 has already rolled back. The recovery report stays
+    // zeroed, which is the truth for a core that recovered nothing, and
+    // `SHOW META`'s block reads that way on a peer.
+    if (config.log_topology == kSingleStream) {
+        if (log != nullptr && log->enabled(LogLevel::kInfo)) {
+            log->Info("recovery", "core " + std::to_string(config.core_id) +
+                                      ": one stream, so core 0's mount pass covered this core's "
+                                      "records; nothing recovered here");
+        }
+    } else {
+        auto recovered = RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
+                                            *runtime->store_, *runtime->undo_log_, &*runtime->wal_,
+                                            log, &clock, config.wal_dir, config.anchors);
+        if (!recovered.ok()) return recovered.status();
+        // Kept, not discarded: the dispatcher's `SHOW META` prints it and a
+        // test reads it (PW3b) - the one field that says whether the last
+        // stop bounded this mount.
+        runtime->recovery_ = recovered.value();
+    }
 
     // A peer may not raise the durable transaction ceiling - the superblock is
     // page 0 and belongs to the system core (M5), and `superblock_` here is a
@@ -200,10 +217,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     if (config.next_trx_id > runtime->superblock_.next_trx_id()) {
         if (Status s = runtime->superblock_.SetNextTrxId(config.next_trx_id); !s.ok()) return s;
     }
-    if (recovered.value().next_trx_id > runtime->superblock_.next_trx_id()) {
+    // Reads the report this core's own recovery produced, which is zeroed
+    // under one stream because core 0's pass covered these records and
+    // raised the ceiling there. So in that topology the check is core 0's
+    // to make and this one is vacuously true rather than skipped.
+    if (runtime->recovery_.next_trx_id > runtime->superblock_.next_trx_id()) {
         return Status::Unsupported(
             "core " + std::to_string(config.core_id) + ": its log names transaction id " +
-            std::to_string(recovered.value().next_trx_id - 1) +
+            std::to_string(runtime->recovery_.next_trx_id - 1) +
             ", above the ceiling the superblock carries; the system core owns page 0 and grants "
             "this core its id blocks (docs/inflight/in-progress/workplan-peer-writer.md PW1)");
     }

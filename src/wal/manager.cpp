@@ -15,6 +15,22 @@ namespace {
 // AL-S8's `wal_ring_full` cell and not something to spin through.
 constexpr int kRingDrainAttempts = 4;
 
+// A checkpoint record names its core in one byte (`payload.hpp`), so a
+// manager serving a core the byte cannot hold could not log an honest
+// checkpoint. Refused where the id enters the WAL layer rather than at the
+// two append sites: a mount that cannot work should fail at the door, not
+// degrade into a core that logs an error every checkpoint interval
+// forever. Unreachable through the server, which bounds `cores` at
+// `kMaxWalCores` long before here.
+Status CheckLoggableCoreId(std::uint32_t core_id) noexcept {
+    if (core_id > 0xFF) {
+        return Status::InvalidArgument(
+            "WalManager: core id " + std::to_string(core_id) +
+            " does not fit the byte a checkpoint record names its core in");
+    }
+    return Status::OK();
+}
+
 }  // namespace
 
 const char* DurabilityClassName(DurabilityClass durability) noexcept {
@@ -58,6 +74,9 @@ StatusOr<std::unique_ptr<WalManager>> WalManager::Open(LogDevice* device,
                                                        const sched::Clock& clock,
                                                        std::uint32_t core_id,
                                                        WalManagerConfig config) {
+    if (Status s = CheckLoggableCoreId(core_id); !s.ok()) {
+        return s;
+    }
     auto stream = WalStream::Open(device, core_id, config.ring_capacity, config.shared_stream);
     if (!stream.ok()) {
         return stream.status();
@@ -71,6 +90,9 @@ StatusOr<std::unique_ptr<WalManager>> WalManager::Attach(WalStream* stream, WalW
                                                          const sched::Clock& clock,
                                                          std::uint32_t core_id,
                                                          WalManagerConfig config) {
+    if (Status s = CheckLoggableCoreId(core_id); !s.ok()) {
+        return s;
+    }
     if (stream == nullptr) {
         return Status::InvalidArgument("WalManager::Attach: stream must not be null");
     }

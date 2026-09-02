@@ -232,6 +232,16 @@ public:
         // Zero means "core 0 had none to give", which is only true before a
         // database exists (PW1, docs/inflight/in-progress/workplan-peer-writer.md).
         std::uint64_t next_trx_id = 0;
+
+        // **What the volume's log is** (AR0 M0, AL-R5), copied from core 0's
+        // superblock on the startup thread — the *third* field here that
+        // exists because `superblock_` is a default-constructed copy, and
+        // the one where a zero would be worst. `kPerCoreStreams` is 0, so a
+        // peer that was never told would silently conclude "my own stream
+        // is mine to recover" on a volume that has one stream, and recover
+        // a log another core is already recovering. `superblock.hpp`'s
+        // accessor names this trap; this field is the spring.
+        std::uint32_t log_topology = kPerCoreStreams;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and

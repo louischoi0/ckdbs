@@ -412,45 +412,64 @@ TEST_F(CheckpointerTest, ASecondCheckpointOverACleanPoolAnchorsItself) {
 
 // ---- Which core published a checkpoint (AR0 M0, AL-S4a) ----------------
 
-// Under one stream every core's checkpoints share a log, so a
-// CHECKPOINT_BEGIN that cannot say whose it is cannot be replayed
-// correctly. The record carries it in the envelope's per-type flags byte.
-TEST_F(CheckpointerTest, ACheckpointRecordNamesTheCoreThatPublishedIt) {
-    auto peer_device = MemoryLogDevice::Create(kSegmentSize);
-    ASSERT_TRUE(peer_device.ok());
-    auto peer_wal = WalManager::Open(peer_device.value().get(), clock_, /*core_id=*/5);
-    ASSERT_TRUE(peer_wal.ok());
-
-    InMemoryCheckpointAnchor anchor;
-    Checkpointer checkpointer(*peer_wal.value(), target_, txns_, anchor);
-    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
-    EXPECT_EQ(anchor.anchor().core_id, 5u);
-
-    bool saw_begin = false;
-    bool saw_end = false;
-    for (std::uint64_t seg = 0; seg < peer_device.value()->segment_count(); ++seg) {
+// Every record on a device, so the two cells below do not each re-walk
+// the segments by hand.
+std::vector<RecordHeaderFields> RecordsOn(MemoryLogDevice& device) {
+    std::vector<RecordHeaderFields> found;
+    for (std::uint64_t seg = 0; seg < device.segment_count(); ++seg) {
         std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
-        ASSERT_TRUE(peer_device.value()->ReadAt(seg, kSegmentHeaderSize, body).ok());
+        EXPECT_TRUE(device.ReadAt(seg, kSegmentHeaderSize, body).ok());
         RecordReader reader(body, seg * kSegmentSize + kSegmentHeaderSize);
         while (std::optional<DecodedRecord> record = reader.Next()) {
             if (record->type() == RecordType::kPad) break;
-            if (record->type() == RecordType::kCheckpointBegin) {
-                saw_begin = true;
-                EXPECT_EQ(CheckpointCoreOf(record->header.flags), 5u);
-            }
-            if (record->type() == RecordType::kCheckpointEnd) {
-                saw_end = true;
-                EXPECT_EQ(CheckpointCoreOf(record->header.flags), 5u);
-            }
+            found.push_back(record->header);
         }
     }
-    EXPECT_TRUE(saw_begin);
-    EXPECT_TRUE(saw_end);
+    return found;
+}
+
+bool IsCheckpointRecord(const RecordHeaderFields& header) {
+    return header.type == static_cast<std::uint8_t>(RecordType::kCheckpointBegin) ||
+           header.type == static_cast<std::uint8_t>(RecordType::kCheckpointEnd);
+}
+
+// **On a shared stream, which is the topology the byte exists for.** An
+// attached manager serves core 5 while the stream it appends to is the
+// instance's, numbered 0 - so the segment header cannot answer "whose
+// checkpoint is this" and the record must. Opening a per-core stream at
+// core 5 would exercise the one configuration where the byte is redundant.
+TEST_F(CheckpointerTest, APeersCheckpointOnASharedStreamNamesItsOwnCore) {
+    WalManagerConfig shared;
+    shared.ring_capacity = kMinRingCapacity;
+    shared.shared_stream = true;
+    auto owner_device = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(owner_device.ok());
+    auto owner = WalManager::Open(owner_device.value().get(), clock_, /*core_id=*/0, shared);
+    ASSERT_TRUE(owner.ok()) << owner.status().message();
+    owner.value()->StartWriter();
+
+    auto peer = WalManager::Attach(owner.value()->stream(), owner.value()->writer(), clock_,
+                                   /*core_id=*/5);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_EQ(peer.value()->stream()->core_id(), 0u);  // the stream is the instance's
+
+    InMemoryCheckpointAnchor anchor;
+    Checkpointer checkpointer(*peer.value(), target_, txns_, anchor);
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+    EXPECT_EQ(anchor.anchor().core_id, 5u);
+
+    int named = 0;
+    for (const RecordHeaderFields& header : RecordsOn(*owner_device.value())) {
+        if (!IsCheckpointRecord(header)) continue;
+        ++named;
+        EXPECT_EQ(CheckpointCoreOf(header.flags), 5u);
+    }
+    EXPECT_EQ(named, 2);
 }
 
 // Core 0's records still hold a zero flags byte, which is why this needed
-// no format event: 0 is what every checkpoint record ever written holds,
-// and 0 is what core 0 means. A single-core instance's log is unchanged.
+// no format event. The golden log pins the same fact by CRC over a whole
+// log; this one names the cause when it breaks.
 TEST_F(CheckpointerTest, CoreZerosRecordsStillCarryAZeroFlagsByte) {
     auto zero_device = MemoryLogDevice::Create(kSegmentSize);
     ASSERT_TRUE(zero_device.ok());
@@ -461,31 +480,26 @@ TEST_F(CheckpointerTest, CoreZerosRecordsStillCarryAZeroFlagsByte) {
     Checkpointer checkpointer(*zero_wal.value(), target_, txns_, anchor);
     ASSERT_TRUE(checkpointer.RunToCompletion().ok());
 
-    bool saw = false;
-    for (std::uint64_t seg = 0; seg < zero_device.value()->segment_count(); ++seg) {
-        std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
-        ASSERT_TRUE(zero_device.value()->ReadAt(seg, kSegmentHeaderSize, body).ok());
-        RecordReader reader(body, seg * kSegmentSize + kSegmentHeaderSize);
-        while (std::optional<DecodedRecord> record = reader.Next()) {
-            if (record->type() == RecordType::kPad) break;
-            if (record->type() == RecordType::kCheckpointBegin ||
-                record->type() == RecordType::kCheckpointEnd) {
-                saw = true;
-                EXPECT_EQ(record->header.flags, 0u);
-            }
-        }
+    int seen = 0;
+    for (const RecordHeaderFields& header : RecordsOn(*zero_device.value())) {
+        if (!IsCheckpointRecord(header)) continue;
+        ++seen;
+        EXPECT_EQ(header.flags, 0u);
     }
-    EXPECT_TRUE(saw);
+    EXPECT_EQ(seen, 2);
 }
 
-// A core id past the byte is refused rather than truncated into another
-// core's identity.
-TEST(CheckpointCoreFlagTest, ACoreIdPastTheByteIsRefusedNotTruncated) {
-    EXPECT_TRUE(CheckpointCoreFlag(0).ok());
-    EXPECT_EQ(CheckpointCoreFlag(63).value(), 63u);
-    EXPECT_EQ(CheckpointCoreFlag(kMaxCheckpointCoreId).value(), kMaxCheckpointCoreId);
+// The bound sits where a core id enters the WAL layer, so a manager that
+// could not log an honest checkpoint fails at the door rather than
+// degrading into a core that errors every interval forever.
+TEST(WalManagerCoreIdTest, ACoreIdPastTheCheckpointByteIsRefusedAtOpen) {
+    auto device = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(device.ok());
+    sched::ManualClock clock;
 
-    auto refused = CheckpointCoreFlag(kMaxCheckpointCoreId + 1);
+    EXPECT_TRUE(WalManager::Open(device.value().get(), clock, 255).ok());
+
+    auto refused = WalManager::Open(device.value().get(), clock, 256);
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
 }
