@@ -328,16 +328,18 @@ groups co-located than with them scattered, collapsing to 1.02x under
 (`bench/v2.8.0/results-af-t5-namespace-grouping-*`). **The mechanism first
 published for it was wrong and is retracted**: it was attributed to `group`
 durability's batch falling to one on a core with a single committing
-session, and a direct measurement then found the batch is **1.000 on every
-core at every concurrency** — there is no batch for a placement to lose
-(§3c, and `known-gaps.md` carries it as a D2 finding of its own).
+session, and a direct measurement then found that **one and two committing
+sessions on a core batch identically** — 1.000 against 1.000; the batch only
+moves at four sessions and is `n/2` from there — so the batch cannot be what
+separates the two layouts (§3c, and `known-gaps.md` carries the D2 threshold
+as a finding of its own).
 
 So the honest statement of NS10's write-side cost is:
 
 - **It is real and measured**, at 2.35x on one load phase at seven groups.
-- **Its mechanism is unknown.** Ruled out: group-commit batching, and
-  sync *count* per core (with no batching anywhere, both layouts perform one
-  sync per commit and their per-core commit counts are equal). An untested
+- **Its mechanism is unknown.** Ruled out: group-commit batching at one
+  versus two committers per core, which is measured equal, so both layouts
+  perform one sync per commit and their per-core commit counts are equal. An untested
   hypothesis - a core serving one synchronous session idles for a client
   round trip after every reply, where a core serving two does not - is
   recorded at §3c and needs per-core reactor utilisation to settle.
@@ -348,8 +350,9 @@ So the honest statement of NS10's write-side cost is:
 2026-09-02), core-local, where `1.000` means every commit on this core paid
 its own device sync. Reading a *peer's* needs a session there
 (`peer_listeners = on`), which is verified rather than assumed
-(`bench/peer_group_batch_probe.py`). Today it reads `1.000` everywhere,
-which is the D2 finding above rather than anything about namespaces.
+(`bench/peer_group_batch_probe.py`). It reads `1.000` on a core with fewer
+than four committing sessions, which is the D2 threshold rather than
+anything about namespaces.
 
 **The best practice is the point, not a footnote** (AF-2). Relations that
 are joined, foreign-keyed or read together belong in one namespace, so the
