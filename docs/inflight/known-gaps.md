@@ -2784,10 +2784,19 @@ parent owner, a reference intent left behind — and two things do not:
   cross-owner foreign key write inside a transaction aborted, retryably,
   forever. Each is pinned by one of AI-T2's two cells.
 
-**And the intent's crash window is stated but not demonstrated.** An
-intent-only participant writes no `TXN_PREPARE` record, so its intents die
-with the process; what makes that safe is the claim that a participant
-restarting between granting an intent and its prepare leg forces the
-coordinator's transaction to fail. **AH-T5 is what proves it**, and it is
-gated behind the owed XG3 process-kill half. Until then the invariant is
-asserted by `fk_probe_service.hpp` and demonstrated by nothing.
+~~**And the intent's crash window is stated but not demonstrated.**~~
+**Demonstrated 2026-09-01 by AH-T5** and measured at
+`bench/v2.8.0/results-ah-t5-fk-intent-crash-v2.7.0-89-g956f00d.md`: killed
+after the grant and before any prepare, 3/3 across three passes, no child row
+and no in-doubt residue after the restart. **The half a single process cannot
+stage stays owed** — both cores are threads of one process, so a participant
+dying under a *surviving* coordinator is not exercised anywhere, and that is
+the shape AH-R5's sentence literally describes.
+
+**What the crossing still does not cover, after AH closed** (work order AH's
+verdict, `bench/v2.8.0/results-ah-t6-fk-crossing-matrix-v2.7.0-97-g199dabf.md`
+§6): the surviving-coordinator crash half above; the legs' maxima behind a p99
+that is 13× the colocated arm's at one row; `durability = strict` and any
+concurrency at all, every number being one client one statement at a time; and
+the reverse direction's fan-out, which is the first bullet of this entry and
+the crossing's one standing asymmetry.

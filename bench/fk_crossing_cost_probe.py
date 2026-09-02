@@ -190,10 +190,40 @@ def values_of(table, pk, per_statement):
 
 
 def fk_counters(conn):
+    """The five counters and the two legs, off one `SHOW META`.
+
+    The legs are `count`/`total`/`max` in the shape `PhaseLeg` prints
+    everywhere in this command, so a block's mean leg is the difference of
+    two totals over the difference of two counts - which is why both halves
+    are read rather than the total alone.
+    """
     reply = conn.cmd('SHOW META')
-    return {name: int(field(reply, name) or 0)
-            for name in ('fk_probes_sent', 'fk_intents_granted',
-                         'fk_intents_released', 'fk_intents_live')}
+    names = ('fk_probes_sent', 'fk_intents_granted', 'fk_intents_released',
+             'fk_intents_live', 'fk_probe_round_n', 'fk_probe_round_us',
+             'fk_probe_round_max_us', 'fk_release_decide_n', 'fk_release_decide_us',
+             'fk_release_decide_max_us')
+    # **Absent is zero here, and absent is the normal case.** `SHOW META`
+    # prints both foreign-key blocks only where something happened - the
+    # "absent rather than zeroed" rule the whole command follows - so a core
+    # that owns a parent and sends no probes carries no leg fields at all,
+    # and a reader that demanded them would fail the run on a healthy
+    # instance.
+    out = {}
+    for name in names:
+        token = f' {name}='
+        if token not in ' ' + reply.replace('\\n', ' '):
+            out[name] = 0
+            continue
+        out[name] = int(field(reply, name) or 0)
+    return out
+
+
+def leg_mean_us(before, after, name):
+    """One leg's mean over the block, or None where the leg was not walked."""
+    n = after[f'{name}_n'] - before[f'{name}_n']
+    if n <= 0:
+        return None
+    return (after[f'{name}_us'] - before[f'{name}_us']) / n
 
 
 # ---- M1: the gate's lift, on a write that never crosses -------------------
@@ -393,6 +423,12 @@ def crossing_run(args):
                         'intents_released': (after[parent_core]['fk_intents_released'] -
                                              before[parent_core]['fk_intents_released']),
                         'intents_live_after': after[parent_core]['fk_intents_live'],
+                        'probe_round_us': leg_mean_us(before[crossing_child_core],
+                                                      after[crossing_child_core],
+                                                      'fk_probe_round'),
+                        'release_decide_us': leg_mean_us(before[crossing_child_core],
+                                                         after[crossing_child_core],
+                                                         'fk_release_decide'),
                     })
     finally:
         if conns:
@@ -489,6 +525,8 @@ def owners_run(args):
                 out['blocks'].append({
                     'shape': name, 'block': block, 'us': samples, 'retries': retries,
                     'probes_sent': after['fk_probes_sent'] - before['fk_probes_sent'],
+                    'probe_round_us': leg_mean_us(before, after, 'fk_probe_round'),
+                    'release_decide_us': leg_mean_us(before, after, 'fk_release_decide'),
                 })
     finally:
         if conns:
@@ -580,7 +618,8 @@ def main():
                 p = percentiles(cell['us'])
                 print(f'{cell["shape"]:>11} block {cell["block"]}: p50={p["p50"]:.1f}us '
                       f'p90={p["p90"]:.1f}us mean={p["mean"]:.1f}us '
-                      f'probes={cell["probes_sent"]} retries={cell["retries"]}')
+                      f'probes={cell["probes_sent"]} retries={cell["retries"]} '
+                      f'probe_leg={cell["probe_round_us"]} decide_leg={cell["release_decide_us"]}')
                 want = args.rows * (1 if cell['shape'] == 'one-owner' else 2)
                 if cell['probes_sent'] != want:
                     failed = True
@@ -599,7 +638,8 @@ def main():
                       f'block {cell["block"]}: p50={p["p50"]:.1f}us '
                       f'p90={p["p90"]:.1f}us mean={p["mean"]:.1f}us '
                       f'probes={cell["probes_sent"]} granted={cell["intents_granted"]} '
-                      f'live={cell["intents_live_after"]} retries={cell["retries"]}')
+                      f'live={cell["intents_live_after"]} retries={cell["retries"]} '
+                      f'probe_leg={cell["probe_round_us"]} decide_leg={cell["release_decide_us"]}')
                 if cell['shape'] == 'colocated' and cell['probes_sent'] != 0:
                     failed = True
                     print('  FAIL: the colocated arm probed')

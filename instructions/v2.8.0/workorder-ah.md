@@ -212,7 +212,7 @@ counters reported beside every latency; results under
 | AH-T3 | **Built 2026-09-01 with AH-T4**, because it is AH-T4's gate for a correctness reason and not an ordering one: lifting F5 without it leaves a parent `DELETE` blind to foreign intents. The parent-side check consults `FkIntentTable` before anything local and answers busy |
 | AH-T4 | **Built 2026-09-01.** `CheckForeignKeyColocation` admits. F5 amended, §3a added, `known-gaps.md` opened. Full suite 3149/3149 green |
 | AH-T5 | **Blocked 2026-09-01 by a gate AH did not know about**, then **unblocked and run the same day**. Its own gate (XG3's process-kill half) is repaid: `bench/v2.8.0/results-xg3-answer-edge-kill-v2.7.0-86-g6b18f69.md`, 3/3 across three passes. The gate it *found* — the peer-writer FK arm — is narrowed on operator direction, and with it narrowed the cell runs: **3/3 PASS**, parent on core 2, child on core 1, killed at `participant.fk_intent_granted_preprepare`, no child row after the restart. §AH-T5 below |
-| AH-T6 | not started |
+| AH-T6 | **Done 2026-09-02.** Cells, instrument and matrix: `bench/v2.8.0/results-ah-t6-fk-crossing-matrix-v2.7.0-97-g199dabf.md`. H-AH1 held and understated, H-AH2 **split** (the round count counts owners and not rows; the latency counts neither), H-AH3 held by AH-T5's probe, H-AH4 held at the dispatcher. Verdict below |
 
 ### AH-T5 — the gate that makes the whole crossing unreachable
 
@@ -637,3 +637,44 @@ ruling:
    The old sentence is left standing in §2 where FK-M1's amendment
    already qualifies it, rather than edited twice; §2a states the new
    mechanism in its own words.
+
+### AH-T6 — the verdict, and what the order closes
+
+**H-AH1 held, and "for free" understated it.** The hoist is free at one row
+(+1.0%, inside a 2.1 µs block spread) and **26.1% cheaper at a hundred**,
+because one descent replaces a hundred — and it took the variance with it,
+12.6 µs of block-to-block spread down to 0.6.
+
+**H-AH2 split, and both halves are findings.** The *round count* counts
+owners and not rows, exactly: 300 rounds for 300 statements at 1, 10 and 100
+rows apiece, 600 for two owners, 0 for every colocated block. The *latency*
+does neither. It is **flat in owners** — two foreign owners cost no more than
+one, because the fork sends every request and parks once over all of them, so
+the wait is the **slowest owner's reply and not the sum** — and it **grows
+with rows**, through a leg that is the reactor's queue behind a heavier commit
+rather than anything about the round. The honest restatement of AH-R2 is
+therefore: *a statement's cross-owner cost is a function of the slowest owner
+it touches.*
+
+**H-AH3 held** by AH-T5's probe (3/3, three passes); its other half — a
+participant dying under a *surviving* coordinator — needs two processes and
+stays owed. **H-AH4 held** at the dispatcher: a real statement parked
+mid-probe, the parent `DELETE` answering busy and *retryable* before §3a's
+terminal refusal, which takes over once the decide releases.
+
+**The leg instrument's first lesson is not to add legs up.** Under the
+shipped durability class the release decide measures 1.25 ms while the
+statement's end-to-end increment is 71 µs: the wait overlaps the commit's own
+group-commit drain, which the statement was paying anyway. XE's line on a
+different leg — a round counted is not a round waited for.
+
+**What work order AH closes**: AH-R1..R7 ruled and enacted; the forward
+check's crossing built, parked, probed and resumed; the reverse's refusal by
+name; the intent granted, released and crash-tested; the four hypotheses
+answered; the matrix measured. Its contract is `foreign-keys.md` §2a/§2b/§3a.
+
+**What it hands on**, all named in the results file's §6: the
+surviving-coordinator crash half, the legs' maxima behind the p99 tail,
+`strict` and concurrency, and the reverse direction's fan-out — a cross-owner
+parent still cannot be deleted, which `known-gaps.md` keeps as the crossing's
+one standing asymmetry.
