@@ -124,7 +124,14 @@ struct ParticipantCommitStats {
 // **The foreign key's two rounds** (AH-T6, `foreign-keys.md` §2a/§2b).
 //
 //   fork: last probe sent ──(1)──> every owner's reply settled
-//   autocommit: decide sent ──(2)──> every holder acknowledged
+//   autocommit: decide *begun* ──(2)──> every holder acknowledged
+//
+// (2) opens before the send rather than after it, which is
+// `CoordinatorCommitStats::decide`'s own convention - one reading rule for
+// both - and means the leg carries the encode and the ring submit as well
+// as the wait. (1) does not, because its send happens in a different
+// function from its park and the stamp is taken where the last request is
+// already away.
 //
 // The same shape and the same reason as the commit legs above: three
 // results files could say a cross-owner write costs more and none could say

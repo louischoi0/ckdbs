@@ -292,9 +292,7 @@ public:
 
     // Idempotent: a transaction that ships four statements to one owner has
     // one participant, and prepares it once.
-    void EnrolParticipant(std::uint32_t core_id) {
-        if (!HasParticipant(core_id)) participants_.push_back(core_id);
-    }
+    void EnrolParticipant(std::uint32_t core_id) { AddUnique(participants_, core_id); }
 
     // ---- The foreign key's intent holders (work order AI, F4) -----------
     //
@@ -320,12 +318,7 @@ public:
 
     // Idempotent, `EnrolParticipant`'s rule: a statement naming three
     // parents on one owner leaves one holder.
-    void EnrolIntentHolder(std::uint32_t core_id) {
-        for (std::uint32_t core : intent_holders_) {
-            if (core == core_id) return;
-        }
-        intent_holders_.push_back(core_id);
-    }
+    void EnrolIntentHolder(std::uint32_t core_id) { AddUnique(intent_holders_, core_id); }
 
     // Cleared where the decide has gone out for a statement that was its
     // own transaction (F1). An explicit transaction's holders end with
@@ -347,17 +340,22 @@ public:
     // once.
     std::vector<std::uint32_t> DecideTargets() const {
         std::vector<std::uint32_t> targets = participants_;
-        for (std::uint32_t core : intent_holders_) {
-            bool seen = false;
-            for (std::uint32_t already : targets) {
-                if (already == core) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (!seen) targets.push_back(core);
-        }
+        for (std::uint32_t core : intent_holders_) AddUnique(targets, core);
         return targets;
+    }
+
+    // **Which of the decide's targets hold an intent and no rows.** The
+    // wire carries this per target (`TxnDecideRequestPayload::intent_only`)
+    // so a participant meeting no context can tell the expected case from
+    // the anomaly. A core in both lists is a *participant* - it holds rows,
+    // it prepared, and it must take the ordinary path - which is why this
+    // is a difference and not a copy of `intent_holders_`.
+    std::vector<std::uint32_t> IntentOnlyTargets() const {
+        std::vector<std::uint32_t> only;
+        for (std::uint32_t core : intent_holders_) {
+            if (!HasParticipant(core)) only.push_back(core);
+        }
+        return only;
     }
 
     // **Whether this transaction has already shipped a statement to
@@ -459,6 +457,16 @@ private:
     // count, which is small, and the discovery order is worth keeping - it
     // is the order the prepare messages go out in and the order a log line
     // names them in.
+    // The one "linear scan, push if absent" these three lists share. A
+    // participant list is at most `kMaxParticipants` long, so a scan is the
+    // right shape and a set would be a second concept for the same thing.
+    static void AddUnique(std::vector<std::uint32_t>& into, std::uint32_t core_id) {
+        for (std::uint32_t core : into) {
+            if (core == core_id) return;
+        }
+        into.push_back(core_id);
+    }
+
     std::vector<std::uint32_t> participants_;
     // Cores holding a reference intent for this transaction (AI, F4). See
     // `intent_holders()` for why this is not `participants_`.

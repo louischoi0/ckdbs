@@ -148,6 +148,7 @@ void Txn2pcServer::OnDecide(const sched::MessageHeader& header,
     ask.session_id = request.session_id;
     ask.transaction_id = request.transaction_id;
     ask.retry = request.retry != 0;
+    ask.intent_only = request.intent_only != 0;
     const std::uint64_t request_id = header.request_id;
 
     // Refused rather than guessed, and the refusal leaves this core in
@@ -396,7 +397,8 @@ Status Txn2pcClient::Prepare(std::uint64_t request_id, std::uint64_t session_id,
 
 Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
                             std::uint64_t transaction_id, TxnDecision decision,
-                            std::span<const std::uint32_t> participants) {
+                            std::span<const std::uint32_t> participants,
+                            std::span<const std::uint32_t> intent_only) {
     if (decision == TxnDecision::kUnset) {
         return Status::InvalidArgument(
             "cross-owner transaction: a decide must name commit or abort; kUnset is the zeroed "
@@ -427,6 +429,15 @@ Status Txn2pcClient::Decide(std::uint64_t request_id, std::uint64_t session_id,
     request.retry = 0;
     for (std::uint32_t core : participants) {
         ++decide_messages_;
+        // **Per target**, because one transaction can hold rows on one core
+        // and only an intent on another, and the byte says which this is.
+        request.intent_only = 0;
+        for (std::uint32_t holder : intent_only) {
+            if (holder == core) {
+                request.intent_only = 1;
+                break;
+            }
+        }
         sched::SubmitSendPod(scheduler_, transport_, core_id_, core, /*session_core=*/core_id_,
                              request_id, sched::RingMessageKind::kTxnDecideRequest, request);
     }

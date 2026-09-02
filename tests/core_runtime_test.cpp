@@ -4087,13 +4087,14 @@ struct ForeignIndexRig {
     // pointer to it and must die first.
     std::optional<Txn2pcClient> txn2pc;
     // **Core 0's two halves of the foreign-key probe** (AI-T2). Production
-    // wires both on every core (`CoreRuntime::AttachTransport`), because a
-    // relation is a foreign parent on one statement and a child on the
-    // next; this rig built core 0 by hand and so has to do the same, or a
-    // peer's cross-owner INSERT parks on a request nobody answers. The
-    // table is declared ahead of the server that fills it and ahead of the
-    // dispatcher that reads it, which is `core_runtime.hpp`'s own order and
-    // for its reason.
+    // wires both on every core, because a relation is a foreign parent on
+    // one statement and a child on the next - `CoreRuntime::AttachTransport`
+    // for a peer and `Expeditor::Serve` for core 0. **The second of those
+    // was missing until 2026-09-02** and this hand-wiring is what concealed
+    // it: every cell whose parent is core-0-owned passed against a rig that
+    // had what production did not. The table is declared ahead of the
+    // server that fills it and ahead of the dispatcher that reads it, which
+    // is `core_runtime.hpp`'s own order and for its reason.
     FkIntentTable fk_intents;
     std::optional<FkProbeClient> fk_client;
     std::optional<FkProbeServer> fk_server;
@@ -6848,6 +6849,18 @@ TEST_F(CoreRuntimeTest, ACrossOwnerInsertProbesTheParentsOwnerAndWritesTheChildR
     // and named as owed.
     EXPECT_NE(peer_meta.find("fk_probe_round_n=1"), std::string::npos) << peer_meta;
     EXPECT_NE(peer_meta.find("fk_release_decide_n=1"), std::string::npos) << peer_meta;
+
+    // **And the healthy path does not read as a lost transaction half.**
+    // A decide reaching a core with no context is `ShippedStatementExecutor`'s
+    // anomaly - it logs an Error and bumps `decide_refusals`, the counter
+    // that means a participant is missing - and an intent holder has no
+    // context by construction, so before the wire carried `intent_only`
+    // *every* cross-owner foreign-key statement tripped it on its success
+    // path. The tests were green throughout, because they asserted the
+    // intent was released and never looked at what the release cost.
+    EXPECT_EQ(rig.executor->decide_refusals(), 0u)
+        << "the parent's owner reported a 2PC anomaly on a healthy crossing";
+
     const std::string core0_meta = rig.dispatcher->Dispatch("SHOW META").response;
     EXPECT_NE(core0_meta.find("fk_intents_granted=1"), std::string::npos) << core0_meta;
     EXPECT_NE(core0_meta.find("fk_intents_released=1"), std::string::npos) << core0_meta;
@@ -6935,6 +6948,95 @@ TEST_F(CoreRuntimeTest, ACrossOwnerFkWriteInATransactionCommitsAndItsDecideEndsT
     // of the intent's end and the thing the intent was holding still.
     const std::string del =
         rig.dispatcher->Dispatch("DELETE FROM txnparent WHERE id = 7").response;
+    EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
+
+    // **And the healthy path does not read as a lost transaction half.**
+    // A decide reaching a core with no context is `ShippedStatementExecutor`'s
+    // anomaly - it logs an Error and bumps `decide_refusals`, the counter
+    // that means a participant is missing - and an intent holder has no
+    // context by construction, so before the wire carried `intent_only`
+    // *every* cross-owner foreign-key statement tripped it on its success
+    // path. The tests were green throughout, because they asserted the
+    // intent was released and never looked at what the release cost.
+    EXPECT_EQ(rig.executor->decide_refusals(), 0u)
+        << "the parent's owner reported a 2PC anomaly on a healthy crossing";
+}
+
+TEST_F(CoreRuntimeTest, AParticipantCoordinatesItsOwnIntentReleaseThroughTheDecidedCommit) {
+    // **The path `foreign-keys.md` §2b names as load-bearing and untested.**
+    // Every other cell here has the core that probes also be the core that
+    // decides. This one takes them apart: the write that probes is itself a
+    // **shipped** statement, so the intent holder is enrolled on the
+    // *participant's* context session, and the participant sends its own
+    // decide when the coordinator's decision is applied to it.
+    //
+    // The chain, and each link is asserted below:
+    //
+    //   core 0   BEGIN, INSERT INTO <child> - ships to the peer, which owns it
+    //   peer     executes it, finds the parent foreign, probes core 0,
+    //            records core 0 as an intent holder on *its* context session
+    //   core 0   COMMIT - prepares the peer (it holds rows), then decides it
+    //   peer     applies that decision by dispatching COMMIT on the context
+    //            session, which forks on `has_intent_holders()` and sends
+    //            the peer's **own** decide to core 0
+    //   core 0   releases the intent it granted
+    //
+    // So core 0 is the outer transaction's coordinator *and* the inner
+    // decide's participant, and the two are keyed differently - the intent
+    // by `(peer, the context session's ship id)`, the outer transaction by
+    // `(core 0, the client session's)`. Nothing but this cell shows that
+    // they do not collide.
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "selfrelease");
+    OpenCrossOwnerFkPair(rig, "sr");
+    ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO srp VALUES (7, 5)").response.rfind("ERR", 0),
+              0u);
+
+    Session client;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN", begun, &client);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    DispatchOutcome wrote;
+    auto write = rig.Start("INSERT INTO src VALUES (7)", wrote, &client);
+    ASSERT_TRUE(rig.Drive(*write)) << wrote.response;
+    ASSERT_EQ(wrote.response.rfind("INSERTED", 0), 0u) << wrote.response;
+
+    // **The holder is the peer's, not this session's.** Core 0's client
+    // session enrolled the peer as a *participant* - it holds rows - and
+    // recorded no intent holder at all, because core 0 never probed
+    // anybody. The intent on core 0 was granted to the peer's context
+    // session, and it is live because the transaction is.
+    EXPECT_EQ(client.participants().size(), 1u);
+    EXPECT_FALSE(client.has_intent_holders())
+        << "the coordinator recorded a holder it never asked for";
+    EXPECT_EQ(rig.fk_intents.live_rows(), 1u)
+        << "the shipped write did not leave a reference intent on the parent's owner";
+
+    DispatchOutcome committed;
+    auto commit = rig.Start("COMMIT", committed, &client);
+    ASSERT_TRUE(rig.Drive(*commit, 512)) << committed.response;
+    EXPECT_NE(committed.response.rfind("ERR", 0), 0u)
+        << "the cross-owner commit: " << committed.response;
+
+    // **And the participant's own decide ended it.** Core 0 sent one decide
+    // - to the peer, for the outer transaction - and that decide carries no
+    // intent of core 0's to release. What released this one is the decide
+    // the *peer* sent back, from the COMMIT its decision dispatched.
+    rig.Pump(16);
+    EXPECT_EQ(rig.fk_intents.live_rows(), 0u)
+        << "nobody released the intent the shipped write left behind";
+
+    // Core 0 is the holder here, so its executor is the one that would cry
+    // anomaly if `intent_only` were not carried through this longer chain.
+    EXPECT_EQ(rig.executor->decide_refusals(), 0u)
+        << "the intent holder reported a 2PC anomaly on a healthy crossing";
+
+    // The row is on its owner, and the parent is no longer pinned by an
+    // intent - §3a's own refusal is what answers now.
+    const std::string rows = rig.peer->dispatcher().Dispatch("SELECT pid FROM src").response;
+    EXPECT_NE(rows.find("7"), std::string::npos) << rows;
+    const std::string del = rig.dispatcher->Dispatch("DELETE FROM srp WHERE id = 7").response;
     EXPECT_EQ(del.find("relied on by a foreign key check"), std::string::npos) << del;
 }
 

@@ -301,6 +301,9 @@ struct PendingShippedStatement {
 // that one, since both legs of one transaction carry the same session and
 // transaction id.
 struct PendingCrossOwnerCommit {
+    // Zero where **no prepare was sent** - a transaction whose only
+    // cross-owner contact was a probe. The parked half reads it as "there
+    // is no vote to collect", not as "the vote was lost".
     std::uint64_t prepare_request_id = 0;
     std::uint64_t decide_request_id = 0;
     std::uint64_t session_id = 0;
@@ -313,9 +316,10 @@ struct PendingCrossOwnerCommit {
     // the only thing that ends an intent. `participants` is the prepare's
     // list; this is the decide's, and it is the union.
     std::vector<std::uint32_t> decide_targets;
-    // Zero where **no prepare was sent** - a transaction whose only
-    // cross-owner contact was a probe. The parked half reads it as "there
-    // is no vote to collect", not as "the vote was lost".
+    // Which of them hold an intent and no rows, so the decide can say so
+    // per target and a holder's missing context reads as expected rather
+    // than as a lost transaction half.
+    std::vector<std::uint32_t> intent_only;
 
     // **XF4's two coordinator-side stamps**, carried here because the
     // commit's two halves live in two functions: `PrepareAcrossOwners`
@@ -1216,6 +1220,12 @@ private:
     // send, for the reason the shipping enrolment states: a participant
     // recorded for a request that never left would be prepared for a
     // transaction it holds nothing of.
+    // Ends this statement's reference intents where there is nothing to
+    // park on - the synchronous dispatch and the fork's own send failure.
+    // Always an abort: both callers are refusals, and a statement that did
+    // not run has nothing to commit. Autocommit only; see the definition.
+    void ReleaseIntentsWithoutWaiting(Session& session);
+
     Status SendForeignKeyProbes(const exec::FkParentVerdicts& held, Session& session,
                                  std::string_view line, DispatchOutcome& out);
 

@@ -798,6 +798,16 @@ private:
     // participant transport holds the executor's seams.
     std::optional<Txn2pcServer> txn_2pc_server_;
     std::optional<Txn2pcClient> txn_2pc_client_;
+    // **Core 0's two halves of the foreign-key probe** (`foreign-keys.md`
+    // §2a). `CoreRuntime` wires these on every peer; core 0's runtime is
+    // this class, and until 2026-09-02 it wired neither - so a peer child
+    // whose parent was core-0-owned sent a probe nobody handled, parked to
+    // the reply deadline and answered `TXN_CONFLICT retryable=1` naming a
+    // condition that could never clear. The table is declared ahead of the
+    // server that fills it, `core_runtime.hpp`'s order and its reason.
+    FkIntentTable fk_intents_;
+    std::optional<FkProbeServer> fk_probe_server_;
+    std::optional<FkProbeClient> fk_probe_client_;
 
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 

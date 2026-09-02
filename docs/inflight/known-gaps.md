@@ -2868,8 +2868,20 @@ the shape AH-R5's sentence literally describes.
 
 **What the crossing still does not cover, after AH closed** (work order AH's
 verdict, `bench/v2.8.0/results-ah-t6-fk-crossing-matrix-v2.7.0-97-g199dabf.md`
-§6): the surviving-coordinator crash half above; the legs' maxima behind a p99
-that is 13× the colocated arm's at one row; `durability = strict` and any
+§6): the surviving-coordinator crash half above; `durability = strict` and any
 concurrency at all, every number being one client one statement at a time; and
 the reverse direction's fan-out, which is the first bullet of this entry and
-the crossing's one standing asymmetry.
+the crossing's one standing asymmetry. ~~The legs' maxima behind the p99
+tail~~ - **closed 2026-09-02**
+(`bench/v2.8.0/results-ah-t6-leg-maxima-v2.7.0-100-gea401d5.md`): the tail is
+the write path's and not the crossing's - under the shipped durability class
+the crossing's p99 is **0.81×** the colocated arm's - and both rounds' maxima
+are bounded. The 13× the matrix file reported was three blocks of a colocated
+arm that had not met its own worst case. ~~The participant-coordinated
+release's cost~~ - **closed 2026-09-02**
+(`bench/v2.8.0/results-ah-t6-participant-release-cost-v2.7.0-101-ged47cfc.md`):
+an intent-holding participant's acknowledgement leg is **720×** a plain
+participant's (4.4 µs → 3.1 ms) and the cause is the cross-owner path's own
+unconditional decision-durability wait rather than the `fdatasync` XE1
+removed - `relaxed` does not collapse it. Invisible to a client under the
+shipped class, +53.8% under `relaxed`.

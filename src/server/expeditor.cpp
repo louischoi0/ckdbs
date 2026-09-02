@@ -1676,6 +1676,16 @@ Status Expeditor::Serve() {
                 sched::RingMessageKind::kTxnDecideRequest,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
                     txn_2pc_server_->OnDecide(header, payload);
+                    // **The decide is what ends a reference intent, and the
+                    // only thing that does** (AH-R5). After `OnDecide`, not
+                    // before: the decision is what the intent was holding
+                    // the parent still *for*. `CoreRuntime`'s copy of this
+                    // handler carries the same comment and the same order.
+                    if (!fk_probe_server_.has_value()) return;
+                    TxnDecideRequestPayload decide{};
+                    if (payload.size() != sizeof(decide)) return;
+                    std::memcpy(&decide, payload.data(), sizeof(decide));
+                    fk_probe_server_->ReleaseIntents(header.src_core, decide.session_id);
                 });
             !s.ok()) {
             return s;
@@ -1683,6 +1693,39 @@ Status Expeditor::Serve() {
         txn_2pc_client_.emplace(/*core_id=*/0, scheduler, *transport_, clock_, &*logger_);
         if (Status s = txn_2pc_client_->RegisterReplyReceivers(); !s.ok()) return s;
         dispatcher_->SetTxn2pc(&*txn_2pc_client_);
+
+        // **Core 0's two halves of the foreign-key probe**, beside 2PC
+        // because they are one mechanism: the intent a probe grants is
+        // released by the transaction's decide and by nothing else (AH-R5),
+        // which is the hook installed below.
+        //
+        // **Both halves, on the core that is not a `CoreRuntime`.** Every
+        // peer gets these from `CoreRuntime::AttachTransport`; core 0's
+        // runtime is this class, and it had neither - so a relation owned
+        // by core 0 could be a foreign parent that answered nothing. The
+        // child's core parked to `kFkProbeReplyDeadlineNs` and refused
+        // `TXN_CONFLICT retryable=1`, a retryable code naming a condition
+        // that could not clear, and core 0 could neither send a probe of
+        // its own nor consult an intent before deleting a parent. Reachable
+        // wherever a catalog carries relations placed under more than one
+        // `placement` setting.
+        fk_probe_server_.emplace(catalog(), *store_, /*core_id=*/0, fk_intents_, scheduler,
+                                 *transport_,
+                                 txn_manager_.has_value() ? &*txn_manager_ : nullptr, &*logger_);
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kFkProbeRequest,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    fk_probe_server_->OnRequest(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        fk_probe_client_.emplace(/*core_id=*/0, scheduler, *transport_, clock_, &*logger_);
+        if (Status s = fk_probe_client_->RegisterReplyReceiver(); !s.ok()) return s;
+        // The receiver first, then the pointer the dispatcher asks through,
+        // which is this file's rule everywhere above.
+        dispatcher_->SetFkProbes(&*fk_probe_client_);
+        dispatcher_->SetFkIntents(&fk_intents_);
 
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -
