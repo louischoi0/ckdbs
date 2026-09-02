@@ -811,7 +811,7 @@ Dispatcher commands, not parser statements:
 
 | Command | Answers |
 |---|---|
-| `SHOW META` | instance metadata (superblock, format version, config), plus what the last mount's recovery did — records scanned, transactions committed and rolled back, per-phase timings, and `catalog_recovered=0`, which is a standing statement that DDL is unlogged rather than a number that will change (`docs/spec/client-manual.md` has the field list) |
+| `SHOW META` | instance metadata (superblock, format version, config), the WAL's own counters - including `wal_mean_group_batch`, how many commits this core's fsyncs are amortised over, where `1.000` means every commit paid its own device sync - plus what the last mount's recovery did — records scanned, transactions committed and rolled back, per-phase timings, and `catalog_recovered=0`, which is a standing statement that DDL is unlogged rather than a number that will change (`docs/spec/client-manual.md` has the field list) |
 | `SHOW TABLES` | the relation list |
 | `SHOW NAMESPACES` | the namespace list, `sys` and `public` first. Names are the **SQL spellings**, which is what a statement writes |
 | `SHOW PAGE <id> [VALUES]` | one page's header and slots; `VALUES` hex-dumps tuple payloads |

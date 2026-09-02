@@ -1541,6 +1541,39 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " wal_interval_syncs=" << wal_stats.interval_syncs
            << " wal_sync_failures="
            << (wal_stats.sync_failures + wal_->writer_sync_failures());
+
+        // **How many commits this core's fsyncs are amortised over**
+        // (AF-T5's §3b finding). D2's whole mechanism is that one sync
+        // resolves a batch, and `kds.conf.sample` states the edge case that
+        // makes it matter: *"a batch of one is a batch"*. A core serving one
+        // committing session has no partner to batch with and pays a sync
+        // per commit, and AF-T5 measured that as **2.35x on a load phase**
+        // against a placement that gave each core two committers.
+        //
+        // **This is the number, and a session count is not.** The obvious
+        // reading of "how many sessions is this core committing for" is a
+        // count of attached sessions - and under a single listener that is
+        // every session on core 0 and zero on the peers, while the peers
+        // are the cores actually paying the un-batched syncs, because a
+        // shipped write commits on its relation's owner. The batch is the
+        // fact; the session count is a proxy that inverts on the one
+        // topology the fact was found on.
+        //
+        // Printed as the two counters plus their quotient rather than the
+        // quotient alone: an operator reading a live server needs to see
+        // whether the batches are few and large or many and small, and a
+        // mean over a whole uptime hides a phase change. `1.000` is the
+        // cliff - every D2 commit paid its own device sync.
+        //
+        // Per core, like every other row in this reply: `SHOW META` answers
+        // from the dispatcher the session is on, so reading a peer's batch
+        // needs a session there (`peer_listeners = on`) - said out loud
+        // because the same limitation is what stopped `wal_syncs` from
+        // answering this question, and it has not gone away.
+        os << " wal_group_commits=" << wal_stats.group_commits
+           << " wal_group_batches=" << wal_stats.group_batches
+           << " wal_mean_group_batch=" << std::fixed << std::setprecision(3)
+           << wal_stats.mean_group_batch_size() << std::defaultfloat;
     }
 
     // A peer's lease refills and what each cost (lease_refill_stats.hpp):

@@ -2800,13 +2800,19 @@ do, and one thing it does that nobody has decided:
   scatters them — measured at **2.35× on the load phase** under `group` and
   **1.02× under `relaxed`**, with the cost tracking sessions-per-core
   monotonically (7 → 12.0 s, 2 → 13.5 s, 1 → 31.9 s).
-  **Nothing in the engine reports sessions per core**, so an operator
-  cannot see which side of this a workload is on, and `SHOW META`'s
-  `wal_syncs` answers for the *session's* core rather than the owner's — so
-  under a single listener it cannot be read off the writers either. Not a
-  correctness problem and not namespace-specific in mechanism; it is
-  namespace-specific in *reachability*, because co-location is what AF
-  exists to do. Unmeasured: how the cost scales past three points.
+  ~~**Nothing in the engine reports sessions per core**~~ — **exposed
+  2026-09-02**: `SHOW META` now prints `wal_group_commits`,
+  `wal_group_batches` and `wal_mean_group_batch`, and **`1.000` is the
+  cliff**. The batch is the quantity rather than a session count, and
+  deliberately so: a count of *attached* sessions puts them all on core 0
+  under a single listener while the peers are the cores paying the
+  un-batched syncs, because a shipped write commits on its relation's
+  owner. **What is still awkward is reading a peer's**: `SHOW META` answers
+  from the session's core, so a peer's batch needs a session there
+  (`peer_listeners = on`). Not a correctness problem and not
+  namespace-specific in mechanism; it is namespace-specific in
+  *reachability*, because co-location is what AF exists to do. Unmeasured:
+  how the cost scales past three points.
 - **No `sim/` cell covers a namespace.** The generator creates relations
   in `public` and nothing declares one, so the crash/restart harness has
   never mounted a file with a user namespace in it. The rows involved are

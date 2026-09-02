@@ -336,10 +336,15 @@ Three things follow, and none of them changes NS10's rule:
 - It is **not a namespace mechanism**. Any placement reducing sessions per
   core does it; a namespace is simply the thing that makes it reachable on
   purpose, and the shipped default is the co-locating one.
-- **The engine does not report the number it depends on.** No `SHOW`
-  surface says how many committing sessions a core holds, and `SHOW META`'s
-  `wal_syncs` answers for the *session's* core, not the owner's - so under a
-  single listener it cannot be read off the writers either.
+- **The number it depends on is reported since 2026-09-02**, and it is the
+  batch rather than a session count: `SHOW META`'s `wal_mean_group_batch`,
+  where **`1.000` means every commit on this core paid its own device
+  sync**. A count of attached sessions would have answered the opposite
+  question - under a single listener they all sit on core 0 while the peers
+  pay the un-batched syncs - so the batch is the fact and the session count
+  is the proxy that inverts. Reading a *peer's* batch still needs a session
+  there (`peer_listeners = on`), because `SHOW META` answers from the
+  session's core.
 - It is a **throughput** cost on a write phase, not a correctness one, and
   it does not touch the read side the grouping exists to accelerate.
 
