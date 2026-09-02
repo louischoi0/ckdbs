@@ -7502,27 +7502,74 @@ TEST_F(CoreRuntimeTest, AForeignAssertionBuildAbandonedByCore0IsEvictedOnTheOwne
     EXPECT_EQ(RowsWith(*rig.peer, "assert_abandon", ",10"), 2) << out.response;
 }
 
-TEST_F(CoreRuntimeTest, AForeignAssertionIsRefusedInsideAnExplicitTransaction) {
-    // The park would hold the client's transaction open across the owner's
-    // whole scan, and the owner would enforce a constraint whose row waits
-    // on a COMMIT that may never come. Refused by name before anything is
-    // sent - nothing burned, no request on the ring.
+TEST_F(CoreRuntimeTest, AForeignAssertionBuildsInsideAnExplicitTransactionLikeTheLocalArm) {
+    // The local arm's contract on a peer-owned relation (AK-S1): the
+    // statement parks inside the transaction, the owner enforces before
+    // COMMIT - against the transaction's own enrolled write too - and a
+    // ROLLBACK undoes the transaction's rows and leaves the assertion where
+    // a locally-declared one would be: assertions are non-transactional
+    // DDL (`ddl-transactional.md` §5f).
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "assert_in_txn");
+    // A core-0-owned relation, so the transaction has a row of its own for
+    // the ROLLBACK to undo - which is what separates "the assertion
+    // survived" from "nothing was undone". Not the target relation: a
+    // build meeting the transaction's own in-flight row refuses (§5f).
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kCreatingCore);
+    ASSERT_EQ(rig.dispatcher->Dispatch("CREATE TABLE c0_rows (id int64, v int64) BTREE")
+                  .response.substr(0, 3),
+              "CRE");
+    rig.catalog2->SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
 
     Session session;
     ASSERT_EQ(rig.dispatcher->Dispatch("BEGIN", &session).response.rfind("ERR", 0),
               std::string::npos);
-    const std::string out =
-        rig.dispatcher
-            ->Dispatch("CREATE ASSERTION intxn ON assert_in_txn GROUP BY (v) CHECK COUNT(*) <= 1",
-                       &session)
-            .response;
-    EXPECT_EQ(out.rfind("ERR ", 0), 0u) << out;
-    EXPECT_NE(out.find("run it in autocommit"), std::string::npos) << out;
-    EXPECT_EQ(rig.assertion_client->waiting(), 0u) << "a waiter was opened for a refused statement";
-    rig.Pump(4);
-    EXPECT_EQ(rig.peer->assertion_builds()->builds(), 0u) << "the owner was asked to build";
+    ASSERT_EQ(rig.dispatcher->Dispatch("INSERT INTO c0_rows VALUES (77)", &session)
+                  .response.rfind("ERR", 0),
+              std::string::npos);
+    DispatchOutcome made;
+    auto create = rig.Start(
+        "CREATE ASSERTION intxn ON assert_in_txn GROUP BY (v) CHECK COUNT(*) <= 1", made,
+        &session);
+    ASSERT_TRUE(rig.Drive(*create)) << made.response;
+    ASSERT_EQ(made.response.rfind("ERR", 0), std::string::npos) << made.response;
+    EXPECT_NE(made.response.find("built_by_core=1"), std::string::npos) << made.response;
+    EXPECT_EQ(rig.peer->assertion_builds()->builds(), 1u) << "the owner was not asked to build";
+    EXPECT_TRUE(session.in_explicit_txn()) << "the park ended the client's transaction";
+    EXPECT_TRUE(rig.peer->dispatcher().assertions().AnyOn(rig.oid))
+        << "the owner is not enforcing before COMMIT";
+
+    // Enforced before COMMIT, on both routes to the owner: an autocommit
+    // write shipped whole, and this transaction's own write, which ships
+    // and enrols the owner (R6-8) - the path the lifted refusal kept
+    // unreachable.
+    DispatchOutcome shipped;
+    auto second = rig.Start("INSERT INTO assert_in_txn VALUES (10)", shipped);
+    ASSERT_TRUE(rig.Drive(*second)) << shipped.response;
+    EXPECT_NE(shipped.response.find("ASSERTION_VIOLATION"), std::string::npos)
+        << shipped.response;
+    DispatchOutcome enrolled;
+    auto third = rig.Start("INSERT INTO assert_in_txn VALUES (10)", enrolled, &session);
+    ASSERT_TRUE(rig.Drive(*third)) << enrolled.response;
+    EXPECT_NE(enrolled.response.find("ASSERTION_VIOLATION"), std::string::npos)
+        << enrolled.response;
+
+    // ROLLBACK: the transaction's row goes, the assertion stays.
+    DispatchOutcome rolled;
+    auto rollback = rig.Start("ROLLBACK", rolled, &session);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rolled.response;
+    EXPECT_FALSE(session.in_explicit_txn());
+    EXPECT_EQ(rig.dispatcher->Dispatch("SELECT * FROM c0_rows").response.find(",77"),
+              std::string::npos)
+        << "the ROLLBACK left the transaction's own row";
+    EXPECT_TRUE(rig.peer->dispatcher().assertions().AnyOn(rig.oid))
+        << "the ROLLBACK took a non-transactional DDL with it";
+    EXPECT_NE(rig.dispatcher->Dispatch("SHOW ASSERTIONS").response.find("name=intxn"),
+              std::string::npos);
+    DispatchOutcome again;
+    auto fourth = rig.Start("INSERT INTO assert_in_txn VALUES (20)", again);
+    ASSERT_TRUE(rig.Drive(*fourth)) << again.response;
+    EXPECT_NE(again.response.find("ASSERTION_VIOLATION"), std::string::npos) << again.response;
 }
 TEST_F(CoreRuntimeTest, AStatementSpanningTwoOwnersIsNotShippedAndKeepsItsRefusal) {
     // R6's multi-owner statement: `SoleForeignOwner` refuses a chain whose

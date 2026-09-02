@@ -1396,7 +1396,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleCabin(Trim(line));
         }
         if (IEquals(sub, "ASSERTION")) {
-            return HandleAssertion(Trim(line), session);
+            return HandleAssertion(Trim(line));
         }
         // `UNIQUE` routes here too, so its refusal comes from the parser
         // with the byte offset of the word itself rather than from this
@@ -1438,7 +1438,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleIndex(Trim(line), session);
         }
         if (IEquals(sub, "ASSERTION")) {
-            return HandleAssertion(Trim(line), session);
+            return HandleAssertion(Trim(line));
         }
         if (IEquals(sub, "NAMESPACE")) {
             return HandleNamespace(Trim(line), session);
@@ -3479,7 +3479,7 @@ DispatchOutcome CommandDispatcher::HandleShowNamespaces(Session& session) {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Session& session) {
+DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
@@ -3515,7 +3515,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
             auto rel_row = catalog_.GetSysTableRow(rel_oid.value());
             if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
                 if (assertion_builds_ != nullptr) {
-                    return BeginForeignAssertionBuild(stmt, rel_row.value().owner_core, session);
+                    return BeginForeignAssertionBuild(stmt, rel_row.value().owner_core);
                 }
                 return {ErrorReply(Status::NotImplemented(
                             "CREATE ASSERTION on '" + stmt.table_name + "' at byte " +
@@ -3617,28 +3617,12 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
 }
 
 DispatchOutcome CommandDispatcher::BeginForeignAssertionBuild(const parser::AssertionStmt& stmt,
-                                                              std::uint32_t owner_core,
-                                                              Session& session) {
-    // The park would hold the client's transaction open across the owner's
-    // whole scan, and the owner would be enforcing a constraint whose row
-    // waits on a COMMIT that may never come. Refused by name before
-    // anything is sent, exactly as the sibling CREATE INDEX is, and
-    // nothing is burned: no id issued, no page written, the transaction as
-    // it was. It is a divergence from the local arm, which takes this
-    // statement inside a transaction and publishes at once (assertions are
-    // not transactional DDL, `docs/spec/ddl-transactional.md` §5) - named
-    // here rather than left to be found.
-    if (session.in_explicit_txn()) {
-        return {ErrorReply(Status::NotImplemented(
-                    "CREATE ASSERTION on '" + stmt.table_name + "' at byte " +
-                    std::to_string(stmt.table_byte_offset) + ": the relation is owned by core " +
-                    std::to_string(owner_core) +
-                    ", which builds and adopts the Bound Cabin before this statement's row "
-                    "exists - inside a transaction that row waits on the client's COMMIT; run "
-                    "it in autocommit (workplan-peer-writer.md PW1c-6c)")),
-                false};
-    }
-
+                                                              std::uint32_t owner_core) {
+    // Admitted inside an explicit transaction (AK-S1, ddl-transactional.md
+    // §5f): the row `FinishAssertionBuild` writes takes no transaction, and
+    // the owner refuses none of the relation's writes across the park, so
+    // there is nothing for a session to be asked about.
+    //
     // §3.1's checks and the id, on the catalog this core owns, before a
     // byte crosses: a declaration that would have been refused locally is
     // refused without asking a peer to scan a relation for it. The id is

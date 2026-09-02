@@ -2229,6 +2229,21 @@ still waits on its own gate, so:
 
 ## SQL surface and protocol
 
+- **`CREATE ASSERTION` resolves its target unfiltered, so an uncommitted
+  `CREATE TABLE` is a legal target** (found 2026-09-02 by AK-S1's review;
+  pre-existing on both arms). `AssertionTargetOid`
+  (`src/exec/assertion_catalog.cpp`) calls `FindTableOidByName` with no
+  view, where `BeginForeignIndexBuild` resolves under `ViewFor(session)`.
+  So `BEGIN; CREATE TABLE t …; CREATE ASSERTION a ON t …; ROLLBACK` rolls
+  the `sys.tables` row back and leaves the `sys.assertions` row — written
+  under `kBootstrapXid`, read by no view — naming a relation that no
+  longer exists, and another session's in-flight `CREATE TABLE` is
+  targetable from autocommit the same way. The owner enforces the orphan
+  until its next mount, where `mount_recovery.cpp` counts an unreadable
+  target as another core's (`assertions_foreign`) rather than failing.
+  AK-S1 added the same-session *foreign* case to a hole open three other
+  ways; the fix is the index arm's filtered resolution, and it is a
+  candidate for a later AK stage rather than this one.
 - **KWP/1's crash-injection acceptance is owed and was not run**
   (2026-08-31, milestone KW). `docs/spec/protocol.md` §15-5 requires that
   under deterministic crash injection an acked `S_TXN_OK(D1/D2)` commit

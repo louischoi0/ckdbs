@@ -8,9 +8,10 @@ only — §5 says exactly what each gets and §5a why they still differ.
 **§5e** adds the two-core case (PW1c-6b, 2026-08-25): a `CREATE INDEX`
 whose relation another core owns is built by that owner and stays atomic
 and isolated across both, and `DROP INDEX` on such a relation is refused
-inside a transaction. **§5f** does the same for `CREATE ASSERTION`
+inside a transaction. **§5f** adds the two-core case for `CREATE ASSERTION`
 (PW1c-6c, 2026-08-26) on a stronger premise — a Bound Cabin is written by
-every later write to the relation, not only at build time — and with no
+every later write to the relation, not only at build time — with no
+transaction refusal (AK-S1, 2026-09-02) and with no
 refusal window. Owning workplan: `docs/inflight/in-progress/workplan-ddl-transactional.md`
 (this spec) and `docs/inflight/in-progress/workplan-peer-writer.md` §7c/§7d
 (the two-core cases).
@@ -599,12 +600,27 @@ isolates it).
 **Built 2026-08-26 (PW1c-6c, `docs/inflight/in-progress/workplan-peer-writer.md`
 §7d.)** The shape is §5e's — core 0 checks the declaration and issues the
 id, the owner builds, core 0 publishes the `sys.assertions` row, the
-statement parks between the two phases and is refused inside an explicit
-transaction — and the *reason* is stronger. An index is built once from rows
-core 0 cannot see; a Bound Cabin is **written by every subsequent write to
-the relation**, so its pages have to be the owner's for the assertion's whole
-life, not only at build time. That is why nothing about this can be fixed by
-telling core 0's build to try harder.
+statement parks between the two phases — and the *reason* is stronger. An
+index is built once from rows core 0 cannot see; a Bound Cabin is
+**written by every subsequent write to the relation**, so its pages have
+to be the owner's for the assertion's whole life, not only at build time.
+That is why nothing about this can be fixed by telling core 0's build to
+try harder.
+
+**It is no longer refused inside an explicit transaction** (AK-S1,
+2026-09-02, `instructions/v2.8.0/workorder-ak.md`): that refusal borrowed
+§5e's ground, "the row waits on the client's COMMIT", and the row never
+did — `InsertAssertion` writes under no transaction, which is what makes
+the local arm publish at once. Inside a transaction the foreign arm now
+behaves as the local one: the owner enforces before `COMMIT`, and a
+`ROLLBACK` leaves the assertion where it left a locally-declared one. One
+consequence is shared with the local arm and named rather than hidden: a
+transaction that has already written the relation meets the build's
+in-flight refusal (`assertion_build.cpp`'s `kBusy` → `TXN_CONFLICT`), and
+a retry inside that transaction cannot succeed — its own row stays in
+flight until it ends — while each attempt burns an assertion id and
+orphans the owner's chain. Run the declaration first, or outside the
+transaction that writes.
 
 **Atomic**, on the same terms: one publishing event, core 0's row. A refused
 reply, a deadline or a failed publish tells the owner `done(aborted)` and the

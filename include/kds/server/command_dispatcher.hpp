@@ -1145,19 +1145,22 @@ private:
     // **On a relation another core owns the cabin is built there**
     // (PW1c-6c, the two phases below): every write to the relation appends
     // to the cabin, and only the owner may write the owner's pages.
-    DispatchOutcome HandleAssertion(std::string_view line, Session& session);
+    // No session: assertions are non-transactional DDL (`ddl-transactional.md`
+    // §5), so neither arm has anything to ask it (AK-S1 dropped the last
+    // read, the foreign arm's explicit-transaction refusal).
+    DispatchOutcome HandleAssertion(std::string_view line);
 
     // The foreign arm's two phases (PW1c-6c, assertion_build_service.hpp).
-    // Phase 1: the refusal inside an explicit transaction, the checks and
-    // the id under `exec::PrepareAssertionDef`, the declaration sent, the
-    // outcome returned pending. Phase 2, once `AssertionBuildClient::Settled`:
-    // the owner's root read, the `sys.assertions` row published, `done` - or
-    // the timeout / the owner's refusal as the error and `done(aborted)`.
+    // Phase 1: the checks and the id under `exec::PrepareAssertionDef`, the
+    // declaration sent, the outcome returned pending. Phase 2, once
+    // `AssertionBuildClient::Settled`: the owner's root read, the
+    // `sys.assertions` row published, `done` - or the timeout / the owner's
+    // refusal as the error and `done(aborted)`.
     //
     // The live directory is **not** adopted here: it belongs to the core
     // that will append to it, which adopted it at the end of its own build.
     DispatchOutcome BeginForeignAssertionBuild(const parser::AssertionStmt& stmt,
-                                               std::uint32_t owner_core, Session& session);
+                                               std::uint32_t owner_core);
     DispatchOutcome FinishAssertionBuild(const PendingAssertionBuild& build);
 
     // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
