@@ -59,6 +59,10 @@ from multicore_benchmark import (  # noqa: E402
 )
 
 FIELDS = ("wal_group_commits", "wal_group_batches", "wal_syncs")
+# Not deltas: max and min are running extremes over the whole mount, so
+# subtracting two readings would be meaningless. Read absolutely, which is
+# why each sweep point needs its own phase to be read against.
+EXTREMES = ("wal_group_batch_max", "wal_group_batch_min")
 
 
 def batch_fields(conn):
@@ -67,6 +71,8 @@ def batch_fields(conn):
     if meta.startswith("ERR"):
         raise RuntimeError(f"SHOW META: {meta}")
     out = {k: field(meta, k) for k in FIELDS}
+    for k in EXTREMES:
+        out[k] = field(meta, k)
     out["core"] = field(meta, "core")
     # The mean is printed as a float, which `field()` cannot parse.
     at = meta.find(" wal_mean_group_batch=")
@@ -80,6 +86,8 @@ def batch_fields(conn):
 
 def delta(before, after):
     d = {k: after[k] - before[k] for k in FIELDS}
+    for k in EXTREMES:
+        d[k] = after[k]
     d["mean_group_batch_over_phase"] = (
         d["wal_group_commits"] / d["wal_group_batches"]
         if d["wal_group_batches"] else 0.0)
@@ -220,6 +228,7 @@ def main():
                 d["commits_per_s"] = (n * args.rows) / d["wall_s"]
                 sweep.append(d)
                 print(f"  {n:2d} session(s): batch={d['mean_group_batch_over_phase']:6.3f} "
+                      f"min={d['wal_group_batch_min']:3d} max={d['wal_group_batch_max']:3d} "
                       f"commits={d['wal_group_commits']:6d} syncs={d['wal_syncs']:6d} "
                       f"{d['commits_per_s']:8.1f} commits/s")
             out["sweep"] = sweep

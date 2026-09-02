@@ -131,6 +131,17 @@ Status WalManager::Sync() {
     // every commit in the batch, which is the whole mechanism.
     if (pending_group_commits_ > 0 && IsDurable(highest_group_commit_lsn_)) {
         ++stats_.group_batches;
+        // The spread, recorded before the count is cleared (manager.hpp's
+        // `group_batch_max` says which question it answers). `min` is
+        // seeded on the first batch rather than initialised to a sentinel,
+        // so "no batch yet" stays 0 and is not confusable with a batch of
+        // that size.
+        if (pending_group_commits_ > stats_.group_batch_max) {
+            stats_.group_batch_max = pending_group_commits_;
+        }
+        if (stats_.group_batch_min == 0 || pending_group_commits_ < stats_.group_batch_min) {
+            stats_.group_batch_min = pending_group_commits_;
+        }
         pending_group_commits_ = 0;
         highest_group_commit_lsn_ = 0;
     }

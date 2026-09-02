@@ -111,6 +111,23 @@ struct WalStats {
     std::uint64_t strict_commits = 0;
     std::uint64_t group_commits = 0;    // D2 commits registered
     std::uint64_t group_batches = 0;    // syncs that resolved at least one
+
+    // **The batch's spread, not just its mean.** `mean_group_batch_size()`
+    // below answers "how much amortisation happened"; these two answer
+    // "was it the same every time", which is the question a mean cannot.
+    // Added 2026-09-02 to decide one specific reading: the batch measures
+    // `n/2` at every session count (`bench/peer_group_batch_probe.py`), and
+    // the explanation offered for it - that a session awaiting its reply
+    // cannot stage, so half the population is always out of the running -
+    // predicts a **tight** distribution at n/2. A mix of full and singleton
+    // batches averaging the same number would mean something else entirely,
+    // and the mean cannot tell those apart.
+    //
+    // `group_batch_min` is over **non-empty** batches, so it is never the 0
+    // a sync with nothing staged would contribute; 0 means no batch has
+    // completed, which is what `group_batches == 0` says too.
+    std::uint64_t group_batch_max = 0;
+    std::uint64_t group_batch_min = 0;
     std::uint64_t relaxed_commits = 0;
     std::uint64_t interval_syncs = 0;  // drains that fired on the D3 interval
 
