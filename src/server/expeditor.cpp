@@ -1018,10 +1018,22 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // checkpoint whose snapshot is the base, which is what AS6a's "from the last
     // checkpoint" means. The anchor read here is the one recovery already used,
     // so the two cannot disagree about which checkpoint that was.
+    //
+    // **Under one stream it is `redo_start_lsn` instead, and core 0 is not
+    // exempt from the reason** (AR0 M0). Slot 0 holds the *fold* — the
+    // record of whichever core had the lowest redo start — so its
+    // `checkpoint_lsn` is that core's `CHECKPOINT_BEGIN`, which can sit
+    // past core 0's own snapshot exactly as it can past a peer's. Starting
+    // there finds no base, and no base is not a slow scan: it is
+    // `NoteUnenforceable` for every assertion this core owns. The field the
+    // fold does bound is `redo_start_lsn` — at or below every core's redo
+    // start, which is at or below every core's own `CHECKPOINT_BEGIN`.
     expeditor->recovery_ = ResumeAssertionsAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
         /*owner_core=*/0, /*stream_core=*/0,
-        expeditor->database_->superblock.wal_anchor(0).checkpoint_lsn,
+        expeditor->database_->superblock.single_stream()
+            ? expeditor->database_->superblock.wal_anchor(0).redo_start_lsn
+            : expeditor->database_->superblock.wal_anchor(0).checkpoint_lsn,
         expeditor->dispatcher_->assertions(), expeditor->recovery_, &*expeditor->logger_);
 
     // **The completion checkpoint** (RC08), which is what makes the next
