@@ -287,21 +287,73 @@ DDL. Separate worktrees.
 
 ## AJ-T0 — the survey, run ahead of its gate
 
-**Run 2026-09-02 on `worktree-workorder-aj` at `640afdf`, source-read.**
-AJ-T0's stated gate is AJ-R1, and it was run before that ruling
-deliberately: every answer below is decision-independent, and three of
-them are premises AJ-R2 and AJ-R3 rest on. Nothing was built.
+**Run 2026-09-02 on `worktree-workorder-aj` at `640afdf`, re-anchored the
+same day at `bab3f3a` (`v2.7.0-107-gbab3f3a`) after AF-T2..T5 merged from
+`origin/main`.** Source-read throughout. AJ-T0's stated gate is AJ-R1, and
+it was run before that ruling deliberately: every answer below is
+decision-independent, and three of them are premises AJ-R2 and AJ-R3 rest
+on. Nothing was built.
 
-| # | question | answer at `640afdf` | consequence |
+**Every line number below is `bab3f3a`'s.** AF added 350 lines to
+`command_dispatcher.cpp`, so the numbers this order's prose carries — and
+the ones the first survey pass recorded — are `640afdf`'s and no longer
+resolve. The AF merge's effect on the findings themselves is §"What AF
+changed" below: two hunks touch this order's ground and neither
+invalidates an answer.
+
+| # | question | answer at `bab3f3a` | consequence |
 |---|---|---|---|
-| 1 | Does `DeleteInner` have a pk fast path? | **Yes**, `command_dispatcher.cpp:10244`: `PkEqualityTarget(ta, stmt.where)` then `LocateByPk`, falling through to `VisitRelation` when the locator cannot resolve. `PkEqualityTarget` (`:7289`) is a pure function of the WHERE and the schema — one `kCompareValue` `kEq` conjunct on column 0, non-negative int. | AJ-R2(i) is implementable at the fork with **no new predicate analysis**. The fork calls `PkEqualityTarget` directly. |
-| 1a | Does the fork already hold the pk? | **No, not in the shipped configuration.** `WriteTargetCore` (`:7329`) fills `*target_id` only after the `access.ranges.empty()` early return, so with spreading off — every relation until one asks — `target_id` at `:10048` stays unset. | The hoist must call `PkEqualityTarget` itself; it must not read `target_id`. Cheap (no page access), so this costs nothing. |
-| 2 | Does `HandleDelete`'s fork have INSERT's park? | **The `pending_shipped` branch, yes** (`:9992`, which the file's own comment labels "HandleInsert's branch, for its reason"). The **fk park** is not there: the `pending_fk_probe` return exists only on INSERT (`:6552`, `:6639`) and UPDATE (`:9090`). The park machinery itself is in `DispatchAsync` (`:366`–`:540`) and is statement-agnostic. | AJ-T3 adds `if (out_probe.pending_fk_probe.has_value()) return out_probe;` to `DeleteInner` and one propagation in `HandleDelete`. The wait, collect, resume and decide blocks are reused unmodified. |
-| 2a | Can a DELETE need two parks? | **No.** `DeleteInner` mints `check_view` only for `fkeys_in` (`:10078`); a DELETE runs no forward check, so `fkeys_out` never produces a probe on this path. | `DispatchAsync:482`'s `NotImplemented` guard ("one park per dispatch is all this path has") is not reachable by AJ, and AJ must not make it reachable. |
+| 1 | Does `DeleteInner` have a pk fast path? | **Yes**, `command_dispatcher.cpp:10564`: `PkEqualityTarget(ta, stmt.where)` then `LocateByPk`, falling through to `VisitRelation` when the locator cannot resolve. `PkEqualityTarget` (`:7544`) is a pure function of the WHERE and the schema — one `kCompareValue` `kEq` conjunct on column 0, non-negative int. | AJ-R2(i) is implementable at the fork with **no new predicate analysis**. The fork calls `PkEqualityTarget` directly. |
+| 1a | Does the fork already hold the pk? | **No, not in the shipped configuration.** `WriteTargetCore` (`:7584`) fills `*target_id` only at `:7609`, past the `access.ranges.empty()` early return — so with spreading off, every relation until one asks, `target_id` at `:10368` stays unset. | The hoist must call `PkEqualityTarget` itself; it must not read `target_id`. Cheap (no page access), so this costs nothing. |
+| 2 | Does `HandleDelete`'s fork have INSERT's park? | **The `pending_shipped` branch, yes** (`:10305`, whose own comment labels it "HandleInsert's branch, for its reason"). The **fk park** is not there: the `pending_fk_probe` return exists only on INSERT (`:6807`, `:6894`) and UPDATE (`:9404`). The park machinery itself is in `DispatchAsync` (`:366`–`:540`) and is statement-agnostic. | AJ-T3 adds `if (out_probe.pending_fk_probe.has_value()) return out_probe;` to `DeleteInner` and one propagation in `HandleDelete`. The wait, collect, resume and decide blocks are reused unmodified. |
+| 2a | Can a DELETE need two parks? | **No.** `DeleteInner` mints `check_view` only for `fkeys_in` (`:10402`); a DELETE runs no forward check, so `fkeys_out` never produces a probe on this path. | `DispatchAsync:484`'s `NotImplemented` guard ("one park per dispatch is all this path has") is not reachable by AJ, and AJ must not make it reachable. |
 | 3 | Where does the shipped DELETE fork, and does it fork on `has_intent_holders()`? | **The premise is wrong.** `has_intent_holders` appears in exactly two files — `session.hpp` and `command_dispatcher.cpp` — and **nowhere in `shipped_statement_executor.cpp`**. A shipped statement runs through `dispatcher_.DispatchAsync(state->text, state->session, &state->out)` (`shipped_statement_executor.cpp:195`) on the owner core, in autocommit (`:276` rolls back and refuses one that opens a transaction). | A shipped DELETE **already reaches the park and the release** through `DispatchAsync`'s own autocommit decide block (`:502`) on the owner's session. **AJ-T1's fourth clear site does not exist and must not be invented**; the shipped case is covered by the same three sites as the local one. The prepare-relevance predicate at `shipped_statement_executor.cpp:706` (`wrote_nothing`) is a *different* question and is unaffected. |
-| 4 | Where does the pending-set consult go? | Inside `FkProbeServer::OnRequest`'s per-parent loop (`fk_probe_service.cpp:71`–`:122`), **between the owner-core re-check (`:88`) and `exec::CheckParentPresent` (`:96`)** — necessarily before `intents_.Add` (`:110`), which is the grant AJ-R3(a) must prevent. | One consult, one site, ahead of the existence read. Confirms AJ-R3(a)'s "one existing handler consults it". |
+| 4 | Where does the pending-set consult go? | Inside `FkProbeServer::OnRequest`'s per-parent loop (`fk_probe_service.cpp:71`–`:122`), **between the owner-core re-check (`:91`) and `exec::CheckParentPresent` (`:96`)** — necessarily before `intents_.Add` (`:109`), which is the grant AJ-R3(a) must prevent. | One consult, one site, ahead of the existence read. Confirms AJ-R3(a)'s "one existing handler consults it". |
 | 4a | Is there an in-flight verdict to answer with? | **Yes, and it needs no new enum value.** `exec::FkVerdict` is `{kPass, kViolation, kBusy}` (`fk_check.hpp:65`); `kBusy` is already "another transaction is writing the row the check depends on… reported as `kTxnConflict`". | The reverse's mirror answer is `kBusy`. No wire-format change on the forward pair. |
-| 5 | How does c mint a read view with no session? | `txn_->MintReadView(/*writer=*/0)` (`fk_probe_service.cpp:57`), with the reason stated at the site: the check reads the **owner's own latest state**, never a view carried on the wire. | The reverse handler copies it verbatim. §4's one-MVCC rule is untouched, as this order claims. |
+| 5 | How does c mint a read view with no session? | `txn_->MintReadView(/*writer=*/0)` (`fk_probe_service.cpp:59`), with the reason stated at the site: the check reads the **owner's own latest state**, never a view carried on the wire. | The reverse handler copies it verbatim. §4's one-MVCC rule is untouched, as this order claims. |
+
+The other citations this order's prose carries, re-anchored at `bab3f3a`:
+the reverse refusal is still `fk_check.cpp:190` (unmoved, but its *message*
+changed — see below); `CheckNoChildrenBeforeDelete` is `:4391`, unchanged
+in body; `SendForeignKeyProbes` is `:4191` with its `ship_id` mint at
+`:4212`; `ReleaseIntentsWithoutWaiting` is `:4159`; the explicit-transaction
+decide sites are `:9887` and `:9996`; `IntentOnlyTargets()` is read at
+`:5408`; `HandleDelete` is `:10295`, `DeleteInner` `:10328`, and its per-row
+reverse check `:10476`.
+
+### What AF changed, checked at the merge
+
+AF-T2..T5 merged into this worktree at `bab3f3a`; **AJ's sequencing gate
+is therefore satisfied** and AF-P1a is ratified. Two of AF's hunks land on
+this order's ground and a third bears on AJ-R1's counter-argument. None
+invalidates an answer above.
+
+- **`CheckNoChildrenBeforeDelete` is untouched in body** (`:4391`). AF's
+  350 dispatcher lines added `ResolveCreateNamespace` immediately *after*
+  it, which is why the diff appears to straddle it.
+- **`DeleteInner` gained one call** — `catalog_.CheckRelationQualifier`
+  (`:10350`), between `FindTableOidByName` and `InitTableAccess`. It sits
+  **ahead of the fork**, so AJ-T3's hoist point is unchanged and the
+  registration naturally follows a verified qualifier. Nothing to do.
+- **AF-T4 wrote into the two messages AJ would change, and both must be
+  carried rather than overwritten.** `fk_check.cpp:190`'s refusal now ends
+  "*create a parent and its children in one namespace to keep the pair on
+  one core*", which `foreign-keys.md` F5 calls the only actionable clause
+  in it — **AJ-R2's remainder refusal keeps that clause**. And
+  `CREATE TABLE` emits a `WARN` (`command_dispatcher.cpp:4914`) whose text
+  says a parent DELETE "*is refused until the reverse fan-out is built*":
+  once AJ lands, that half is false for the shapes AJ-R2 admits while the
+  forward crossing's per-write probe round is not, so **AJ-T3 amends the
+  warning, it does not delete it**.
+- **AF-T5's measurement weakens AJ-R1's counter-argument rather than
+  strengthening it.** "AF-P5 avoids the refusal" is true, but colocation
+  is not free: `results-af-t5-namespace-grouping-v2.7.0-99-g775e79d.md`
+  measures namespace placement at **0.81× at one group** — a 19% cost
+  where there is nothing to overlap the hop — and a **tie** with blind
+  rotation at three groups on eight cores. So "just put the pair in one
+  namespace" asks the user to shape placement around a missing feature,
+  and charges them when their grouping has no parallelism in it. That is
+  an argument for building AJ, not against.
 
 ### Three findings the survey produced that change the tasks
 
@@ -346,6 +398,7 @@ fail-closed and names this order, as the forward's does.
 | row | status |
 |---|---|
 | AJ-R1..R4 | awaiting the operator's word |
-| AJ-T0 | **run 2026-09-02 on `worktree-workorder-aj` at `640afdf`**, ahead of its gate because every answer is decision-independent. Table above; three findings (S1, S2, S3) amend AJ-T1, AJ-T2 and AJ-T3's premises. One premise in this order's own text is **corrected**: `shipped_statement_executor.cpp` does not fork on `has_intent_holders()` and has no clear site to add |
+| AJ-T0 | **run 2026-09-02 on `worktree-workorder-aj` at `640afdf`, re-anchored at `bab3f3a`** after AF-T2..T5 merged. Run ahead of its gate because every answer is decision-independent. Table above; three findings (S1, S2, S3) amend AJ-T1, AJ-T2 and AJ-T3's premises. One premise in this order's own text is **corrected**: `shipped_statement_executor.cpp` does not fork on `has_intent_holders()` and has no clear site to add. AF's effect is checked and is two message obligations, not a design change |
+| Sequencing | **Satisfied at `bab3f3a`.** AF-T2..T5 are built, measured and ratified (AF-P1a), so this order's "after AF-T2..T5" gate is met; the AF merge is in this worktree |
 | AJ-T1..T5 | not started |
 | AJ-T6 | not sequenced |
