@@ -346,12 +346,71 @@ struct ColumnDef {
     // keyword hashes exactly as an identifier does.
     std::string references_table;
 
+    // The namespace qualifier written before the parent, if any - see
+    // `namespace-qualifier rule above.
+    std::string references_schema;
+
     // Where `REFERENCES` was written, for a refusal that can point at it.
     std::uint32_t references_byte_offset = 0;
 };
 
+// ---- The namespace qualifier a statement may write (AF-T3) ----------------
+//
+// `ns.t` is accepted everywhere a relation is named
+// (`instructions/v2.8.0/ratification-af-namespace.md` AF-6, operator shape
+// (a)), and every statement struct below therefore carries a `schema`
+// beside its `table_name`, empty when the name was written unqualified.
+// Stated once here rather than nine times:
+//
+// **A relation's name is instance-global, and a qualifier does not change
+// which relation a name reaches.** That is AF-T3's decision, and it is the
+// half of `docs/spec/namespace.md` NS5/NS6 that AF declines: AF-2 makes a
+// namespace a *placement* declaration and AF-9 says outright that it is not
+// a name-collision domain. So `orders.customer` and `customer` resolve to
+// the same row, and two namespaces still cannot hold two relations of one
+// name.
+//
+// What a qualifier *is*, then, is an assertion the engine checks:
+//
+//   - at `CREATE TABLE ns.t` it **selects** the namespace, which is the one
+//     place it decides anything - and through AF-T2 that decides the core;
+//   - everywhere else it is verified against the relation's stored
+//     `namespace_oid` and a disagreement is refused by name with its byte
+//     (`Catalog::CheckRelationQualifier`). Accepting a false qualifier
+//     silently would be the "truthfulness beats convenience" rule broken on
+//     the one statement a reader uses to see where a relation lives.
+//
+// `sys` keeps its older meaning - the catalog views - and is refused as a
+// user namespace (`well_known.hpp`), so no statement changes meaning.
+//
+// The parser does not resolve any of this: which namespaces exist is the
+// catalog's question, exactly as `RelationRef::schema` has always said.
+//
+// Cited from elsewhere as "ast.hpp's namespace-qualifier rule". It is a
+// comment and stays one: a `constexpr` string nothing reads would be a doc
+// anchor wearing a symbol's clothes, and the block above is the content.
+
+// `CREATE NAMESPACE <name>` / `DROP NAMESPACE <name>` (AF-T3, AF-6's
+// operator-taken shape (a); `docs/spec/namespace.md` NS7).
+//
+// One struct for both statements, `CabinStmt`'s precedent: they take one
+// identifier and differ only in which catalog call they reach. There is no
+// `IF NOT EXISTS` and no `CASCADE` - the first would make a typo
+// indistinguishable from an intent, which is the whole reason shape (b)
+// lost, and the second is NS7's declined scope.
+struct NamespaceStmt {
+    std::string name;
+    std::uint32_t byte_offset = 0;
+    bool drop = false;
+};
+
 struct CreateTableStmt {
     std::string table_name;
+    // The namespace this relation is created in - and the only qualifier
+    // in the grammar that *decides* rather than asserts. Empty means
+    // `public` (AF-T2 then leaves the relation on the creating core).
+    std::string schema;
+    std::uint32_t table_byte_offset = 0;
     std::vector<ColumnDef> columns;
     catalog::ClusteredType clustered = catalog::ClusteredType::kHeap;
 
@@ -385,6 +444,8 @@ inline constexpr std::size_t kDefaultMaxInsertRows = 1024;
 // refuses an over-cap statement naming the cap and the count.
 struct InsertStmt {
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
+    std::uint32_t table_byte_offset = 0;
     std::vector<std::vector<AstValue>> rows;
 };
 
@@ -635,6 +696,8 @@ struct Assignment {
 
 struct UpdateStmt {
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
+    std::uint32_t table_byte_offset = 0;
     std::vector<Assignment> assignments;  // SET list, at least one
     std::vector<Condition> where;         // empty = no WHERE clause; AND-combined
 };
@@ -652,6 +715,8 @@ struct UpdateStmt {
 // SELECT that found the rows meant.
 struct DeleteStmt {
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
+    std::uint32_t table_byte_offset = 0;
     std::vector<Condition> where;  // empty = every row
 };
 
@@ -666,6 +731,7 @@ struct DeleteStmt {
 // share the resolution and differ in which catalog call they reach.
 struct AlterStmt {
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t byte_offset = 0;  // of the table name
 
     bool rename_column = false;  // false: RENAME TO, the relation itself
@@ -693,6 +759,7 @@ struct AlterStmt {
 // (DT2); pages orphan until reclamation exists (DT1).
 struct DropTableStmt {
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t byte_offset = 0;
 };
 
@@ -710,6 +777,7 @@ struct DropTableStmt {
 // two copies of one grammar.
 struct CabinStmt {
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
     std::string column_name;
     std::uint32_t byte_offset = 0;         // of the table name
     std::uint32_t column_byte_offset = 0;  // of the column name
@@ -745,6 +813,7 @@ struct IndexColumnRef {
 struct IndexStmt {
     std::string index_name;
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
     std::vector<IndexColumnRef> key_columns;
     std::vector<IndexColumnRef> covered_columns;
     std::uint32_t byte_offset = 0;        // of the index name
@@ -777,6 +846,7 @@ struct AssertionStmt {
 
     // Everything below is CREATE-only and stays empty for a DROP.
     std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t table_byte_offset = 0;
 
     std::vector<IndexColumnRef> group_columns;
@@ -835,7 +905,7 @@ struct AssertionStmt {
 
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, CabinStmt, IndexStmt, AssertionStmt, AlterStmt,
-                               DropTableStmt>;
+                               DropTableStmt, NamespaceStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

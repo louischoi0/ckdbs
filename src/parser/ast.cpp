@@ -22,6 +22,9 @@ const char* StatementTypeName(const Statement& stmt) {
             }
             if constexpr (std::is_same_v<T, AlterStmt>) return "ALTER TABLE";
             if constexpr (std::is_same_v<T, DropTableStmt>) return "DROP TABLE";
+            if constexpr (std::is_same_v<T, NamespaceStmt>) {
+                return s.drop ? "DROP NAMESPACE" : "CREATE NAMESPACE";
+            }
         },
         stmt);
 }

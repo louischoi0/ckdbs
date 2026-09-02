@@ -97,11 +97,82 @@ inline constexpr std::uint32_t kSystemCore = 0;
 // `kRotate` is **not** deleted and not an exercise mode either - it stays a
 // configurable placement, and §6a's gates are unchanged. DA2 settles which
 // one ships, not which ones exist.
-enum class PlacementPolicy : std::uint8_t { kCreatingCore, kRotate };
+//
+// **`kNamespace` is the shipped default since AF-T2** (2026-09-02,
+// `instructions/v2.8.0/ratification-af-namespace.md`), and it does **not**
+// reverse DA2: for a relation in `public` - which is every relation until
+// somebody writes `CREATE NAMESPACE` - it answers exactly what
+// `kCreatingCore` answers, because an undeclared namespace is never
+// rotated. What it adds is the case DA2 could not price: a group of
+// relations the *user* said belong together. DA2's 0.51x is rotation spent
+// blindly - it splits the pair that joins every second as readily as the
+// pair that never meets - and `kNamespace` is the same rotation with the
+// grouping supplied, so a join inside a group never crosses.
+//
+// `kCreatingCore` stays selectable, and is the right setting for a file
+// whose relations were placed by some other history.
+enum class PlacementPolicy : std::uint8_t { kCreatingCore, kRotate, kNamespace };
+
+// "This namespace has no core yet." Not a core id: `kSystemCore` is a legal
+// answer, so absence needs a value no core count can reach.
+inline constexpr std::uint32_t kUnplacedNamespace = 0xFFFFFFFFu;
+
+// What the catalog could **read off its own rows** about the namespace a
+// relation is being created in. Every field is an observation and none of
+// them is a decision, which is what keeps the policy in this file and the
+// recording in the catalog - the split this header opens with.
+struct NamespacePlacement {
+    // The `owner_core` of the lowest-oid relation already in this
+    // namespace, or `kUnplacedNamespace` when it holds none.
+    //
+    // **This is AF-P1**: the namespace's core is *derived* from rows that
+    // exist rather than cached in a field that could drift from them, and
+    // the lowest oid is the "first relation" the operator's sentence names.
+    // It is also what makes a file written before AF mount unchanged - the
+    // relations in a namespace answer for it.
+    std::uint32_t settled_core = kUnplacedNamespace;
+
+    // How many namespace rows precede this one on `sys.objects`, dropped
+    // ones counted. The rotation input for a namespace no relation has
+    // fixed yet.
+    //
+    // **Why a rank and not the creating core.** AF-P1 as first written said
+    // an unfixed namespace takes the creating core; DDL runs on core 0 and
+    // only on core 0 (`CreateTable` passes `kSystemCore` for it), so that
+    // rule would place *every* namespace on core 0 and the policy would do
+    // nothing at all. AF-4 requires the opposite - "AF is rotation with the
+    // grouping supplied" - so the missing half is supplied here: a
+    // namespace nobody has placed rotates on its declaration order. Dropped
+    // rows count precisely because they are never retired
+    // (`well_known.hpp`'s `kTypeDroppedNamespace`), which makes the rank
+    // immutable and satisfies AF-P4 - emptying a namespace does not free it
+    // to move.
+    std::uint64_t rank = 0;
+
+    // Whether anybody declared this namespace - `oid >= kUserOidStart`, the
+    // oid-range idiom `mount_recovery.cpp` and `relayout_planner.cpp` use to
+    // ask "is this the catalog's". False for `sys` and `public`, which is
+    // what keeps DA2's answer for a relation whose writer named no
+    // namespace.
+    bool declared = false;
+};
 
 constexpr std::uint32_t AssignOwnerCore(PlacementPolicy policy, std::uint32_t creating_core,
-                                        std::uint32_t core_count,
-                                        std::uint64_t relation_seq) noexcept {
+                                        std::uint32_t core_count, std::uint64_t relation_seq,
+                                        NamespacePlacement ns = {}) noexcept {
+    if (policy == PlacementPolicy::kNamespace) {
+        // An undeclared namespace is DA2's case and takes DA2's answer.
+        if (!ns.declared) return creating_core;
+        // A namespace its first relation already fixed. Never rebalanced
+        // (AF-P4): ownership that changed without DDL is exactly what
+        // `catalog_cache.hpp` forbids caching, and `TableAccess` caches it.
+        if (ns.settled_core != kUnplacedNamespace) return ns.settled_core;
+        // This relation is the one that fixes it.
+        if (core_count > 1) {
+            return kSystemCore + 1 + static_cast<std::uint32_t>(ns.rank % (core_count - 1));
+        }
+        return creating_core;
+    }
     if (policy == PlacementPolicy::kRotate && core_count > 1) {
         // M1's rotation over the non-system cores. Legal since CC7/P6b:
         // ownership follows the catalog, and the publish handoff grants the

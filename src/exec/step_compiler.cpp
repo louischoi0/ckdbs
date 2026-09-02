@@ -1478,6 +1478,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     for (const parser::RelationRef* rel : refs) {
         auto oid = catalog.FindTableOidByName(rel->table_name, view);
         if (!oid.ok()) return oid.status();
+        // AF-T3, and this is the one site that covers FROM, every JOIN and
+        // every subquery block - they all bind through this loop.
+        if (Status s = catalog.CheckRelationQualifier(rel->schema, rel->table_name, oid.value(),
+                                                      rel->byte_offset, view);
+            !s.ok()) {
+            return s;
+        }
         auto access = catalog.InitTableAccess(oid.value());
         if (!access.ok()) return access.status();
         scope.relations.push_back(BoundRelation{rel->binding(), access.value()});

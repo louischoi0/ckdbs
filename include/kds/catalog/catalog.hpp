@@ -486,11 +486,53 @@ public:
     // otherwise. A dropped namespace does not resolve - the retype to
     // `kTypeDroppedNamespace` frees the name the instant the drop runs,
     // which is `DROP TABLE`'s own rule (ddl-transactional.md §5a).
-    StatusOr<Oid> FindNamespaceOidByName(std::string_view name);
+    //
+    // **`view` is the reader's visibility, and this is a resolution route**
+    // (`ddl-transactional.md` §5's rule 1): a namespace is a schema object,
+    // so a session that cannot see the transaction which created one must
+    // not be able to create a relation in it. `FindTableOidByName`'s
+    // contract, one object kind over. Null (the default) is every internal
+    // caller and every pre-AF-T3 behaviour; `CreateNamespace`'s own
+    // collision check passes null **on purpose** and says why at the call.
+    StatusOr<Oid> FindNamespaceOidByName(std::string_view name,
+                                          const txn::ReadView* view = nullptr);
 
     // Every live user namespace, registry entries excluded - the callers
-    // that want those have `sys_objects()`.
-    StatusOr<std::vector<SysObjectRow>> ListNamespaces();
+    // that want those have `sys_objects()`. `view` as above: `SHOW
+    // NAMESPACES` is a schema-object surface, so it filters exactly as
+    // `SHOW TABLES` does.
+    StatusOr<std::vector<SysObjectRow>> ListNamespaces(const txn::ReadView* view = nullptr);
+
+    // Checks the namespace qualifier a statement wrote in front of a
+    // relation name (AF-T3; `parser/ast.hpp`'s namespace-qualifier rule).
+    //
+    // An empty qualifier is `OK` and asks nothing: a name is
+    // instance-global and an unqualified one means exactly what it always
+    // meant. A written qualifier is **verified, not resolved** - the
+    // relation was already found by name - and a disagreement is
+    // `kNotFound` naming both parts, because "there is no `orders.customer`"
+    // is what actually happened even though a `customer` exists elsewhere.
+    //
+    // `byte_offset` is where the name was written, and **0 means
+    // nowhere**: a statement's first token is its verb, so no relation name
+    // can sit at byte 0, and the debug surfaces that take a bare argument
+    // (`DESCRIBE`, `SHOW RELAYOUT`, the bare `CREATE TABLE`) have no offsets
+    // to give. Those get a refusal with no position rather than one
+    // pointing at byte 0. Taken here rather than appended by each caller
+    // because six call sites had copied the same two lines.
+    //
+    // **What it costs, stated rather than assumed.** An unqualified name
+    // returns before reading anything, so the ordinary statement pays
+    // nothing. `sys.` and `public.` resolve from two constants. Any other
+    // qualifier pays **one `sys.objects` scan per statement**
+    // (`FindNamespaceOidByName`); the relation's own namespace comes from
+    // the cached `TableAccess` and costs nothing. That scan is not cached
+    // and deliberately so for now - a namespace name-to-oid cache is new
+    // invalidation machinery (`catalog_cache.hpp`'s rule) and nothing has
+    // measured the scan yet. Price it before building the cache.
+    Status CheckRelationQualifier(std::string_view qualifier, std::string_view rel_name,
+                                   Oid rel_oid, std::uint32_t byte_offset = 0,
+                                   const txn::ReadView* view = nullptr);
 
     // Drops one. **RESTRICT**, the rule `DROP TABLE` already uses for
     // foreign keys and assertions: a namespace holding any relation is
@@ -1301,6 +1343,18 @@ private:
     // this function's; publication is the only difference.
     Status WriteRangeRow(SysRangeRow row, std::uint64_t trx_id, CatalogRowRef* where);
 
+    // The three facts `AssignOwnerCore` needs about a namespace, read off
+    // the catalog's own rows (AF-T2, `core_placement.hpp`'s
+    // `NamespacePlacement`). `existing` is the `sys.tables` scan
+    // `CreateTable` already makes for the rotation counter, passed in
+    // rather than re-taken - one scan answers both questions.
+    //
+    // The second scan, of `sys.objects` for the namespace's rank, is taken
+    // **only** when the namespace holds no relation yet, which is once per
+    // namespace for the life of the file.
+    StatusOr<NamespacePlacement> DeriveNamespacePlacement(
+        Oid namespace_oid, const std::vector<SysTableRow>& existing);
+
     storage::PageStore& store_;
 
     // Instance-pinned, never mutated after construction - see the
@@ -1351,6 +1405,10 @@ private:
     std::uint64_t pending_marks_ = 0;
     InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
+    // The engine's default is `kNamespace` (`Expeditor::Config`, AF-T2);
+    // a bare Catalog - bootstrap, recovery, a test over a store - keeps
+    // `kCreatingCore`, which is what every one of those wants and what
+    // `kNamespace` answers for them anyway, `public` being undeclared.
     PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;
     RowIdLeaseTable* row_id_leases_ = nullptr;
     // Unset until the first GenerateUserOid() recovers it from the catalog.

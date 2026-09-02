@@ -914,6 +914,14 @@ private:
 
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables(Session& session);
+
+    // `SHOW NAMESPACES` (`docs/spec/namespace.md` NS9). `sys.objects`
+    // filtered by type, the way `SHOW TABLES` filters by `kTypeTable`.
+    DispatchOutcome HandleShowNamespaces(Session& session);
+
+    // `{CREATE | DROP} NAMESPACE <name>` (AF-T3). One handler for both, as
+    // the parser has one production - see `NamespaceStmt` (ast.hpp).
+    DispatchOutcome HandleNamespace(std::string_view line, Session& session);
     DispatchOutcome HandleDescribe(std::string_view args, Session& session);
     DispatchOutcome HandleShowPage(std::string_view args);
     DispatchOutcome HandleShowPatterns();
@@ -1025,6 +1033,12 @@ private:
     // Called **even when the DDL failed**: rows written before the failure
     // are on the page either way, and a rollback that skipped them would
     // leave the half-built relation this feature exists to prevent.
+    // The rollback trail for a DDL route that changes rows rather than
+    // inserting them (`DROP TABLE`, `DROP NAMESPACE`). No-op outside an
+    // explicit transaction.
+    void NoteCatalogRowChanges(DdlScope& scope,
+                               const std::vector<catalog::CatalogRowChange>& changed);
+
     void NoteDdlRows(DdlScope& scope);
 
     // Transactions holding catalog rows nobody has committed yet. Empty
@@ -1227,6 +1241,15 @@ private:
     // One access shape, recorded by hand because a check is not a step
     // (FK-M4). Never fails a write.
     void RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_oid, std::uint64_t column_mask);
+
+    // The namespace a `CREATE TABLE ns.t` names, or `kNamespacePublic` for
+    // an unqualified name (AF-T3). The one qualifier in the grammar that
+    // decides rather than asserts: through AF-T2 it decides the relation's
+    // owner core. An unknown namespace is refused with its byte and is
+    // **not** created - see `ast.hpp`'s namespace-qualifier rule.
+    StatusOr<catalog::Oid> ResolveCreateNamespace(std::string_view qualifier,
+                                                  std::uint32_t byte_offset,
+                                                  const txn::ReadView* view);
 
     // A relation's name for a human-readable reply, or `oid=<n>` when it
     // cannot be resolved. Inspection surfaces only: catalog rows store oids

@@ -434,6 +434,12 @@ StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
                                 std::to_string(stmt.table_byte_offset) + ")");
     }
+    // AF-T3, as at every other relation name.
+    if (Status s = catalog.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                  stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
     return oid.value();
 }
 

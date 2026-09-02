@@ -399,6 +399,52 @@ TEST(FingerprintTest, TheKeyModeWordNeededNoFingerprintVersionBump) {
     EXPECT_TRUE(FingerprintOf("SELECT * FROM t WHERE assigned = 1").has_value());
 }
 
+TEST(FingerprintTest, TheNamespaceSyntaxNeededNoFingerprintVersionBump) {
+    // **AF-T3's explicit answer to the question AF-6 required be answered
+    // here rather than discovered when a stored waystone stopped matching.**
+    //
+    // Two things AF-6 called fingerprint-visible, and neither moves a hash:
+    //
+    //   - `CREATE NAMESPACE` is a **new keyword**, and reserving a word is a
+    //     grammar change and never a fingerprint change (this file's header):
+    //     keywords hash as identifiers, same tag, same folded text. Nothing
+    //     already stored contains one, because the statement did not parse.
+    //   - `ns.table` is a **new name shape** in the grammar, but not a new
+    //     *token* shape: a dot between two identifiers has lexed and hashed
+    //     since the catalog views, so `sys.tables` hashed exactly the same
+    //     way before AF as after. What changed is which of those token
+    //     streams reach a parse - the easy half of the bump rule, "making a
+    //     statement fingerprintable that previously was not".
+    //
+    // So the version stays at 1, and the golden hash is the witness.
+    EXPECT_EQ(kFingerprintVersion, 1u);
+    EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
+
+    // `sys.tables` is the statement that could actually have moved - it is
+    // the one qualified shape that already parsed - so it is pinned by
+    // value rather than argued about. AF touched neither the lexer nor the
+    // accumulator, so this is the pre-AF number; what the pin buys is that
+    // a *later* change to the qualified-name path cannot move it silently.
+    EXPECT_EQ(Must("SELECT * FROM sys.tables").pattern_id, 0x41085c4d12710b3dull);
+
+    // `NAMESPACE` is unreserved, like every clause head this grammar has
+    // grown: a column may still be called `namespace`, which is the
+    // property that keeps the hashes above from moving.
+    EXPECT_TRUE(FingerprintOf("SELECT * FROM t WHERE namespace = 1").has_value());
+
+    // `CREATE NAMESPACE` has no pattern at all, and neither has any other
+    // DDL: `IsPatternableLeadingWord` admits SELECT, INSERT and UPDATE and
+    // nothing else, so the new *statement* cannot move a stored hash even in
+    // principle. Only the new *name shape* could have, and it did not.
+    EXPECT_FALSE(FingerprintOf("CREATE NAMESPACE orders").has_value());
+
+    // A qualified name stays a different shape from an unqualified one,
+    // which it must: identifiers are shape, and a trail recorded against one
+    // relation is worthless to another. `orders.line` is three tokens where
+    // `line` is one.
+    EXPECT_NE(Must("SELECT * FROM orders.line").pattern_id, Must("SELECT * FROM line").pattern_id);
+}
+
 TEST(FingerprintTest, TheNumericTokenNeededNoFingerprintVersionBump) {
     // The subtler case of the bump rule, argued in fingerprint.cpp:
     // `12.34` *did* lex before this token (int, dot, int), so its

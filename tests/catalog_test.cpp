@@ -560,6 +560,120 @@ TEST_F(CatalogTest, TheTwoReservedNamespacesCannotBeDropped) {
     }
 }
 
+// ---- AF-T2: the namespace picks the core ---------------------------------
+//
+// `instructions/v2.8.0/ratification-af-namespace.md` AF-T2/AF-P1/AF-P4.
+// Four cells, one per claim the policy makes, all against a four-core
+// catalog because a one-core instance cannot tell the three policies apart.
+
+class NamespacePlacementTest : public ::testing::Test {
+protected:
+    storage::InMemoryPageStore store_{128};
+    // Four cores, so kSystemCore + 1..3 are the rotation's targets.
+    Catalog catalog_{store_, storage::kDefaultInlineCellWidth, /*core_count=*/4};
+
+    void SetUp() override {
+        ASSERT_TRUE(catalog_.Bootstrap().ok());
+        catalog_.SetPlacementPolicy(PlacementPolicy::kNamespace);
+    }
+
+    StatusOr<std::uint32_t> OwnerOf(Oid rel_oid) {
+        auto row = catalog_.GetSysTableRow(rel_oid);
+        if (!row.ok()) return row.status();
+        return row.value().owner_core;
+    }
+
+    Oid CreateIn(Oid ns_oid, const char* name) {
+        auto oid = catalog_.CreateTable(ns_oid, name, MinimalPkSchema(), ClusteredType::kHeap);
+        EXPECT_TRUE(oid.ok()) << name << ": " << oid.status().message();
+        return oid.ok() ? oid.value() : 0;
+    }
+};
+
+// DA2's half: a relation nobody declared a namespace for is placed exactly
+// where `kCreatingCore` would place it, which is what makes `kNamespace`
+// shippable as the default.
+TEST_F(NamespacePlacementTest, AnUndeclaredNamespaceKeepsTheCreatingCoresAnswer) {
+    for (const char* name : {"a", "b", "c", "d", "e"}) {
+        auto owner = OwnerOf(CreateIn(kNamespacePublic, name));
+        ASSERT_TRUE(owner.ok()) << owner.status().message();
+        EXPECT_EQ(owner.value(), kSystemCore)
+            << "a relation in `public` was rotated off the creating core";
+    }
+}
+
+// AF-4's half: two declared namespaces are two cores, and every relation
+// in one lands on that one - which is the whole mechanism.
+TEST_F(NamespacePlacementTest, ADeclaredNamespaceTakesACoreAndItsRelationsFollow) {
+    auto orders = catalog_.CreateNamespace("orders");
+    ASSERT_TRUE(orders.ok()) << orders.status().message();
+    auto ledger = catalog_.CreateNamespace("ledger");
+    ASSERT_TRUE(ledger.ok()) << ledger.status().message();
+
+    auto first = OwnerOf(CreateIn(orders.value(), "orders_head"));
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    EXPECT_NE(first.value(), kSystemCore) << "a declared namespace stayed on the system core";
+
+    // AF-P1: the first relation fixed it, and every later one derives that
+    // same answer off the rows rather than re-rotating.
+    for (const char* name : {"orders_line", "orders_note"}) {
+        auto owner = OwnerOf(CreateIn(orders.value(), name));
+        ASSERT_TRUE(owner.ok()) << owner.status().message();
+        EXPECT_EQ(owner.value(), first.value())
+            << name << " left the namespace's core, so a join inside the group would cross";
+    }
+
+    // A second namespace is a second core: the parallelism AE-8 asked for,
+    // and the reason the grouping is the user's to declare.
+    auto other = OwnerOf(CreateIn(ledger.value(), "ledger_entry"));
+    ASSERT_TRUE(other.ok()) << other.status().message();
+    EXPECT_NE(other.value(), first.value())
+        << "two independent namespaces landed on one core, so nothing runs in parallel";
+}
+
+// AF-P4: placement is decided once and never rebalanced, and the case
+// somebody will reach for is the one this asserts - "the namespace is
+// empty again, so it may move now". It may not.
+TEST_F(NamespacePlacementTest, EmptyingANamespaceDoesNotFreeItToMove) {
+    auto orders = catalog_.CreateNamespace("orders");
+    ASSERT_TRUE(orders.ok()) << orders.status().message();
+
+    const Oid first_rel = CreateIn(orders.value(), "orders_head");
+    auto before = OwnerOf(first_rel);
+    ASSERT_TRUE(before.ok()) << before.status().message();
+
+    std::vector<std::uint64_t> dropped_cabins;
+    ASSERT_TRUE(catalog_.DropTable(first_rel, dropped_cabins).ok());
+
+    // The namespace holds nothing now, so the derivation falls back to the
+    // rank - which counts dropped namespace rows precisely so that it
+    // cannot move.
+    auto after = OwnerOf(CreateIn(orders.value(), "orders_head2"));
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    EXPECT_EQ(after.value(), before.value())
+        << "an emptied namespace was re-rotated onto a different core";
+}
+
+// The policy is the config's, not the namespace's: declaring a namespace
+// under `creating` changes nothing, which is what keeps a file placed by
+// some other history readable as that history.
+TEST_F(NamespacePlacementTest, TheOtherTwoPoliciesIgnoreTheNamespace) {
+    catalog_.SetPlacementPolicy(PlacementPolicy::kCreatingCore);
+    auto orders = catalog_.CreateNamespace("orders");
+    ASSERT_TRUE(orders.ok()) << orders.status().message();
+
+    auto pinned = OwnerOf(CreateIn(orders.value(), "orders_head"));
+    ASSERT_TRUE(pinned.ok()) << pinned.status().message();
+    EXPECT_EQ(pinned.value(), kSystemCore) << "`creating` consulted the namespace";
+
+    // And `rotate` keeps rotating on the relation count, which is what it
+    // has always done and what DA2 measured.
+    catalog_.SetPlacementPolicy(PlacementPolicy::kRotate);
+    auto rotated = OwnerOf(CreateIn(orders.value(), "orders_line"));
+    ASSERT_TRUE(rotated.ok()) << rotated.status().message();
+    EXPECT_NE(rotated.value(), kSystemCore) << "`rotate` stopped rotating";
+}
+
 TEST_F(CatalogTest, ACachedAccessCarriesTheRelationsRangesAndTheyRepublishOnInsert) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 

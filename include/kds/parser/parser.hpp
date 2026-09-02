@@ -65,6 +65,11 @@ private:
     StatusOr<CabinStmt> ParseCabin(bool drop);
     StatusOr<IndexStmt> ParseIndex(bool drop);
 
+    // `{CREATE | DROP} NAMESPACE <name>` (AF-T3, AF-6's shape (a);
+    // `docs/spec/namespace.md` NS7), with the leading two words already
+    // consumed. One production for both, for ParseCabin's reason.
+    StatusOr<NamespaceStmt> ParseNamespace(bool drop);
+
     // `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
     // (docs/spec/alter.md AL7), with `ALTER` already consumed. Every other
     // form under ALTER is refused here, by name and position (AL1).
@@ -103,6 +108,21 @@ private:
     // and appends them in written order.
     StatusOr<RelationRef> ParseRelationRef();
     Status ParseJoins(SelectStmt& stmt);
+
+    // `<name>` or `<ns>.<name>` - the one production every relation name in
+    // the grammar goes through since AF-T3 (ast.hpp's namespace-qualifier
+    // rule). `schema` is left empty when the name was written unqualified.
+    //
+    // `offset`, when given, receives the byte of what was written **first**
+    // - the qualifier if there is one - so a refusal about a namespace
+    // points at the namespace rather than at the name after the dot.
+    //
+    // Which namespaces exist is the catalog's question and not this
+    // production's, exactly as `RelationRef::schema` has always said: an
+    // unknown one fails at resolution, where the message can name what does
+    // exist.
+    Status ParseQualifiedName(std::string& schema, std::string& name,
+                              std::uint32_t* offset = nullptr);
     Status CheckDistinctBindings(const SelectStmt& stmt) const;
 
     // `x` or `a.x`. ParseQualifiedColumn is the ON-clause form: the same

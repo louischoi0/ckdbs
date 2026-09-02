@@ -540,18 +540,26 @@ public:
 
         // Relation placement (workplan P6c, `placement` config key):
         // `creating` pins every relation to the creating core; `rotate`
-        // spreads user relations over the non-system cores.
+        // spreads user relations over the non-system cores; `namespace`
+        // places a relation on its **namespace's** core.
         //
-        // **`creating` is the ratified default** (DA2, 2026-08-31,
+        // **`creating` was the ratified default** (DA2, 2026-08-31,
         // `instructions/v2.7.0/ratification-da.md`), on the measurement in
         // `bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md`
         // §6: rotation's crossover is a step at the first core to take a
         // second session, and past it rotation is **negative at seven
         // writer cores (0.51x)**. It is also the arrangement DA1's sweep
-        // was run under, so DA1's numbers are numbers for this policy.
-        // `rotate` is not deleted and stays configurable; what DA2 settles
-        // is which one ships.
-        catalog::PlacementPolicy placement = catalog::PlacementPolicy::kCreatingCore;
+        // was run under, so DA1's numbers are numbers for that policy.
+        //
+        // **`namespace` is the default since AF-T2** (2026-09-02) and DA2
+        // is not reversed by it: a relation in `public` - every relation
+        // until somebody writes `CREATE NAMESPACE` - gets `creating`'s
+        // answer unchanged, because `AssignOwnerCore` rotates only a
+        // namespace somebody declared. What changes is that a declared
+        // group of relations gets a core of its own, which is the input
+        // whose absence produced DA2's 0.51x. `creating` and `rotate` both
+        // stay configurable.
+        catalog::PlacementPolicy placement = catalog::PlacementPolicy::kNamespace;
 
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to
         // wherever the process runs"; the two are joined into one path, so

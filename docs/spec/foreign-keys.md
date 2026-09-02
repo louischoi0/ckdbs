@@ -93,6 +93,25 @@ Decisions proposed as v1:
     another core (§3a). RESTRICT needs an authoritative "no children" and
     the parent's core cannot see them.
 
+  **Both are now told to the user who can act on them (AF-T4, 2026-09-02),
+  and where they are told is the decision.** The advice does not live in
+  `CheckForeignKeyColocation`, which no longer refuses and which nobody
+  reads; it lives at the two moments a person is choosing:
+
+  - **`CREATE TABLE` emits a `WARN` line** when the declared parent's
+    owner differs from the child's, naming both costs above and the
+    remedy — create the two in one namespace. It rides the reply shape a
+    `CREATE TABLE` already has for "the relation is correct and something
+    about it is worth knowing", which is the cabin warning's.
+  - **the parent-`DELETE` refusal names the remedy** as its last clause
+    (`exec/fk_check.cpp`). Everything before it says why the engine cannot
+    answer; the namespace is the only actionable thing in the message.
+
+  A pair created in one namespace is on one core by `namespace.md` NS10,
+  so following the advice makes the refusal unreachable rather than
+  merely rarer — and the `CREATE TABLE` is silent, which is what makes
+  the warning mean something when it does appear.
+
   The refusal it replaced was correct for its time and its argument is
   worth keeping: a declaration admitted before the crossing existed would
   have sent `CheckParentPresent` to `BtreeLookup` a page this core may not

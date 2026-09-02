@@ -701,6 +701,69 @@ TEST_F(TxnSessionTest, EveryRouteIntoARelationAgreesItIsInvisible) {
     ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
 }
 
+TEST_F(TxnSessionTest, EveryRouteIntoANamespaceAgreesItIsInvisible) {
+    // **AF-T3's half of DT3c's list.** A namespace is a schema object, so
+    // every route into "does this namespace exist" has to answer the way
+    // the relation routes do - and AF-T1's own note said AF-T3 owed this
+    // the moment `CREATE NAMESPACE` became a statement two sessions can
+    // run at once. A single route answering differently *is* the leak,
+    // which is how `SHOW TABLES` and later `SHOW INDEXES` each leaked an
+    // uncommitted DDL.
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "CREATE NAMESPACE ghostns").substr(0, 7), "CREATED");
+
+    // The listing does not show it...
+    EXPECT_EQ(Run(b, "SHOW NAMESPACES").find("ghostns"), std::string::npos)
+        << "an uncommitted namespace is listed to another session";
+    // ...and no route resolves it: not a create into it, not a qualifier
+    // asserting a relation is in it, not a drop of it.
+    for (const char* sql : {"CREATE TABLE ghostns.t (id int64)",
+                            "SELECT * FROM ghostns.base",
+                            "DROP NAMESPACE ghostns"}) {
+        EXPECT_EQ(Run(b, sql).rfind("ERR", 0), 0u) << "leaked through: " << sql;
+    }
+
+
+    // The creator reaches it by the same routes, which is the half that
+    // must **not** be symmetric: a session has to see its own uncommitted
+    // DDL or it cannot build on it.
+    EXPECT_NE(Run(a, "SHOW NAMESPACES").find("ghostns"), std::string::npos);
+    EXPECT_EQ(Run(a, "CREATE TABLE ghostns.t (id int64)").substr(0, 7), "CREATED");
+
+    // **And the rollback works, which it did not before this cell existed.**
+    // `CreateNamespace` recorded a trail entry with no oid on it, so the
+    // abort could not compensate its `sys.objects` row and answered "no
+    // columns for this rel_id" - a *catalog* relation's schema, asked for
+    // by the relocator. `catalog.cpp` carries the fix and the reason.
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // And afterwards nobody sees it, including the creator.
+    for (Session* s : {&a, &b}) {
+        EXPECT_EQ(Run(*s, "SHOW NAMESPACES").find("ghostns"), std::string::npos)
+            << "a rolled-back namespace is still listed";
+    }
+}
+
+TEST_F(TxnSessionTest, ANamespaceNameCollisionIsRefusedWhileTheFirstCreateIsOpen) {
+    // The other half, and it is the **opposite** rule for a reason
+    // (`ddl-transactional.md` §6, as `CREATE TABLE` already reads it):
+    // `CreateNamespace`'s uniqueness check is deliberately unfiltered, so
+    // the second create is refused while the first is open rather than
+    // both succeeding and leaving two rows claiming one name.
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "CREATE NAMESPACE contested").substr(0, 7), "CREATED");
+
+    auto second = Run(b, "CREATE NAMESPACE contested");
+    EXPECT_EQ(second.rfind("ERR", 0), 0u) << second;
+    EXPECT_NE(second.find("already exists"), std::string::npos) << second;
+
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+}
+
 TEST_F(TxnSessionTest, ASecondCreateOfTheSameNameIsRefusedWhileTheFirstIsOpen) {
     // Spec §6's open decision, in its conservative half: the duplicate
     // check is deliberately unfiltered, so the second create is refused

@@ -1182,6 +1182,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "META")) return HandleShowMeta();
         if (IEquals(sub, "TABLES")) return HandleListTables(session);
+        if (IEquals(sub, "NAMESPACES")) return HandleShowNamespaces(session);
         if (IEquals(sub, "PAGE")) return HandleShowPage(sub_rest);
         if (IEquals(sub, "PATTERNS")) return HandleShowPatterns();
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
@@ -1290,6 +1291,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "INDEX") || IEquals(sub, "UNIQUE")) {
             return HandleIndex(Trim(line), session);
         }
+        if (IEquals(sub, "NAMESPACE")) {
+            return HandleNamespace(Trim(line), session);
+        }
         if (IEquals(sub, "TABLE")) {
             // Disambiguate the bare-name form ("CREATE TABLE foo")
             // from the SQL form ("CREATE TABLE foo (col type, ...)"): the
@@ -1323,10 +1327,14 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ASSERTION")) {
             return HandleAssertion(Trim(line), session);
         }
+        if (IEquals(sub, "NAMESPACE")) {
+            return HandleNamespace(Trim(line), session);
+        }
         if (IEquals(sub, "TABLE")) {
             return HandleDropTable(Trim(line), session);
         }
-        return {"ERR only DROP TABLE, DROP CABIN, DROP INDEX and DROP ASSERTION are supported",
+        return {"ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX and DROP "
+                "ASSERTION are supported",
                 false};
     }
     if (IEquals(cmd, "INSERT")) {
@@ -2327,6 +2335,25 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     return {os.str(), false};
 }
 
+// `t` or `ns.t` in a **raw argument** (AF-T3). The debug surface's commands
+// take a bare token rather than a parse - `DESCRIBE`, `SHOW RELAYOUT`, the
+// bare `CREATE TABLE <name>` form - and a qualifier has to mean the same
+// thing there as in the grammar, or the two surfaces disagree about what a
+// name is. One dot deep, exactly as `Parser::ParseQualifiedName`.
+//
+// A trailing or leading dot is left alone: the halves come back as written
+// and the catalog refuses the empty one by name, which beats this helper
+// inventing a syntax error for a surface that has no byte offsets.
+namespace {
+
+std::pair<std::string_view, std::string_view> SplitQualifiedArg(std::string_view arg) {
+    const std::size_t dot = arg.find('.');
+    if (dot == std::string_view::npos) return {std::string_view{}, arg};
+    return {arg.substr(0, dot), arg.substr(dot + 1)};
+}
+
+}  // namespace
+
 DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
                                                      Session& session) {
     // D2 (workplan-rv3-catalog-recovery.md): every DDL statement runs
@@ -2337,21 +2364,47 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
         if (args.empty()) {
             return {"ERR CREATE TABLE requires a name", false};
         }
+        // AF-T3: the same qualifier the SQL form takes, so `CREATE TABLE
+        // orders.t` means one thing on both surfaces. Before this it meant
+        // a relation literally called "orders.t".
+        const auto [qualifier, name] = SplitQualifiedArg(args);
 
-        auto existing = catalog_.FindTableOidByName(args);
+        // Before the collision check, for `HandleCreateTableSql`'s reason:
+        // the `EXISTS` arm below would otherwise answer a statement whose
+        // namespace does not exist, absorbing the qualifier instead of
+        // verifying it.
+        const std::optional<txn::ReadView> ns_view = ViewFor(session);
+        auto create_ns = ResolveCreateNamespace(qualifier, /*byte_offset=*/0,
+                                                ns_view.has_value() ? &*ns_view : nullptr);
+        if (!create_ns.ok()) {
+            return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
+        }
+
+        auto existing = catalog_.FindTableOidByName(name);
         if (existing.ok()) {
+        // **`EXISTS` is truthful only about the name, so a qualifier that
+        // disagrees gets a sentence rather than that token** (the AF-T3
+        // review's finding 5). Relation names are instance-global, so
+        // `ledger.plain` cannot be created while a `plain` sits in `public`
+        // - but replying `EXISTS` to it asserts that `ledger.plain` exists,
+        // which is the one thing that is false. The qualifier check answers
+        // with the namespace the name is actually held in.
+            if (Status s = catalog_.CheckRelationQualifier(qualifier, name, existing.value());
+                !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
             return {"EXISTS oid=" + std::to_string(existing.value()), false};
         }
         if (existing.status().code() != StatusCode::kNotFound) {
             return {ErrorReply(existing.status()), false, 0, existing.status()};
         }
-        if (auto refused = RefuseIfNameHeldByPendingDrop(args, session); refused.has_value()) {
+        if (auto refused = RefuseIfNameHeldByPendingDrop(name, session); refused.has_value()) {
             return *refused;
         }
 
         catalog::Schema schema;
         DdlScope ddl = DdlScopeFor(scope);
-        auto oid = catalog_.CreateTable(catalog::kNamespacePublic, args, schema,
+        auto oid = catalog_.CreateTable(create_ns.value(), name, schema,
                                          catalog::ClusteredType::kHeap, ddl.trx_id, ddl.sink());
         NoteDdlRows(ddl);  // before the status, for the partial-write reason above
         if (!oid.ok()) {
@@ -2367,10 +2420,17 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
         return {"ERR DESCRIBE requires a table name", false};
     }
 
+    const auto [qualifier, name] = SplitQualifiedArg(args);
     const std::optional<txn::ReadView> view = ViewFor(session);
-    auto oid = catalog_.FindTableOidByName(args, view.has_value() ? &*view : nullptr);
+    auto oid = catalog_.FindTableOidByName(name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
+    }
+    if (Status s = catalog_.CheckRelationQualifier(qualifier, name, oid.value(),
+                                                   /*byte_offset=*/0,
+                                                   view.has_value() ? &*view : nullptr);
+        !s.ok()) {
+        return {ErrorReply(s), false, 0, s};
     }
 
     auto table_row = catalog_.GetSysTableRow(oid.value());
@@ -3012,6 +3072,12 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
     }
+    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                   stmt.byte_offset,
+                                                   view.has_value() ? &*view : nullptr);
+        !s.ok()) {
+        return {ErrorReply(s), false, 0, s};
+    }
 
     // AL7: the catalog's own names are load-bearing for bootstrap and are
     // nobody's to change - refused here so both forms share the answer,
@@ -3103,6 +3169,12 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         if (!oid.ok()) {
             return {ErrorReply(oid.status()), false, 0, oid.status()};
         }
+        if (Status s = catalog_.CheckRelationQualifier(
+                stmt.schema, stmt.table_name, oid.value(), stmt.byte_offset,
+                drop_view.has_value() ? &*drop_view : nullptr);
+            !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
+        }
 
         // DT3's RESTRICT, both blockers named. A referencing foreign key
         // blocks at the *declared* level - the constraint exists whether or
@@ -3143,24 +3215,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         Status dropped =
             catalog_.DropTable(oid.value(), dropped_cabins, ddl.trx_id,
                                ddl.txn != nullptr ? &changed : nullptr);
-        if (ddl.txn != nullptr) {
-            for (const catalog::CatalogRowChange& c : changed) {
-                if (c.deleted) {
-                    txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
-                                         c.page_id, c.slot, c.oid, c.prior_trx_id,
-                                         c.prior_undo_ptr);
-                } else {
-                    txn_->NoteOverwrite(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
-                                        c.page_id, c.slot, c.oid, c.prior_trx_id,
-                                        c.prior_undo_ptr, c.prior_image);
-                }
-            }
-            // Mark the transaction as holding DDL so `ViewFor` starts
-            // filtering - **not** by pushing a fake row into `written`, which
-            // would put an insert with an invalid page on the trail and have
-            // the abort try to retire it.
-            if (!changed.empty()) MarkHoldsDdl(*ddl.txn);
-        }
+        NoteCatalogRowChanges(ddl, changed);
         if (Status s = dropped; !s.ok()) {
             return {ErrorReply(s), false, 0, s};
         }
@@ -3178,6 +3233,98 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         }
         return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
     });
+}
+
+// `CREATE NAMESPACE <name>` / `DROP NAMESPACE <name>` (AF-T3, AF-6's
+// operator-taken shape (a); `docs/spec/namespace.md` NS7).
+//
+// One handler for both, as the parser has one production: they differ only
+// in which catalog call they reach. Under `InDdlStatement` like every other
+// DDL route, so the one `sys.objects` row this writes is on a real
+// transaction's trail and a crash mid-statement has a loser to roll back -
+// which matters more here than it looks, because AF-T2 makes the namespace
+// the thing that decides where every relation in it will live.
+DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Session& session) {
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) {
+        return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+    }
+    if (!std::holds_alternative<parser::NamespaceStmt>(parsed.value())) {
+        return {"ERR expected a CREATE NAMESPACE or DROP NAMESPACE statement", false};
+    }
+    const auto stmt = std::get<parser::NamespaceStmt>(std::move(parsed.value()));
+
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        DdlScope ddl = DdlScopeFor(scope);
+
+        if (!stmt.drop) {
+            auto oid = catalog_.CreateNamespace(stmt.name, ddl.trx_id, ddl.sink());
+            NoteDdlRows(ddl);  // before the status: a partial write is still a write
+            if (!oid.ok()) {
+                Status s = oid.status().WithContext("byte " +
+                                                    std::to_string(stmt.byte_offset));
+                return {ErrorReply(s), false, 0, s};
+            }
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("ddl", "created namespace '" + stmt.name + "' oid=" +
+                                      std::to_string(oid.value()));
+            }
+            return {"CREATED NAMESPACE " + stmt.name + " oid=" + std::to_string(oid.value()),
+                    false};
+        }
+
+        const std::optional<txn::ReadView> ns_view = ViewFor(session);
+        auto oid = catalog_.FindNamespaceOidByName(stmt.name,
+                                                   ns_view.has_value() ? &*ns_view : nullptr);
+        if (!oid.ok()) {
+            Status s = oid.status().code() == StatusCode::kNotFound
+                           ? Status::NotFound("no namespace named '" + stmt.name + "' (byte " +
+                                              std::to_string(stmt.byte_offset) + ")")
+                           : oid.status();
+            return {ErrorReply(s), false, 0, s};
+        }
+
+        // RESTRICT, and the catalog names the relation that blocked it.
+        std::vector<catalog::CatalogRowChange> changed;
+        Status dropped = catalog_.DropNamespace(oid.value(), ddl.trx_id,
+                                                ddl.txn != nullptr ? &changed : nullptr);
+        NoteCatalogRowChanges(ddl, changed);
+        if (!dropped.ok()) {
+            Status s = dropped.WithContext("byte " + std::to_string(stmt.byte_offset));
+            return {ErrorReply(s), false, 0, s};
+        }
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped namespace '" + stmt.name + "' oid=" +
+                                  std::to_string(oid.value()));
+        }
+        return {"DROPPED NAMESPACE " + stmt.name + " oid=" + std::to_string(oid.value()), false};
+    });
+}
+
+// `SHOW NAMESPACES` (`docs/spec/namespace.md` NS9): `sys.objects` filtered
+// by type, the way `SHOW TABLES` filters by `kTypeTable`. The two
+// bootstrap namespaces are listed first and by their **SQL spellings** -
+// `sys` and `public` - rather than by the registry names their rows carry
+// ("namespaceSys"/"namespacePublic"), because what a user needs from this
+// command is the word they would write in a statement.
+DispatchOutcome CommandDispatcher::HandleShowNamespaces(Session& session) {
+    // Under the session's view, exactly as `SHOW TABLES` is (DT4): a
+    // namespace is a schema object, so the route that reports which ones
+    // exist has to answer the way every other resolution route does. A
+    // surface that leaked an uncommitted `CREATE NAMESPACE` would be the
+    // `SHOW INDEXES` defect again, one object kind over.
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto live = catalog_.ListNamespaces(view.has_value() ? &*view : nullptr);
+    if (!live.ok()) {
+        return {ErrorReply(live.status()), false, 0, live.status()};
+    }
+    std::ostringstream os;
+    os << catalog::kNamespaceSysName << ' ' << catalog::kNamespacePublicName;
+    for (const catalog::SysObjectRow& row : live.value()) {
+        os << ' ' << catalog::NameView(row.name);
+    }
+    return {os.str(), false};
 }
 
 DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Session& session) {
@@ -3526,9 +3673,13 @@ DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
         if (!all.ok()) return {ErrorReply(all.status()), false, 0, all.status()};
         reports = std::move(all.value());
     } else {
-        auto oid = catalog_.FindTableOidByName(name);
+        const auto [qualifier, bare] = SplitQualifiedArg(name);
+        auto oid = catalog_.FindTableOidByName(bare);
         if (!oid.ok()) {
             return {"ERR unknown relation '" + std::string(name) + "'", false};
+        }
+        if (Status s = catalog_.CheckRelationQualifier(qualifier, bare, oid.value()); !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
         }
         // A fresh budget at the configured ceiling: the walk is priced like
         // any other relation read, and a spent budget refuses the survey
@@ -4226,6 +4377,30 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
     return Status::OK();
 }
 
+StatusOr<catalog::Oid> CommandDispatcher::ResolveCreateNamespace(std::string_view qualifier,
+                                                                std::uint32_t byte_offset,
+                                                                const txn::ReadView* view) {
+    if (qualifier.empty()) return catalog::kNamespacePublic;
+    auto ns = catalog_.FindNamespaceOidByName(qualifier, view);
+    if (ns.ok()) {
+        // `sys` resolves - it has to, or `sys.tables` would stop naming the
+        // views - and creating *into* it is refused here rather than at the
+        // catalog, where the message would be about a system relation
+        // instead of about the namespace that was written.
+        if (catalog::IsSystemNamespace(ns.value())) {
+            return Status::InvalidArgument("namespace '" + std::string(qualifier) +
+                                            "' is the catalog's and holds no user relation "
+                                            "(byte " + std::to_string(byte_offset) + ")");
+        }
+        return ns.value();
+    }
+    if (ns.status().code() != StatusCode::kNotFound) return ns.status();
+    return Status::NotFound("no namespace named '" + std::string(qualifier) +
+                            "' (byte " + std::to_string(byte_offset) +
+                            "); CREATE NAMESPACE it first - a namespace is never created by "
+                            "being named");
+}
+
 std::string CommandDispatcher::RelationNameOf(catalog::Oid oid) {
     // Unfiltered by design (DT3c): this renders a name for an oid the
     // caller already holds, so hiding it would print an empty label
@@ -4289,6 +4464,26 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         }
         auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
 
+        // AF-T3: the one qualifier that decides rather than asserts. An
+        // unqualified name is `public`, so every statement written before
+        // AF means exactly what it meant; a named namespace must already
+        // exist, because implicit creation is what makes a typo
+        // indistinguishable from an intent (AF-6, shape (a) over (b)).
+        //
+        // **Resolved before the name-collision check below, not after it.**
+        // The other order let `CREATE TABLE ordrs.t` answer `EXISTS oid=n`
+        // whenever some relation `t` existed anywhere - the qualifier
+        // absorbed rather than verified, and AF-6's "a typo must not be
+        // indistinguishable from an intent" broken by the one arm that
+        // never reached the resolver. An unqualified name still reads no
+        // catalog here, so this costs the ordinary path nothing.
+        const std::optional<txn::ReadView> ns_view = ViewFor(session);
+        auto create_ns = ResolveCreateNamespace(stmt.schema, stmt.table_byte_offset,
+                                                ns_view.has_value() ? &*ns_view : nullptr);
+        if (!create_ns.ok()) {
+            return {ErrorReply(create_ns.status()), false, 0, create_ns.status()};
+        }
+
         // **Deliberately unfiltered, and this is a decision rather than an
         // omission** (ddl-transactional.md §6's second open item: what two
         // transactions creating the same name should do).
@@ -4308,6 +4503,19 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // what the spec still has open.
         auto existing = catalog_.FindTableOidByName(stmt.table_name);
         if (existing.ok()) {
+        // **`EXISTS` is truthful only about the name, so a qualifier that
+        // disagrees gets a sentence rather than that token** (the AF-T3
+        // review's finding 5). Relation names are instance-global, so
+        // `ledger.plain` cannot be created while a `plain` sits in `public`
+        // - but replying `EXISTS` to it asserts that `ledger.plain` exists,
+        // which is the one thing that is false. The qualifier check answers
+        // with the namespace the name is actually held in.
+            if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name,
+                                                           existing.value(),
+                                                           stmt.table_byte_offset);
+                !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
             return {"EXISTS oid=" + std::to_string(existing.value()), false};
         }
         if (existing.status().code() != StatusCode::kNotFound) {
@@ -4511,6 +4719,17 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                             std::to_string(col.references_byte_offset) + ")",
                         false};
             }
+            // AF-T3: `REFERENCES orders.customer` asserts where the parent
+            // lives, and a wrong assertion is refused - which matters more
+            // here than anywhere else, because after AF-T2 the parent's
+            // namespace is the parent's *core*.
+            if (Status s = catalog_.CheckRelationQualifier(
+                    col.references_schema, col.references_table, parent_oid.value(),
+                    col.references_byte_offset,
+                    parent_view.has_value() ? &*parent_view : nullptr);
+                !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
             auto parent = catalog_.InitTableAccess(parent_oid.value());
             if (!parent.ok()) {
                 return {ErrorReply(parent.status()), false, 0, parent.status()};
@@ -4544,7 +4763,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             stmt.clustered_given ? stmt.clustered : catalog::ClusteredType::kHeap;
 
         DdlScope ddl = DdlScopeFor(scope);
-        auto oid = catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema,
+        auto oid = catalog_.CreateTable(create_ns.value(), stmt.table_name, schema,
                                          clustered, ddl.trx_id, ddl.sink());
         // Registered before the status is read: a create that failed partway
         // still left rows on the page, and those are exactly the rows a
@@ -4565,7 +4784,37 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // reach the trail - the orphan the review named, pre-existing on
         // the explicit-transaction path and recorded in
         // workplan-rv3-catalog-recovery.md's remainder.
+        // **AF-T4** (`ratification-af-namespace.md` AF-P5): a cross-owner
+        // foreign key is admitted - AH-T4 converted `CheckForeignKeyColocation`
+        // from a constraint to a recommendation - and this is where the
+        // recommendation is spoken, because this is where a user is
+        // choosing. Collected in the loop below and emitted with the
+        // cabin warnings, which is the reply shape a CREATE TABLE already
+        // has for "the relation is correct and something about it is worth
+        // knowing".
+        std::vector<std::string> fk_notices;
+        auto child_row = catalog_.GetSysTableRow(oid.value());
+        if (!child_row.ok()) {
+            return {ErrorReply(child_row.status()), false, 0, child_row.status()};
+        }
         for (const PendingForeignKey& fk : pending_fkeys) {
+            auto parent_row = catalog_.GetSysTableRow(fk.parent_oid);
+            if (!parent_row.ok()) {
+                return {ErrorReply(parent_row.status()), false, 0, parent_row.status()};
+            }
+            if (parent_row.value().owner_core != child_row.value().owner_core) {
+                // Both costs named, because "admitted" must not read as
+                // "free" - the write cost is per statement and the DELETE
+                // one is a refusal (`foreign-keys.md` §2a, §3a).
+                fk_notices.push_back(
+                    "the foreign key on column " + std::to_string(fk.column_no) +
+                    " references '" + fk.parent_name + "', which core " +
+                    std::to_string(parent_row.value().owner_core) + " owns while this relation "
+                    "is core " + std::to_string(child_row.value().owner_core) +
+                    "'s: every write of this relation pays one cross-core probe round, and a "
+                    "DELETE of a referenced parent row is refused until the reverse fan-out "
+                    "is built; create the two in one namespace to keep them on one core");
+            }
             auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
             if (!created.ok()) {
                 // No survival claim in either direction: autocommit's
@@ -4598,7 +4847,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // is correct; what is missing is an accelerator, and reporting it as a
         // warning beats leaving a half-created table behind - there is no
         // transaction to roll one back into.
-        std::vector<std::string> warnings;
+        std::vector<std::string> warnings = std::move(fk_notices);
         for (const catalog::SysColumnRow& col : schema.columns) {
             if (catalog::EffectiveCabinPolicy(col.cabin_policy) != catalog::kCabinPolicyEnabled) {
                 continue;
@@ -6231,6 +6480,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
     }
+    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                   stmt.table_byte_offset,
+                                                   view.has_value() ? &*view : nullptr);
+        !s.ok()) {
+        return {ErrorReply(s), false, 0, s};
+    }
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
@@ -7489,6 +7744,34 @@ void CommandDispatcher::MarkHoldsDdl(const txn::Transaction& txn) {
     }
 }
 
+void CommandDispatcher::NoteCatalogRowChanges(
+    DdlScope& scope, const std::vector<catalog::CatalogRowChange>& changed) {
+    // The rollback trail for a DDL route that *changes* rows rather than
+    // inserting them - `DROP TABLE` and `DROP NAMESPACE`. One function
+    // because the two had one copy each and the second was the first minus
+    // the delete-mark branch: `DropNamespace` only ever retypes today, so
+    // the copy was correct and silently assumed the other's invariant.
+    //
+    // Nothing to do outside an explicit transaction: autocommit's DDL has
+    // no rollback to serve, which is why the changes are not even collected
+    // there.
+    if (scope.txn == nullptr) return;
+    for (const catalog::CatalogRowChange& c : changed) {
+        if (c.deleted) {
+            txn_->NoteDeleteMark(*scope.txn, static_cast<std::uint32_t>(c.rel_oid), c.page_id,
+                                 c.slot, c.oid, c.prior_trx_id, c.prior_undo_ptr);
+        } else {
+            txn_->NoteOverwrite(*scope.txn, static_cast<std::uint32_t>(c.rel_oid), c.page_id,
+                                c.slot, c.oid, c.prior_trx_id, c.prior_undo_ptr, c.prior_image);
+        }
+    }
+    // Mark the transaction as holding DDL so `ViewFor` starts filtering -
+    // **not** by pushing a fake row into `written`, which would put an
+    // insert with an invalid page on the trail and have the abort try to
+    // retire it.
+    if (!changed.empty()) MarkHoldsDdl(*scope.txn);
+}
+
 void CommandDispatcher::NoteDdlRows(DdlScope& scope) {
     if (scope.txn == nullptr) return;
     if (!scope.written.empty()) MarkHoldsDdl(*scope.txn);
@@ -8038,9 +8321,17 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         const bool from_is_view =
             IEquals(stmt.from.schema, exec::kCatalogSchema) &&
             exec::IsCatalogView(stmt.from.table_name);
+        // The same test the FROM relation gets, and it had to become the
+        // same test at AF-T3: `!schema.empty()` meant "is a view" only
+        // while `sys` was the one qualifier there was, and under a user
+        // namespace it would answer "a catalog view cannot be joined"
+        // about two ordinary relations.
         bool any_join_is_view = false;
         for (const parser::JoinClause& join : stmt.joins) {
-            if (!join.relation.schema.empty()) any_join_is_view = true;
+            if (IEquals(join.relation.schema, exec::kCatalogSchema) &&
+                exec::IsCatalogView(join.relation.table_name)) {
+                any_join_is_view = true;
+            }
         }
         if (from_is_view || any_join_is_view) {
             if (analyze) {
@@ -8075,9 +8366,26 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                         known + ")",
                     false};
         }
-        return {"ERR unknown schema '" + stmt.from.schema +
-                    "'; the only qualified relations are the catalog views under `sys`",
-                false};
+        // **AF-T3 opened this arm.** It used to answer everything but `sys`
+        // with "unknown schema", because a qualifier could only ever have
+        // named the catalog views. A user namespace is now a qualifier
+        // too, so a name that resolves falls through to the compiler,
+        // which binds the relation and checks the qualifier against it
+        // (`step_compiler.cpp`, one site for FROM, JOIN and every
+        // subquery). Only a namespace that does not exist is refused here,
+        // and it is refused by name.
+        const std::optional<txn::ReadView> schema_view = ViewFor(session);
+        auto ns = catalog_.FindNamespaceOidByName(
+            stmt.from.schema, schema_view.has_value() ? &*schema_view : nullptr);
+        if (!ns.ok()) {
+            if (ns.status().code() != StatusCode::kNotFound) {
+                return {ErrorReply(ns.status()), false, 0, ns.status()};
+            }
+            return {"ERR no namespace named '" + stmt.from.schema + "' (byte " +
+                        std::to_string(stmt.from.byte_offset) +
+                        "); the catalog views are under `sys`",
+                    false};
+        }
     }
 
     // V17: parse -> compile -> execute. Everything that used to be
@@ -8862,6 +9170,12 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
+    }
+    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                   stmt.table_byte_offset,
+                                                   view.has_value() ? &*view : nullptr);
+        !s.ok()) {
+        return {ErrorReply(s), false, 0, s};
     }
 
     auto access = catalog_.InitTableAccess(oid.value());
@@ -9939,6 +10253,12 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     auto oid =
         catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                   stmt.table_byte_offset,
+                                                   view.has_value() ? &*view : nullptr);
+        !s.ok()) {
+        return {ErrorReply(s), false, 0, s};
+    }
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
     const catalog::TableAccess& ta = *access.value();

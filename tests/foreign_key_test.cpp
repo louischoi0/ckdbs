@@ -890,5 +890,78 @@ TEST_F(ForeignKeyCheckTest, ANullableForeignKeyColumnShowsNullableYes) {
     EXPECT_NE(out.find("nullable=no"), std::string::npos) << out;
 }
 
+// ---- AF-T4: the namespace remedy, spoken where a user is choosing --------
+//
+// `instructions/v2.8.0/ratification-af-namespace.md` AF-P5/AF-T4. AH-T4
+// converted `CheckForeignKeyColocation` from a constraint to a
+// recommendation - a cross-owner pair is admitted and priced - and the
+// recommendation had nowhere to be spoken until `CREATE NAMESPACE` existed.
+// It is spoken at CREATE TABLE, which is the moment a user is choosing.
+
+class ForeignKeyPlacementTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        // Four cores, so two namespaces can be two cores. Namespace
+        // placement is the shipped default (`Expeditor::Config`), but a
+        // bare bootstrap builds a bare Catalog, so it is set here.
+        auto boot = bootstrap::BootstrapDatabase(store_, 1000,
+                                                 storage::kDefaultInlineCellWidth, /*cores=*/4);
+        ASSERT_TRUE(boot.ok()) << boot.status().message();
+        boot_.emplace(std::move(boot.value()));
+        boot_->catalog.SetPlacementPolicy(catalog::PlacementPolicy::kNamespace);
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_);
+    }
+
+    std::string Run(std::string_view line) { return dispatcher_->Dispatch(line).response; }
+
+    storage::InMemoryPageStore store_{kFirstUserPageId};
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+TEST_F(ForeignKeyPlacementTest, ACrossOwnerForeignKeyIsAdmittedAndSaysWhatItCosts) {
+    ASSERT_EQ(Run("CREATE NAMESPACE ledger").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE NAMESPACE trading").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE TABLE ledger.accounts (id int64, name varchar) BTREE").substr(0, 7),
+              "CREATED");
+
+    const std::string out =
+        Run("CREATE TABLE trading.trades (id int64, account_id int64 REFERENCES accounts) BTREE");
+    // **Admitted** - the pair is legal since AH-T4, and a refusal here
+    // would be the constraint coming back.
+    ASSERT_EQ(out.substr(0, 7), "CREATED") << out;
+    EXPECT_NE(out.find("WARN"), std::string::npos) << out;
+    // Both costs, because "admitted" must not read as "free"...
+    EXPECT_NE(out.find("cross-core probe"), std::string::npos) << out;
+    EXPECT_NE(out.find("DELETE of a referenced parent row is refused"), std::string::npos) << out;
+    // ...and the one thing the user can act on.
+    EXPECT_NE(out.find("one namespace"), std::string::npos) << out;
+}
+
+TEST_F(ForeignKeyPlacementTest, AForeignKeyInsideOneNamespaceIsSilent) {
+    // The point of the advice is that following it costs nothing to say.
+    ASSERT_EQ(Run("CREATE NAMESPACE ledger").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE TABLE ledger.accounts (id int64, name varchar) BTREE").substr(0, 7),
+              "CREATED");
+
+    const std::string out =
+        Run("CREATE TABLE ledger.trades (id int64, account_id int64 REFERENCES accounts) BTREE");
+    ASSERT_EQ(out.substr(0, 7), "CREATED") << out;
+    EXPECT_EQ(out.find("WARN"), std::string::npos) << out;
+
+    // And the reason it is silent: NS10 put them on one core.
+    auto parent = boot_->catalog.FindTableOidByName("accounts");
+    auto child = boot_->catalog.FindTableOidByName("trades");
+    ASSERT_TRUE(parent.ok());
+    ASSERT_TRUE(child.ok());
+    auto parent_row = boot_->catalog.GetSysTableRow(parent.value());
+    auto child_row = boot_->catalog.GetSysTableRow(child.value());
+    ASSERT_TRUE(parent_row.ok());
+    ASSERT_TRUE(child_row.ok());
+    EXPECT_EQ(parent_row.value().owner_core, child_row.value().owner_core);
+    EXPECT_NE(parent_row.value().owner_core, catalog::kSystemCore)
+        << "a declared namespace stayed on the system core, so this proves nothing";
+}
+
 }  // namespace
 }  // namespace kds::server

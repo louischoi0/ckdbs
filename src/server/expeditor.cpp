@@ -628,9 +628,12 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             placement = catalog::PlacementPolicy::kCreatingCore;
         } else if (v.value() == "rotate") {
             placement = catalog::PlacementPolicy::kRotate;
+        } else if (v.value() == "namespace") {
+            placement = catalog::PlacementPolicy::kNamespace;
         } else {
             return Status::InvalidArgument(file.origin() + ": placement '" + v.value() +
-                                            "' is not a policy; use creating or rotate");
+                                            "' is not a policy; use creating, rotate or "
+                                            "namespace");
         }
     }
     if (file.Has("cores")) {
