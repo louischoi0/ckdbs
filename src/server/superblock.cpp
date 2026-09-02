@@ -32,7 +32,9 @@ SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds,
     SuperBlockFields f{};
     f.magic = kSuperBlockMagic;
     f.version = kSuperBlockVersion;
-    f.reserved1 = 0;
+    // Every database this build creates still has one stream per core;
+    // the cutover (AL-S1c) is what writes kSingleStream here.
+    f.log_topology = kPerCoreStreams;
     f.create_time = now_unix_seconds;
     f.last_mount_time = now_unix_seconds;
     f.wal_anchor_count = 0;
@@ -67,7 +69,15 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
                                   " is not this build's (" +
                                   std::to_string(kSuperBlockVersion) + ")");
     }
-    std::memcpy(&f.reserved1, base + kReserved1Offset, sizeof(f.reserved1));
+    std::memcpy(&f.log_topology, base + kLogTopologyOffset, sizeof(f.log_topology));
+    if (f.log_topology != kPerCoreStreams && f.log_topology != kSingleStream) {
+        // A value this build has no reading for. Refused rather than
+        // defaulted: guessing the topology guesses how many streams
+        // recovery must find.
+        return Status::Corruption("superblock: log topology " +
+                                  std::to_string(f.log_topology) +
+                                  " is neither per-core (0) nor single (1)");
+    }
     std::memcpy(&f.create_time, base + kCreateTimeOffset, sizeof(f.create_time));
     std::memcpy(&f.last_mount_time, base + kLastMountTimeOffset, sizeof(f.last_mount_time));
     std::memcpy(&f.wal_anchor_count, base + kWalAnchorCountOffset, sizeof(f.wal_anchor_count));
@@ -132,7 +142,8 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
 
     std::memcpy(base + kMagicOffset, &fields_.magic, sizeof(fields_.magic));
     std::memcpy(base + kVersionOffset, &fields_.version, sizeof(fields_.version));
-    std::memcpy(base + kReserved1Offset, &fields_.reserved1, sizeof(fields_.reserved1));
+    std::memcpy(base + kLogTopologyOffset, &fields_.log_topology,
+                sizeof(fields_.log_topology));
     std::memcpy(base + kCreateTimeOffset, &fields_.create_time, sizeof(fields_.create_time));
     std::memcpy(base + kLastMountTimeOffset, &fields_.last_mount_time,
                 sizeof(fields_.last_mount_time));
@@ -184,6 +195,14 @@ Status SuperBlock::SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& an
     if (core_id >= kMaxWalCores) {
         return Status::InvalidArgument("superblock: WAL anchor core_id " +
                                        std::to_string(core_id) + " is at or above kMaxWalCores");
+    }
+    if (single_stream() && core_id != 0) {
+        // One stream, one place recovery starts (superblock.hpp). A peer's
+        // checkpoint reaches slot 0 through its publisher's fold, never
+        // through a slot of its own.
+        return Status::InvalidArgument(
+            "superblock: this database has one WAL stream, so core " + std::to_string(core_id) +
+            " has no anchor slot; publish the fold into slot 0 instead");
     }
     wal_anchors_[core_id] = anchor;
     if (core_id + 1 > fields_.wal_anchor_count) {

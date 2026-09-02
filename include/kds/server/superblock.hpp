@@ -195,7 +195,36 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // gated on D2) - the bump is not for what it holds but for where it sits,
 // and landing the epoch now, before R6's recovery fixtures exist, is the
 // ordering instructions/v2.4.0/range-foundation.md §0 argues costs nothing.
+// **No bump on 2026-09-02, and this one is worth recording because the
+// work order asked for one.** AR0 M0 (`instructions/v3.0.0/workorder-al-m0-single-wal.md`
+// AL-R3) called for a format event to record the log topology. It is not
+// one: the field lands in `reserved1`, the u32 at offset 12 that
+// `CreateFresh` has always zeroed and `Encode` has always written, and
+// **0 is exactly the value that means "per-core streams"** - what every
+// image ever written in fact has. That is the `page_header.hpp` precedent
+// verbatim (`relayout_epoch` and `owner_oid` consumed two reserved words
+// the same way, "every page ever written already carries 0 here, and 0
+// reads as never relayouted - so the arrival is not a format event").
+//
+// The bump D14 does owe arrives with the cutover and the stamp change
+// (AL-S1c, AL-S5), where the *pages* stop meaning what they meant. Landing
+// a version event here, ahead of any change in meaning, would refuse every
+// existing volume for the length of three stages and buy nothing.
 inline constexpr std::uint32_t kSuperBlockVersion = 16;
+
+// ---- How many WAL streams this database's log is (AR0 M0) --------------
+//
+// A durable fact about the volume, not a setting: it decides how many
+// streams recovery must find and therefore how the anchor table below is
+// read. `kPerCoreStreams` is 0 because that is what every image written
+// before AR0 M0 holds in this word, and it is what those images are.
+//
+// Nothing writes `kSingleStream` yet - the cutover (AL-S1c) does, at
+// bootstrap, and only for a database created by that build or later. So
+// every arm below that reads `kSingleStream` is unreachable in a running
+// instance today and is exercised at this layer's own tests.
+inline constexpr std::uint32_t kPerCoreStreams = 0;
+inline constexpr std::uint32_t kSingleStream = 1;
 
 // ---- On-disk field layout ----------------------------------------------
 
@@ -206,7 +235,10 @@ inline constexpr std::size_t kSuperBlockBodyOffset = storage::kPageBodyOffset;
 struct SuperBlockFields {
     std::uint64_t magic;
     std::uint32_t version;
-    std::uint32_t reserved1;
+    // Was `reserved1`; `kPerCoreStreams` (0) or `kSingleStream`, consumed
+    // in place on 2026-09-02 without a format event for the reason the
+    // version list above gives.
+    std::uint32_t log_topology;
     std::uint64_t create_time;       // unix seconds
     std::uint64_t last_mount_time;
     std::uint32_t wal_anchor_count;  // anchor slots ever published into
@@ -297,7 +329,7 @@ struct SuperBlockFields {
 
 inline constexpr std::size_t kMagicOffset = 0;
 inline constexpr std::size_t kVersionOffset = 8;
-inline constexpr std::size_t kReserved1Offset = 12;
+inline constexpr std::size_t kLogTopologyOffset = 12;
 inline constexpr std::size_t kCreateTimeOffset = 16;
 inline constexpr std::size_t kLastMountTimeOffset = 24;
 inline constexpr std::size_t kWalAnchorCountOffset = 32;
@@ -305,7 +337,7 @@ inline constexpr std::size_t kInlineCellWidthOffset = 36;
 
 static_assert(offsetof(SuperBlockFields, magic) == kMagicOffset);
 static_assert(offsetof(SuperBlockFields, version) == kVersionOffset);
-static_assert(offsetof(SuperBlockFields, reserved1) == kReserved1Offset);
+static_assert(offsetof(SuperBlockFields, log_topology) == kLogTopologyOffset);
 static_assert(offsetof(SuperBlockFields, create_time) == kCreateTimeOffset);
 static_assert(offsetof(SuperBlockFields, last_mount_time) == kLastMountTimeOffset);
 static_assert(offsetof(SuperBlockFields, wal_anchor_count) == kWalAnchorCountOffset);
@@ -490,7 +522,21 @@ public:
     // 8-3's ordering requirement. Fails with InvalidArgument for a core_id
     // at or above kMaxWalCores; refusing beats wrapping, which would let
     // one core's anchor silently overwrite another's.
+    //
+    // **Under `kSingleStream` the only legal slot is 0** (AR0 M0, AL-R3):
+    // there is one stream, so there is one place recovery starts, and a
+    // per-core anchor would be a second answer to a question with one. A
+    // peer core's completed checkpoint reaches slot 0 through the fold its
+    // publisher performs - core 0 keeps the per-core numbers in memory and
+    // writes the minimum here - so the refusal is what keeps a caller from
+    // bypassing that fold rather than a limitation.
     Status SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& anchor) noexcept;
+
+    // How many WAL streams this database's log is: `kPerCoreStreams` or
+    // `kSingleStream`. A durable fact recorded at bootstrap, never a
+    // setting a mount may change.
+    std::uint32_t log_topology() const noexcept { return fields_.log_topology; }
+    bool single_stream() const noexcept { return fields_.log_topology == kSingleStream; }
 
     // Stamps last_mount_time to `now_unix_seconds` (call once per boot,
     // after Decode()/CreateFresh() succeeds).

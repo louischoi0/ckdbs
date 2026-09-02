@@ -64,6 +64,107 @@ TEST(SuperBlockTest, EncodeZeroesReservedTail) {
     }
 }
 
+// ---- The log topology (AR0 M0, work order AL's AL-R3) --------------------
+
+// Builds the page an existing database has: a superblock this build wrote,
+// with the topology word forced to what every image predating the field
+// holds. Poking the byte rather than calling a setter is deliberate -
+// nothing in the API can set the topology yet, and the compatibility claim
+// is about *bytes on a page*, not about a value in a struct.
+PageBuf PageWithTopology(std::uint32_t topology) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf;
+    sb.Encode(AsSpan(buf));
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kLogTopologyOffset, &topology,
+                sizeof(topology));
+    return buf;
+}
+
+std::uint32_t TopologyByteOf(const PageBuf& buf) {
+    std::uint32_t out = 0;
+    std::memcpy(&out, buf.data() + kSuperBlockBodyOffset + kLogTopologyOffset, sizeof(out));
+    return out;
+}
+
+// The whole reason this needed no format event, and the claim is about the
+// *byte*: the word this build now writes the topology into is the word
+// every superblock ever written already holds zero in, and zero is what a
+// per-core-stream database is. So the assertion is on the encoded page,
+// not on a value poked back in - that would prove nothing.
+TEST(SuperBlockTopologyTest, AFreshImagesTopologyByteIsTheZeroEveryOldImageHolds) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf;
+    buf.fill(std::byte{0xAB});  // so a byte left unwritten would fail here
+    sb.Encode(AsSpan(buf));
+
+    EXPECT_EQ(TopologyByteOf(buf), 0u);
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().log_topology(), kPerCoreStreams);
+    EXPECT_FALSE(decoded.value().single_stream());
+}
+
+TEST(SuperBlockTopologyTest, AFreshDatabaseIsPerCoreUntilTheCutoverSaysOtherwise) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    EXPECT_EQ(sb.log_topology(), kPerCoreStreams);
+    EXPECT_FALSE(sb.single_stream());
+}
+
+// Decode *and* re-encode. Reading alone would pass on an `Encode` that
+// wrote a hard zero, since the value under test would be the one poked
+// into the buffer rather than the one the encoder produced.
+TEST(SuperBlockTopologyTest, ANonZeroTopologySurvivesBothHalvesOfTheCodec) {
+    PageBuf buf = PageWithTopology(kSingleStream);
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_TRUE(decoded.value().single_stream());
+
+    PageBuf again;
+    again.fill(std::byte{0xAB});
+    decoded.value().Encode(AsSpan(again));
+    EXPECT_EQ(TopologyByteOf(again), kSingleStream) << "Encode dropped the topology";
+}
+
+// Guessing the topology would guess how many streams recovery must find.
+TEST(SuperBlockTopologyTest, AnUnknownTopologyIsRefusedRatherThanDefaulted) {
+    PageBuf buf = PageWithTopology(7);
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    EXPECT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(decoded.status().message().find("topology"), std::string::npos);
+}
+
+// One stream, one place recovery starts. A peer's checkpoint reaches slot 0
+// through its publisher's fold, never through a slot of its own.
+TEST(SuperBlockTopologyTest, UnderOneStreamOnlySlotZeroTakesAnAnchor) {
+    PageBuf buf = PageWithTopology(kSingleStream);
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok());
+    SuperBlock one = std::move(decoded.value());
+
+    EXPECT_TRUE(one.SetWalAnchor(0, WalAnchorFields{4096, 8192, 12288, 0}).ok());
+
+    Status refused = one.SetWalAnchor(1, WalAnchorFields{1, 2, 3, 0});
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(refused.message().find("one WAL stream"), std::string::npos);
+
+    // And the slot a peer tried to take is untouched.
+    EXPECT_EQ(one.wal_anchor(1).checkpoint_lsn, 0u);
+}
+
+// The per-core arm is unchanged, which is what keeps every core's
+// checkpoint working until the cutover.
+TEST(SuperBlockTopologyTest, UnderPerCoreStreamsEveryCoreStillTakesItsOwnAnchor) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    EXPECT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{1, 2, 3, 0}).ok());
+    EXPECT_TRUE(sb.SetWalAnchor(3, WalAnchorFields{4, 5, 6, 0}).ok());
+    EXPECT_EQ(sb.wal_anchor(3).checkpoint_lsn, 4u);
+}
+
 // ---- Per-core WAL anchors (wal.md section 14-3) --------------------------
 
 TEST(SuperBlockWalAnchorTest, FreshDatabaseHasNoAnchors) {
