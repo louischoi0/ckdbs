@@ -320,33 +320,36 @@ stands, and AF is the reason it can — the parallelism a split would have
 found inside one relation is found between groups of relations instead,
 with the grouping declared by the person who knows it.
 
-**What co-location costs on the write side, measured 2026-09-02.** NS10 is
-stated as a read-side win and it is one; the write side has a cost nothing
-had priced. `group` durability (D2) amortises a commit's fsync over the
-concurrent committers **on one core**, and a batch of one is a batch. Putting
-a wired group's relations on one core is exactly what can leave that core
-with a single committing session, where a placement that scattered them would
-have given it two — so a co-located group's load can pay **twice the fsyncs**.
-Measured at 2.35× on a seven-group load under `group`, collapsing to 1.02×
-under `relaxed`, which is what identifies the sync as the whole of it
-(`bench/v2.8.0/results-af-t5-namespace-grouping-*` §3b).
+**What co-location costs on the write side, and what is still unknown about
+it.** NS10 is stated as a read-side win and it is one. On the write side
+AF-T5 measured a real cost — a seven-group load ran 2.35x slower with the
+groups co-located than with them scattered, collapsing to 1.02x under
+`relaxed`, so it is sync-related
+(`bench/v2.8.0/results-af-t5-namespace-grouping-*`). **The mechanism first
+published for it was wrong and is retracted**: it was attributed to `group`
+durability's batch falling to one on a core with a single committing
+session, and a direct measurement then found the batch is **1.000 on every
+core at every concurrency** — there is no batch for a placement to lose
+(§3c, and `known-gaps.md` carries it as a D2 finding of its own).
 
-Three things follow, and none of them changes NS10's rule:
+So the honest statement of NS10's write-side cost is:
 
-- It is **not a namespace mechanism**. Any placement reducing sessions per
-  core does it; a namespace is simply the thing that makes it reachable on
-  purpose, and the shipped default is the co-locating one.
-- **The number it depends on is reported since 2026-09-02**, and it is the
-  batch rather than a session count: `SHOW META`'s `wal_mean_group_batch`,
-  where **`1.000` means every commit on this core paid its own device
-  sync**. A count of attached sessions would have answered the opposite
-  question - under a single listener they all sit on core 0 while the peers
-  pay the un-batched syncs - so the batch is the fact and the session count
-  is the proxy that inverts. Reading a *peer's* batch still needs a session
-  there (`peer_listeners = on`), because `SHOW META` answers from the
-  session's core.
-- It is a **throughput** cost on a write phase, not a correctness one, and
-  it does not touch the read side the grouping exists to accelerate.
+- **It is real and measured**, at 2.35x on one load phase at seven groups.
+- **Its mechanism is unknown.** Ruled out: group-commit batching, and
+  sync *count* per core (with no batching anywhere, both layouts perform one
+  sync per commit and their per-core commit counts are equal). An untested
+  hypothesis - a core serving one synchronous session idles for a client
+  round trip after every reply, where a core serving two does not - is
+  recorded at §3c and needs per-core reactor utilisation to settle.
+- **It does not touch the read side** the grouping exists to accelerate,
+  and it is a throughput cost, never a correctness one.
+
+**What an operator can see**: `SHOW META`'s `wal_mean_group_batch` (added
+2026-09-02), core-local, where `1.000` means every commit on this core paid
+its own device sync. Reading a *peer's* needs a session there
+(`peer_listeners = on`), which is verified rather than assumed
+(`bench/peer_group_batch_probe.py`). Today it reads `1.000` everywhere,
+which is the D2 finding above rather than anything about namespaces.
 
 **The best practice is the point, not a footnote** (AF-2). Relations that
 are joined, foreign-keyed or read together belong in one namespace, so the

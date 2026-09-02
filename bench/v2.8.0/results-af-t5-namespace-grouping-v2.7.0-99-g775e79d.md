@@ -204,7 +204,19 @@ different reps, so this is host noise rather than a within-rep effect, and
 the medians reported above exclude both. The `namespace` outlier is also
 where g7-c4's 13.2 ms p100 comes from.
 
-### 3b. The load anomaly, diagnosed: a batch of one
+### 3b. The load anomaly — **this section's mechanism is retracted**
+
+> **RETRACTED 2026-09-02, the same day it was written.** §3b explained
+> g7-c8's load gap as `group` durability's batch falling to one on a core
+> with a single committing session. **A direct measurement falsifies it**
+> (`bench/peer_group_batch_probe.py`, archived beside this file): the batch
+> is **1.000 on every core at every concurrency measured** — one session or
+> two, peer core or core 0 — so a placement cannot have lost a batching it
+> never had. The measured facts below stand; the *reason* given for them
+> does not, and g7-c8's 2.35× returns to **unexplained**. §3c is the
+> retraction and what replaced it.
+
+### 3b (as written, mechanism false): a batch of one
 
 §3a reported g7-c8's load phase at 29.7 s under `namespace` against 13.4 s
 under `rotate` and called it unexplained. It is explained, and the cause is
@@ -261,6 +273,63 @@ reads 0.969× over these 3 reps against 0.900× over §3a's 5 — so the
 *throughput* loss at one group per writer core is smaller than §3a's number
 suggests and sits close to parity. The direction is unchanged; the size was
 noise-dominated, as §3a's overlapping ranges already warned.
+
+### 3c. What the retraction found instead: D2 forms no batch at all
+
+`SHOW META` gained `wal_group_commits` / `wal_group_batches` /
+`wal_mean_group_batch` so §3b's claim could be *seen* rather than inferred.
+Pointing it at the claim killed it, and the replacement finding is larger.
+
+**The measurement.** One namespace's two relations, co-located on one core by
+NS10; `peer_listeners = on` so a session can be accepted on that core;
+400 inserts from one session, then 400 each from two sessions committing at
+the same time. Same core, same relations, same statement count, same class —
+the arms differ only in how many sessions commit at once.
+
+| owner core | placement | sessions committing | commits | batches | syncs | mean batch | commits/s |
+|---|---|---|---|---|---|---|---|
+| 1 (peer) | `namespace` | 1 | 400 | 400 | 400 | **1.000** | 860 |
+| 1 (peer) | `namespace` | 2 | 800 | 800 | 800 | **1.000** | 909 |
+| 0 | `creating` | 1 | 400 | 400 | 400 | **1.000** | 297 |
+| 0 | `creating` | 2 | 800 | 800 | 800 | **1.000** | 389 |
+
+**Every D2 commit performs its own device sync, whatever the concurrency and
+whichever core.** Two concurrent sessions do not halve the syncs and do not
+raise throughput per commit — they take twice as long for twice the work.
+`durability = group`, the shipped default, is paying `strict`'s device cost.
+
+**And the source says why, in its own comment.** A D2 commit stages its
+record and the dispatcher then drains **inline, on the dispatching thread**,
+immediately (`command_dispatcher.cpp`): *"Inline, on this thread: the batch
+is whatever happened to be staged already, which with no scheduler is this
+commit alone."* A batch of more than one therefore needs a second commit to
+be staged **between** the first's append and its drain — and the reactor
+does not yield in that window. So the batch is structurally one under any
+workload that commits through this path, which is what the four rows above
+show from the outside.
+
+**What this does to §3b.** The batching mechanism is gone, so g7-c8's 2.35×
+is unexplained again. What the retraction *does* rule out is worth keeping,
+because it is what a next attempt should not re-try:
+
+- it is **not** group-commit batching (no batch exists to lose);
+- it is **not** sync *count* per core — with no batching anywhere, both arms
+  perform one sync per commit, and the per-core commit counts are equal;
+- it **is** sync-related, since `relaxed` collapses the gap to 1.02×.
+
+**A hypothesis, labelled as one because this section has already published a
+wrong mechanism once.** Under `namespace` a core serves exactly one
+synchronous session, so after each reply it idles for a full client round
+trip; under `rotate` two sessions target each core, so its queue is rarely
+empty. Equal syncs, unequal *idle*. That is consistent with everything
+measured — including `relaxed`, where service time collapses and both arms
+become round-trip-bound and equal — and **it is not measured**. Confirming
+it needs per-core reactor utilisation during the load phase, which
+`SHOW META`'s scheduling-group accounting could give and this probe does not.
+
+**What survives and is worth keeping.** `wal_mean_group_batch` is more
+useful after this, not less: it is the field that showed a documented
+mechanism was not happening, and `1.000` everywhere is the standing evidence.
 
 ---
 

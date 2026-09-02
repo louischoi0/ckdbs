@@ -2790,29 +2790,32 @@ do, and one thing it does that nobody has decided:
   which side of that they are on. Two things left unmeasured: anything past
   2.33 groups per writer core (one point, not a curve), and the row-count
   axis at that sizing.
-- **Co-locating a group can double its write workload's fsync count, and
-  the shipped placement is the one that co-locates.** Diagnosed 2026-09-02
-  (`results-af-t5-namespace-grouping-*` §3b): `group` durability amortises a
-  commit's fsync over the concurrent committers **on one core**, and *"a
-  batch of one is a batch"* (`kds.conf.sample`). A placement that puts a
-  wired group's relations together can leave a core serving exactly one
-  committing session, which halves the batch against a placement that
-  scatters them — measured at **2.35× on the load phase** under `group` and
-  **1.02× under `relaxed`**, with the cost tracking sessions-per-core
-  monotonically (7 → 12.0 s, 2 → 13.5 s, 1 → 31.9 s).
-  ~~**Nothing in the engine reports sessions per core**~~ — **exposed
-  2026-09-02**: `SHOW META` now prints `wal_group_commits`,
-  `wal_group_batches` and `wal_mean_group_batch`, and **`1.000` is the
-  cliff**. The batch is the quantity rather than a session count, and
-  deliberately so: a count of *attached* sessions puts them all on core 0
-  under a single listener while the peers are the cores paying the
-  un-batched syncs, because a shipped write commits on its relation's
-  owner. **What is still awkward is reading a peer's**: `SHOW META` answers
-  from the session's core, so a peer's batch needs a session there
-  (`peer_listeners = on`). Not a correctness problem and not
-  namespace-specific in mechanism; it is namespace-specific in
-  *reachability*, because co-location is what AF exists to do. Unmeasured:
-  how the cost scales past three points.
+- **`durability = group` forms no batch, so D2 pays D1's device cost.**
+  Found 2026-09-02 by `bench/peer_group_batch_probe.py`
+  (`bench/v2.8.0/results-af-t5-namespace-grouping-*` §3c) and confirmed in
+  source. `SHOW META`'s `wal_mean_group_batch` reads **1.000 on every core
+  at every concurrency measured** — one session or two, peer core or core 0
+  — and two concurrent sessions take twice as long for twice the work
+  rather than sharing a sync. The reason is that a D2 commit drains
+  **inline on the dispatching thread** right after staging its record
+  (`command_dispatcher.cpp`: *"the batch is whatever happened to be staged
+  already, which with no scheduler is this commit alone"*), and the reactor
+  does not yield between the append and the drain, so a second commit can
+  never join the first. `kds.conf.sample` describes D2 as *"one fsync
+  amortized over a batch of concurrent committers"*, which is the design and
+  not the behaviour. **Not a correctness problem** — the durability point is
+  unchanged and D2 is at worst as safe as D1 — and not measured beyond two
+  concurrent sessions on one core, which is where a batch should already
+  have formed.
+- **AF-T5's g7-c8 load gap is unexplained again** — `namespace` 29.7 s
+  against `rotate` 13.4 s on the load phase, 2.35× on a re-run, collapsing
+  to 1.02× under `relaxed`. It was explained as group-commit batching on
+  2026-09-02 and **that explanation was retracted the same day** by the
+  measurement above: there is no batch to lose. What the retraction rules
+  out is recorded at §3c along with an untested queueing hypothesis (a core
+  serving one synchronous session idles for a client round trip after every
+  reply; a core serving two does not). Confirming or killing that needs
+  per-core reactor utilisation during the phase.
 - **No `sim/` cell covers a namespace.** The generator creates relations
   in `public` and nothing declares one, so the crash/restart harness has
   never mounted a file with a user namespace in it. The rows involved are
