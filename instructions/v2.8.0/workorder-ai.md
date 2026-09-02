@@ -242,7 +242,7 @@ comparison.
 | AI-T0 | **Done 2026-09-02.** Eight sites surveyed, H-AI3 **held**: no site outside the gate descends a relation this core does not own. Table below |
 | AI-T1 | **Complete 2026-09-02.** The lift itself and three of AI-R5's placements landed 2026-09-01 at `956f00d`; the remainder lands here — the one surviving stale contract claim corrected, H-AI2 answered by source-read, and AI-R3's re-point built. See "AI-T1's remainder" below |
 | AI-T2 | **Built 2026-09-02.** The end-to-end cross-owner INSERT runs in process, autocommit and inside a transaction, and the four defects the cell found are fixed on the operator's rulings (F1 F2 F3 F4). Contract in `foreign-keys.md` §2b. H-AI1's three remaining fixtures (absent, retired and in-flight parent) are **not built** — the present-parent path and the intent's whole life are. See the three slice sections below |
-| AI-T3 | not started |
+| AI-T3 | **Done 2026-09-02.** `bench/v2.8.0/results-ai-t3-fk-crossing-cost-v2.7.0-95-g341e9be.md`. The lift costs nothing measurable and the file says so with the noise floor; the crossing costs **+69.5 µs (+5.8%)** under the shipped durability class and **+56.8 µs (+71.5%)** with the device out, counted rather than inferred through a new `SHOW META` block. See "AI-T3" below |
 
 ### The order arrived after its own AI-T1
 
@@ -473,3 +473,57 @@ the lift's own overhead on a colocated peer write is still expected to be
 unmeasurable (two `empty()` tests), but the *interesting* number is no
 longer that — it is what the autocommit decide costs a cross-owner INSERT,
 since that round trip did not exist before this slice.
+
+### AI-T3 — the measurement, and the instrument it needed first
+
+**An instrument before a number** (`341e9be`). `SHOW META` gains one
+foreign-key block — `fk_probes_sent`, `fk_intents_granted`,
+`fk_intents_released`, `fk_intents_live`, `fk_intent_refusals` — printed
+only where something happened. XD0's rule on the leg AI added, and it is
+not ceremony: a latency that *assumed* a probe crossed cannot tell a
+crossing from a colocated statement that never left the core, and telling
+those two apart is the whole subject. Every crossing block reports 400
+rounds for 400 statements and every colocated block reports 0; the driver
+fails the run on any other reading.
+
+**M1, the lift itself: no cost, and the file states the floor rather than
+asserting the conclusion.** Arms are two builds — `546ddc8` pre-lift and
+`341e9be` — alternated block by block, writing to a peer-owned relation
+with **no foreign key**, which is the population that gained nothing from
+the lift and would have paid for it. Post-lift is 4.3 µs (4.5%) *faster*
+at p50, which two `empty()` calls cannot buy; each arm's own block-to-block
+spread is 6.7 µs, larger than the difference between them. Unmeasurable, as
+AI-T3 predicted, now with the numbers that say so.
+
+**M2, the crossing: +69.5 µs (+5.8%) shipped, +56.8 µs (+71.5%) with the
+device out.** Same statement, same parent relation, same parent row; the
+only difference is whether the parent lives on the child's core. The two
+rounds cost about 57 µs of ring, and under `group` the write is already
+waiting on a device, so that lands as under 6%.
+
+**The number that gives it meaning is XD's.** A cross-owner *commit* costs
+3.077× a one-owner one, because it adds device syncs. The foreign key's
+crossing adds two ring round trips and **no sync at all** — the intent-only
+participant writes no `TXN_PREPARE` and, since F4, is not asked to prepare
+— which is why it costs 5.8% where the commit costs 208%.
+
+**And one finding nobody asked for**: under `relaxed` the crossing's **p99
+is 13× the colocated arm's** where its p50 is 1.7×, with zero retries. A
+small population of statements waits far longer than the median one.
+Named, not diagnosed — AH-T6's leg attribution is the measurement that can
+say which of the two rounds it is, and it is recorded as owed there.
+
+## What work order AI closes, and what it hands on
+
+Closed: AI-R1..AI-R6 ruled and enacted; AI-T0's survey (H-AI3 holds);
+AI-T1's lift and its contract corrections; AI-T2's end-to-end cell and the
+four defects it found, with the contract in `foreign-keys.md` §2b; AI-T3's
+instrument and measurement. H-AI2 holds by source-read, H-AI4 by the
+re-pointed A5 cell, H-AI1 **split** — the present-parent path holds end to
+end, the three verdict fixtures are not built.
+
+Handed to **AH-T6**, which needs the same fixtures for its own matrix:
+H-AI1's absent, retired and in-flight parent cells; the probe-versus-decide
+leg attribution; the transaction path's own numbers; `strict`; more than
+one distinct owner per statement; and the p99 tail §4 of the results file
+names.
