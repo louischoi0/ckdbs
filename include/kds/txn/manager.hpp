@@ -9,6 +9,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/instance_visibility.hpp"
 #include "kds/txn/read_view.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -263,9 +264,23 @@ private:
 class TransactionManager final : public wal::ActiveTransactions {
 public:
     // `wal` may be null - the unlogged path the socket-free tests run on.
+    //
+    // `visibility` is the instance's shared visibility state (AN-R1), null
+    // wherever there is no instance to share - every fixture, and the
+    // single-manager tools. **A manager given one publishes what its core
+    // knows and reads nothing back**: at AN-S1 the predicate is still the
+    // per-core `ReadView`, so this wiring is additive and the suite is what
+    // proves it. `core` names the slot this manager owns.
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
-                       wal::WalManager* wal = nullptr) noexcept
-        : ids_(ids), undo_(undo), store_(store), wal_(wal) {
+                       wal::WalManager* wal = nullptr,
+                       InstanceVisibility* visibility = nullptr,
+                       std::uint32_t core = 0) noexcept
+        : ids_(ids), undo_(undo), store_(store), wal_(wal), visibility_(visibility),
+          core_(core) {
+        // Before any transaction runs on this core. The floor may not rise
+        // past a cursor it has never seen, so a core that has not published
+        // one is a core the floor treats as unattached (instance_visibility.hpp).
+        PublishCoreBounds();
         // Arms the undo purge (docs/inflight/in-progress/workplan-undo-purge.md): the log's
         // only appender is this manager, so `this` is alive at every call
         // by construction. Structural, like the snapshot lease - a
@@ -533,10 +548,19 @@ private:
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);
 
+    // Republishes this core's two id-valued bounds into the instance slot:
+    // the sequence's cursor and the oldest transaction still running. Both
+    // move on every Begin, Commit and Abort, and a no-op with no
+    // `visibility_`. The snapshot bound is AN-S2's - a read view carries no
+    // LSN yet.
+    void PublishCoreBounds() noexcept;
+
     TrxIdSequence& ids_;
     UndoLog& undo_;
     storage::PageStore& store_;
     wal::WalManager* wal_;
+    InstanceVisibility* visibility_;
+    std::uint32_t core_;
 
     // Live transactions, in id order. A vector because the set is bounded
     // by kMaxTrackedLiveTxns and a scan over 64 entries beats a hash on

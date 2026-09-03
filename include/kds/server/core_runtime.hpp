@@ -267,6 +267,15 @@ public:
         // transport are.
         wal::WalStream* shared_stream = nullptr;
         wal::WalWriter* shared_writer = nullptr;
+
+        // **The instance's visibility state** (AN-R1), borrowed from the
+        // expeditor on the same terms as the two above and null for the
+        // same reason: it records commit order as a commit record's LSN,
+        // and under per-core streams there is no such order across cores.
+        // Null is also every fixture's answer - a `CoreRuntime` built
+        // without one keeps the per-core `ReadView`, which at AN-S1 is
+        // what every core is still reading anyway.
+        txn::InstanceVisibility* visibility = nullptr;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and

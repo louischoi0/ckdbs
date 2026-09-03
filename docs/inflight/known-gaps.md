@@ -80,6 +80,27 @@ statement about an engine that no longer exists; re-verify or strike it.
   been running against a volume they contradicted. See the fixture entry
   under Testing.
 
+- **The read view and the read horizon are both per-core, and one spec
+  sentence asserts the opposite.** Verified at `004f949`. `ReadView::Visible`
+  (`include/kds/txn/read_view.hpp:81-90`) decides visibility from a bound on
+  transaction ids, and `TransactionManager::ReadHorizon()`
+  (`src/txn/manager.cpp:559-579`) walks this core's live set and reader slots
+  only. Both are sound only while a reader reads its own core's versions —
+  which `txn.md` §4.1 states of the horizon and states nowhere of the
+  predicate — and that holds today only because a peer reaches another core's
+  rows by shipping the statement. A shared buffer pool ends it, and the
+  failure is a dirty read and a purge that outruns a reader, not an error.
+
+  **`docs/spec/crosscore.md:288-290` states the false premise as a fact**:
+  *"the trx-id domain is global, so ids compare cleanly"*. Ids are leased to
+  each core in disjoint blocks (`include/kds/txn/trx_id.hpp:74`,
+  `:153-155`), so issue order across cores is not id order and no bound on
+  ids orders commits between them. That sentence is the gap, written down as
+  a guarantee.
+
+  Owner: `docs/spec/txn.md` §4.1. The source read and the mechanism that
+  closes it are `instructions/v3.0.0/workorder-an-read-view.md` AN-3 E.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own

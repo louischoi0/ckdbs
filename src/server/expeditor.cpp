@@ -983,8 +983,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     Expeditor* self = expeditor.get();
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
                                 [self] { return self->PersistSuperBlock(); });
+    // Before the manager that publishes into it. Under per-core streams
+    // there is no comparable commit order to record, so there is nothing
+    // here and every manager keeps the per-core view it has (AN-R1).
+    if (expeditor->database_->superblock.single_stream()) expeditor->visibility_.emplace();
     expeditor->txn_manager_.emplace(*expeditor->trx_ids_, *expeditor->undo_log_,
-                                    *expeditor->store_, &*expeditor->wal_);
+                                    *expeditor->store_, &*expeditor->wal_,
+                                    expeditor->visibility_ ? &*expeditor->visibility_ : nullptr,
+                                    /*core=*/0);
 
     expeditor->dispatcher_.emplace(
         expeditor->database_->superblock, expeditor->database_->catalog, *expeditor->store_,
@@ -1588,6 +1594,10 @@ Status Expeditor::Serve() {
                 core_config.shared_stream = wal_->stream();
                 core_config.shared_writer = wal_->writer();
             }
+            // Borrowed on the same terms and for the same topology reason
+            // (AN-R1). Null under per-core streams, where this peer's LSNs
+            // are comparable with nothing else.
+            core_config.visibility = visibility_ ? &*visibility_ : nullptr;
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

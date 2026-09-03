@@ -714,6 +714,18 @@ private:
     // member here follows. `ids_` writes the superblock through a callback
     // rather than owning the page, because what "durable" means for the
     // superblock belongs to this class (Sync()), not to the sequence.
+    // The instance's shared visibility state (AN-R1), borrowed by core 0's
+    // own manager and by every peer's. Declared **first** in this block and
+    // therefore destroyed last, after `cores_` and after `txn_manager_` -
+    // the same rule `wal_` follows for the stream peers append through.
+    //
+    // Present only under `kSingleStream`: it records commit order as a
+    // commit record's LSN, and under per-core streams LSNs are stream-local
+    // and never compared across streams (`wal.md` §3), so there would be no
+    // order to record. A pre-M0 volume keeps the per-core `ReadView` it has
+    // (`ratification-an-commit-order.md` AN-D4's fourth constraint).
+    std::optional<txn::InstanceVisibility> visibility_;
+
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;

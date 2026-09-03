@@ -333,7 +333,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The undo log is already built - recovery wrote its compensations
     // through it above, before this stack existed.
     runtime->txn_manager_.emplace(*runtime->trx_ids_, *runtime->undo_log_, *runtime->store_,
-                                  &*runtime->wal_);
+                                  &*runtime->wal_, config.visibility, config.core_id);
 
     // Recording off, deliberately and not as a default - see the header:
     // Waystone is advisory, so a peer returns identical rows without it and

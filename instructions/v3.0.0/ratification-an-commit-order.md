@@ -6,11 +6,15 @@ Drafted 2026-09-03 by CLA on `worktree-commit-order-ratification` at
 against the tree. AN-7 records what changed and why, because three of the
 four were the document reading a spec at `d15b5ac` while claiming `f027a3c`.
 
-**Awaits the operator's per-ruling marks.** AR0 §5's standing rule does not
-carry this document: AN-Q3 is a `[quiet-wrong]` item in that rule's own
-sense — an implementation window whose failure is a missing row rather than
-an error — and AN-Q5 reopens a policy decided against a smaller cost. Both
-are named exceptions to CLA's proposals standing by default.
+**Marked 2026-09-03; see AN-D10.** AN-Q1, AN-Q2 and AN-Q4 are settled by
+the operator's mark of `workorder-an-read-view.md` AN-R7(B) and are built
+there. AN-Q3, AN-Q5 and AN-Q6 remain open and have **moved** into that work
+order as AN-R9, AN-R10 and AN-R11. AR0 §5's standing rule did not carry
+them: AN-Q3 is a `[quiet-wrong]` item in that rule's own sense — an
+implementation window whose failure is a missing row rather than an error —
+and AN-Q5 reopens a policy decided against a smaller cost. Both were named
+exceptions to CLA's proposals standing by default, and AN-Q5 is the one the
+mark was taken without.
 
 **No code changes.** AN rules on five sites across four specs (AN-D6) and
 names what a work order would then owe.
@@ -265,6 +269,34 @@ do not depend on AN alike:
 
 AN-Q5 is now load-bearing twice — for AN-D4 and for the condition D1's mark
 hangs on.
+
+## AN-D10 — The mark, and one correction it inherits
+
+Recorded 2026-09-03. The operator marked `workorder-an-read-view.md`
+AN-R7 as **(B)**, which is this document's mechanism: a scalar snapshot
+LSN over a `trx_id → commit_lsn` window above a floor. What that settles
+and where each open item went:
+
+| item | after the mark |
+|---|---|
+| AN-D1..D4, D6, D7, D9 | stand, here. AN-D4's four constraints bound the build and none moved |
+| AN-Q1 (the window and the floor) | **settled**, built at `workorder-an-read-view.md` AN-S1. **Corrected there by AN-R8** — see below |
+| AN-Q2 (the snapshot's shape) | **settled**, built at AN-S2. `kMaxTrackedLiveTxns` and `Begin`'s `OutOfSpace` retire with it, as this document said they would |
+| AN-Q4 (`ReadHorizon()` global) | **settled**, and larger than stated here: it has four trx-id-valued consumers, listed at that work order's AN-3 D, and all four change unit |
+| AN-Q3 (the publication window) | moved, as **AN-R9**. Ruled there, not closed the obvious way: publishing inside the append latch would put visibility *ahead* of durability, which `src/txn/manager.cpp:230` and `:243` show it is not today |
+| AN-Q5 (retention, global) | moved, as **AN-R10**, still open. This document proposed AN-D4 not be marked without it; the mark came first, and AN-R10 records that plainly and gates AN-S2 |
+| AN-Q6 (mint at first read) | moved, as **AN-R11**, still open and separable |
+
+**The correction.** AN-Q1 defines the floor as *"a single instance-wide trx
+id below which every transaction is resolved"*. That is not maintainable
+under the block lease, and it fails the way the trx-id high-water mark
+fails: a core holding an unspent range **below** an advanced floor can
+issue into it at any time, and the floor's branch then answers "committed"
+for a writer that is live. The floor takes a second bound — the minimum
+issue cursor across cores — and `workorder-an-read-view.md` AN-R8 carries
+it with the derivation. The *mount* case this document states is
+unaffected and was right: every core's first block is leased at or above
+the post-recovery high-water.
 
 ## AN-7 — What the review changed
 

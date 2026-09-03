@@ -18,6 +18,7 @@ add_executable(kds_tests
     undo_log_test.cpp
     visibility_test.cpp
     trx_id_test.cpp
+    instance_visibility_test.cpp
     step_vm_mvcc_test.cpp
     txn_manager_test.cpp
     txn_session_test.cpp

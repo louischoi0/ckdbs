@@ -110,6 +110,9 @@ StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
     }
 
     live_.push_back(std::move(txn));
+    // After the push: `OldestActiveTrxId()` reads `live_`, and this
+    // transaction is exactly what may have lowered it.
+    PublishCoreBounds();
     return live_.back().get();
 }
 
@@ -240,7 +243,23 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     // and reserves nothing to release - what it does do is stop bounding
     // the horizon, which is what lets a later growth recycle its pages.
     txn.trail_.clear();
+
+    // **The window entry goes in before the in-flight set lets go**
+    // (AN-R2, AN-R9). Either order gives a consistent answer, but this one
+    // has no instant where the transaction is in neither record, which is
+    // the property AN-S2's cutover leans on: the two say the same thing
+    // throughout, so where a map insert sits cannot move visibility on its
+    // own.
+    //
+    // Nothing is published on the unlogged path. There is no commit record
+    // and so no order to record, and a manager wired to an instance
+    // without a WAL is a shape AN-S2 has to rule on rather than one this
+    // line should guess at.
+    if (visibility_ != nullptr && lsn != wal::kNoLsn) {
+        visibility_->PublishCommit(txn.id_, lsn);
+    }
     txn.active_ = false;
+    PublishCoreBounds();
     return lsn;
 }
 
@@ -436,10 +455,26 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
 
     txn.trail_.clear();
     txn.active_ = false;
+    // **No window entry** (AN-R2). A loser is invisible by absence, and its
+    // page changes have just been physically undone above - which is the
+    // same fact the floor rests on, so nothing is owed here beyond letting
+    // the transaction stop holding the floor down.
+    PublishCoreBounds();
     // Undo pages are **not** freed; purge is a non-goal (section 9). Nor is
     // this transaction's undo separable from anyone else's - one page holds
     // many transactions' records (undo_log.hpp).
     return first_failure;
+}
+
+void TransactionManager::PublishCoreBounds() noexcept {
+    if (visibility_ == nullptr) return;
+    // The cursor first. `OldestActiveTrxId()` can only name an id this
+    // sequence has already issued, so publishing the cursor before the
+    // oldest live id means a concurrent reader never sees a slot claiming
+    // a live transaction at or above the point this core swears it has not
+    // reached.
+    visibility_->PublishIssueCursor(core_, ids_.peek());
+    visibility_->PublishOldestUnresolved(core_, OldestActiveTrxId());
 }
 
 std::vector<wal::CheckpointActiveTxn> TransactionManager::Snapshot() const {

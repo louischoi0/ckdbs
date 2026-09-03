@@ -37,6 +37,7 @@ add_library(kds
     src/txn/recovery_undo.cpp
     src/txn/visibility.cpp
     src/txn/trx_id.cpp
+    src/txn/instance_visibility.cpp
     src/txn/manager.cpp
     src/storage/in_memory_page_store.cpp
     src/storage/cabin_bound_page.cpp
