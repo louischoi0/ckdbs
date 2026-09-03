@@ -4,8 +4,8 @@ Written 2026-09-03 on `worktree-v3.0.0-arch-revision` at `f6ed10c`
 (`v2.7.0-157-gf6ed10c`), while M0's baseline (AL-S8) was still measuring.
 The survey below is a source read at that commit.
 
-**Status: not started, and it must not start before AL-S8's numbers are
-read.** M1 removes the structural argument `eviction.md` §1 is built on,
+**Status: AM-S0(b) is done; the rest has not started, and it must not
+start before AL-S8's numbers are read.** M1 removes the structural argument `eviction.md` §1 is built on,
 and the only honest way to remove it is to know what the per-core pool was
 worth. AM-1 says what would change that.
 
@@ -218,7 +218,7 @@ review, the full suite, sync with `origin/main` on the branch, stop.
 
 | # | Stage | Cells (definition of done) | Size |
 |---|---|---|---|
-| AM-S0 | **The assembly under test, first and alone.** Two halves, and the second was found after this order was written. (a) A cell that boots a real `Expeditor` at `cores = 2` and asserts what each core came up holding — log, attach, superblock image, recovery report, catalog cache. (b) **Rebuild `CoreRuntimeTest` so a peer attaches to core 0's shared stream**, the way `Expeditor` wires it: the fixture bootstraps a single-stream volume and then models per-core streams, a combination no instance can be in, and it currently only runs because `SetUp` overrides the topology on its copy (`docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`) | (a) the two M0 defects each reproduce against a deliberately reverted fix and are caught. (b) the override is **deleted** and `ctest -R CoreRuntime` is green — which is the whole cost of the stage, since removing it failed 123 cells at `f027a3c` and several of them assert on a peer's own recovery, which does not run under one stream. A per-core arm needs a volume that says so, and `BootstrapDatabase` has no parameter for it today | L |
+| AM-S0 | **The assembly under test, first and alone.** Two halves, and the second was found after this order was written. (a) A cell that boots a real `Expeditor` at `cores = 2` and asserts what each core came up holding — log, attach, superblock image, recovery report, catalog cache. (b) **Rebuild `CoreRuntimeTest` so a peer attaches to core 0's shared stream**, the way `Expeditor` wires it: the fixture bootstraps a single-stream volume and then models per-core streams, a combination no instance can be in, and it currently only runs because `SetUp` overrides the topology on its copy (`git show 30e0377:docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`, closed by this row) | (a) the two M0 defects each reproduce against a deliberately reverted fix and are caught. (b) the override is **deleted** and `ctest -R CoreRuntime` is green — which is the whole cost of the stage, since removing it failed 123 cells at `f027a3c` and several of them assert on a peer's own recovery, which does not run under one stream. A per-core arm needs a volume that says so, and `BootstrapDatabase` has no parameter for it today | L |
 | AM-S1 | The page latch (AM-R3): the primitive, its `cores = 1` compile-out, and its acquisition order against the WAL latch | contention cell at 8 cores; a `cores = 1` A/B showing the acquire/release pair costs nothing measurable | M |
 | AM-S2 | The shared pool: one frame table, one CLOCK hand, `buffer_pool_frames` an undivided instance total (AM-R2's `MayFault` removal here) | a page faulted on core 1 is served from the frame core 0 loaded; the boot refusal for `frames < cores` goes | L |
 | AM-S3 | Writeback and the WAL gate under sharing; EV8's new bound and counter (AM-R6) | flush-before-evict holds with two cores dirtying one page; the cross-core exhaustion counter is nonzero exactly when it should be | M |
@@ -230,4 +230,6 @@ review, the full suite, sync with `origin/main` on the branch, stop.
 
 | row | status |
 |---|---|
-| AM-S0..S6 | not started; AM-1 says why AL-S8 gates them |
+| AM-S0 (b) | **done.** The override is deleted and `ctest -R CoreRuntime` is green; the legacy cells run on `CoreRuntimePerCoreStreamTest`, over a volume `BootstrapDatabase` genuinely wrote as `kPerCoreStreams`, and the fixture keeps the `CoreRuntime` prefix so that selector still reaches them. The bug file is closed and deleted. **No engine change:** of the 23 cells the override was hiding, 19 were the rig bounding a wait by a round count where M0 made durability core 0's writer thread's `fsync`, three were legacy, and one restarted an owner without flushing the pages its own revival reads off the device. The finding worth carrying into S1-S3: **a peer's commit is now durable in wall-clock time, not on the tick that staged it**, so any test that waits for one waits on a deadline (`ForeignIndexRig::TurnUntil`) |
+| AM-S0 (a) | not started — the `Expeditor` cell at `cores = 2`, and the two M0 defects reproduced against a reverted fix |
+| AM-S1..S6 | not started; AM-1 says why AL-S8 gates them |

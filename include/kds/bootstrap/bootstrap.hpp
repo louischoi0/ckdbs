@@ -77,10 +77,12 @@ struct BootstrapResult {
 // that still mounts, and until this parameter existed the only way to
 // exercise that branch was to bootstrap a single-stream volume and then
 // overwrite its topology on a *copy* of the image - which is a combination
-// no instance can be in, and which
-// `docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`
-// records 123 cells having been written against. A legacy arm needs a
-// volume that genuinely says per-core, and this is where one comes from.
+// no instance can be in, and which 123 cells had been written against
+// (recorded while the defect stood, at
+// `git show 30e0377:docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`;
+// `tests/core_runtime_test.cpp`'s `CoreRuntimePerCoreStreamTest` is the arm
+// that closed it). A legacy arm needs a volume that genuinely says
+// per-core, and this is where one comes from.
 //
 // A caller that passes `kPerCoreStreams` is asking for a volume this build
 // would not create, and gets every per-core rule with it.

@@ -37,16 +37,14 @@ statement about an engine that no longer exists; re-verify or strike it.
   **the layer above the one both defects were found in, and it is still
   untested.**
 
+  **Its sibling entry closed at AM-S0(b)** — the fixture that bootstrapped a
+  single-stream volume and modelled a peer under per-core streams — and this
+  is the half that stays open: the layer *above* the one that fixture
+  covers. What that closure found is in
+  `instructions/v3.0.0/workorder-am-m1-shared-pool.md`'s AM-S0(b) row.
+
   Owner: no spec claims this ground. `docs/spec/sched.md` §8 and
   `docs/spec/wal.md` §16 each test their own half.
-
-- **`tests/core_runtime_test.cpp` models per-core WAL streams on a volume
-  that is single-stream.** Found at `f027a3c`, open, filed at
-  `bugs/core-runtime-fixture-models-per-core-streams.md`. The same shape as
-  the entry above — the tests model the assembly instead of running it —
-  and the cost is the same: it hides what the real wiring would refuse.
-  Handing a peer the volume's whole image surfaced it as **123 failing
-  cells at once**, every one refusing for the right reason.
 
 - **`wal_ring_full_refusals` is proved zero where it must be and unproved
   where it fires.** Verified at `f6ed10c`. Reaching it needs an append to
