@@ -1,0 +1,30 @@
+{
+  "core0_owner": {
+    "core": 0,
+    "table": "probe0",
+    "latency": {
+      "ops": 2000,
+      "p0_us": 74.1,
+      "p25_us": 314.5,
+      "p50_us": 455.9,
+      "p95_us": 1019.1,
+      "p99_us": 1358.3,
+      "max_us": 3957.8,
+      "mean_us": 516.4
+    }
+  },
+  "peer_owner": {
+    "core": 1,
+    "table": "probe_ns.probe1",
+    "latency": {
+      "ops": 2000,
+      "p0_us": 72.8,
+      "p25_us": 339.2,
+      "p50_us": 480.4,
+      "p95_us": 1039.8,
+      "p99_us": 1379.3,
+      "max_us": 2536.4,
+      "mean_us": 527.7
+    }
+  }
+}

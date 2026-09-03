@@ -121,10 +121,18 @@ under a shared pool the frame a statement waits for may be pinned by
 another core's task, and "yield and retry" is no longer bounded by this
 core's own progress. Untouched by AR0, and a real gap — AM-R6.
 
-**I. Nothing in the tree constructs an `Expeditor`** (`docs/inflight/known-gaps.md`).
-Every multi-core defect of M0 landed in exactly that hole. M1 is a
-multi-core memory-model change; the same hole is waiting for it, and
-AM-S0's first cell is closing it rather than discovering it twice.
+**I. The multi-core assembly is not under test, in two layers**
+(`docs/inflight/known-gaps.md`). No test and no `sim/` cell reaches
+`Expeditor::Open` — the only construction is production's
+`src/server/main.cpp:344`. And the layer below it is worse than untested:
+`CoreRuntimeTest` bootstraps a **single-stream** volume and models a peer
+under **per-core** streams, running today only because `SetUp` overrides
+the topology on its own copy. Removing that override failed **123 cells**
+at `f027a3c`, every refusal correct.
+
+M1 is a multi-core memory-model change and both holes are waiting for it.
+AM-S0 closes them before anything else, rather than discovering them a
+third time.
 
 ---
 
@@ -210,7 +218,7 @@ review, the full suite, sync with `origin/main` on the branch, stop.
 
 | # | Stage | Cells (definition of done) | Size |
 |---|---|---|---|
-| AM-S0 | **The Expeditor cell, first and alone.** A test that boots a real `Expeditor` at `cores = 2` and asserts what each core came up holding — log, attach, superblock copy, recovery report, catalog cache | the two M0 defects (`AL-7c`'s null log device, `AL-7e`'s peer topology) each reproduce against a deliberately reverted fix and are caught | M |
+| AM-S0 | **The assembly under test, first and alone.** Two halves, and the second was found after this order was written. (a) A cell that boots a real `Expeditor` at `cores = 2` and asserts what each core came up holding — log, attach, superblock image, recovery report, catalog cache. (b) **Rebuild `CoreRuntimeTest` so a peer attaches to core 0's shared stream**, the way `Expeditor` wires it: the fixture bootstraps a single-stream volume and then models per-core streams, a combination no instance can be in, and it currently only runs because `SetUp` overrides the topology on its copy (`docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`) | (a) the two M0 defects each reproduce against a deliberately reverted fix and are caught. (b) the override is **deleted** and `ctest -R CoreRuntime` is green — which is the whole cost of the stage, since removing it failed 123 cells at `f027a3c` and several of them assert on a peer's own recovery, which does not run under one stream. A per-core arm needs a volume that says so, and `BootstrapDatabase` has no parameter for it today | L |
 | AM-S1 | The page latch (AM-R3): the primitive, its `cores = 1` compile-out, and its acquisition order against the WAL latch | contention cell at 8 cores; a `cores = 1` A/B showing the acquire/release pair costs nothing measurable | M |
 | AM-S2 | The shared pool: one frame table, one CLOCK hand, `buffer_pool_frames` an undivided instance total (AM-R2's `MayFault` removal here) | a page faulted on core 1 is served from the frame core 0 loaded; the boot refusal for `frames < cores` goes | L |
 | AM-S3 | Writeback and the WAL gate under sharing; EV8's new bound and counter (AM-R6) | flush-before-evict holds with two cores dirtying one page; the cross-core exhaustion counter is nonzero exactly when it should be | M |
