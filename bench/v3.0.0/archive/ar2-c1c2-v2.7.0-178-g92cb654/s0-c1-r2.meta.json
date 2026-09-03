@@ -1,0 +1,9 @@
+{
+  "attempts": 1,
+  "cores_reached": [
+    0
+  ],
+  "replies": {
+    "0": "version=16 create_time=1788422709 last_mount_time=1788422709 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5437 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20672 wal_group_batches=5430 wal_mean_group_batch=3.807 wal_group_batch_max=7 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=7908731 sched_iterations=6416 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=388343 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=403647 sched_foreground_polls=41796 sched_foreground_consumed_us=403647 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7320 recovery_redo_us=6801 recovery_high_water_us=6 recovery_undo_us=0 recovery_checkpoint_us=5504 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0"
+  }
+}

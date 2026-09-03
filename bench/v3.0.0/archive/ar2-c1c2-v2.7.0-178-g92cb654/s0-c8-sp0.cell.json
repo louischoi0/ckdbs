@@ -1,0 +1,70 @@
+{
+  "cell": "s0-c8-sp0",
+  "scenario": "s0",
+  "port": 15591,
+  "cores": 8,
+  "peer_listeners": "on",
+  "range_size_ids": null,
+  "suffix": "s0c8sp0",
+  "binary": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/kds_server",
+  "precheck": {
+    "time": "2026-09-03 07:59:11 UTC",
+    "loadavg": "0.58 0.67 0.54 1/305 442426",
+    "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn",
+    "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 122615816 136300520  48% /"
+  },
+  "config": "data_file = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp0.db\nport = 15591\ncores = 8\ndurability = group\npeer_listeners = on\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/logs/s0-c8-sp0\nlog_level = warn\n",
+  "server_start": "2026-09-03 07:59:11 UTC",
+  "phases": [
+    {
+      "phase": "run",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "15591",
+        "--suffix",
+        "s0c8sp0",
+        "--users",
+        "100",
+        "--accounts-per-user",
+        "3",
+        "--assets",
+        "30",
+        "--traders",
+        "8",
+        "--txn-per-user",
+        "50",
+        "--verify",
+        "200",
+        "--seed",
+        "1",
+        "--sync",
+        "--json",
+        "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp0.json"
+      ],
+      "exit_code": 0,
+      "seconds": 13.936,
+      "stdout": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp0.run.stdout.txt"
+    }
+  ],
+  "meta_cores_reached": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "meta_attempts": 13,
+  "server_stop": {
+    "stop": "sigterm",
+    "exit_code": 0,
+    "stop_seconds": 1.116
+  },
+  "postcheck_loadavg": "1.08 0.77 0.57 1/327 442478"
+}

@@ -1,0 +1,12 @@
+created 8 relations with suffix _s2c8plon:
+  organizations_s2c8plon
+  ships_s2c8plon
+  operations_s2c8plon
+  cargos_s2c8plon
+  fees_s2c8plon
+  recipes_s2c8plon
+  freights_s2c8plon
+  charges_s2c8plon
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario2_freight.py --suffix s2c8plon [--load-only]

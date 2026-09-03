@@ -1,0 +1,32 @@
+created 8 relations with suffix _s2c8ploffr2:
+  organizations_s2c8ploffr2
+  ships_s2c8ploffr2
+  operations_s2c8ploffr2
+  cargos_s2c8ploffr2
+  fees_s2c8ploffr2
+  recipes_s2c8ploffr2
+  freights_s2c8ploffr2
+  charges_s2c8ploffr2
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario2_freight.py --suffix s2c8ploffr2
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15598  table scenario2_s2c8ploffr2
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1294.8   1160.4   1195.1   1237.4   1715.8   1715.8    1715.8     0
+load-organizations         300         0    1287.1   1062.3   1156.6   1197.4   1630.4   2468.9    7318.1     0
+load-ships                  30         0    1166.7   1051.0   1109.4   1142.5   1321.4   1336.8    1336.8     0
+load-operations            300         0    1247.5   1015.2   1142.1   1185.6   1642.3   1985.7    3305.3     0
+load-fees                   12         0    1753.3   1125.5   1240.3   1271.8   4709.7   4709.7    4709.7     0
+load-recipes                93         0    1246.1   1060.2   1160.9   1199.1   1557.0   2433.4    2433.4     0
+load-cargos               4000         0    1323.8   1020.3   1171.0   1217.8   1611.2   3718.8   29158.5     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.

@@ -1,8 +1,12 @@
 # AR2 — Architecture Revision: The Borrow Model
 
-Status: DRAFT, pending operator ratification
+Status: DRAFT, **partly ratified** — `raft-ar2-A.md` (operator,
+2026-09-03) fixes the evaluation axis, adds R13 and R14, ratifies E1, E4,
+E11, E12 and R4's refusal, defers the rest with gates, and asks for six
+amendments to this body; they are applied below and marked **(AR2-A)**
 Author: CLA, 2026-09-03, on worktree `ar2-borrow-model` against `183b956`
-(`v2.7.0-171-g183b956`)
+(`v2.7.0-171-g183b956`); amended on the same worktree at `988a698` per
+AR2-A and the C1/C2 measurements of `92cb654`
 Scope: what replaces write ownership under AR0-4 — the unit, mode, holder
 and scope of every tenancy a mutating or fencing operation takes — and
 the spec sentences that rested on a permanent owner (`crosscore.md` CC3,
@@ -11,8 +15,11 @@ NS10, `physical-optimizer.md` R6)
 Claim tags: a `path:line` citation **is** the `[source-read]` tag, at
 `183b956`, and AR2-V checks every one; `[measured]` with the
 `bench/v3.0.0/` file that holds the number, or the AR0-V row that
-attributes it; everything else `[design]`. Nothing here was measured by
-this draft.
+attributes it; everything else `[design]`. The C1 and C2 numbers in §1
+and §9 are this branch's own measurements at `92cb654`
+(`bench/v3.0.0/results-ar2-c1-colocation-v2.7.0-178-g92cb654.md`,
+`bench/v3.0.0/results-ar2-c2-spreading-v2.7.0-178-g92cb654.md`); nothing
+else here was measured by this draft.
 Relation to AR0: a refinement of AR0-4 inside M2 and M3. Nothing here
 precedes M1, and nothing here touches M1 (§9).
 Relation to AR1: one crossing, §5.1's last paragraph.
@@ -41,7 +48,11 @@ are §7, and nothing here is decided outside them.
   AR0-M5 put it (R8, E5).
 - **AR2-8** `UPDATE` and `DELETE` execute where the session is; an
   `INSERT` does so only under spreading; DDL and a named-key admission
-  still ship to core 0 (R5, R12, E7).
+  still ship to core 0 (R5, R12, E7, E13).
+- **AR2-9 (AR2-A)** A move borrows the unit whose key-space assignment it
+  changes (R13); the read borrow is at the position's finest lock unit
+  (R14). The evaluation axis is refusal → wait, flexibility, and the
+  physical optimizer's foundation — not throughput (AR2-A §1).
 
 ---
 
@@ -83,11 +94,27 @@ not have.
   attributed to the shipping hop compounding across an eight-statement
   transaction
   (`bench/v3.0.0/results-scenario2-freight-v2.7.0-157-gf6ed10c.md:62-92`).
+  **Measured by C1** on this branch at `92cb654`: with no hop at all
+  (`peer_listeners = off` at `cores = 8`) throughput returns to within
+  1.7–2.8% of `cores = 1` — 565.7 and 559.5 TPS against 575.4 — so the
+  hop is the whole 46%, not its largest part
+  (`bench/v3.0.0/results-ar2-c1-colocation-v2.7.0-178-g92cb654.md` §3, §9).
 - The cost on short autocommits: scenario 0 gains 7.6–7.7% at `cores = 8`
   (`bench/v3.0.0/results-scenario0-stockmarket-v2.7.0-157-gf6ed10c.md:80-101`).
+  **Its missing half, C2**: arming spreading so that each peer's `INSERT`
+  executes locally reverses the gain — 533.8 and 523.1 TPS against 703.9
+  with spreading off in the same session, −24% and −26% — and adds 6–7
+  refused `INSERT`s per 10,000 while a range opens
+  (`bench/v3.0.0/results-ar2-c2-spreading-v2.7.0-178-g92cb654.md` §3, §5, §10).
 - A peer writing its own relation locally under one stream: p50 and p99
   within 1–5% of core 0's own
-  (`bench/v3.0.0/results-wal-single-stream-v2.7.0-157-gf6ed10c.md:78-128`).
+  (`bench/v3.0.0/results-wal-single-stream-v2.7.0-157-gf6ed10c.md:78-128`)
+  — for one pinned session with four fillers. Per statement under eight
+  sessions, C2's counters put the loss on the *unchanged* shipped
+  `UPDATE`, not on the `INSERT` that went local, which is consistent with
+  the shared drain serving more independent local-commit demand and is
+  not proven by it (C2 §5: a verified counter reading with an unproven
+  cause).
 - The old ~3 ms cross-owner commit decomposes into three serialized
   device syncs of the 2PC protocol, not scheduler latency — attributed
   by AR0-V's first table row to files at `1769487`, not measured under
@@ -97,6 +124,9 @@ Read together: a local write costs what an owner's write costs, and the
 hop costs up to half the throughput on the shape scenario 2 has — a hop
 with **no 2PC in it**, since every relation in those cells is
 core-0-owned, so AR0 §4.5's retirement of XD shrinks none of the 46%.
+The hop is not one flat cost either: a shipped `COMMIT` pays roughly ten
+times a plain statement's hop, a routing wait stacked on a durability
+wait (C1 §5), which is the statement E7's default must price first.
 What no cell answers is
 the hot-row shape — scenario 2's `operations` update — which one core
 serializes today at zero lock cost and which a borrow turns into lock
@@ -158,14 +188,14 @@ refill), and AR2 renames neither.
 | `INSERT`, pk issued by the engine | the range's **id block**, plus `IX` on the relation | `X` on the block (implicit: one core holds it) | lock (implicit) + latch on the tail page | block: the lease; tail page: critical section | `AllocateRowIdRange`; `heap-and-tuple.md:180` "row-id leases work on every relation"; R5 |
 | `INSERT`, pk **named** — at or above the mark, or below it on a btree relation | the row above's units, or the leaf page and the new tuple; **and the relation's `sys.tables` row**, a core 0 catalog page | `X` on the tuple, `IX` on the relation; the catalog write is core 0's | lock + latch | transaction; critical section | ships to core 0 as today (`heap-and-tuple.md:182` "a peer core refuses a named key, per row"); R5's third paragraph |
 | `UPDATE`, `DELETE` | the **tuple**, `IX` on the relation; the page for the write | `X` | lock + latch | transaction; critical section | M2's row lock: the Keystone lock byte is its fast path and D2(a)'s table its wait path (R2's second paragraph; `docs/spec/txn.md:401-402`, `include/kds/storage/heap/heap_page.hpp:127-128`, AR0-V4) |
-| `SELECT` under SI (D1(b)) | none for visibility; `IS` on the **relation** while the statement holds a position in it | `IS` | lock | the statement | AN's snapshot LSN decides what is visible; the `IS` exists only so a relation `X` (DDL, the mover) waits for a positioned reader — §5.4, **E12** |
+| `SELECT` under SI (D1(b)) | none for visibility; `IS` on the **slice** the statement is positioned in — the page's `[min_key, next.min_key)` on a page, the range between pages — with `IS` on the range and the relation by the intention rule | `IS` | lock | the statement | AN's snapshot LSN decides what is visible; the `IS` exists so a move (R13) waits for a positioned reader at the unit it moves — §5.4, **E12, ratified at R14's unit (AR2-A)** |
 | assertion check (D8) | the **slice** of the group key | `S` while checking, `X` when the writer changes the group's state | lock + latch on the Bound Cabin page | transaction | D8; §5.2 |
 | FK forward check, child insert (D9(a)) | the parent **tuple** | `S` fence | lock | the child transaction | D9(a); §5.3 |
 | FK reverse check, parent delete | the child **slice** of the fk value when a covering Bound structure exists; else the child **relation** | `S` fence | lock | transaction | AR0-M3 item 3 left this open; **E3** `[quiet-wrong]` |
 | Observational Cabin bank | none | — | — | — | §6a's rule survives in content; its test is re-expressed against AN-S2's view — **E6** `[OPEN]` |
 | Bound Cabin append | covered by the writer's slice or tuple borrow; the Cabin page | `X` inherited; latch | latch | critical section | AR0 §4.2 |
 | DDL: `CREATE`/`DROP`/`ALTER`, `CREATE INDEX`, range split | the **relation** | `X` | lock | the DDL transaction | executes on core 0, unchanged (`crosscore.md:38,40` CC11, CC13) |
-| relayout mover (future) | the **relation** | `X` | lock | the maintenance task's run | R6's precondition becomes checkable once readers hold `IS`; §5.4 |
+| a move — split, merge, migration, relayout of a key interval (R13, AR2-A) | the **unit whose key-space assignment it changes**: a range or a slice, in `X` with `IX` on its ancestors; a move that changes no key assignment and only relocates bytes borrows the **page** alone and bumps the epoch | `X` | lock; latch alone for a page-only move | the maintenance task's run; a critical section for a page-only move | R13; §5.4 — R6's precondition becomes checkable once readers hold `IS` (R14) |
 | checkpoint, eviction writeback, sweep | the **page** | `S` for a read-out, `X` for a write-back | latch | critical section | AM-R3 |
 
 Three rows carry the weight. The first says an `INSERT` takes no page
@@ -296,11 +326,16 @@ affinity a catalog fact updated from statistics with no data movement,
 and AR0-M5 fixes **where** it lives: `sys.ranges.owner_core` re-scoped
 from an authority to a hint, not a new `sys.range_affinity` relation,
 which would be a second name for the quantity
-(`ar0-architecture-revision.md:455-465`). AR2 proposes only the **feed**:
-the lock manager's grant count per `(range, core)`,
-decayed by `physical-optimizer.md` R1's lazy-decay score — one decay
-implementation (`include/kds/stats/decay.hpp`) — so the core that borrows
-a range most is its affinity. This is a **new collector**, which `physical-optimizer.md`
+(`ar0-architecture-revision.md:455-465`). AR2 proposes only the **feed**,
+and AR2-A §5 item 2 widens it: per lock unit the collector exports
+**grant counts, wait counts and wait time**, each decayed by
+`physical-optimizer.md` R1's lazy-decay score — one decay implementation
+(`include/kds/stats/decay.hpp`). Grant counts say where is warm — the
+core that borrows a range most is its affinity. Wait counts say where is
+blocked, and they are the optimizer's signal for the moves R13 admits:
+waits concentrated on one range → split; fence waits on a relation →
+create the covering structure (E3, AR1's supporting Cabin, §5.1). This
+is a **new collector**, which `physical-optimizer.md`
 R2 says must be specified in the layer that owns collection; it is not
 an extension of `sys.access_stats`, whose key is `(kind, rel_id,
 column_mask)` with no core and a 4,096-shape cap
@@ -314,11 +349,15 @@ family likewise. AM-R3's sub-decision — a run-time branch or a
 compile-time one — is inherited unchanged, and its measurement decides
 for both families at once.
 
-**AR2-R10 — Deadlock.** `[design]` D12's wait-for graph on the log core
-with a safety timeout; the timeout aborts the waiter (R1). Multi-unit
-borrowing widens the graph's edge set — a slice fence waiting on a tuple
-`X` is a new edge shape — and the detector is over transactions, not
-units, so the shape does not change it.
+**AR2-R10 — Deadlock.** `[design; priority per AR2-A §5 item 1]` D12's
+wait-for graph on the log core is **the mechanism**: an abort is issued
+only on a detected cycle, and it aborts the waiter (R1). The safety
+timeout is a net for a detector fault, logged as such, and **never the
+normal end of a wait** — a wait that ends by clock reintroduces a
+refusal after the work was done, which is worse than the refusal it
+replaced. Multi-unit borrowing widens the graph's edge set — a slice
+fence waiting on a tuple `X` is a new edge shape — and the detector is
+over transactions, not units, so the shape does not change it.
 
 **AR2-R11 — Auxiliary structures.** `[design, E6]`
 
@@ -352,7 +391,41 @@ route** — a session may be routed to a range's affinity core for the
 warm-cache benefit D10 prices, which for a spreading-off `INSERT` is not
 optional (R5). `UNKNOWN_OUTCOME`, the lost-answer class of a shipped
 write, shrinks to the two forms that still ship. The default — local
-unless routed, or routed unless local — is E7, decided by §9's cells.
+unless routed, or routed unless local — is E7; §9's C1 and C2 price it
+and are **not a gate on AR2** (AR2-A §1). What they priced: a hop-free
+route recovers the whole loss C1 measures, and a peer-local `INSERT`
+under spreading loses 24–26% with the loss landing on the unchanged
+shipped `UPDATE` (C2 §5). On that evidence E7's `INSERT` arm reads
+**routed**; CLA's **local** proposal for `UPDATE` and `DELETE` stands
+(AR2-A §4) and waits on C3.
+
+**AR2-R13 — A move borrows the unit whose key-space assignment it
+changes.** `[ratified, AR2-A §2; the operator's text]`
+
+> A move borrows the unit whose key-space assignment it changes, in `X`,
+> for the maintenance task's run. The unit may be a range (split, merge,
+> migration), a slice (relayout of a key interval), or — for a move that
+> changes **no** key assignment, only where bytes live — a page. A
+> lock-family unit (range, slice) is borrowed with `IX` on its ancestors,
+> so a reader's `IS` at any enclosed unit (R14) is what the move waits
+> for, by the ordinary compatibility table. A page-unit move is
+> latch-family only (R2): it holds the frame `X` for its critical
+> section, changes no key's unit, and bumps the Waystone epoch
+> (`heap-and-tuple.md:28-34`'s one epoch-bumping operation gains a
+> second, listed) because recorded `(page, slot)` locations move. A move
+> that changes key assignment **and** relocates pages borrows the lock
+> unit; the page latch is taken inside it, as for any write.
+
+**AR2-R14 — The read borrow is at the position's finest lock unit.**
+`[ratified, AR2-A §2; the operator's text]`
+
+> E12's `IS` is taken on the **slice** a positioned statement is walking
+> (the page's `[min_key, next.min_key)` when it is on a page, the range
+> when it is between pages), with `IS` on the range and relation by the
+> intention rule. A relation-level move still waits for it through the
+> hierarchy; a slice-level move waits only for readers in that slice.
+> R3's "one compatibility check" is unchanged; what changes is that the
+> check has a unit finer than the relation.
 
 ---
 
@@ -374,7 +447,11 @@ store per relation under M3's topology.
 (`F`, `G`, five shapes) and states its own single crossing with AR0 in
 its §11. AR2 touches the Cabin's *lifecycle* only — who appends a Bound
 entry and under what borrow, when an Observational set may be banked —
-and no shape. The two drafts do not share a decision.
+and no shape. The two drafts do not share a decision, and they ask for
+**one thing under one name** (AR2-A §5 item 6): the covering structure
+E3's slice arm requires is AR1's **supporting Cabin** — the auto-created
+Cabin of its D5, which AR2-A calls AR1-8 — and creating it is a legal
+move under R13 when the optimizer's wait signal (R8) asks for it.
 
 ### 5.2 Assertion
 
@@ -407,13 +484,18 @@ undo-trail clause is implied — but a `SELECT` under SI takes no borrow
 for visibility, and a chain walk holds no page span across a park
 (`docs/spec/sched.md:42`), so a mover would move tuples under a parked
 reader's position and the walk would miss or repeat rows. The first
-clause therefore needs a **read borrow**: an `IS` on the relation for the
-statement's duration, §3's `SELECT` row, the one cost AR2 puts on reads
-(R3, E12). With it the precondition is one compatibility check — the
-first mechanism the mover has had; without it the mover's gate is
-writers-only and R6's first clause stays unenforced. Nothing here moves
-§6's gates. Noted in AR2-V: §6's first gate cites a premise `txn.md`
-§4.1 no longer holds.
+clause therefore needs a **read borrow**: an `IS` at the position's
+finest lock unit — the slice, with `IS` on the range and the relation by
+the intention rule (R14) — for the statement's duration, §3's `SELECT`
+row, the one cost AR2 puts on reads (R3, E12, ratified by AR2-A). With it
+the precondition is one compatibility check — the first mechanism the
+mover has had — and R13 makes it exact: a move borrows the unit whose
+key assignment it changes, so a slice-level relayout waits only for
+readers in that slice and a range move for readers in that range, while
+a page-only move (bytes relocated, no key reassigned) is a latch and an
+epoch bump. Without the read borrow the mover's gate is writers-only and
+R6's first clause stays unenforced. Nothing here moves §6's gates. Noted
+in AR2-V: §6's first gate cites a premise `txn.md` §4.1 no longer holds.
 
 ### 5.5 Statement shipping and cross-owner transactions
 
@@ -493,20 +575,29 @@ wrong result. Every item below is in one of those classes, or is a
 user-visible contract — except E1, listed so that the omission of `SIX`
 is a stated default rather than an oversight.
 
+**AR2-A marked this table** (`raft-ar2-A.md` §3–§4, operator,
+2026-09-03): E1, E4, E11 and E12 (at R14's unit) are **ratified**, and
+R4's cap refusal is declared the one refusal the borrow model keeps.
+Deferred with a gate: E2 (M2 opening), E3 (M3, the AR1/AR2 unification),
+E5 (M3, amended per R8), E7 (C1/C2, now measured), E8 and E9 (M3), E10
+(M3's gate-by-gate check), D12's priority (M2, now stated in R10). E13 is
+added at AR2-A's request.
+
 | # | item | class | CLA proposal |
 |---|---|---|---|
-| E1 | Lock mode set | default, listed | `IS`, `IX`, `S`, `X` only; no `SIX`, no update mode in v1 |
-| E2 | Per-transaction borrow cap, `max_locks_per_txn`: its value and its refusal code | constant; user-visible | 65,536; `ResourceExhausted`, non-retryable, never escalate (R4) |
-| E3 | FK reverse check with no covering Bound structure | quiet-wrong | child **relation** `S` fence; slice fence when covered (R7) |
-| E4 | Slice key | quiet-wrong | `(rel_oid, [lo, hi))`, page as hint only (R6) |
-| E5 | Affinity collector | spec (R2 of `physical-optimizer.md`) | lock-manager grant counts per `(range, core)`, decayed by that spec's R1, feeding `sys.ranges.owner_core` per AR0-M5; not a `sys.access_stats` extension (R8) |
+| E1 | Lock mode set | **ratified (AR2-A)** | `IS`, `IX`, `S`, `X` only; no `SIX`, no update mode in v1 |
+| E2 | Per-transaction borrow cap, `max_locks_per_txn`: its value and its refusal code | constant; user-visible — deferred to M2 (AR2-A) | 65,536; `ResourceExhausted`, non-retryable, never escalate (R4) — the one refusal the model keeps, because a cap cannot be waited out |
+| E3 | FK reverse check with no covering Bound structure | quiet-wrong — deferred to M3 (AR2-A) | child **relation** `S` fence as the coarse arm; slice fence once AR1's supporting Cabin covers the column (R7, §5.1) |
+| E4 | Slice key | **ratified (AR2-A)** | `(rel_oid, [lo, hi))`, page as hint only (R6) |
+| E5 | Affinity and wait collector | spec (R2 of `physical-optimizer.md`) — deferred to M3, amended (AR2-A) | per lock unit: grant counts, wait counts and wait time, decayed by that spec's R1; grants feed `sys.ranges.owner_core` per AR0-M5, waits are the optimizer's move signal (R8); not a `sys.access_stats` extension |
 | E6 | Observational bank rule under the LSN view | OPEN, AN's | keep the rule's content; AN-S2 re-expresses the test (R11) |
-| E7 | Execution default: local unless routed, or routed unless local | measurement-gated | decided by §9's C1–C3; CLA proposes **local** for `UPDATE`/`DELETE` now and `INSERT` per R5's arms |
+| E7 | Execution default: local unless routed, or routed unless local | measurement-gated — C1/C2 measured, C3 pending (AR2-A) | CLA proposes **local** for `UPDATE`/`DELETE` (stands per AR2-A §4) and, on C2's evidence, **routed** for `INSERT`; C3 decides the rest (R12, §9) |
 | E8 | NS10's verb: "selects the core that owns" → "declares the affinity of" | user-visible | take it; `owner_core` fields keep their bytes (§5.6) |
 | E9 | `core_count` pinning once `owner_core` means affinity | format / mount rule | stays pinned: E7 answers the ownership ground and `wal.md:58`'s warm-up ground is untouched by anything here (§5.6) |
 | E10 | "A relation with a durable auxiliary does not split" (ratification AE, 2026-09-01) under AR2 | spec | re-ratify or retire in M3's work order after §5.7's gate-by-gate check |
-| E11 | Borrow scope: by scope, never by clock | quiet-wrong | take R1 as written; no expiry, no renewal, no revocation |
-| E12 | A read borrow: `IS` on the relation for a positioned statement | cost on every read | take it, priced in C3 (R3, §5.4); without it the mover's gate is writers-only |
+| E11 | Borrow scope: by scope, never by clock | **ratified (AR2-A)** | R1 as written; no expiry, no renewal, no revocation |
+| E12 | A read borrow: `IS` at the position's finest lock unit (R14) | **ratified (AR2-A)**; its price is C3's to report, not to decide | taken; without it no move can wait (R3, §5.4) |
+| E13 | Named-key `INSERT`: does core 0's catalog relation become borrowable at tuple unit — `X` on the `sys.tables` row — so the admission **waits** instead of ships (R5) | OPEN, M3 (AR2-A §5 item 4) | none yet. CC11 is the only ground for the ship and AR2 does not argue it; the argument belongs with `rules.md` §3's declared-shared row for the catalog (§8) |
 
 ---
 
@@ -548,27 +639,48 @@ is a stated default rather than an oversight.
 
 ## 9. Sequencing
 
-AR2 lands inside AR0 §8's chain and adds no milestone.
+AR2 lands inside AR0 §8's chain and adds no milestone. **M2 opens when
+M1 (AM) and AN-S2 close** (AR2-A §1); the cells below price R12/E7 and
+gate nothing.
 
-1. **Now, no code — two cells** under `bench/README.md`'s rules,
-   `build-release`, interleaved, `git describe --tags`, filed under
-   `bench/v3.0.0/`:
-   - **C1, co-location ceiling.** Scenario 2 at `cores = 8` with the
-     relations a booking touches declared in one namespace (NS10). It
-     measures how much of the 46% owner routing alone recovers.
-   - **C2, local parallel inserts.** Scenario 0 at `cores = 8` with
-     `range_size_ids` armed — a range-granularity borrow, already built.
-     If it does not beat 754.7 TPS, group commit bounds ingest and finer
-     borrowing cannot help; if it scales, R5's second arm has a number.
-     Arming it in a cell is a measurement, not a default change (D6).
+1. **Two cells, measured on this branch at `92cb654`** under
+   `bench/README.md`'s rules — `build-release`, interleaved with repeats,
+   `git describe --tags` = `v2.7.0-178-g92cb654`, durability `group`
+   only, the raw run archived at
+   `bench/v3.0.0/archive/ar2-c1c2-v2.7.0-178-g92cb654/`:
+   - **C1, co-location ceiling** —
+     `bench/v3.0.0/results-ar2-c1-colocation-v2.7.0-178-g92cb654.md`.
+     Realized as `peer_listeners = off` at `cores = 8`, not as a namespace
+     declaration: for this driver's schema every relation is core-0-owned
+     with or without one, so NS10 would have varied nothing (C1 §0).
+     565.7 and 559.5 TPS against 575.4 at `cores = 1` and 322.1/321.1
+     with the hop: the hop is the whole 46%, a routing fix alone recovers
+     it, and a shipped `COMMIT` pays about ten times a plain statement's
+     hop (C1 §5, §9).
+   - **C2, local parallel inserts** —
+     `bench/v3.0.0/results-ar2-c2-spreading-v2.7.0-178-g92cb654.md`.
+     `range_size_ids = 65536` and `4096` at `cores = 8`,
+     `peer_listeners = on`: 533.8 and 523.1 TPS against 703.9 with
+     spreading off in the same session, −24% and −26%, plus 6–7 refused
+     `INSERT`s per 10,000 while a range opens. The counters put the loss
+     on the *unchanged* shipped `UPDATE`, not on the `INSERT` that went
+     local, so the earlier reading "group commit bounds ingest" is not
+     what the data says; the cause is unproven (C2 §5, §10). R5's second
+     arm has a negative number, and the refusal class C2 met is the one
+     a borrow would turn into a wait (E13). Arming spreading in a cell
+     was a measurement, not a default change (D6).
+   - Three first-pass cells were contaminated by the host and are kept
+     beside their clean repeats, which match AL-S8 within 3% (C1 §8,
+     C2 §9).
 2. **M1 (AM) — untouched.** AM-R1 keeps write authority with the owner
    through M1 and AR2 respects it: nothing in §3 executes before the
    page latch and the shared pool exist.
-3. **M2 — the lock family.** R1–R4, R6, R9, R10 with D2, D12, D13; the
-   tuple lock in the Keystone lock byte; the slice fence; the relation
-   lock. E1–E4, E11 and E12 move into M2's ruling table when it opens.
-4. **M3 — the consequences.** R7, R8, R11, R12; §5.1–5.7; E5–E10 move
-   into M3's ruling table.
+3. **M2 — the lock family.** R1–R4, R6, R9, R10, R13, R14 with D2, D12,
+   D13; the tuple lock in the Keystone lock byte; the slice fence; the
+   relation lock. E2 and D12's priority move into M2's ruling table when
+   it opens; E1, E4, E11 and E12 are ratified (AR2-A §3).
+4. **M3 — the consequences.** R7, R8, R11, R12; §5.1–5.7; E3, E5, E7
+   (after C3), E8–E10 and E13 move into M3's ruling table.
 5. **C3, contention** — many sessions across cores updating one row
    locally under the tuple lock, and the same sessions on disjoint rows
    so the relation-level `IX`/`IS` key is priced alone (R3) — after M2's
@@ -633,4 +745,16 @@ heap consumer of the horizon and no mover exist. Belongs in
 
 **What AR2-V does not verify.** No `[design]` claim, and no number: every
 number above is AL-S8's, measured at `v2.7.0-157-gf6ed10c` on the host
-those files stamp, and this draft ran nothing.
+those files stamp. The C1 and C2 numbers the body cites were measured on
+this branch at `92cb654` **after** this source read, and their own files
+carry their verification (each reads its figures from the drivers'
+tables and `SHOW META` dumps in the archive); AR2-V does not re-verify
+them.
+
+**AR2-A.** `instructions/v3.0.0/raft-ar2-A.md` (operator, 2026-09-03,
+merged into this branch at `988a698`) is the ratification of record for
+this draft. Its §5 amendments are applied in the body and marked
+**(AR2-A)**: R10's D12 priority, R8's wait collector, §3's mover and
+`SELECT` rows, E13, §9's opening condition, and §5.1's supporting-Cabin
+crossing; R13 and R14 are quoted verbatim. Where the body and AR2-A
+disagree, AR2-A is what the operator said.

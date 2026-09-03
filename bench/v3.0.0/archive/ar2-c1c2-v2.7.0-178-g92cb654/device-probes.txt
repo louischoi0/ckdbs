@@ -1,0 +1,21 @@
+Device probes taken by the orchestrating session during the AR2 C1/C2 run
+(2026-09-03, host of the run, data device /dev/root ext4 under /home/cdkbs).
+Raw dd output, verbatim from the session's command output; the run's own
+cells were not running while a probe ran.
+
+After batch 2a (s2-c1, s0-c1 finished 08:01:18 UTC), before batch 3:
+  dd if=/dev/zero of=<run dir>/ddprobe bs=4k count=1 conv=fdatasync
+    4096 bytes (4.1 kB, 4.0 KiB) copied, 0.00238938 s, 1.7 MB/s
+    4096 bytes (4.1 kB, 4.0 KiB) copied, 0.00268583 s, 1.5 MB/s
+
+Immediately before batch 3 (s0-c8-sp4096 started 08:03:08 UTC):
+  dd if=/dev/zero of=<run dir>/ddbulk bs=1M count=64 conv=fdatasync
+    67108864 bytes (67 MB, 64 MiB) copied, 0.416061 s, 161 MB/s
+    67108864 bytes (67 MB, 64 MiB) copied, 0.384924 s, 174 MB/s
+
+Host at the same moments (/proc/loadavg, ps of the unrelated server):
+  08:02 UTC  0.73 0.80 0.62  (pid 899 /home/cdkbs/autotrade/.../kds_server, 0.7% CPU, up 1d 9h)
+
+These are point probes, not a time series: they bound the device at the
+moments named and say nothing about the 07:59-08:01 window in which the
+degraded cells ran.

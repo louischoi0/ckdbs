@@ -1,0 +1,70 @@
+{
+  "cell": "s0-c8-sp0-r2",
+  "scenario": "s0",
+  "port": 15599,
+  "cores": 8,
+  "peer_listeners": "on",
+  "range_size_ids": null,
+  "suffix": "s0c8sp0r2",
+  "binary": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/kds_server",
+  "precheck": {
+    "time": "2026-09-03 08:04:18 UTC",
+    "loadavg": "1.00 0.85 0.65 1/300 442989",
+    "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn",
+    "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 123210480 135705856  48% /"
+  },
+  "config": "data_file = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp0-r2.db\nport = 15599\ncores = 8\ndurability = group\npeer_listeners = on\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/logs/s0-c8-sp0-r2\nlog_level = warn\n",
+  "server_start": "2026-09-03 08:04:18 UTC",
+  "phases": [
+    {
+      "phase": "run",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "15599",
+        "--suffix",
+        "s0c8sp0r2",
+        "--users",
+        "100",
+        "--accounts-per-user",
+        "3",
+        "--assets",
+        "30",
+        "--traders",
+        "8",
+        "--txn-per-user",
+        "50",
+        "--verify",
+        "200",
+        "--seed",
+        "1",
+        "--sync",
+        "--json",
+        "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp0-r2.json"
+      ],
+      "exit_code": 0,
+      "seconds": 7.977,
+      "stdout": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp0-r2.run.stdout.txt"
+    }
+  ],
+  "meta_cores_reached": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "meta_attempts": 19,
+  "server_stop": {
+    "stop": "sigterm",
+    "exit_code": 0,
+    "stop_seconds": 1.116
+  },
+  "postcheck_loadavg": "1.07 0.87 0.66 1/328 443047"
+}

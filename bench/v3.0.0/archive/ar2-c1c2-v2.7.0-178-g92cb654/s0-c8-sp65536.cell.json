@@ -1,0 +1,70 @@
+{
+  "cell": "s0-c8-sp65536",
+  "scenario": "s0",
+  "port": 15593,
+  "cores": 8,
+  "peer_listeners": "on",
+  "range_size_ids": 65536,
+  "suffix": "s0c8sp65536",
+  "binary": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/kds_server",
+  "precheck": {
+    "time": "2026-09-03 07:59:55 UTC",
+    "loadavg": "1.19 0.82 0.59 1/326 442531",
+    "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn",
+    "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 122766472 136149864  48% /"
+  },
+  "config": "data_file = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp65536.db\nport = 15593\ncores = 8\ndurability = group\npeer_listeners = on\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/logs/s0-c8-sp65536\nlog_level = warn\nrange_size_ids = 65536\n",
+  "server_start": "2026-09-03 07:59:55 UTC",
+  "phases": [
+    {
+      "phase": "run",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "15593",
+        "--suffix",
+        "s0c8sp65536",
+        "--users",
+        "100",
+        "--accounts-per-user",
+        "3",
+        "--assets",
+        "30",
+        "--traders",
+        "8",
+        "--txn-per-user",
+        "50",
+        "--verify",
+        "200",
+        "--seed",
+        "1",
+        "--sync",
+        "--json",
+        "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp65536.json"
+      ],
+      "exit_code": 1,
+      "seconds": 9.73,
+      "stdout": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c8-sp65536.run.stdout.txt"
+    }
+  ],
+  "meta_cores_reached": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "meta_attempts": 40,
+  "server_stop": {
+    "stop": "sigterm",
+    "exit_code": 0,
+    "stop_seconds": 1.116
+  },
+  "postcheck_loadavg": "1.29 0.87 0.61 1/306 442569"
+}

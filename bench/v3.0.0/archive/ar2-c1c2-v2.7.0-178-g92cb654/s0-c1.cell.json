@@ -1,0 +1,63 @@
+{
+  "cell": "s0-c1",
+  "scenario": "s0",
+  "port": 15596,
+  "cores": 1,
+  "peer_listeners": "off",
+  "range_size_ids": null,
+  "suffix": "s0c1",
+  "binary": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/kds_server",
+  "precheck": {
+    "time": "2026-09-03 08:01:06 UTC",
+    "loadavg": "0.88 0.82 0.61 1/299 442643",
+    "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn",
+    "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 122913060 136003276  48% /"
+  },
+  "config": "data_file = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c1.db\nport = 15596\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/ar2-c1c2-92cb654/logs/s0-c1\nlog_level = warn\n",
+  "server_start": "2026-09-03 08:01:06 UTC",
+  "phases": [
+    {
+      "phase": "run",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "15596",
+        "--suffix",
+        "s0c1",
+        "--users",
+        "100",
+        "--accounts-per-user",
+        "3",
+        "--assets",
+        "30",
+        "--traders",
+        "8",
+        "--txn-per-user",
+        "50",
+        "--verify",
+        "200",
+        "--seed",
+        "1",
+        "--sync",
+        "--json",
+        "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c1.json"
+      ],
+      "exit_code": 0,
+      "seconds": 11.134,
+      "stdout": "/home/cdkbs/bench-runs/ar2-c1c2-92cb654/s0-c1.run.stdout.txt"
+    }
+  ],
+  "meta_cores_reached": [
+    0
+  ],
+  "meta_attempts": 1,
+  "server_stop": {
+    "stop": "sigterm",
+    "exit_code": 0,
+    "stop_seconds": 0.015
+  },
+  "postcheck_loadavg": "1.21 0.89 0.64 1/299 442666"
+}
