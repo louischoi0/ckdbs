@@ -222,8 +222,11 @@ everything data-moving is refused.
 - **The disagreement is Corruption**: a varchar cell tagged `kNull` whose
   bitmap bit is clear fails loudly (§3).
 - **Contract suite**: the existing byte-for-byte configuration comparisons
-  (waystone, index, cabin, types, assertion) must be unchanged for all-`NOT
-  NULL` relations — the regression that would say this feature leaked into
-  relations that never asked for it.
+  (waystone, index, cabin, inner-build) must be unchanged for all-`NOT NULL`
+  relations — the regression that would say this feature leaked into relations
+  that never asked for it. The types and aggregate contracts belong in the same
+  sweep for the same reason, though they pin claims rather than configurations;
+  assertion has no contract suite at all — `tests/assertion_*_test.cpp` are
+  what carry the check there.
 - **Three-valued logic**: a truth table per operator, driven through the
   statement surface, not the comparison function alone.

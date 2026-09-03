@@ -146,9 +146,13 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   every size/offset with the derivation in a comment. Full rules:
   `docs/rules/rules.md`.
 - Document the lock/atomic protocol at the top of each subsystem file.
-- Tests accompany every subsystem; contract suites (waystone, index, cabin,
-  types, assertion) compare configurations byte-for-byte — keep them green
-  and extend them with the feature.
+- Tests accompany every subsystem; the contract suites that compare
+  configurations byte-for-byte are **waystone, index, cabin and inner-build**
+  — keep them green and extend them with the feature. The other contract
+  suites are a different shape, pinning claims rather than configurations:
+  types and aggregate one test per numbered spec item, scram and tls against
+  their RFC vectors. **Assertion has no contract suite** —
+  `tests/assertion_*_test.cpp` are what carry its checks.
 - **Never push what you have not built — unless the operator says to.**
   `scripts/githooks/pre-push` is the gate; enable it once per clone with
   `git config core.hooksPath scripts/githooks`. On CLA's own initiative the
