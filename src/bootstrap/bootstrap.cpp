@@ -7,7 +7,8 @@ namespace kds::bootstrap {
 StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
                                              std::uint64_t now_unix_seconds,
                                              std::uint32_t inline_cell_width,
-                                             std::uint32_t cores, Logger* log) {
+                                             std::uint32_t cores, Logger* log,
+                                             std::uint32_t log_topology) {
     // Checked before anything is read or created: an illegal width must not
     // be the reason a fresh database gets pinned to a number no build can
     // use, and it must not be reported as a *mismatch* below when it is
@@ -115,7 +116,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     // every per-core rule, which is what lets the two be read side by side
     // rather than one silently misread as the other.
     server::SuperBlock sb = server::SuperBlock::CreateFresh(
-        now_unix_seconds, inline_cell_width, cores, server::kSingleStream);
+        now_unix_seconds, inline_cell_width, cores, log_topology);
     sb.Encode(created.value().bytes());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +

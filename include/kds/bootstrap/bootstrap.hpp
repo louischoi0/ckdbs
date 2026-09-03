@@ -68,9 +68,26 @@ struct BootstrapResult {
 // was a fresh database or an existing one. The returned Catalog carries
 // the same logger, so catalog writes are reported from here on. It must
 // outlive both the call and the returned result.
+// `log_topology` is **last, and defaulted, because production never passes
+// it**: every volume this build creates is `kSingleStream` (AR0 M0,
+// AL-S1c's flip), chosen once here and pinned for the life of the volume.
+//
+// What it exists for is the one thing nothing else can build: a
+// **pre-M0 volume**. `wal.md` §3 keeps per-core streams as a live branch
+// that still mounts, and until this parameter existed the only way to
+// exercise that branch was to bootstrap a single-stream volume and then
+// overwrite its topology on a *copy* of the image - which is a combination
+// no instance can be in, and which
+// `docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`
+// records 123 cells having been written against. A legacy arm needs a
+// volume that genuinely says per-core, and this is where one comes from.
+//
+// A caller that passes `kPerCoreStreams` is asking for a volume this build
+// would not create, and gets every per-core rule with it.
 StatusOr<BootstrapResult> BootstrapDatabase(
     storage::PageStore& store, std::uint64_t now_unix_seconds,
     std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
-    std::uint32_t cores = 1, Logger* log = nullptr);
+    std::uint32_t cores = 1, Logger* log = nullptr,
+    std::uint32_t log_topology = server::kSingleStream);
 
 }  // namespace kds::bootstrap
