@@ -603,8 +603,40 @@ public:
     Expeditor(const Expeditor&) = delete;
     Expeditor& operator=(const Expeditor&) = delete;
 
+    // Out of line because `running_` below points at a type this header does
+    // not define.
+    ~Expeditor();
+
     // Binds the port and serves clients until a STOP command, then syncs.
+    // `Start()` then `RunUntilStopped()`, and what production calls.
     Status Serve();
+
+    // Assembles the instance and returns with it running: the reactors of
+    // cores 1..N-1 are on their own threads and the listeners are bound,
+    // but **core 0's reactor has not been entered**, so no client statement
+    // has run.
+    //
+    // **That gap is the whole reason the split exists** (AM-S0(a)). `cores_`
+    // used to be filled 350 lines inside a function that then blocked for
+    // the life of the process, so the multi-core assembly - who opens the
+    // log, who attaches, what a peer is handed - was reachable from no test
+    // at all, and M0 shipped two defects that lived in it.
+    // `tests/expeditor_test.cpp` is what the seam is for.
+    //
+    // On failure nothing is left running: every thread this call started is
+    // stopped and joined before it returns, so a caller may drop the
+    // `Expeditor` on an error without a second call. Calling it twice is
+    // refused - `InvalidArgument`, the "simply wrong" code - because the
+    // second call would bind a bound port and spawn a second set of workers.
+    Status Start();
+
+    // Runs core 0's reactor until something stops it, then takes the
+    // shutdown path whole - the enrolled rollback, the peer broadcast and
+    // join, each core's final sync and shutdown checkpoint, the listener
+    // detach, this core's sync and checkpoint. Refused if `Start()` did not
+    // run, because there would be no reactor to run and the shutdown tail
+    // would then report a clean stop of an instance that never started.
+    Status RunUntilStopped();
 
     // Writes everything back to stable storage. Still what SYNC and the
     // shutdown path call; no longer the *only* thing that persists, now
@@ -652,6 +684,13 @@ public:
     // whose log held nothing, which is the common case and a fact worth
     // being able to assert rather than assume.
     const MountRecovery& recovery() const noexcept { return recovery_; }
+
+    // **The peers, and the window to ask in is between `Start()` and
+    // `RunUntilStopped()`.** Empty at `cores = 1` and before `Start()`;
+    // cleared on the way down, so a caller that asks afterwards sees no
+    // cores rather than dangling ones. Core 0 is not in it - core 0's
+    // runtime is this object.
+    const std::vector<std::unique_ptr<CoreRuntime>>& cores() const noexcept { return cores_; }
 
     // The `SIGTERM`/`SIGINT` descriptor the platform layer installed
     // (`server/stop_signal.hpp`). `Serve()` registers it with its reactor, so a
@@ -844,6 +883,12 @@ private:
     // thread, before the workers are joined.
     void BroadcastShutdown(sched::Scheduler& core0_scheduler);
 
+    // The failure half of `Start()`: stops and joins whatever core threads
+    // it had already spawned, then drops the cores. Not the shutdown tail -
+    // an instance that never entered core 0's reactor has nothing to sync
+    // and nothing to checkpoint.
+    void StopStartedCores();
+
     // Flushes the catalog pages and tells every peer to drop its cache.
     // Hooked to `Catalog::BumpVersion()`, the single DDL choke point, so a
     // DDL added later broadcasts without knowing this exists.
@@ -856,6 +901,21 @@ private:
     // manager, which implements wal::ActiveTransactions. `NoActiveTransactions`
     // was correct only while nothing could be live.
     std::optional<wal::Checkpointer> checkpointer_;
+
+    // **What `Serve()` used to hold on its own stack**: the io backend, the
+    // TLS context and credential store, the three listeners, core 0's
+    // reactor, the reactor-borrow guard, and the peer threads. Defined in
+    // `expeditor.cpp`, which is what its field order and its destructor are
+    // about and why `~Expeditor` is out of line - the type would otherwise
+    // drag the epoll backend, OpenSSL's context and `<thread>` into every
+    // translation unit that names an `Expeditor`, and put a
+    // `#if KDS_WITH_TLS` member in a public header.
+    //
+    // **Declared last, so it is destroyed before every member it borrows
+    // from** - `dispatcher_` holds its reactor, and the pipeline endpoints
+    // above send through a transport it outlives.
+    struct ServeRuntime;
+    std::unique_ptr<ServeRuntime> running_;
 };
 
 }  // namespace kds::server

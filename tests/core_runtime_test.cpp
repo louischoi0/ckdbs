@@ -63,6 +63,14 @@ namespace {
 
 class CoreRuntimeTest : public ::testing::Test {
 protected:
+    // **Which volume this fixture bootstraps** (AM-S0). `kSingleStream` is
+    // what this build writes and what every cell below is about;
+    // `CoreRuntimePerCoreStreamTest` overrides it to `kPerCoreStreams` and inherits
+    // everything else, which is the only honest way to keep a legacy cell:
+    // over a volume that genuinely says per-core, not over a single-stream
+    // one with its image rewritten on a copy.
+    virtual std::uint32_t LogTopology() const { return kSingleStream; }
+
     void SetUp() override {
         dir_ = std::filesystem::temp_directory_path() /
                ("kds_core_runtime_" + std::to_string(::getpid()) + "_" +
@@ -86,7 +94,8 @@ protected:
         // cores a volume has (AR0 M0, AL-S3). A volume that says one core
         // has no core 1 to publish an anchor for, and the refusal is right.
         auto boot = bootstrap::BootstrapDatabase(*core0_store_, 1000,
-                                                 storage::kDefaultInlineCellWidth, /*cores=*/2);
+                                                 storage::kDefaultInlineCellWidth, /*cores=*/2,
+                                                 /*log=*/nullptr, LogTopology());
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         core0_.emplace(std::move(boot.value()));
 
@@ -107,13 +116,22 @@ protected:
         // that is not. The fixture previously bootstrapped a single-stream
         // volume and then overwrote the topology to per-core on its copy of
         // the image — a combination no instance can be in, and the defect
-        // `docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`
-        // records. The override is gone; the stream is real.
+        // `git show 30e0377:docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`
+        // recorded (closed and deleted at AM-S0(b), which is this fixture).
+        // The override is gone; the stream is real.
         //
         // Cells that genuinely test the **legacy** topology — a peer opening
         // its own `wal-<core>-*`, running its own recovery, publishing its
-        // own anchor — live in `PerCoreStreamTest` below, over a volume that
+        // own anchor — live in `CoreRuntimePerCoreStreamTest` below, over a volume
         // actually says `kPerCoreStreams`.
+        //
+        // **Skipped whole on the per-core arm** (`CoreRuntimePerCoreStreamTest`):
+        // is no stream to attach to on a volume that says every core opens
+        // its own, and `ConfigFor` hands nothing.
+        if (LogTopology() != kSingleStream) {
+            config_superblock_ = core0_->superblock;
+            return;
+        }
         auto log_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
         ASSERT_TRUE(log_device.ok()) << log_device.status().message();
         core0_log_device_ = std::move(log_device.value());
@@ -137,13 +155,6 @@ protected:
         config_superblock_ = core0_->superblock;
     }
 
-    // The volume as it really is: what a cell modelling the shipped
-    // topology hands to `ConfigFor`'s result.
-    SuperBlock SingleStreamSuperBlock() const {
-        SuperBlock sb = core0_->superblock;
-        EXPECT_TRUE(sb.SetLogTopology(kSingleStream).ok());
-        return sb;
-    }
     void TearDown() override {
         std::error_code ec;
         std::filesystem::remove_all(dir_, ec);
@@ -165,9 +176,12 @@ protected:
         config_superblock_ = core0_->superblock;
         c.superblock = &config_superblock_;
         // What `Expeditor` hands a peer on a single-stream volume, and what
-        // `CoreRuntime::Open` refuses to proceed without (AM-S0).
-        c.shared_stream = core0_wal_->stream();
-        c.shared_writer = core0_wal_->writer();
+        // `CoreRuntime::Open` refuses to proceed without (AM-S0). Null on
+        // the per-core arm, where a peer opens its own log.
+        if (core0_wal_ != nullptr) {
+            c.shared_stream = core0_wal_->stream();
+            c.shared_writer = core0_wal_->writer();
+        }
         auto lease = extents_->Reserve(storage::kDefaultExtentPages);
         EXPECT_TRUE(lease.ok()) << lease.status().message();
         if (lease.ok()) c.lease = lease.value();
@@ -195,6 +209,14 @@ protected:
     // over the two creation pages, and a row-id block.
     void FundPeerForRelation(struct ForeignIndexRig& rig, catalog::Oid oid);
 
+    // PW1c-7's restart, shared by two cells because only *half* of it is
+    // about the log topology (AM-S0). `flush_before_restart` selects which
+    // half: with the pages on the device the claim is read off the platter,
+    // which is true whatever the volume's log says; with them only in the
+    // log it is redo's replay that leaves them resident and stamped, and a
+    // peer runs redo only under per-core streams.
+    void PeerPagesSurviveARestart(bool flush_before_restart, const std::string& name);
+
     // A cross-owner foreign key pair, funded: `<base>p` on core 0 and
     // `<base>c` on the peer, the child referencing the parent. The two
     // placement policies are how a two-core rig puts one relation on each
@@ -221,7 +243,35 @@ protected:
     std::optional<storage::ExtentAllocator> extents_;
 };
 
-TEST_F(CoreRuntimeTest, EachCoreOpensItsOwnWalStream) {
+// ---- The legacy arm ------------------------------------------------------
+//
+// **A volume this build does not create, mounted the way it still mounts.**
+// `wal.md` §3 keeps per-core streams as a live branch: a pre-M0 volume says
+// `kPerCoreStreams` in its superblock and every core opens its own
+// `wal-<core>-*`, runs its own recovery and publishes its own anchor. The
+// cells marked `CoreRuntimePerCoreStreamTest` are the ones that are *about*
+// that
+// branch, and they are here rather than deleted because deleting them would
+// leave the branch untested while it is still reachable.
+//
+// **The name carries the `CoreRuntime` prefix on purpose**: cells are
+// registered as `Fixture.Name` (`gtest_discover_tests`), so a fixture named
+// anything else would drop this arm out of `ctest -R CoreRuntime` - the very
+// command the work order names as the stage's verification, and the arm this
+// stage exists to preserve.
+//
+// The whole difference is `LogTopology()`, and it is the difference that
+// matters: `BootstrapDatabase` writes the topology into the image, so this
+// arm's peers see per-core streams because the volume says so - not because
+// `SetUp` rewrote the image on its own copy, which is the defect AM-S0
+// removed (recorded while it stood, at
+// `git show 30e0377:docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`).
+class CoreRuntimePerCoreStreamTest : public CoreRuntimeTest {
+protected:
+    std::uint32_t LogTopology() const override { return kPerCoreStreams; }
+};
+
+TEST_F(CoreRuntimePerCoreStreamTest, EachCoreOpensItsOwnWalStream) {
     // The segment naming (`wal-<core_id>-<segment_no>.log`) predates
     // multicore, which is why N streams share one directory without
     // colliding. Asserted because it is load-bearing and invisible.
@@ -1016,7 +1066,7 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     EXPECT_GE(core0_->superblock.wal_anchor(0).checkpoint_lsn, folded);
 }
 
-TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) {
+TEST_F(CoreRuntimePerCoreStreamTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) {
     // PW3b. Core 0 checkpoints at three points - the completion checkpoint
     // at mount, the cadence, and the way out - and PW3 gave a peer the first
     // two. Without the third a graceful restart replayed every peer's stream
@@ -1064,15 +1114,13 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
             core0.RunOnce();
         }
         ASSERT_EQ(receiver.publishes(), 1u);
-        // **Core 0 publishes too, as a running instance's cadence would.**
-        // The volume has one anchor and it is the minimum over every core,
-        // held where the mount found it until each has spoken (AL-S3's
-        // warm-up) - so a two-core volume where only the peer ever
-        // checkpoints keeps an anchor of zero, and the bound this test is
-        // about would never appear. That is the warm-up working, not a
-        // failure, and the fix is to model the core that was missing.
-        ASSERT_TRUE(receiver.Publish({/*core_id=*/0, 4096, 4096, 8192, 0}).ok());
-        const WalAnchorFields mount_anchor = core0_->superblock.wal_anchor(0);
+        // **Slot 1, because this volume says per-core.**
+        // `SuperBlockCheckpointAnchor::Publish` folds into slot 0 only under
+        // `single_stream()`; here every core keeps its own slot and nothing
+        // is a minimum over anything, so the peer's anchor is read where the
+        // peer wrote it. A core-0 stand-in has nothing to contribute for the
+        // same reason - there is no fold for it to hold open.
+        const WalAnchorFields mount_anchor = core0_->superblock.wal_anchor(1);
         ASSERT_GT(mount_anchor.checkpoint_lsn, 0u);
 
         // Funded the ordinary way, then a run's worth of rows.
@@ -1101,36 +1149,14 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         ASSERT_TRUE(peer.value()->Sync().ok());
         if (clean_stop) {
             ASSERT_TRUE(peer.value()->ShutdownCheckpoint(receiver).ok());
-            // **Core 0 checkpoints again, past the peer.** The one anchor
-            // is the *minimum* over cores, so a core that last checkpointed
-            // long ago holds the instance's replay range open however
-            // recent everyone else's is - which is true of one stream and
-            // is why AL-R4 leaves a single gathered checkpoint to M1. A
-            // stand-in that stayed at its first LSN would make this test
-            // measure that, rather than the bound it is about.
-            //
-            // Just above the peer's own point, not an arbitrary large
-            // number: under one stream every core's anchor lives in one LSN
-            // space bounded by the instance's append point, and an anchor
-            // claiming a gigabyte is a record no core of this volume could
-            // have published. It is inert only while it loses the minimum -
-            // and if it ever won, `Analyze`'s honesty check would refuse
-            // the mount rather than fail this assertion.
-            const wal::Lsn peer_point = peer.value()->wal().appended_lsn();
-            ASSERT_TRUE(receiver
-                            .Publish({/*core_id=*/0, peer_point + 1, peer_point + 1,
-                                      peer_point + 1, 0})
-                            .ok());
-            // Four now: the peer's mount checkpoint, core 0's two, and the
-            // shutdown anchor this line is about.
-            EXPECT_EQ(receiver.publishes(), 4u)
+            EXPECT_EQ(receiver.publishes(), 2u)
                 << "the shutdown anchor must reach page 0 with no reactor running";
-            EXPECT_GT(core0_->superblock.wal_anchor(0).checkpoint_lsn,
+            EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn,
                       mount_anchor.checkpoint_lsn);
         } else {
-            EXPECT_EQ(receiver.publishes(), 2u);  // the mount's, and core 0's
+            EXPECT_EQ(receiver.publishes(), 1u);  // the mount's alone
         }
-        const WalAnchorFields stop_anchor = core0_->superblock.wal_anchor(0);
+        const WalAnchorFields stop_anchor = core0_->superblock.wal_anchor(1);
         peer.value().reset();
 
         // The restart, with the anchor Expeditor copies out of the superblock.
@@ -1193,7 +1219,16 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
 
             CoreRuntime::Config as_one_stream = ConfigFor(1);
             as_one_stream.anchor = stop_anchor;
-            const SuperBlock one_stream_image = SingleStreamSuperBlock();
+            // **The one place in this file that still hands a peer an image
+            // its volume disagrees with, and it is deliberate.** Everywhere
+            // else that was the defect AM-S0 removed; here the disagreement
+            // *is* the experiment - the same volume, the same stop, differing
+            // only in what the log topology says - and it is sound because
+            // under `kSingleStream` this core reads no log at all, so there
+            // is no per-core log content for the claim to be wrong about.
+            // The assertion below is exactly that: it recovered nothing.
+            SuperBlock one_stream_image = core0_->superblock;
+            ASSERT_TRUE(one_stream_image.SetLogTopology(kSingleStream).ok());
             as_one_stream.superblock = &one_stream_image;
             as_one_stream.shared_stream = owner.value()->stream();
             as_one_stream.shared_writer = owner.value()->writer();
@@ -1255,21 +1290,10 @@ TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMount
                     .ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
 
-    // The instance's log, as the cutover builds it.
-    auto shared_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
-    ASSERT_TRUE(shared_device.ok()) << shared_device.status().message();
-    wal::WalManagerConfig shared_config;
-    shared_config.shared_stream = true;
-    auto owner = wal::WalManager::Open(shared_device.value().get(), clock_, /*core_id=*/0,
-                                       shared_config);
-    ASSERT_TRUE(owner.ok()) << owner.status().message();
-    owner.value()->StartWriter();
-
+    // The instance's log is the fixture's since AM-S0, and `ConfigFor` hands
+    // it: a second `WalManager` over the same `wal-0-0.log`, with a second
+    // writer thread, was two owning managers on one file for no gain.
     CoreRuntime::Config config = ConfigFor(1);
-    const SuperBlock one_stream_image = SingleStreamSuperBlock();
-    config.superblock = &one_stream_image;
-    config.shared_stream = owner.value()->stream();
-    config.shared_writer = owner.value()->writer();
 
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
@@ -1291,20 +1315,9 @@ TEST_F(CoreRuntimeTest, APeersOwnSuperblockAnswersForTheVolumeAndNotWithZeros) {
     // (`next_trx_id`, the WAL anchor, `log_topology`) and the next three
     // were live. The fix is the whole image, so this cell asserts the
     // *class* is closed rather than the third instance.
-    auto shared_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
-    ASSERT_TRUE(shared_device.ok()) << shared_device.status().message();
-    wal::WalManagerConfig shared_config;
-    shared_config.shared_stream = true;
-    auto owner = wal::WalManager::Open(shared_device.value().get(), clock_, /*core_id=*/0,
-                                       shared_config);
-    ASSERT_TRUE(owner.ok()) << owner.status().message();
-    owner.value()->StartWriter();
-
+    // The fixture's own log and image, for `AForeignAssertion`'s reason
+    // just above: `ConfigFor` hands what `Expeditor` hands.
     CoreRuntime::Config config = ConfigFor(1);
-    const SuperBlock one_stream_image = SingleStreamSuperBlock();
-    config.superblock = &one_stream_image;
-    config.shared_stream = owner.value()->stream();
-    config.shared_writer = owner.value()->writer();
 
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
@@ -1346,8 +1359,8 @@ TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) 
     // Since AM-S0 `ConfigFor` hands the real stream, because the volume is
     // single-stream and `Expeditor` would; the wiring bug this cell exists
     // for is a peer handed *nothing*, so it has to take the stream back
-    // out. `SingleStreamSuperBlock()` is no longer needed either - the
-    // volume already says one stream.
+    // out. Nothing has to rewrite the image either - the volume already
+    // says one stream.
     config.shared_stream = nullptr;
     config.shared_writer = nullptr;
 
@@ -3643,25 +3656,19 @@ TEST_F(CoreRuntimeTest, ASpentLeaseRefusesWithTheWiresRetryableBit) {
     EXPECT_NE(ins.rfind("ERR", 0), 0u) << ins;
 }
 
-TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
-    // PW1c-7 (workplan-peer-writer.md §8): a peer that wrote a relation
-    // across several pages, then restarted, holds nothing in memory - a
-    // fresh extent lease that covers none of its old pages, no fault grant,
-    // no write grant. What it does hold is durable: every page it wrote
-    // carries its stream stamp (PL §9 rule 4), the creation pages since the
-    // acquisition restamp (rule 6). The store claims from the stamp on the
-    // fault, so the relation reads whole and takes writes again with no
-    // grant re-delivered at all. Two restarts: one after the pages were
-    // flushed (the device path), one with the pages living only in the
-    // log (redo's replay leaves them resident without rights, stamped as it
-    // applied them - the resident-frame path).
-    for (const bool flush_before_restart : {true, false}) {
-        SCOPED_TRACE(flush_before_restart ? "pages flushed before the restart"
-                                          : "pages living only in the log");
+// PW1c-7 (workplan-peer-writer.md §8): a peer that wrote a relation across
+// several pages, then restarted, holds nothing in memory - a fresh extent
+// lease that covers none of its old pages, no fault grant, no write grant.
+// What it does hold is durable: every page it wrote carries its stream stamp
+// (PL §9 rule 4), the creation pages since the acquisition restamp (rule 6).
+// The store claims from the stamp on the fault, so the relation reads whole
+// and takes writes again with no grant re-delivered at all.
+void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
+                                               const std::string& name) {
+    {
         catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                                   /*core_count=*/2);
         catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-        const std::string name = flush_before_restart ? "survives_flushed" : "survives_logged";
         auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
                                         catalog::ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
@@ -3704,7 +3711,20 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
         EXPECT_EQ(peer.value()->store().stamp_claims(), 0u)
             << "a funded first run claims nothing";
         ASSERT_TRUE(peer.value()->Sync().ok()) << "the log is what survives";
-        if (flush_before_restart) ASSERT_TRUE(peer.value()->store().Sync().ok());
+        if (flush_before_restart) {
+            ASSERT_TRUE(peer.value()->store().Sync().ok());
+            // **And core 0's free map, which is the authority on which pages
+            // exist.** A restarting peer builds that view by reading the map
+            // off the device (`core_runtime.cpp`), and the extent this run
+            // was leased was carved out of core 0's copy *after* the last
+            // sync - so without this the restarted peer answers `not found`
+            // for its own pages before the stamp claim is ever reached. On
+            // the log path redo's `PAGE_INIT` replay allocates them instead,
+            // which is why only this arm needs it; in a real instance the
+            // pass that does it is core 0's own mount, before any peer
+            // attaches.
+            ASSERT_TRUE(core0_store_->Sync().ok());
+        }
         peer.value().reset();
 
         // The restart: a new lease, nothing granted, the ceiling core 0
@@ -3731,10 +3751,26 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
             reopened.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM " + name).response;
         EXPECT_NE(after.find("601"), std::string::npos) << after;
         // Destroyed with its last page unflushed and its PAGE_INIT in the
-        // log - the second iteration's mount replays this stream too, which
-        // is the never-written-page case the store now reads as NotFound.
+        // log - the never-written-page case the store reads as NotFound.
         reopened.value().reset();
     }
+}
+
+TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
+    // **The device path**, which is the half that has nothing to do with
+    // the log: the pages were flushed, and the restarted owner claims each
+    // one from the stamp it reads off the platter
+    // (`DevicePageStore::TryClaimByStamp`). True under either topology, and
+    // run here under the one every volume this build creates.
+    PeerPagesSurviveARestart(/*flush_before_restart=*/true, "survives_flushed");
+}
+
+TEST_F(CoreRuntimePerCoreStreamTest, APeersOwnPagesSurviveARestartByRedosStamp) {
+    // **The resident-frame path**, and it is per-core by construction: the
+    // pages live only in the log, so what leaves them resident and stamped
+    // is the peer's *own* redo - and under one stream a peer runs no
+    // recovery at all (core 0's pass is the instance's).
+    PeerPagesSurviveARestart(/*flush_before_restart=*/false, "survives_logged");
 }
 
 TEST_F(CoreRuntimeTest, AnUnacquiredRelationIsAskedForAndTheRegrantLands) {
@@ -4504,15 +4540,58 @@ struct ForeignIndexRig {
         return sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
                                    peer->dispatcher().DispatchAsync(sql, session, &out));
     }
-    // Polls `statement` between turns until it finishes; false if it does
-    // not within `max_rounds`.
-    bool Drive(sched::CoroTask& statement, int max_rounds = 256) {
-        for (int i = 0; i < max_rounds; ++i) {
-            if (statement.Poll() == sched::PollResult::kDone) return true;
-            Pump();
+    // **Turns until `done` answers true, bounded by a deadline** - and
+    // `max_rounds` is only the floor under it (AM-S0).
+    //
+    // A round count was a proxy for progress while every wait a statement
+    // could take was resolved by something this loop itself did: a ring
+    // message, a build reply, an inline `Sync()`. Under one stream that
+    // stopped being true. A committing statement parks on `IsDurable`, and
+    // the only thing that moves that watermark on an attached manager is
+    // core 0's **writer thread** taking an `fdatasync` -
+    // `WalManager::RequestSyncNow` asks and does not wait, deliberately,
+    // because a drain that blocked would hold the reactor for another
+    // thread's I/O. 256 tight rounds run out in well under the fsync they
+    // are waiting for, so every shipped write parked forever the moment the
+    // peer stopped owning its stream: `executed=0 running=1 waiting=1`, an
+    // engine doing exactly what it should against a rig measuring turns
+    // where it now has to measure time.
+    //
+    // Past the floor the loop sleeps rather than spins, so the writer gets
+    // a CPU instead of racing this thread for one.
+    template <typename Turn, typename Done>
+    bool TurnUntil(Turn turn, Done done, int max_rounds) {
+        const auto deadline = std::chrono::steady_clock::now() + kDriveCeiling;
+        for (int i = 0;; ++i) {
+            if (done()) return true;
+            turn();
+            if (i < max_rounds) continue;
+            // `done()` once more, not `false`: the `turn()` just above may be
+            // the one that finished the work, and reporting a hang for it
+            // would fail a cell that succeeded.
+            if (std::chrono::steady_clock::now() >= deadline) return done();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
-        return false;
     }
+    // `TurnUntil` over `Pump()`, which is what all but one caller wants.
+    template <typename Done>
+    bool PumpUntil(Done done, int max_rounds = 256) {
+        return TurnUntil([this] { Pump(); }, done, max_rounds);
+    }
+    // Polls `statement` between turns until it finishes; false if it does
+    // not within `TurnUntil`'s bound.
+    bool Drive(sched::CoroTask& statement, int max_rounds = 256) {
+        return TurnUntil([this] { Pump(); },
+                         [&statement] { return statement.Poll() == sched::PollResult::kDone; },
+                         max_rounds);
+    }
+    // Long enough that a slow device's sync is never mistaken for a hang,
+    // short enough that a real hang fails the cell rather than the suite's
+    // timeout. `Drive`'s callers all assert the result; the `PumpUntil`
+    // sites discard it and assert the condition itself on the next line, so
+    // this bound is only ever reached on a defect either way - but it is
+    // reached once per call, and a cell with several of them pays for each.
+    static constexpr std::chrono::milliseconds kDriveCeiling{5000};
 };
 
 void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* table) {
@@ -4774,12 +4853,7 @@ TEST_F(CoreRuntimeTest, APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt) {
         sched::SchedulingGroup::kForeground,
         rig.peer->dispatcher().DispatchAsync("CREATE TABLE cb4_new (id int64, v int64)", nullptr,
                                              &out));
-    bool done = false;
-    for (int i = 0; i < 256 && !done; ++i) {
-        done = statement->Poll() == sched::PollResult::kDone;
-        if (!done) rig.Pump();
-    }
-    ASSERT_TRUE(done) << "the shipped DDL never finished";
+    ASSERT_TRUE(rig.Drive(*statement)) << "the shipped DDL never finished";
     EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
 
     // It ran where the catalog is writable, which is the whole point: core
@@ -5370,7 +5444,7 @@ TEST_F(CoreRuntimeTest, EachCrossOwnerCommitLegIsTimedAndAOneOwnerCommitTimesNot
     const ParticipantCommitStats& p = rig.peer->shipped_statements()->commit_phase();
     EXPECT_EQ(p.prepare_durable.count, 1u);
     EXPECT_EQ(p.decide_ack.count, 1u);
-    for (int i = 0; i < 512 && p.decide_durable.count == 0; ++i) rig.Pump();
+    rig.PumpUntil([&p] { return p.decide_durable.count != 0; }, 512);
     EXPECT_EQ(p.decide_durable.count, 1u)
         << "the participant's own terminal record never became durable";
 
@@ -6574,7 +6648,7 @@ TEST_F(CoreRuntimeTest, TheSameShippedIdentityArrivingTwiceRunsOnceAndAnswersFro
                     ->Ship(/*owner_core=*/1, /*request_id=*/100, /*session_id=*/5,
                            /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
                     .ok());
-    for (int i = 0; i < 256 && !rig.ship->Settled(100); ++i) rig.Pump();
+    rig.PumpUntil([&rig] { return rig.ship->Settled(100); });
     const ShippedStatementOutcome* first = rig.ship->Find(100);
     ASSERT_NE(first, nullptr);
     ASSERT_TRUE(first->arrived) << "the first statement never answered";
@@ -6588,7 +6662,7 @@ TEST_F(CoreRuntimeTest, TheSameShippedIdentityArrivingTwiceRunsOnceAndAnswersFro
                     ->Ship(/*owner_core=*/1, /*request_id=*/101, /*session_id=*/5,
                            /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
                     .ok());
-    for (int i = 0; i < 256 && !rig.ship->Settled(101); ++i) rig.Pump();
+    rig.PumpUntil([&rig] { return rig.ship->Settled(101); });
     const ShippedStatementOutcome* again = rig.ship->Find(101);
     ASSERT_NE(again, nullptr);
     ASSERT_TRUE(again->arrived);
@@ -6618,9 +6692,11 @@ TEST_F(CoreRuntimeTest, AReplyLostAfterTheOwnerCommittedLeavesOneRowAndTheRetryF
     // commits there while core 0 has drained nothing. This is the window
     // the whole scheme is written for: the effect stands, and the answer
     // has not landed.
-    for (int i = 0; i < 256 && rig.peer->shipped_statements()->executed() == 0; ++i) {
-        rig.peer->scheduler().RunOnce();
-    }
+    // **Only the owner turns here**, so this is `TurnUntil` over the peer's
+    // reactor alone rather than `PumpUntil` - core 0 drains nothing, which
+    // is the window the cell exists for.
+    rig.TurnUntil([&rig] { rig.peer->scheduler().RunOnce(); },
+                  [&rig] { return rig.peer->shipped_statements()->executed() != 0; }, 256);
     ASSERT_EQ(rig.peer->shipped_statements()->executed(), 1u) << "the owner never ran it";
     ASSERT_EQ(RowsWith(*rig.peer, "shipped_lost", ",42"), 1);
 
@@ -6639,7 +6715,7 @@ TEST_F(CoreRuntimeTest, AReplyLostAfterTheOwnerCommittedLeavesOneRowAndTheRetryF
                     ->Ship(/*owner_core=*/1, /*request_id=*/201, /*session_id=*/6,
                            /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
                     .ok());
-    for (int i = 0; i < 256 && !rig.ship->Settled(201); ++i) rig.Pump();
+    rig.PumpUntil([&rig] { return rig.ship->Settled(201); });
     const ShippedStatementOutcome* retry = rig.ship->Find(201);
     ASSERT_NE(retry, nullptr);
     ASSERT_TRUE(retry->arrived);
@@ -6724,7 +6800,13 @@ TEST_F(CoreRuntimeTest, AShippedStatementsDeadlineIsUnknownOutcomeAndTheOwnerSti
     // be recalled - so the effect stands while the client was told the
     // outcome is unknown. That is the documented contract, not a defect,
     // and this is the assertion that keeps it documented.
-    rig.Pump(64);
+    // Pumped until the answer nobody wanted comes back, not for a fixed
+    // count: the owner's commit is durable only when core 0's writer thread
+    // has synced for it (`TurnUntil`). **Then turns anyway**, because every
+    // assertion below is an *exactly-once* claim and a wait that stops at
+    // the first reply has given a second one no chance to appear.
+    rig.PumpUntil([&rig] { return rig.ship->late_executed_replies() != 0; }, 64);
+    rig.Pump(8);
     EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
     EXPECT_EQ(RowsWith(*rig.peer, "shipped_deadline", ",45"), 1)
         << "the statement must apply exactly once, whatever the client was told";
@@ -6785,7 +6867,16 @@ TEST_F(CoreRuntimeTest, AParkedShippedStatementDestroyedUnderItsWaiterLeaksTheWa
     ASSERT_EQ(rig.ship->waiting(), 1u);
 
     statement.reset();  // the park destroyed, as cancellation would destroy it
-    rig.Pump(64);
+    // The owner still runs it, and its commit waits on the writer thread -
+    // so this waits for the run rather than counting turns (`TurnUntil`).
+    // **On core 0's event, not the peer's**: what is asserted below is
+    // core 0's waiter count, which nothing moves until the reply lands
+    // there - and `Pump(8)` after it is the turns core 0 would need to
+    // reclaim the waiter if a future cancellation path ever did. Waiting on
+    // the peer's `executed()` alone would prove only that core 0 had not
+    // reclaimed it within a single turn.
+    rig.PumpUntil([&rig] { return rig.ship->late_executed_replies() != 0; }, 64);
+    rig.Pump(8);
     EXPECT_EQ(rig.ship->waiting(), 1u)
         << "a destroyed park now reclaims its waiter - update this invariant, and "
            "docs/inflight/known-gaps.md's entry for it";
@@ -6958,7 +7049,7 @@ TEST_F(CoreRuntimeTest, AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetri
     OpenForeignIndexRig(rig, "shipped_ryow_retry");
 
     auto settle = [&](std::uint64_t id) {
-        for (int i = 0; i < 256 && !rig.ship->Settled(id); ++i) rig.Pump();
+        rig.PumpUntil([&rig, id] { return rig.ship->Settled(id); });
         const ShippedStatementOutcome* out = rig.ship->Find(id);
         return out != nullptr && out->arrived ? out->status : Status::IoError("never answered");
     };
@@ -7871,6 +7962,16 @@ TEST_F(CoreRuntimeTest, AnOwnerBuiltAssertionIsEnforcingAgainAfterTheOwnersResta
     // only by a flush - which is what the owner's remount will read.
     FlushCatalog();
     ASSERT_TRUE(core0_store_->Sync().ok());
+    // **And the owner's own pages, which under one stream nothing else puts
+    // there** (AM-S0). The revive below walks the cabin chain and claims
+    // each page from its stream stamp, and a stamp is read off the
+    // *device* - so the pages the owner built have to have reached it.
+    // Under per-core streams the restarted peer replayed its own log and
+    // re-faulted them on the way past; under one stream a peer runs no
+    // recovery of its own (core 0's pass is the instance's), so what stands
+    // in for that replay is the flush a clean stop performs - `Serve`'s
+    // tail, which is what this reset models.
+    ASSERT_TRUE(rig.peer->store().Sync().ok());
 
     rig.peer.reset();
     CoreRuntime::Config config = ConfigFor(1);

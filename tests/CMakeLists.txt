@@ -47,6 +47,7 @@ add_executable(kds_tests
     txn_2pc_protocol_test.cpp
     prepared_recovery_test.cpp
     core_runtime_test.cpp
+    expeditor_test.cpp
     step_pipeline_test.cpp
     step_descriptor_test.cpp
     remote_step_service_test.cpp
