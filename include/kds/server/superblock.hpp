@@ -534,27 +534,18 @@ public:
     // `kSingleStream`. A durable fact recorded at bootstrap, never a
     // setting a mount may change.
     //
-    // **A peer's copy is filled in at `CoreRuntime::Open`, and the fill is
-    // not optional.** A peer's `superblock_` is a *default-constructed
-    // copy* (`core_runtime.hpp`), zero everywhere, and zero is a legal
-    // value of this field - so an unfilled peer answers `kPerCoreStreams`
-    // on a single-stream volume, silently and wrongly rather than not at
-    // all. That is exactly the shape PW1 hit with `next_trx_id`
-    // (`core_runtime.cpp`: *"a zero there is legal, silent and wrong"*),
-    // and it is fixed the same way: carried on `CoreRuntime::Config` and
-    // applied through `SetLogTopology` below. Found by the AL-S9 review,
-    // reachable from `SHOW META` under `peer_listeners = on`.
+    // **A peer's copy is the volume's whole decoded image**, handed over on
+    // `CoreRuntime::Config` and copied in `Open`'s first statement. It used
+    // to be a *default-constructed* copy filled in field by field, and zero
+    // is a legal value of most of these fields - `kPerCoreStreams` is 0, a
+    // zero `next_trx_id` is "core 0 had none to give", a zero `create_time`
+    // renders as the epoch - so a field nobody carried across answered
+    // silently and wrongly rather than not at all. That happened three
+    // times before the AL-S9 review found the next three already live in
+    // `SHOW META`. `Open` now refuses a config with no image, which is why
+    // there is no longer a list of fields a peer may ask about.
     std::uint32_t log_topology() const noexcept { return fields_.log_topology; }
     bool single_stream() const noexcept { return fields_.log_topology == kSingleStream; }
-
-    // Sets the topology on an **in-memory copy** that did not come from a
-    // decoded image - a peer's, and nothing else. It is not a mount-time
-    // change to a volume: `log_topology` is chosen once at `CreateFresh`
-    // and a decoded superblock already carries the right value, so calling
-    // this on core 0's is at best a no-op. Refuses a value that is neither
-    // constant, because a third one would decode as a topology no branch
-    // handles.
-    Status SetLogTopology(std::uint32_t topology) noexcept;
 
     // Stamps last_mount_time to `now_unix_seconds` (call once per boot,
     // after Decode()/CreateFresh() succeeds).

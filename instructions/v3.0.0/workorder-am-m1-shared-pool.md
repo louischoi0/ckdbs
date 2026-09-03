@@ -1,0 +1,225 @@
+# Work order AM — AR0 M1: the shared buffer pool, page latches, scalar page LSN
+
+Written 2026-09-03 on `worktree-v3.0.0-arch-revision` at `f6ed10c`
+(`v2.7.0-157-gf6ed10c`), while M0's baseline (AL-S8) was still measuring.
+The survey below is a source read at that commit.
+
+**Status: not started, and it must not start before AL-S8's numbers are
+read.** M1 removes the structural argument `eviction.md` §1 is built on,
+and the only honest way to remove it is to know what the per-core pool was
+worth. AM-1 says what would change that.
+
+---
+
+## AM-1 — The direction, and what it is not
+
+AR0 §8 step 4: *"M1: shared buffer pool, page latches, scalar page LSN."*
+AR0-4 retires **write-serialization authority**; §3's revised G1 admits
+latch primitives, and G2 keeps `cores = 1` at zero overhead.
+
+**The title overstates the work in one place and understates it in
+another, and the survey is how CLA found both.**
+
+- **"Scalar page LSN" is already done.** `page_lsn` at offset 8 of the
+  common header has always been a scalar `uint64_t`, and G3 — "LSN is
+  stream-local, never compared across streams" — was retired by M0. What
+  is left of the phrase is the *stamp*, the 16-bit `flags` word at offset
+  2 carrying `core_id + 1` (`page_header.hpp:137-158`), which D4 proposes
+  to drop. That is a page-header format question, not an LSN question, and
+  AM-R4 takes it.
+- **"Page latches" is not a widening. It is a first build.**
+  `include/kds/base/latch.hpp` is included by **exactly one file** in the
+  tree, `include/kds/wal/stream.hpp` — verified at `f6ed10c`. There is no
+  page latch. `heap-and-tuple.md` §6 specifies one ("pinned for the
+  duration of any access and **latched** — shared for reads, exclusive for
+  structural mutation"), and what makes that specification true today is
+  not an implementation: it is that a page belongs to one core and the
+  reactor is run-to-completion between suspension points. M1 has to write
+  the thing the spec has been describing.
+
+**What M1 is not:** it is not the lock manager. AR0 §8 puts that in M2,
+and the ordering is not cosmetic — see AM-R1, which is the ruling the
+whole milestone turns on.
+
+---
+
+## AM-2 — Where this sits against AR0's D-items
+
+| D-item | Bearing on M1 |
+|---|---|
+| D4 (free-map / superblock access rule; "page LSN becomes scalar; drop the stream id field") | **AM-R4 and AM-R5.** The `[source-read required: page header layout]` tag is discharged in AM-3 E |
+| D14 (no in-place migration; a new major version mounts only its own volumes) | **AM-R4 depends on it.** Dropping the stamp field is a format event, and D14 is what makes it payable |
+| D2, D8, D9, D12, D13 (lock manager, gap locks, FK, deadlock, async waits) | **M2, not here.** AM-R1 is what keeps them out |
+| D1 (isolation target) | Not needed by M1, and M1 must not presuppose it |
+| D10, D6 (affinity weight, spreading default) | Measurement-gated on RW-C1; untouched |
+
+---
+
+## AM-3 — The survey: what a shared pool would meet, at `f6ed10c`
+
+**A. There is no page latch, and no other engine code takes a lock.**
+`base/latch.hpp` has one includer (`wal/stream.hpp`). A grep for `Latch`
+across `include/` and `src/` finds the WAL and nothing else. The other
+locks a reactor thread can reach are `FileLogDevice::segments_mutex_` and
+`WalWriter::mutex_`, both inside the WAL (`sched.md` §9-2). So M1 adds the
+**first** lock outside the log, and `rules.md` §3's declared-sharing table
+gains its fourth row.
+
+**B. The pool is per core, and `eviction.md` argues for it in the strongest
+terms the tree contains.** §1: *"Per-core pools (S7) + thread-per-core ⇒
+the entire replacement mechanism is core-local. There are no latches, no
+lock-free tricks, and no cross-core coordination anywhere in this design.
+This is the structural advantage over shared-pool engines (PostgreSQL's
+buffer mapping and clock sweep contend on locks; KDS simply has nothing to
+contend on)."* EV4: *"Strict per-core pools. No cross-core frame stealing,
+no rebalancing in v1 … any stealing path reintroduces cross-core
+synchronization, forfeiting the lock-free property."*
+
+**This is the single largest thing M1 reverses**, and it is reversed by
+argument, not by deletion: the spec's claim is *true*, and M1 is the
+decision to pay that cost for something else. `eviction.md` §1 and EV4 get
+rewritten to say what was bought, or the spec becomes a lie about the
+engine.
+
+**C. `DevicePageStore` declares itself core-local.** `device_page_store.hpp:97`:
+*"Concurrency: core-local, no internal synchronization (rules.md #3)."*
+Pin counts and frame state are plain non-atomic fields (`page.md` §6),
+which is stated as a *feature*: "multi-core adds instances, not
+synchronization."
+
+**D. The store carries an ownership apparatus that a shared pool does not
+obviously need.** `MayFault` / `MayWrite`, extent leases, write grants
+(PW1c-4) and stamp claims (PW1c-7); `CreateAtUnpinned` refused on a leased
+store; `FlushMaps` refused on a leased store; the system range readable
+everywhere and writable only by core 0. Whether any of it survives a
+shared pool is AM-R2, and the answer is not "delete it".
+
+**E. The page header, for D4's `[source-read required]`.** Common 32-byte
+header (`page_header.hpp`): `page_type` at 0, `format_version` at 1,
+**`flags` at 2 (2 bytes) — the PL-C stream stamp, `core_id + 1`, 0 =
+never stamped**, `checksum` at 4, `page_lsn` at 8. So D4's "drop the stream
+id field" is a **2-byte hole at offset 2 in every headered page**, and
+`FormatPage`, `SetPageStreamStamp`, `StreamStampFor`, `StampIsForeign` and
+`device_page_store`'s claim-at-fault are its users. Not a bump-free change.
+
+**F. `buffer_pool_frames` is an instance total already.** `expeditor.cpp:204`:
+*"the budget is an instance total divided evenly per core, remainder to
+core 0"*, and a value below `cores` is refused at boot because a share of
+zero is meaningless. Under a shared pool the division disappears and the
+refusal with it — the setting keeps its name and its meaning gets
+*simpler*, which is what `CLAUDE.md`'s "never add a second name for a
+quantity an existing setting expresses" asks for.
+
+**G. `cores = 1` is where G2 has to be enforced, and the WAL shows how.**
+`WalStream` takes `Latch*`; null means unshared and costs two branches.
+A page latch has no such luxury: it would sit in the hot accessor path,
+not once per append. AM-R3.
+
+**H. Eviction's exhaustion protocol assumes a core owns its frames.** EV8's
+bounded cooperative retry ends in `ResourceExhausted` on the *statement*;
+under a shared pool the frame a statement waits for may be pinned by
+another core's task, and "yield and retry" is no longer bounded by this
+core's own progress. Untouched by AR0, and a real gap — AM-R6.
+
+**I. Nothing in the tree constructs an `Expeditor`** (`docs/inflight/known-gaps.md`).
+Every multi-core defect of M0 landed in exactly that hole. M1 is a
+multi-core memory-model change; the same hole is waiting for it, and
+AM-S0's first cell is closing it rather than discovering it twice.
+
+---
+
+## AM-4 — Rulings AM-R1..AM-R7 (CLA's proposals)
+
+**AM-R1 — M1 shares the *cache*, never the *authority*.**
+This is the ruling the milestone turns on. A shared pool means two cores
+can hold the same frame; it must not mean two cores can *write* the same
+relation, because what makes concurrent writers safe is row locks and
+those are M2. So through M1, **statement dispatch still routes a write to
+the relation's owner** — unchanged from today — and the shared pool changes
+only *where the bytes live*, not who may mutate them. The page latch M1
+builds is therefore doing one job: protecting a frame from a concurrent
+*reader* on another core, plus the writeback and sweep paths. Reversing
+this — sharing the authority in M1 and deferring the locks — would convert
+every lost-update into a quiet wrong answer with no gate anywhere, which
+is exactly the risk class AR0 §4.1 warns about.
+
+**AM-R2 — The ownership apparatus is narrowed by *proof*, not by
+deletion.** `MayFault` becomes vacuous under a shared pool (any core may
+fault any page) and goes. `MayWrite` **stays** for as long as AM-R1 holds,
+because it is the enforcement of the very rule AM-R1 keeps — and a debug
+assertion is not enough: it is the thing that turns a routing bug into a
+refusal instead of corruption. Extent leases stay (allocator authority,
+retained by AR0-4). Stamp claims are AM-R4's.
+
+**AM-R3 — The page latch: one word in the frame, compiled out at
+`cores = 1`.** Not a `std::mutex` per frame — a pool of 8192 frames would
+carry 8192 of them. Proposal: a 32-bit word per frame holding the shared
+count and an exclusive bit, acquired with CAS; and at `cores = 1` the
+acquire/release pair is a **no-op the compiler removes**, satisfying G2's
+"zero overhead" literally rather than "two branches". Whether `cores` is
+a compile-time or a run-time zero is the sub-decision: a run-time branch
+in the hot accessor is measurable, a compile-time one means two builds.
+**CLA proposes the run-time branch and a measurement**, because two builds
+is a testing burden the engine has never carried and the branch is
+perfectly predicted. `[measurement-gated]`
+
+**AM-R4 — The stamp field goes, and it goes in M1 rather than being left
+to rot.** Under a shared pool no core "owns" a frame, so PL-C's claim has
+no reader left — its last one is `device_page_store`'s claim-at-fault,
+which AM-R2 removes with `MayFault`. Leaving a 2-byte field that nothing
+writes and nothing reads is worse than removing it: the next reader
+assumes it means something. D14 makes the format event payable, so
+`flags` at offset 2 becomes reserved-and-zero, `StampIsForeign` and
+`StreamStampFor` go, and `docs/spec/page-lsn-cross-stream.md` finally
+leaves the tree — which `docs/inflight/known-gaps.md` records as undated
+today. **A pre-M1 volume then does not mount**, per D14, and that is the
+first time in this revision that has been true: M0 kept them mountable.
+Say it out loud in the milestone row rather than discovering it.
+
+**AM-R5 — The free map and the superblock stay core 0's.** D4 proposes
+moving allocator authority to "the log core"; under M0 the log core *is*
+core 0, so the proposal is already satisfied and needs no work. CC11's
+"every core reads with the same authority; core 0 alone writes" survives
+a shared pool unchanged — sharing the cache does not make a second writer.
+**No change in M1.**
+
+**AM-R6 — EV8's exhaustion protocol needs a new bound, and this is the
+gap AR0 does not mention.** Today "yield and retry, then
+`ResourceExhausted`" is bounded because the frames a core waits on are its
+own and its own tasks release them. Under a shared pool a statement can
+exhaust its budget waiting on a frame another core's task holds pinned,
+and the retry budget stops being a statement-local fact. Proposal: keep
+the budget and the truthful error, and **count the cross-core case
+separately** so an undersized pool is distinguishable from a contended
+one — an operator told `ResourceExhausted` needs to know which. New
+counter, not a new setting.
+
+**AM-R7 — `eviction.md` §1 and EV4 are rewritten as a trade, not
+deleted.** The spec's argument against a shared pool is correct and must
+survive as the reason the cost is being paid. §1's "KDS simply has nothing
+to contend on" becomes a statement about what was given up and what for,
+with AL-S8's numbers and M1's own beside it. A spec that quietly drops an
+argument it used to make cannot be audited.
+
+---
+
+## AM-5 — Stages
+
+Sizes: S ≤ ½ day, M ≤ 2 days, L more. Every stage: `critics-developer`
+review, the full suite, sync with `origin/main` on the branch, stop.
+
+| # | Stage | Cells (definition of done) | Size |
+|---|---|---|---|
+| AM-S0 | **The Expeditor cell, first and alone.** A test that boots a real `Expeditor` at `cores = 2` and asserts what each core came up holding — log, attach, superblock copy, recovery report, catalog cache | the two M0 defects (`AL-7c`'s null log device, `AL-7e`'s peer topology) each reproduce against a deliberately reverted fix and are caught | M |
+| AM-S1 | The page latch (AM-R3): the primitive, its `cores = 1` compile-out, and its acquisition order against the WAL latch | contention cell at 8 cores; a `cores = 1` A/B showing the acquire/release pair costs nothing measurable | M |
+| AM-S2 | The shared pool: one frame table, one CLOCK hand, `buffer_pool_frames` an undivided instance total (AM-R2's `MayFault` removal here) | a page faulted on core 1 is served from the frame core 0 loaded; the boot refusal for `frames < cores` goes | L |
+| AM-S3 | Writeback and the WAL gate under sharing; EV8's new bound and counter (AM-R6) | flush-before-evict holds with two cores dirtying one page; the cross-core exhaustion counter is nonzero exactly when it should be | M |
+| AM-S4 | The stamp field (AM-R4) and the format event; `page-lsn-cross-stream.md` leaves the tree | a pre-M1 volume is refused at mount, naming why; no reader of `flags` at offset 2 remains | M |
+| AM-S5 | Prose: `eviction.md` §1/EV4 as AM-R7 asks, `page.md` §6, `heap-and-tuple.md` §6, `rules.md` §3's fourth row, `crosscore.md` CC7, `CLAUDE.md` | no spec claims a core-local pool | M |
+| AM-S6 | The baseline against AL-S8's, same cells, same host | one results file per cell under `bench/v3.0.0/`, and **the delta to AL-S8 is the point** — that pair is within one engine and is exactly what D15 permits | M |
+
+## AM-6 — Row status (CLA, appended as rows land)
+
+| row | status |
+|---|---|
+| AM-S0..S6 | not started; AM-1 says why AL-S8 gates them |

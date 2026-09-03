@@ -1572,12 +1572,14 @@ Status Expeditor::Serve() {
             core_config.anchors = database_->superblock.wal_anchors();
             // And the ceiling this peer's recovery must not sit above (PW1).
             // Same copy, same thread, same reason as the anchor.
-            core_config.next_trx_id = database_->superblock.next_trx_id();
             // The third field copied off core 0's superblock because a
             // peer's own copy is default-constructed and a zero here is
             // legal, silent and wrong (core_runtime.hpp). It decides
             // whether this core recovers a stream of its own at all.
-            core_config.log_topology = database_->superblock.log_topology();
+            // The whole image, which is what a peer answers `SHOW META`
+            // from and what every topology test on that core reads
+            // (`core_runtime.hpp`'s `Config::superblock`).
+            core_config.superblock = &database_->superblock;
             // The instance's log, where there is one. Core 0's manager owns
             // both and outlives every peer, so these are borrowed rather
             // than shared - and they are null under per-core streams, where

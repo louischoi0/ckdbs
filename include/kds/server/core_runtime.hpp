@@ -225,23 +225,36 @@ public:
         // rather than guessing. Indexed by core id.
         std::vector<WalAnchorFields> anchors;
 
-        // Core 0's durable transaction-id ceiling, copied on the startup
-        // thread for the reason the anchor above is: this core's
-        // `superblock_` is default-constructed, so the field reads 0 here
-        // and a mount would compare its recovered stream against nothing.
-        // Zero means "core 0 had none to give", which is only true before a
-        // database exists (PW1, docs/inflight/in-progress/workplan-peer-writer.md).
-        std::uint64_t next_trx_id = 0;
-
-        // **What the volume's log is** (AR0 M0, AL-R5), copied from core 0's
-        // superblock on the startup thread — the *third* field here that
-        // exists because `superblock_` is a default-constructed copy, and
-        // the one where a zero would be worst. `kPerCoreStreams` is 0, so a
-        // peer that was never told would silently conclude "my own stream
-        // is mine to recover" on a volume that has one stream, and recover
-        // a log another core is already recovering. `superblock.hpp`'s
-        // accessor names this trap; this field is the spring.
-        std::uint32_t log_topology = kPerCoreStreams;
+        // **The volume's superblock, and it is required** — `Open` refuses
+        // without it. Copied wholesale into `superblock_` below, which is
+        // what closes a class of bug rather than an instance of one.
+        //
+        // Three fields used to live here individually — the transaction-id
+        // ceiling (PW1), the log topology (AL-S1c) and, before them, the
+        // WAL anchor — each added after a peer was caught answering a
+        // *legal, silent, wrong zero* off a default-constructed
+        // `superblock_`. The AL-S9 review found the next three already
+        // live: `version`, `create_time` and `last_mount_time`, which a
+        // peer's `SHOW META` printed as `0` and as the epoch under
+        // `peer_listeners = on`, contradicting `crosscore.md` CC11's *every
+        // core reads with the same authority*. Field-by-field was never
+        // going to end, because nothing listed which fields a peer was
+        // entitled to answer and nothing checked.
+        //
+        // So the peer gets the whole decoded image and the pointer is
+        // mandatory: a `CoreRuntime` cannot be constructed without being
+        // told what volume it is on. `anchor` above stays separate because
+        // it is a *selection* — this core's slot, or the fold's under one
+        // stream — not a field the image is missing.
+        //
+        // **A borrowed pointer, read once and not retained.** `Open` copies
+        // through it in its first statement, on the startup thread, after
+        // core 0 has finished raising its own ceiling and before any peer
+        // worker runs — the same single-threaded discipline `anchor` and
+        // `anchors` already rely on. It is not a handle on core 0's live
+        // image and must not become one: that would be shared mutable state
+        // with no declaration (`docs/rules/rules.md` §3).
+        const SuperBlock* superblock = nullptr;
 
         // **The instance's log, when there is one** (AR0 M0, AL-R1/AL-S1c).
         // Both null under per-core streams, where this core opens its own

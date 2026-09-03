@@ -38,7 +38,7 @@ operator says otherwise; constants are never CLA's):
 |---|---|
 | D3 (log appender) | the *mechanism* is AL-R1, a proposal that differs from D3(a)'s letter for the reason AR0-V4 gives; the *constant* (the group-commit cadence) stays `wal_drain_interval_ns` at its current 1 ms and is re-measured at AL-S8 |
 | D4 (free-map / superblock authority) | untouched by M0: `crosscore.md` CC11 stands — core 0 alone writes the superblock, the free map and the catalog, and core 0 is also where the one log's drain runs (AL-R1). "The log core" of D4 *is* core 0 in M0 |
-| D14 (format) | AL-R3: superblock format 15 → 16; a version-15 image refuses the mount; nothing migrates in place |
+| D14 (format) | **Not consumed after all** — AL-R3's draft proposed superblock format 15 → 16, and AL-S2 amended it: `log_topology` took the former `reserved1` word, which every existing image already holds as 0 = `kPerCoreStreams`, so M0 is a **format-event-free** change and a pre-M0 volume still mounts. D14's "a new major version mounts only volumes created by it" is therefore **unspent**, and AM-R4 is where it gets paid |
 | D15 (baseline) | AL-R8, **ratified by CLA 2026-09-03**: `bench/v3.0.0/`, a fresh series, no delta to any v2.x number |
 
 **D-items M0 does not touch**: D1, D2, D5–D13, D16 beyond the citation

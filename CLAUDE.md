@@ -81,21 +81,33 @@ stated in its spec as a fact, and nowhere here as a plan.
 **Three trees left on 2026-09-02, ahead of the big-bang change: `bench/`,
 `instructions/` and `docs/inflight/`.** The last commit holding them is
 `1769487`; `git show 1769487:<path>` retrieves any file, and each directory
-keeps a `README.md` saying what was there and why it went. **Every citation
-to one of those paths — in this file, a spec, the manual, a test or a source
-comment — resolves against that commit.** `instructions/v3.0.0/` reopened
+keeps a `README.md` saying what was there and why it went. **A citation to
+one of those paths — in this file, a spec, the manual, a test or a source
+comment — resolves against that commit *unless the path exists in the
+working tree*.** All three have since reopened, so the qualifier is
+load-bearing: `docs/inflight/in-progress/` is not a reopened bucket and a
+source comment still cites it. `instructions/v3.0.0/` reopened
 on 2026-09-02 with the change's own instructions — AR0 and one work order
 per milestone (`instructions/v3.0.0/index.md`). **`bench/` reopened on
 2026-09-03** with AL-R8 ratified: `bench/v3.0.0/` is a fresh series and
 carries no delta against any v2.x number, and `bench/README.md` states the
-five rules a run is invalid without. `docs/inflight/` stays closed. Two
-buckets remain under `docs/`, one rule each:
+five rules a run is invalid without. **`docs/inflight/` reopened on
+2026-09-03 on the operator's word**, with a narrower job than it had —
+`instructions/` took the plans, so this holds only what a plan is not.
+Three buckets under `docs/`, one rule each:
 
 - **`docs/spec/`** — what is confirmed and implemented. The authoritative
   specifications; when this file and a spec conflict, the spec wins.
 - **`docs/rules/`** — concepts and constraints that hold across the whole
   codebase: `rules.md`, the fixed-length-tuple rule, the Keystone id
   invariant and its findings.
+- **`docs/inflight/`** — `known-gaps.md` (what is missing, what the code
+  does differently from a spec, what the suite does not cover), `bugs/`
+  (a defect found and **not yet fixed** — one fixed in the session that
+  found it gets none) and `blocked/`. Every entry names the commit it was
+  verified at; an entry older than its subsystem's last change is a
+  statement about an engine that no longer exists. Open work orders are
+  **not** here — they are `instructions/<version>/`.
 
 A closed workplan is deleted, not archived: the spec that owns the
 subsystem carries everything durable. The plans closed before 2026-08-26
@@ -262,8 +274,14 @@ later must still say what it was true of:
 None are recorded here or in the specs: the lists that stood here and in
 each spec's open-decisions section were plans against the engine the
 big-bang change replaces, and they went with `docs/inflight/` (at
-`1769487`, and in this file at `7f0193b`). The rule stands without the
-list: **when work touches a matter the owning spec does not decide, stop
+`1769487`, and in this file at `7f0193b`). **The open list for v3 is
+AR0's D1–D16**, in `instructions/v3.0.0/ar0-architecture-revision.md` §5,
+each with CLA's proposal beside it and each unratified but D15 — and three
+of them (D7, D8, D9) are marked `[quiet-wrong]` by AR0 itself, meaning a
+wrong choice converts a refusal into a wrong answer. `docs/inflight/known-gaps.md`
+tracks what is *missing*, which is a different list and does not decide
+anything. The rule stands whatever the lists say: **when work touches a
+matter the owning spec does not decide, stop
 and ask, or implement behind an interface that keeps every option
 viable.** Never infer a decision from a green suite, a merged diff, or
 the absence of a rule. The C++ standard, toolchain, build system and test

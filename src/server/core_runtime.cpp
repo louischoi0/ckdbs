@@ -97,7 +97,23 @@ CoreRuntime::~CoreRuntime() {
 StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                                          storage::PageDevice& device,
                                                          const sched::Clock& clock, Logger* log) {
+    // **Before anything else, because everything below may read it.** The
+    // volume's image is required rather than optional: a `CoreRuntime` that
+    // does not know what volume it is on answers a legal, silent, wrong
+    // zero for every field it was not individually told about, which is the
+    // shape three separate defects have now taken (`core_runtime.hpp`'s
+    // `Config::superblock`).
+    if (config.superblock == nullptr) {
+        return Status::InvalidArgument(
+            "CoreRuntime: core " + std::to_string(config.core_id) +
+            " was given no superblock; a core cannot be opened without the volume's image");
+    }
+
     auto runtime = std::unique_ptr<CoreRuntime>(new CoreRuntime(config, log));
+    // The whole decoded image, not a field of it. `anchor` and `anchors`
+    // stay on the config: those are selections over the image, not gaps in
+    // it.
+    runtime->superblock_ = *config.superblock;
 
     // Each core gets its own epoll instance. Sharing one would be shared
     // mutable state between cores (workplan guideline 1) and would also
@@ -117,7 +133,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // Unattached, it opens `wal-<core_id>-<segment_no>.log` in the shared
     // directory - the naming predates multicore (file_log_device.hpp) and
     // is why N streams need no per-core directory.
-    if (config.log_topology == kSingleStream) {
+    if (config.superblock->single_stream()) {
         if (config.shared_stream == nullptr || config.shared_writer == nullptr) {
             // A peer with no stream to attach to would silently open one of
             // its own and write records nobody replays.
@@ -200,7 +216,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // undo losers core 0 has already rolled back. The recovery report stays
     // zeroed, which is the truth for a core that recovered nothing, and
     // `SHOW META`'s block reads that way on a peer.
-    if (config.log_topology == kSingleStream) {
+    if (config.superblock->single_stream()) {
         // **Timed, though nothing was recovered.** `SHOW META` prints the
         // whole `_us` block only where a clock was supplied
         // (`command_dispatcher.cpp`), and this core still measures the
@@ -234,27 +250,15 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // nothing persists and a ceiling core 0 never learns of.
     //
     // **The ceiling it compares against is core 0's, and PW1 is when that
-    // started mattering.** `superblock_` is default-constructed - zero
-    // everywhere, `next_trx_id` included - so this check used to compare a
-    // recovered stream against 0. That was harmless only while a peer's
-    // stream named no transaction of its own, which the sentence this
-    // comment replaced predicted would end with the id leases: the first
-    // peer that writes and then remounts would recover ids above 0 and
-    // refuse its own mount, on a database that did nothing wrong. So core 0
-    // copies its ceiling in at startup, exactly as it copies this core's WAL
-    // anchor and for the same reason - the field cannot be read off
-    // `superblock_`, and a zero there is legal, silent and wrong.
-    if (config.next_trx_id > runtime->superblock_.next_trx_id()) {
-        if (Status s = runtime->superblock_.SetNextTrxId(config.next_trx_id); !s.ok()) return s;
-    }
-    // **The same copy, and the same failure mode** (AL-S9 review). Zero is
-    // a legal `log_topology` - it is `kPerCoreStreams` - so a peer that is
-    // never told answers `SHOW META` with `wal_topology=per-core` on a
-    // single-stream volume, and prints `wal_anchor_count` beside it. Not a
-    // missing field a reader would notice: a wrong one. Every other user of
-    // the topology on this core reads `config.log_topology` directly, which
-    // is why nothing but the report was affected.
-    if (Status s = runtime->superblock_.SetLogTopology(config.log_topology); !s.ok()) return s;
+    // started mattering.** This check used to compare a recovered stream
+    // against the 0 of a default-constructed copy, which was harmless only
+    // while a peer's stream named no transaction of its own - and the id
+    // leases ended that: the first peer to write and then remount would
+    // recover ids above 0 and refuse its own mount, on a database that did
+    // nothing wrong. PW1 fixed it by copying that one field across; the
+    // AL-S9 review replaced the copying with the whole image above, because
+    // field-by-field had by then been wrong three more times.
+
     // Reads the report this core's own recovery produced, which is zeroed
     // under one stream because core 0's pass covered these records and
     // raised the ceiling there. So in that topology the check is core 0's
@@ -488,7 +492,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // enforce them - but the log they were recorded in is stream 0's,
         // and the scanner validates every segment header against the id it
         // is given (`mount_recovery.hpp` says what each answers).
-        /*stream_core=*/config.log_topology == kSingleStream ? 0 : config.core_id,
+        /*stream_core=*/config.superblock->single_stream() ? 0 : config.core_id,
         // **And `redo_start_lsn` under one stream, not `checkpoint_lsn`.**
         // The scan must begin at or before *this* core's own first
         // `ASSERT_SNAPSHOT`, which is written just after its own
@@ -506,7 +510,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // folds `ASSERT_*` records after whatever base it finds, and
         // `DedupeEntryLinkage` exists for that overlap - and it is no wider
         // than the redo pass that just ran.
-        config.log_topology == kSingleStream ? config.anchor.redo_start_lsn
+        config.superblock->single_stream() ? config.anchor.redo_start_lsn
                                              : config.anchor.checkpoint_lsn,
         runtime->dispatcher_->assertions(), runtime->recovery_, log);
 

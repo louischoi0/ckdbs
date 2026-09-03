@@ -108,6 +108,11 @@ protected:
         CoreRuntime::Config c;
         c.core_id = core_id;
         c.wal_dir = dir_.string();
+        // Required, and deliberately so: a core cannot be opened without
+        // the volume's image (`core_runtime.hpp`). Every cell below then
+        // sees the topology, the ceiling and the times the volume really
+        // has, instead of the legal zeros a default-constructed copy gave.
+        c.superblock = &core0_->superblock;
         auto lease = extents_->Reserve(storage::kDefaultExtentPages);
         EXPECT_TRUE(lease.ok()) << lease.status().message();
         if (lease.ok()) c.lease = lease.value();
@@ -789,12 +794,13 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblo
     // not begin a *single* transaction - every write died at its first id,
     // ahead of any page. Reads never noticed: a read view mints from
     // `peek()`, which issues nothing.
-    // Core 0's ceiling travels in the config, the way its WAL anchor does:
-    // a peer's own `SuperBlock` is default-constructed, so without this the
-    // mount check downstream compares a recovered stream against 0.
+    // Core 0's ceiling travels in the config, the way its WAL anchor does -
+    // as of the AL-S9 review, inside the whole superblock rather than as a
+    // field of its own, because a peer's copy answered a legal zero for
+    // every field nobody had thought to carry.
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
-    ASSERT_GT(config.next_trx_id, 0u) << "a bootstrapped database should carry a ceiling";
+    ASSERT_GT(config.superblock->next_trx_id(), 0u)
+        << "a bootstrapped database should carry a ceiling";
 
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
@@ -827,7 +833,7 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblo
     // The grant sits at or above the ceiling the config carried, so the
     // out-of-order guard in `ReserveBlock` has a real floor to check
     // against rather than the 0 a default-constructed superblock reads.
-    EXPECT_GE(block.value().first, config.next_trx_id);
+    EXPECT_GE(block.value().first, config.superblock->next_trx_id());
 
     // And the windows stay disjoint: core 0's next id sits past the block it
     // granted, so a peer's transaction id can never collide with a core-0
@@ -894,7 +900,6 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     ASSERT_EQ(receiver.folded_cores(), 0u);
 
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
@@ -984,7 +989,6 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         RegisterAnchorReceiver(core0, receiver);
 
         CoreRuntime::Config first_run = ConfigFor(1);
-        first_run.next_trx_id = core0_->superblock.next_trx_id();
         auto peer = CoreRuntime::Open(first_run, *device_, clock_, nullptr);
         ASSERT_TRUE(peer.ok()) << peer.status().message();
         ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
@@ -1068,7 +1072,6 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         // The restart, with the anchor Expeditor copies out of the superblock.
         CoreRuntime::Config again = ConfigFor(1);
         again.anchor = stop_anchor;
-        again.next_trx_id = core0_->superblock.next_trx_id();
         auto reopened = CoreRuntime::Open(again, *device_, clock_, nullptr);
         ASSERT_TRUE(reopened.ok()) << reopened.status().message();
 
@@ -1126,8 +1129,6 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
 
             CoreRuntime::Config as_one_stream = ConfigFor(1);
             as_one_stream.anchor = stop_anchor;
-            as_one_stream.next_trx_id = core0_->superblock.next_trx_id();
-            as_one_stream.log_topology = kSingleStream;
             as_one_stream.shared_stream = owner.value()->stream();
             as_one_stream.shared_writer = owner.value()->writer();
             auto single = CoreRuntime::Open(as_one_stream, *device_, clock_, nullptr);
@@ -1199,8 +1200,6 @@ TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMount
     owner.value()->StartWriter();
 
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
-    config.log_topology = kSingleStream;
     config.shared_stream = owner.value()->stream();
     config.shared_writer = owner.value()->writer();
 
@@ -1211,15 +1210,19 @@ TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMount
     EXPECT_GE(peer.value()->recovery().assertions_foreign, 1u);
 }
 
-TEST_F(CoreRuntimeTest, APeersOwnSuperblockCopyLearnsTheVolumesTopology) {
-    // The AL-S9 review's finding. A peer's `superblock_` is a
-    // default-constructed copy and zero is a *legal* `log_topology` - it is
-    // `kPerCoreStreams` - so a peer that is never told reports
-    // `wal_topology=per-core` on a single-stream volume and prints
-    // `wal_anchor_count` beside it. Nothing else on the core was affected,
-    // because every other reader takes `config.log_topology` directly; this
-    // is the one place the copy is the answer, and it is the one an
-    // operator reads.
+TEST_F(CoreRuntimeTest, APeersOwnSuperblockAnswersForTheVolumeAndNotWithZeros) {
+    // The AL-S9 review's finding, and then the review of the fix. A peer's
+    // `superblock_` was a *default-constructed copy*, and zero is a legal
+    // value of most of its fields - so a peer reported
+    // `wal_topology=per-core` on a single-stream volume, and printed
+    // `version=0` and two epoch timestamps beside it, under
+    // `peer_listeners = on`. Wrong rather than absent, and directly against
+    // `crosscore.md` CC11's "every core reads with the same authority".
+    //
+    // Three fields had already been carried across one at a time
+    // (`next_trx_id`, the WAL anchor, `log_topology`) and the next three
+    // were live. The fix is the whole image, so this cell asserts the
+    // *class* is closed rather than the third instance.
     auto shared_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
     ASSERT_TRUE(shared_device.ok()) << shared_device.status().message();
     wal::WalManagerConfig shared_config;
@@ -1230,25 +1233,45 @@ TEST_F(CoreRuntimeTest, APeersOwnSuperblockCopyLearnsTheVolumesTopology) {
     owner.value()->StartWriter();
 
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
-    config.log_topology = kSingleStream;
     config.shared_stream = owner.value()->stream();
     config.shared_writer = owner.value()->writer();
 
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // Asserted through `SHOW META` rather than through the field, because
-    // the report is where the wrong answer reached a client.
+    // Asserted through `SHOW META` rather than through the fields, because
+    // the report is where every wrong answer reached a client.
     const std::string meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
     EXPECT_NE(meta.find("wal_topology=single"), std::string::npos) << meta;
     EXPECT_EQ(meta.find("wal_anchor_count="), std::string::npos)
         << "printed only under per-core, and this volume is not: " << meta;
+    // The three the review found live. `version=0` is not a version this
+    // build ever wrote, and a zero `create_time` renders as the epoch - the
+    // reading an operator would act on.
+    EXPECT_EQ(meta.find("version=0 "), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("create_time=0 "), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("last_mount_time=0 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find("version=" + std::to_string(kSuperBlockVersion)), std::string::npos)
+        << "a peer must answer the volume's version, not its copy's: " << meta;
+}
+
+TEST_F(CoreRuntimeTest, ACoreCannotBeOpenedWithoutTheVolumesImage) {
+    // The guard that closes the class rather than the instance: three
+    // separate defects came from a field nobody carried across, and nothing
+    // listed which fields a peer was entitled to answer. Now there is no
+    // such list, because there is no such choice.
+    CoreRuntime::Config config = ConfigFor(1);
+    config.superblock = nullptr;
+
+    auto opened = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_FALSE(opened.ok());
+    EXPECT_EQ(opened.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(opened.status().message().find("superblock"), std::string::npos)
+        << opened.status().message();
 }
 
 TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) {
     CoreRuntime::Config config = ConfigFor(1);
-    config.log_topology = kSingleStream;  // and no shared_stream/shared_writer
 
     auto opened = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_FALSE(opened.ok());
@@ -3584,7 +3607,6 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
         CoreRuntime::Config first_run = ConfigFor(1);
         // The ceiling core 0 copies in at every start (Expeditor's loop):
         // the second iteration's stream already names the first's ids.
-        first_run.next_trx_id = core0_->superblock.next_trx_id();
         SCOPED_TRACE("first run's lease starts at page " + std::to_string(first_run.lease.first));
         auto peer = CoreRuntime::Open(first_run, *device_, clock_, nullptr);
         ASSERT_TRUE(peer.ok()) << peer.status().message();
@@ -3610,7 +3632,6 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
         // The restart: a new lease, nothing granted, the ceiling core 0
         // would copy in.
         CoreRuntime::Config again = ConfigFor(1);
-        again.next_trx_id = core0_->superblock.next_trx_id();
         auto reopened = CoreRuntime::Open(again, *device_, clock_, nullptr);
         ASSERT_TRUE(reopened.ok()) << reopened.status().message();
         EXPECT_FALSE(reopened.value()->store().MayWrite(root))
@@ -3710,7 +3731,6 @@ TEST_F(CoreRuntimeTest, AnUnacquiredRelationIsAskedForAndTheRegrantLands) {
     ASSERT_TRUE(RegisterRelationGrantHandler(core0, catalog2, publish, nullptr).ok());
 
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
     ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
@@ -4427,7 +4447,6 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
     rig.peer = std::move(peer.value());
@@ -7747,7 +7766,6 @@ TEST_F(CoreRuntimeTest, AnOwnerBuiltAssertionIsEnforcingAgainAfterTheOwnersResta
 
     rig.peer.reset();
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
     auto again = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(again.ok()) << again.status().message();
 
@@ -8173,7 +8191,6 @@ TEST_F(CoreRuntimeTest, AnIndexBuildIsRefusedForAForeignRelationAndReleasedOnAbo
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     CoreRuntime::Config config = ConfigFor(1);
-    config.next_trx_id = core0_->superblock.next_trx_id();
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
     ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
