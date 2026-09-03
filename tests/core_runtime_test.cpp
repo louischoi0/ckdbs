@@ -4504,15 +4504,53 @@ struct ForeignIndexRig {
         return sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
                                    peer->dispatcher().DispatchAsync(sql, session, &out));
     }
-    // Polls `statement` between turns until it finishes; false if it does
-    // not within `max_rounds`.
-    bool Drive(sched::CoroTask& statement, int max_rounds = 256) {
-        for (int i = 0; i < max_rounds; ++i) {
-            if (statement.Poll() == sched::PollResult::kDone) return true;
-            Pump();
+    // **Turns until `done` answers true, bounded by a deadline** - and
+    // `max_rounds` is only the floor under it (AM-S0).
+    //
+    // A round count was a proxy for progress while every wait a statement
+    // could take was resolved by something this loop itself did: a ring
+    // message, a build reply, an inline `Sync()`. Under one stream that
+    // stopped being true. A committing statement parks on `IsDurable`, and
+    // the only thing that moves that watermark on an attached manager is
+    // core 0's **writer thread** taking an `fdatasync` -
+    // `WalManager::RequestSyncNow` asks and does not wait, deliberately,
+    // because a drain that blocked would hold the reactor for another
+    // thread's I/O. 256 tight rounds run out in well under the fsync they
+    // are waiting for, so every shipped write parked forever the moment the
+    // peer stopped owning its stream: `executed=0 running=1 waiting=1`, an
+    // engine doing exactly what it should against a rig measuring turns
+    // where it now has to measure time.
+    //
+    // Past the floor the loop sleeps rather than spins, so the writer gets
+    // a CPU instead of racing this thread for one.
+    template <typename Turn, typename Done>
+    bool TurnUntil(Turn turn, Done done, int max_rounds) {
+        const auto deadline = std::chrono::steady_clock::now() + kDriveCeiling;
+        for (int i = 0;; ++i) {
+            if (done()) return true;
+            turn();
+            if (i < max_rounds) continue;
+            if (std::chrono::steady_clock::now() >= deadline) return false;
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
-        return false;
     }
+    // `TurnUntil` over `Pump()`, which is what all but one caller wants.
+    template <typename Done>
+    bool PumpUntil(Done done, int max_rounds = 256) {
+        return TurnUntil([this] { Pump(); }, done, max_rounds);
+    }
+    // Polls `statement` between turns until it finishes; false if it does
+    // not within `TurnUntil`'s bound.
+    bool Drive(sched::CoroTask& statement, int max_rounds = 256) {
+        return TurnUntil([this] { Pump(); },
+                         [&statement] { return statement.Poll() == sched::PollResult::kDone; },
+                         max_rounds);
+    }
+    // Long enough that a slow device's sync is never mistaken for a hang,
+    // short enough that a real hang fails the cell rather than the suite's
+    // timeout. Every caller asserts the result, so this bound is only ever
+    // reached on a defect.
+    static constexpr std::chrono::milliseconds kDriveCeiling{5000};
 };
 
 void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* table) {
@@ -4774,12 +4812,7 @@ TEST_F(CoreRuntimeTest, APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt) {
         sched::SchedulingGroup::kForeground,
         rig.peer->dispatcher().DispatchAsync("CREATE TABLE cb4_new (id int64, v int64)", nullptr,
                                              &out));
-    bool done = false;
-    for (int i = 0; i < 256 && !done; ++i) {
-        done = statement->Poll() == sched::PollResult::kDone;
-        if (!done) rig.Pump();
-    }
-    ASSERT_TRUE(done) << "the shipped DDL never finished";
+    ASSERT_TRUE(rig.Drive(*statement)) << "the shipped DDL never finished";
     EXPECT_NE(out.response.rfind("ERR", 0), 0u) << out.response;
 
     // It ran where the catalog is writable, which is the whole point: core
@@ -5370,7 +5403,7 @@ TEST_F(CoreRuntimeTest, EachCrossOwnerCommitLegIsTimedAndAOneOwnerCommitTimesNot
     const ParticipantCommitStats& p = rig.peer->shipped_statements()->commit_phase();
     EXPECT_EQ(p.prepare_durable.count, 1u);
     EXPECT_EQ(p.decide_ack.count, 1u);
-    for (int i = 0; i < 512 && p.decide_durable.count == 0; ++i) rig.Pump();
+    rig.PumpUntil([&p] { return p.decide_durable.count != 0; }, 512);
     EXPECT_EQ(p.decide_durable.count, 1u)
         << "the participant's own terminal record never became durable";
 
@@ -6574,7 +6607,7 @@ TEST_F(CoreRuntimeTest, TheSameShippedIdentityArrivingTwiceRunsOnceAndAnswersFro
                     ->Ship(/*owner_core=*/1, /*request_id=*/100, /*session_id=*/5,
                            /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
                     .ok());
-    for (int i = 0; i < 256 && !rig.ship->Settled(100); ++i) rig.Pump();
+    rig.PumpUntil([&rig] { return rig.ship->Settled(100); });
     const ShippedStatementOutcome* first = rig.ship->Find(100);
     ASSERT_NE(first, nullptr);
     ASSERT_TRUE(first->arrived) << "the first statement never answered";
@@ -6588,7 +6621,7 @@ TEST_F(CoreRuntimeTest, TheSameShippedIdentityArrivingTwiceRunsOnceAndAnswersFro
                     ->Ship(/*owner_core=*/1, /*request_id=*/101, /*session_id=*/5,
                            /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
                     .ok());
-    for (int i = 0; i < 256 && !rig.ship->Settled(101); ++i) rig.Pump();
+    rig.PumpUntil([&rig] { return rig.ship->Settled(101); });
     const ShippedStatementOutcome* again = rig.ship->Find(101);
     ASSERT_NE(again, nullptr);
     ASSERT_TRUE(again->arrived);
@@ -6618,9 +6651,11 @@ TEST_F(CoreRuntimeTest, AReplyLostAfterTheOwnerCommittedLeavesOneRowAndTheRetryF
     // commits there while core 0 has drained nothing. This is the window
     // the whole scheme is written for: the effect stands, and the answer
     // has not landed.
-    for (int i = 0; i < 256 && rig.peer->shipped_statements()->executed() == 0; ++i) {
-        rig.peer->scheduler().RunOnce();
-    }
+    // **Only the owner turns here**, so this is `TurnUntil` over the peer's
+    // reactor alone rather than `PumpUntil` - core 0 drains nothing, which
+    // is the window the cell exists for.
+    rig.TurnUntil([&rig] { rig.peer->scheduler().RunOnce(); },
+                  [&rig] { return rig.peer->shipped_statements()->executed() != 0; }, 256);
     ASSERT_EQ(rig.peer->shipped_statements()->executed(), 1u) << "the owner never ran it";
     ASSERT_EQ(RowsWith(*rig.peer, "shipped_lost", ",42"), 1);
 
@@ -6639,7 +6674,7 @@ TEST_F(CoreRuntimeTest, AReplyLostAfterTheOwnerCommittedLeavesOneRowAndTheRetryF
                     ->Ship(/*owner_core=*/1, /*request_id=*/201, /*session_id=*/6,
                            /*sequence=*/1, rig.oid, Role::kReadWrite, kSql)
                     .ok());
-    for (int i = 0; i < 256 && !rig.ship->Settled(201); ++i) rig.Pump();
+    rig.PumpUntil([&rig] { return rig.ship->Settled(201); });
     const ShippedStatementOutcome* retry = rig.ship->Find(201);
     ASSERT_NE(retry, nullptr);
     ASSERT_TRUE(retry->arrived);
@@ -6724,7 +6759,10 @@ TEST_F(CoreRuntimeTest, AShippedStatementsDeadlineIsUnknownOutcomeAndTheOwnerSti
     // be recalled - so the effect stands while the client was told the
     // outcome is unknown. That is the documented contract, not a defect,
     // and this is the assertion that keeps it documented.
-    rig.Pump(64);
+    // Pumped until the answer nobody wanted comes back, not for a fixed
+    // count: the owner's commit is durable only when core 0's writer thread
+    // has synced for it (`TurnUntil`).
+    rig.PumpUntil([&rig] { return rig.ship->late_executed_replies() != 0; }, 64);
     EXPECT_EQ(rig.peer->shipped_statements()->executed(), 1u);
     EXPECT_EQ(RowsWith(*rig.peer, "shipped_deadline", ",45"), 1)
         << "the statement must apply exactly once, whatever the client was told";
@@ -6785,7 +6823,9 @@ TEST_F(CoreRuntimeTest, AParkedShippedStatementDestroyedUnderItsWaiterLeaksTheWa
     ASSERT_EQ(rig.ship->waiting(), 1u);
 
     statement.reset();  // the park destroyed, as cancellation would destroy it
-    rig.Pump(64);
+    // The owner still runs it, and its commit waits on the writer thread -
+    // so this waits for the run rather than counting turns (`TurnUntil`).
+    rig.PumpUntil([&rig] { return rig.peer->shipped_statements()->executed() != 0; }, 64);
     EXPECT_EQ(rig.ship->waiting(), 1u)
         << "a destroyed park now reclaims its waiter - update this invariant, and "
            "docs/inflight/known-gaps.md's entry for it";
@@ -6958,7 +6998,7 @@ TEST_F(CoreRuntimeTest, AShippedSessionReadsItsOwnWriteBackWhenThatWriteWasRetri
     OpenForeignIndexRig(rig, "shipped_ryow_retry");
 
     auto settle = [&](std::uint64_t id) {
-        for (int i = 0; i < 256 && !rig.ship->Settled(id); ++i) rig.Pump();
+        rig.PumpUntil([&rig, id] { return rig.ship->Settled(id); });
         const ShippedStatementOutcome* out = rig.ship->Find(id);
         return out != nullptr && out->arrived ? out->status : Status::IoError("never answered");
     };
