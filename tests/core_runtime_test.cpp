@@ -99,28 +99,42 @@ protected:
 
         extents_.emplace(*core0_store_, kFirstUserPageId);
 
-        // **The image every `ConfigFor` hands a core, and the one place
-        // this fixture knowingly differs from a real instance.**
+        // **Core 0's log, and the stream every peer attaches to** (AM-S0).
         //
-        // `BootstrapDatabase` writes a **single-stream** volume — every
-        // volume this build creates is one — while most cells below model a
-        // peer under **per-core** streams, opening its own log and running
-        // its own recovery. No real instance is in that combination. It
-        // went unnoticed while a peer's `superblock_` was a
-        // default-constructed copy whose topology read `kPerCoreStreams`
-        // whatever the volume said; handing over the whole image (AL-S9
-        // review) made 123 cells refuse at once, and the refusals were
-        // *right* — a peer on a single-stream volume must be given a stream
-        // to attach to.
-        //
-        // Overriding the topology here keeps those cells running and keeps
-        // every other field of the image true, which is the half of the fix
-        // that was never in question. `SingleStreamSuperBlock()` below is
-        // what the cells that model the real topology use.
+        // This is what `Expeditor::Open` does and what this fixture used to
+        // fake: `BootstrapDatabase` writes a **single-stream** volume, so a
+        // peer must be handed a stream, and `CoreRuntime::Open` refuses one
+        // that is not. The fixture previously bootstrapped a single-stream
+        // volume and then overwrote the topology to per-core on its copy of
+        // the image — a combination no instance can be in, and the defect
         // `docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`
-        // is the defect, and rebuilding the fixture is its own stage.
+        // records. The override is gone; the stream is real.
+        //
+        // Cells that genuinely test the **legacy** topology — a peer opening
+        // its own `wal-<core>-*`, running its own recovery, publishing its
+        // own anchor — live in `PerCoreStreamTest` below, over a volume that
+        // actually says `kPerCoreStreams`.
+        auto log_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
+        ASSERT_TRUE(log_device.ok()) << log_device.status().message();
+        core0_log_device_ = std::move(log_device.value());
+
+        wal::WalManagerConfig wal_config;
+        // The latch, armed because this fixture is two cores by
+        // construction — the same conjunct `Expeditor` uses, where a
+        // one-core instance arms nothing.
+        wal_config.shared_stream = true;
+        auto wal = wal::WalManager::Open(core0_log_device_.get(), clock_, /*core_id=*/0,
+                                         wal_config);
+        ASSERT_TRUE(wal.ok()) << wal.status().message();
+        core0_wal_ = std::move(wal.value());
+        // **And the writer, because `writer()` is null until this runs.**
+        // An attached peer never touches the device, so the writer is its
+        // only route to durability, and `CoreRuntime::Open` refuses a peer
+        // handed a null one. `Expeditor::Open` calls this at the same
+        // point, immediately after opening the log.
+        core0_wal_->StartWriter();
+
         config_superblock_ = core0_->superblock;
-        ASSERT_TRUE(config_superblock_.SetLogTopology(kPerCoreStreams).ok());
     }
 
     // The volume as it really is: what a cell modelling the shipped
@@ -149,8 +163,11 @@ protected:
         // a restarting peer a ceiling below the ids its own log already
         // names, and the mount refuses - correctly.
         config_superblock_ = core0_->superblock;
-        EXPECT_TRUE(config_superblock_.SetLogTopology(kPerCoreStreams).ok());
         c.superblock = &config_superblock_;
+        // What `Expeditor` hands a peer on a single-stream volume, and what
+        // `CoreRuntime::Open` refuses to proceed without (AM-S0).
+        c.shared_stream = core0_wal_->stream();
+        c.shared_writer = core0_wal_->writer();
         auto lease = extents_->Reserve(storage::kDefaultExtentPages);
         EXPECT_TRUE(lease.ok()) << lease.status().message();
         if (lease.ok()) c.lease = lease.value();
@@ -192,8 +209,14 @@ protected:
     std::unique_ptr<storage::MemoryPageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> core0_store_;
     std::optional<bootstrap::BootstrapResult> core0_;
-    // The image `ConfigFor` hands over: core 0's, with the topology this
-    // fixture models. See `SetUp` for why the two differ.
+    // Core 0's log and the manager over it. Declared before
+    // `config_superblock_` so they outlive nothing that matters here, and
+    // **borrowed by every peer a cell opens** — which is why a cell must
+    // let its `CoreRuntime`s go before the fixture does (they are locals;
+    // the fixture's members die after `TearDown`).
+    std::unique_ptr<wal::FileLogDevice> core0_log_device_;
+    std::unique_ptr<wal::WalManager> core0_wal_;
+    // The image `ConfigFor` hands over: core 0's, as the volume really is.
     SuperBlock config_superblock_;
     std::optional<storage::ExtentAllocator> extents_;
 };
@@ -1319,8 +1342,14 @@ TEST_F(CoreRuntimeTest, ACoreCannotBeOpenedWithoutTheVolumesImage) {
 
 TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) {
     CoreRuntime::Config config = ConfigFor(1);
-    const SuperBlock one_stream_image = SingleStreamSuperBlock();
-    config.superblock = &one_stream_image;
+    // **Cleared on purpose, and this is now the only cell that does.**
+    // Since AM-S0 `ConfigFor` hands the real stream, because the volume is
+    // single-stream and `Expeditor` would; the wiring bug this cell exists
+    // for is a peer handed *nothing*, so it has to take the stream back
+    // out. `SingleStreamSuperBlock()` is no longer needed either - the
+    // volume already says one stream.
+    config.shared_stream = nullptr;
+    config.shared_writer = nullptr;
 
     auto opened = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_FALSE(opened.ok());
@@ -4427,12 +4456,36 @@ struct ForeignIndexRig {
 
     sched::RealRingTransport& ring() { return transport->value(); }
 
+    // Core 0's WAL, borrowed from the fixture (AM-S0). Since the peer
+    // attaches to core 0's stream rather than opening its own, **core 0 is
+    // the only thing that can drain it** - and in this rig core 0 is a bare
+    // scheduler rather than a `CoreRuntime`, so the drain has to be run by
+    // hand. Null in a rig opened before that wiring existed.
+    wal::WalManager* shared_wal = nullptr;
+
     // One turn of both reactors, the peer first: a message core 0 sent
     // last turn is handled before core 0 polls anything parked on it.
+    //
+    // **And the group committer after them**, which is what
+    // `Expeditor::Serve` installs as the scheduler's post-task hook. It is
+    // not bookkeeping: a committing statement *parks* instead of syncing on
+    // its own stack (`command_dispatcher.hpp`'s `pending_lsn`), and the
+    // drain is what it parks *for*. Without it a peer's commit never wakes
+    // and `Drive` spends its whole round budget polling a task that cannot
+    // finish - which is exactly what every rig cell did the moment the peer
+    // stopped owning its own stream.
+    // The hook is installed in `CoreRuntime::Run()`, and this rig never
+    // calls it - it drives `scheduler().RunOnce()` directly - so the peer's
+    // drain is run here for it. Both managers: the peer's attached one is
+    // what wakes its parked commit, and core 0's owning one is what
+    // actually reaches the device, and in this rig core 0 has no runtime to
+    // do it.
     void Pump(int rounds = 1) {
         for (int i = 0; i < rounds; ++i) {
             peer->scheduler().RunOnce();
+            (void)peer->wal().DrainOnce();
             core0->RunOnce();
+            if (shared_wal != nullptr) (void)shared_wal->DrainOnce();
         }
     }
     // Core 0's statement as the coroutine its reactor would poll. Never
@@ -4499,6 +4552,8 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
     rig.peer = std::move(peer.value());
+    // The stream the peer just attached to, so `Pump` can drain it.
+    rig.shared_wal = core0_wal_.get();
     ASSERT_TRUE(rig.peer->AttachTransport(rig.ring()).ok());
     rig.peer->GrantRelationFault(RelationFaultExtentOf(rig.row, storage::kDefaultExtentPages));
     const PageId pages[] = {rig.row.desc_page_id, rig.row.anchor_page_id};
@@ -5127,7 +5182,11 @@ TEST_F(CoreRuntimeTest, AWriteToAPeerOwnedRelationIsShippedAndTheOwnerExecutesIt
 
     DispatchOutcome out;
     auto statement = rig.Start("INSERT INTO shipped_write VALUES (40)", out);
-    ASSERT_TRUE(rig.Drive(*statement)) << out.response;
+    ASSERT_TRUE(rig.Drive(*statement))
+        << "response='" << out.response << "'"
+        << " executed=" << rig.peer->shipped_statements()->executed()
+        << " running=" << rig.peer->shipped_statements()->running()
+        << " waiting=" << rig.ship->waiting();
     EXPECT_EQ(out.response.rfind("INSERTED", 0), 0u) << out.response;
 
     // It ran **on the owner**: the owner's executor counted it, and the row
