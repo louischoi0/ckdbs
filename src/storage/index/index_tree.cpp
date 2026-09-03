@@ -77,6 +77,14 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
             }
             // Re-fetch for write: the frame is already resident, so this is
             // a hash lookup that flips the dirty flag.
+            //
+            // The read handle is dropped **first**: it holds the page's
+            // latch shared, and a page latch is never upgraded (AM-S1,
+            // page_latch.hpp). This is btree.cpp's Descend shape, and the
+            // census (`KDS_TEST_PAGE_LATCH=1`) named this line in every
+            // index-insert cell. Nothing can evict between the release and
+            // the re-fetch on a single-threaded core.
+            bytes.value().Release();
             auto writable = store.Get(current);
             if (!writable.ok()) return writable.status();
             d.leaf = std::move(writable.value());

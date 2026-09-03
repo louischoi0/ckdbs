@@ -108,6 +108,7 @@ add_executable(kds_tests
     catalog_test.cpp
     insert_wal_test.cpp
     bootstrap_test.cpp
+    page_latch_test.cpp
     page_mgr_test.cpp
     command_dispatcher_test.cpp
     supplied_key_test.cpp

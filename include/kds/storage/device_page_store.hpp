@@ -13,6 +13,7 @@
 #include "kds/storage/extent_lease.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/page_device.hpp"
+#include "kds/storage/page_latch.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/durability.hpp"
 
@@ -94,7 +95,82 @@
 // correct (wal.md section 11-1). A frame keeps that value until it is
 // written back, then drops it.
 //
-// Concurrency: core-local, no internal synchronization (rules.md #3).
+// Concurrency: core-local, no internal synchronization (rules.md #3) -
+// **but for the page latch word**, below, which is the first thing in the
+// storage layer another thread may touch.
+//
+// ---- The page latch (AM-R3, AR2-R2) ---------------------------------------
+//
+// Every frame carries one 32-bit word (`Frame::latch`, page_latch.hpp): an
+// exclusive bit, the owning core, and a count. **Armed only at `cores > 1`**
+// (SetLatchArmed, from the superblock's core_count - the same fact the
+// stream latch arms on, without its topology conjunct: frames have no
+// stream); unarmed - `cores = 1`, every hand-built store, the simulator -
+// the accessors never read or write the word, which is G2's zero overhead
+// as a property of the code rather than of a build flag. In debug builds
+// `KDS_TEST_PAGE_LATCH=1` arms every store so the whole suite runs armed.
+//
+// What it protects through M1: a frame against a concurrent *reader* on
+// another core, and against the writeback and sweep paths (AM-R1: writes
+// still route to the relation's owner). In AM-S1 the pools are still per
+// core, so no second core can reach a frame and the latch is inert; the
+// primitive, its order and its cells are what that stage lands. Writeback,
+// StampPageLsn, the hit path's usage bump and the scan ring still touch
+// frames unlatched - AM-S2 and AM-S3 own those.
+//
+// Taken where the pin is taken and released where it is released: a
+// PageRef holds both. Get and the Create* accessors take it exclusive,
+// GetForRead shared. **Re-entrant for the owning core** - one task holds a
+// page twice on every chain-growth and split path (heap_chain.cpp's
+// re-fetch after CreateNew, btree.cpp's rebuild, LogFullPageImage under
+// its caller's handle) - and the owning core is the running task, because
+// a core runs one task at a time and no task parks holding a pin
+// (exec::InstallSuspendAudit). **Never upgraded**: a task holding a page
+// shared may not ask for it exclusive. That is a self-deadlock, aborted in
+// debug naming the page (PinFrame) and a hang in release, as a recursive
+// std::mutex acquisition is (base/latch.hpp).
+//
+// Acquisition order (rules.md section 3's row):
+//   - **Outer to the WAL stream latch.** A task appends while holding its
+//     page latches - LogFullPageImage takes the page again under the handle
+//     its caller already holds, catalog and Bound Cabin chain growth append
+//     under the old tail's - and **no WAL path asks for a page latch while
+//     holding the stream latch**, so no cycle exists. The stream latch is
+//     held only inside WalStream's Append/Seal/Flush/Sync, none of which
+//     can see a PageStore. wal/ *does* take page latches in one place -
+//     recovery's redo (`wal/redo.cpp`'s Get/CreateAt), on a store this
+//     mount already armed - and that is on the mount thread with no stream
+//     latch held and no second thread alive. The cost accepted: a page
+//     latch can be held across an append's section, a segment roll
+//     included; a reader of that page elsewhere spins, then yields.
+//   - **Held across a durability wait only on the fault path.** WriteBack
+//     takes the WAL gate (EnsureDurable, a wait on the writer thread)
+//     before it writes any byte, and it takes no page latch at all today,
+//     so no frame is latched across the wait; but the sweep that reached
+//     WriteBack runs inside a fault, and the faulting task may hold *other*
+//     frames latched while it waits. Sound, because the writer thread takes
+//     no page latch; a latency cost under a shared pool, and AM-S3's to
+//     measure. **AM-S2 inherits one obligation here**: AwaitWalGate reads
+//     each frame's page_lsn *before* the gate call, so whatever latch that
+//     scan comes to need must be dropped before EnsureDurable, or the wait
+//     acquires exactly the "latched across a durability wait" shape this
+//     bullet rules out.
+//   - **Never nested with the visibility window latch** in either
+//     direction: that latch is taken holding nothing (AN-R9), and no path
+//     holds a PageRef at commit.
+//   - **Never across a park**: the suspend audit's `live_pins() != 0`
+//     already covers it, because the pin and the latch share a handle.
+//   - **Page against page: unordered through M1, and AM-S2 owes the
+//     rule.** Two page latches are held at once on every descent (parent
+//     then child), every split (the old leaf and its new sibling) and every
+//     chain growth (the old tail and the new page); through M1 one core
+//     owns its pool, so no two holders of different pages can ever wait on
+//     each other and no order is needed. The shared pool is where an ABBA
+//     becomes possible, and the tree's own shapes - parent before child,
+//     old before new - are what AM-S2 will state as the order.
+//
+// Waits spin with a pause hint, then yield; there is no queue. A holder is
+// in a critical section measured in nanoseconds, or in an append.
 //
 // Logging (component tag "pagestore"): allocation and write-back are the
 // two things that change what is on disk, so both are logged - allocation
@@ -584,6 +660,29 @@ public:
     void SetFrameBudget(std::size_t frames) noexcept { frame_budget_ = frames; }
     std::size_t frame_budget() const noexcept { return frame_budget_; }
 
+    // ---- The page latch's switch (AM-S1) ---------------------------------
+    //
+    // Armed from the superblock's core count by the assembly (core 0 in
+    // Expeditor::Open, a peer in CoreRuntime::Open) and by nothing else:
+    // a store nobody armed - `cores = 1`, every hand-built one - never
+    // touches a latch word. The header's "The page latch" section says
+    // what arming buys and what it costs.
+    // The debug census (`KDS_TEST_PAGE_LATCH=1`, Open()) arms first and
+    // wins: the assembly's own call cannot disarm a store the census armed,
+    // or every assembly-driven fixture would run the census unarmed at one
+    // core and the "whole suite ran armed" claim would be narrower than it
+    // reads.
+    void SetLatchArmed(bool armed) noexcept { latch_armed_ = armed || latch_forced_; }
+    bool latch_armed() const noexcept { return latch_armed_; }
+
+    // Test hooks: hold a resident frame's latch as if another core held it,
+    // with no pin, so the sweep's and EvictClean's latch refusals can be
+    // exercised before a second core can reach a frame (AM-S2). Absent
+    // frame: NotFound. The word is read back by `latch_word_for_test`.
+    Status LatchFrameForTest(PageId page_id, PinMode mode, std::uint32_t core);
+    Status UnlatchFrameForTest(PageId page_id, std::uint32_t core);
+    StatusOr<std::uint32_t> latch_word_for_test(PageId page_id) const;
+
     // Pin accounting (MG04). Live pins across all frames, and the highest
     // that count has ever been - the number the per-operation ceiling
     // decision needs measured rather than assumed.
@@ -693,6 +792,13 @@ private:
     struct Frame {
         std::unique_ptr<Page> bytes;
         bool dirty = false;
+        // The page latch word (page_latch.hpp), sitting in the padding
+        // after `dirty` so the frame's size does not move. A plain integer
+        // rather than a `std::atomic` so `Frame` stays movable (the table
+        // moves it in); every access goes through `std::atomic_ref`, and
+        // only when the store is armed - unarmed it stays 0 for the frame's
+        // whole life.
+        std::uint32_t latch = 0;
         // First log record to dirty this frame since it was last written
         // back; 0 when nothing logged touched it. See StampPageLsn().
         wal::Lsn rec_lsn = 0;
@@ -701,9 +807,12 @@ private:
         //
         // How many live `PageRef`s hold this frame. **Plain, non-atomic,
         // core-local** - `page.md` §6 makes that the model rather than a
-        // shortcut: one pool per core, and cross-core page access does not
-        // exist. A frame with pins > 0 is never a victim, at any pressure
-        // (EV4 answers OutOfSpace instead of waiting).
+        // shortcut: one pool per core, and through M1 cross-core page
+        // access does not exist (the latch word above is the one field a
+        // shared pool will read from another core; the pin count is not,
+        // and AM-S2 owns that change). A frame with pins > 0 is never a
+        // victim, at any pressure (EV4 answers OutOfSpace instead of
+        // waiting).
         std::uint32_t pins = 0;
 
         // The CLOCK usage counter (`docs/spec/eviction.md` EV1 / §3.1-2):
@@ -713,6 +822,11 @@ private:
         // express, and which is the whole of EV1's "no LRU lists".
         std::uint8_t usage = 0;
     };
+    // The latch word landed in existing padding: the frame is the size it
+    // was before AM-S1, and the first assert on it is this one.
+    static_assert(sizeof(Frame) == 32, "Frame grew; the latch word was meant to fill padding");
+    static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(Frame),
+                  "std::atomic_ref needs the word aligned inside the frame");
 
     // One region's pair of bitmaps: the unit of residency, and the unit of
     // dirtiness.
@@ -855,9 +969,12 @@ private:
     // and a pin is only ever taken and dropped by a handle through the base
     // interface: a caller that could unpin by hand could unpin someone
     // else's frame.
-    void PinFrame(PageId page_id) noexcept override;
+    void PinFrame(PageId page_id, PinMode mode) noexcept override;
     void UnpinFrame(PageId page_id) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
+    static PageLatchMode LatchModeFor(PinMode mode) noexcept {
+        return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
+    }
     std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes,
                                                 bool dirty, bool warm = true);
     Status EnsureAddressable(PageId page_id);
@@ -924,6 +1041,12 @@ private:
     // Core ownership (see SetCoreOwnership). The defaults are core 0's, so
     // every construction site that predates multicore keeps its behaviour.
     std::uint32_t core_id_ = 0;
+    // The page latch's switch and gauge (SetLatchArmed). Off by default:
+    // arming is the assembly's act, on the superblock's core count.
+    bool latch_armed_ = false;
+    // Set by Open()'s debug census override and never cleared: SetLatchArmed
+    // keeps the store armed once this is true.
+    bool latch_forced_ = false;
     // See SetStampSuppressed. Off everywhere but inside a single-stream
     // mount pass.
     bool stamp_suppressed_ = false;

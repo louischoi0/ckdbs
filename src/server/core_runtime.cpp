@@ -199,6 +199,13 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // identity moves up; the lease still may not be installed yet, for the
     // reason above.
     runtime->store_->SetStreamCoreId(config.core_id);
+    // The page latch (AM-S1): armed from the instance's core count, which
+    // the superblock pinned at bootstrap and `Expeditor::Open` copied here -
+    // after the identity above, so the owner field the word records is this
+    // core's. `core_count > 1` alone: frames have no stream topology, so the
+    // WAL's `single_stream()` conjunct has no counterpart. At one core the
+    // word is never touched (device_page_store.hpp, "The page latch").
+    runtime->store_->SetLatchArmed(config.core_count > 1);
     runtime->undo_log_.emplace(*runtime->store_, &*runtime->wal_);
     // Timed, as core 0's is (`Expeditor::Open` passes its clock): `SHOW META`
     // prints the whole RC09 block only when `timings.timed` says a clock was

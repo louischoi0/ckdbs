@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -269,6 +270,12 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // can reach the stream. `AtOneCoreTheStreamsLatchIsNeverArmed` is the
     // other half.
     EXPECT_TRUE(db.wal().stream()->shared());
+    // **The page latch arms on the same count** (AM-S1): core 0's store and
+    // the peer's, each from the superblock's `core_count`, each naming its
+    // own core in the word. `AtOneCoreThePageLatchIsNeverArmed` is the
+    // other half.
+    EXPECT_TRUE(db.store().latch_armed()) << "core 0's store did not arm its page latch";
+    EXPECT_TRUE(peer.store().latch_armed()) << "the peer's store did not arm its page latch";
 
     // **The superblock image.** A peer used to hold a default-constructed
     // copy, and zero is a legal value of most of its fields - so it reported
@@ -342,6 +349,27 @@ TEST_F(ExpeditorTest, AtOneCoreTheStreamsLatchIsNeverArmed) {
     // Dropped without ever entering the reactor, which `~Expeditor` has to
     // survive: it is the shape a failed start leaves behind, and the shape
     // this file's other cells use to look at an instance.
+}
+
+TEST_F(ExpeditorTest, AtOneCoreThePageLatchIsNeverArmed) {
+    // AM-S1's half of G2: the page latch word exists in every frame, and at
+    // one core the store never reads or writes it (AM-R3's run-time branch,
+    // `device_page_store.hpp` "The page latch"). Asserted on the assembly
+    // rather than on a hand-built store, because the decision is
+    // `Expeditor::Open`'s - a hand-built store is unarmed by default and
+    // would pass this cell whatever the assembly did.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(db.Start().ok());
+
+    if (std::getenv("KDS_TEST_PAGE_LATCH") != nullptr) {
+        GTEST_SKIP() << "the census override arms every store and wins over the assembly's "
+                        "decision, which is what this cell asserts";
+    }
+    EXPECT_FALSE(db.store().latch_armed())
+        << "a one-core instance armed the page latch, which is a CAS on every pin";
 }
 
 TEST_F(ExpeditorTest, StartIsRefusedTwiceAndTheRunHalfIsRefusedWithoutIt) {

@@ -92,6 +92,15 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
             // Re-fetch for write: the frame is already resident, so this
             // is a hash lookup that flips the dirty flag, and it happens
             // only on the insert path where a WAL append dwarfs it.
+            //
+            // The read handle is dropped **first**. It holds the page's
+            // latch shared, and the page latch is never upgraded (AM-S1,
+            // page_latch.hpp): asking for it exclusive while this task's
+            // own share is live is the one self-deadlock in the tree's
+            // access patterns, found by the census. Nothing can evict
+            // between the release and the re-fetch on a single-threaded
+            // core, which is the argument the comment above already makes.
+            bytes.value().Release();
             auto writable = store.Get(current);
             if (!writable.ok()) return writable.status();
             d.leaf = std::move(writable.value());

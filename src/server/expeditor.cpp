@@ -814,6 +814,16 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->wal_ = std::move(wal.value());
     expeditor->wal_->SetLogger(&*expeditor->logger_);
 
+    // The page latch (AM-S1) arms on the same fact, without the topology
+    // conjunct: frames have no stream, so `core_count > 1` is the whole
+    // predicate. Armed **before** recovery below, deliberately - recovery
+    // runs on this thread with no reactor alive, so its every page access
+    // exercises the armed primitive contention-free, a self-test the mount
+    // pays nothing for. At one core the word is never touched.
+    static_assert(kMaxWalCores - 1 <= storage::kPageLatchMaxCoreId,
+                  "the latch word's owner field must name every core the superblock admits");
+    expeditor->store_->SetLatchArmed(expeditor->database_->superblock.core_count() > 1);
+
     // **The idle sync stops touching the reactor here.** D3's loss-window
     // tick moves to the WAL writer thread (wal/writer.hpp) - and only it.
     // A commit's sync, a prepare's, a client `SYNC`'s and the checkpoint

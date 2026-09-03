@@ -7,6 +7,10 @@
 #include <string>
 #include <vector>
 
+#ifndef NDEBUG
+#include <execinfo.h>
+#endif
+
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/page_header.hpp"
 
@@ -227,6 +231,18 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
     if (const char* budget = std::getenv("KDS_TEST_FRAME_BUDGET"); budget != nullptr) {
         const long parsed = std::strtol(budget, nullptr, 10);
         if (parsed > 0) store->SetFrameBudget(static_cast<std::size_t>(parsed));
+    }
+    // AM-S1's census: `KDS_TEST_PAGE_LATCH=1` arms the page latch on every
+    // debug-build store, so one `ctest` run exercises the armed primitive
+    // under the whole suite - single-threaded, which is exactly what proves
+    // the nesting rules (re-entrancy, never an upgrade) against every access
+    // pattern the tree has, rather than against the ones a fixture thought
+    // of. Same reasoning as the budget override above.
+    if (const char* armed = std::getenv("KDS_TEST_PAGE_LATCH"); armed != nullptr) {
+        if (std::strtol(armed, nullptr, 10) > 0) {
+            store->latch_forced_ = true;  // the assembly's SetLatchArmed cannot undo it
+            store->SetLatchArmed(true);
+        }
     }
 #endif
     return store;
@@ -601,6 +617,9 @@ void DevicePageStore::ReleaseScanSlot(PageId page_id) noexcept {
     // (ring fetches never bump), and a pinned-class page is never dropped
     // by anyone. Each abandons the frame to ordinary pool life.
     if (frame.dirty || frame.pins > 0 || frame.usage > 0 || IsPinnedClass(page_id)) return;
+    // A latched frame is a pinned frame through M1; the refusal is the
+    // shared pool's shape, as in EvictColdFrames and EvictClean.
+    if (latch_armed_ && PageLatch::IsHeld(frame.latch)) return;
     frames_.erase(it);
 }
 
@@ -1306,6 +1325,13 @@ Status DevicePageStore::EvictClean(std::span<const PageId> page_ids) {
                 std::to_string(it->second.pins) +
                 " reference(s); evicting it would dangle them");
         }
+        // Same guarantee, read from the latch word: a hold another core
+        // took has no pin in this table (AM-S1; redundant through M1).
+        if (latch_armed_ && PageLatch::IsHeld(it->second.latch)) {
+            return Status::InvalidArgument(
+                "DevicePageStore: page " + std::to_string(id) +
+                " is latched; evicting it would pull a frame from under its holder");
+        }
     }
     for (const PageId id : page_ids) {
         frames_.erase(id);
@@ -1349,7 +1375,7 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 
 // ---- Frame reclamation (docs/inflight/in-progress/workplan-eviction.md EV01-EV02) -------------
 
-void DevicePageStore::PinFrame(PageId page_id) noexcept {
+void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
     // Called by the base pinned accessors immediately after the raw fetch
     // made the frame resident, on the same single-threaded core - so the
     // find can only miss if something is deeply wrong, and a miss is left
@@ -1358,6 +1384,40 @@ void DevicePageStore::PinFrame(PageId page_id) noexcept {
     // detects deterministically.
     auto it = frames_.find(page_id);
     if (it == frames_.end()) return;
+    if (latch_armed_) {
+        // The page latch (AM-S1, the header's "The page latch" section).
+        // Taken where the pin is taken, in the accessor's mode, and never
+        // upgraded: a task that holds this frame shared and now asks for
+        // it exclusive would wait for its own share forever. Through M1
+        // every pin on this frame is this core's - the pools are per core
+        // and no task parks holding a pin - so "shared holders exist and
+        // this frame is pinned here" *is* that upgrade, and it is a
+        // protocol defect in the caller, aborted in debug naming the page.
+        // A release build hangs in the spin below, as a recursive
+        // std::mutex acquisition does (base/latch.hpp). AM-S2 must revisit
+        // this test once a foreign core can hold a share.
+        Frame& frame = it->second;
+#ifndef NDEBUG
+        if (mode == PinMode::kExclusive && frame.pins != 0 &&
+            PageLatch::HasSharedHolders(frame.latch)) {
+            std::fprintf(stderr,
+                         "DevicePageStore: page %u is held shared by this core (%u pin(s)) "
+                         "and was asked for exclusive - a page latch is never upgraded "
+                         "(docs/spec/page.md section 6)\n",
+                         page_id, frame.pins);
+            // The census's whole value is naming the site: raw frames, for
+            // `addr2line -e <binary>` - the executable is not linked
+            // -rdynamic, so symbol names are not available here.
+            void* frames_out[48];
+            const int depth = backtrace(frames_out, 48);
+            backtrace_symbols_fd(frames_out, depth, 2);
+            std::abort();
+        }
+#endif
+        // The turns it spun are dropped: a contention gauge is AM-S3's, when
+        // it has a number to want (the cells read Acquire's return directly).
+        (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
+    }
     ++it->second.pins;
     ++live_pins_;
     if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
@@ -1386,12 +1446,49 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
     if (it->second.pins != 0) {
         --it->second.pins;
         if (live_pins_ != 0) --live_pins_;
+        // The latch leaves with the pin: one handle, one hold of each. The
+        // word knows whether this core is the exclusive owner, so no mode
+        // travels here.
+        if (latch_armed_) PageLatch::Release(it->second.latch, core_id_);
     }
 }
 
 void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
     auto it = frames_.find(page_id);
     if (it != frames_.end()) it->second.dirty = true;
+}
+
+Status DevicePageStore::LatchFrameForTest(PageId page_id, PinMode mode, std::uint32_t core) {
+    auto it = frames_.find(page_id);
+    if (it == frames_.end()) {
+        return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
+                                " is not resident");
+    }
+    if (PageLatch::TryAcquire(it->second.latch, LatchModeFor(mode), core) !=
+        PageLatchOutcome::kAcquired) {
+        return Status::InvalidArgument("DevicePageStore: page " + std::to_string(page_id) +
+                                       " is latched in a conflicting mode");
+    }
+    return Status::OK();
+}
+
+Status DevicePageStore::UnlatchFrameForTest(PageId page_id, std::uint32_t core) {
+    auto it = frames_.find(page_id);
+    if (it == frames_.end()) {
+        return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
+                                " is not resident");
+    }
+    PageLatch::Release(it->second.latch, core);
+    return Status::OK();
+}
+
+StatusOr<std::uint32_t> DevicePageStore::latch_word_for_test(PageId page_id) const {
+    auto it = frames_.find(page_id);
+    if (it == frames_.end()) {
+        return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
+                                " is not resident");
+    }
+    return PageLatch::Load(it->second.latch);
 }
 
 bool DevicePageStore::IsPinnedClass(PageId page_id) const noexcept {
@@ -1489,6 +1586,10 @@ std::size_t DevicePageStore::EvictColdFrames(std::size_t budget) {
         //               dropping it here would lose a write (EV02's scope).
         if (frame.pins != 0) continue;
         if (IsPinnedClass(id)) continue;
+        // A latched frame is a pinned frame through M1 (one handle holds
+        // both), so this refusal is redundant today and is the shape the
+        // shared pool needs: a hold taken by another core has no pin here.
+        if (latch_armed_ && PageLatch::IsHeld(frame.latch)) continue;
 
         // §3.2's branches, in the specified order: a positive usage counter
         // is decremented and the frame survives this rotation.

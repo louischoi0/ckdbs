@@ -121,6 +121,16 @@ private:
     std::byte* data_ = nullptr;
 };
 
+// The mode a pinned accessor takes its frame in (AM-S1, the page latch).
+// `GetForRead` is shared; `Get` and every `Create*` are exclusive. A store
+// without a latch ignores it; `DevicePageStore` latches the frame in this
+// mode when armed (its header says when that is). Deliberately not
+// `PageLatchMode` itself: this header is the interface every store
+// implements and must not depend on the latch primitive, and the two name
+// different things - the accessor's intent here, the word's state there -
+// that happen to coincide today.
+enum class PinMode : std::uint8_t { kShared, kExclusive };
+
 class PageStore {
 public:
     virtual ~PageStore() = default;
@@ -131,14 +141,17 @@ public:
     // seam a store implements is the raw fetch (below) plus the three
     // frame hooks. Nothing can evict between the fetch and the pin - a
     // core is single-threaded and nothing here suspends - so the pair is
-    // atomic in the only sense that matters.
+    // atomic in the only sense that matters. **That sentence is true of
+    // per-core pools** (through AR0 M1's AM-S1); the shared pool AM-S2
+    // builds must latch the frame table across the pair, and this comment
+    // is where that obligation is recorded.
 
     // Fetches an already-created page, pinned, for read or in-place
     // mutation. Fails with NotFound if page_id was never created.
     StatusOr<PageRef> Get(PageId page_id) {
         auto bytes = GetUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
-        PinFrame(page_id);
+        PinFrame(page_id, PinMode::kExclusive);
         return PageRef(this, page_id, bytes.value());
     }
 
@@ -149,7 +162,7 @@ public:
     StatusOr<PageRef> GetForRead(PageId page_id) {
         auto bytes = GetForReadUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
-        PinFrame(page_id);
+        PinFrame(page_id, PinMode::kShared);
         return PageRef(this, page_id, bytes.value());
     }
 
@@ -158,7 +171,7 @@ public:
     StatusOr<PageRef> CreateAt(PageId page_id) {
         auto bytes = CreateAtUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
-        PinFrame(page_id);
+        PinFrame(page_id, PinMode::kExclusive);
         return PageRef(this, page_id, bytes.value());
     }
 
@@ -167,7 +180,7 @@ public:
     StatusOr<std::pair<PageId, PageRef>> CreateNew() {
         auto made = CreateNewUnpinned();
         if (!made.ok()) return made.status();
-        PinFrame(made.value().first);
+        PinFrame(made.value().first, PinMode::kExclusive);
         return std::pair<PageId, PageRef>(
             made.value().first, PageRef(this, made.value().first, made.value().second));
     }
@@ -177,7 +190,7 @@ public:
     StatusOr<std::pair<PageId, PageRef>> CreateNewHeaderless() {
         auto made = CreateNewHeaderlessUnpinned();
         if (!made.ok()) return made.status();
-        PinFrame(made.value().first);
+        PinFrame(made.value().first, PinMode::kExclusive);
         return std::pair<PageId, PageRef>(
             made.value().first, PageRef(this, made.value().first, made.value().second));
     }
@@ -187,8 +200,12 @@ public:
     // Defaults are no-ops, and for every store without eviction that is
     // the *true* implementation, not a stub: a frame that can never be
     // reclaimed needs no pin to stay resident. DevicePageStore overrides
-    // all three onto its Frame metadata (pins, dirty).
-    virtual void PinFrame(PageId page_id) noexcept { (void)page_id; }
+    // all three onto its Frame metadata (pins, dirty, and the latch word
+    // when armed - the mode is what tells it shared from exclusive).
+    virtual void PinFrame(PageId page_id, PinMode mode) noexcept {
+        (void)page_id;
+        (void)mode;
+    }
     virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
 
