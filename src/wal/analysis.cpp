@@ -132,24 +132,29 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // page; raising it is monotone and free).
         //
         // **The erase is a per-core-stream rule and does not survive one
-        // stream** (AR0 M0, AL-R6, amended from building AL-S5). What
-        // licenses it is not the handoff itself but the sentence above it:
-        // *this stream* owes the page nothing below this LSN. That holds
-        // per core because a handoff is logged by the receiver as an
-        // acquisition, and the receiver's stream has nothing for the page
-        // below it. Under one stream the same log also holds the **giver's**
-        // records for that page, and erasing drops them from the dirty
-        // table - which makes redo's not-dirty filter skip every one of
-        // them. Keeping the entry costs redo re-applying records the image
-        // may already hold, which the `page_lsn` gate makes idempotent:
-        // slower at worst, where the erase is wrong at worst.
+        // stream** (AR0 M0, AL-R6, amended twice from building AL-S5 - the
+        // second time because the first reason was wrong). What licenses
+        // it is rule 1(a)'s **flush**, as the paragraph above and
+        // `analysis.hpp` both say; and a flush covers *one core's page
+        // store*, pools being per core. Under per-core streams the erase's
+        // reach matched the flush's, because it dropped only the appending
+        // stream's entries. Under one stream the erase speaks for **every
+        // core's** records while the flush still speaks for one core's
+        // frames - and a handoff is appended by a core that need not be
+        // the page's writer at all (the re-delivery path in
+        // `relation_grant_service.cpp` re-runs the publish, which appends
+        // one from core 0 for a page a peer has dirty and unflushed). The
+        // erase would then drop that peer's entry and redo's not-dirty
+        // filter would skip its record: a lost update, not slow work.
+        // Keeping the entry costs redo re-applying what the image may
+        // already hold, which the `page_lsn` gate makes idempotent.
         if (record.header.page_id != kInvalidPageId) {
-            if (record.type() == RecordType::kPageHandoff && !start.single_stream) {
-                out.dirty_pages.erase(record.header.page_id);
-            } else if (record.type() == RecordType::kPageHandoff) {
-                // Neither erased nor seeded: the handoff is an ownership
-                // fact, not a mutation, so it must not become a page's
-                // recLSN either. `max_page_id` below still takes it.
+            if (record.type() == RecordType::kPageHandoff) {
+                // Under one stream: neither erased nor seeded. A handoff is
+                // an ownership fact, not a mutation, so it must not become
+                // a page's recLSN either. `max_page_id` below still takes
+                // it, which the erase never governed.
+                if (!start.single_stream) out.dirty_pages.erase(record.header.page_id);
             } else {
                 out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
             }

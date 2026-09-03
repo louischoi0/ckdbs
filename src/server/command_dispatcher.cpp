@@ -1478,11 +1478,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // slot 0 holds the fold and `SetWalAnchor` refuses any other - so
        // printing it would be a field that can only ever say one thing,
        // where `wal_topology` says the thing worth knowing.
-       << " wal_topology=" << (superblock_.single_stream() ? "single" : "per-core")
-       << (superblock_.single_stream()
-               ? std::string()
-               : " wal_anchor_count=" + std::to_string(superblock_.wal_anchor_count()))
-       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+       << " wal_topology=" << (superblock_.single_stream() ? "single" : "per-core");
+    if (!superblock_.single_stream()) {
+        os << " wal_anchor_count=" << superblock_.wal_anchor_count();
+    }
+    os << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
        // The core serving this session (PW6, docs/inflight/in-progress/workplan-peer-writer.md).
        // Under `peer_listeners = on` the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -
@@ -1534,17 +1534,21 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // A peer core starts no writer thread of its own (`expeditor.cpp` does,
     // for core 0 alone), so its `writer_syncs()` is structurally zero.
     //
-    // **Under one stream a peer's whole WAL block is zero, and that is the
-    // truth rather than a gap** (AR0 M0). It performs no device sync: it
-    // flushes through core 0's stream and waits on core 0's writer, so
-    // every `fdatasync` this instance pays is counted on core 0 and
-    // counted once. Its interval count is zero too, because the loss
-    // window belongs to the log and the log has one drain that bounds it
-    // (`manager.cpp`'s `DrainOnce`) - a peer ticking it would have asked
-    // for a sync of bytes it does not own, every interval, forever. So the
-    // reading rule below still holds on a peer, trivially: nothing was
-    // performed and nothing was waited on *here*. What a peer's durability
-    // cost looks like is core 0's writer count rising.
+    // **Under one stream a peer's `wal_syncs` and `wal_interval_syncs` are
+    // structurally 0** (AR0 M0). It performs no device sync: it flushes
+    // through core 0's stream and waits on core 0's writer, so every
+    // `fdatasync` this instance pays is counted on core 0. Its interval
+    // count is 0 because the loss window belongs to the log, which has one
+    // drain bounding it (`manager.cpp`'s `DrainOnce`). So the reading rule
+    // below holds on a peer trivially: nothing was performed and nothing
+    // was waited on *here*, and a peer's durability cost is read as core
+    // 0's writer count rising.
+    //
+    // **`wal_sync_failures` is the exception and is not structurally 0.** A
+    // peer's flush of the shared ring can fail, and so can its wait on the
+    // writer; both are counted here. A failed wait is counted on core 0
+    // too, so that one field is the one place a peer and core 0 both
+    // report the same event.
     //
     // Hence three fields, and the middle one is the **interval** tick
     // rather than the writer's count, so one reading rule holds on every

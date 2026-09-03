@@ -393,15 +393,25 @@ Status WalManager::DrainOnce() {
     // stay open until this core happened to sync for itself.
     ResolveBatches();
 
-    // **The free-tick test is this core's own work, not the log's.** On an
-    // owning manager the two are the same: `appended_lsn()` is what this
-    // core appended. On an attached one it is the *instance's* append
-    // point, which core 0 moves constantly - so the equality is never true
-    // on a peer and every tick fell through to the interval branch below,
-    // issuing a sync request per interval with nothing of its own staged.
-    // What a peer has to do is close its own batches, which the
+    // **The free-tick test skips a peer, whose own work the lines below
+    // cover.** On an attached manager `appended_lsn()` is the *instance's*
+    // append point, which core 0 moves constantly - so the equality was
+    // never true on a peer and every tick fell through to the interval
+    // branch below, issuing a sync request per interval with nothing of its
+    // own staged. What a peer has to do is close its own batches, which the
     // `ResolveBatches` above just did, and ask for a sync only if somebody
     // is parked on one.
+    //
+    // **On core 0 this test is deliberately over the *whole log*, and it
+    // must stay that way.** `appended_lsn()` there is the shared stream's,
+    // so it includes every peer's staged bytes - which is the *only* thing
+    // bounding a peer's `relaxed` loss window now that peers do not tick
+    // the interval themselves: core 0 cannot take this early-out while any
+    // peer has bytes unflushed, so it reaches the D3 branch and flushes
+    // them, within one `relaxed_flush_interval_ns` exactly as before the
+    // cutover. Making this symmetric - "core 0 should only mind its own
+    // work" - would leave every peer's relaxed data unbounded, silently and
+    // with no test failing. The asymmetry is the design, not an oversight.
     if (!attached() && appended_lsn() == durable_lsn()) {
         return Status::OK();  // nothing to do; a tick must be free
     }
@@ -422,12 +432,18 @@ Status WalManager::DrainOnce() {
 
     // **The loss window is the log's, and under one stream the log has one
     // drain that bounds it** - core 0's, which runs on the same cadence
-    // (`expeditor.cpp`). A peer ticking it too would ask for a sync of
-    // bytes it does not own, every interval, forever: N-1 redundant
-    // `fdatasync`es that nobody is waiting for, and an `interval_syncs`
-    // count on every peer measuring the instance's cadence rather than any
-    // work of that core's. So an attached manager does not take this
+    // (`expeditor.cpp`) and cannot skip a peer's bytes, for the reason the
+    // early-out above gives. So an attached manager does not take this
     // branch at all.
+    //
+    // What a peer's tick cost before, stated precisely because the obvious
+    // reading is wrong: on an *idle* instance it woke nobody -
+    // `WalWriter::RequestSync` returns early once the watermark has passed
+    // - so the cost was one acquisition of the **shared** latch and a
+    // no-op flush, per peer, per interval. On a *busy* one it was worse
+    // than redundant: the peer's flush frequently carried **core 0's**
+    // staged bytes, charging them to that peer's `flushes` and forcing
+    // syncs above the coalescing a single drain exists to get.
     if (attached()) {
         return Status::OK();
     }

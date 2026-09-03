@@ -957,9 +957,11 @@ bool CoreRuntime::AdmitWritePages(std::span<const PageId> pages) {
     // acquisition record**: a PAGE_HANDOFF appended to this stream naming
     // this core as the incoming one - page_lsn must name a record that
     // exists (the WAL gate refuses the bare append point), the record is
-    // the receiver's durable acquisition fact, and analysis's erase reads
-    // correctly in both directions (below this LSN, this stream's redo
-    // owes the page nothing - for an acquisition, nothing below exists).
+    // the receiver's durable acquisition fact. (Analysis's erase, which
+    // this used to justify in both directions, **does not run under one
+    // stream** - `wal/analysis.cpp` says why: the flush that licenses it
+    // covers one core's pool while the erase would speak for every core's
+    // records.)
     // C1's refresh (see GrantRelationFault) - required here too, because
     // C2's fix below makes this grant self-sufficient when it arrives
     // first. One failure policy for this whole function (the 25059bf

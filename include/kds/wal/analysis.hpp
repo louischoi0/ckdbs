@@ -138,11 +138,18 @@ struct AnalysisResult {
     // seeded from CHECKPOINT_BEGIN's table. Redo replays a page from its
     // recLSN; the page_lsn gate does the rest (wal.md §9).
     //
-    // A PAGE_HANDOFF removes its page (PW1c-2, spec-page-lsn-cross-stream
-    // §9 rule 3): from that LSN the page belongs to another stream and
-    // this stream's redo never touches it - sound because the handoff's
-    // flush put everything logged before it in the durable image. A page
-    // that returns is durably restamped at re-acquisition (§9 rule 6), so
+    // A PAGE_HANDOFF removes its page **under per-core streams only**
+    // (PW1c-2, `page-lsn-cross-stream.md` §9 rule 3): from that LSN the
+    // page belongs to another stream and this stream's redo never touches
+    // it - sound because the handoff's flush put everything logged before
+    // it in the durable image. **Under one stream it removes nothing**
+    // (AR0 M0): that flush covers one core's page store, while with one log
+    // the erase would speak for every core's records - so it would drop a
+    // peer's unflushed entry and redo would skip its record. `analysis.cpp`
+    // carries the case.
+    //
+    // A page that returns is durably restamped at re-acquisition (§9 rule
+    // 6), so
     // it re-enters here through its post-return records with a page_lsn
     // already in this stream's space - no per-page departure memory is
     // needed, and none is kept (the f19ead1 review's C2: a durable fact
@@ -234,10 +241,12 @@ struct AnalysisStart {
     // above are plain: `wal/` sits below `server/`, and the layer that owns
     // the superblock is the one that reads it.
     //
-    // What it changes is redo's stamp discipline, and only that. Under
-    // per-core streams a page carrying another core's stamp inside this
-    // stream's redo scope is `Corruption` - the crossing must have been
-    // logged - and every applied page is restamped for this stream. Under
+    // What it changes is redo's stamp discipline **and the handoff rule
+    // `AnalysisResult::dirty_pages` describes** - `Analyze` reads this
+    // field too, for that erase. Under per-core streams a page carrying
+    // another core's stamp inside this stream's redo scope is `Corruption`
+    // - the crossing must have been logged - and every applied page is
+    // restamped for this stream. Under
     // **one** stream both are wrong: every core's records are in this log
     // by construction, so a peer's stamp is not foreign but simply true,
     // and restamping it to the recovering core would take the page away

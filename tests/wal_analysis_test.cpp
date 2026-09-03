@@ -183,12 +183,15 @@ TEST_F(AnalysisTest, APageHandoffRemovesThePageFromTheDirtyPageTable) {
 // hold, which the page_lsn gate makes idempotent - slower at worst, where
 // the erase is wrong at worst.
 TEST_F(AnalysisTest, UnderOneStreamAHandoffLeavesTheDirtyPageTableAlone) {
+    Lsn givers_lsn = 0;
     {
         auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         // The giver's record, then the receiver's acquisition, then the
         // receiver's own - all in the one log, which is the whole point.
-        ASSERT_TRUE(s.value()->Append({RecordType::kHeapOverwrite, 5, 800}).ok());
+        auto givers = s.value()->Append({RecordType::kHeapOverwrite, 5, 800});
+        ASSERT_TRUE(givers.ok());
+        givers_lsn = givers.value();
         std::array<std::byte, kPageHandoffPayloadSize> handoff{};
         ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 800}, handoff).ok());
@@ -206,11 +209,12 @@ TEST_F(AnalysisTest, UnderOneStreamAHandoffLeavesTheDirtyPageTableAlone) {
     // The giver's record still seeds the page, so redo will replay from it.
     ASSERT_EQ(r.value().dirty_pages.count(800), 1u)
         << "the giver's records were dropped from the one pass that must replay them";
-    // And the handoff did not become the page's recLSN: it is an ownership
-    // fact, not a mutation.
+    // And the recLSN is the *giver's* record, not the handoff's: a handoff
+    // is an ownership fact, not a mutation, and redo must replay from the
+    // write rather than from the transfer.
     const auto seeded = r.value().dirty_pages.find(800);
     ASSERT_NE(seeded, r.value().dirty_pages.end());
-    EXPECT_LT(seeded->second, r.value().end_lsn);
+    EXPECT_EQ(seeded->second, givers_lsn);
 
     // A page named only by a handoff is still not dirty - nothing to redo.
     EXPECT_EQ(r.value().dirty_pages.count(900), 0u);
