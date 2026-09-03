@@ -1,0 +1,54 @@
+{
+  "cell": "g2-B",
+  "arm": "B",
+  "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+  "port": 15614,
+  "durability": "group",
+  "suffix": "g2b",
+  "precheck": {
+    "time": "2026-09-03 13:17:15 UTC",
+    "loadavg": "0.85 0.35 0.12 1/326 489787",
+    "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+    "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125406032 133510304  49% /"
+  },
+  "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g2-B.db\nport = 15614\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g2-B\nlog_level = warn\n",
+  "server_start": "2026-09-03 13:17:15 UTC",
+  "driver": {
+    "argv": [
+      "/usr/bin/python3",
+      "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "15614",
+      "--suffix",
+      "g2b",
+      "--users",
+      "100",
+      "--accounts-per-user",
+      "3",
+      "--assets",
+      "30",
+      "--traders",
+      "8",
+      "--txn-per-user",
+      "50",
+      "--verify",
+      "200",
+      "--seed",
+      "1",
+      "--sync",
+      "--json",
+      "/home/cdkbs/bench-runs/am-s1-page-latch/g2-B.json"
+    ],
+    "exit_code": 0,
+    "seconds": 7.877
+  },
+  "meta": "version=16 create_time=1788441435 last_mount_time=1788441435 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5434 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20672 wal_group_batches=5428 wal_mean_group_batch=3.808 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=8037337 sched_iterations=6467 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=438510 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=405061 sched_foreground_polls=41796 sched_foreground_consumed_us=405061 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=6974 recovery_redo_us=6595 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=7208 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+  "server_stop": {
+    "stop": "sigterm",
+    "exit_code": 0,
+    "stop_seconds": 0.015
+  },
+  "postcheck_loadavg": "0.87 0.36 0.13 1/327 489811"
+}

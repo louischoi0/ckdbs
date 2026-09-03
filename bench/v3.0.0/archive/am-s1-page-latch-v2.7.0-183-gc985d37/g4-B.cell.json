@@ -1,0 +1,54 @@
+{
+  "cell": "g4-B",
+  "arm": "B",
+  "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+  "port": 15620,
+  "durability": "group",
+  "suffix": "g4b",
+  "precheck": {
+    "time": "2026-09-03 13:22:45 UTC",
+    "loadavg": "0.25 0.35 0.20 1/317 490183",
+    "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n490176 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1788415079508-w0m60x.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'nohup setsid python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g4-B g4-A >> /home/cdkbs/bench-runs/am-s1-page-latch/run.log 2>&1 & sleep 4; echo \"=== launched:\"; pgrep -f \"run_ab.py /home\" ; tail -2 /home/cdkbs/bench-runs/am-s1-page-latch/run.log' < /dev/null && pwd -P >| /tmp/claude-1ecd-cwd\n490180 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g4-B g4-A",
+    "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125812176 133104160  49% /"
+  },
+  "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g4-B.db\nport = 15620\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g4-B\nlog_level = warn\n",
+  "server_start": "2026-09-03 13:22:45 UTC",
+  "driver": {
+    "argv": [
+      "/usr/bin/python3",
+      "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "15620",
+      "--suffix",
+      "g4b",
+      "--users",
+      "100",
+      "--accounts-per-user",
+      "3",
+      "--assets",
+      "30",
+      "--traders",
+      "8",
+      "--txn-per-user",
+      "50",
+      "--verify",
+      "200",
+      "--seed",
+      "1",
+      "--sync",
+      "--json",
+      "/home/cdkbs/bench-runs/am-s1-page-latch/g4-B.json"
+    ],
+    "exit_code": 0,
+    "seconds": 7.777
+  },
+  "meta": "version=16 create_time=1788441765 last_mount_time=1788441765 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5438 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20672 wal_group_batches=5432 wal_mean_group_batch=3.806 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=7942146 sched_iterations=6527 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=506485 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=416352 sched_foreground_polls=41796 sched_foreground_consumed_us=416352 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7008 recovery_redo_us=6678 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=5334 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+  "server_stop": {
+    "stop": "sigterm",
+    "exit_code": 0,
+    "stop_seconds": 0.015
+  },
+  "postcheck_loadavg": "0.31 0.36 0.20 1/315 490208"
+}

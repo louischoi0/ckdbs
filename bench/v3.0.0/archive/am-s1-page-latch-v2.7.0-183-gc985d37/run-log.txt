@@ -1,0 +1,24 @@
+[2026-09-03 13:15:25 UTC] cell g1-A (A, group) starting
+[2026-09-03 13:15:34 UTC] cell g1-A done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.007}
+[2026-09-03 13:15:37 UTC] cell g1-B (B, group) starting
+[2026-09-03 13:16:08 UTC] cell g1-B done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.665}
+[2026-09-03 13:16:11 UTC] cell s1-A (A, strict) starting
+[2026-09-03 13:16:41 UTC] cell s1-A done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:16:44 UTC] cell s1-B (B, strict) starting
+[2026-09-03 13:17:12 UTC] cell s1-B done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:17:15 UTC] cell g2-B (B, group) starting
+[2026-09-03 13:17:23 UTC] cell g2-B done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:17:26 UTC] cell g2-A (A, group) starting
+[2026-09-03 13:17:34 UTC] cell g2-A done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:17:37 UTC] cell s2-B (B, strict) starting
+[2026-09-03 13:18:05 UTC] cell s2-B done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:18:08 UTC] cell s2-A (A, strict) starting
+[2026-09-03 13:18:35 UTC] cell s2-A done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.007}
+[2026-09-03 13:20:47 UTC] cell g3-A (A, group) starting
+[2026-09-03 13:21:06 UTC] cell g3-A done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:21:09 UTC] cell g3-B (B, group) starting
+[2026-09-03 13:21:21 UTC] cell g3-B done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:22:45 UTC] cell g4-B (B, group) starting
+[2026-09-03 13:22:53 UTC] cell g4-B done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}
+[2026-09-03 13:22:56 UTC] cell g4-A (A, group) starting
+[2026-09-03 13:23:05 UTC] cell g4-A done, driver exit 0, stop {'stop': 'sigterm', 'exit_code': 0, 'stop_seconds': 0.015}

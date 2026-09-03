@@ -1,0 +1,64 @@
+loading: users=100 assets=30 accounts~300  (tables suffixed _g1b)
+  users         100 rows
+  assets         30 rows
+  accounts      287 rows   (load took 2.1s)
+running until 5,000 transactions commit (50 per user, ceiling 60s): 8 trader process(es) + 1 reporting process, 180 simulated days
+
+ckdbs benchmark - 27 columns, 287 rows resident, 9 connections
+server 127.0.0.1:15611  table *_g1b
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load-users                 100        75   13315.8   1051.4   1175.9   1231.5  82336.3 276524.1  292089.8     0
+load-assets                 30       792    1263.3   1085.9   1173.3   1213.4   1498.4   1540.7    1540.7     0
+load-accounts              287       421    2373.4   1040.8   1147.1   1192.2   1536.4  44342.7  153650.7     0
+txn                       5000       196   40731.2   9066.8  10576.6  11074.9 189952.6 572507.6 1276437.4     0
+trade-insert             10000       393    9672.0   1549.5   2579.8   2697.8  21191.2 209690.4  882283.4     0
+account-update           10000       393   10690.2   2245.7   2581.3   2700.0  26956.9 219744.6  882260.2     0
+profit-scan                700        28    7566.0    716.0   1395.4   1453.7   5925.4 227253.6  587514.9     0
+profit-insert              700        28    8499.2   2269.3   2531.5   2636.3   8381.6  99868.6  702292.3     0
+sync                         1       358    2789.7   2789.7   2789.7   2789.7   2789.7   2789.7    2789.7     0
+
+  load-users: one row per customer
+  load-assets: instruments
+  load-accounts: 3+-1 per user
+  txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+  trade-insert: heap chain tail append, WAL-logged
+  account-update: in-place overwrite after a clustered-btree descent, unlogged
+  profit-scan: FilterScan: WHERE user_id = <n>, a non-pk equality, so the whole accounts relation is walked per user
+  profit-insert: one user_periodic_profit row per user per period
+  sync: page store flushed to the data file
+
+  the four statements are NOT atomic as this tool runs them: the engine has BEGIN/COMMIT (docs/spec/txn.md, built) but this tool does not use them, so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+  balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+  money is int64 minor units - float/decimal columns are refused at CREATE TABLE under the fixed-length rule.
+  INSERT is the one logged statement; UPDATE and CREATE TABLE are unlogged, so the balance moves survive only a SYNC or a clean shutdown. Do not measure this on tmpfs, where fsync is free and every durability class looks identical.
+  no Cabin (--cabin declares one on accounts.user_id): the reporter's `WHERE user_id = <n>` walks the whole accounts relation per user, per period, which is what a reporting job on an unindexed foreign key costs.
+  accounts/users/assets are BTREE and trades/user_periodic_profit are HEAP - a heap accounts relation would make every UPDATE a full chain scan, and the update number would then be a function of --users, not of the engine.
+
+business scenario
+------------------------------------------------------------------------
+  users 100   accounts 287   assets 30   simulated span 180 days in 25.5s wall
+  transaction = 2 INSERT trades + 2 UPDATE accounts, 8 trader process(es)
+  statement grouping  four autocommit statements: four transactions, four durability points (--txn groups them)
+  ran to a work target of 5,000 transactions (ceiling was 60s); TPS below is over the 25.5s the work took
+
+  TPS                        196.3   committed transactions/sec
+  statements/sec             785.3   4 statements per transaction
+  committed                  5,000
+  torn                           0   partially applied; no transaction was open to roll back (--txn opens one)
+  underfunded                  179   skipped before any statement was sent
+  per trader          #0:625  #1:625  #2:625  #3:625  #4:625  #5:625  #6:625  #7:625
+
+  cabin               disabled (--cabin declares one on accounts.user_id); the reporting scan above is a FilterScan
+
+  foreign key         none (--fk declares trades.account_id -> accounts)
+
+  reporting process             15 periods, 700 user_periodic_profit rows written
+                      one FilterScan of accounts per user per period
+
+  balance verify               200 accounts read back - all match
+
+  trades relation holds 10,000 rows (2 per committed transaction)
+
+  wrote /home/cdkbs/bench-runs/am-s1-page-latch/g1-B.json

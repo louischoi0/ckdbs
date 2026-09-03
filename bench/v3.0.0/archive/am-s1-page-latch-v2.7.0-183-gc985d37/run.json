@@ -1,0 +1,696 @@
+{
+  "describe_tree": "v2.7.0-183-gc985d37",
+  "binaries": {
+    "A": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A",
+    "B": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B"
+  },
+  "sha256": {
+    "A": "d6b2c4202a929e545bace8d570cd6fec42640a58461536d4c4ab3709e3872f52",
+    "B": "6724bbb4094bab35c208a6b5fe60bc8dd7b2a5fc361ede870db8a823df979d88"
+  },
+  "started": "2026-09-03 13:15:25 UTC",
+  "cells": [
+    {
+      "cell": "g1-A",
+      "arm": "A",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A",
+      "port": 15610,
+      "durability": "group",
+      "suffix": "g1a",
+      "precheck": {
+        "time": "2026-09-03 13:15:25 UTC",
+        "loadavg": "0.15 0.06 0.01 1/300 489617",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489606 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1788415079508-w0m60x.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'echo \"=== engine diff 92cb654..a68dbc3 (A'\"'\"'s provenance: parent engine of c985d37):\"; git -C /home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model diff --stat 92cb654 a68dbc3 -- src include tools CMakeLists.txt | tail -3; echo \"(end diff)\"; echo \"=== engine diff a68dbc3..c985d37:\"; git -C /home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model diff --stat a68dbc3 c985d37 -- src include tools CMakeLists.txt | tail -12; nohup setsid python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all > /home/cdkbs/bench-runs/am-s1-page-latch/run.log 2>&1 & sleep 4; echo \"=== launched:\"; pgrep -a -f run_ab.py; cat /home/cdkbs/bench-runs/am-s1-page-latch/run.log' < /dev/null && pwd -P >| /tmp/claude-274c-cwd\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125135420 133780916  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g1-A.db\nport = 15610\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g1-A\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:15:25 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15610",
+          "--suffix",
+          "g1a",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g1-A.json"
+        ],
+        "exit_code": 0,
+        "seconds": 9.18
+      },
+      "meta": "version=16 create_time=1788441325 last_mount_time=1788441325 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5438 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20722 wal_group_batches=5432 wal_mean_group_batch=3.815 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=9356250 sched_iterations=7261 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=1284726 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=435856 sched_foreground_polls=41946 sched_foreground_consumed_us=435856 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7066 recovery_redo_us=6581 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=6093 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.007
+      },
+      "postcheck_loadavg": "0.21 0.08 0.01 1/298 489643"
+    },
+    {
+      "cell": "g1-B",
+      "arm": "B",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+      "port": 15611,
+      "durability": "group",
+      "suffix": "g1b",
+      "precheck": {
+        "time": "2026-09-03 13:15:37 UTC",
+        "loadavg": "0.20 0.07 0.01 1/298 489643",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125203072 133713264  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g1-B.db\nport = 15611\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g1-B\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:15:37 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15611",
+          "--suffix",
+          "g1b",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g1-B.json"
+        ],
+        "exit_code": 0,
+        "seconds": 29.171
+      },
+      "meta": "version=16 create_time=1788441337 last_mount_time=1788441337 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=168 wal_syncs=5441 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=21122 wal_group_batches=5432 wal_mean_group_batch=3.888 wal_group_batch_max=7 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=29185583 sched_iterations=6977 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=983334 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=500431 sched_foreground_polls=43146 sched_foreground_consumed_us=500431 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7109 recovery_redo_us=6792 recovery_high_water_us=6 recovery_undo_us=0 recovery_checkpoint_us=434131 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.665
+      },
+      "postcheck_loadavg": "0.58 0.18 0.05 1/313 489702"
+    },
+    {
+      "cell": "s1-A",
+      "arm": "A",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A",
+      "port": 15612,
+      "durability": "strict",
+      "suffix": "s1a",
+      "precheck": {
+        "time": "2026-09-03 13:16:11 UTC",
+        "loadavg": "0.54 0.18 0.05 1/313 489702",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125270728 133645608  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/s1-A.db\nport = 15612\ncores = 1\ndurability = strict\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/s1-A\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:16:11 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15612",
+          "--suffix",
+          "s1a",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/s1-A.json"
+        ],
+        "exit_code": 0,
+        "seconds": 29.416
+      },
+      "meta": "version=16 create_time=1788441371 last_mount_time=1788441371 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=20790 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=29611558 sched_iterations=5820 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=375964 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=28897659 sched_foreground_polls=21332 sched_foreground_consumed_us=744490 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7050 recovery_redo_us=6791 recovery_high_water_us=5 recovery_undo_us=0 recovery_checkpoint_us=5421 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.79 0.27 0.09 1/327 489759"
+    },
+    {
+      "cell": "s1-B",
+      "arm": "B",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+      "port": 15613,
+      "durability": "strict",
+      "suffix": "s1b",
+      "precheck": {
+        "time": "2026-09-03 13:16:44 UTC",
+        "loadavg": "0.79 0.27 0.09 1/327 489759",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125338404 133577932  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/s1-B.db\nport = 15613\ncores = 1\ndurability = strict\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/s1-B\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:16:44 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15613",
+          "--suffix",
+          "s1b",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/s1-B.json"
+        ],
+        "exit_code": 0,
+        "seconds": 26.511
+      },
+      "meta": "version=16 create_time=1788441404 last_mount_time=1788441404 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=20812 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=26683323 sched_iterations=6110 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=365468 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=25960664 sched_foreground_polls=21376 sched_foreground_consumed_us=856692 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7350 recovery_redo_us=6778 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=5403 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.93 0.36 0.12 1/326 489787"
+    },
+    {
+      "cell": "g2-B",
+      "arm": "B",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+      "port": 15614,
+      "durability": "group",
+      "suffix": "g2b",
+      "precheck": {
+        "time": "2026-09-03 13:17:15 UTC",
+        "loadavg": "0.85 0.35 0.12 1/326 489787",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125406032 133510304  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g2-B.db\nport = 15614\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g2-B\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:17:15 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15614",
+          "--suffix",
+          "g2b",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g2-B.json"
+        ],
+        "exit_code": 0,
+        "seconds": 7.877
+      },
+      "meta": "version=16 create_time=1788441435 last_mount_time=1788441435 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5434 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20672 wal_group_batches=5428 wal_mean_group_batch=3.808 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=8037337 sched_iterations=6467 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=438510 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=405061 sched_foreground_polls=41796 sched_foreground_consumed_us=405061 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=6974 recovery_redo_us=6595 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=7208 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.87 0.36 0.13 1/327 489811"
+    },
+    {
+      "cell": "g2-A",
+      "arm": "A",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A",
+      "port": 15615,
+      "durability": "group",
+      "suffix": "g2a",
+      "precheck": {
+        "time": "2026-09-03 13:17:26 UTC",
+        "loadavg": "0.80 0.36 0.13 1/300 489812",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125473660 133442676  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g2-A.db\nport = 15615\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g2-A\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:17:26 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15615",
+          "--suffix",
+          "g2a",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g2-A.json"
+        ],
+        "exit_code": 0,
+        "seconds": 7.777
+      },
+      "meta": "version=16 create_time=1788441446 last_mount_time=1788441446 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5438 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20672 wal_group_batches=5432 wal_mean_group_batch=3.806 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=7961094 sched_iterations=6602 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=588758 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=421172 sched_foreground_polls=41796 sched_foreground_consumed_us=421172 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7142 recovery_redo_us=6703 recovery_high_water_us=5 recovery_undo_us=0 recovery_checkpoint_us=5465 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.81 0.37 0.13 1/298 489835"
+    },
+    {
+      "cell": "s2-B",
+      "arm": "B",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+      "port": 15616,
+      "durability": "strict",
+      "suffix": "s2b",
+      "precheck": {
+        "time": "2026-09-03 13:17:37 UTC",
+        "loadavg": "0.75 0.36 0.13 1/299 489836",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125541288 133375048  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/s2-B.db\nport = 15616\ncores = 1\ndurability = strict\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/s2-B\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:17:37 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15616",
+          "--suffix",
+          "s2b",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/s2-B.json"
+        ],
+        "exit_code": 0,
+        "seconds": 26.611
+      },
+      "meta": "version=16 create_time=1788441457 last_mount_time=1788441457 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=20833 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=26780583 sched_iterations=6026 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=360758 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=26080759 sched_foreground_polls=21418 sched_foreground_consumed_us=977038 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7016 recovery_redo_us=6657 recovery_high_water_us=5 recovery_undo_us=0 recovery_checkpoint_us=5216 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.92 0.44 0.17 1/313 489890"
+    },
+    {
+      "cell": "s2-A",
+      "arm": "A",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A",
+      "port": 15617,
+      "durability": "strict",
+      "suffix": "s2a",
+      "precheck": {
+        "time": "2026-09-03 13:18:08 UTC",
+        "loadavg": "0.92 0.44 0.17 1/313 489890",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n489614 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B all",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125608952 133307384  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/s2-A.db\nport = 15617\ncores = 1\ndurability = strict\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/s2-A\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:18:08 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15617",
+          "--suffix",
+          "s2a",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/s2-A.json"
+        ],
+        "exit_code": 0,
+        "seconds": 26.861
+      },
+      "meta": "version=16 create_time=1788441488 last_mount_time=1788441488 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=20812 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=0 wal_group_batches=0 wal_mean_group_batch=0.000 wal_group_batch_max=0 wal_group_batch_min=0 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=27025566 sched_iterations=5848 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=337348 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=26349060 sched_foreground_polls=21376 sched_foreground_consumed_us=728985 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=6985 recovery_redo_us=6783 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=7433 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.007
+      },
+      "postcheck_loadavg": "1.02 0.51 0.20 1/326 489930"
+    },
+    {
+      "cell": "g3-A",
+      "arm": "A",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A",
+      "port": 15618,
+      "durability": "group",
+      "suffix": "g3a",
+      "precheck": {
+        "time": "2026-09-03 13:20:47 UTC",
+        "loadavg": "0.11 0.33 0.17 1/327 490057",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n490050 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1788415079508-w0m60x.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'nohup setsid python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g3-A g3-B >> /home/cdkbs/bench-runs/am-s1-page-latch/run.log 2>&1 & sleep 4; echo \"=== launched:\"; pgrep -f run_ab.py; tail -3 /home/cdkbs/bench-runs/am-s1-page-latch/run.log' < /dev/null && pwd -P >| /tmp/claude-d897-cwd\n490054 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g3-A g3-B",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125676752 133239584  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g3-A.db\nport = 15618\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g3-A\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:20:47 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15618",
+          "--suffix",
+          "g3a",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g3-A.json"
+        ],
+        "exit_code": 0,
+        "seconds": 18.098
+      },
+      "meta": "version=16 create_time=1788441647 last_mount_time=1788441647 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5440 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20822 wal_group_batches=5430 wal_mean_group_batch=3.835 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=18300061 sched_iterations=6938 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=947812 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=533701 sched_foreground_polls=42246 sched_foreground_consumed_us=533701 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7070 recovery_redo_us=6721 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=167931 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.43 0.39 0.19 1/314 490086"
+    },
+    {
+      "cell": "g3-B",
+      "arm": "B",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+      "port": 15619,
+      "durability": "group",
+      "suffix": "g3b",
+      "precheck": {
+        "time": "2026-09-03 13:21:09 UTC",
+        "loadavg": "0.43 0.39 0.19 1/328 490100",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n490054 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g3-A g3-B",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125744408 133171928  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g3-B.db\nport = 15619\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g3-B\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:21:09 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15619",
+          "--suffix",
+          "g3b",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g3-B.json"
+        ],
+        "exit_code": 0,
+        "seconds": 11.234
+      },
+      "meta": "version=16 create_time=1788441669 last_mount_time=1788441669 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5439 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20722 wal_group_batches=5430 wal_mean_group_batch=3.816 wal_group_batch_max=5 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=11327740 sched_iterations=6456 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=434114 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=438839 sched_foreground_polls=41946 sched_foreground_consumed_us=438839 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=6957 recovery_redo_us=6684 recovery_high_water_us=5 recovery_undo_us=0 recovery_checkpoint_us=60931 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.62 0.43 0.21 1/328 490134"
+    },
+    {
+      "cell": "g4-B",
+      "arm": "B",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B",
+      "port": 15620,
+      "durability": "group",
+      "suffix": "g4b",
+      "precheck": {
+        "time": "2026-09-03 13:22:45 UTC",
+        "loadavg": "0.25 0.35 0.20 1/317 490183",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n490176 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1788415079508-w0m60x.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'nohup setsid python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g4-B g4-A >> /home/cdkbs/bench-runs/am-s1-page-latch/run.log 2>&1 & sleep 4; echo \"=== launched:\"; pgrep -f \"run_ab.py /home\" ; tail -2 /home/cdkbs/bench-runs/am-s1-page-latch/run.log' < /dev/null && pwd -P >| /tmp/claude-1ecd-cwd\n490180 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g4-B g4-A",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125812176 133104160  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g4-B.db\nport = 15620\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g4-B\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:22:45 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15620",
+          "--suffix",
+          "g4b",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g4-B.json"
+        ],
+        "exit_code": 0,
+        "seconds": 7.777
+      },
+      "meta": "version=16 create_time=1788441765 last_mount_time=1788441765 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5438 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20672 wal_group_batches=5432 wal_mean_group_batch=3.806 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=7942146 sched_iterations=6527 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=506485 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=416352 sched_foreground_polls=41796 sched_foreground_consumed_us=416352 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7008 recovery_redo_us=6678 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=5334 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.31 0.36 0.20 1/315 490208"
+    },
+    {
+      "cell": "g4-A",
+      "arm": "A",
+      "binary": "/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A",
+      "port": 15621,
+      "durability": "group",
+      "suffix": "g4a",
+      "precheck": {
+        "time": "2026-09-03 13:22:56 UTC",
+        "loadavg": "0.29 0.36 0.20 1/329 490222",
+        "pgrep": "899 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn\n490180 python3 /home/cdkbs/bench-runs/am-s1-page-latch/run_ab.py /home/cdkbs/bench-runs/am-s1-page-latch /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A /home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B g4-B g4-A",
+        "df": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/root      ext4 258932720 125879820 133036516  49% /"
+      },
+      "config": "data_file = /home/cdkbs/bench-runs/am-s1-page-latch/g4-A.db\nport = 15621\ncores = 1\ndurability = group\npeer_listeners = off\nplacement = namespace\ncheckpoint_interval_ms = 5000\nauth = off\ntls = off\nlog_dir = /home/cdkbs/bench-runs/am-s1-page-latch/logs/g4-A\nlog_level = warn\n",
+      "server_start": "2026-09-03 13:22:56 UTC",
+      "driver": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/cdkbs/ckdbs/.claude/worktrees/ar2-borrow-model/tools/scenario0_stockmarket.py",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "15621",
+          "--suffix",
+          "g4a",
+          "--users",
+          "100",
+          "--accounts-per-user",
+          "3",
+          "--assets",
+          "30",
+          "--traders",
+          "8",
+          "--txn-per-user",
+          "50",
+          "--verify",
+          "200",
+          "--seed",
+          "1",
+          "--sync",
+          "--json",
+          "/home/cdkbs/bench-runs/am-s1-page-latch/g4-A.json"
+        ],
+        "exit_code": 0,
+        "seconds": 7.827
+      },
+      "meta": "version=16 create_time=1788441776 last_mount_time=1788441776 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 undo_pages_live=2 undo_pages_recycled=166 wal_syncs=5438 wal_interval_syncs=0 wal_sync_failures=0 wal_group_commits=20672 wal_group_batches=5431 wal_mean_group_batch=3.806 wal_group_batch_max=6 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 cross_core_write_refusals=0 cross_core_write_refusal_keys=0 sched_wall_us=8026146 sched_iterations=6648 sched_idle_blocks=0 sched_wake_race_skips=0 sched_parked_idle_blocks=0 sched_idle_block_us=641483 sched_wakes_sent=0 sched_wakes_received=0 sched_spurious_wakes=0 sched_foreground_polled_us=416679 sched_foreground_polls=41796 sched_foreground_consumed_us=416679 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=7006 recovery_redo_us=6746 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=5199 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 recovery_assertions_foreign=0",
+      "server_stop": {
+        "stop": "sigterm",
+        "exit_code": 0,
+        "stop_seconds": 0.015
+      },
+      "postcheck_loadavg": "0.34 0.37 0.20 1/328 490245"
+    }
+  ],
+  "passes": [
+    {
+      "started": "2026-09-03 13:15:25 UTC",
+      "finished": "2026-09-03 13:18:38 UTC",
+      "cells": [
+        "g1-A",
+        "g1-B",
+        "s1-A",
+        "s1-B",
+        "g2-B",
+        "g2-A",
+        "s2-B",
+        "s2-A"
+      ]
+    },
+    {
+      "started": "2026-09-03 13:15:25 UTC",
+      "finished": "2026-09-03 13:21:24 UTC",
+      "cells": [
+        "g1-A",
+        "g1-B",
+        "s1-A",
+        "s1-B",
+        "g2-B",
+        "g2-A",
+        "s2-B",
+        "s2-A",
+        "g3-A",
+        "g3-B"
+      ]
+    }
+  ],
+  "pass_started": "2026-09-03 13:22:45 UTC",
+  "finished": "2026-09-03 13:23:08 UTC"
+}
