@@ -275,3 +275,241 @@ and D2/D10's "scheduler latency" premise is not.
 - **D2 and D3 accept different hop ratios**, and D3(a) as written cannot
   carry a `FULL_PAGE_IMAGE` through a ring slot. Work order AL's AL-R1
   takes this up.
+
+---
+
+## AR0-M — The operator's marks of 2026-09-03
+
+Recorded by CLA on `worktree-commit-order-ratification` at `f027a3c`
+(`v2.7.0-158-gf027a3c`). **The body above and AR0-V are untouched**; this
+section records which D-items now carry the operator's mark, what each
+mark carries with it, and what each inherits from AR0-V's source read.
+Everything not listed stays pending — D3-D7, D10, D12, D13, D14, D16
+beyond what AL-2 records M0 consuming.
+
+### AR0-M1 — D1: (b), conditionally
+
+**The mark.** SI plus explicit gap/predicate locks on the assertion and FK
+paths — §5's option (b) — taken **on the premise that RU, RR and RC are all
+deliverable**, and **withdrawn and re-decided if they are not**.
+
+**Amended by the operator the same day.** The first mark named four levels
+and counted three. SR inside the condition would have made it
+self-cancelling — §5's (c) is "full serializable (SSI or S2PL)" while (b)
+admits any write skew falling off the assertion and FK paths — so **SR
+leaves the condition and D1 stays (b)**. The condition is three levels: RU,
+RR, RC.
+
+**SERIALIZABLE stays out of scope and the *reason* expires with this mark,
+in four places rather than one.** `txn.md` §1 closes SR on two grounds — no
+lock manager and no row-level read tracking — and M2 builds the first. The
+conclusion stands; the justification does not, and it is written out at
+`txn.md` §1, in the **user-visible refusal text** at
+`src/txn/manager.cpp:64-65` ("this engine has neither a lock manager nor
+row-level read tracking", which M2 makes untrue on the wire),
+`manual/sql/sql.md:758` and `client-manual.md:370`. The honest post-M2
+wording names what is actually missing: no row-level read tracking, and
+SI's write skew closed only on the assertion and FK paths (D8, D9).
+Rewriting all four belongs to M2's work order. **One is already wrong
+today, independently of M2**: the comment at `src/txn/manager.cpp:59-61`
+says "no lock manager and **no reader registration**", which `txn.md` §1
+explicitly corrects and `txn.md` §4.1 contradicts ("Readers are
+registered") — a stale comment to fix whenever that file is next opened.
+
+**What the mark rests on, and the half of the condition nothing answers.**
+The three levels do not stand alike:
+
+- **RU does not exist in the engine, and it is not free.** `txn.md` §1 says
+  "exactly two isolation levels" and `ParseIsolationLevel`
+  (`src/txn/manager.cpp:54-68`) refuses every other spelling. What is cheap
+  is the *mechanism*: invariant 12 carries no `xmax` and
+  `PageView::OverwriteTuple` is in place, so the newest version is the one
+  on the page and RU is that page read with no view taken. What it still
+  costs is an enum value and its spellings, a bypass at the visibility
+  choke point, a ruling on what an RU **writer**'s first-updater-wins view
+  is (`txn.md` §5), and the rewrite of §1's "exactly two". **Deliverable at
+  M2 and dependent on nothing else** — which is the point: of the three, RU
+  is the one no other mark gates.
+- **RR and RC, as levels meaning one instant across the instance, depend on
+  `ratification-an-commit-order.md` AN-D4, which is unmarked.** With no
+  total commit order a snapshot is a per-core high-water mark.
+- **So the condition cannot be evaluated yet, and one half of it has no
+  answer in either document.** If AN-D4 is declined, RR and RC survive as
+  **per-core** levels — what the engine ships at `f027a3c` and what
+  `crosscore.md` §5 states. **Does a per-core RR satisfy "지원 가능"?** The
+  mark does not say and CLA will not guess; it is the question that decides
+  whether D1 stands or returns for re-decision. AN-D9 carries the
+  mechanism; the question lives here.
+
+### AR0-M2 — D2: (a)
+
+A shared partitioned lock table, partition count 64 x cores, compiled out
+at `cores = 1`.
+
+Two things it inherits from the tree rather than from the body:
+
+- **AR0-V1 already answered D2's stated ground.** The premise that
+  cross-core cost is scheduler latency is not what the tree attributes. The
+  mark stands on (b)'s own cost — one ring round trip per lock — rather than
+  on that premise.
+- **The primitive the option names no longer exists.** AL-7's review record
+  deleted `spin_latch.hpp` at `7839a29`, and `base/latch.hpp` is now a
+  `std::mutex` reached through a nullable pointer — **two predictable
+  branches, which that header is careful to call a property of the code
+  rather than a build flag**, unlike D2(a)'s own genuine compile-out at
+  `cores = 1`. A lock table's contention is not the WAL append's —
+  nanoseconds, never a holder inside `fsync` — so the deletion does not
+  refute (a). It means the implementation either re-introduces a spin
+  primitive or uses `base/latch.hpp`. Not decided here.
+
+**What `rules.md` §3 requires of it either way**, at `f027a3c` and not at
+the shape that section had a week ago: a justification comment for **any**
+lock, in the subsystem header *and* in the owning spec; and a partitioned
+lock table read by every core is a **new row in §3's declared-shared
+table**, whose rule is that "Adding a row is a spec change first and a code
+change second" and that "the fourth should be argued for rather than
+noticed later". D2's work order owes that argument — what serializes the
+table and which spec declares it — before the code, exactly as AN-Q1 owes
+it for the commit-order window.
+
+The partition count stays `[constant]` and re-measurable.
+
+### AR0-M3 — D8: as proposed
+
+Locked keys are every column named in an assertion predicate or aggregate
+group key, and every FK referenced key; an assertion declares its locked
+keys explicitly at `CREATE`, and implicit derivation is refused on
+quiet-wrong grounds.
+
+Four things the order inherits, from a source read at `f027a3c`, recorded
+so the work order does not rediscover them:
+
+1. **The text conflates two sets.** For `SUM(col) <= N` the *trigger* set —
+   what makes a write require a check — is the group columns **plus the
+   summed column** (`assertion.md` §4.2 checks an `UPDATE` whose sum-column
+   delta is positive with the group unchanged). The *lock* set is the group
+   key. "Every column named in the predicate" is the union, and locks more
+   than the constraint needs.
+2. **The FK half names the wrong side for the gap gap-locks exist to
+   close.** "Every FK referenced key" is the parent's pk, which D9(a)'s
+   shared lock already covers on the forward path. The phantom is on the
+   **child** side: a child inserted while the parent's reverse walk is in
+   flight. D9's own sentence ("checks for children under the same gap lock
+   as D8") reads child-side; D8's text does not.
+3. **A gap lock needs a structure to name the gap in, and only one of the
+   two paths has one.** An assertion does by construction: the Bound Cabin
+   is pinned and full-coverage (`cabin.md` §12.1), so a group key with no
+   entry yet is still a lockable slot. The FK child side does not —
+   `child.fk_col` carries no required index, and `foreign-keys.md` §3's
+   declared fix is `CREATE CABIN ON child(fk_col)`, an **Observational**
+   Cabin authoritative only for observed values, which cannot hold a lock
+   for a value nobody has probed. **The work order must say what a parent
+   `DELETE` locks when the child has no covering structure**; relation
+   scope is the coarse answer and is not chosen here.
+4. **Explicit declaration is redundant for the v1 predicate class.** AS2's
+   grammar already carries the `GROUP BY` list, so for AS1's class the
+   declared set and the derived set are the same list and the derivation is
+   a projection, not an analysis. The requirement earns its keep only if the
+   predicate class widens; as written it risks a second, user-maintained
+   name for a fact the grammar already holds (`CLAUDE.md`, no second name).
+
+**What the mark strikes.** `assertion.md` AS4 — "Reservation protocol
+combined with owner-core group-key serialization. **No latches, no waiting,
+no deadlock.**" — is a decision-record entry that D8 with D12 contradicts.
+It is struck by whichever work order lands D8, not by this record.
+
+### AR0-M4 — D9: (a)
+
+A shared row lock on the parent row, held for the child transaction's
+duration.
+
+**What it retires**, all in `foreign-keys.md`, and the list is longer than
+the intent:
+
+- the **reference intent** with the dispatch-fork park that carries it
+  (§2a/§2b; its row-scoped property is stated in §3a, "A live reference
+  intent on the row being deleted");
+- §3's "the in-place row with a foreign `trx_id` *is* the lock record; no
+  lock manager exists or is needed" — the current design's whole answer to
+  this problem, replaced rather than supplemented;
+- **F3, and this is the one D9(a) contradicts hardest**: "Blocking is not
+  expressible on a cooperative single-writer core", so a fail-fast
+  `TxnConflict` is the whole concurrency answer. A shared lock *held for the
+  child transaction's duration* makes a conflicting check **wait**, which
+  F3 forecloses. The item that would answer it is **D13** (async lock
+  waits), which is unmarked — so D9's mark reaches past itself into D13;
+- §5's first bullet, "No lock manager, no wait queues, no deadlock detector
+  — F3 plus in-place `trx_id` makes the uncommitted row itself the conflict
+  signal", which D9 with D12 negates clause by clause.
+
+**What it can reuse.** The Keystone lock byte `txn.md` §5 calls unused is a
+home for the row lock (AR0-V4).
+
+**What it does not move.** `foreign-keys.md` §4's check visibility — a view
+minted at check time, latest-state, an in-flight writer answered busy — is
+not a snapshot question. What D9 changes is that a parent seen under the
+lock cannot then disappear, which is *how* the check and the transaction's
+snapshot come to agree. The check is not moved onto the snapshot; the
+snapshot is defended.
+
+### AR0-M5 — D11: the R5 mover is retired
+
+Retired as a **data** mover; affinity rebalancing is a table update.
+
+**The shape is AR0-V3's and not the body's.** `sys.ranges` at page 15
+already carries a per-range `owner_core` (`catalog/rows.hpp`), so affinity
+is that column **re-scoped from an authority to a hint**, not a new
+`sys.range_affinity` relation — which would be a second name for the
+quantity. `sys.access_stats` at `kCatalogPageAccessStats = 11` stops being
+R5's gate and blocks nothing.
+
+### AR0-M6 — D15: the version is v3.0.0
+
+**The operator has named the version** (`CLAUDE.md`, Version Management).
+AL-R8's `bench/v3.0.0/` is now the version's series rather than a
+proposal's, and `index.md`'s "the version number is AR0 D15's *proposal*"
+no longer holds.
+
+**The annotated tag is a separate act and is not taken here.**
+`git describe --tags` reads `v2.7.0-*` until one exists, and a tag message
+is a durability claim that carries what bounds it.
+
+**What it could truthfully say moved twice while this section was being
+written, which is the argument for writing the state rather than the
+verdict.** At `f027a3c` M0's code had landed and its baseline had not, so
+no milestone was complete by its own definition of done — AR0 §8 step 3 and
+AL-2 both make a fresh baseline half of what M0 *is*. Merging `origin/main`
+brought `6ead2a0`: **AL-S8 is measured** — eleven cells at
+`v2.7.0-157-gf6ed10c` on the 8-core EPYC with data on ext4, three results
+files under `bench/v3.0.0/` — with a `critics-developer` pass over those
+files still in flight, and AL-S9's prose pass built. So M0 is complete or
+all but, and **M1 through M4 are not built**; M1 is written and was gated on
+exactly the numbers that now exist.
+
+A `v3.0.0` tag cut here would therefore be honest only if its message says
+one milestone of five is built and names which. Cut it now with that
+message, or cut it when more of the series closes — CLA takes neither
+reading, and nothing is pushed either way without the word.
+
+### AR0-M7 — What the review of this section changed
+
+`critics-developer`, 2026-09-03, ~71 tool calls against
+`worktree-commit-order-ratification` at `f027a3c`. Three claims in the
+first draft of AR0-M were refuted by this tree and are corrected above.
+
+| claim | what the tree says | where it landed |
+|---|---|---|
+| "AR0 M0 has landed" | at `f027a3c`, AL-S8 was **in progress** in this same directory and `bench/` held only its README, a fresh baseline being half of what AR0 §8 step 3 and AL-2 define M0 to be. It also contradicted `index.md`'s own row added in the same change | AR0-M6 rewritten — and rewritten a second time when the merge of `origin/main` brought `6ead2a0`, where AL-S8 **is** measured. Both states are kept in the paragraph, because the tag argument rests on which one holds and it moved twice in a day |
+| "AL-7d deleted `spin_latch.hpp`" | the deletion is **AL-7**'s review record at `7839a29`; AL-7d (`aff4e32`) is AL-S5/S6's and touches no latch header. The substance held — no `spin_latch*` exists and `base/latch.hpp` is a `std::mutex` | AR0-M2's attribution corrected; the "compile-out" wording separated from D2(a)'s real one, since the header calls its two branches a property of the code rather than of a build flag |
+| "RU needs nothing new ... the cheapest read path in the engine" | there is **no RU**: `txn.md` §1 says "exactly two isolation levels" and `ParseIsolationLevel` refuses every other spelling. The *mechanism* is cheap; the level is not built | AR0-M1's first bullet rewritten to say what RU still costs, and that it is deliverable at M2 gated by nothing — the sibling document had this right and this section did not |
+
+Three mis-scopes also applied: `rules.md` §3 is cited at `f027a3c`'s shape,
+where it requires a justification of **any** lock and makes a partitioned
+lock table a new declared-shared row to be argued for; AR0-M4's retire list
+gained `foreign-keys.md` F3 and §5's first bullet, which D9(a) contradicts
+harder than the intent does, and F3's "blocking is not expressible" is why
+D9's mark reaches into the unmarked D13; and the question "does a per-core
+RR satisfy the condition" now has a home in AR0-M1 rather than being
+forwarded to AN-D9, which was forwarding it back.
+
+Bloat applied: the amendment narration cut from ten lines to five.
