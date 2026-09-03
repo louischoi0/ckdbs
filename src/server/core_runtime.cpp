@@ -1218,6 +1218,12 @@ void CoreRuntime::Run() {
         // review's S4; they were one registration apiece).
         if (config_.core_id != 0) {
             scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
+                // **Before the refill, and that order is the mechanism**
+                // (AN-R13): the burn check is what sets `burn_requested_`,
+                // and the refill below is what acts on it. A peer that
+                // should burn therefore asks on this tick and installs on
+                // the next.
+                MaybeBurnIdleTrxIdBlock();
                 MaybeRefillTrxIds();
                 MaybeRefillRowIds();
                 MaybeRequestRelationGrants();
@@ -1417,12 +1423,28 @@ void CoreRuntime::MaybeRequestRelationGrants() {
     }
 }
 
+void CoreRuntime::MaybeBurnIdleTrxIdBlock() {
+    if (!txn_manager_.has_value()) return;
+    if (txn_manager_->MaybeBurnIdleBlock() == txn::TransactionManager::BurnOutcome::kNeedsBlock) {
+        burn_requested_ = true;
+    }
+}
+
 void CoreRuntime::MaybeRefillTrxIds() {
     // Asked for *before* the window is spent, the extent lease's rule and
     // for its reason: `TrxIdSequence::Next()` is called from inside a
     // statement and cannot await, so by the time it reports exhaustion the
     // statement is already lost.
-    if (trx_id_refill_in_flight_ || !trx_ids_->low_water()) return;
+    //
+    // **Or asked for while the window is full**, which is the one case that
+    // inverts the rule above (AN-R13, AN-S1b): an *idle* core's window is
+    // not low and never will be, and its unspent range is what holds the
+    // instance's commit-order floor down. `burn_requested_` is set by the
+    // burn check on the same tick, so the grant is asked for on one tick
+    // and installed on the next - never burning into an empty hand, which
+    // would leave this core's next write failing retryably for no gain.
+    if (trx_id_refill_in_flight_ || (!trx_ids_->low_water() && !burn_requested_)) return;
+    burn_requested_ = false;
 
     trx_id_refill_in_flight_ = true;
     trx_id_refill_.stats.NoteSubmit(scheduler_->clock().Now(), scheduler_->iterations());

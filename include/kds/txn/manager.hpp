@@ -543,6 +543,39 @@ public:
     // reader, never the accounting.
     StatusOr<ReaderLease> RegisterReader(const ReadView& view);
 
+    // ---- Unpinning the instance's commit-order floor (AN-R13, AN-S1b) ----
+    //
+    // What `MaybeBurnIdleBlock` answered.
+    enum class BurnOutcome : std::uint8_t {
+        // This core is not what the floor is waiting on, or it is still
+        // running transactions, or the window has not grown enough to pay
+        // for a burn. The overwhelmingly common answer.
+        kNotNeeded,
+        // The window was burned; this core's cursor is at the high-water
+        // and the floor is free to pass every id below it.
+        kBurned,
+        // This core should burn and cannot: a leased sequence with no
+        // granted block parked. The caller asks for one and tries again on
+        // its next tick. **Peers only** - core 0 carves and never answers
+        // this.
+        kNeedsBlock,
+    };
+
+    // Burns this core's unspent id block when the instance's commit-order
+    // floor is waiting on it and it has stopped issuing (AN-R13's marked
+    // exit). Cheap and false-answering in every ordinary state: one atomic
+    // load and a comparison when this core is busy or not the binding one.
+    //
+    // "Has stopped issuing" is `ids_.peek()` not having moved since the
+    // previous call, which is exact rather than approximate - `Next()` has
+    // one caller, `Begin` - and costs no counter.
+    //
+    // Called from the `system`-group tick on every core. A burn writes the
+    // superblock on core 0 and spends a granted block on a peer, which is
+    // why it is gated on the window having grown rather than on idleness
+    // alone: an instance whose window drains has nothing to buy.
+    BurnOutcome MaybeBurnIdleBlock();
+
     // The smallest transaction id any live reader on this core might still
     // need a superseded version from: the minimum of MinVisibleBound()
     // over every active transaction's view (and its own id) and every
@@ -579,6 +612,18 @@ private:
     wal::WalManager* wal_;
     InstanceVisibility* visibility_;
     std::uint32_t core_;
+
+    // `ids_.peek()` as `MaybeBurnIdleBlock` last saw it. Equal on two
+    // consecutive ticks means this core issued nothing between them, which
+    // is what "idle" means for a floor bound that only moves when ids are
+    // issued.
+    std::uint64_t last_burn_cursor_ = 0;
+
+    // How large the commit window must be before a burn is worth a
+    // superblock write or a granted block. `[PROPOSED]`, not measured:
+    // four reclamation thresholds, so an instance whose floor is moving
+    // never reaches it and one whose floor is pinned reaches it quickly.
+    static constexpr std::size_t kBurnWindowThreshold = 4096;
 
     // Live transactions, in id order. A vector because the set is bounded
     // by kMaxTrackedLiveTxns and a scan over 64 entries beats a hash on

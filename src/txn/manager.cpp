@@ -466,6 +466,41 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     return first_failure;
 }
 
+TransactionManager::BurnOutcome TransactionManager::MaybeBurnIdleBlock() {
+    if (visibility_ == nullptr) return BurnOutcome::kNotNeeded;
+
+    // Idle since the previous tick. Checked before anything that touches
+    // the shared structure, so a busy core pays one load of its own
+    // sequence and returns.
+    const std::uint64_t cursor = ids_.peek();
+    const bool idle = cursor == last_burn_cursor_;
+    last_burn_cursor_ = cursor;
+    if (!idle) return BurnOutcome::kNotNeeded;
+
+    // Not what the floor is waiting on, or the only core attached - in
+    // which case the floor tracks this cursor and the window drains on its
+    // own (`instance_visibility.hpp`).
+    if (!visibility_->PinsFloor(core_)) return BurnOutcome::kNotNeeded;
+
+    // Pinned, but the window has not grown enough to pay for the burn. An
+    // instance can sit here indefinitely and lose nothing: the floor is
+    // held, and what the floor holds is memory nobody is short of yet.
+    if (visibility_->window_size() < kBurnWindowThreshold) return BurnOutcome::kNotNeeded;
+
+    if (!ids_.can_burn()) return BurnOutcome::kNeedsBlock;
+    if (Status s = ids_.BurnWindow(); !s.ok()) {
+        // The window is untouched on a failure, so this core is exactly
+        // where it was and the next tick tries again. Nothing is reported:
+        // a burn that did not happen costs memory, never a wrong answer,
+        // and a caller that could act on the failure would only retry.
+        return BurnOutcome::kNotNeeded;
+    }
+
+    PublishCoreBounds();
+    last_burn_cursor_ = ids_.peek();
+    return BurnOutcome::kBurned;
+}
+
 void TransactionManager::PublishCoreBounds() noexcept {
     if (visibility_ == nullptr) return;
     // **The unresolved bound first, and the order is the contract, not a

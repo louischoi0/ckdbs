@@ -594,6 +594,35 @@ Until it lands the growth is live — **but not in the shipped default**:
 its work, so the floor tracks it and the window drains. The exposure is
 `cores > 1` with a core that runs no transactions.
 
+**What AN-S1b settled when it was built.** Three things the ruling left
+open resolved against the tree rather than by choice:
+
+- **The gate is three-part, not one.** Idle alone is not enough, because a
+  burn costs a superblock write on core 0 and a granted block on a peer,
+  and an instance whose window drains has nothing to buy. The trigger is
+  *idle* **and** *pinning* **and** *the window past `kBurnWindowThreshold`*
+  (4096 entries, `[PROPOSED]`, four reclamation thresholds).
+- **"Idle" is exact and needs no counter.** `ids_.Next()` has one caller
+  in the tree — `manager.cpp:90`, inside `Begin` — so "`peek()` unmoved
+  between two ticks" *is* "issued nothing between them". The first call
+  after attach can only record the cursor, never burn.
+- **`PinsFloor` compares against the candidate, not against the other
+  cursors**, so a *busy* core whose oldest live transaction sits below the
+  idle core's cursor is the one holding the floor and the idle core is not
+  asked to burn — it would buy nothing. And it is false at one attached
+  core, which is what keeps the shipped default paying nothing.
+
+**One thing the build found that the ruling had not.** A core that has
+never issued an id holds an *empty* window at the superblock's high-water
+(`TrxIdSequence`'s constructor sets `next_ == ceiling_`), so burning hands
+it back a block starting exactly where it already is and its cursor does
+not move. That is harmless — the burn is idempotent and the gate stops
+asking once the window drains — but it is the reason AN-S1b's wiring cell
+**carves** the second core's block rather than publishing a cursor for it:
+a peer whose block was never carved leaves the high-water where core 0
+already stands, and the cell would then be testing an instance that cannot
+exist.
+
 ## AN-5 — Stages
 
 Every stage: `critics-developer` review, full suite, sync with
@@ -619,7 +648,7 @@ nothing and is not scheduled.
 | AN-S0 | **landed at `b5abab6`.** This document and the `known-gaps.md` entry, source-read at `004f949`, rewritten twice the same day — on the source read, then on AN-R7's mark — and corrected a third time against the first `critics-developer` pass recorded in AN-7 |
 | AN-S1 | **landed at `b5abab6`, suite green.** `include/kds/txn/instance_visibility.hpp` and `src/txn/instance_visibility.cpp`; publication from `TransactionManager` at three points plus its constructor; `CoreRuntime::Config::visibility` and the `Expeditor`'s `visibility_`, gated on `single_stream()`; ten cells in `tests/instance_visibility_test.cpp`. **3263/3263 pass** in Debug — the additive claim holds, since every existing cell reads the unchanged per-core predicate. **Its `critics-developer` pass was still running when it landed**, on the operator's word, and AN-7 gains its record when it returns; a finding against S1's code is therefore a fix on top of this commit rather than a change to it |
 | AN-S1 (fixes) | **two bugs found by review after `b5abab6` landed and fixed on top of it**, plus four cells over a real `WalManager` covering the publication points. 3267/3267. See AN-7's third pass; AN-R13 is live at this stage and unresolved |
-| AN-S1b | not started. AN-R13's marked exit (a): an idle core burns its unspent block so its cursor stops pinning the floor. Not in the shipped default's path (`cores = 1`), live at `cores > 1` with an idle core |
+| AN-S1b | **built, suite green at 3274/3274, review running.** AN-R13's marked exit (a). `TrxIdSequence::can_burn()`/`BurnWindow()`; `InstanceVisibility::PinsFloor()`/`attached_cores()`; `TransactionManager::MaybeBurnIdleBlock()` with its three-part gate; the peer's tick asks through `burn_requested_` and core 0 rides the writeback tick. Seven cells |
 | AN-S2 | not started; **gated on AN-R10 and AN-R12** |
 | AN-S3..S5 | not started |
 

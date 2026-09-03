@@ -85,6 +85,16 @@ Status TrxIdSequence::ReserveBlock() {
     return Status::OK();
 }
 
+Status TrxIdSequence::BurnWindow() {
+    // `ReserveBlock()` unchanged and unconditional: it is already the one
+    // place a window is replaced, it already refuses a grant starting below
+    // `next_` - invariant 12's one unforgivable failure - and a carved
+    // block is already durable before it is returned. Burning is calling it
+    // while the current window still has room, which is the whole of the
+    // mechanism.
+    return ReserveBlock();
+}
+
 StatusOr<std::uint64_t> TrxIdSequence::Next() {
     if (next_ >= ceiling_) {
         if (Status s = ReserveBlock(); !s.ok()) return s;

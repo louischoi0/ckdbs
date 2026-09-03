@@ -178,6 +178,24 @@ public:
     // transaction. `kUnboundedBound` when no core has attached.
     std::uint64_t FloorCandidate() const noexcept;
 
+    // How many cores have published a cursor.
+    std::size_t attached_cores() const noexcept;
+
+    // **Whether `core` is what the floor is waiting on** (AN-R13): its
+    // cursor is the candidate, and at least one other core has attached.
+    //
+    // The comparison is against `FloorCandidate()` rather than against the
+    // other cursors, so a *busy* core whose oldest unresolved transaction
+    // sits below this cursor answers false here - that core is the one
+    // holding the floor, and it will let go when its transaction ends. Only
+    // a core whose own cursor is the binding term can unpin anything by
+    // burning it.
+    //
+    // False at one attached core, always: the floor then tracks that core's
+    // own cursor, which rises with its own work, so the window drains and
+    // there is nothing to burn for. That is the shipped `cores = 1` case.
+    bool PinsFloor(std::uint32_t core) const noexcept;
+
     // Raises the floor as far as the candidate and the horizon allow, and
     // drops every window entry it passes. Returns entries dropped.
     //

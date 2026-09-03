@@ -154,6 +154,36 @@ public:
     // and unspent, and a crash burns it.
     std::uint64_t ceiling() const noexcept { return ceiling_; }
 
+    // ---- Burning an unspent window on purpose (AN-R13) -------------------
+    //
+    // Discards `[peek(), ceiling())` and installs a fresh window, so
+    // `peek()` jumps to the current high-water. **A crash and a stopped
+    // core already do this** - the file's opening trade is that ids are
+    // unique and monotonic and *never gapless*, and that a burned id costs
+    // nothing - so this adds a caller, not a property.
+    //
+    // Why anyone would: `peek()` is published as this core's bound on the
+    // instance's commit-order floor
+    // (`instructions/v3.0.0/workorder-an-read-view.md` AN-R8), and it rises
+    // only when this core issues. A core that stops running transactions
+    // freezes it, and the floor - a minimum over cores - freezes with it,
+    // so the commit window can never drop an entry again. Burning is how an
+    // idle core stops holding the instance.
+    //
+    // **Inverts the parking rule `low_water()` states, deliberately.** That
+    // rule keeps a *busy* core from asking every tick by leaving a granted
+    // block parked until the window is spent. An idle core has the opposite
+    // problem, so it asks while its window is full and installs the grant
+    // early. `can_burn()` is what a caller checks first: a leased sequence
+    // with nothing parked answers false, and the caller asks for a grant
+    // rather than burning into an empty hand and failing its next `Next()`.
+    bool can_burn() const noexcept { return lease_ == nullptr || lease_->pending_count() > 0; }
+
+    // Burns the unspent remainder. `can_burn()` must hold; a leased
+    // sequence with no parked grant fails without touching the window,
+    // which leaves the caller exactly where it was.
+    Status BurnWindow();
+
 private:
     Status ReserveBlock();
     void InstallWindow(TrxIdRange window) noexcept;

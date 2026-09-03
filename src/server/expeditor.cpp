@@ -2074,6 +2074,15 @@ Status Expeditor::Serve() {
         if (!drained.ok() && logger_->enabled(LogLevel::kWarn)) {
             logger_->Warn("expeditor", "writeback drain failed: " + drained.status().message());
         }
+        // Core 0's half of AN-R13, riding this tick rather than taking one
+        // of its own - the same `system`-group economy the peer's lease
+        // check makes. **Core 0 never answers `kNeedsBlock`**: it carves
+        // its own window from the superblock, so a burn is synchronous and
+        // there is nothing to ask anyone for. It is also a real case rather
+        // than a symmetry: core 0 carves first, so its block is the lowest
+        // in the instance, and an instance whose relations all live on
+        // peers has core 0 idle and pinning from the first commit.
+        if (txn_manager_.has_value()) (void)txn_manager_->MaybeBurnIdleBlock();
     });
 
     // The other `system`-group task of wal.md section 6-2/6-3. It is what

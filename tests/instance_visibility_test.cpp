@@ -319,5 +319,149 @@ TEST_F(VisibilityWiringTest, AbortLeavesNoWindowEntry) {
     EXPECT_GT(vis_.Floor(), id);
 }
 
+// ---- AN-S1b: burning an idle core's block (AN-R13) ------------------------
+//
+// The floor is a minimum over cores of each core's issue cursor, and a
+// cursor rises only when its core issues an id. So a core that stops running
+// transactions freezes the floor for the whole instance and the commit
+// window can never drop another entry. Burning the unspent block is the
+// operator's marked exit: the core discards ids it reserved and takes a
+// fresh block at the current high-water, which is what `trx_id.hpp`'s own
+// trade already permits - unique and monotonic, never gapless.
+
+TEST(InstanceVisibilityTest, OneAttachedCorePinsNothing) {
+    InstanceVisibility vis;
+    vis.PublishIssueCursor(kCore0, 9000);
+    vis.PublishOldestUnresolved(kCore0, kUnboundedBound);
+    // The floor tracks this core's own cursor, which rises with its own
+    // work, so there is nothing to burn for. The shipped `cores = 1` case.
+    EXPECT_EQ(vis.attached_cores(), 1u);
+    EXPECT_FALSE(vis.PinsFloor(kCore0));
+}
+
+TEST(InstanceVisibilityTest, TheLowestCursorIsTheCorePinningTheFloor) {
+    InstanceVisibility vis;
+    vis.PublishIssueCursor(kCore0, 5000);
+    vis.PublishOldestUnresolved(kCore0, kUnboundedBound);
+    vis.PublishIssueCursor(kCore1, 9000);
+    vis.PublishOldestUnresolved(kCore1, kUnboundedBound);
+
+    EXPECT_EQ(vis.attached_cores(), 2u);
+    EXPECT_TRUE(vis.PinsFloor(kCore0));
+    EXPECT_FALSE(vis.PinsFloor(kCore1));
+    // An unattached core pins nothing and is never asked to burn.
+    EXPECT_FALSE(vis.PinsFloor(7));
+}
+
+// A *busy* core whose oldest live transaction sits below the idle core's
+// cursor is the one holding the floor, and it lets go when that transaction
+// ends. Burning the idle core's block would buy nothing, so it is not asked
+// to: `PinsFloor` compares against the candidate, not against the cursors.
+TEST(InstanceVisibilityTest, ALiveTransactionBelowTheCursorPinsInstead) {
+    InstanceVisibility vis;
+    vis.PublishIssueCursor(kCore0, 5000);
+    vis.PublishOldestUnresolved(kCore0, kUnboundedBound);
+    vis.PublishIssueCursor(kCore1, 9000);
+    vis.PublishOldestUnresolved(kCore1, 4000);
+
+    EXPECT_EQ(vis.FloorCandidate(), 4000u);
+    EXPECT_FALSE(vis.PinsFloor(kCore0));
+    EXPECT_FALSE(vis.PinsFloor(kCore1));
+}
+
+// The failure AN-R13 names, as a cell: an idle core freezes its cursor, the
+// busy core carves every later block above it, and the floor never moves
+// again. Without the burn this is the state the instance stays in.
+TEST(InstanceVisibilityTest, AnIdleCoreFreezesTheFloorAndTheWindowGrows) {
+    InstanceVisibility vis;
+    vis.PublishIssueCursor(kCore1, 4096);  // attached, idle, never moves
+    vis.PublishOldestUnresolved(kCore1, kUnboundedBound);
+    vis.PublishIssueCursor(kCore0, 8192);
+    vis.PublishOldestUnresolved(kCore0, kUnboundedBound);
+
+    for (std::uint64_t id = 8192; id < 8192 + 20000; ++id) {
+        vis.PublishIssueCursor(kCore0, id + 1);
+        vis.PublishCommit(id, id);
+    }
+    // Pinned at the idle core's cursor, and every one of those commits is
+    // above it, so nothing was ever dropped.
+    EXPECT_EQ(vis.Floor(), 4096u);
+    EXPECT_EQ(vis.window_size(), 20000u);
+    EXPECT_TRUE(vis.PinsFloor(kCore1));
+
+    // The burn, as the sequence performs it: the cursor jumps to a block
+    // carved at the current high-water, which is above every block already
+    // carved - so above the busy core's cursor, not level with it.
+    vis.PublishIssueCursor(kCore1, 8192 + 20000 + 4096);
+    // The pin moves to the busy core, which is the converging state and not
+    // a stuck one: that cursor rises with its own work.
+    EXPECT_FALSE(vis.PinsFloor(kCore1));
+    EXPECT_TRUE(vis.PinsFloor(kCore0));
+    EXPECT_EQ(vis.Reclaim(), 20000u);
+    EXPECT_EQ(vis.window_size(), 0u);
+    EXPECT_EQ(vis.Floor(), 8192 + 20000u);
+}
+
+TEST_F(VisibilityWiringTest, AnIdleCoreBurnsItsBlockAndUnpinsTheFloor) {
+    auto mgr = Attach();
+    const std::uint64_t high_water = superblock_.next_trx_id();
+
+    // A second core's block, **carved rather than asserted**. That matters:
+    // a burn takes its new window from the superblock's high-water, so a
+    // peer whose cursor was merely published would leave the high-water
+    // where core 0 already is and the burn would hand it back the block it
+    // started on. Carving is what a real peer's lease does, and it is what
+    // puts a block above core 0's.
+    auto peer_block = ids_->Carve(4096);
+    ASSERT_TRUE(peer_block.ok()) << peer_block.status().message();
+    vis_.PublishIssueCursor(kCore1, peer_block.value().first);
+    vis_.PublishOldestUnresolved(kCore1, kUnboundedBound);
+    ASSERT_TRUE(vis_.PinsFloor(kCore0));
+
+    // The first tick only records the cursor: "idle" means unmoved
+    // *between* two ticks, so nothing can burn on a first observation.
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+
+    // Idle and pinning, but the window has not grown, so a burn is not worth
+    // a superblock write.
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_EQ(vis_.slot(kCore0).issue_cursor.load(), high_water);
+
+    for (std::uint64_t id = 1; id <= 4096; ++id) vis_.PublishCommit(high_water + id, id);
+    ASSERT_GE(vis_.window_size(), 4096u);
+
+    // Now it is. Core 0 carves its own block, so the burn is synchronous and
+    // it never asks anyone for one.
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kBurned);
+    EXPECT_GT(vis_.slot(kCore0).issue_cursor.load(), high_water);
+    EXPECT_FALSE(vis_.PinsFloor(kCore0));
+}
+
+TEST_F(VisibilityWiringTest, ABusyCoreIsNeverAskedToBurn) {
+    auto mgr = Attach();
+    const std::uint64_t high_water = superblock_.next_trx_id();
+    vis_.PublishIssueCursor(kCore1, high_water + 1'000'000);
+    vis_.PublishOldestUnresolved(kCore1, kUnboundedBound);
+    for (std::uint64_t id = 1; id <= 4096; ++id) vis_.PublishCommit(high_water + id, id);
+
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    // A transaction between two ticks moves the cursor, which is what "busy"
+    // is - exactly, and with no counter, because `Next()` has one caller.
+    auto txn = mgr->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_EQ(vis_.slot(kCore0).issue_cursor.load(), high_water + 1);
+}
+
+// A manager with no instance state is every fixture and every tool: the
+// check must cost it nothing and change nothing.
+TEST_F(VisibilityWiringTest, ABareManagerNeverBurns) {
+    TransactionManager bare(*ids_, *undo_, store_, wal_.get());
+    const std::uint64_t before = ids_->peek();
+    EXPECT_EQ(bare.MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_EQ(bare.MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_EQ(ids_->peek(), before);
+}
+
 }  // namespace
 }  // namespace kds::txn

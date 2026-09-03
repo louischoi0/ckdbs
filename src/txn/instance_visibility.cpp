@@ -55,6 +55,22 @@ std::uint64_t InstanceVisibility::FloorCandidate() const noexcept {
     return candidate;
 }
 
+std::size_t InstanceVisibility::attached_cores() const noexcept {
+    std::size_t attached = 0;
+    for (const CoreVisibilitySlot& slot : slots_) {
+        if (slot.issue_cursor.load(std::memory_order_acquire) != kUnboundedBound) ++attached;
+    }
+    return attached;
+}
+
+bool InstanceVisibility::PinsFloor(std::uint32_t core) const noexcept {
+    if (core >= slots_.size()) return false;
+    const std::uint64_t cursor = slots_[core].issue_cursor.load(std::memory_order_acquire);
+    if (cursor == kUnboundedBound) return false;
+    if (attached_cores() < 2) return false;
+    return cursor == FloorCandidate();
+}
+
 void InstanceVisibility::PublishCommit(std::uint64_t trx_id, std::uint64_t commit_lsn) {
     bool reclaim = false;
     {
