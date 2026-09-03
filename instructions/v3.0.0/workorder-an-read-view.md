@@ -623,6 +623,39 @@ a peer whose block was never carved leaves the high-water where core 0
 already stands, and the cell would then be testing an instance that cannot
 exist.
 
+**AN-R14 — What exit (a) does not cover, and the cost it carries.
+[recorded, not decided]** AN-S1b's review found three things the mark's
+exit leaves standing. None is a defect in what was built; all three are
+properties of the exit itself.
+
+- **A core that *stops* is not an idle core.** Burning needs the burning
+  core's own tick, and nothing else ever republishes a slot to
+  `kUnboundedBound`: `PublishIssueCursor` and `PublishOldestUnresolved`
+  have one caller each. A core that wedges or shuts down keeps its cursor
+  forever and the floor with it. Not reachable today — the expeditor stops
+  every core together — but AN-S1b closes the *idle* case only, and the
+  landing note must not read as though AN-R13 is closed entirely. It
+  belongs in `docs/inflight/known-gaps.md` when AN-S2 makes the window
+  load-bearing.
+- **The burn leapfrogs, so the amplification is N and not a constant.**
+  The busy core exhausts its block and carves the next from the
+  high-water, which puts it *above* every core that has just burned — so
+  all N idle cores must burn again to let the floor past. At 63 idle
+  peers that is ~63 superblock `Sync()`s and ~63 × 4096 ids per 4096
+  committed transactions. `kBurnWindowThreshold`'s derivation in the
+  header prices the *reclaim* pass and not this; the ratio that actually
+  governs it is `kBurnWindowThreshold / kTrxIdBlockSize`, and **AN-S5
+  measures it** rather than a constant being moved unratified.
+- **A burn moves this core's `MintReadView` bound by the whole instance's
+  carved range in one step**, which is AN-3 E's H2 widened and now driven
+  by a timer rather than by write traffic. Inert at AN-S1b, because a core
+  only judges its own rows and `up_to_trx_id` dies at AN-S2. Related and
+  in the same condition: `Reclaim`'s `reachable` is bounded by
+  `HorizonLsn()`, which nothing publishes yet, so a burn can raise the
+  floor past commits a live reader's view would still call invisible.
+  **Both must be re-checked the moment `min_snapshot_lsn` starts being
+  published**, which is AN-S2's first act.
+
 ## AN-5 — Stages
 
 Every stage: `critics-developer` review, full suite, sync with
@@ -757,7 +790,32 @@ two separately, and collapsing the public surface would take that
 instrument away in the same change that first needed it. **Deferred to
 AN-S2**, where the same header is being rewritten anyway.
 
-**On the tests: the two cells the pass was pointed at were the two
+### Fourth pass — `critics-developer` on AN-S1b's code, 2026-09-03, 61 tool calls
+
+Two bugs, both fixed, and the first of them is the one that matters: **the
+mechanism never terminated on exactly the instance it was built for.**
+
+| finding | what it was | where it landed |
+|---|---|---|
+| **B1 — a burn never spent itself.** The gate reads `window_size()`, and the window shrinks only inside `Reclaim()`, whose two callers were `PublishCommit` and the manager's constructor. `MaybeBurnIdleBlock` called neither | on an instance whose commit traffic has stopped with a grown window there is no `PublishCommit`, so the window never falls, so the gate stays open **on every tick forever** — a carve, a superblock write and a `Sync()` per 50 ms on core 0 and a lease round trip per peer, on an instance doing nothing, consuming ids at ~2M/s against a space that never wraps. Cores round-robin as candidate, so each in turn burns | fixed: `Reclaim()` after `PublishCoreBounds()` in the burn. Each burn puts one cursor above every id ever issued, so after at most one burn per attached core the candidate passes the whole window and the gate closes. The reviewer reproduced it against a reverted fix — the window stuck at 4096, the third tick answering `kBurned`, the superblock carved a third time |
+| **B2 — `burn_requested_` latched across the grant that answered it.** `MaybeRefillTrxIds` returns early without clearing when a refill is already in flight, so the flag survived the grant and the next tick asked for a second block nothing needed | one spurious core-0 carve, superblock write and `Sync()` per occurrence, and it falsified the comment that says the flag is set and acted on within one tick | fixed by re-deriving the flag from each tick's answer instead of latching it — strictly less code |
+| F1, F2, F3 — the leapfrog cost, the *stopped*-core case, and the widened H2 | none of them defects in what was built | **AN-R14** |
+| T2 — the safety property had no manager-level cell | `ABusyCoreIsNeverAskedToBurn` exercises the `!idle` branch twice and never reaches a core holding a **live transaction** whose cursor is still, which is the only case where `PinsFloor` is what stands between the floor and a live writer | added as `ALiveTransactionStopsTheBurnThoughTheCursorIsStill`. **It failed on first run** and the setup was the reason: a peer block carved *before* `Begin` sits below the live id, so every commit in it drains and the cell asserts nothing. The transaction goes first |
+
+Also corrected: `manager.hpp`'s claim that the idle test is exact because
+`Next()` has one caller is not the whole reason — `peek()` also moves in
+`InstallWindow`, and what makes it exact is that the burn path re-reads
+`peek()` after burning. A future second `ReserveBlock` caller would need
+that sentence to be right.
+
+**Rejected: none.** The pass's own "rejected as non-findings" list
+independently confirmed the three design choices CLA was least sure of —
+`PinsFloor` comparing against the candidate rather than the cursors, the
+`attached_cores() < 2` guard, and reusing `ReserveBlock` rather than
+adding a second window-install path, which is what makes invariant 12's
+guard cover the burn for free.
+
+**On the tests: the two cells the second pass was pointed at were the two
 weakest**, and CLA wrote both. `FloorStopsAtALowerCoresUnspentRange`'s
 last four lines could not fail — no reclamation ran after the core went
 live, so `EXPECT_LE(Floor(), 5000)` held for any floor including zero,

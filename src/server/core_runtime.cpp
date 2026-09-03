@@ -1425,9 +1425,15 @@ void CoreRuntime::MaybeRequestRelationGrants() {
 
 void CoreRuntime::MaybeBurnIdleTrxIdBlock() {
     if (!txn_manager_.has_value()) return;
-    if (txn_manager_->MaybeBurnIdleBlock() == txn::TransactionManager::BurnOutcome::kNeedsBlock) {
-        burn_requested_ = true;
-    }
+    // **Re-derived every tick, never latched.** `MaybeRefillTrxIds` below
+    // clears the flag only on the tick it acts on it, and it returns early
+    // while a refill is already in flight - so latching would leave the flag
+    // set across the grant that answered it, and the next tick would ask for
+    // a second block nothing needs. On core 0 that second ask is a carve, a
+    // superblock write and a `Sync()`. The answer is a fact about this tick,
+    // so it is stored as one.
+    burn_requested_ =
+        txn_manager_->MaybeBurnIdleBlock() == txn::TransactionManager::BurnOutcome::kNeedsBlock;
 }
 
 void CoreRuntime::MaybeRefillTrxIds() {

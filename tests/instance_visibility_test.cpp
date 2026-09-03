@@ -453,6 +453,88 @@ TEST_F(VisibilityWiringTest, ABusyCoreIsNeverAskedToBurn) {
     EXPECT_EQ(vis_.slot(kCore0).issue_cursor.load(), high_water + 1);
 }
 
+// **The safety property, through the manager rather than beside it.** The
+// cell above only ever exercises the `!idle` branch: the cursor moved, so
+// both answers are `kNotNeeded` for the cheapest possible reason. The case
+// that matters is a core holding a **live transaction** whose cursor is
+// *still* between two ticks - idle by the burn's own test - where the only
+// thing standing between it and a burn is `PinsFloor` reading
+// `oldest_unresolved`. Burning there would put this core's cursor above the
+// high-water and let the floor pass a writer that has not committed, which
+// is the whole hazard AN-R8 exists for, reached through a timer instead of
+// through the predicate.
+TEST_F(VisibilityWiringTest, ALiveTransactionStopsTheBurnThoughTheCursorIsStill) {
+    auto mgr = Attach();
+
+    // **The transaction first, and the peer's block after it.** Order
+    // matters here for a reason worth stating: `Begin` is what makes this
+    // core carve its own block, so a block carved *before* it sits below
+    // the live id, and every commit in it is below the floor's binding
+    // term and drains on the next reclamation - leaving the window empty
+    // and the cell asserting nothing.
+    auto txn = mgr->Begin(IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+    const std::uint64_t live_id = txn.value()->id();
+
+    // Nothing moves this core's cursor from here: no further `Begin`.
+    auto peer = ids_->Carve(4096);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    vis_.PublishIssueCursor(kCore1, peer.value().first + peer.value().count);
+    vis_.PublishOldestUnresolved(kCore1, kUnboundedBound);
+    for (std::uint64_t i = 0; i < 4096; ++i) vis_.PublishCommit(peer.value().first + i, i + 1);
+    ASSERT_GE(vis_.window_size(), 4096u);
+
+    // Idle by the cursor test on the second call, pinning by cursor, window
+    // over the threshold - every gate open but the one that matters.
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_FALSE(vis_.PinsFloor(kCore0));
+    // And the floor never passed the live writer, which is what the refusal
+    // was protecting.
+    EXPECT_LE(vis_.Floor(), live_id);
+}
+
+// **A burn spends itself, and the gate closes on the same call.** The gate
+// reads `window_size()`, and the window shrinks only inside `Reclaim()` -
+// which runs from `PublishCommit` and from an attach, and from nowhere else.
+// A burn that raised the cursor and stopped would therefore leave the gate
+// open on exactly the instance it was built for: with the commits stopped
+// nothing calls `Reclaim()` again, so every idle core that pins burns on
+// every tick for the life of the process - a carve and a superblock `Sync()`
+// each time, on an instance doing nothing.
+TEST_F(VisibilityWiringTest, ABurnDrainsTheWindowItWasTakenFor) {
+    auto mgr = Attach();
+    const std::uint64_t high_water = superblock_.next_trx_id();
+
+    // A peer that carved a block, spent it, and stopped - so its cursor sits
+    // one block above the high-water core 0 still holds, and every id in the
+    // window is one this peer issued.
+    auto peer_block = ids_->Carve(4096);
+    ASSERT_TRUE(peer_block.ok()) << peer_block.status().message();
+    const TrxIdRange peer = peer_block.value();
+    vis_.PublishIssueCursor(kCore1, peer.first + peer.count);
+    vis_.PublishOldestUnresolved(kCore1, kUnboundedBound);
+    for (std::uint64_t i = 0; i < peer.count; ++i) vis_.PublishCommit(peer.first + i, i + 1);
+
+    // Core 0 has issued nothing, so its cursor is the binding term and none
+    // of the peer's commits can be dropped.
+    ASSERT_TRUE(vis_.PinsFloor(kCore0));
+    ASSERT_EQ(vis_.window_size(), peer.count);
+
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kBurned);
+
+    // The burn put core 0's cursor above every id ever issued, and the pass
+    // that reads it ran in the same call: the window is gone, not merely
+    // droppable.
+    EXPECT_EQ(vis_.window_size(), 0u);
+    EXPECT_GE(vis_.Floor(), peer.first + peer.count);
+    // And so the gate is shut: the next tick is idle and still pinning, and
+    // answers "not needed" because there is nothing left to buy.
+    EXPECT_EQ(mgr->MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
+    EXPECT_EQ(superblock_.next_trx_id(), high_water + 2 * peer.count);
+}
+
 // A manager with no instance state is every fixture and every tool: the
 // check must cost it nothing and change nothing.
 TEST_F(VisibilityWiringTest, ABareManagerNeverBurns) {

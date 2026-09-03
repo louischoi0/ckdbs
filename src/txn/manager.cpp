@@ -497,6 +497,21 @@ TransactionManager::BurnOutcome TransactionManager::MaybeBurnIdleBlock() {
     }
 
     PublishCoreBounds();
+    // **And spend it, in the same call.** The gate above reads
+    // `window_size()`, and the window only ever shrinks inside `Reclaim()` -
+    // which runs from `PublishCommit` and from an attach, and from nowhere
+    // else. So a burn that only raises the cursor leaves the gate open on
+    // exactly the instance it was built for: with the commits stopped
+    // nothing ever calls `Reclaim()`, `window_size()` never falls, and every
+    // idle core that pins burns again on its next tick - a superblock carve
+    // and `Sync()` per tick on core 0 and a lease round trip per two ticks
+    // on a peer, for the life of the process, on an instance doing nothing.
+    // Reclaiming here is what makes the mechanism terminate: each burn puts
+    // one core's cursor above every id ever issued, so after at most one
+    // burn per attached core the candidate passes the whole window, the
+    // window drains and the gate closes. Same reason the constructor
+    // reclaims - a bound moved, so the pass that reads it runs.
+    visibility_->Reclaim();
     last_burn_cursor_ = ids_.peek();
     return BurnOutcome::kBurned;
 }
