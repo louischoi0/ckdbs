@@ -17,26 +17,36 @@ prices is therefore not the latch — it is the compile-out**: the
 through the virtual `PinFrame(PageId, PinMode)`
 (`include/kds/storage/page_store.hpp:205`), the unchanged 32-byte `Frame`
 layout (`static_assert(sizeof(Frame) == 32, ...)`,
-`include/kds/storage/device_page_store.hpp:827`), and one extra
-unpin/pin pair per leaf write-descent that the armed census forced into
-`src/storage/btree/btree.cpp:103` and
-`src/storage/index/index_tree.cpp:87` (a read handle released before the
-leaf's write re-fetch, to keep the latch's never-upgraded rule true under
-contention). **The armed cost — the CAS pair itself, and contention at
+`include/kds/storage/device_page_store.hpp:827`), and the one unpin the
+armed census moved *earlier* on each leaf write-descent
+(`src/storage/btree/btree.cpp:103` and
+`src/storage/index/index_tree.cpp:87`: the read handle is released before
+the leaf's write re-fetch instead of at scope exit, to keep the latch's
+never-upgraded rule true under contention — the added line is a single
+`Release()`, so the pin and unpin *counts* are unchanged, only their
+order). **The armed cost — the CAS pair itself, and contention at
 `cores > 1` — is not measured here.** It has only the unit-level
 `PageLatch.EightThreadsNeverShareAFrameExclusivelyAndTheCountsBalance`
 cell (`tests/page_latch_test.cpp:188`) behind it today; the multi-core
 number is AM-S6's, against AL-S8's own baseline, and does not exist yet.
 This document is deliberately not at the concurrency extreme rule 4b
-asks for — that is AM-S6's cell by design, and AM-S1's own definition of
+asks for (**every numbered "rule" in this file is a documentation rule
+from `.claude/agents/ck-tester.md`, not one of `bench/README.md`'s five
+run-validity rules** — those five are satisfied and shown in §1: release
+build at the measured commit, a named block device, a hashed binary
+copy per arm, per-cell load and `pgrep`, and chosen ports) — that is
+AM-S6's cell by design, and AM-S1's own definition of
 done calls for exactly the quiet end instead: proving the unarmed path
 costs nothing *before* asking what the armed path costs under load. The
-durability axis, by contrast, is swept at both its ends (`group` and
-`strict`) in every arm.
+durability axis is swept in every arm, but not to both ends: the engine
+has three classes (`strict`/`group`/`relaxed` = D1/D2/D3,
+`include/kds/wal/manager.hpp:87`), and this run covers the strict end and
+the `group` default. **`relaxed` — the fast end, where a fixed per-pin
+cost would show up least buried — was not run.**
 
 **The result: nothing measurable.** Both durability classes show a B−A
 delta that sits inside this run's own clean-cell run-to-run spread, and
-the two matched same-pass A/B pairs that survive (§7) do not even agree
+the four matched same-pass A/B pairs that survive (§7) do not even agree
 on which arm is faster. §8 reads this against this engine's own last
 numbers for the shape; §11 draws out what is, and is not, established by
 that.
@@ -48,10 +58,10 @@ that.
 | Date/time | 2026-09-03, 13:15:25–13:23:08 UTC (three passes; per-cell times in §2) |
 | Worktree | `ar2-borrow-model` (branch `worktree-ar2-borrow-model`) |
 | Commits measured | A: `92cb654` (byte-identical to `a68dbc3`, verified empty `git diff --stat 92cb654 a68dbc3 -- src include tools CMakeLists.txt`); B: `c985d37`, `git describe --tags` = `v2.7.0-183-gc985d37` |
-| Tree cleanliness | `git status --short` in this worktree at the time of writing shows one modified tracked file (`instructions/v3.0.0/workorder-am-m1-shared-pool.md`, the AM-6 status rows — not touched by this session) and this archive directory as the only untracked path; the engine tree itself (`src`, `include`, `tools`) was clean at `c985d37` when `build-release/kds_server` was built. |
+| Tree cleanliness | **No engine file is modified**: `git status --short` in this worktree shows one modified tracked file — `instructions/v3.0.0/workorder-am-m1-shared-pool.md`, whose AM-6 `AM-S1 A/B` row this run's outcome is written into — and two untracked paths, this document and its archive directory. Nothing under `src`, `include` or `tools` is touched, so the tree the measured binary was built from is `c985d37` exactly. |
 | Binary provenance, A | `/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_A`, 6,229,408 bytes, `sha256 d6b2c4202a929e545bace8d570cd6fec42640a58461536d4c4ab3709e3872f52` (re-hashed this session; matches). Same copy `results-ar2-c1-colocation-v2.7.0-178-g92cb654.md` §1 measured — identical hash, so it is literally the same binary, not merely the same source commit. |
 | Binary provenance, B | `/home/cdkbs/bench-runs/am-s1-page-latch/kds_server_B`, 6,229,848 bytes, `sha256 6724bbb4094bab35c208a6b5fe60bc8dd7b2a5fc361ede870db8a823df979d88` (re-hashed this session; matches). Source `build-release/kds_server` mtime `2026-09-03 11:12:14 UTC`; commit `c985d37`'s own timestamp is `11:11:43 UTC` — **the binary postdates the commit it measures by 31 s**, the correct order. |
-| Engine delta A→B | `git diff --stat a68dbc3 c985d37 -- src include tools CMakeLists.txt` (verified this session): 8 files, **535 insertions(+), 14 deletions(-)** — `include/kds/storage/device_page_store.hpp` (+133), `include/kds/storage/page_latch.hpp` (new, +246), `include/kds/storage/page_store.hpp` (+33), `src/server/core_runtime.cpp` (+7), `src/server/expeditor.cpp` (+10), `src/storage/btree/btree.cpp` (+9), `src/storage/device_page_store.cpp` (+103), `src/storage/index/index_tree.cpp` (+8). `tools/` and `CMakeLists.txt` untouched. |
+| Engine delta A→B | `git diff --stat a68dbc3 c985d37 -- src include tools CMakeLists.txt` (verified this session): 8 files, **535 insertions(+), 14 deletions(-)**. Per file, from `--numstat` (+ins/−del): `include/kds/storage/device_page_store.hpp` +128/−5, `include/kds/storage/page_latch.hpp` (new) +246, `include/kds/storage/page_store.hpp` +25/−8, `src/server/core_runtime.cpp` +7, `src/server/expeditor.cpp` +10, `src/storage/btree/btree.cpp` +9, `src/storage/device_page_store.cpp` +102/−1, `src/storage/index/index_tree.cpp` +8. `tools/` and `CMakeLists.txt` untouched. |
 | Device | `/home/cdkbs/bench-runs/am-s1-page-latch`, `ext4`, `/dev/root` (`df -T`, recorded per cell; 49% used throughout — a real block device, not tmpfs). |
 | Build type | `build-release` (Release; `CMAKE_BUILD_TYPE=Release`, `CMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG`, `KDS_WITH_TLS=ON` per `CMakeCache.txt`). |
 | Host | 8 logical CPUs (`nproc`), Azure VM, `Linux 6.17.0-1022-azure`. |
@@ -62,15 +72,16 @@ that.
 ## 2. What was run, and in what order
 
 Twelve cells, three passes (`run-log.txt` timestamps; `run.json`'s own
-`passes` list mis-records pass 2's `started` as pass 1's — a merge-logic
-artifact of the orchestrator overwriting `run.json` per pass, not a
-second run — see the archive README). Pass 2 was added because `g1-B`
+`passes` list mis-records pass 2's `started` as pass 1's — an artifact of
+`run_ab.py:172` reloading the previous `run.json` and appending to it,
+which is what carries the run's original `started` into each later
+entry, not a second run — see the archive README). Pass 2 was added because `g1-B`
 came back degraded, leaving `group` with only one clean `B` cell; pass 3
 because both `g3` cells also came back degraded. Interleaved A/B
 throughout, no arm run twice in a row, each pair repeated with the order
 reversed.
 
-| Cell | Arm | Port | Durability | Start (UTC) | Wall (s) | Pre-load (1 min) | Post-load | `recovery_checkpoint_us` | State |
+| Cell | Arm | Port | Durability | Start (UTC) | Work window (s) | Pre-load (1 min) | Post-load | `recovery_checkpoint_us` | State |
 |---|---|---|---|---|---|---|---|---|---|
 | `g1-A` | A | 15610 | group | 13:15:25 | 7.5 | 0.15 | 0.21 | 6,093 | clean |
 | `g1-B` | B | 15611 | group | 13:15:37 | 25.5 | 0.20 | 0.58 | **434,131** | **degraded** |
@@ -96,7 +107,12 @@ document.
 
 Every cell: fresh data file, fresh server started from the arm's hashed
 binary copy, precheck (`/proc/loadavg`, `pgrep`, `df -T`) before the
-server started, the driver, `SHOW META`, `SIGTERM`.
+server started, the driver, `SHOW META`, `SIGTERM`. **"Work window" is
+the driver's own measured span** (`<cell>.json`'s `meta.seconds`, the
+denominator of every TPS below), not the cell's wall clock — the whole
+cell, including bootstrap and stop, runs 0.7–3.7 s longer
+(`<cell>.cell.json`'s `driver.seconds`, and `run-log.txt`'s start/done
+pair).
 
 ## 3. Headline: TPS and statements/sec (rule 5a)
 
@@ -158,15 +174,12 @@ they are excluded from every comparison in §3 and §8.**
 | `g4-B` | B | group | 5,000 | 8,294.4 | 10,250.4 | 10,643.5 | 13,467.4 | 20,618.2 | 26,650.3 | clean |
 | `g4-A` | A | group | 5,000 | 8,313.5 | 10,162.7 | 10,503.5 | 13,337.1 | 17,971.0 | 29,569.3 | clean |
 
-The degraded cells' shape is the same one `results-ar2-c2-spreading-v2.7.0-178-g92cb654.md`
-§9 named for its own outlier: **p0/p25/p50 sit inside the clean band, and
-only p95/p99/max blow out** — `g3-A`'s p25 (10,932.8) and `g1-B`'s p25
-(10,576.6) are both squarely inside the clean group range (10,162.7–
-10,797.2), while their p99/max are one to three orders of magnitude
-larger than any clean cell's. A rare, severe host stall, not a sustained
-shift.
+The degraded cells' bodies are normal — `g3-A`'s p25 (10,932.8) and
+`g1-B`'s p25 (10,576.6) sit inside the clean group range (10,162.7–
+10,797.2) — and only their p95/p99/max are out, by one to three orders
+of magnitude; §7 carries the evidence and the reading.
 
-### `trade-insert` (`INSERT`, WAL-logged) and `account-update` (`UPDATE`, unlogged)
+### `trade-insert` (`INSERT`) and `account-update` (`UPDATE`) — both WAL-logged
 
 | Cell / phase | ops | p0 | p25 | p50 | p95 | p99 | max |
 |---|---|---|---|---|---|---|---|
@@ -195,12 +208,23 @@ shift.
 | `g4-A` trade-insert | 10,000 | 1,444.2 | 2,488.0 | 2,586.8 | 3,217.2 | 5,469.4 | 17,196.4 |
 | `g4-A` account-update | 10,000 | 2,242.4 | 2,491.8 | 2,592.5 | 3,245.2 | 5,577.3 | 17,211.5 |
 
-**`trade-insert` (logged) and `account-update` (unlogged) track within a
-few percent of each other in every clean cell**, the same finding
-AL-S8's own scenario0 document made (§4 there): the commit's durability
-wait, not the row mutation, dominates both statements' client-perceived
-cost about equally, so whether the individual statement is WAL-logged
-barely shows.
+**`trade-insert` and `account-update` track within a few percent of each
+other in every clean cell**, matching AL-S8's own scenario0 document
+(§4 there): the commit's durability wait, not the row mutation,
+dominates both statements' client-perceived cost about equally.
+
+**A correction to that prior document, carried here so the number is not
+re-read wrongly**: AL-S8's §4 attributed the agreement to one statement
+being logged and the other not (`account-update` "page-only, unlogged"),
+and that file now carries the correction in the same commit as this one.
+The claim was false, and already false at AL-S8's own `f6ed10c` — an
+`UPDATE` appends `HEAP_OVERWRITE` like every other data mutation
+(`src/server/command_dispatcher.cpp:10134`,
+`include/kds/wal/record.hpp:55`; `CLAUDE.md`'s WAL row states the rule).
+The two phases agree because they are the *same* shape — one logged row
+mutation each under its own autocommit envelope — so their agreement says
+the commit wait dominates, and says nothing at all about the cost of
+logging.
 
 ### `profit-scan` (FilterScan, unindexed `WHERE user_id = <n>`) and `profit-insert`
 
@@ -250,9 +274,11 @@ identical to `account-update`'s, per §4):
 | Arm B | 2,639.5 µs | 9,168.8 µs | **6,529.3 µs** |
 
 This delta is what one `fsync` (strict) or a share of one group-batched
-`fsync` (group) costs on this device, and it is two to three orders of
-magnitude larger than the entire A−B delta in §3 — the compile-out this
-document exists to price is nowhere near this wait's scale.
+`fsync` (group) costs on this device. Against the same statement's own
+arm-to-arm difference — 9.4 µs in group, 152.0 µs in strict, from the
+p50 means in the table above — the durability wait is 710× and 43×
+larger: the compile-out this document exists to price is nowhere near
+this wait's scale.
 
 **The mechanism is visible directly in `SHOW META`.** Group durability
 batches: `wal_syncs` ≈ 5,434–5,441 against `wal_group_commits` ≈
@@ -270,16 +296,17 @@ strict 189.2–193.7 TPS) is this batching factor, not the arm.
 uncontended connection, no concurrent committers to batch with) sits at
 1,158.2–1,347.9 µs across every cell in this run — the floor every
 statement pays before durability is even asked for, matching AL-S8's own
-1,169–1,235 µs finding for the same phase at the same core count.
+1,169–1,235 µs finding for the same phase (stated there across every
+cell of its matrix, not per core count).
 
 **Write-statement execution** is not separately measurable this run
 (would need `--log-level debug`, avoided so as not to add I/O to the
-fsync path being priced); indirectly, `trade-insert` (logged) and
-`account-update` (unlogged) costing the same in every cell (§4) says row
-mutation itself is a small fraction of either.
+fsync path being priced): this run separates neither the mutation nor the
+append from the commit wait that dominates both write phases.
 
-**Read wait** does not apply to `txn` — no read is inside the four
-statements measured, and `profit-scan`'s FilterScan runs concurrently
+**Read wait** has no separable share of `txn` — no read *statement* is in
+the measured unit (the two `UPDATE`s' own pk lookups are page reads this
+run cannot price apart), and `profit-scan`'s FilterScan runs concurrently
 without gating `txn`.
 
 **Lock/conflict wait** is ~0: `torn = 0` in all twelve cells (§6), and
@@ -311,12 +338,15 @@ body"). No cause beyond "device stalls at the host level" is supportable
 from this run's data — the stalls hit one A cell and two B cells, so
 whatever they are, they are arm-independent. All three are excluded from
 §3's and §8's comparisons and appear only in their own table rows above.
+Read the thermometer first: it flags a cell before the driver has sent a
+statement, which is cheaper and cleaner than inferring contamination from
+the `txn` tail.
 
 **The run's own clean-cell floor.** Group durability's three clean A
 cells (668.4 / 731.1 / 732.6 TPS) spread 9.6% — wider than the two clean
-B cells' 1.7%, wider than either durability's own strict spread (2.6% /
-0.5%), and wider than AL-S8's previously recorded 1.5% same-configuration
-floor. That spread is driven almost entirely by `g1-A` alone: `g1-A`
+B cells' 1.7%, wider than either arm's strict spread (2.6% A / 0.5% B),
+and wider than AL-S8's previously recorded 1.5% same-configuration
+floor. That spread is driven almost entirely by `g1-A`: `g1-A`
 vs `g2-A` is 9.4%, `g1-A` vs `g4-A` is 9.6%, but `g2-A` vs `g4-A` is only
 0.2%. `g1-A` was the very first cell of the whole run — its own
 `recovery_checkpoint_us` (6,093) is unremarkable, so it is not
@@ -326,7 +356,8 @@ cell whose TPS reads as an outlier within its own arm. Read conservatively:
 agreement, with `g1-A` itself a milder, sub-threshold version of the same
 host effect that produced the three flagged degraded cells** — this
 document cannot distinguish that from ordinary first-cell noise with one
-sample.
+sample. A future same-shape run that opens with a throwaway warm-up cell,
+discarded before the measured pairs begin, would settle it cheaply.
 
 **The matched same-pass pairs do not agree on direction, which is itself
 evidence the delta is noise.** Four same-pass, interleaved pairs survive
@@ -385,38 +416,29 @@ apologise for; it is not measured in this document either.
 
 ## 9. Row-set size — not swept, named as a gap
 
-Every cell runs AL-S8's own fixed shape: 100 users, 287 accounts, a
-5,000-transaction work target. Rule 9 asks for a sweep at 200/1K/10K
-rows at minimum so a fixed cost can be told apart from a per-row one;
-this document does not do that — it is a same-shape A/B by design, since
-AM-S1's own definition of done is a comparison at one fixed shape, not a
-cardinality sweep. This document cannot say whether the compile-out's
-(unmeasurable) cost has any row-count dependence at all; that gap is
-unclosed by this run.
+Every cell runs AL-S8's own fixed shape — 100 users, 287 accounts, a
+5,000-transaction work target — and rule 9's sweep at 200/1K/10K rows,
+which would tell a fixed cost from a per-row one, was not run. Whether
+the compile-out's cost has any row-count dependence is unanswered here.
 
 ## 10. Conclusion against AM-S1's definition of done
 
-**Met, for the `cores = 1` half.** The work order's own words are "a
+**Met, for the `cores = 1` half.** The work order's words are "a
 `cores = 1` A/B showing the acquire/release pair costs nothing
-measurable," and §3/§7/§8 above show exactly that: every A−B delta this
-document can compute (group +1.0%, strict +2.4%) is smaller than or
-comparable to this run's own internal noise floor (up to 9.6% on one
-arm) and smaller than the deltas this engine already carries against its
-own prior numbers for the same shape. The matched-pair sign
-disagreement in §7 is the strongest form that finding can take short of
-a formal significance test this run's sample size (2–3 clean cells per
-arm per durability) does not support. **The definition of done's other
-half — "contention cell at 8 cores" — is not this document's job and
-remains unmet**: it has only the unit-level 8-thread cell in
-`tests/page_latch_test.cpp` behind it, which asserts contention occurred
-and the counts balance, not a throughput number. AM-S6 is where that
-number belongs, against AL-S8's own 8-core baseline.
+measurable": every A−B delta this document can compute (§3) sits inside
+the run's own floor (§7) and inside the band this engine's history
+already occupies for the shape (§8), and the surviving matched pairs do
+not even agree on which arm is faster. **The other half — "contention
+cell at 8 cores" — remains unmet**: only the 8-thread unit cell in
+`tests/page_latch_test.cpp` stands behind it, asserting that contention
+occurred and the counts balance, not a throughput number; AM-S6 is where
+that number belongs, against AL-S8's own 8-core baseline.
 
 ## 11. What this measurement teaches about the engine
 
 - **The bound is on the compile-out, not the latch.** Nothing in this
   document says anything about what the latch costs once armed — that
-  question is untouched here by construction (§0/intro), and reading
+  question is untouched here by construction (see the opening), and reading
   this result as evidence the latch itself is free would be a category
   error the work order's own two-cell split exists to prevent.
 - **Group durability's own run-to-run spread (9.6% on one arm's three
@@ -426,30 +448,6 @@ number belongs, against AL-S8's own 8-core baseline.
   than a 535-line, mechanically-reasoned-to-be-inert code change. Any
   future `cores = 1` A/B on this class of change should budget for a
   floor at least this wide before calling a delta a result.
-- **The mount-time completion checkpoint is an arm-independent device-
-  stall thermometer.** It caught one A cell and two B cells at wildly
-  different magnitudes (434 ms, 168 ms, 61 ms) with no correlation to
-  which engine was running, and it flagged them *before* the driver sent
-  a single statement — cheaper and cleaner than reading the `txn` tail
-  percentiles to guess which cells are contaminated.
-- **Strict's ≈3.67–3.79× lower TPS than group is exactly one `fsync` per
-  statement, and `SHOW META` proves it directly rather than by
-  inference**: `wal_syncs` ≈ 20,800 in every strict cell against ≈5,440
-  in every group cell, with `wal_group_batches = 0` under strict and
-  `wal_mean_group_batch` ≈ 3.8 under group. The batching factor (≈3.8)
-  and the TPS ratio (≈3.67–3.79×) are close enough that group commit's
-  amortization is the entire explanation for the durability-class gap at
-  this single-connection-per-trader concurrency, matching AL-S8's own
-  finding for the same shape on the prior engine state.
-- **`g1-A`, not any `B` cell, is this run's least explained number.**
-  It is the run's very first cell, its own device-stall thermometer
-  (`recovery_checkpoint_us` = 6,093) reads clean, yet its TPS (668.4)
-  sits 9.4–9.6% below its own arm's other two clean cells and 7.2% below
-  this engine's own prior `s0-c1-r2` number on the identical binary.
-  Nothing in this run's data explains why beyond "first cell of a cold
-  run" as a hypothesis, unverified. A future same-shape run that opens
-  with a throwaway warm-up cell, discarded before the measured pairs
-  begin, would close this gap cheaply.
 
 Raw driver JSON, `SHOW META` text, cell records, server configs and the
 orchestrator/summary scripts for all twelve cells are archived at

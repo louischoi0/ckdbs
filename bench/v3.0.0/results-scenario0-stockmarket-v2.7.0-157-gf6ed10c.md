@@ -114,7 +114,7 @@ Every row is a `Phase.summary()` distribution (`tools/bench_common.py`);
 | `s0-c1-s` | 5,000 | 4,602.1 | 34,720.8 | 37,216.2 | 73,428.1 | 83,630.9 | 160,897.6 |
 | `s0-c8-s` | 5,000 | 19,422.8 | 31,915.3 | 35,737.8 | 46,317.1 | 53,077.7 | 72,309.6 |
 
-### `trade-insert` (WAL-logged) and `account-update` (page-only, unlogged) — p50/p99, µs
+### `trade-insert` (`INSERT`) and `account-update` (`UPDATE`) — p50/p99, µs
 
 | Cell | trade-insert p50 | trade-insert p99 | account-update p50 | account-update p99 |
 |---|---|---|---|---|
@@ -124,13 +124,17 @@ Every row is a `Phase.summary()` distribution (`tools/bench_common.py`);
 | `s0-c8-s` | 9,069.7 | 15,843.6 | 9,234.6 | 15,862.6 |
 
 **`trade-insert` and `account-update` are statistically the same
-statement here, and that is itself a finding.** One is WAL-logged
-(`INSERT`) and one is not (`UPDATE` writes its page outside the log,
-`kds.conf.sample`'s durability section), yet their latencies track within
-a few percent of each other in every cell. Autocommit wraps *both* in an
-implicit transaction with its own commit envelope, and the commit's
-durability wait — not the row mutation — dominates both statements' client-
-perceived cost about equally. §5 separates that wait out.
+statement here.** *Corrected on `ar2-borrow-model` after `680c763`: this
+paragraph and the heading above originally called the `UPDATE`
+"page-only, unlogged". It is not — an `UPDATE` appends `HEAP_OVERWRITE`
+like every other data mutation (`include/kds/wal/record.hpp`'s
+`kHeapOverwrite`), and it did so at `f6ed10c` too; the numbers stand, the
+inference built on the contrast does not.* Both statements are WAL-logged,
+autocommit wraps both in an implicit transaction with its own commit
+envelope, and the commit's durability wait — not the row mutation —
+dominates both statements' client-perceived cost about equally, which is
+why their latencies track within a few percent of each other in every
+cell. §5 separates that wait out.
 
 `s0-c1-s`'s `txn` p0 (4,602.2 µs) sitting below its own `p25`
 (34,720.8 µs) by 8× is the shape of a single connection with no

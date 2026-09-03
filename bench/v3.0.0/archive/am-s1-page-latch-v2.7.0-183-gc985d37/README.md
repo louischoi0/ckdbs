@@ -16,8 +16,9 @@ Pass 1 (13:15:25–13:18:38 UTC): `g1-A`, `g1-B`, `s1-A`, `s1-B`, `g2-B`,
 `g2-A`, `s2-B`, `s2-A`.
 
 Pass 2 (13:20:47–13:21:24 UTC): `g3-A`, `g3-B` — added because `g1-B`
-came back with a 434 ms mount-time completion checkpoint (against 5–7 ms
-elsewhere), leaving group durability with only one clean `B` cell.
+came back with a 434 ms mount-time completion checkpoint (against
+5.2–7.4 ms in the nine clean cells), leaving group durability with only
+one clean `B` cell.
 
 Pass 3 (13:22:45–13:23:08 UTC): `g4-B`, `g4-A` — added because both `g3`
 cells also came back degraded (168 ms and 61 ms mount checkpoints); run
@@ -49,25 +50,32 @@ excludes them from every comparison but keeps their own rows.
   run: the phase table (`ops qps mean p0 p25 p50 p95 p99 max err`), the
   per-phase description block, the "business scenario" block (`TPS`,
   `statements/sec`, `committed`, `torn`, `underfunded`, per-trader
-  counts, the reporting-process summary, the `--verify` result). This is
-  what the results file's percentile and headline tables are read from —
-  nothing in the results file is recomputed from `<cell>.json` that
-  isn't also visible here.
+  counts, the reporting-process summary, the `--verify` result). The
+  human-readable twin of `<cell>.json`, and the source of the results
+  file's `committed`/`torn`/`underfunded`/`--verify` claims. **Where the
+  two differ, `<cell>.json` is authoritative**: this stdout truncates TPS
+  to one decimal rather than rounding it, so `g2-B` prints 711.8 and
+  `g4-B` 723.8 where `meta.tps` holds 711.87 and 723.85 and the results
+  file's §3 carries 711.9 and 723.9.
 - **`run.json`** — the orchestrator's own run-wide index: `describe_tree`,
   both arms' binary paths and `sha256`, `started`/`finished`, and the
   `cells` list (one record per cell, matching that cell's own
-  `<cell>.cell.json`). **Recording quirk**: `run_ab.py` was invoked three
-  times (once per pass) and reloads the previous `run.json` to append
-  rather than overwrite, but it carries the *first* invocation's
-  `started` timestamp into every later pass's `passes[]` entry instead of
-  recording each pass's own start — the `passes` list's second entry
-  shows `started: 2026-09-03 13:15:25 UTC`, which is pass 1's start, not
-  pass 2's. **The true pass boundaries are `run-log.txt`'s own
-  timestamps** (and, for the run actually in progress at any given
-  `run.json` write, the top-level `pass_started` field, which is correct
-  for the pass it was written during). The results file's §2 cells table
-  uses `run-log.txt` and each cell's own `<cell>.cell.json:server_start`,
-  never the `passes[].started` field.
+  `<cell>.cell.json`). **Do not read `passes[]` as a pass list.**
+  `run_ab.py` was invoked three times (once per pass) and reloads the
+  previous `run.json` to append rather than overwrite (`run_ab.py:168`),
+  and the entry it appends is a snapshot of *everything before this
+  invocation*, not of the previous pass. Three consequences, all visible
+  in the archived file: there are **two** entries for three passes (the
+  pass in progress writes no entry for itself); each entry's `cells` is
+  **cumulative**, so `passes[1].cells` lists all ten cells run to that
+  point rather than pass 2's two; and each entry's `started` is the
+  *run's* start carried forward (`run_ab.py:173` passes `prev["started"]`),
+  so `passes[1].started` reads `2026-09-03 13:15:25 UTC` — pass 1's
+  start, not pass 2's. Only `passes[N].finished` is a true pass boundary.
+  **The authority is `run-log.txt`'s per-cell timestamps** (and the
+  top-level `pass_started`, correct for the pass it was written during).
+  The results file's §2 cells table uses `run-log.txt` and each cell's own
+  `<cell>.cell.json:server_start`, never `passes[]`.
 - **`run-log.txt`** — the orchestrator's own stdout: one `starting` line
   and one `done` line per cell, each timestamped, giving the authoritative
   pass boundaries the `run.json` quirk above does not.
