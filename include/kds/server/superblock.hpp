@@ -547,6 +547,22 @@ public:
     std::uint32_t log_topology() const noexcept { return fields_.log_topology; }
     bool single_stream() const noexcept { return fields_.log_topology == kSingleStream; }
 
+    // Overrides the topology on an **in-memory copy**. Not a mount-time
+    // change to a volume: the field is chosen once at `CreateFresh` and a
+    // decoded image already carries the right value, so calling this on a
+    // superblock that came off a device is at best a no-op.
+    //
+    // It exists for one caller, and the caller is a symptom rather than a
+    // design: `tests/core_runtime_test.cpp` bootstraps a **single-stream**
+    // volume and then models a peer under **per-core** streams, which is a
+    // combination no real instance can be in. Restoring the whole image to
+    // a peer (AL-S9 review) made the contradiction visible - 123 cells
+    // began refusing, correctly, because a peer on a single-stream volume
+    // must be handed a stream to attach to. `docs/inflight/bugs/` carries
+    // the defect; this setter is what keeps the suite honest about
+    // everything *else* in the image until that fixture is rebuilt.
+    Status SetLogTopology(std::uint32_t topology) noexcept;
+
     // Stamps last_mount_time to `now_unix_seconds` (call once per boot,
     // after Decode()/CreateFresh() succeeds).
     void MarkMounted(std::uint64_t now_unix_seconds) noexcept;

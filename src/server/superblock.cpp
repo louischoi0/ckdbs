@@ -219,6 +219,15 @@ Status SuperBlock::SetNextTrxId(std::uint64_t next) noexcept {
     return Status::OK();
 }
 
+Status SuperBlock::SetLogTopology(std::uint32_t topology) noexcept {
+    if (topology != kPerCoreStreams && topology != kSingleStream) {
+        return Status::InvalidArgument("superblock: log_topology " + std::to_string(topology) +
+                                       " is neither kPerCoreStreams nor kSingleStream");
+    }
+    fields_.log_topology = topology;
+    return Status::OK();
+}
+
 void SuperBlock::MarkMounted(std::uint64_t now_unix_seconds) noexcept {
     fields_.last_mount_time = now_unix_seconds;
 }

@@ -40,6 +40,14 @@ statement about an engine that no longer exists; re-verify or strike it.
   Owner: no spec claims this ground. `docs/spec/sched.md` §8 and
   `docs/spec/wal.md` §16 each test their own half.
 
+- **`tests/core_runtime_test.cpp` models per-core WAL streams on a volume
+  that is single-stream.** Found at `f027a3c`, open, filed at
+  `bugs/core-runtime-fixture-models-per-core-streams.md`. The same shape as
+  the entry above — the tests model the assembly instead of running it —
+  and the cost is the same: it hides what the real wiring would refuse.
+  Handing a peer the volume's whole image surfaced it as **123 failing
+  cells at once**, every one refusing for the right reason.
+
 - **`wal_ring_full_refusals` is proved zero where it must be and unproved
   where it fires.** Verified at `f6ed10c`. Reaching it needs an append to
   lose the drained ring space to another core `kRingDrainAttempts` (4)
@@ -66,6 +74,11 @@ statement about an engine that no longer exists; re-verify or strike it.
   takes the volume's whole image and **refuses a config without one**, so
   there is no list because there is no choice. Owner:
   `include/kds/server/core_runtime.hpp`.
+
+  **The closure immediately paid for itself**, which is why it is recorded
+  rather than dropped: handing over the real image broke 123 tests that had
+  been running against a volume they contradicted. See the fixture entry
+  under Testing.
 
 ## Decisions the revision has not taken
 

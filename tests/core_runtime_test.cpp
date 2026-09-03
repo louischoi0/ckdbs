@@ -98,6 +98,37 @@ protected:
         ASSERT_TRUE(core0_store_->Sync().ok());
 
         extents_.emplace(*core0_store_, kFirstUserPageId);
+
+        // **The image every `ConfigFor` hands a core, and the one place
+        // this fixture knowingly differs from a real instance.**
+        //
+        // `BootstrapDatabase` writes a **single-stream** volume — every
+        // volume this build creates is one — while most cells below model a
+        // peer under **per-core** streams, opening its own log and running
+        // its own recovery. No real instance is in that combination. It
+        // went unnoticed while a peer's `superblock_` was a
+        // default-constructed copy whose topology read `kPerCoreStreams`
+        // whatever the volume said; handing over the whole image (AL-S9
+        // review) made 123 cells refuse at once, and the refusals were
+        // *right* — a peer on a single-stream volume must be given a stream
+        // to attach to.
+        //
+        // Overriding the topology here keeps those cells running and keeps
+        // every other field of the image true, which is the half of the fix
+        // that was never in question. `SingleStreamSuperBlock()` below is
+        // what the cells that model the real topology use.
+        // `docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`
+        // is the defect, and rebuilding the fixture is its own stage.
+        config_superblock_ = core0_->superblock;
+        ASSERT_TRUE(config_superblock_.SetLogTopology(kPerCoreStreams).ok());
+    }
+
+    // The volume as it really is: what a cell modelling the shipped
+    // topology hands to `ConfigFor`'s result.
+    SuperBlock SingleStreamSuperBlock() const {
+        SuperBlock sb = core0_->superblock;
+        EXPECT_TRUE(sb.SetLogTopology(kSingleStream).ok());
+        return sb;
     }
     void TearDown() override {
         std::error_code ec;
@@ -112,7 +143,14 @@ protected:
         // the volume's image (`core_runtime.hpp`). Every cell below then
         // sees the topology, the ceiling and the times the volume really
         // has, instead of the legal zeros a default-constructed copy gave.
-        c.superblock = &core0_->superblock;
+        // Re-read core 0's image **now**, not once at SetUp: `Expeditor`
+        // reads it when it launches a peer, and by then core 0's
+        // transaction-id ceiling has moved. A snapshot taken earlier hands
+        // a restarting peer a ceiling below the ids its own log already
+        // names, and the mount refuses - correctly.
+        config_superblock_ = core0_->superblock;
+        EXPECT_TRUE(config_superblock_.SetLogTopology(kPerCoreStreams).ok());
+        c.superblock = &config_superblock_;
         auto lease = extents_->Reserve(storage::kDefaultExtentPages);
         EXPECT_TRUE(lease.ok()) << lease.status().message();
         if (lease.ok()) c.lease = lease.value();
@@ -154,6 +192,9 @@ protected:
     std::unique_ptr<storage::MemoryPageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> core0_store_;
     std::optional<bootstrap::BootstrapResult> core0_;
+    // The image `ConfigFor` hands over: core 0's, with the topology this
+    // fixture models. See `SetUp` for why the two differ.
+    SuperBlock config_superblock_;
     std::optional<storage::ExtentAllocator> extents_;
 };
 
@@ -1129,6 +1170,8 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
 
             CoreRuntime::Config as_one_stream = ConfigFor(1);
             as_one_stream.anchor = stop_anchor;
+            const SuperBlock one_stream_image = SingleStreamSuperBlock();
+            as_one_stream.superblock = &one_stream_image;
             as_one_stream.shared_stream = owner.value()->stream();
             as_one_stream.shared_writer = owner.value()->writer();
             auto single = CoreRuntime::Open(as_one_stream, *device_, clock_, nullptr);
@@ -1200,6 +1243,8 @@ TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMount
     owner.value()->StartWriter();
 
     CoreRuntime::Config config = ConfigFor(1);
+    const SuperBlock one_stream_image = SingleStreamSuperBlock();
+    config.superblock = &one_stream_image;
     config.shared_stream = owner.value()->stream();
     config.shared_writer = owner.value()->writer();
 
@@ -1233,6 +1278,8 @@ TEST_F(CoreRuntimeTest, APeersOwnSuperblockAnswersForTheVolumeAndNotWithZeros) {
     owner.value()->StartWriter();
 
     CoreRuntime::Config config = ConfigFor(1);
+    const SuperBlock one_stream_image = SingleStreamSuperBlock();
+    config.superblock = &one_stream_image;
     config.shared_stream = owner.value()->stream();
     config.shared_writer = owner.value()->writer();
 
@@ -1272,6 +1319,8 @@ TEST_F(CoreRuntimeTest, ACoreCannotBeOpenedWithoutTheVolumesImage) {
 
 TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) {
     CoreRuntime::Config config = ConfigFor(1);
+    const SuperBlock one_stream_image = SingleStreamSuperBlock();
+    config.superblock = &one_stream_image;
 
     auto opened = CoreRuntime::Open(config, *device_, clock_, nullptr);
     ASSERT_FALSE(opened.ok());
