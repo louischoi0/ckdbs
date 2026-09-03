@@ -529,8 +529,8 @@ nothing and is not scheduled.
 
 | row | status |
 |---|---|
-| AN-S0 | **complete, not yet committed.** This document and the `known-gaps.md` entry, source-read at `004f949`, rewritten twice the same day — on the source read, then on AN-R7's mark — and corrected a third time against the `critics-developer` pass recorded in AN-7. The commit id goes here when it lands |
-| AN-S1 | **built, suite green, not yet committed.** `include/kds/txn/instance_visibility.hpp` and `src/txn/instance_visibility.cpp`; publication from `TransactionManager` at three points plus its constructor; `CoreRuntime::Config::visibility` and the `Expeditor`'s `visibility_`, gated on `single_stream()`; ten cells in `tests/instance_visibility_test.cpp`. **3263/3263 pass** in Debug — the additive claim holds, since every existing cell reads the unchanged per-core predicate |
+| AN-S0 | **landed at `b5abab6`.** This document and the `known-gaps.md` entry, source-read at `004f949`, rewritten twice the same day — on the source read, then on AN-R7's mark — and corrected a third time against the first `critics-developer` pass recorded in AN-7 |
+| AN-S1 | **landed at `b5abab6`, suite green.** `include/kds/txn/instance_visibility.hpp` and `src/txn/instance_visibility.cpp`; publication from `TransactionManager` at three points plus its constructor; `CoreRuntime::Config::visibility` and the `Expeditor`'s `visibility_`, gated on `single_stream()`; ten cells in `tests/instance_visibility_test.cpp`. **3263/3263 pass** in Debug — the additive claim holds, since every existing cell reads the unchanged per-core predicate. **Its `critics-developer` pass was still running when it landed**, on the operator's word, and AN-7 gains its record when it returns; a finding against S1's code is therefore a fix on top of this commit rather than a change to it |
 | AN-S2 | not started; **gated on AN-R10** |
 | AN-S3..S5 | not started |
 
