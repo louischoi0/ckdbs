@@ -986,5 +986,26 @@ TEST_F(InsertWalTest, TheBatchIsCountedPerClassAndRelaxedFormsNone) {
     EXPECT_NE(meta.find(" wal_group_batch_min=0"), std::string::npos) << meta;
 }
 
+// ---- The ring's backpressure, in SHOW META ------------------------------
+
+TEST_F(InsertWalTest, ShowMetaReportsTheRingBackpressure) {
+    // AL-S8 needs the ring's stall count from outside the process, and the
+    // engine has counted it since the first drain path without printing it
+    // - the same gap the group-commit batch above closed. Under one stream
+    // it is the number that says whether eight appenders are contending for
+    // one ring, which is the cost AR0-2 accepted and the stage prices.
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kGroup);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v int32)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (7)").response.substr(0, 8), "INSERTED");
+
+    const std::string meta = d.Dispatch("SHOW META").response;
+    // Both present, and both zero on a workload this small: one committing
+    // session against the default ring never fills it. A nonzero refusal
+    // count here would be a sizing bug rather than a slow device, which is
+    // exactly the distinction the second counter exists to make.
+    EXPECT_NE(meta.find(" wal_ring_full=0 "), std::string::npos) << meta;
+    EXPECT_NE(meta.find(" wal_ring_full_refusals=0"), std::string::npos) << meta;
+}
+
 }  // namespace
 }  // namespace kds::server

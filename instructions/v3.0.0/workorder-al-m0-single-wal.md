@@ -39,7 +39,7 @@ operator says otherwise; constants are never CLA's):
 | D3 (log appender) | the *mechanism* is AL-R1, a proposal that differs from D3(a)'s letter for the reason AR0-V4 gives; the *constant* (the group-commit cadence) stays `wal_drain_interval_ns` at its current 1 ms and is re-measured at AL-S8 |
 | D4 (free-map / superblock authority) | untouched by M0: `crosscore.md` CC11 stands — core 0 alone writes the superblock, the free map and the catalog, and core 0 is also where the one log's drain runs (AL-R1). "The log core" of D4 *is* core 0 in M0 |
 | D14 (format) | AL-R3: superblock format 15 → 16; a version-15 image refuses the mount; nothing migrates in place |
-| D15 (baseline) | AL-R8, awaiting the operator on *where* a v3 measurement goes |
+| D15 (baseline) | AL-R8, **ratified by CLA 2026-09-03**: `bench/v3.0.0/`, a fresh series, no delta to any v2.x number |
 
 **D-items M0 does not touch**: D1, D2, D5–D13, D16 beyond the citation
 rule above. The page header keeps its bytes (AR0-V3).
@@ -409,13 +409,38 @@ script against a fresh volume at `d15b5ac` and after AL-S1 yields
 `format_version` and the fields AL-R3 names.
 
 **AL-R8 — Measurement: what a v3 number is and where it goes.**
-*Awaiting the operator; nothing is written under `bench/` until then.*
-CLA's proposal: `bench/v3.0.0/`, reopening `bench/` with its README
-restated for the new engine; the same drivers (`tools/scenario*`,
-`tools/*_benchmark.py`); this host — 8 cores, AMD EPYC 9V74, the host
-the v2.8.0 result files name — `build-release` only; every file named
-by `git describe --tags`; a **fresh series** with no delta against any
-v2.x number (D15). The M0 cells are AL-S8's.
+**Ratified 2026-09-03 by CLA** under the operator's standing "I will
+follow CLA's proposal"; `bench/` reopens with AL-S8 and not before.
+`bench/v3.0.0/`, its README restated for the new engine; the same
+drivers (`tools/scenario*`, `tools/*_benchmark.py`), unmodified — a
+driver change inside a measurement stage measures the driver; this host
+— 8 cores, AMD EPYC 9V74, the host the v2.8.0 result files name —
+`build-release` only; every file named by `git describe --tags`; a
+**fresh series** with no delta against any v2.x number (D15). The M0
+cells are AL-S8's.
+
+Four rules carry over from `bench/docs/README.md` at `1769487`, because
+each of them has already invalidated a run on this box and none is
+implied by "measure in release":
+
+1. **Release, rebuilt at the measured commit.** Debug has reported the
+   wrong sign; a stale `build-release` silently prices an older engine.
+2. **A block device, never tmpfs.** Check with `df -T` at run time, and
+   **name the device in the results file** — `/tmp` is tmpfs here.
+3. **Measure a copy of the binary.** `cp` it into the run's directory,
+   hash the copy, start every server from the copy. The build tree is
+   shared with every other session in this repository and a `cmake
+   --build` landing mid-matrix would swap the engine with nothing in the
+   driver output to show it.
+4. **Record the host's load, and re-check it per cell** — three session
+   scratchpads were live here on 2026-09-02 and a competing build moved
+   a p99 by 12×. `/proc/loadavg` plus `pgrep -a -f "cc1plus|cmake
+   --build|ctest"` before each cell, both written into the file.
+
+And one that is new to v3, because M0 is what makes it matter: **the
+port is chosen, never defaulted.** 15432 on this box is held by an
+unrelated instance under `/home/cdkbs/autotrade`; a cell that binds the
+default either fails or, worse, talks to that server.
 
 ## AL-5 — Stages
 
@@ -472,7 +497,10 @@ first, which is what S1a now is.
 | AL-S5 | **Built 2026-09-02**, and the ruling it enacts was wrong about its own subject. AL-R6 said analysis's handoff erase "becomes a no-op and is deleted" under one stream. It does not become a no-op — it becomes **unsound**, which is a different reason and a sharper one. What licenses the erase per core is not the handoff but the sentence around it: *this stream* owes the page nothing below this LSN, which holds because a handoff is logged by the **receiver** as an acquisition and the receiver's stream has nothing for the page below it (`core_runtime.cpp`'s `AdmitWritePages` says so). One stream also holds the **giver's** records for that page, and erasing drops them from the dirty table — which makes redo's not-dirty filter skip every one of them. So the erase is skipped under one stream, and the handoff seeds nothing either, being an ownership fact rather than a mutation; `max_page_id` still takes it, which the erase never governed. Keeping the entry costs redo re-applying records the image may already hold, idempotent under the `page_lsn` gate: slower at worst, where the erase is wrong at worst. This also gives `AnalysisStart::single_stream` a reader in `Analyze`, which the AL-S4b review had objected it lacked. Cells: under one stream the giver's record still seeds the page, the handoff does not become its recLSN, a page named only by a handoff is still not dirty, and the high-water still rises past it — with the per-core erase cell unchanged beside it. `docs/spec/page-lsn-cross-stream.md` now carries a **superseded-in-part** header saying, rule by rule, what one stream keeps and what it drops — including that AR0 §7's flat "superseded" overstates it, since a pre-change volume is still governed by every word. **Suite: 3248/3248** (`ctest -j8`, Debug). Overhead not measured (the interleaved A/B is suspended by operator decision). **Amended by AL-7d**: the reason written into this row and into `analysis.cpp` was still wrong in its second draft. The erase is not licensed by *who logged the handoff* — it is licensed by rule 1(a)'s **flush**, and a flush covers one core's page store. Under per-core streams the erase's reach matched the flush's; under one stream the erase speaks for every core's records while the flush still speaks for one core's frames, and the concrete loser is `relation_grant_service.cpp`'s re-delivery, which re-runs the publish and appends a handoff from core 0 for a page a peer holds dirty and unflushed. The conclusion did not move; the proof did |
 | AL-S6 | **Built 2026-09-02**, and its largest piece was a behaviour fix rather than a field rename. **An idle peer's drain stopped taking its early-out at the cutover**, because `appended_lsn()` on an attached manager is the *instance's* append point, which core 0 moves constantly — so the equality was never true on a peer and every tick fell through to the D3 branch, asking for a sync of bytes it does not own, every interval, forever. Two changes: the free-tick test is now this core's own work, and **an attached manager does not take the interval branch at all**, because the loss window belongs to the log and the log has one drain bounding it. That also makes the counters honest without inventing one: a peer's `wal_syncs` and `wal_interval_syncs` are structurally 0 under one stream, which is true — it performs no device sync, flushing through core 0's stream and waiting on core 0's writer — so `SHOW META`'s stated subtraction rule holds on a peer trivially instead of underflowing, and a peer's durability cost is read on core 0. `SHOW META` gains `wal_topology` and prints `wal_anchor_count` **only under per-core**, since under one stream it can only ever say 1; `client-manual.md` §3's two rows say all of it. **Suite: 3249/3249** (`ctest -j8`, Debug). Overhead not measured (the interleaved A/B is suspended by operator decision) — though this stage removes a per-peer, per-interval sync request that AL-S8 would otherwise have measured as noise it could not attribute. **Amended by AL-7d** on two counts. `wal_sync_failures` is **not** structurally 0 on a peer: its flush of the shared ring can fail and so can its wait on the writer, and a failed wait is counted on core 0 too — the one field where a peer and core 0 report the same event. And the free-tick early-out is **not** "this core's own work" as a principle: on core 0 it is deliberately over the whole log, and that asymmetry is the only thing bounding a peer's `relaxed` loss window now that peers do not tick the interval — core 0 cannot take the early-out while any peer has bytes unflushed, so it reaches the D3 branch and flushes them within one `relaxed_flush_interval_ns`, exactly as before the cutover |
 | AL-S7 | **Run 2026-09-02: `scripts/sim.sh` green, 190 runs, 0 failures** — the full committed corpus plus four date-derived fresh seeds, across `clean`/`sync-crash`/`crash`, with and without injected device faults, over all three value profiles, plus the advisory-feature pairing per seed. **No seed needed fixing**, and the reason is worth recording rather than reading as luck: the harness has always modelled one log (`sim/instance.hpp` holds a single `MemoryLogDevice`), so the cutover moved it from "one device, per-core rules" to "one device, one-stream rules" — the topology now comes from the volume it bootstraps rather than being assumed, which is the one line that changed. Its instance is single-core, so the fold is an identity, the warm-up is satisfied by the first publish, and the redo/undo stamp suppression is a no-op there; what the corpus does exercise is the crash-at-op contract against the new mount pass, which is the property AL-R5 changed. **Also fixed here, and it is a miss rather than this stage's own work**: the AL-S1c review named *two* sites for the assertion-scan floor and AL-7c's fix reached only the peer's. Core 0 is not exempt from the reason — slot 0 holds the fold, so its `checkpoint_lsn` belongs to whichever core had the lowest redo start and can sit past core 0's own snapshot exactly as it can past a peer's. Both sites now take `redo_start_lsn` under one stream. **Suite: 3249/3249** (`ctest -j8`, Debug) |
-| AL-S8..S9 | not started |
+| AL-S9 | **Built 2026-09-03** on `worktree-v3.0.0-arch-revision`, and the review found more than the pass did. `wal.md` §3 is rewritten as *One Stream Per Instance* with the per-core topology kept as the **other branch a volume can be in** rather than deleted — a pre-M0 image still says `kPerCoreStreams` and every old rule still governs it. `rules.md` §3 no longer says shared-nothing: core-local is the default and shared state is **declared**, in a table of three rows that indexes the owning specs rather than being the authority — the WAL stream, the reactor wake flag, and the data file's capacity. `sched.md` §9-2 names the three locks a reactor thread can take and their order; `page-lsn-cross-stream.md`'s superseded table now says **latch**, not atomic. `cross-owner-txn.md` §2c states the in-stream resolution, `crosscore.md` CC3/CC7/CC10/CC11 stop saying *stream* where they mean *owner*, and `client-manual.md`, `manual/server/server.md`, `kds.conf.sample` and `CLAUDE.md` follow. `bench/` reopens with AL-R8 ratified. **Suite: 3252/3252** (`ctest -j8`, Debug). Overhead not measured (the interleaved A/B is suspended by operator decision) |
+| AL-S9 review | **Applied 2026-09-03**, and it is the sharpest of the milestone: four statements the source flatly refutes, eleven surviving per-core-stream sentences across seven files (two of them contradicting paragraphs the same diff wrote), one **live code bug**, and four bloat cuts. AL-7e is the record |
+| AL-S8 | **In progress 2026-09-03**: the instrument first. `WalStats::ring_full_drains` has been counted since the first drain path and `SHOW META` never printed it, so the stage's *`wal_ring_full` at eight writers* cell had no instrument at all. Surfaced as **two** fields rather than one, because the drain loop hides two events: `wal_ring_full` is a stall the appender paid a flush for and got through, `wal_ring_full_refusals` an append that exhausted `kRingDrainAttempts` and was refused `OutOfSpace` — a counter that did not exist, because AL-R1's bound is what made the case reachable and nothing counted it. The refusal path is **proved to stay at zero where it must and is unproved where it fires**: it needs an append to lose the drained space to another core four times running, which cannot be forced from one thread, and the test file and the manual both say so rather than implying coverage. `build-release` rebuilt, the binary hashed into the run directory per `bench/README.md` rule 3. **Suite: 3252/3252**. The measurement itself is not run and no number is claimed |
+| AL-S8..S9 | superseded by the two rows above |
 
 ## AL-7d — AL-S5 and AL-S6's review record
 
@@ -534,6 +562,69 @@ handoff's LSN as readily as the giver's. It now pins the giver's LSN by
 value, which is the property the stage exists to hold.
 
 **Suite: 3249/3249** (`ctest -j8`, Debug). Overhead not measured — the
+interleaved A/B is suspended by operator decision.
+
+## AL-7e — AL-S9's review record
+
+**Applied 2026-09-03** on `worktree-v3.0.0-arch-revision`. The review's own
+summary is the fair one: *the technical content is right — every
+load-bearing claim about the fold, recovery, the resolver, the stamp and
+the counters checks out — but the pass shipped four statements the source
+flatly refutes and missed eleven surviving per-core-stream sentences across
+seven files.* It fixed all fifteen itself. What follows is what CLA decided
+on top of that.
+
+**The four false statements, because the pattern in them is worth naming.**
+Each was CLA writing what the design *should* have been rather than reading
+what it is: that the record copy happens outside the latch (it does not —
+`WalStream::Append` holds it through `EncodeRecord`, and this diff's own
+`page-lsn-cross-stream.md` line says the reserve/copy/publish split was
+tried and abandoned); that one thread issues every `fdatasync` (two do —
+core 0's reactor for anything anyone is parked on, the writer for D3's tick
+and a peer's request); and twice that the WAL latch is *the one lock on a
+reactor thread* when there are three (`FileLogDevice::segments_mutex_`
+under it, `WalWriter::mutex_` with it released). A prose stage is exactly
+where this happens, and the guard is the review reading source rather than
+the diff.
+
+**The live code bug, which the prose is how CLA found.**
+`manual/server/server.md` now claims `SHOW META`'s `wal_topology` reports
+the volume's topology — and on a peer it did not. A peer's `superblock_` is
+a default-constructed copy and **zero is a legal value of that field**, so a
+peer answered `wal_topology=per-core` on a single-stream volume and printed
+`wal_anchor_count` beside it: wrong rather than absent, reachable under
+`peer_listeners = on`. The header at `superblock.hpp` had predicted this
+exact trap and named the fix; AL-S1c carried `log_topology` on
+`CoreRuntime::Config` and never applied it to the copy. Fixed with a
+`SetLogTopology` beside the `next_trx_id` copy it is the twin of, and
+pinned by a cell that **fails without the fix** — checked, not assumed.
+
+**The highest-value decision the review left open, taken here.**
+`rules.md` §3 said the declared shared list "is short and is the whole of
+it: the WAL", which as written brands two live structures as defects: the
+reactor's sleep flag and `Waker` (declared, but in `sched.md` §7), and the
+data-file `PageDevice`, whose capacity core 0 grows and every core's store
+reads unsynchronized. The list is now a **three-row table that indexes the
+owning specs rather than being the authority**, and the device's row is
+paid for: `page_device.hpp`'s "a PageDevice instance is owned by one core"
+was false and had been since the store went per core, so it now says what
+makes an unsynchronized `uint32_t` sound there — core 0 alone writes and
+capacity only rises. Three rows is not a small number for an engine that
+called itself shared-nothing a week ago; writing them down is what makes
+the fourth an argument instead of a discovery.
+
+**Accepted without change**: the CC11 scoping (its "no subsystem header
+carries an acquisition order" now says *for these three*, since
+`wal/stream.hpp` carries one over a different structure), and all four
+bloat cuts — the snapshot argument was written twice in two files, the
+retention rule twice, `page.md` restated `wal.md` §3's handoff bullet
+immediately after citing it, and one paragraph restated the two sentences
+above it.
+
+**Nothing was declined.** Every finding was either applied as written or
+applied with the decision above made explicit.
+
+**Suite: 3252/3252** (`ctest -j8`, Debug). Overhead not measured — the
 interleaved A/B is suspended by operator decision.
 
 ## AL-7c — AL-S1c's review record

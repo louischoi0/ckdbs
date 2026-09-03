@@ -32,8 +32,16 @@
 // sequential transfer. The default implementations just loop, so an
 // implementation only overrides them when it can actually do better.
 //
-// Concurrency: a PageDevice instance is owned by one core, like everything
-// else (rules.md section 3). Nothing here is internally synchronized.
+// Concurrency: **one instance serves every core's store** - `Expeditor`
+// hands the same reference to each `CoreRuntime::Open` - and it is on
+// `rules.md` section 3's declared shared list. Nothing here is internally
+// synchronized, and the reason that is sound rather than lucky is the
+// write side: **core 0 alone grows the file**, and capacity only rises, so
+// a peer reading a stale value under-reads a bound and faults nothing it
+// should not. A device that could shrink, or that any core could grow,
+// would need real synchronization. (This comment said "owned by one core"
+// until the AL-S9 review; it had not been true since the store went
+// per-core.)
 
 namespace kds::storage {
 

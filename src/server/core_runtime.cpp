@@ -247,6 +247,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     if (config.next_trx_id > runtime->superblock_.next_trx_id()) {
         if (Status s = runtime->superblock_.SetNextTrxId(config.next_trx_id); !s.ok()) return s;
     }
+    // **The same copy, and the same failure mode** (AL-S9 review). Zero is
+    // a legal `log_topology` - it is `kPerCoreStreams` - so a peer that is
+    // never told answers `SHOW META` with `wal_topology=per-core` on a
+    // single-stream volume, and prints `wal_anchor_count` beside it. Not a
+    // missing field a reader would notice: a wrong one. Every other user of
+    // the topology on this core reads `config.log_topology` directly, which
+    // is why nothing but the report was affected.
+    if (Status s = runtime->superblock_.SetLogTopology(config.log_topology); !s.ok()) return s;
     // Reads the report this core's own recovery produced, which is zeroed
     // under one stream because core 0's pass covered these records and
     // raised the ceiling there. So in that topology the check is core 0's

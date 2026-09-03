@@ -154,7 +154,23 @@ struct WalStats {
     // Times an append found the ring full and had to drain it inline. The
     // stall metric of wal.md section 13 / test 8: nonzero means producers
     // are outrunning the device.
+    //
+    // **Counted per attempt, not per append**, because the ring is shared
+    // and one append may drain more than once (AL-R1): a drain this core
+    // performs can be consumed by another core before this one gets the
+    // latch back. So the number is *stalls paid*, which is what a stall
+    // metric should be, and it is above the number of appends that stalled.
     std::uint64_t ring_full_drains = 0;
+
+    // Appends that exhausted `kRingDrainAttempts` and were refused
+    // `OutOfSpace`. **A different event from the one above and a far worse
+    // one**: a drain that worked cost the appender a synchronous flush, and
+    // this is a statement that failed. It became reachable when AL-R1
+    // replaced the single retry with a bound - under an unshared ring one
+    // drain was a proof of progress - so nothing counted it before and a
+    // shared ring is exactly where it can happen. Zero is the expected
+    // reading at every load; nonzero is a sizing bug, not a slow device.
+    std::uint64_t ring_full_refusals = 0;
 
     // Mean records per group-commit sync, the number section 16-7 is
     // about. Zero when no batch has completed.

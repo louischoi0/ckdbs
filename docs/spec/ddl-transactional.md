@@ -106,7 +106,7 @@ Built, and what each gets:
 - **`DROP INDEX`** — atomic and isolated, **core-0-scoped** (§5b): on a
   relation another core owns it is refused inside a transaction (§5e).
 - **`CREATE INDEX` on a relation another core owns** — atomic and
-  isolated across two cores: the owner builds the tree in its own stream,
+  isolated across two cores: the owner builds the tree from its own lease,
   core 0 writes and commits the `sys.indexes` row (§5e).
 - **`CREATE ASSERTION` on a relation another core owns** — the owner
   builds, core 0 publishes; admitted inside a transaction (§5f).
@@ -341,7 +341,7 @@ owner while the **catalog write** stays on core 0, and the statement is
 two phases with a park between them (`crosscore.md` CC7's owner-builds
 exception says why the pages may not travel the other way instead).
 
-**Atomic.** The owner builds the tree in its own stream under `kNoTxnId`
+**Atomic.** The owner builds the tree from its own lease under `kNoTxnId`
 and replies with the root; core 0 writes the `sys.indexes` row naming that
 root and commits. There is exactly one publishing event — core 0's commit
 — and until it lands nothing names the tree. A rollback, a refused reply,

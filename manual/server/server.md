@@ -50,8 +50,11 @@ scripts/stop.sh                        # graceful stop (sends STOP via the CLI)
 
 On startup the server prints the data file, page count, superblock version,
 log destination and the port, then blocks in `Serve()` for the life of the
-process. The data file is created if absent; the per-core WAL segments live
-in `<data_file>.wal/` unless `wal_dir` says otherwise.
+process. The data file is created if absent; the WAL segments live in
+`<data_file>.wal/` unless `wal_dir` says otherwise. A volume bootstrapped by
+this build has **one WAL stream for the instance**, whatever `cores` says;
+`SHOW META`'s `wal_topology` field reports which topology a mounted volume
+was written with.
 
 The listener is **loopback only** (`127.0.0.1`), plain TCP, no TLS, no
 authentication — a development/inspection surface, not a production API.
@@ -74,8 +77,8 @@ out-of-range values, each naming the file and line.
 |---|---|---|
 | `data_file` | `kds.db` | Data file path (also the positional argument). |
 | `port` | `15432` | TCP port, loopback only. |
-| `wal_dir` | `<data_file>.wal` | Per-core WAL segment directory. |
-| `cores` | `1` | Reactor cores. **Pinned into the superblock at bootstrap**; a later mount under a different count refuses to start naming both numbers. Above 1: parallel WAL streams only — core 0 still serves every statement (`docs/spec/crosscore.md`). |
+| `wal_dir` | `<data_file>.wal` | WAL segment directory. |
+| `cores` | `1` | Reactor cores, pinned one per CPU. **Pinned into the superblock at bootstrap**; a later mount under a different count refuses to start, naming both numbers. Above 1 the cores share one WAL stream and one log: core 0 owns it, peers append through it, and every `fdatasync` is issued once (`docs/spec/wal.md` §3). |
 | `inline_cell_width` | `64` | Bytes every `varchar` occupies inside a tuple. **Pinned at bootstrap**, mount-checked; changing it for existing data is a rebuild, no migration. Range 16..4096. |
 | `isolation` | `read committed` | The level a connection starts at; overridable per session (`SET ISOLATION LEVEL`) and per transaction (`BEGIN ISOLATION LEVEL`). |
 | `durability` | `group` | `strict`/`d1`, `group`/`d2`, `relaxed`/`d3` — applied at COMMIT for every logged statement (INSERT/UPDATE/DELETE). Instance-wide; the per-transaction class is a KWP/1 field, not wired. |
@@ -152,11 +155,15 @@ tags and per-level detail: `docs/spec/client-manual.md` §1.
 `SHOW RELAYOUT` (physical-optimizer shadow report), `SHOW PAGE <id>
 [VALUES]` (page-level debugging). Full list: `manual/sql/sql.md` §6.
 
-**Multi-core.** `cores > 1` spawns pinned reactor threads with their own
-WAL streams, but core 0 serves every statement today; peers come up alive
-and idle, with `waystone_recording` and `access_statistics` off on peers by
-design. Leave it at 1 until the cross-core pipeline lands
-(`docs/inflight/in-progress/workplan-crosscore.md` P4).
+**Multi-core.** `cores > 1` spawns one pinned reactor thread per core.
+Relations are owned by a core (a namespace selects it, `docs/spec/namespace.md`)
+and statements reach that owner over the cross-core pipeline. The cores
+share **one WAL stream** — core 0 opens the log and every peer appends
+through it — so a peer's `SHOW META` WAL block reads zero syncs by
+construction and the instance's durability cost is read on core 0
+(`docs/spec/wal.md` §3). `waystone_recording` and `access_statistics` stay
+off on peers by design. Recovery runs once, on core 0, before any peer
+exists.
 
 ## 6. What a restart loses — known gaps
 

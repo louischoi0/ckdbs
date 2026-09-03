@@ -36,3 +36,4 @@ kds_server
 # tests/testdata/, never by being left lying in the tree.
 sim-artifacts.txt
 *.sim
+Testing/

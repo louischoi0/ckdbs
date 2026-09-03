@@ -331,7 +331,37 @@ TEST_F(WalManagerTest, AFullRingDrainsInlineInsteadOfFailingTheAppender) {
     }
     EXPECT_GE(wal->stats().ring_full_drains, 1u);  // the stall metric
     EXPECT_EQ(wal->stats().records_appended, records);
+    // And the *other* counter stays at zero, which is the whole reason
+    // there are two: every one of those stalls was paid and got through,
+    // so nothing was refused. A run that conflated them would read this
+    // workload as a sizing bug.
+    EXPECT_EQ(wal->stats().ring_full_refusals, 0u);
 }
+
+TEST_F(WalManagerTest, ARecordLargerThanTheRingIsNotARingFullRefusal) {
+    // The refusal counter means "the ring could not be drained into space
+    // in `kRingDrainAttempts` tries". A record that can never fit is a
+    // caller error (`InvalidArgument`), reaches no drain, and must not
+    // land in a counter an operator reads as backpressure.
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+
+    auto lsn = wal->Append(HeapInsert(1, 1), Pattern(kMinRingCapacity * 2, 3));
+    ASSERT_FALSE(lsn.ok());
+    EXPECT_EQ(lsn.status().code(), StatusCode::kInvalidArgument) << lsn.status().message();
+    EXPECT_EQ(wal->stats().ring_full_refusals, 0u);
+    EXPECT_EQ(wal->stats().ring_full_drains, 0u);
+}
+
+// **What no cell here covers, stated rather than implied.** A nonzero
+// `ring_full_refusals` needs an append to lose the drained space to
+// *another core* four times running - `kRingDrainAttempts` exists because
+// AL-R1 made the ring shared, and a drain is no longer a proof of
+// progress. That interleaving cannot be forced from one thread, and a
+// multi-threaded cell that sometimes trips is worse than none. The
+// counter is therefore proved to stay at zero where it must and is
+// unproved where it fires; `docs/spec/client-manual.md` says the same to
+// the operator.
 
 // ---- Abort ---------------------------------------------------------------
 

@@ -18,7 +18,7 @@
 # Path to the data file. Created if absent.
 data_file = kds.db
 
-# Directory holding the per-core WAL segment files (docs/spec/wal.md §4.1).
+# Directory holding the WAL segment files (docs/spec/wal.md section 4.1).
 # Defaults to "<data_file>.wal" when unset.
 # wal_dir = kds.db.wal
 
@@ -46,20 +46,27 @@ data_file = kds.db
 # bytes per string column per row, paid whether or not the value is short.
 inline_cell_width = 64
 
-# How many reactor cores this instance runs (docs/inflight/in-progress/workplan-crosscore.md M6).
+# How many reactor cores this instance runs (docs/spec/crosscore.md).
 #
 # Pinned into the superblock when the database is created and validated
 # against it on every mount after — a mismatch refuses to start, naming both
-# numbers. WAL streams are per core, so this decides how many streams the
-# database has, and mounting under a different count would leave the
-# difference with nothing to replay them.
+# numbers.
 #
-# A value above 1 spawns that many pinned reactor threads, each with its own
-# WAL stream (workplan P0-P2). **Core 0 still serves every statement**: a
-# peer cannot read the catalog until the per-core catalog cache exists
-# (workplan P6), so the other cores come up alive and idle. Raising this
-# today buys parallel WAL streams and nothing else - and costs a thread and
-# a ring matrix - so 1 remains the right setting until P4.
+# A value above 1 spawns that many pinned reactor threads. They **share one
+# WAL stream**: core 0 opens the instance's log and every peer appends
+# through it, so every fdatasync is issued once, by one thread, over one
+# file (docs/spec/wal.md section 3). Relations are owned by a core — the
+# namespace selects it — and statements reach that owner over the cross-core
+# pipeline, so raising this buys parallel execution and costs a thread, a
+# ring matrix, and a latch on the WAL append path.
+#
+# The count stays pinned under one stream for the anchor's sake: its redo
+# start is the minimum over every core and is held back until each has
+# published at least once, so a changed count would either park it forever
+# or advance it past a core that no longer runs. (A database written before
+# the change reports `wal_topology=per-core` in SHOW META and has one stream
+# per core for life; mounting *that* under a different count would leave
+# streams with nothing to replay them.)
 #
 # Bounded above by the superblock's 64 WAL anchor slots, and refused if it
 # exceeds the machine's reported core count: reactors are pinned and never
@@ -198,14 +205,23 @@ durability = group
 # waiting on. A tick with nothing staged does no I/O, so this is cheap to
 # run often. 0 disables it, which leaves relaxed commits unsynced until the
 # next checkpoint or shutdown.
+#
+# With one WAL stream this is one cadence for the instance, not one per
+# core: core 0's drain is the only one that ticks the relaxed interval, and
+# it covers every peer's staged bytes because the log's append point is
+# shared (docs/spec/wal.md section 3). A peer's drain closes its own group
+# batches and asks core 0's writer for a sync only when somebody is parked
+# on one.
 wal_drain_interval_us = 1000
 
 # How long a `relaxed` commit may sit unsynced - D3's loss window
 # (docs/spec/wal.md). It is also a **latency** dial, which is less obvious: the
 # sync that enforces it runs on the reactor thread, so the statement in
 # flight when it fires pays the device's full latency. Measured on an EBS
-# volume, the default produces one ~2.2 ms statement every 12 ms and is the
-# whole of a relaxed instance's tail (bench/results-latency-matrix.md).
+# volume, the default produced one ~2.2 ms statement every 12 ms and was the
+# whole of a relaxed instance's tail — measured on the pre-AR0 engine
+# (`git show 1769487:bench/results-latency-matrix.md`) and not yet re-priced
+# against the single stream.
 # Raising it thins the stalls out and lengthens the window of committed work
 # a crash can lose; it cannot remove them.
 relaxed_flush_interval_us = 10000

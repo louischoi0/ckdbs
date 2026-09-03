@@ -42,7 +42,7 @@ stated in its spec as a fact, and nowhere here as a plan.
 | Pages, semi-sorted heap, Keystone, fixed-length tuples, var-heap | Built | `docs/spec/heap-and-tuple.md` (authoritative), `docs/rules/rule-fixed-length-tuple.md`, `docs/spec/page.md` |
 | Multi-page free map | Region-based, ceiling 2^31 pages / 16 TiB, no superblock bump. The map is unlogged; recovery repairs it | `docs/spec/page.md` §5 |
 | Clustered B+ tree | Built. An append-split publishes the separator before the sibling link | `docs/spec/heap-and-tuple.md` §5 |
-| WAL | Every data mutation logged (heap, undo, var-heap, index, assertions, catalog/DDL) except ALLOC/FREE and the advisory Waystone classes invariant 8 exempts. Recovery runs at mount — analysis/redo/high-water/undo per core, a completion checkpoint, `SHOW META`'s recovery block; a torn catalog page refuses the mount | `docs/spec/wal.md` |
+| WAL | **One stream for the instance** (AR0 M0): core 0 owns the log, peers attach and append under its latch, and the superblock's `log_topology` says which topology a volume was written with — a pre-M0 volume still mounts per-core. Every data mutation logged (heap, undo, var-heap, index, assertions, catalog/DDL) except ALLOC/FREE and the advisory Waystone classes invariant 8 exempts. Recovery runs at mount, once per log — analysis/redo/high-water/undo, a completion checkpoint, `SHOW META`'s recovery block; a torn catalog page refuses the mount | `docs/spec/wal.md` |
 | Transactions & MVCC | Built. Reader leases bound a purge (`ReadHorizon()`); undo pages recycle into the log's next growth. `SnapshotTooOld` is never raised; a previous run's undo pages are not reclaimed at mount | `docs/spec/txn.md` |
 | Transactional DDL | Built and durable: catalog writes logged, DDL under a real transaction, losers rolled back at mount. `CREATE TABLE` is atomic, isolated and consistent; `CREATE INDEX`/`DROP INDEX` atomic and isolated (`DROP` on core 0 only); **`DROP TABLE` is atomic but not isolated** (§5a) | `docs/spec/ddl-transactional.md` |
 | Namespaces | A namespace **selects the core** that owns the relations created in it, fixed by its first relation and never rebalanced; `PlacementPolicy::kNamespace` is the default. `CREATE NAMESPACE` / `DROP NAMESPACE` (RESTRICT), `SHOW NAMESPACES`, `ns.table` everywhere a relation is named. **A qualifier declares placement, never identity** — relation names are instance-global | `docs/spec/namespace.md` (NS10) |
@@ -65,7 +65,7 @@ stated in its spec as a fact, and nowhere here as a plan.
 | Physical optimizer, Part I: relayout | Built, shadow-only: every move is blocked by a named §6 gate, which `SHOW RELAYOUT` reports | `docs/spec/physical-optimizer.md` |
 | Physical optimizer, Part II: Cabin controller | Built, with `SHOW CABIN_OPTIMIZER`; managed state is memory-resident | same, Part II |
 | Buffer-pool eviction | Every accessor returns a pinned `PageRef`; the CLOCK sweep runs on the fault path under `buffer_pool_frames` (default 0 = unbounded) | `docs/spec/eviction.md`, `docs/spec/page.md` §3 |
-| Cross-core execution | A two-step join executes across cores, replies byte-identical to local execution. Statement shipping carries an autocommit, single-relation statement to its owner; a lost answer is `UNKNOWN_OUTCOME`. Cross-owner transactions: writes and reads cross, a read enrols, RR gets a consistent-per-core snapshot, RC no cross-core promise; the coordinator's decision record is the durability point and a participant acks a decide at its COMMIT append. A typed client's shipped read is answered in rows on an answer edge (§4a); the text arm keeps its 992-byte cap | `docs/spec/cross-owner-txn.md`, `docs/spec/crosscore.md`, `docs/spec/sched.md` |
+| Cross-core execution | A two-step join executes across cores, replies byte-identical to local execution. Statement shipping carries an autocommit, single-relation statement to its owner; a lost answer is `UNKNOWN_OUTCOME`. Cross-owner transactions: writes and reads cross, a read enrols, RR gets a consistent-per-core snapshot, RC no cross-core promise; the coordinator's decision record is the durability point and a participant acks a decide at its COMMIT append. Under one stream an undecided prepare resolves in the mount's own scan — absence of a decision is abort. A typed client's shipped read is answered in rows on an answer edge (§4a); the text arm keeps its 992-byte cap | `docs/spec/cross-owner-txn.md`, `docs/spec/crosscore.md`, `docs/spec/sched.md` |
 | Task representation | C++20 stackless coroutines | `docs/spec/sched.md` §3 |
 | Wire protocol KWP/1 | The default port speaks length-prefixed binary frames: handshake with capability intersection, SCRAM, PARSE/BIND/EXECUTE over statement and portal handles, typed row batches, portal suspension, transaction and durability frames, a pinned error registry. `kMaxFrame` 16 MiB, 64 KiB batch target, 60 s portal-idle timeout, 64 statements and 64 portals per session; `max_rows` bounds delivery, not execution; `C_DESCRIBE` of an unexecuted statement is refused. The newline protocol is `debug_text_port`'s loopback debug surface, off unless configured; `STOP` is reachable only there. TLS 1.3 and the statement-class roles are off by default; the `COMPRESSION` bit is reserved and never offered | `docs/spec/protocol.md`, `docs/spec/client-manual.md` |
 | Keystone id issue-once contract | A pk `UPDATE` is refused at compile; `sys.tables.next_id`'s bump logs and replays with every catalog write | `docs/rules/keystoneid-invariant.md`, `docs/rules/keystoneid-k0-findings.md` |
@@ -85,11 +85,11 @@ keeps a `README.md` saying what was there and why it went. **Every citation
 to one of those paths — in this file, a spec, the manual, a test or a source
 comment — resolves against that commit.** `instructions/v3.0.0/` reopened
 on 2026-09-02 with the change's own instructions — AR0 and one work order
-per milestone (`instructions/v3.0.0/index.md`); `bench/` and
-`docs/inflight/` stay closed until the operator says what a measurement
-of the new engine is and where it goes (work order AL's AL-R8 carries
-CLA's proposal). Two buckets remain
-under `docs/`, one rule each:
+per milestone (`instructions/v3.0.0/index.md`). **`bench/` reopened on
+2026-09-03** with AL-R8 ratified: `bench/v3.0.0/` is a fresh series and
+carries no delta against any v2.x number, and `bench/README.md` states the
+five rules a run is invalid without. `docs/inflight/` stays closed. Two
+buckets remain under `docs/`, one rule each:
 
 - **`docs/spec/`** — what is confirmed and implemented. The authoritative
   specifications; when this file and a spec conflict, the spec wins.
@@ -179,9 +179,9 @@ version of record is `v2.7.0` at `d840a30`**; read its tag message.
   only the first half overstates the engine.
 - **Every measurement names its version, and `git describe --tags` is
   how** — `v2.0.0-37-gaa3e26c`. Binding on every results file and on any
-  reply that quotes a number. Where a results file lives is unsettled:
-  `bench/` is empty by decision and nothing is written there until the
-  big-bang change says where measurement goes.
+  reply that quotes a number. A results file lives at
+  `bench/<version>/<benchmark>-<describe>.md`; `bench/README.md` carries
+  the rules, and a v3 number is never set beside a v2.x one.
 - **Nothing is back-filled.** A result measured before a version existed
   keeps its bare commit id.
 

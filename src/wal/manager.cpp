@@ -332,6 +332,12 @@ StatusOr<Lsn> WalManager::Append(const RecordSpec& spec, std::span<const std::by
         lsn = stream_->Append(spec, payload);
     }
     if (!lsn.ok()) {
+        // Only the exhausted-bound case is the ring's: every other status
+        // out of `Append` is the record's or the device's, and counting
+        // those here would make the refusal counter unreadable.
+        if (lsn.status().code() == StatusCode::kOutOfSpace) {
+            ++stats_.ring_full_refusals;
+        }
         return lsn.status();
     }
     ++stats_.records_appended;

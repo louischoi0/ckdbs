@@ -6,7 +6,9 @@ The reactor: how work is scheduled on a core. Consistent with `docs/rules/rules.
 
 ## 1. Model
 
-KDS does **not** schedule OS threads. At startup the engine spawns exactly one worker thread per core, pins each with CPU affinity, and never creates threads afterward. Each worker runs a **reactor**: a cooperative, run-to-completion event loop that owns all engine state assigned to that core (shared-nothing). "The scheduler" is the policy inside each reactor that decides which ready task runs next. All scheduler data structures are core-local and lock-free by construction.
+KDS does **not** schedule OS threads. At startup the engine spawns exactly one worker thread per core, pins each with CPU affinity, and never creates threads afterward. Each worker runs a **reactor**: a cooperative, run-to-completion event loop that owns the engine state assigned to that core. "The scheduler" is the policy inside each reactor that decides which ready task runs next. All **scheduler** data structures are core-local and lock-free by construction, with one documented exception: the reactor's sleep flag and its `Waker`, which other cores' threads read and write to end an idle block (§7).
+
+**Core-local is the default, not a law of the engine** (AR0-2). Shared-nothing was retired as the memory model: state may be shared where a subsystem's spec says it is and says what serializes it. `rules.md` §3 indexes what is declared today — the WAL stream, this section's wake flag, and the data file's capacity; §9-2 below states the boundary for the reactor thread.
 
 Reference architectures: Seastar (ScyllaDB), glommio.
 
@@ -55,7 +57,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 
 ## 5. Cross-Core Communication
 
-- Topology: per-core-pair **SPSC lock-free rings** (N² rings for N cores), preallocated at startup. SPSC keeps each ring single-writer/single-reader, matching the shared-nothing ownership rule with no atomics beyond the ring indices.
+- Topology: per-core-pair **SPSC lock-free rings** (N² rings for N cores), preallocated at startup. SPSC keeps each ring single-writer/single-reader — one writer and one reader by construction, so no atomics beyond the ring indices. This holds regardless of what else the engine shares: the rings are how *work* moves between cores, and nothing has been added to them.
 - A message names a target-core operation and carries POD payload; on receipt (phase 3) the peer wraps it as a task in the sender-designated scheduling group. Replies are messages back to the origin core.
 - **Backpressure:** a full ring fails the send with the KDS status type (no blocking, no `throw`). Callers must handle `ring_full` — typically by suspending the sending task until the reactor retries. Silent drop is forbidden.
 - The ring interface is injectable: simulation replaces it with an in-memory model that can delay and reorder deliveries (§8).
@@ -184,7 +186,7 @@ wakes nobody: its reactors are multiplexed by a seeded harness, and a second
 ## 9. Invariants
 
 1. One pinned worker thread per core; no thread creation after startup.
-2. All scheduler state is core-local; no locks in the reactor or scheduler.
+2. All scheduler state is core-local but the sleep flag and `Waker` of §7, and the scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. Those three are the whole list (`wal/stream.hpp` and `wal/writer.hpp` state the order). A subsystem may add another only by stating it in its own spec, with what it serializes and why a core-local alternative was rejected; an unstated lock in the reactor is a defect.
 3. Reactor phases execute in the fixed order of §2.
 4. Every task yields within its budget; no preemption; no work-stealing.
 4a. A queue is not a claim of work: a task parked on a condition is not runnable, and the reactor may sleep while holding one (§7). A task type that cannot tell a park from a yield inherits `advanced_in_last_poll() == true` and keeps the reactor awake — the safe answer, never the accurate-looking one.

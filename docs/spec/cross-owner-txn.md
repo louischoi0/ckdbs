@@ -124,23 +124,28 @@ request/reply shape — POD payload, parked waiter on the coordinator, a
 deadline, `Status::FromWire`.
 
 1. **Prepare.** The coordinator sends prepare to every participant. A
-   participant makes its work durable — its own stream, its own
-   `fdatasync` — writes a `TXN_PREPARE` record naming the coordinator's
+   participant makes its work durable — under one stream by asking core 0's
+   writer and waiting on it, under per-core streams by its own `fdatasync`
+   (`docs/spec/wal.md` §3) — writes a `TXN_PREPARE` record naming the coordinator's
    `(session_id, transaction_id)`, and replies **prepared** or **refused**.
    The promise is made *after* the record is durable, never at the append.
-2. **Decide.** Every participant prepared ⇒ the coordinator commits **in
-   its own stream**, and that `COMMIT` **is the decision**. Any refusal or
+2. **Decide.** Every participant prepared ⇒ the coordinator commits, and
+   that `COMMIT` **is the decision** — one record, one author, wherever the
+   log is. Any refusal or
    timeout ⇒ abort. Either way it then tells the participants, and waits
    for their acknowledgements. A participant applies the decision as its
    own ordinary local COMMIT or ROLLBACK, and **under D2 `group` it
    acknowledges at the append**, its own record's durability riding the
    next drain — see the contract below.
 
-**The decision lives in exactly one stream**, and that is the whole design.
-LSNs are stream-local and are never compared across cores
-(`docs/spec/wal.md` §3), so a decision recorded in two places could be
-recovered two ways. One-phase commit and presumed-commit/presumed-abort are
-foreclosed by the same rule.
+**The decision is recorded in exactly one place**, the coordinator's, and
+that is the whole design: a decision recorded in two places could be
+recovered two ways. Under per-core streams that place was a distinct
+*stream*, and the argument had a second leg — LSNs were stream-local and
+never compared across cores. With one stream per instance (`docs/spec/wal.md`
+§3) the second leg is gone and the first is untouched: one record, one
+author, one reading. One-phase commit and presumed-commit/presumed-abort
+stay foreclosed by it.
 
 **A participant that replied prepared may not unilaterally abort.** The
 idle ceiling that ends an abandoned context stops applying to it; the
@@ -228,10 +233,21 @@ Two things bound the wait:
 
 ### 2c. Recovery
 
-At mount, a `TXN_PREPARE` with no decision in its own stream is neither a
-winner nor a loser: it is a **fourth outcome**. Its coordinator's stream is
-the authority, and resolving it is a *file* read, not a message — which is
-why it survives a coordinator that is not running.
+At mount, a `TXN_PREPARE` with no decision beside it is neither a winner
+nor a loser: it is a **fourth outcome**. The coordinator's record is the
+authority, and resolving it is a *log* read, not a message — which is why
+it survives a coordinator that is not running.
+
+**Under one stream** (`wal.md` §3) that read is the mount's own scan. The
+coordinator's decision, if it was ever made durable, is in the same log the
+`TXN_PREPARE` is in and inside the same replay range, because the prepare
+floor below puts it there. So **absence of a decision is abort**, decided
+by the one pass, with no second file opened and no cross-stream comparison
+to make.
+
+**Under per-core streams** the coordinator's stream is a different file and
+resolution opens it, which is what the retention obligation below is
+written against.
 
 A prepared transaction **floors the checkpoint's redo start** at its
 `TXN_PREPARE` (`ActiveTransactions::OldestPreparedLsn`,
@@ -243,18 +259,25 @@ anywhere. `docs/spec/wal.md` §11-3 carries it. The price is the standard
 one: an in-doubt transaction pins the log, and §2b's ceiling is what bounds
 how much.
 
-**The retention obligation.** Resolution takes *no decision found ⇒ ABORT*
-and scans the coordinator's stream whole from LSN 0, because no sound lower
-bound exists — a bound from this stream's LSNs would be a cross-stream
-comparison, and one from the coordinator's checkpoint would assume the
-decision sits above it. That answer is sound only while the decision is
-still *in* that stream, so:
+**The retention obligation.** Resolution takes *no decision found ⇒ ABORT*.
+Under per-core streams it scans the coordinator's stream whole from LSN 0,
+because no sound lower bound exists — a bound from this stream's LSNs would
+be a cross-stream comparison, and one from the coordinator's checkpoint
+would assume the decision sits above it. Under one stream the bound is the
+fold's redo start and it *is* sound, for the reason the floor gives. Either
+way the answer holds only while the decision is still in the log, so:
 
 > **A coordinator's stream may not recycle a segment holding a decision
 > until every participant of that transaction has made its own terminal
 > record durable.** A pre-durable acknowledgement does not discharge this:
 > either the ack carries the participant's durable point, or retention is
 > floored by something other than the acks.
+
+Under one stream the coordinator's segment is also the participant's, and
+the fold discharges the rule rather than restating it: the redo start is
+the minimum over every core, so no core's checkpoint can retire a segment
+another core still needs. The obligation is written for the per-core case
+and for whatever a later topology brings.
 
 Nothing recycles a WAL segment today (`wal.md` §11), so the rule constrains
 a policy that does not yet exist. It is written down because the policy
@@ -305,9 +328,12 @@ Concretely:
   of this.
 
 Two cross-owner RR transactions can disagree about the order of two commits
-on two cores. That is the price of shared-nothing, and it is the price
+on two cores. That is the price of a per-core ReadView, and it is the price
 `crosscore.md` §5 was already paying: this narrows it from *no ReadView at
-all* to *a ReadView per core* and stops there.
+all* to *a ReadView per core* and stops there. Sharing the log did not
+change it — a shared WAL gives every commit a comparable LSN, but nothing
+mints a snapshot across cores, and AR0-3 declined the cut vector that
+would.
 
 **The remote-step pipeline does not run inside such a transaction**, and
 that is a rule rather than an accident. `HandleSelect`'s two remote-read

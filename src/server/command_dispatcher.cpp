@@ -1613,6 +1613,22 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // batches, so `min == max` is a batch that never varied.
            << " wal_group_batch_max=" << wal_stats.group_batch_max
            << " wal_group_batch_min=" << wal_stats.group_batch_min;
+
+        // **The ring's backpressure, and it is per core even though the
+        // ring is not** (AR0 M0). Under one stream every core appends into
+        // the same ring, so a stall here was caused by the instance's
+        // producers together - but it was *paid* by this core's appender,
+        // on its own reactor thread, and that is the quantity an operator
+        // is reading for. Summing the cores gives the instance's stalls;
+        // the spread across them says whether one core is starving.
+        //
+        // Two counters rather than one, because they are two events (see
+        // `manager.hpp`): `wal_ring_full` is a stall the appender paid a
+        // flush for and got through, `wal_ring_full_refusals` an append
+        // that ran out of attempts and was refused. The first is a load
+        // reading, the second a sizing bug.
+        os << " wal_ring_full=" << wal_stats.ring_full_drains
+           << " wal_ring_full_refusals=" << wal_stats.ring_full_refusals;
     }
 
     // A peer's lease refills and what each cost (lease_refill_stats.hpp):

@@ -13,10 +13,10 @@
 >
 > | | under one stream |
 > |---|---|
-> | **§6's rejection of PL-A** (one global LSN, "a shared atomic on the append path") | **Reversed.** PL-A is what M0 built. The atomic is real and is the cost AR0-2 accepts; `wal/stream.hpp` carries the latch's justification and AL-S8 prices it |
+> | **§6's rejection of PL-A** (one global LSN, "a shared atomic on the append path") | **Reversed.** PL-A is what M0 built. The serialization is a **latch**, not an atomic — the reserve/copy/publish split that would have made it an atomic was tried and abandoned (AL-R1) — and it is the cost AR0-2 accepts; `wal/stream.hpp` carries its justification and AL-S8 prices it |
 > | **§9 rule 4**, the stamp riding the page_lsn | **Narrowed to a claim.** The stamp still says which core owns a page — `device_page_store`'s claim-at-fault reads it — but it no longer says which log the page's records are in, because there is one. Redo does not restamp, and the mount's undo phase does not either (`SetStampSuppressed`) |
 > | **§9 rules 5-6**, a foreign stamp is `Corruption` | **Not in force.** There is no other stream to have crossed from |
-> | **§9 rules 1-3**, the logged handoff over a flushed page | **Still in force**, because ownership is still per core in M0. What changed is analysis: the dirty-table erase is a per-core rule and is skipped, since the one log also holds the giver's records (AL-R6) |
+> | **§9 rules 1-3**, the logged handoff over a flushed page | **Still in force**, because ownership is still per core in M0. What changed is analysis: the dirty-table erase is **skipped**, because what licenses it is rule 1(a)'s *flush*, and a flush covers one core's page store while with one log the erase would speak for every core's records (AL-R6, as amended by AL-7d) |
 > | **§2's invariant chain** (one stream per core, LSNs never compared across streams) | **The premise, not the conclusion.** It is what M0 removed |
 >
 > AR0's own §7 lists this document as "superseded"; that overstates it, and

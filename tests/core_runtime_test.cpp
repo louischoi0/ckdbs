@@ -1211,6 +1211,41 @@ TEST_F(CoreRuntimeTest, UnderOneStreamAPeerWithAnAssertionInTheCatalogStillMount
     EXPECT_GE(peer.value()->recovery().assertions_foreign, 1u);
 }
 
+TEST_F(CoreRuntimeTest, APeersOwnSuperblockCopyLearnsTheVolumesTopology) {
+    // The AL-S9 review's finding. A peer's `superblock_` is a
+    // default-constructed copy and zero is a *legal* `log_topology` - it is
+    // `kPerCoreStreams` - so a peer that is never told reports
+    // `wal_topology=per-core` on a single-stream volume and prints
+    // `wal_anchor_count` beside it. Nothing else on the core was affected,
+    // because every other reader takes `config.log_topology` directly; this
+    // is the one place the copy is the answer, and it is the one an
+    // operator reads.
+    auto shared_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
+    ASSERT_TRUE(shared_device.ok()) << shared_device.status().message();
+    wal::WalManagerConfig shared_config;
+    shared_config.shared_stream = true;
+    auto owner = wal::WalManager::Open(shared_device.value().get(), clock_, /*core_id=*/0,
+                                       shared_config);
+    ASSERT_TRUE(owner.ok()) << owner.status().message();
+    owner.value()->StartWriter();
+
+    CoreRuntime::Config config = ConfigFor(1);
+    config.next_trx_id = core0_->superblock.next_trx_id();
+    config.log_topology = kSingleStream;
+    config.shared_stream = owner.value()->stream();
+    config.shared_writer = owner.value()->writer();
+
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // Asserted through `SHOW META` rather than through the field, because
+    // the report is where the wrong answer reached a client.
+    const std::string meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find("wal_topology=single"), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("wal_anchor_count="), std::string::npos)
+        << "printed only under per-core, and this volume is not: " << meta;
+}
+
 TEST_F(CoreRuntimeTest, APeerWithNoStreamToAttachToRefusesRatherThanOpeningOne) {
     CoreRuntime::Config config = ConfigFor(1);
     config.log_topology = kSingleStream;  // and no shared_stream/shared_writer

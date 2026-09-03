@@ -20,9 +20,18 @@ Normative coding rules for the KDS storage engine. Rules only: design rationale 
 
 ## 3. Threading
 
-- The engine is **thread-per-core, shared-nothing**. Every piece of engine state has exactly one owning core; only the owning thread touches it.
-- Cross-core communication uses explicit message/queue interfaces. Shared mutable state across cores is forbidden.
-- Locks are a last-resort mechanism at partition boundaries. Any lock requires a justification comment in the subsystem header stating what it protects and its acquisition order.
+- The engine is **thread-per-core**, and **core-local state is the default** (AR0-2). Most engine state has exactly one owning core and only that thread touches it; a subsystem that departs from this says so in its own spec, names what is shared and names what serializes it.
+- **Shared-nothing is no longer the rule it was.** "Shared mutable state across cores is forbidden" was the rule until AR0 M0; it is now "shared mutable state across cores is *declared*". A structure that is shared and undeclared is a defect, and so is a lock in a subsystem whose spec does not carry one — the change widened what may be shared, not who may decide it. **The declaration lives in the owning spec, and this list is an index of them rather than the authority**:
+
+  | shared | serialized by | declared in |
+  |---|---|---|
+  | The **WAL** — one stream per instance | the stream latch, `wal/stream.hpp`'s stated order | `docs/spec/wal.md` §3 |
+  | The reactor **wake flag** and the `Waker` | atomics; a missed wake costs latency, never liveness | `docs/spec/sched.md` §7 |
+  | The **data-file device**'s capacity, grown by core 0 and read from every store | core 0 alone writes; readers see a monotone value | `docs/spec/crosscore.md` CC11, `docs/spec/page.md` §6 |
+
+  Adding a row is a spec change first and a code change second. Three rows is not a small number for an engine that called itself shared-nothing a week ago, and the point of writing them down is that the fourth should be argued for rather than noticed later.
+- Cross-core *work* still moves only over the explicit message/queue interfaces (`docs/spec/sched.md` §5). Sharing a structure is never a licence to run another core's task on this thread.
+- Locks stay a last-resort mechanism, and the justification comment is now the mechanism that keeps the declared list honest: any lock requires a comment in the subsystem header stating what it protects and its acquisition order, and the owning spec must say the same thing. Two locks held at once need a stated order between them; the WAL's three — the stream latch, the log device's segment-table lock taken under it, and the writer's wait mutex, taken only with the latch released — are the whole list, and `wal/stream.hpp` and `wal/writer.hpp` state the order.
 - The tuple super-column word is manipulated only via `std::atomic<uint64_t>` operations (CAS for updates); fields within the word must never tear.
 
 ## 4. Deterministic Testability

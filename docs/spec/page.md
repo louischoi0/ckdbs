@@ -9,7 +9,7 @@ Page allocation, the buffer pool, the file layout, and the I/O path. Consistent 
 | S1 | Page layout abstraction | **Common 32-byte page header** at offset 0 for all header-bearing page classes |
 | S2 | Store interface | **`PageRef`** — RAII pinned-page handle; the `PageStore` contract hands out no raw span |
 | S5 | Disk layout | **Single data file**; `offset = page_id × 8192`; extent-based growth |
-| S7 | Multi-core ownership | **Per-core buffer pools** over core-owned pages (shared-nothing preserved) |
+| S7 | Multi-core ownership | **Per-core buffer pools** over core-owned pages. Unchanged by AR0 M0: the log is shared, the frames are not (§6) |
 | S9 | Page checksums | **Adopted** — CRC32C in the common header, computed at flush, verified at load |
 | S11 | Paging mechanism | **Explicit buffer pool. mmap is rejected for data and WAL** (§15) |
 | S12 | Page → relation resolution | **`owner_oid` in the common header** (§2a) — the page is the mapping, no auxiliary structure |
@@ -31,7 +31,7 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 |---|---|---|---|
 | 0 | 1 | `page_type` | frozen append-only enum: `heap`, `btree_internal`, `btree_leaf`, `undo`, `catalog`, `superblock`, `freemap`, … (`0` = invalid/unformatted) |
 | 1 | 1 | `format_version` | per-type layout version; bumps are format events |
-| 2 | 2 | `flags` | the PL-C stream stamp: `core_id + 1` of the WAL stream that last wrote the page, 0 = never stamped (`page-lsn-cross-stream.md` §9 rule 4) |
+| 2 | 2 | `flags` | the PL-C stream stamp: `core_id + 1` of the core that last claimed the page, 0 = never stamped (`page-lsn-cross-stream.md` §9 rule 4). **A claim of ownership, not a statement about which log the page's records are in** — under one WAL stream (`wal.md` §3) redo neither refuses a foreign value nor rewrites one |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
 | 16 | 8 | `relayout_epoch` | bumped when tuples on the page move (`docs/spec/physical-optimizer.md` R4, `heap-and-tuple.md` §3.1a); 0 = never relayouted |
@@ -105,7 +105,8 @@ Owns "which page_ids exist / are free" inside the disk-backed store, behind the 
 
 - One `DevicePageStore` per core (`include/kds/server/core_runtime.hpp`), caching only pages that core owns. Pin counts and frame state are plain non-atomic fields; multi-core adds instances, not synchronization.
 - Cross-core page access does not exist: work moves to the owning core over the message interface (rules.md §3).
-- Ownership: a relation's pages belong to the core `sys.tables.owner_core` names (`docs/spec/crosscore.md` CC7); a core writes only pages inside an extent it was granted or leased; a page changes streams only through the logged handoff of `docs/spec/page-lsn-cross-stream.md` §9.
+- Ownership: a relation's pages belong to the core `sys.tables.owner_core` names (`docs/spec/crosscore.md` CC7); a core writes only pages inside an extent it was granted or leased; a page changes hands only through the logged handoff of `docs/spec/page-lsn-cross-stream.md` §9. **The pools stay per core under one WAL stream**: the log is shared, the frames are not (`wal.md` §3).
+- **The device under them is shared, and that is declared** (`rules.md` §3): one `PageDevice` serves every core's store, and core 0 alone grows it. A reader sees a capacity that only rises, which is what makes an unsynchronized `uint32_t` sound here and would not survive a shrink.
 
 ## 7. Eviction
 

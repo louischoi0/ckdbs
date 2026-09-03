@@ -39,8 +39,9 @@ layer and this engine deliberately does not:
   namespace only decides what a relation's `owner_core` is set to at
   CREATE (NS10). Two relations in one namespace sit on one core under the
   shipped policy and may not under `placement = creating` or `rotate`.
-- It does not scope a WAL stream, a checkpoint, or a snapshot. Streams are
-  per core, and nothing about namespaces changes that.
+- It does not scope the WAL, a checkpoint, or a snapshot. The instance has
+  one log (`docs/spec/wal.md` §3) and checkpoints are per core; nothing about
+  namespaces changes either.
 - It does not create a query boundary. See NS4.
 
 The one-line test for anything else proposed for this layer: **if removing

@@ -279,13 +279,13 @@ atomic CAS loops, no cross-core sharing. v1 assertions are single-relation
 - **`CREATE ASSERTION` on a relation another core owns is built by that
   core.** Core 0 keeps §3.1's checks, the id and the `sys.assertions` row;
   the owner scans under its own view, allocates the chain from its own
-  extent lease, logs `ASSERT_BUILD` and AS6a's base into its own stream, and
-  adopts the directory at the end of its build. No page crosses a stream
+  extent lease, logs `ASSERT_BUILD` and AS6a's base itself, and adopts the
+  directory at the end of its build. No page crosses an owner
   (`docs/spec/crosscore.md` CC7's owner-builds exception).
 - **The enforcing core is the owning core, at every mount too.** Recovery's
   assertion resume runs per core and takes on only the relations that core
   owns; the owner's own checkpoint carries the group snapshots, so the base
-  and the records folded onto it are one stream's.
+  and the records folded onto it are that owner's.
 - **A core that knows of an assertion it cannot enforce refuses the
   relation's writes.** Refusing is recoverable; admitting an unchecked write
   is not. The one such file is a cabin core 0 built for a relation another
