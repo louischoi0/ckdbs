@@ -468,13 +468,23 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
 
 void TransactionManager::PublishCoreBounds() noexcept {
     if (visibility_ == nullptr) return;
-    // The cursor first. `OldestActiveTrxId()` can only name an id this
-    // sequence has already issued, so publishing the cursor before the
-    // oldest live id means a concurrent reader never sees a slot claiming
-    // a live transaction at or above the point this core swears it has not
-    // reached.
-    visibility_->PublishIssueCursor(core_, ids_.peek());
+    // **The unresolved bound first, and the order is the contract, not a
+    // preference.** `Begin` moves the two in opposite directions in one
+    // step: it lowers this core's oldest unresolved id to the id it has
+    // just issued, and raises the cursor past that id. A concurrent
+    // `Reclaim()` on another core that read the *raised* cursor beside the
+    // *old* unresolved bound would compute a floor above a transaction that
+    // is live, and the floor's branch would then answer "committed" for it -
+    // H2 reintroduced through the publication order rather than through the
+    // predicate.
+    //
+    // Storing the bound that moves *down* first closes it. Both stores are
+    // release and both loads are acquire, so a reader that sees the new
+    // cursor sees the new bound with it; and a reader that sees the old
+    // cursor is bounded by the old cursor, which is the id just issued
+    // (`peek()` is exclusive) and so still at or below every live id.
     visibility_->PublishOldestUnresolved(core_, OldestActiveTrxId());
+    visibility_->PublishIssueCursor(core_, ids_.peek());
 }
 
 std::vector<wal::CheckpointActiveTxn> TransactionManager::Snapshot() const {

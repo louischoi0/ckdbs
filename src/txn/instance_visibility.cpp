@@ -59,7 +59,13 @@ void InstanceVisibility::PublishCommit(std::uint64_t trx_id, std::uint64_t commi
     bool reclaim = false;
     {
         LatchGuard guard(&window_latch_);
-        window_[trx_id] = commit_lsn;
+        // `try_emplace`, not `operator[]`: a transaction id is issued once
+        // and never reissued (invariant 12 and `trx_id.hpp`'s "unique and
+        // monotonic, never gapless"), so a second commit under one id is a
+        // defect the map would otherwise absorb by overwriting the first
+        // one's order with the second's. Keeping the first is the
+        // conservative half of the choice; the assignment is simply dropped.
+        window_.try_emplace(trx_id, commit_lsn);
         reclaim = window_.size() >= reclaim_at_;
     }
     if (reclaim) Reclaim();
@@ -91,8 +97,15 @@ std::size_t InstanceVisibility::Reclaim() {
     // id: a live snapshot below that commit must still be told this writer
     // had not committed, and the floor's branch would tell it otherwise.
     std::uint64_t reachable = candidate;
-    for (const auto& [trx_id, commit_lsn] : window_) {
-        if (trx_id < reachable && commit_lsn > horizon) reachable = trx_id;
+    // Skipped outright with no reader anywhere: `commit_lsn > horizon` is
+    // unsatisfiable at `kUnboundedBound`, and that is every pass at AN-S1
+    // (nothing publishes a snapshot bound yet) and every pass in any
+    // instance with no registered reader. Halves the work in the common
+    // case rather than proving the same thing per entry.
+    if (horizon != kUnboundedBound) {
+        for (const auto& [trx_id, commit_lsn] : window_) {
+            if (trx_id < reachable && commit_lsn > horizon) reachable = trx_id;
+        }
     }
 
     std::size_t dropped = 0;
@@ -105,11 +118,19 @@ std::size_t InstanceVisibility::Reclaim() {
         }
     }
 
-    // Monotone. `reachable` can be below the floor when a core begins a
-    // transaction whose id is lower than one already resolved - which is
-    // ordinary under block leases - and the floor must not follow it down.
-    // It is still sound: the floor only ever reached its current value
-    // because every cursor was at or above it, and cursors do not fall.
+    // Monotone, and the CAS is not decoration: `reachable` is at or above
+    // the floor in every state this instance can reach, so the guard exists
+    // for the one state it cannot. A live transaction's id is at or above
+    // its own core's published cursor, which is at or above the floor, so
+    // `oldest_unresolved` never lowers the candidate below it; and an entry
+    // the floor has passed was erased by the pass that passed it, so no
+    // window entry pins `reachable` below the floor either. **The one way
+    // down is a core attaching with a first cursor below the floor** - which
+    // the wiring forbids (a core's sequence opens at the superblock's
+    // `next_trx_id`, at or above every attached core's cursor) and this
+    // class cannot check, because refusing the cursor would leave the floor
+    // above that core's ids anyway. The CAS keeps a monotone floor rather
+    // than repairing an instance that is already wrong.
     std::uint64_t held = floor_.load(std::memory_order_relaxed);
     while (reachable > held && !floor_.compare_exchange_weak(held, reachable,
                                                              std::memory_order_release,

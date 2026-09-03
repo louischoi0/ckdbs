@@ -82,7 +82,14 @@
 // case, AN-S3.
 //
 // `issue_cursor` and `oldest_unresolved` only ever pull the floor down, so
-// a stale read of either is conservative in the ordinary sense.
+// a stale read of *either alone* is conservative in the ordinary sense.
+// **The pair is not**, and this is the one ordering rule a publisher owes:
+// a `Begin` raises the cursor and lowers the unresolved bound in one step,
+// and a floor computed from the new cursor beside the old bound sits above
+// the transaction that was just begun. So the bound that moves **down** is
+// stored first, the bound that moves **up** second, and the release/acquire
+// pair then makes a reader that sees the new cursor see the new bound with
+// it (`TransactionManager::PublishCoreBounds`).
 //
 // The window is guarded by `Latch` (`base/latch.hpp`). **Acquisition order:
 // taken with the WAL stream latch released, never under it** - the same
@@ -137,6 +144,8 @@ public:
     void PublishIssueCursor(std::uint32_t core, std::uint64_t cursor) noexcept;
 
     // This core's oldest running transaction, `kUnboundedBound` with none.
+    // **Published before the cursor** when both move - the Concurrency note
+    // above says why.
     void PublishOldestUnresolved(std::uint32_t core, std::uint64_t trx_id) noexcept;
 
     // This core's oldest live snapshot LSN, `kUnboundedBound` with none.

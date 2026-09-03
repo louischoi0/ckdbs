@@ -274,13 +274,31 @@ public:
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
                        wal::WalManager* wal = nullptr,
                        InstanceVisibility* visibility = nullptr,
-                       std::uint32_t core = 0) noexcept
+                       std::uint32_t core = 0)
         : ids_(ids), undo_(undo), store_(store), wal_(wal), visibility_(visibility),
           core_(core) {
+        // **`noexcept` came off here when the floor did.** `Reclaim()` takes
+        // the window latch, and `std::mutex::lock` is a throwing call - so
+        // the old `noexcept` would have turned a lock failure into
+        // `std::terminate` instead of an exception nobody catches either
+        // way. Nothing in the tree constructs this in a nothrow context;
+        // the keyword was a claim, not a requirement.
         // Before any transaction runs on this core. The floor may not rise
         // past a cursor it has never seen, so a core that has not published
         // one is a core the floor treats as unattached (instance_visibility.hpp).
         PublishCoreBounds();
+        // **And the floor with it.** At mount both of the floor's terms sit
+        // at the post-recovery high-water - `TrxIdSequence` opens its window
+        // at the superblock's `next_trx_id`, and no core will ever issue
+        // below that again - so the floor belongs there and not at zero
+        // (AN-R8, and AN-S1's mount cell). Left at zero, the floor's branch
+        // answers "not committed" for every transaction this volume
+        // committed before the restart, and the window is empty at mount, so
+        // there is nothing else to consult: every pre-restart row would read
+        // as written by a live writer. Reclamation is the mechanism that
+        // computes the floor, so attaching runs one pass over an empty
+        // window rather than growing a second way to raise it.
+        if (visibility_ != nullptr) visibility_->Reclaim();
         // Arms the undo purge (docs/inflight/in-progress/workplan-undo-purge.md): the log's
         // only appender is this manager, so `this` is alive at every call
         // by construction. Structural, like the snapshot lease - a

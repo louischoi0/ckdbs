@@ -507,6 +507,93 @@ rule). **A user-visible semantic change, and so the operator's rather
 than CLA's.** It is separable from every stage below and is not scheduled
 here.
 
+**AN-R12 — The floor and the window must be read together. [gates AN-S2]**
+AN-R3 rules that the floor is read live rather than copied, and argues
+that this "makes branch 3 and reclamation agree by construction". **It
+does not, for the branch order AN-R3 itself states.** `Reclaim()` erases
+entries below `reachable` and *then* raises the floor, both under the
+window latch — but `Floor()` is an atomic read taken outside it. A reader
+that reads `Floor() = F_old` before the pass and acquires the latch after
+it finds `t >= F_old` (branch 3 declines) and no window entry (branch 4
+was erased), and answers **not committed for a transaction committed long
+ago**. A lost row, from the two reads straddling the pass in the
+direction the ruling did not consider.
+
+The fix is small and belongs in `instance_visibility.hpp`, not in the
+predicate: one latched accessor answering both together — a
+`{commit_lsn, floor}` pair read under the window latch — or the rule that
+branch 4's miss re-reads `Floor()` before answering, which is sound
+because a miss caused by the erase proves the latch was taken after the
+CAS. **AN-S2 does not land without one of the two.** This is
+`ratification-an-commit-order.md` AN-Q3's "the one place this design can
+be implemented wrongly and pass every test", one layer below where AN-R9
+went looking for it: AN-R9 found the *publication* window and closed it,
+and this is the *reclamation* window beside it.
+
+**AN-R13 — The pinned floor, and an unbounded window. [operator, and it
+is live at AN-S1]** AN-R8's floor is bounded by the minimum `issue_cursor`
+across cores, and a cursor advances only in `ids_.Next()`, which has one
+caller. **A core that runs no transactions freezes its cursor at its
+block's start**, and every block a busy core carves afterwards is above
+that point, so nothing it commits is ever below the floor and `Reclaim()`
+drops nothing — permanently.
+
+Concretely: eight cores, every relation owned by core 0. Peers 1–7 attach,
+publish a cursor, and never move it. Core 0 burns its first block, carves
+one above peer 1's, and from then on the floor is pinned at peer 1's block
+start and the window grows by one entry per commit for the life of the
+process. `reclaim_at_` keeps the CPU amortised; **nothing bounds the
+memory**, and this ships at AN-S1 because the window is populated in
+production the moment a volume is `kSingleStream` with more than one core.
+
+It is inherent to AN-R8 rather than a coding slip — the floor cannot pass
+an id a core may still issue, and the engine cannot know which core owns
+an arbitrary id's block. Four exits, and they differ in what they cost:
+
+- **(a) An idle core burns its unspent block** and re-leases, raising its
+  cursor to the current high-water. `trx_id.hpp` already rules that
+  burning ids "costs nothing" and that gaplessness is a property nothing
+  needs, so this is the design's own idiom — but a peer's re-lease is a
+  grant from core 0, so it is cross-core mechanism rather than a local
+  change.
+- **(b) Refuse past a window cap** — `OutOfSpace` when the window exceeds
+  a bound the floor cannot relieve. Truthful, never a wrong answer, and
+  the same class as the per-core bound the mark retired.
+- **(c) Accept it at AN-S1 and close it in AN-S2**, on the ground that
+  nothing reads the window yet — which is true of the *answers* and false
+  of the memory.
+- **(d) Do not populate the window until AN-S2.** Keeps AN-S1 free, and
+  costs the stage its only production-shaped exercise of publication.
+
+CLA proposed **(a)**, with **(b)** as the backstop that makes the failure
+an error rather than an eviction. **The operator marked (a) on
+2026-09-03.**
+
+**What the mark buys, and the one behaviour it changes.** The machinery
+exists: `TrxIdSequence::ReserveBlock` (`trx_id.cpp:63-87`) already
+installs a fresh window from a parked grant on a peer or from `Carve()`
+on core 0, and already refuses a grant starting below `next_`, so
+burning is *calling it while the current window still has room*.
+`InstallWindow` then jumps `peek()` to the new block's start and the next
+`PublishCoreBounds()` unpins the floor.
+
+The sequencing is what makes it a stage rather than a line. A peer's
+window is refilled by a grant it must ask for, and `low_water()`
+(`trx_id.hpp:130-146`) deliberately does **not** fire for an idle core
+holding a full window — so an idle core must ask *first* and burn only
+when the grant is in hand, or its next transaction meets the retryable
+`TxnConflict` a spent leased window returns. Burn-on-arrival rather than
+burn-then-wait is therefore the shape, and it inverts the parking rule
+`trx_id.hpp` states for the busy case, which is a change that file's own
+comment has to carry.
+
+**AN-S1b** is that stage: the idle-core burn on core 0 and on a peer, the
+"am I the core pinning the floor" test that triggers it, and the cells.
+Until it lands the growth is live — **but not in the shipped default**:
+`cores = 1` has one cursor, which is that core's own and advances with
+its work, so the floor tracks it and the window drains. The exposure is
+`cores > 1` with a core that runs no transactions.
+
 ## AN-5 — Stages
 
 Every stage: `critics-developer` review, full suite, sync with
@@ -531,7 +618,9 @@ nothing and is not scheduled.
 |---|---|
 | AN-S0 | **landed at `b5abab6`.** This document and the `known-gaps.md` entry, source-read at `004f949`, rewritten twice the same day — on the source read, then on AN-R7's mark — and corrected a third time against the first `critics-developer` pass recorded in AN-7 |
 | AN-S1 | **landed at `b5abab6`, suite green.** `include/kds/txn/instance_visibility.hpp` and `src/txn/instance_visibility.cpp`; publication from `TransactionManager` at three points plus its constructor; `CoreRuntime::Config::visibility` and the `Expeditor`'s `visibility_`, gated on `single_stream()`; ten cells in `tests/instance_visibility_test.cpp`. **3263/3263 pass** in Debug — the additive claim holds, since every existing cell reads the unchanged per-core predicate. **Its `critics-developer` pass was still running when it landed**, on the operator's word, and AN-7 gains its record when it returns; a finding against S1's code is therefore a fix on top of this commit rather than a change to it |
-| AN-S2 | not started; **gated on AN-R10** |
+| AN-S1 (fixes) | **two bugs found by review after `b5abab6` landed and fixed on top of it**, plus four cells over a real `WalManager` covering the publication points. 3267/3267. See AN-7's third pass; AN-R13 is live at this stage and unresolved |
+| AN-S1b | not started. AN-R13's marked exit (a): an idle core burns its unspent block so its cursor stops pinning the floor. Not in the shipped default's path (`cores = 1`), live at `cores > 1` with an idle core |
+| AN-S2 | not started; **gated on AN-R10 and AN-R12** |
 | AN-S3..S5 | not started |
 
 ## AN-7 — Review record
@@ -603,3 +692,49 @@ rejected is nothing; the pass produced no finding CLA disagrees with.
 The two it graded most severe were both real, and the first of them
 (`min_snapshot_lsn`) would have shipped a purge race into the structure
 whose whole purpose is closing one.
+
+### Third pass — `critics-developer` on AN-S1's code, 2026-09-03, 59 tool calls
+
+Two bugs, both fixed in the tree and both load-bearing (reverting either
+fails a cell). Five findings reported and not applied, of which two are
+now rulings.
+
+| finding | what it was | where it landed |
+|---|---|---|
+| **B1 — the publication order reopened H2 through the floor's safe branch.** `PublishCoreBounds` stored the cursor first, and `Begin` moves the two in opposite directions in one step: `ids_.Next()` raises the cursor past the id just issued while `OldestActiveTrxId()` drops to it. A concurrent `Reclaim()` reading the raised cursor beside the stale bound computes a floor **above a live transaction**, and branch 3 answers "committed" for it | the exact hazard AN-R8 exists to prevent, arriving through publication order rather than through the predicate. CLA's comment at the site argued the opposite, harmless direction | fixed: the bound that moves *down* is stored first, and the release/acquire pair then carries it with the cursor. The order is now stated as a contract in `instance_visibility.hpp`'s concurrency note, which is where a publisher will look |
+| **B2 — the floor never left zero at mount.** `floor_{0}`, and only `Reclaim()` raises it, and only `PublishCommit` calls it — at 1024 entries. So a fresh mount has floor 0 and an empty window | AN-R8 says "at mount both terms sit at the post-recovery high-water" and AN-S1's cell list names it; neither was implemented nor tested. Under AN-S2 every pre-restart row would read as written by a live writer until 1024 fresh commits accumulated | fixed: the manager runs one `Reclaim()` pass when it attaches, reusing the mechanism that already computes the floor rather than growing a second way to raise it. `ids_.peek()` is the post-recovery high-water at that point |
+| **C1 — the floor and the window are read on either side of the reclamation pass** | AN-R3's "reading the shared floor makes branch 3 and reclamation agree by construction" | **AN-R12**, gating AN-S2 |
+| **C2 — an idle core pins the floor and the window grows without bound** | nothing in the work order priced it, and it is live at AN-S1 rather than at AN-S2 | **AN-R13**, `[operator]` |
+| C3 — a late attach below the floor is unsound and unenforced; the CAS's own comment named an impossible case instead | CLA's comment at the monotone CAS | comment rewritten to name the real case; the precondition is still a comment, and the cheap enforcement point (refuse when `ids_.peek() < Floor()` at attach) is named there |
+| C4 — a manager with a visibility and no WAL drops commit order silently | the `lsn != kNoLsn` guard CLA wrote as a scope question | recorded: unreachable through `Expeditor`/`CoreRuntime`, which pass the two together, and the failure class argues for refusing the wiring at construction rather than degrading at commit. AN-S2's |
+| C5 — the out-of-range slot guard returns silently, and a core that publishes nothing is a core the floor steps past | CLA's three `if (core >= slots_.size()) return;` guards | recorded; dead today because both the config path and `SuperBlock::CreateFresh` range-check the core count |
+
+Applied beyond the review: **the constructor's `noexcept` came off with
+B2's fix** — `Reclaim()` takes the window latch and `std::mutex::lock`
+throws, so the keyword would have turned a lock failure into
+`std::terminate`; nothing constructs this in a nothrow context. And two
+of the review's four cuts: `Reclaim`'s first pass is skipped outright
+when no reader is registered (unsatisfiable at `kUnboundedBound`, which
+is every pass at AN-S1), and `PublishCommit` uses `try_emplace` so a
+reissued id is dropped rather than silently overwriting an earlier
+commit's order.
+
+**Not applied: the review's S1**, folding `PublishIssueCursor` and
+`PublishOldestUnresolved` into one paired call. It is right that the
+order is a contract living in a different file from the class that
+documents it, and right that a B1 regression would pass the suite. But
+the cells the pass itself added model the interleaving by publishing the
+two separately, and collapsing the public surface would take that
+instrument away in the same change that first needed it. **Deferred to
+AN-S2**, where the same header is being rewritten anyway.
+
+**On the tests: the two cells the pass was pointed at were the two
+weakest**, and CLA wrote both. `FloorStopsAtALowerCoresUnspentRange`'s
+last four lines could not fail — no reclamation ran after the core went
+live, so `EXPECT_LE(Floor(), 5000)` held for any floor including zero,
+and the `CommitLsnOf` miss was a miss because nothing had ever published
+that id. `FloorNeverFallsWhenALowerIdGoesLive` was tautological: it
+published a bound *above* the floor, so the candidate never dropped and
+the monotone CAS was never exercised. Both are rewritten, and four cells
+over a real `WalManager` now cover the publication points — which had
+**zero** coverage, and which is where both bugs were.
