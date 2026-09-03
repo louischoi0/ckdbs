@@ -1244,9 +1244,153 @@ void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
     }
 }
 
+// **The reactor-borrow guard** (`expeditor.hpp`'s `ServeRuntime`). Three
+// members hold a pointer into the serving reactor - the dispatcher's
+// scheduler view, its statement-shipping client, its index-build client -
+// and the reactor outlives none of them. A guard rather than a line at the
+// bottom of `Start`: there are twenty early returns above it, and a path
+// that missed one would leave the dispatcher pointing at a destroyed
+// reactor, so `SHOW META` through the public `dispatcher()` accessor would
+// read freed memory.
+//
+// It was a local `struct` inside `Serve` until the start/run split
+// (AM-S0(a)); it is out here now because `ServeRuntime` holds one, and it
+// keeps its position *after* the scheduler in that struct for the same
+// reason it had it here - reverse-order destruction clears the view before
+// the reactor it names goes.
+namespace {
+
+struct ClearReactorBorrows {
+    // **A constructor, and the copy deleted beside it.** As an aggregate,
+    // `emplace(ClearReactorBorrows{...})` built a *temporary*, copied it
+    // into the optional and then destroyed the temporary at the semicolon -
+    // running this destructor, which withdrew the `set_scheduler_view` the
+    // line above had just installed. `SHOW META`'s group-accounting block
+    // was then empty for the life of every instance. Deleting the copy is
+    // what makes that spelling stop compiling rather than stop working.
+    ClearReactorBorrows(CommandDispatcher* d,
+                        std::optional<ShippedStatementExecutor>* e) noexcept
+        : dispatcher(d), executor(e) {}
+    ClearReactorBorrows(const ClearReactorBorrows&) = delete;
+    ClearReactorBorrows& operator=(const ClearReactorBorrows&) = delete;
+
+    CommandDispatcher* dispatcher;
+    std::optional<ShippedStatementExecutor>* executor;
+    ~ClearReactorBorrows() {
+        dispatcher->set_scheduler_view(nullptr);
+        dispatcher->SetStatementShip(nullptr);
+        dispatcher->SetShippedStatements(nullptr);
+        dispatcher->SetTxn2pc(nullptr);
+        dispatcher->SetIndexBuilds(nullptr);
+        dispatcher->SetAssertionBuilds(nullptr);
+        // R6-5's borrow runs the other way - the executor asks through the
+        // 2PC server, and that server is a *member*, so it outlives the
+        // reactor while holding it by reference. Withdrawn here so the two
+        // directions are undone in one place and nothing asks through a
+        // destroyed reactor.
+        if (executor->has_value()) (*executor)->SetTxn2pcServer(nullptr);
+    }
+};
+
+}  // namespace
+
+// The stack `Serve()` used to own, in the order it declared it. **Every
+// member is an `optional` because each is built by a step that can fail**,
+// and the field order is the destruction order: reverse, so the peer
+// threads go first (already joined), then the borrow guard, then the
+// reactor, then the listeners, then the credential store and TLS context,
+// then the io backend. That is exactly what the locals did.
+struct Expeditor::ServeRuntime {
+    std::optional<sched::EpollIoBackend> io_backend;
+#if KDS_WITH_TLS
+    std::optional<TlsContext> tls_context;
+    std::optional<FileCredentialStore> credentials;
+#endif
+    std::optional<TcpServer> listener;
+    std::optional<TcpServer> text_listener;
+    std::optional<KwpLoadServer> kwp_listener;
+    std::optional<sched::Scheduler> scheduler;
+    // After `scheduler`, so reverse order clears the borrows first.
+    std::optional<ClearReactorBorrows> clear_reactor_borrows;
+    std::vector<std::thread> workers;
+
+    // **The listeners are declared *before* `scheduler`, so reverse-order
+    // destruction runs `~TcpServer` - which calls `Detach()` - after the
+    // reactor it is registered with is gone.** `RunUntilStopped`'s tail
+    // detaches them by hand for exactly that reason, but the tail is not
+    // the only way this struct dies: a failed `Start()` unwinds it through
+    // `DropOnFailure`, and an `Expeditor` started and dropped without ever
+    // being run unwinds it in `~Expeditor`. Both of those left an attached
+    // listener to cancel a timer and unregister an fd on a destroyed
+    // `Scheduler`. Idempotent, so the tail's explicit detach still stands.
+    ~ServeRuntime() {
+        if (listener.has_value()) listener->Detach();
+        if (text_listener.has_value()) text_listener->Detach();
+        if (kwp_listener.has_value()) kwp_listener->Detach();
+    }
+};
+
+// Out of line: `ServeRuntime` is defined here and nowhere else.
+Expeditor::~Expeditor() {
+    // **An instance that started and was never run still has peer threads
+    // turning.** `~ServeRuntime` below would destroy a `std::vector<std::thread>`
+    // whose threads are joinable, which is `std::terminate` - the same hazard
+    // `Start()`'s failure paths hit and `StopStartedCores` was written for.
+    // `Start()`-then-look is the shape the AM-S0(a) fixture uses, so this is
+    // the ordinary path and not an exotic one. Null after `RunUntilStopped`
+    // and after a failed `Start`, both of which have already unwound it.
+    if (running_ != nullptr) StopStartedCores();
+}
+
 Status Expeditor::Serve() {
-    auto io_backend = sched::EpollIoBackend::Create();
-    if (!io_backend.ok()) return io_backend.status();
+    if (Status s = Start(); !s.ok()) return s;
+    return RunUntilStopped();
+}
+
+Status Expeditor::Start() {
+    if (running_ != nullptr) {
+        return Status::InvalidArgument(
+            "Expeditor::Start: this instance is already started; a second call would bind a "
+            "bound port and spawn a second set of core threads");
+    }
+    // **Torn down on every failure below, and there are twenty of them.**
+    // Each `return` used to unwind a stack; now it has to unwind a member,
+    // and the guard is what makes that true of paths nobody has taken. It
+    // is dismissed on the one path that succeeds, at the end of this
+    // function, where the caller becomes responsible for the teardown.
+    //
+    // **And it stops the peer threads first, which the stack never did.**
+    // Five of those returns are *after* the workers are spawned - the stop
+    // signal's handler and the three listener attaches - and unwinding a
+    // `std::vector<std::thread>` whose threads are still joinable calls
+    // `std::terminate`. That was reachable before this split and is not a
+    // defect the split introduced; it is one the split had to face, because
+    // `Start()` promises a caller that a failed start leaves nothing
+    // running. `StopStartedCores` is that promise.
+    running_ = std::make_unique<ServeRuntime>();
+    struct DropOnFailure {
+        Expeditor* owner;
+        ~DropOnFailure() {
+            if (owner == nullptr) return;
+            owner->StopStartedCores();
+            owner->running_.reset();
+        }
+    } drop_on_failure{this};
+    ServeRuntime& live = *running_;
+
+    // Named exactly as the locals they replace, so everything below reads
+    // as it did before the split (AM-S0(a)).
+    auto& io_backend = live.io_backend;
+    auto& listener = live.listener;
+    auto& text_listener = live.text_listener;
+    auto& kwp_listener = live.kwp_listener;
+    auto& workers = live.workers;
+
+    {
+        auto opened = sched::EpollIoBackend::Create();
+        if (!opened.ok()) return opened.status();
+        io_backend.emplace(std::move(opened.value()));
+    }
 
     // The TLS context, built before the port binds so a bad certificate
     // refuses to serve rather than serving briefly and failing per
@@ -1255,7 +1399,7 @@ Status Expeditor::Serve() {
     // own, tls_channel.hpp), but keeping the context up for the server's
     // whole life makes the ownership story one sentence.
 #if KDS_WITH_TLS
-    std::optional<TlsContext> tls_context;
+    auto& tls_context = live.tls_context;
 #endif
     if (config_.tls) {
 #if KDS_WITH_TLS
@@ -1280,7 +1424,7 @@ Status Expeditor::Serve() {
     // before the port binds so a bad users file refuses to serve, alive
     // until every connection's gate is gone.
 #if KDS_WITH_TLS
-    std::optional<FileCredentialStore> credentials;
+    auto& credentials = live.credentials;
 #endif
     if (config_.auth_scram) {
 #if KDS_WITH_TLS
@@ -1308,8 +1452,11 @@ Status Expeditor::Serve() {
     // With peer listeners on, every core's socket - this one included -
     // must carry SO_REUSEPORT (tcp_server.hpp on why the first binder
     // matters).
-    auto listener = TcpServer::Listen(config_.port, config_.peer_listeners);
-    if (!listener.ok()) return listener.status();
+    {
+        auto opened = TcpServer::Listen(config_.port, config_.peer_listeners);
+        if (!opened.ok()) return opened.status();
+        listener.emplace(std::move(opened.value()));
+    }
     // **The cut-over** (KW-D6, protocol-wp.md P13): the default port speaks
     // KWP/1. The newline protocol is not deleted - it is `debug_text_port`
     // below, off unless asked for.
@@ -1354,7 +1501,6 @@ Status Expeditor::Serve() {
     // The newline text protocol's loopback debug surface (§12). A second
     // `TcpServer` over the same dispatcher, differing in one call - which
     // is the whole point of `set_protocol` rather than a second class.
-    std::optional<TcpServer> text_listener;
     if (config_.debug_text_port != 0) {
         auto text = TcpServer::Listen(config_.debug_text_port);
         if (!text.ok()) return text.status();
@@ -1372,14 +1518,14 @@ Status Expeditor::Serve() {
     // KWP v0's load endpoint (docs/inflight/in-progress/workplan-kwp-load.md KW1): a second
     // listener, existing only when asked for - kwp_port 0 means no socket
     // is opened at all, so the default instance's surface is unchanged.
-    std::optional<KwpLoadServer> kwp_listener;
     if (config_.kwp_port != 0) {
         auto kwp = KwpLoadServer::Listen(config_.kwp_port);
         if (!kwp.ok()) return kwp.status();
         kwp_listener.emplace(std::move(kwp.value()));
     }
 
-    sched::Scheduler scheduler(clock_, io_backend.value());
+    live.scheduler.emplace(clock_, io_backend.value());
+    sched::Scheduler& scheduler = *live.scheduler;
     scheduler.SetLogger(&*logger_);
     // `SHOW META`'s group-accounting block on core 0 (sched.md §4). The
     // reactor is a local of this function and `dispatcher_` is a member that
@@ -1402,24 +1548,7 @@ Status Expeditor::Serve() {
     // It was installed and never withdrawn before this guard existed - the
     // hazard is the one the `set_scheduler_view` argument above states, and
     // withdrawing all three together is what makes this struct's name true.
-    struct ClearReactorBorrows {
-        CommandDispatcher* dispatcher;
-        std::optional<ShippedStatementExecutor>* executor;
-        ~ClearReactorBorrows() {
-            dispatcher->set_scheduler_view(nullptr);
-            dispatcher->SetStatementShip(nullptr);
-            dispatcher->SetShippedStatements(nullptr);
-            dispatcher->SetTxn2pc(nullptr);
-            dispatcher->SetIndexBuilds(nullptr);
-            dispatcher->SetAssertionBuilds(nullptr);
-            // R6-5's borrow runs the other way - the executor asks through
-            // the 2PC server, and that server is a *member*, so it outlives
-            // this function's `scheduler` while holding it by reference.
-            // Withdrawn here so the two directions are undone in one place
-            // and nothing asks through a destroyed reactor.
-            if (executor->has_value()) (*executor)->SetTxn2pcServer(nullptr);
-        }
-    } clear_reactor_borrows{&*dispatcher_, &shipped_executor_};
+    live.clear_reactor_borrows.emplace(&*dispatcher_, &shipped_executor_);
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,
@@ -1434,7 +1563,6 @@ Status Expeditor::Serve() {
     // spawned, and the reactor below is the same single one that has always
     // served. Guideline 2 asks for zero messages and zero allocations on the
     // single-core path, and the cheapest way to mean it is to build nothing.
-    std::vector<std::thread> workers;
     if (config_.cores > 1) {
         auto transport = sched::RealRingTransport::Create(
             config_.cores, sched::kCoreRingSlots, sched::kCoreRingPayloadBytes);
@@ -2130,6 +2258,50 @@ Status Expeditor::Serve() {
     }
 
     logger_->Info("expeditor", "listening on 127.0.0.1:" + std::to_string(config_.port));
+    // The instance is assembled and running: peers on their threads, ports
+    // bound, and this thread has not yet entered core 0's reactor. That is
+    // the seam `RunUntilStopped()` picks up, and the moment AM-S0(a)'s cell
+    // looks at.
+    drop_on_failure.owner = nullptr;
+    return Status::OK();
+}
+
+void Expeditor::StopStartedCores() {
+    // An empty `workers` is `cores = 1` and every failure before the spawn
+    // loop; a non-empty one is strictly after `live.scheduler.emplace`, so
+    // the dereference below is safe wherever it is reached. The two steps
+    // are the shutdown tail's and in its order: a core is stopped by a ring
+    // message rather than by a flag another thread writes
+    // (`ring_message.hpp` says why), so the broadcast has to reach a reactor
+    // that is still turning.
+    if (running_ != nullptr && !running_->workers.empty()) {
+        BroadcastShutdown(*running_->scheduler);
+        for (auto& worker : running_->workers) {
+            if (worker.joinable()) worker.join();
+        }
+        running_->workers.clear();
+    }
+    // **No final sync and no shutdown checkpoint here**, unlike the tail:
+    // an instance that never entered core 0's reactor ran no client
+    // statement, and the only thing a peer wrote is the completion
+    // checkpoint its own mount published. `~CoreRuntime` is the disposal
+    // that belongs to a core which served nothing.
+    cores_.clear();
+}
+
+Status Expeditor::RunUntilStopped() {
+    if (running_ == nullptr) {
+        return Status::InvalidArgument(
+            "Expeditor::RunUntilStopped: Start() has not run, so there is no reactor to run "
+            "and nothing for the shutdown path to stop");
+    }
+    ServeRuntime& live = *running_;
+    sched::Scheduler& scheduler = *live.scheduler;
+    auto& listener = live.listener;
+    auto& text_listener = live.text_listener;
+    auto& kwp_listener = live.kwp_listener;
+    auto& workers = live.workers;
+
     scheduler.Run();
     // R6-2, and the same moment `~CoreRuntime` uses on a peer: the reactor
     // has stopped, so nothing will decide a cross-owner transaction this
@@ -2203,6 +2375,13 @@ Status Expeditor::Serve() {
     // port and the v0 load endpoint are both declared *before* `scheduler`,
     // so reverse-order destruction runs their destructors after it, and
     // only an explicit detach here gets the ordering right.
+    // **And it stays here even though `~ServeRuntime` now detaches too.**
+    // The two are not the same act: this one runs *before* core 0's final
+    // sync and checkpoint below, and detaching a listener closes live
+    // sessions, which can roll back and append CLRs - the reason the block
+    // above gives for `CloseListener()` preceding the peers' syncs. The
+    // destructor's copy runs after the checkpoint and is the backstop for
+    // the paths that never reach here.
     listener.value().Detach();
     if (text_listener.has_value()) text_listener->Detach();
     if (kwp_listener.has_value()) kwp_listener->Detach();
@@ -2251,6 +2430,11 @@ Status Expeditor::Serve() {
                        "previous anchor: " +
                            ckpt.message());
     }
+    // **Where the locals used to go out of scope**, and the destruction
+    // order inside `ServeRuntime` is the order they had. Everything above
+    // has finished with them: the workers are joined, the listeners
+    // detached, the last checkpoint written.
+    running_.reset();
     return s;
 }
 

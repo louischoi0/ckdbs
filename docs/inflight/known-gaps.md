@@ -12,39 +12,56 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
-- **No test and no `sim/` cell constructs an `Expeditor`.** Verified at
-  `f6ed10c`: the only construction in the tree is production's
-  `src/server/main.cpp:344`, and the only Expeditor surface under test is
-  `Expeditor::Config`'s parse-and-validate overlay
-  (`tests/config_file_test.cpp`, ~30 cells over the config keys and the
-  core-count and frame-budget refusals). Every other reference in `tests/`
-  and `sim/` is a *comment* saying "as `Expeditor::Open` does it", with the
-  test reimplementing the wiring it describes. Nothing reaches `Open` or
-  `Serve`.
+- **The assertion scan's floor is a fixed defect with no regression test
+  under it.** Verified at AM-S0(a) by reverting the fix: every cell in
+  `tests/expeditor_test.cpp` stays green. The defect
+  (`instructions/v3.0.0/workorder-al-m0-single-wal.md` AL-7c) is the scan
+  starting at the anchor fold's `checkpoint_lsn`, which can sit *past* a
+  core's own `ASSERT_SNAPSHOT` — the fold carries the record of whichever
+  core had the lowest `redo_start_lsn`, and that core's checkpoint can be
+  later than everyone else's. A peer then comes up counting what it owns
+  unenforceable, and refuses that relation's writes for the life of the
+  mount (`docs/spec/assertion.md` §6.1).
 
-  So the multi-core **assembly** — who opens the log, who attaches, what a
-  peer is handed, what runs before the listener binds — is covered only by
-  hand-built approximations that can agree with each other while all
-  disagreeing with the real thing.
+  **Why no cell reaches it, stated precisely because the obvious version of
+  the argument cites the wrong call.** It is *not* the shutdown tail's
+  `core->Sync()` that empties a dirty table — that is `wal_->SyncAll()`, the
+  log alone. What does it is each core's `ShutdownCheckpoint`, whose first
+  act is its own `store_->Sync()`; so its `RedoStartFrom` yields exactly its
+  `CHECKPOINT_BEGIN` LSN, which is also its `checkpoint_lsn`, and the
+  `ASSERT_SNAPSHOT` records follow inside the same checkpoint. The fold is a
+  true min over `redo_start_lsn` and the tail walks the cores ascending, so
+  the winner is core 1's — the earliest BEGIN of the run, at or before every
+  core's snapshot, its own included. The property therefore rests on
+  **every** shutdown checkpoint publishing, and on that `store_->Sync()`
+  staying where it is: remove it on the grounds that "the tail already
+  syncs", and this goes silently.
 
-  **What this gap is not.** It did not cause M0's two cutover defects, and
-  saying so would point at the wrong fix. Both sat in `CoreRuntime::Open`,
-  which `tests/core_runtime_test.cpp` does exercise directly at
-  `cores = 2`; both were pinned by cells in that file and neither needed an
-  `Expeditor` to catch. AL-7c's own record says why the null deref escaped
-  — *"no test opened a single-stream peer that had one"* — a missing
-  fixture state, not a missing layer. The honest statement is that this is
-  **the layer above the one both defects were found in, and it is still
-  untested.**
+  **How the state is reached**, which is what a harness for it would need:
+  the fold's winner has to be a **cadence** checkpoint record — the cadence
+  path does not sync the store first, so its `redo_start_lsn` is an old
+  recLSN while its `checkpoint_lsn` is recent — with some other core's last
+  `ASSERT_SNAPSHOT` older than that `checkpoint_lsn`. That needs a core
+  whose shutdown checkpoint never published: a crash, or a
+  `ShutdownCheckpoint` that failed and was logged past. At `cores = 2` it is
+  masked besides, because core 0 is the only core that could win the min
+  with a stale record and it syncs its store before its own checkpoint.
 
-  **Its sibling entry closed at AM-S0(b)** — the fixture that bootstrapped a
-  single-stream volume and modelled a peer under per-core streams — and this
-  is the half that stays open: the layer *above* the one that fixture
-  covers. What that closure found is in
-  `instructions/v3.0.0/workorder-am-m1-shared-pool.md`'s AM-S0(b) row.
+  **So the cheap harness is not an instance-level one.** It is a unit cell
+  over `SuperBlockCheckpointAnchor::Publish` and the floor choice in
+  `CoreRuntime::Open`: publish two synthetic anchor records —
+  `{core 1, redo=1000, ckpt=1000}` and `{core 2, redo=100, ckpt=5000}` —
+  assert the fold carries `{redo=100, ckpt=5000}`, and assert the floor
+  handed to `ResumeAssertionsAfterRecovery` is `100` and not `5000`. That
+  pins the field the fold does not bound, in a few dozen lines with no
+  instance, no threads and no crash. Owner: `docs/spec/wal.md` §16.
 
-  Owner: no spec claims this ground. `docs/spec/sched.md` §8 and
-  `docs/spec/wal.md` §16 each test their own half.
+  The entry this replaces — *no test and no `sim/` cell constructs an
+  `Expeditor`* — closed at AM-S0(a): `Serve()` split into `Start()` +
+  `RunUntilStopped()` (`expeditor.hpp`) and `tests/expeditor_test.cpp` runs
+  a real instance at `cores = 2` over real loopback sockets, asserting the
+  assembly between the halves. Two of AL-7c's three defects have a
+  reproduction there; this is the one that does not.
 
 - **`wal_ring_full_refusals` is proved zero where it must be and unproved
   where it fires.** Verified at `f6ed10c`. Reaching it needs an append to
