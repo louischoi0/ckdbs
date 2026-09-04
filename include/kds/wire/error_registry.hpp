@@ -130,6 +130,17 @@ enum class ResourceDetail : std::uint16_t {
     // anything. Distinguished from `kUnknownPortal` because the client's
     // fix is different - it did hold this portal, and it was too slow.
     kPortalIdleTimeout = 3,
+    // A transaction reached `max_locks_per_txn` (AO-R10, AR2-R4's cap;
+    // `txn/lock_table.hpp`). **The one refusal the borrow model adds and
+    // keeps**, because a cap cannot be waited out the way every other
+    // refusal M2 removes can be: the model never escalates a transaction's
+    // fine borrows into a coarse one, so the alternative to refusing is
+    // truncating, which is a silently weaker guarantee.
+    //
+    // Its own detail because the client's fix differs from every other
+    // `ResourceExhausted`: not a smaller statement or a slower client, but
+    // a shorter transaction.
+    kLockCap = 4,
 };
 
 // ---- The mapping ---------------------------------------------------------

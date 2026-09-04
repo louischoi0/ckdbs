@@ -38,6 +38,7 @@ add_library(kds
     src/txn/visibility.cpp
     src/txn/trx_id.cpp
     src/txn/instance_visibility.cpp
+    src/txn/lock_table.cpp
     src/txn/manager.cpp
     src/storage/in_memory_page_store.cpp
     src/storage/cabin_bound_page.cpp

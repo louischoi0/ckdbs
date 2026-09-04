@@ -61,6 +61,34 @@ TEST(KwpErrorRegistryTest, TheCategoryNumberingIsFrozen) {
     }
 }
 
+TEST(KwpErrorRegistryTest, TheDetailNumberingIsFrozenToo) {
+    // §11: "Detail codes are append-only - never renumber." The categories
+    // above have carried that guard since P16; the details had none, and
+    // AO-S1 appending `kLockCap` is the moment that gap costs something -
+    // a renumber here changes what a deployed client's retry logic reads
+    // *within* a category it already understands.
+    //
+    // Written as literals for the golden list's reason: an append must edit
+    // this list, and editing it is where someone decides the number is new
+    // rather than reused.
+    EXPECT_EQ(static_cast<std::uint16_t>(ProtocolDetail::kMalformedFrame), 1);
+    EXPECT_EQ(static_cast<std::uint16_t>(ProtocolDetail::kUnknownFrameType), 2);
+    EXPECT_EQ(static_cast<std::uint16_t>(ProtocolDetail::kBadMagic), 3);
+    EXPECT_EQ(static_cast<std::uint16_t>(ProtocolDetail::kUnsupportedVersion), 4);
+
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kStatementLimit), 1);
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kPortalLimit), 2);
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kPortalIdleTimeout), 3);
+    // Appended by AO-S1 (`txn/lock_table.hpp`): a transaction that reached
+    // `max_locks_per_txn`. The one refusal the borrow model adds.
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kLockCap), 4);
+
+    // `kNoDetail` is not a detail and must never collide with one, or a
+    // category carrying no detail would read as carrying the first.
+    EXPECT_NE(kNoDetail, 1);
+    EXPECT_NE(kNoDetail, 4);
+}
+
 TEST(KwpErrorRegistryTest, EveryStatusCodeMapsToACategory) {
     // Written out rather than iterated, for the golden list's reason: a
     // code appended to status.hpp must fail here until someone decides

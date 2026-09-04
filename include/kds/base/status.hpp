@@ -56,11 +56,14 @@ enum class StatusCode {
     // execution; zero rows is NULL and not an error. Picking a first row
     // instead would make the answer depend on physical order.
     kCardinalityViolation,
-    // A statement spent its per-statement work budget (exec/budget.hpp).
+    // A caller spent a bound the engine sets on it. Two today, and the
+    // wire detail says which (protocol.md section 11): a statement's
+    // per-statement work budget (exec/budget.hpp), and a transaction's
+    // borrow cap (txn/lock_table.hpp, AO-R10 - max_locks_per_txn).
     // Distinct from kOutOfSpace, which is about storage: nothing is full
-    // here, the statement was simply going to read more than it is allowed
-    // to. Not retryable - re-running it does the same work and stops at
-    // the same place; the fix is a different statement.
+    // here, the caller was simply going to use more than it is allowed to.
+    // Not retryable - re-running does the same work and stops at the same
+    // place; the fix is a different statement, or a shorter transaction.
     //
     // It exists because nothing suspends mid-statement on a cooperative
     // core, so an unbounded statement holds that core against every other
