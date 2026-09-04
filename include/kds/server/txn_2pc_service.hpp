@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "kds/txn/lock_table.hpp"
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/sched/clock.hpp"
@@ -370,7 +371,7 @@ inline constexpr sched::MonoTimeNs kTxnPhaseDeadlineNs = 10ull * 1'000'000'000ul
 // participant that has heard no decide for this long asks its coordinator
 // (`Txn2pcServer::Ask`), and asks again every ceiling until it is answered.
 // A writer on that core that meets a row the in-doubt transaction holds
-// parks for at most this long (`CommandDispatcher`'s `InDoubtBlock`) and is
+// parks for at most this long (`CommandDispatcher`'s `WriteBlock`) and is
 // then refused - **retryably and by name, and not `UnknownOutcome`**: its
 // own statement did nothing and may be retried, which is the opposite of
 // what that code tells a client. The operator ratified "block, with a
@@ -414,6 +415,16 @@ static_assert(kTxnInDoubtCeilingNs < kTxnPhaseDeadlineNs,
               "its coordinator may still legitimately be deciding, not after it - and a "
               "shipped writer must be refused before its own arrival core presumes it lost, "
               "which is the same number (kShippedStatementDeadlineNs, statement_ship_service.hpp)");
+
+// **The fault net must not fire on a holder doing nothing wrong** (AO-R8,
+// finding J). `txn::kLockWaitFaultNetNs` is written out in `txn/lock_table.hpp`
+// because `txn/` may not depend on `server/`; the relation it has to keep is
+// checked here, where both numbers are visible. M3 drops the net to D12's 1 s
+// as it retires 2PC, and this assert is what turns that into a compile error
+// if the two moves are taken in the wrong order.
+static_assert(txn::kLockWaitFaultNetNs > static_cast<std::uint64_t>(kTxnPhaseDeadlineNs),
+              "the lock-wait fault net would fire on a holder still inside its coordinator's "
+              "phase deadline, turning a slow-but-honest 2PC decision into a reported fault");
 
 // How long the coordinator keeps a decision a participant may still ask
 // about. **Not a correctness bound** - a participant that asks after this

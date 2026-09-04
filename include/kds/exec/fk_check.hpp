@@ -84,10 +84,18 @@ enum class FkVerdict : std::uint8_t {
 // walk stopping at the id - unreachable through the DDL surface, and written
 // out anyway because a check that cannot run is worse than a check that runs
 // slowly, and because "can't happen" is not a thing to encode as an error.
+// `busy_trx`, when given, is set to the transaction holding the parent row
+// on a `kBusy` verdict and to 0 otherwise. **AO-S3 needs it because a busy
+// answer becomes a wait**, and a wait has to name what it is waiting for:
+// the dispatcher parks on `IsInFlight(busy_trx)` exactly as a write
+// conflict does. Optional so the paths that cannot wait - `Dispatch()`,
+// and a probe answering for a foreign core - are unchanged and keep
+// F3's retryable refusal.
 StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
                                        const catalog::TableAccess& parent,
                                        std::uint64_t parent_pk,
-                                       const txn::ReadView& check_view, Budget* budget);
+                                       const txn::ReadView& check_view, Budget* budget,
+                                       std::uint64_t* busy_trx = nullptr);
 
 // ---- The hoisted forward check's held verdicts (AH-T1) -------------------
 //

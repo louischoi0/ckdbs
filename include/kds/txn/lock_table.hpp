@@ -281,6 +281,25 @@ inline constexpr std::size_t kMaxLocksPerTxnDefault = 65536;
 // AO-R2's partition count, per core. `[constant]`, re-measured in AO-S7.
 inline constexpr std::size_t kLockPartitionsPerCore = 64;
 
+// **The fault net, and it is never the normal end of a wait** (AO-R8,
+// AR2-R10 as amended by AR2-A). A wait ends when the holder decides. This
+// bound exists only for a fault - a detector that missed a cycle, or a
+// holder that is stuck - and when it fires it aborts the *waiter* (R1
+// never touches the holder) and is logged as the fault it is.
+//
+// **Its value answers AO-3's finding J.** While 2PC is still in the tree
+// an honest holder can sit inside a coordinator's phase deadline
+// (`kTxnPhaseDeadlineNs`, 10 s, `server/txn_2pc_service.hpp`), so a net
+// below that would fire on a holder doing nothing wrong. 11 s until M3
+// retires 2PC, then D12's 1 s. Written out rather than derived from that
+// header because `txn/` must not depend on `server/`; the derivation is
+// this comment, and M3 moves both.
+//
+// Not a config key in M2: `in_doubt_ceiling_ms` already names a wait
+// ceiling and has two 2PC users, so a second key would be a second name
+// for one quantity (`CLAUDE.md`'s rule). M3 re-scopes and renames it.
+inline constexpr std::uint64_t kLockWaitFaultNetNs = 11ull * 1000 * 1000 * 1000;
+
 // What a parked waiter polls. The table owns it and a decide flips it;
 // the waiter holds a `shared_ptr` so the slot outlives the entry it was
 // queued on - entries live in a `vector` that reallocates, so a raw

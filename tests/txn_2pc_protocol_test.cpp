@@ -1552,6 +1552,14 @@ protected:
 
     // A local client's statement on the served path - the only entry point
     // that may park, which is what the block needs.
+    //
+    // **It fails rather than returning a half-outcome.** Before AO-S3 only
+    // an in-doubt row made a statement park, so a caller could assume this
+    // returned a finished one; now any undecided holder does, and a caller
+    // asserting on `response` would read the pre-wait reply
+    // `DispatchAndStage` left there and pass whether or not the statement
+    // ever completed. Every cell that means to observe a *wait* asserts on
+    // its own `done` flag instead of calling this.
     DispatchOutcome RunAsync(const std::string& sql, Session& session, int turns = 64) {
         auto out = std::make_shared<DispatchOutcome>();
         auto done = std::make_shared<bool>(false);
@@ -1563,6 +1571,8 @@ protected:
             (void)wal_->DrainOnce();
             scheduler_->RunOnce();
         }
+        EXPECT_TRUE(*done) << "the statement was still parked after " << turns
+                           << " turns, so what follows would read a stale reply: " << sql;
         return *out;
     }
 };
@@ -1599,7 +1609,7 @@ TEST_F(Txn2pcBlockedWriterTest, AWriterOfAnInDoubtRowWaitsAndThenRunsWhenTheDeci
     EXPECT_NE(Rows().find(",3"), std::string::npos) << Rows();
 }
 
-TEST_F(Txn2pcBlockedWriterTest, AtTheCeilingTheWriterIsRefusedByNameRetryablyAndNotUnknown) {
+TEST_F(Txn2pcBlockedWriterTest, AtTheFaultNetTheWriterIsAbortedAndTheRefusalNamesTheNet) {
     ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
     ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
     ASSERT_TRUE(Prepare().status.ok());
@@ -1614,39 +1624,79 @@ TEST_F(Txn2pcBlockedWriterTest, AtTheCeilingTheWriterIsRefusedByNameRetryablyAnd
     for (int i = 0; i < 16 && !*done; ++i) scheduler_->RunOnce();
     ASSERT_FALSE(*done);
 
+    // **AO-S3 moved this bound from a ceiling to a fault net** (AO-R8).
+    // 200 ms used to be an ordinary outcome: wait a little, then refuse.
+    // A wait that ends by clock reintroduces a refusal *after* the work was
+    // done (AR2-R10), so the wait now ends when the holder decides, and
+    // this bound fires only when something is broken. Past the old ceiling
+    // the statement is still waiting, which is the behaviour change stated.
     clock_.Advance(kTxnInDoubtCeilingNs + 1);
     for (int i = 0; i < 64 && !*done; ++i) scheduler_->RunOnce();
-    ASSERT_TRUE(*done) << "the block has no ceiling, which is the hang HP3 forbids";
+    ASSERT_FALSE(*done) << "the old 200 ms ceiling still ended the wait: " << out->response;
+
+    // Past the net it is aborted, because a hang is not the alternative
+    // (HP3) - the net exists so a missed cycle or a stuck holder cannot
+    // block forever.
+    clock_.Advance(txn::kLockWaitFaultNetNs);
+    for (int i = 0; i < 64 && !*done; ++i) scheduler_->RunOnce();
+    ASSERT_TRUE(*done) << "the wait has no bound at all, which is the hang HP3 forbids";
 
     const Status refused = StatusFromErrorReply(out->response);
-    // **The three properties §2's obligation names**, each one a way to get
-    // this wrong: retryable, so a client's loop reads the bit the engine
-    // means; *not* `UnknownOutcome`, which would tell a client to go and
-    // read data its statement never touched; and named, so an operator sees
-    // a coordinator that has not decided rather than a busy neighbour.
+    // Retryable, so a client's loop reads the bit the engine means; *not*
+    // `UnknownOutcome`, which would tell a client to read back data its
+    // statement never touched; and named as the **net**, so an operator
+    // meeting it looks for the fault rather than concluding the row was
+    // busy.
     EXPECT_TRUE(refused.retryable()) << out->response;
     EXPECT_NE(refused.code(), StatusCode::kUnknownOutcome);
     EXPECT_EQ(refused.code(), StatusCode::kTxnConflict);
-    EXPECT_NE(out->response.find("cross-owner"), std::string::npos) << out->response;
-    EXPECT_NE(out->response.find("coordinator"), std::string::npos) << out->response;
-    // The in-doubt transaction is untouched by the refusal: it is still
-    // prepared, still owed a decision, and still holding the row.
+    EXPECT_NE(out->response.find("fault net"), std::string::npos) << out->response;
+    EXPECT_EQ(out->response.find("coordinator"), std::string::npos)
+        << "the net is the lock family's, not 2PC's: " << out->response;
+    // The holder is untouched by the refusal - R1 aborts the waiter and
+    // never the holder - so it is still prepared and still holding the row.
     EXPECT_EQ(executor_->in_doubt(), 1u);
 }
 
-TEST_F(Txn2pcBlockedWriterTest, ADispatcherWithNoCeilingRefusesAtOnceWhichIsD5sOtherBranch) {
-    // 0 is not an off-switch: it is "refuse retryably up front", the branch
-    // the operator did *not* ratify, reachable by configuration so the two
-    // can be measured against each other.
+TEST_F(Txn2pcBlockedWriterTest, TheCeilingKnobNoLongerEndsTheWritersWait) {
+    // **D5's "refuse at once" branch is gone, and this cell records it**
+    // rather than leaving a key that reads as an off-switch. `0` used to
+    // mean "refuse retryably up front", the branch the operator did not
+    // ratify, kept reachable by configuration so the two could be measured
+    // against each other. AO-S3 ends the wait on the holder's decide
+    // instead of on any clock, so the knob reaches nothing: the writer
+    // waits at `0` exactly as it waits at 200.
+    //
+    // Left as an inert key rather than refused at startup, so a
+    // configuration carrying it still mounts; AO-R8 gives its re-scope to
+    // M3, and AO-0 item 7 is where the operator's word on that sits.
     dispatcher_->set_in_doubt_ceiling_ns(0);
     ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
     ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
     ASSERT_TRUE(Prepare().status.ok());
 
     Session local;
-    const DispatchOutcome out = RunAsync("UPDATE t SET v = 3 WHERE id = 7", local);
-    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
-    EXPECT_TRUE(StatusFromErrorReply(out.response).retryable()) << out.response;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &local, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    EXPECT_FALSE(*done) << "a ceiling of 0 still ended the wait, so the key is not inert after "
+                           "all: " << out->response;
+
+    // And it ends the way every wait now ends - on the decision.
+    ASSERT_TRUE(Decide(TxnDecision::kCommit).status.ok());
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    EXPECT_TRUE(*done);
+    EXPECT_EQ(out->response.rfind("UPDATED", 0), 0u) << out->response;
 }
 
 TEST_F(Txn2pcBlockedWriterTest, AWriterInsideATransactionIsNotPoisonedWhileItIsStillWaiting) {
@@ -1708,22 +1758,294 @@ TEST_F(Txn2pcBlockedWriterTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid
     EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &local).response.rfind("ROLLBACK", 0), 0u);
 }
 
-TEST_F(Txn2pcBlockedWriterTest, AnOrdinaryInFlightWriterIsNotWaitedOnAtAll) {
-    // The narrowness that makes the block safe: only an **in-doubt**
-    // transaction is waited for. An ordinary in-flight writer ends on its
-    // own, so first-updater-wins answers immediately, exactly as it did
-    // before R6-5 - a statement that waited on one would be waiting on a
-    // client's think time.
+// ---- What AO-S3 deliberately does not wait for ---------------------------
+
+TEST_F(Txn2pcBlockedWriterTest, ATransactionThatAlreadyWroteIsRefusedRatherThanWaited) {
+    // **The guard that makes this stage deadlock-free without AO-S4a's
+    // detector.** A cycle needs an edge out of a holder, so if every waiter
+    // holds nothing, the wait-for graph runs waiters -> holders and cannot
+    // close. Restricting the wait to transactions that have written nothing
+    // buys exactly that, at the price of keeping the old refusal for a
+    // transaction that already holds rows - which AO-S4a lifts once there
+    // is a detector to catch what it lets in.
+    //
+    // Without the guard this cell is the classic deadlock: A holds 7 and
+    // wants 8, B holds 8 and wants 7, and both stall until the 11 s fault
+    // net aborts them - two clients that used to get an instant retryable
+    // conflict now make no progress at all, which is the shape AR2-R10
+    // forbids.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (8, 1)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &a)
+                  .response.rfind("UPDATED", 0),
+              0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 8", &b)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    // Each now wants the other's row. Both have written, so neither waits.
+    auto out_a = std::make_shared<DispatchOutcome>();
+    auto done_a = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 8", &a, out_a.get()),
+        [done_a](const Status&) { *done_a = true; }));
+    for (int i = 0; i < 64 && !*done_a; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done_a) << "a transaction holding rows waited, which is a deadlock edge and "
+                            "there is no detector until AO-S4a";
+    EXPECT_EQ(StatusFromErrorReply(out_a->response).code(), StatusCode::kTxnConflict)
+        << out_a->response;
+    EXPECT_TRUE(StatusFromErrorReply(out_a->response).retryable());
+}
+
+TEST_F(Txn2pcBlockedWriterTest, ARepeatableReadWriterIsRefusedBecauseTheReRunCannotSucceed) {
+    // The second guard. Under `kRepeatableRead` the view is minted at
+    // `BEGIN` and `StartStatement` does not re-mint it, so a holder that
+    // commits after that view stays invisible and the re-run refuses on
+    // exactly the ground it refused on the first time. Waiting there turns
+    // an instant refusal into a stall ending in the same refusal, plus a
+    // poisoned session - worse on every axis, so the wait is not offered.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session rr;
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &rr)
+                  .response.rfind("ERR", 0),
+              std::string::npos)
+        << "the level must be settable for this cell to mean anything";
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &rr).response.rfind("BEGIN", 0), 0u);
+
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &rr, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done) << "a repeatable-read writer waited for a decision its own view will "
+                          "never see: " << out->response;
+    EXPECT_EQ(StatusFromErrorReply(out->response).code(), StatusCode::kTxnConflict)
+        << out->response;
+}
+
+// ---- AO-S3's cutover, on the foreign-key forward check -------------------
+
+TEST_F(Txn2pcBlockedWriterTest, AChildInsertWaitsOutAnInFlightParentAndPassesWhenItCommits) {
+    // AO-3 B row 3, the same-core half (the shipped probe's is AO-S5). The
+    // forward check answered `kBusy` -> `TxnConflict` because F3 said there
+    // was nothing to wait on under a single-writer core. There is now: the
+    // check runs at the dispatch fork, before any row work, so the
+    // statement has written nothing and the wait is the ordinary statement
+    // restart.
+    //
+    // **The answer genuinely depends on how the parent ends**, which is why
+    // refusing was the wrong shape: commit makes the child legal, abort
+    // makes it a violation, and the client could not tell which by retrying
+    // blindly.
+    ASSERT_EQ(Local("CREATE TABLE accounts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+
+    // A parent row inserted by a transaction that has not decided.
+    Session parent;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &parent).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO accounts VALUES (5, 1)", &parent)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    // The child insert cannot answer until the parent does.
+    Session child;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("INSERT INTO orders VALUES (1, 5)", &child, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_FALSE(*done) << "the child was refused instead of waiting: " << out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &parent).response.rfind("COMMIT", 0), 0u);
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done) << "the wait never ended";
+    EXPECT_EQ(out->response.rfind("INSERTED", 0), 0u) << out->response;
+}
+
+TEST_F(Txn2pcBlockedWriterTest, AChildInsertWaitingOnAParentThatRollsBackIsAViolation) {
+    // The other decide, and the reason the wait is worth having: the same
+    // child statement gets two different *correct* answers depending on how
+    // the parent ends, and neither is `TxnConflict`. A client retrying a
+    // refusal would have discovered this too, eventually, at the cost of a
+    // round trip per attempt and a schedule nobody chose.
+    ASSERT_EQ(Local("CREATE TABLE accounts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts) BTREE")
+                  .rfind("CREATED", 0),
+              0u);
+
+    Session parent;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &parent).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO accounts VALUES (5, 1)", &parent)
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    Session child;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("INSERT INTO orders VALUES (1, 5)", &child, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_FALSE(*done);
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &parent).response.rfind("ROLLBACK", 0), 0u);
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done);
+    const Status answered = StatusFromErrorReply(out->response);
+    EXPECT_EQ(answered.code(), StatusCode::kFkViolation)
+        << "the parent never existed, so the child references nothing: " << out->response;
+    EXPECT_FALSE(answered.retryable())
+        << "and a retry cannot fix it, which is the difference from the conflict this used to be";
+}
+
+// ---- AO-S3's cutover, on an ordinary local holder ------------------------
+
+TEST_F(Txn2pcBlockedWriterTest, AnAutocommitWriterWaitsOutALocalHolderAndThenSeesItsValue) {
+    // AO-5's S3 row, in full: "an autocommit `UPDATE` against a row an open
+    // transaction holds returns after its `COMMIT` with the new value". No
+    // 2PC anywhere in it - just two sessions on one core, which is the
+    // shape every OLTP client meets and the one that used to answer
+    // `TXN_CONFLICT` and hand the waiting back to the client.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session waiter;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &waiter, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_FALSE(*done) << "the writer was refused instead of waiting: " << out->response;
+
+    // The holder decides. The waiter's next poll finds it gone, re-runs the
+    // statement, and writes over the value the commit left - which is the
+    // re-check being mandatory: it does not resume with the answer it had
+    // when it parked.
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done) << "the wait never ended";
+    EXPECT_EQ(out->response.rfind("UPDATED", 0), 0u) << out->response;
+    EXPECT_NE(Rows().find(",3"), std::string::npos) << Rows();
+}
+
+TEST_F(Txn2pcBlockedWriterTest, AWriterWaitingOutAHolderThatRollsBackWritesOverThePriorVersion) {
+    // The other decide. The holder's compensations put the old value back
+    // before its borrows go (AO-R6's ordering), so the waiter re-runs
+    // against the version that was there all along rather than a
+    // half-undone one.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session waiter;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &waiter, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_FALSE(*done);
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    ASSERT_TRUE(*done) << "an abort must end the wait exactly as a commit does";
+    EXPECT_EQ(out->response.rfind("UPDATED", 0), 0u) << out->response;
+    EXPECT_NE(Rows().find(",3"), std::string::npos) << Rows();
+}
+
+TEST_F(Txn2pcBlockedWriterTest, AnOrdinaryInFlightWriterIsNowWaitedOnToo) {
+    // **AO-S3 inverted this cell's claim, which is the cutover.** It used
+    // to assert the narrowness that made R6-5's block safe: only an
+    // *in-doubt* transaction was worth waiting for, and an ordinary
+    // in-flight writer got first-updater-wins immediately, on the argument
+    // that it "ends on its own" so the client's retry would find the row
+    // free.
+    //
+    // That argument is what AR2-A §1's first axis rejects. The client's
+    // retry loop *is* a wait, written in the wrong place: it spins, it
+    // burns a round trip per attempt, and it gives up on a schedule nobody
+    // chose. A holder that has not decided is one thing whether or not it
+    // is prepared (AO-3 B rows 1 and 2), so the wait now covers both and
+    // the in-doubt case is subsumed rather than special-cased.
     ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
     ASSERT_TRUE(Ship("UPDATE t SET v = 2 WHERE id = 7", 1).status.ok());
-    // No prepare: the shipped transaction is open but not in doubt.
+    // No prepare: the shipped transaction is open and not in doubt.
 
     Session local;
-    const DispatchOutcome out = RunAsync("UPDATE t SET v = 3 WHERE id = 7", local);
-    EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << out.response;
-    EXPECT_EQ(StatusFromErrorReply(out.response).code(), StatusCode::kTxnConflict);
-    EXPECT_EQ(out.response.find("coordinator"), std::string::npos)
-        << "an ordinary conflict must keep its own words: " << out.response;
+    auto out = std::make_shared<DispatchOutcome>();
+    auto done = std::make_shared<bool>(false);
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync("UPDATE t SET v = 3 WHERE id = 7", &local, out.get()),
+        [done](const Status&) { *done = true; }));
+    for (int i = 0; i < 64 && !*done; ++i) {
+        (void)wal_->DrainOnce();
+        scheduler_->RunOnce();
+    }
+    EXPECT_FALSE(*done) << "an ordinary in-flight holder was still answered with a refusal: "
+                        << out->response;
 }
 
 // ---- R6-6: a prepared transaction across a graceful stop ----------------------

@@ -179,10 +179,12 @@ public:
     // the LSN (`prepare_lsn` above), which is 0 on an unlogged instance
     // because there is no record. A **writer of the same rows** wants the
     // flag: `CheckWriteConflict` refuses it as it refuses any in-flight
-    // writer, and the dispatcher then reads `TransactionManager::IsInDoubt`
-    // to decide whether that refusal is one to answer or one to wait out
-    // (`command_dispatcher.hpp`'s `InDoubtBlock`). The flag rather than the
-    // LSN, so the unlogged fixture blocks the way a logged core does.
+    // writer. **The dispatcher no longer asks whether that writer is in
+    // doubt** - since AO-S3 it waits for any undecided holder, so the
+    // question the flag used to answer for `WriteBlock` is gone and what
+    // remains is 2PC's own: a prepared transaction stays live until its
+    // coordinator decides. The flag rather than the LSN, so the unlogged
+    // fixture blocks the way a logged core does.
     bool prepared() const noexcept { return prepared_; }
     void MarkPrepared(wal::Lsn lsn) noexcept {
         prepared_ = true;
@@ -539,12 +541,12 @@ public:
 
     // Whether `trx_id` is a transaction **this core prepared and has not
     // yet been told the outcome of** (R6-5, D5): running here, and marked
-    // by `Transaction::MarkPrepared`. The question a writer asks about the
-    // transaction `CheckWriteConflict` just refused it for - an in-flight
-    // writer that will end on its own is a conflict to report, while one
-    // that is waiting on another core's decision is a conflict to wait out.
-    // False for a transaction that has ended, however it ended, which is
-    // what lets a parked writer's predicate read "decided" off this one bit.
+    // by `Transaction::MarkPrepared`. **No caller since AO-S3**, which
+    // widened the writer's wait from "in doubt" to "in flight" and left
+    // this without the question it existed to answer; kept because the
+    // distinction it draws is still real and AO-S4b's cross-core detector
+    // is the next thing likely to want it. False for a transaction that has
+    // ended, however it ended.
     //
     // Per-core, like `IsInFlight`: a participant's transaction is a local
     // transaction on the core that prepared it, so the writer asking is on

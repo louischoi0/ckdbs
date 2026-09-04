@@ -1,5 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include "kds/txn/lock_table.hpp"
+
 #include "kds/base/crash_point.hpp"  // RP7: the coordinator's three kill points
 
 #include "kds/server/assertion_build_service.hpp"
@@ -296,10 +298,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // they are kept because what they guard is a dereference and a
     // never-reached deadline (`NowNs()` answers 0 with no clock, so a
     // deadline built from it would make the bounded wait unbounded).
-    if (out->in_doubt_block.has_value() && txn_ != nullptr && clock_ != nullptr) {
-        const sched::MonoTimeNs deadline_ns = NowNs() + in_doubt_ceiling_ns_;
-        while (out->in_doubt_block.has_value()) {
-            const DispatchOutcome::InDoubtBlock block = *out->in_doubt_block;
+    if (out->write_block.has_value() && txn_ != nullptr && clock_ != nullptr) {
+        // **The bound is a fault net, not a ceiling** (AO-R8). Before AO-S3
+        // this was `in_doubt_ceiling_ns_`, 200 ms, and reaching it was an
+        // ordinary outcome: the statement was refused after waiting, which
+        // is a refusal issued *after* the work was done and is worse than
+        // the refusal it replaced (AR2-R10). Now the wait ends when the
+        // holder decides, and this bound fires only when something is
+        // broken - logged as a fault below, never as a busy answer.
+        const sched::MonoTimeNs deadline_ns =
+            NowNs() + static_cast<sched::MonoTimeNs>(txn::kLockWaitFaultNetNs);
+        while (out->write_block.has_value()) {
+            const DispatchOutcome::WriteBlock block = *out->write_block;
             if (NowNs() >= deadline_ns) break;
             // Settles the moment the transaction is decided, whichever way:
             // a committed one releases the row to a re-read, an aborted one
@@ -308,20 +318,19 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // `kMaxTrackedLiveTxns` per turn, which is the predicate shape
             // every park in this file uses.
             const std::function<bool()> decided = [this, block, deadline_ns] {
-                return !txn_->IsInDoubt(block.trx_id) || NowNs() >= deadline_ns;
+                return !txn_->IsInFlight(block.trx_id) || NowNs() >= deadline_ns;
             };
             co_await sched::WaitUntil{&decided};
-            if (txn_->IsInDoubt(block.trx_id)) break;  // the ceiling, not the decision
+            if (txn_->IsInFlight(block.trx_id)) break;  // the net, not the decision
             if (logging(LogLevel::kDebug)) {
-                log_->Debug("2pc", "core " + std::to_string(core_id_) +
-                                       " held a write of row id=" + std::to_string(block.pk) +
-                                       " until in-doubt transaction " +
-                                       std::to_string(block.trx_id) +
-                                       " was decided, and is running it again");
+                log_->Debug("lock", "core " + std::to_string(core_id_) +
+                                        " held a write of row id=" + std::to_string(block.pk) +
+                                        " until transaction " + std::to_string(block.trx_id) +
+                                        " decided, and is running it again");
             }
             // **The re-run is deliberately not re-stamped**, so it
             // executes under `kWhenDurable` (`CommitAck`). Unreachable
-            // rather than merely unlikely: `in_doubt_blocker_` is set only
+            // rather than merely unlikely: `blocking_writer_` is set only
             // by `CheckWriteConflictBlocking` on a write path, and the one
             // caller that stamps `kAtAppend` dispatches the literal
             // `COMMIT`, which writes no row and takes no conflict. And the
@@ -332,24 +341,31 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             *out = DispatchAndStage(line, session);
             may_park_ = false;
         }
-        if (out->in_doubt_block.has_value()) {
-            // **The ceiling, and the refusal is named** (§2's obligation).
-            // `TxnConflict`, because `IsRetryable` admits exactly that code
-            // and a client's retry loop reads the wire bit it sets - and
-            // deliberately **not** `UnknownOutcome`, which would tell a
-            // client to go and read its data when this statement plainly
-            // did nothing at all. The message names the wait rather than
-            // only the row, so an operator meeting it knows the cause is a
-            // coordinator that has not decided and not a busy neighbour.
-            const DispatchOutcome::InDoubtBlock block = *out->in_doubt_block;
-            out->in_doubt_block.reset();
+        if (out->write_block.has_value()) {
+            // **The fault net fired, and that is not an outcome - it is a
+            // defect report** (AO-R8, AR2-R10 as AR2-A amends it). A wait
+            // that ends by clock reintroduces a refusal *after* the work
+            // was done, which is worse than the refusal it replaced, so
+            // reaching here means something is broken rather than busy:
+            // before AO-S4a, a cycle nobody detected; after it, a detector
+            // that missed one, or a holder that is genuinely stuck.
+            //
+            // The refusal is still `TxnConflict`, because `IsRetryable`
+            // admits exactly that code and a client's retry loop reads the
+            // wire bit it sets - and deliberately **not** `UnknownOutcome`,
+            // which would tell a client to read its data back when this
+            // statement plainly did nothing. What changed at AO-S3 is the
+            // message: it names the net, so an operator meeting it looks
+            // for the fault instead of concluding the row was busy.
+            const DispatchOutcome::WriteBlock block = *out->write_block;
+            out->write_block.reset();
             const Status refused = Status::TxnConflict(
-                "row id=" + std::to_string(block.pk) +
-                " is held by transaction " + std::to_string(block.trx_id) +
-                ", which this core has prepared for a cross-owner transaction and is waiting "
-                "for its coordinator to decide; the write waited " +
-                std::to_string(in_doubt_ceiling_ns_ / 1'000'000) +
-                " ms and was refused rather than waiting longer");
+                "row id=" + std::to_string(block.pk) + " is held by transaction " +
+                std::to_string(block.trx_id) + ", which has not decided after " +
+                std::to_string(txn::kLockWaitFaultNetNs / 1'000'000'000) +
+                " s; the write hit the lock-wait fault net and was aborted. A wait ends when the "
+                "holder decides, so reaching the net means a deadlock went undetected or a "
+                "holder is stuck - not that the row was busy");
             out->response = ErrorReply(refused);
             // The poison `EndWrite` withheld while the wait was still
             // possible. Inside an explicit transaction this refusal is a
@@ -357,8 +373,12 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // ROLLBACK; in autocommit the scope was already unwound.
             Session& active = session != nullptr ? *session : autocommit_session_;
             if (active.in_explicit_txn()) active.Poison();
+            // **Logged as a fault, at `kWarn`, under the lock family's own
+            // tag** - the component changed with the meaning: this is no
+            // longer a 2PC coordinator's stall but the lock family's net,
+            // and an operator grepping for one should not find the other.
             if (logging(LogLevel::kWarn)) {
-                log_->Warn("2pc", refused.message());
+                log_->Warn("lock", refused.message());
             }
         }
     }
@@ -891,8 +911,8 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     Session& active = session != nullptr ? *session : autocommit_session_;
 
     pending_commit_lsn_ = wal::kNoLsn;
-    in_doubt_blocker_ = 0;
-    in_doubt_blocked_pk_ = 0;
+    blocking_writer_ = 0;
+    blocked_pk_ = 0;
     statement_trail_mark_ = 0;
 
     // ---- H6 step 2: the trace, when this session asked for one ----------
@@ -936,12 +956,20 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // R6-5's, on the same terms. `EndWrite` has already dropped the blocker
     // where the statement is not re-runnable, so a value here means "this
     // statement wrote nothing and a wait could get it past".
-    if (in_doubt_blocker_ != 0) {
-        outcome.in_doubt_block =
-            DispatchOutcome::InDoubtBlock{in_doubt_blocker_, in_doubt_blocked_pk_};
-        in_doubt_blocker_ = 0;
-        in_doubt_blocked_pk_ = 0;
+    //
+    // **Never beside a probe or a ship.** `DispatchAsync` runs the
+    // write-block wait before either of those arms, and its re-run is a
+    // fresh `DispatchAndStage` - so a statement carrying both would have
+    // its parked probe discarded and a second one sent, leaving the first
+    // reply for a request nobody waits on and its reference intents held
+    // to the end of the session. The resume re-resolves the forward check
+    // anyway, so a busy parent is seen again and waited on then.
+    if (blocking_writer_ != 0 && !outcome.pending_fk_probe.has_value() &&
+        !outcome.pending_shipped.has_value()) {
+        outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
     }
+    blocking_writer_ = 0;
+    blocked_pk_ = 0;
 
     if (log_ == nullptr) return outcome;
 
@@ -4170,7 +4198,8 @@ std::vector<parser::AstValue> CommandDispatcher::InsertBodyOf(
 Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& child,
                                                     const std::vector<parser::AstValue>& body,
                                                     const txn::ReadView& check_view,
-                                                    exec::FkParentVerdicts& into) {
+                                                    exec::FkParentVerdicts& into,
+                                                    const txn::Transaction* waiter) {
     for (const catalog::ForeignKeyRef& fk : child.fkeys_out) {
         if (fk.column_no == 0 || fk.column_no > body.size()) continue;
         const parser::AstValue& value = body[fk.column_no - 1];
@@ -4232,9 +4261,30 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
             continue;
         }
 
+        std::uint64_t busy_trx = 0;
         auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), pk, check_view,
-                                                &budget_);
+                                                &budget_, &busy_trx);
         if (!verdict.ok()) return verdict.status();
+
+        // **F3's forward busy becomes a wait, on a same-core parent**
+        // (AO-3 B row 3, AO-S3's half; the shipped probe's half is AO-S5).
+        // The parent row is held by a transaction that has not decided, and
+        // the answer genuinely depends on how it ends - commit makes the
+        // child legal, abort makes it a violation. Refusing retryably told
+        // the client to come back and ask again, which is a wait written in
+        // the client's loop instead of here.
+        //
+        // Recorded on the same channel a write conflict uses, and under the
+        // same two conditions, so one wait serves both: this runs at the
+        // dispatch fork, before any row work, so the statement has written
+        // nothing and re-running it is exactly what the client would do.
+        // **D9(a)'s `S` fence is not this** - that keeps the parent alive
+        // for the child's whole transaction and is M3's; this only changes
+        // *when* the check runs, never what protects the row afterwards
+        // (AO-R14).
+        if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0) {
+            NoteBlockingWriter(waiter, busy_trx, pk);
+        }
 
         // Recorded **per resolution, not per row**, which is the mechanism
         // made visible in `SHOW ACCESS`: a thousand-row insert against one
@@ -7217,7 +7267,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
         if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
         for (const auto& values : stmt.rows) {
             const std::vector<parser::AstValue> body = InsertBodyOf(*ta, values);
-            if (Status s = ResolveForeignKeyParents(*ta, body, view.value(), fk_held); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(*ta, body, view.value(), fk_held, scope.txn); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -7304,7 +7354,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         auto view = CheckView(scope);
         if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
         for (const auto& values : stmt.rows) {
-            if (Status s = ResolveForeignKeyParents(ta, values, view.value(), fk_held); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(ta, values, view.value(), fk_held, scope.txn); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -9810,7 +9860,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                   : 0);
             if (fk->column_no == 0 || fk->column_no > one.size()) continue;
             one[fk->column_no - 1] = *value;
-            if (Status s = ResolveForeignKeyParents(ta, one, check_view, fk_held); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(ta, one, check_view, fk_held, scope.txn); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -10603,37 +10653,52 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
     return scope;
 }
 
+void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx,
+                                           std::uint64_t pk) {
+    if (!may_park_ || clock_ == nullptr || txn_ == nullptr) return;
+    if (!txn_->IsInFlight(trx)) return;
+    // The two guards the declaration argues for. A null `waiter` is
+    // autocommit before its transaction is opened: it holds nothing and
+    // will mint a fresh view, so both tests pass vacuously.
+    if (waiter != nullptr) {
+        // No cycle can form while every waiter holds nothing.
+        if (!waiter->trail().empty()) return;
+        // A repeatable-read waiter's re-run refuses on the same ground.
+        if (waiter->isolation() == txn::IsolationLevel::kRepeatableRead) return;
+    }
+    blocking_writer_ = trx;
+    blocked_pk_ = pk;
+}
+
 Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                                      std::uint64_t pk) {
     Status verdict = txn_->CheckWriteConflict(*scope.txn, cur, pk);
     if (verdict.ok()) return verdict;
-    // **The one thing R6-5 adds**: whether the writer that won this row is
-    // a transaction this core prepared and is waiting on a coordinator to
-    // decide. An ordinary in-flight writer ends on its own and the client's
-    // retry finds the row free; an in-doubt one may hold the row for as
-    // long as its coordinator is unreachable, which is D5's stall - and the
-    // ratified answer is to wait for it under a ceiling rather than to
-    // return a conflict the client would spin on.
+    // **The row is held by a writer that has not decided, so the statement
+    // waits for it instead of refusing** (AO-S3, AO-3 B rows 1 and 2).
+    //
+    // What this replaced: R6-5 waited only for a transaction *this core had
+    // prepared*, on the argument that an ordinary in-flight writer "ends on
+    // its own, so the client's retry finds the row free". AR2-A §1's first
+    // axis rejects that argument - the client's retry loop is a wait
+    // written in the wrong place, spinning a round trip per attempt on a
+    // schedule nobody chose - so a holder that has not decided is one thing
+    // whether or not it is prepared, and the in-doubt case is subsumed
+    // rather than special-cased.
     //
     // Noted, not acted on: this function is inside a page span and a row
     // callback, which is no place to park. `DispatchAsync` is where the
     // wait happens, on the statement, once it is known that nothing was
     // written.
     //
-    // **Noted only where something will act on it**, which is the same
-    // pair of conditions `DispatchAsync`'s block tests: a path that can
-    // park, and a clock to measure the ceiling with. The blocker is not a
-    // diagnostic - it is the one thing that tells `EndWrite` to withhold
-    // the poison a failed statement owes an explicit transaction - so
-    // recording it where nothing will re-run the statement would leave a
-    // client told `ERR` and a transaction still committable, which is the
-    // failure atomicity §6 states. `Dispatch()` and a clockless dispatcher
-    // therefore keep the pre-R6-5 behaviour whole, poison included, which
-    // is what the `InDoubtBlock` declaration says of them.
-    if (may_park_ && clock_ != nullptr && txn_->IsInDoubt(cur)) {
-        in_doubt_blocker_ = cur;
-        in_doubt_blocked_pk_ = pk;
-    }
+    // **The blocker is not a diagnostic** - it is the one thing that tells
+    // `EndWrite` to withhold the poison a failed statement owes an explicit
+    // transaction - so recording it where nothing will re-run the statement
+    // would leave a client told `ERR` and a transaction still committable,
+    // which is the failure atomicity §6 states. `NoteBlockingWriter` is
+    // where every condition on recording it lives, including the two that
+    // keep this stage deadlock-free and its waits non-futile.
+    NoteBlockingWriter(scope.txn, cur, pk);
     return verdict;
 }
 
@@ -10679,10 +10744,10 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     // the client gets the conflict now. Only a statement that wrote nothing
     // reaches `DispatchAsync`'s wait.
     // (`scope.txn` is non-null here: the no-manager arm returned above.)
-    if (in_doubt_blocker_ != 0 &&
+    if (blocking_writer_ != 0 &&
         (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
-        in_doubt_blocker_ = 0;
-        in_doubt_blocked_pk_ = 0;
+        blocking_writer_ = 0;
+        blocked_pk_ = 0;
     }
 
     if (!scope.owned) {
@@ -10704,7 +10769,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // yet: `DispatchAsync` either re-runs the statement or answers the
         // named refusal, and *that* refusal poisons like any other, at the
         // end of the wait.
-        if (!result.ok() && in_doubt_blocker_ == 0) session.Poison();
+        if (!result.ok() && blocking_writer_ == 0) session.Poison();
         return Status::OK();
     }
 

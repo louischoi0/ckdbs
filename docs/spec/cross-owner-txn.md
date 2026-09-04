@@ -224,12 +224,16 @@ Two things bound the wait:
   `UnknownOutcome`, which is terminal: nothing at runtime can resolve that
   transaction and the next mount is what does.
 - A **writer of the same rows** blocks rather than being refused
-  immediately, and is refused by name at `in_doubt_ceiling_ms` — a
-  **retryable** refusal, not `UnknownOutcome`. The distinction is load
+  immediately. **Since AO-S3 it waits for the holder to decide rather than
+  for a clock**: the ceiling that used to end the wait is now a fault net
+  (11 s, `txn::kLockWaitFaultNetNs`) that fires only when something is
+  broken and is logged as a fault. Reaching it is still a **retryable**
+  refusal and not `UnknownOutcome`, and that distinction is still load
   bearing: `UnknownOutcome` tells a client to read the data back, and a
   *blocked writer*'s own statement plainly did nothing.
 
-`in_doubt_ceiling_ms` is a config key reached through one function (§5).
+`in_doubt_ceiling_ms` no longer reaches this wait; it is inert and M3
+re-scopes it (`workorder-ao-m2-lock-family.md` AO-R8).
 
 ### 2c. Recovery
 
@@ -406,7 +410,7 @@ such bound.
 
 | name | where | what bounds it |
 |---|---|---|
-| `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` = 200 ms | **The writer's stall, and only that.** Stall tracks the knob; log retention does not track it at all (measured against the `bench/` tree at `1769487`). The floor in §2c does hold the log back; what bounds *how long* is `kTxnPhaseDeadlineNs` where the coordinator is alive but slow, and the next mount where it is not — neither of which this knob moves |
+| `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` = 200 ms | **Nothing, since AO-S3** — the writer's stall was its only reader and that wait now ends on the holder's decide. Kept so a configuration carrying it still mounts; M3 re-scopes it to the lock-wait fault net (AO-R8). What bounds a writer that waits too long is `txn::kLockWaitFaultNetNs`, 11 s, a fault and not a ceiling. Log retention never tracked this knob; the floor in §2c holds the log back and `kTxnPhaseDeadlineNs` bounds a slow-but-alive coordinator |
 | `kShippedTxnIdleCeilingNs` | `shipped_statement_executor.hpp`, 300 s | How long an abandoned participant context is held before it is rolled back. Deliberately far above the statement deadline: nothing on a healthy path reaches it |
 | `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is one of `txn::kMaxTrackedLiveTxns`, which local clients share — so without it a coordinator storm would refuse an unrelated connection's `BEGIN` with nothing naming the cause |
 | wire sizing | `txn_2pc_service.hpp` | 24 bytes per request leg, 256 for the participant reply, against a 1,024-byte ring slot — asserted against `kCoreRingPayloadBytes`, never the literal |

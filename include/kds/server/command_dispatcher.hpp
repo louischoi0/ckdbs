@@ -518,8 +518,15 @@ struct DispatchOutcome {
     // ordinary retryable one and the transaction is still whole.
     std::optional<PendingCrossOwnerCommit> pending_cross_owner_commit = std::nullopt;
 
-    // A write this core refused because the row it wanted is held by a
-    // transaction this core **prepared and is in doubt about** (R6-5, D5).
+    // A write this core is holding back because something it needs is held
+    // by a transaction that **has not decided yet** (AO-S3; R6-5 and D5 are
+    // where the narrower first version came from).
+    //
+    // Two things set it, and both mean the same: `CheckWriteConflictBlocking`
+    // when the row's last writer is in flight, and the foreign-key forward
+    // resolution when the *parent* row's writer is. `NoteBlockingWriter` is
+    // the single gate on both, and it is where the conditions live - among
+    // them the two that keep this stage deadlock-free without a detector.
     //
     // Set only where the refusal is one a re-run could get past: the
     // statement wrote nothing before it hit the conflict, so running it
@@ -534,11 +541,11 @@ struct DispatchOutcome {
     // answer there is the retryable conflict itself. So the block is a
     // property of served connections, and a fixture sees the pre-R6-5
     // behaviour.
-    struct InDoubtBlock {
-        std::uint64_t trx_id = 0;  // the in-doubt writer holding the row
+    struct WriteBlock {
+        std::uint64_t trx_id = 0;  // the undecided writer being waited for
         std::uint64_t pk = 0;      // the row it holds
     };
-    std::optional<InDoubtBlock> in_doubt_block = std::nullopt;
+    std::optional<WriteBlock> write_block = std::nullopt;
 
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/spec/wal.md
@@ -949,6 +956,33 @@ private:
     // (D5's ratified "block, with a bounded ceiling ending in a named
     // refusal"). One function for the two call sites, so the two write
     // paths cannot come to disagree about which conflicts are waitable.
+    // Records `trx` as the holder this statement is waiting for, when
+    // waiting is both **safe** and **capable of a different answer**. Both
+    // tests are the point, and each closes a hole the S3 cutover would
+    // otherwise open.
+    //
+    // **Safe: the waiter must hold nothing.** A cycle needs an edge out of
+    // a holder, and a transaction that has written nothing is one no other
+    // transaction can be waiting for. Restricting the wait to those makes
+    // the wait-for graph edges-from-waiters-only, which has no cycle by
+    // construction - so this stage cannot deadlock, and it does not need
+    // AO-S4a's detector to be safe. A transaction that has already written
+    // keeps the old retryable refusal until that detector exists, which is
+    // the honest half-step: axis 1 reaches autocommit and every
+    // transaction's first write now, and the rest at AO-S4a.
+    //
+    // **Capable: the re-run must be able to answer differently.** Under
+    // `kRepeatableRead` the view is minted at `BEGIN` and `StartStatement`
+    // does not re-mint it, so a holder that commits after that view stays
+    // invisible and `CheckWriteConflict` refuses again on exactly the same
+    // ground. Waiting there converts an instant refusal into a stall
+    // ending in the same refusal, which is worse on every axis.
+    // `waiter` is the transaction the statement runs in, or null in
+    // autocommit before one is opened - which is the safest case of all,
+    // since a transaction that does not exist holds nothing and re-mints
+    // its view by construction.
+    void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t pk);
+
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                       std::uint64_t pk);
 
@@ -1242,10 +1276,14 @@ private:
     // whose rows are all known there, and once per row otherwise. Nothing it
     // does may depend on a row having been written, which is what makes it
     // legal to run early and what the self-referencing carve-out protects.
+    // `waiter` is the transaction this statement runs in (null in
+    // autocommit before one is opened); it is what decides whether a busy
+    // parent becomes a wait - see `NoteBlockingWriter`.
     Status ResolveForeignKeyParents(const catalog::TableAccess& child,
                                      const std::vector<parser::AstValue>& body,
                                      const txn::ReadView& check_view,
-                                     exec::FkParentVerdicts& into);
+                                     exec::FkParentVerdicts& into,
+                                     const txn::Transaction* waiter = nullptr);
 
     // What the extraction pass deferred because its owner is not this
     // core: **sent** as one probe per owner, and the statement parked
@@ -2334,14 +2372,14 @@ private:
     // failure. All three are zeroed at the top of `DispatchAndStage` and
     // read out at its end.
     //
-    // `in_doubt_blocker_` is the in-doubt transaction that refused this
-    // statement, `in_doubt_blocked_pk_` the row it holds, and
+    // `blocking_writer_` is the undecided transaction that refused this
+    // statement, `blocked_pk_` the row it holds, and
     // `statement_trail_mark_` the transaction's trail length when this
     // statement's write scope opened - which is what says whether the
     // statement wrote anything before it was refused, and therefore whether
     // re-running it is a repeat or a second application.
-    std::uint64_t in_doubt_blocker_ = 0;
-    std::uint64_t in_doubt_blocked_pk_ = 0;
+    std::uint64_t blocking_writer_ = 0;
+    std::uint64_t blocked_pk_ = 0;
     std::size_t statement_trail_mark_ = 0;
 
     // D5's ceiling for this core, `InDoubtCeilingNs()`'s storage.

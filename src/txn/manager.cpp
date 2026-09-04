@@ -56,13 +56,21 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
     if (folded == "read committed" || folded == "rc") return IsolationLevel::kReadCommitted;
     if (folded == "repeatable read" || folded == "rr") return IsolationLevel::kRepeatableRead;
     if (folded == "serializable") {
-        // Out of scope and **not** [OPEN] (section 1): it needs predicate
-        // locking or SSI read-tracking, neither of which fits a design with
-        // no lock manager and no reader registration. Named explicitly so
-        // the refusal says why rather than "unknown level".
+        // Out of scope and **not** [OPEN] (section 1). **Both halves of
+        // the reason this used to give are now false** (AR0-M1 flagged the
+        // second; AO-S3 makes the first stale): readers *are* registered
+        // (`txn.md` §4.1), and a lock manager exists
+        // (`txn/lock_table.hpp`). What still holds is narrower and is what
+        // the refusal now says - the lock family has no **predicate** lock.
+        // Its finest fence is a slice, a bounded key interval, which
+        // cannot express "every row a `WHERE` matches" over a non-key
+        // column, and SSI's alternative needs per-row read tracking that
+        // nothing records. AO-S8 owes the same correction to `txn.md` §1's
+        // four SR texts.
         return Status::Unsupported(
-            "SERIALIZABLE is out of scope: it needs predicate locking or read-tracking, and "
-            "this engine has neither a lock manager nor row-level read tracking");
+            "SERIALIZABLE is out of scope: it needs predicate locking or read-tracking, and this "
+            "engine's lock family fences key intervals rather than predicates and tracks no "
+            "row-level reads");
     }
     return Status::InvalidArgument("unknown isolation level '" + std::string(text) +
                                    "'; expected 'read committed' or 'repeatable read'");
