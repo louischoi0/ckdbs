@@ -483,14 +483,16 @@ rule. Every item names the ruling it moves.
 
 ## AO-7 — Where AR2's text and the tree disagree
 
-Listed so S8 amends AR2 rather than the next reader inheriting the drift.
+Listed so the drift is amended — items 2, 6 and 7's `sched.md` half on
+2026-09-04, the rest by S8 — rather than inherited by the next reader.
 
 1. AR2-R2's "a writer takes the tuple by CAS on the byte under the page
    latch": no CAS exists, no page latch exists at `9e5068c`, the stamp
    already is the lock, and the byte is on disk — AO-R3.
 2. AR2 §2's family table reads "D12: wait-for graph, timeout aborts the
    waiter" as if the timeout were a mechanism; R10 as amended by AR2-A says
-   it never is — a drift inside AR2 itself.
+   it never is — a drift inside AR2 itself. **Amended 2026-09-04**: the
+   cell now reads as R10 does.
 3. AR2-R9's "no-op at one core" against axis 1 at one core — AO-R9.
 4. AR0 D16 puts D1 in M2 (`:133`); §8 step 5 (`:153`, D2/D13/D12/D8) and
    AR2 §9 do not — AO-2.
@@ -501,9 +503,13 @@ Listed so S8 amends AR2 rather than the next reader inheriting the drift.
    had migrated to a peer
    (`bench/v3.0.0/results-ar2-c2-spreading-v2.7.0-178-g92cb654.md:252-266`) —
    so the class is finding B #6, M3's under R12, not E13's named-key ship.
+   **Amended 2026-09-04**: §9 item 1 now names the class.
 7. `ring_transport.hpp:16-19` ("no shared engine state") and `sched.md:189`
    ("those three are the whole list") are already false by one lock (the
-   window latch, AN-S4's); S8 owes the second correction.
+   window latch, AN-S4's); **`sched.md` §9-2 and `rules.md` §3's table
+   corrected 2026-09-04** — both latches in §9-2, the window's row added
+   to the table citing AN-R9 until AN-S4 moves it into `txn.md` — and
+   `ring_transport.hpp:16-19` is still owed.
 8. `include/kds/txn/manager.hpp:63-68`'s premise ("nothing suspends between reading a
    tuple's header and overwriting it") is what a wait breaks; the re-check
    after every park is the consequence — AO-R4.

@@ -134,7 +134,7 @@ decision elsewhere (`docs/spec/physical-optimizer.md` §6):
 
 | Plan | Would do | Blocked on |
 |---|---|---|
-| `compact` | drop delete-marked tuples past the reader horizon, reclaim pages | **Gate 1 — reader horizon**: readers are deliberately unregistered (`docs/spec/txn.md` §9); a mover that guesses a horizon is partial recovery in different clothes |
+| `compact` | drop delete-marked tuples past the reader horizon, reclaim pages | **Gate 1 — reader horizon**: readers are registered per core (`docs/spec/txn.md` §4.1), but the horizon feeds only the undo purge and the catalog's delete-mark purge — no purge of a user relation's delete marks and no mover exist; a mover that guessed a horizon instead of consuming it would be partial recovery in different clothes |
 | `cluster` | co-locate a hot set on fewer pages | **Gate 2 — ordered-between**: it would break the between-pages ordering `kRange` tail pruning reads; the legal form is `[OPEN]`, to be chosen from shadow data |
 | `defrag` | rewrite a chain onto contiguous page ids | **Gate 3 — cross-relation page reuse**: a reallocated page can hold a colliding per-relation Keystone id at a recorded slot, and `PAGE_INIT` resets the epoch, so trail validation would pass wrongly |
 

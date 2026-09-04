@@ -6,7 +6,10 @@ E11, E12 and R4's refusal, defers the rest with gates, and asks for six
 amendments to this body; they are applied below and marked **(AR2-A)**
 Author: CLA, 2026-09-03, on worktree `ar2-borrow-model` against `183b956`
 (`v2.7.0-171-g183b956`); amended on the same worktree at `988a698` per
-AR2-A and the C1/C2 measurements of `92cb654`
+AR2-A and the C1/C2 measurements of `92cb654`, and on 2026-09-04 — the
+first commit after `c40b3cc` on branch `worktree-worktree-ar2-borrow-model`
+— for three drifts named by AO-7 and this branch's review (§2's family
+table, §8's R6 line, §9's C2 refusal class) and AR2-V's discrepancy note
 Scope: what replaces write ownership under AR0-4 — the unit, mode, holder
 and scope of every tenancy a mutating or fencing operation takes — and
 the spec sentences that rested on a permanent owner (`crosscore.md` CC3,
@@ -157,7 +160,7 @@ number, and it cannot run before M1.
 | family | unit | holder | scope | released by | waits | deadlock |
 |---|---|---|---|---|---|---|
 | latch | page | a task | critical section | leaving the section | spin or yield, no queue | impossible by acquisition order |
-| lock | relation, range, slice, tuple | a transaction | the transaction (an autocommit's is its statement) | decide — commit or abort | D13: asynchronous, the waiter parks and is re-enqueued on grant | D12: wait-for graph, timeout aborts the waiter |
+| lock | relation, range, slice, tuple | a transaction | the transaction (an autocommit's is its statement) | decide — commit or abort | D13: asynchronous, the waiter parks and is re-enqueued on grant | D12: the wait-for graph is the mechanism and aborts the waiter on a detected cycle; the timeout is a net for a detector fault, never the normal end of a wait (R10; AR2-A §5 item 1) |
 
 **Modes.** `S`, `X` on the unit borrowed; `IS`, `IX` on every ancestor
 in the lock family. Standard compatibility: `IS` conflicts only with `X`;
@@ -620,7 +623,11 @@ added at AR2-A's request.
 - `docs/spec/foreign-keys.md:25` F3 — struck (by D9; inherited).
 - `docs/spec/namespace.md:3-4` NS10 — verb amended (§5.6, E8).
 - `docs/spec/physical-optimizer.md:66` R6 — amended: the precondition is
-  a relation `X` borrow behind readers' `IS` (§5.4, E12).
+  the mover's `X` on the unit whose key assignment it changes (R13),
+  behind readers' `IS` at the position's finest lock unit (R14: the
+  slice on a page, the range between pages): one compatibility check
+  (§5.4, E12; the relation-`X` wording that stood here until 2026-09-04
+  predated AR2-A).
 - `docs/spec/txn.md:401-402` "No lock manager, no waiting, no deadlock
   detection, and the Keystone lock byte stays unused" — the whole
   sentence is amended at M2, not only its last clause: the byte becomes
@@ -666,9 +673,14 @@ gate nothing.
      on the *unchanged* shipped `UPDATE`, not on the `INSERT` that went
      local, so the earlier reading "group commit bounds ingest" is not
      what the data says; the cause is unproven (C2 §5, §10). R5's second
-     arm has a negative number, and the refusal class C2 met is the one
-     a borrow would turn into a wait (E13). Arming spreading in a cell
-     was a measurement, not a default change (D6).
+     arm has a negative number. The refusals C2 met are every one
+     `CrossCoreWriteRefused` — a session bound to core 0 whose target
+     range had migrated to a peer (C2's log-line reconstruction,
+     `results-ar2-c2-spreading-v2.7.0-178-g92cb654.md:252-266` at
+     `c40b3cc`) — the class `workorder-ao-m2-lock-family.md` AO-3 B #6
+     assigns to M3 under R12, not E13's named-key ship; this sentence
+     filed them under E13 until 2026-09-04 (AO-7 item 6). Arming
+     spreading in a cell was a measurement, not a default change (D6).
    - Three first-pass cells were contaminated by the host and are kept
      beside their clean repeats, which match AL-S8 within 3% (C1 §8,
      C2 §9).
@@ -742,6 +754,21 @@ readers are registered and `ReadHorizon()` already feeds two purges. The
 compaction gate's stated premise is stale; its true blocker is that no
 heap consumer of the horizon and no mover exist. Belongs in
 `docs/inflight/known-gaps.md` with the commit it was verified at.
+**Fixed instead, 2026-09-04, on branch
+`worktree-worktree-ar2-borrow-model` (worktree directory
+`worktree-ar2-borrow-model`; a live branch named `worktree-ar2-borrow-model`
+is a different tree) in the first commit after `c40b3cc`**: the premise is
+gone from the two sites above and from the five more the review of that
+fix found carrying it — `physical-optimizer.md` §1, the manual's gate table
+(`manual/physical-optimizer/physical-optimizer.md`), `index.md`'s "nothing
+reclaims" bullet, `drop-table.md`'s reuse sentence, and the operator-visible
+refusal string in `src/server/expeditor.cpp` — each now citing `txn.md`
+§4.1 and stating the true blocker: the horizon feeds the undo purge and
+the catalog's delete-mark purge, and no purge of a user relation's delete
+marks and no mover exist. The gate itself is unchanged.
+`src/txn/manager.cpp:59-61`'s comment keeps the premise and stays AO-S3's
+(`workorder-ao-m2-lock-family.md` AO-1). Nothing is filed for a drift
+fixed where it was found.
 
 **What AR2-V does not verify.** No `[design]` claim, and no number: every
 number above is AL-S8's, measured at `v2.7.0-157-gf6ed10c` on the host

@@ -419,7 +419,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(
                 file.origin() +
                 ": physical_optimizer = on is not available: every relayout plan is blocked - "
-                "compact on the reader horizon (readers are unregistered, txn.md §9), cluster "
+                "compact on the reader horizon (no user-relation purge consumes it, txn.md §4.1), cluster "
                 "on the ordered-between property kRange pruning reads, defrag on cross-relation "
                 "page reuse breaking trail validation (docs/spec/physical-optimizer.md §6). "
                 "Use 'shadow' for the report, 'off' to silence it.");

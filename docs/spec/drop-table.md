@@ -12,8 +12,9 @@ pages. The heap/btree chain, the var-heap chain, index pages and any
 Bound Cabin pages stay allocated and unreachable — leaked space, stated
 plainly. Returning a page to the free map is `physical-optimizer.md` §6
 gate 3 (a reallocated page breaks trail validation — per-relation Keystone
-ids collide at a reused slot), and any reuse needs a reader horizon that
-deliberate reader non-registration withholds. A DROP that guessed at
+ids collide at a reused slot), and any reuse needs a consumer of the
+reader horizon that no user-relation purge is (`txn.md` §4.1). A DROP that
+guessed at
 either would be the partial recovery `txn.md` §8 forbids, in different
 clothes.
 

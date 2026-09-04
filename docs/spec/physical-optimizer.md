@@ -16,7 +16,8 @@ this file expands), `rule-fixed-length-tuple.md` (tuple mobility),
 `eviction.md` (EV1's temperature hook), `pattern-tracking-levels.md`
 (decay-ranked trail eviction), `waystone-concpets.md` §3.1 (epoch validation),
 `cabin.md` (relocation invariance), `index.md` (IX3),
-`txn.md` §9 (no reader registration), `parser-v2.md` I7/V11.
+`txn.md` §4.1 (reader registration; the horizon's two consumers),
+`parser-v2.md` I7/V11.
 
 **On the numbering.** `eviction.md` EV1 and `pattern-tracking-levels.md`
 §3 cite "the physical-optimizer lazy-decay score (R1)", and **R1 is the
@@ -34,8 +35,8 @@ exists for (`heap-and-tuple.md` §1). Its input half is built —
 this spec is what consumes it.
 
 **Relayout is shadow-only, and that is the finding, not a hedge.** Every
-candidate move is blocked by a named gate (§6): compaction needs the
-reader horizon that deliberate non-registration withholds, hot clustering
+candidate move is blocked by a named gate (§6): compaction needs a
+consumer of the reader horizon that no user-relation purge is, hot clustering
 breaks the ordered-between property `kRange` pruning reads, and retiring a
 page for reuse breaks trail validation across relations. So the optimizer
 applies its own promotion-gate philosophy (`overview.md` §4) to itself:
@@ -182,9 +183,11 @@ into a number, per relation, on a live workload.
 Every relayout move is blocked, and `SHOW RELAYOUT` names the gate. The
 three gates, as facts about today's engine:
 
-1. **Reader horizon.** Readers are unregistered (`txn.md` §9), so no
-   delete-marked tuple can be proven unneeded by every snapshot; nothing
-   compacts.
+1. **Reader horizon.** Readers are registered per core and
+   `ReadHorizon()` bounds a purge (`txn.md` §4.1), but its only consumers
+   are the undo purge and the catalog's delete-mark purge: no purge of a
+   user relation's delete-marked tuples exists, and no mover, so no such
+   tuple is ever proven unneeded and reclaimed; nothing compacts.
 2. **Ordered-between compatibility.** Clustering an arbitrary hot id set
    onto one page can satisfy invariant 3 while breaking the between-pages
    ordering `kRange` pruning reads; nothing clusters.

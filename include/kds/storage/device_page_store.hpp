@@ -123,12 +123,18 @@
 // GetForRead shared. **Re-entrant for the owning core** - one task holds a
 // page twice on every chain-growth and split path (heap_chain.cpp's
 // re-fetch after CreateNew, btree.cpp's rebuild, LogFullPageImage under
-// its caller's handle) - and the owning core is the running task, because
-// a core runs one task at a time and no task parks holding a pin
-// (exec::InstallSuspendAudit). **Never upgraded**: a task holding a page
-// shared may not ask for it exclusive. That is a self-deadlock, aborted in
-// debug naming the page (PinFrame) and a hang in release, as a recursive
-// std::mutex acquisition is (base/latch.hpp).
+// its caller's handle) - and the owning core stands for the running task
+// on the discipline that a core runs one task at a time and no task parks
+// holding a pin. A discipline, not a gate: exec::InstallSuspendAudit
+// records a violation in debug builds and is not fatal, and a park under a
+// latch would be a silent second exclusive grant to the next task on this
+// core (a per-task owner is AM-S2's escalation if the audit ever records
+// one). **Never upgraded**: a task holding a page shared may not ask for
+// it exclusive. That is a self-deadlock, aborted in debug naming the page
+// (PinFrame - the check reads this store's own `pins != 0` as "the shares
+// are mine", sound only while pools are per core) and an unbounded spin
+// on the reactor thread in release, which a recursive std::mutex at least
+// blocks on (base/latch.hpp).
 //
 // Acquisition order (rules.md section 3's row):
 //   - **Outer to the WAL stream latch.** A task appends while holding its
@@ -159,18 +165,26 @@
 //     direction: that latch is taken holding nothing (AN-R9), and no path
 //     holds a PageRef at commit.
 //   - **Never across a park**: the suspend audit's `live_pins() != 0`
-//     already covers it, because the pin and the latch share a handle.
+//     covers it in debug builds, recording rather than failing, because
+//     the pin and the latch share a handle; nothing covers it in release.
 //   - **Page against page: unordered through M1, and AM-S2 owes the
-//     rule.** Two page latches are held at once on every descent (parent
-//     then child), every split (the old leaf and its new sibling) and every
-//     chain growth (the old tail and the new page); through M1 one core
+//     rule.** Two page latches are held at once on every split (the old
+//     leaf and its new sibling) and every chain growth (the old tail and
+//     the new page) - a descent holds one at a time, its handle dying per
+//     iteration; through M1 one core
 //     owns its pool, so no two holders of different pages can ever wait on
 //     each other and no order is needed. The shared pool is where an ABBA
 //     becomes possible, and the tree's own shapes - parent before child,
-//     old before new - are what AM-S2 will state as the order.
+//     old before new - are what AM-S2 will state as the order. AM-S2 also
+//     inherits: the self-deadlock check's `pins` proxy (PinFrame); a
+//     re-validation after the re-fetch btree.cpp's and index_tree.cpp's
+//     leaf-for-write paths now do on a dropped read handle; and starvation
+//     - shared is granted whenever X is clear, with no writer preference,
+//     so a hot page's steady readers can starve an exclusive request.
 //
-// Waits spin with a pause hint, then yield; there is no queue. A holder is
-// in a critical section measured in nanoseconds, or in an append.
+// Waits spin with a pause hint, then yield; there is no queue and no
+// writer preference. A holder is in a critical section measured in
+// nanoseconds, or in an append.
 //
 // Logging (component tag "pagestore"): allocation and write-back are the
 // two things that change what is on disk, so both are logged - allocation

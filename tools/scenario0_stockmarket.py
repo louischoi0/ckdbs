@@ -1189,9 +1189,10 @@ def main():
                         help="socket timeout in seconds (default: 120); a FilterScan "
                              "over a large accounts relation is one slow reply")
     parser.add_argument("--sync", action="store_true",
-                        help="send SYNC after the run and time it - UPDATE is unlogged, "
-                             "so without this the balance moves survive only a clean "
-                             "shutdown (docs/spec/wal.md)")
+                        help="send SYNC after the run and time it (docs/spec/wal.md). "
+                             "Every statement here is WAL-logged - the INSERT as "
+                             "HEAP_INSERT, the UPDATE as HEAP_OVERWRITE - so this prices "
+                             "the closing sync, not a rescue of unlogged writes")
     parser.add_argument("--json", metavar="PATH", help="also write results as JSON")
     parser.add_argument("--server-log", metavar="PATH",
                         help="the server's log at --log-level debug: adds its own "
@@ -1368,7 +1369,8 @@ def main():
         elif name == "trade-insert":
             merged.detail = "heap chain tail append, WAL-logged"
         else:
-            merged.detail = "in-place overwrite after a clustered-btree descent, unlogged"
+            merged.detail = ("in-place overwrite after a clustered-btree descent, "
+                             "WAL-logged as HEAP_OVERWRITE")
         phases.append(merged)
 
     if profit_result:
@@ -1465,11 +1467,11 @@ def main():
         "be lost between them, and --verify reads a sample back to confirm it.",
         "money is int64 minor units - float/decimal columns are refused at CREATE "
         "TABLE under the fixed-length rule.",
-        f"INSERT is the one logged statement"
+        f"every statement is WAL-logged - INSERT as HEAP_INSERT, UPDATE as "
+        f"HEAP_OVERWRITE, CREATE TABLE as catalog records (docs/spec/wal.md)"
         + (f" (durability={durability})" if durability else "")
-        + "; UPDATE and CREATE TABLE are unlogged, so the balance moves survive only "
-          "a SYNC or a clean shutdown. Do not measure this on tmpfs, where fsync is "
-          "free and every durability class looks identical.",
+        + ". Do not measure this on tmpfs, where fsync is free and every durability "
+          "class looks identical.",
         (f"--cabin declares a Cabin on {CABIN_RELATION}.{CABIN_COLUMN} "
          "(docs/spec/cabin.md): the reporter's non-pk equality is then served from an "
          "observed value's entry set instead of walking the relation, and the account "

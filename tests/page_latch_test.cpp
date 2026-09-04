@@ -16,10 +16,11 @@
 #include "kds/storage/memory_page_device.hpp"
 
 // AM-S1 (`instructions/v3.0.0/workorder-am-m1-shared-pool.md`): the page
-// latch word - the primitive alone, on raw words with no store, no frame
-// and no pin. What the store does with it (the arming, the modes the
-// accessors pick, the eviction refusals) is `device_page_store_test.cpp`'s
-// and `eviction_test.cpp`'s, one stage over.
+// latch word - first the primitive alone, on raw words with no store, no
+// frame and no pin; then what the store does with it (the arming, the
+// modes the accessors pick, the sweep's and EvictClean's refusals) on
+// `PageLatchStoreTest` below. The scan ring's refusal (ReleaseScanSlot)
+// has no cell. The arming on the real assembly is `expeditor_test.cpp`'s.
 //
 // Two rules the cells pin because the header states them as rules rather
 // than as behaviour that happens to hold: the word is never upgraded (an

@@ -86,8 +86,10 @@ Two rules ride along, and both are load-bearing rather than tidy:
   correct by IX1's superset rule, and useless. This is `cabin.md` §5's
   third row, and the index carries the same contract test.
 - **Nothing reclaims.** A superseded entry costs memory, a page, and a
-  read-time skip; there is no purge of index entries, because readers are
-  deliberately unregistered (`docs/spec/txn.md` §9). Same bargain the
+  read-time skip; there is no purge of index entries: readers are
+  registered per core and `ReadHorizon()` bounds a purge (`docs/spec/txn.md`
+  §4.1), but only the undo purge and the catalog's delete-mark purge
+  consume it, and no index purge was built. Same bargain the
   var-heap and the undo log strike, stated here so it is not discovered.
 
 ### 2.1 Failure on the write path

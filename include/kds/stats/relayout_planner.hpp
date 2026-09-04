@@ -66,7 +66,7 @@ enum class RelayoutPlanKind : std::uint8_t {
 
 // Spec §6's gates, by number.
 enum class RelayoutGate : std::uint8_t {
-    kReaderHorizon = 1,   // no oldest-active horizon: readers unregistered
+    kReaderHorizon = 1,   // the per-core horizon feeds no user-heap purge, and no mover exists
     kOrderedBetween = 2,  // clustering breaks the property kRange pruning reads
     kPageReuse = 3,       // a freed page reallocated across relations breaks trails
 };

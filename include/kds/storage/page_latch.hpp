@@ -32,9 +32,10 @@
 //     request, so an X-then-S it did not admit would spin undiagnosed;
 //   - exclusive acquire: admitted on a free word, and **re-entrant for the
 //     owning core** (count + 1) - one task holds a page twice on every chain
-//     growth and split path, and the owning core is the running task
-//     because a core runs one task at a time and no task parks holding a
-//     pin (exec::InstallSuspendAudit);
+//     growth and split path, and the owning core stands for the running
+//     task on the discipline that no task parks holding a pin - recorded,
+//     not enforced, by exec::InstallSuspendAudit in debug builds; the word
+//     itself cannot tell two tasks on one core apart;
 //   - **never upgraded**: an exclusive request against shared holders is
 //     `kBusy`, whoever holds the shares. The word cannot tell whose they
 //     are; the store can (its pins are this core's through M1), and it is
@@ -131,8 +132,9 @@ public:
     // diagnoses).
     static PageLatchOutcome TryAcquire(std::uint32_t& word, PageLatchMode mode,
                                        std::uint32_t core) noexcept {
-        // The owner field cannot name a core past the cap: `core + 1` would
-        // carry into the exclusive bit and decode as core 0's hold.
+        // The owner field cannot name a core past the cap: EncodePageLatch
+        // masks `core + 1` into the field, so a core past it would decode as
+        // another core's hold (127 as core 0's).
         assert(core <= kPageLatchMaxCoreId);
         std::atomic_ref<std::uint32_t> ref(word);
         std::uint32_t cur = ref.load(std::memory_order_acquire);
