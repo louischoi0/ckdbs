@@ -172,10 +172,12 @@ Rule 3: name each wait and give it a share.
 |---|---|---|
 | **Cross-core statement shipping (peer→core 0 hop)** | dominant: accounts for the *entire* `cores=8` throughput loss (§3), not merely the largest share | `ploff` vs `plon` at fixed `cores=8`, isolating the hop cleanly since nothing else differs between the two configs (same core count, same relation ownership) |
 | **Durability/commit (fsync or its batched equivalent)** | `ploff`'s own commit p50 (1,778.8/1,745.9 µs, no hop at all) is the durability-plus-RTT floor for this shape; `strict` was not run so the fsync-only component cannot be isolated further this run | `ploff` commit percentiles, §4 |
-| **The hop is not evenly spread across the transaction's 8 statements — the `COMMIT` pays a disproportionate share** | `commit`'s own p50 delta (`plon`−`ploff`) is 4,030.0 µs (`plon-r2`: 4,045.7 µs) against a *whole-booking* p50 delta of 6,740.8 µs (`r2`: 6,956.4 µs) — **59.8%/58.2%** of the entire added latency sits in the one statement that both ships *and* then waits on core 0's own group-commit drain. The other ~7 statements split the remainder at roughly 387–416 µs each, closer to a plain routing hop with no durability wait stacked on it | per-phase p50 arithmetic, §4; consistent within 1.6 points across the repeat pair |
-| **Read wait** | `cargo-lookup`/`credit-lookup`/`capacity-read`/`recipe-read` sit at 220–540 µs p50 in `ploff`, rising to 340–540 µs p50 in `plon` — small individually, four per booking, and not where the loss concentrates | `<cell>.run.stdout.txt` phase table |
+| **The hop is not evenly spread across the transaction's 8 statements — the `COMMIT` pays a disproportionate share, and one read pays roughly double the average of the rest** | `commit`'s own p50 delta (`plon`−`ploff`) is 4,030.0 µs (`plon-r2`: 4,045.7 µs) against a *whole-booking* p50 delta of 6,740.8 µs (`r2`: 6,956.4 µs) — **59.8%/58.2%** of the entire added latency sits in the one statement that both ships *and* then waits on core 0's own group-commit drain. Averaged across the other 7 statements the remainder is roughly 387–416 µs each, but that average hides real skew: `cargo-lookup` alone rises ~847 µs p50 (421.8→1,268.5 µs; `r2`: 438.1→1,257.8 µs) — close to double the per-statement average, and the size of §5's own 842.6 µs whole-booking-over-8 estimate — while the other three reads and the inserts move far less | per-phase p50 arithmetic, §4; consistent within 1.6 points across the repeat pair |
+| **Read wait** | not uniform across the four reads. `credit-lookup`/`capacity-read`/`recipe-read` sit at 373.5–537.2 µs p50 in `ploff` (`r2`: 376.5–525.7 µs) and 336.8–539.1 µs p50 in `plon`/`plon-r2` — essentially flat, no hop cost visible. `cargo-lookup` is the outlier: 421.8/438.1 µs p50 in `ploff`/`ploff-r2` rising to 1,268.5/1,257.8 µs in `plon`/`plon-r2` — a ~3× rise, ~847 µs, matching the hop estimate above almost exactly. Individually still small next to the commit's ~4 ms, but not the uniform 220–540 µs this row originally reported | `<cell>.run.stdout.txt` phase table |
 | **Lock/conflict wait** | small and roughly flat across configurations (7–12 conflicts of 3,000 committed in every cell, §3); not the mechanism behind the `cores=8` loss since it does not move with `peer_listeners` | `conflicted`/`retries` counters |
 | **Client/socket round trip** | included in every number above; the driver is a single Python connection per booker, so this floor is shared with AL-S8's own caveat about not separating it further without perturbing the durability path being priced | — |
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read 2026-09-04): the two rows above originally read "the other ~7 statements split the remainder at roughly 387–416 µs each, closer to a plain routing hop with no durability wait stacked on it" and "sit at 220–540 µs p50 in `ploff`, rising to 340–540 µs p50 in `plon`." Both are averages that hid a single outlier: `<cell>.run.stdout.txt`'s phase table shows `credit-lookup`/`capacity-read`/`recipe-read` essentially flat (373.5–537.2 µs p50 in `ploff`, 336.8–539.1 µs in `plon`), but `cargo-lookup` rises from 421.8/438.1 µs to 1,268.5/1,257.8 µs — a ~3× jump the "220–540"/"387–416" ranges concealed. The 387–416 µs per-statement average itself is arithmetically correct (it is not restated); what was wrong is reading it as evenly spread.*
 
 **Engine-side corroboration from `SHOW META`.** Core 0's own
 `sched_foreground_polled_us` per booking is nearly flat between
@@ -187,16 +189,26 @@ shipped statement is cheap: `3,228,153 / 41,060 shipped_executed = 78.6
 µs`. The loss is therefore almost entirely on the **requesting peer's**
 side of the hop — the wait for the reply — which `SHOW META` does not
 expose as a summed quantity, only as a per-core maximum
-(`shipped_wait_us_max`, 22,619–39,141 µs on the six peers carrying
+(`shipped_wait_us_max`, 22,619–39,141 µs on the **nine** peers carrying
 substantial ship traffic — over 1,000 `shipped_statements` — across both
-`plon` cells, landing right around the `booking` phase's own p99:
+`plon` cells (`plon`: cores 1, 3, 5, 7; `plon-r2`: cores 2, 3, 4, 5, 6),
+landing right around the `booking` phase's own p99:
 consistent with, though not proof of, the hop's wait being what fills
-the tail. The two peers with only a handful of shipped statements each
-(8 and 300) show 10,246–40,619 µs instead — too small a sample per peer
+the tail. The **three** peers with only a handful of shipped statements each
+(`plon` core 2 = 8, core 4 = 300; `plon-r2` core 7 = 8) show 10,246–40,619 µs instead — too small a sample per peer
 to read as anything but noise, not included in the range above). A
 per-commit or per-shipped-statement **mean** wait counter split by core
 does not exist today; that is what would turn this corroboration into a
 full accounting.
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): the paragraph above originally said "six peers" and "the
+two peers with only a handful." Recounting `<cell>.meta.json`'s
+per-core `shipped_statements` for both `plon` cells gives **nine** cores
+above 1,000 (`plon` cores 1/3/5/7, `plon-r2` cores 2/3/4/5/6) and
+**three** with a handful (`plon` core 2 = 8 and core 4 = 300, `plon-r2`
+core 7 = 8) — the 22,619–39,141 µs and 10,246–40,619 µs ranges
+themselves were already correct for these sets and are unchanged.*
 
 **Per-statement hop cost.** Averaging the whole-booking delta over 8
 statements, per AR2's own estimate: `(19,482.7 − 12,741.9) / 8 ≈ 842.6 µs`

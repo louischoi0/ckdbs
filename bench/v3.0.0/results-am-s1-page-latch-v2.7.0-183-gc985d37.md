@@ -78,8 +78,21 @@ which is what carries the run's original `started` into each later
 entry, not a second run — see the archive README). Pass 2 was added because `g1-B`
 came back degraded, leaving `group` with only one clean `B` cell; pass 3
 because both `g3` cells also came back degraded. Interleaved A/B
-throughout, no arm run twice in a row, each pair repeated with the order
-reversed.
+throughout: within each two-cell pair the arms alternate, and each
+durability family's starting arm reverses pair to pair (group: `g1`
+A-first, `g2` B-first, `g3` A-first, `g4` B-first; strict: `s1` A-first,
+`s2` B-first). The same arm does run twice in a row three times, at the
+seams between pairs where adjacency was not controlled for — `s1-B`
+(13:16:44) into `g2-B` (13:17:15), `s2-A` (13:18:08) into `g3-A`
+(13:20:47), and `g3-B` (13:21:09) into `g4-B` (13:22:45), all visible in
+the run order below.
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): this sentence originally read "no arm run twice in a row."
+`run-log.txt`'s own arm sequence is A B A B B A B A A B B A — alternation
+holds inside every pair and the starting arm reverses pair to pair
+within each durability family, exactly as stated above, but the same
+arm does repeat at three pair boundaries, named above.*
 
 | Cell | Arm | Port | Durability | Start (UTC) | Work window (s) | Pre-load (1 min) | Post-load | `recovery_checkpoint_us` | State |
 |---|---|---|---|---|---|---|---|---|---|
@@ -150,6 +163,57 @@ inside the spread this run's own repeated cells already show for one
 arm alone. Neither reads as a finding; §7 develops why, including the
 one place (group A) where the "own spread" number is doing more work
 than a two-cell floor normally would.
+
+**Both readings above are cell-wise: they exclude the three degraded
+*cells* (`g1-B`, `g3-A`, `g3-B`) but keep a degraded cell's clean
+*partner* in the arm mean whenever that partner is itself clean. Only
+`g1` has such a partner — `g1-B` is degraded and dropped, but `g1-A` is
+clean and stays in the arm-A mean; `g3`'s own partner, `g3-A`, is
+independently degraded too, so that pair is already excluded whole. This
+document's own
+noise-floor rule is to repeat the *pair*, not the cell — a device stall
+on one arm of a pair says nothing about whether its partner's result
+would have looked the same on a quiet host, so the honest exclusion unit
+is the pair, not the individual cell.** Applying that: `g1` (both
+`g1-A` and `g1-B`) and `g3` (both `g3-A` and `g3-B`) drop entirely,
+leaving group A with the same two cells as group B (`g2-A`/`g4-A` vs
+`g2-B`/`g4-B`, n=2 each) instead of three vs two; strict is unaffected
+(both its pairs were already clean).
+
+| Durability | Arm | n (pair-wise clean) | Mean TPS | Own spread (max−min)/min |
+|---|---|---|---|---|
+| group | A | 2 (`g2-A`, `g4-A`) | 731.9 | 0.2% |
+| group | B | 2 (`g2-B`, `g4-B`) | 717.9 | 1.7% |
+| strict | A | 2 (`s1-A`, `s2-A`) | 189.2 | 2.6% |
+| strict | B | 2 (`s1-B`, `s2-B`) | 193.7 | 0.5% |
+
+| Durability | B − A (TPS, pair-wise) | B vs A |
+|---|---|---|
+| group | −14.0 | **−1.9%** |
+| strict | +4.6 | **+2.4%** |
+
+**Under pair-wise exclusion, group flips sign: A is faster by 1.9%, not
+B faster by 1.0%.** This is the same direction as both matched group
+pairs in §7 (`g2`: A by 2.7%; `g4`: A by 1.2%) — unsurprising, since
+dropping the unpaired `g1-A` is what was pulling the cell-wise A mean
+down into a tie with B in the first place (§7 traces `g1-A`'s own TPS as
+the outlier driving group A's 9.6% cell-wise spread). Strict is
+unchanged because neither of its two pairs lost a partner. Read as: at
+`cores = 1`, the compile-out's bounded cost is **−1.9% (group, A ahead,
+matching both group pairs) and +2.4% (strict, B ahead, matching both
+strict pairs)** — opposite signs across the two durability classes,
+each within a few percent, not the "B inside A's own spread" reading
+the cell-wise table above gives on its own. §7 carries the pair-level
+evidence this rests on; §11 folds it into the run's overall reading.
+
+*Added on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04). The cell-wise table and its "+1.0%"/"inside A's 9.6%"
+reading above are the run's own first report and are left as measured —
+they are not wrong, only wider than the exclusion this document's own
+rules call for once the pair-wise treatment already given to `g3` (both
+cells dropped) is applied to `g1` too. Both readings
+now stand: the numbers agree with each other about where the noise floor
+is, and disagree about which arm they say is ahead.*
 
 ## 4. Percentiles (rule 6: p0/p25/p50/p95/p99/max, every row)
 
@@ -276,9 +340,22 @@ identical to `account-update`'s, per §4):
 This delta is what one `fsync` (strict) or a share of one group-batched
 `fsync` (group) costs on this device. Against the same statement's own
 arm-to-arm difference — 9.4 µs in group, 152.0 µs in strict, from the
-p50 means in the table above — the durability wait is 710× and 43×
+p50 means in the table above — the durability wait is 707× and 43×
 larger: the compile-out this document exists to price is nowhere near
 this wait's scale.
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): this sentence originally said 710×, dividing 6,671.9 by the
+table's rounded 9.4 µs (6,671.9 / 9.4 = 709.8, which itself rounds to
+710). The group arm-A/arm-B p50 means round to 2,648.9/2,639.5 for
+display, but computed from the underlying per-cell `trade-insert` p50s
+(`g1-A`/`g2-A`/`g4-A` and `g2-B`/`g4-B`) they are 2,648.93/2,639.50 µs,
+a difference of 9.43 µs, not 9.4. `6,671.9 / 9.43 ≈ 707.3`, which is
+where 707× comes from. (The table's own `+7.1` TPS delta at §3 has the
+same source: the unrounded group-arm means are 710.71/717.86 TPS,
+7.15 apart, which standard rounding renders as 7.1 rather than 7.2 —
+not a separate error, the same effect of computing from finer-grained
+inputs than the table displays.)*
 
 **The mechanism is visible directly in `SHOW META`.** Group durability
 batches: `wal_syncs` ≈ 5,434–5,441 against `wal_group_commits` ≈
@@ -359,6 +436,20 @@ document cannot distinguish that from ordinary first-cell noise with one
 sample. A future same-shape run that opens with a throwaway warm-up cell,
 discarded before the measured pairs begin, would settle it cheaply.
 
+**`g1-A` is not just a milder version of the same host effect — it is
+the one clean cell this document's own noise-floor rule (repeat the
+pair, not the cell) says should have been dropped alongside its
+degraded partner `g1-B`, and dropping it changes which arm the group
+headline favors.** §3 now carries that reading: excluding both cells of
+every pair with a degraded partner (`g1` and `g3`, not just their
+degraded halves) leaves group A at 731.9 TPS (`g2-A`/`g4-A`, spread
+0.2% — the tight agreement this paragraph already flagged as the more
+trustworthy floor) against group B's unchanged 717.9 TPS, a **1.9% A
+lead**, not the cell-wise table's 1.0% B lead. That 1.9% is bounded by,
+and consistent with, the two matched group pairs below (`g2`: A by
+2.7%; `g4`: A by 1.2%) — all three now agree on direction, where the
+cell-wise headline alone did not.
+
 **The matched same-pass pairs do not agree on direction, which is itself
 evidence the delta is noise.** Four same-pass, interleaved pairs survive
 exclusion (`g1` is dropped, `g3` is dropped — both have a degraded
@@ -372,11 +463,24 @@ partner):
 | `g4` | 732.6 | 723.9 | A | 1.2% |
 
 Group pairs favor A; strict pairs favor B; every margin is under 4%.
-Four samples, two per durability, is too few to call a consistent winner,
-and that inconsistency — not a tight aggregate spread — is the strongest
-evidence in this run that the compile-out costs nothing measurable: a
-real regression or win would be expected to show the same sign in both
-matched pairs of its durability class, and neither class does.
+**Each durability class is internally consistent — both group pairs
+favor A (2.7%, 1.2%), both strict pairs favor B (4.0%, 0.9%) — but the
+two classes disagree with each other.** Four samples, two per
+durability, is too few to trust either sign as a real effect on its
+own, and a compile-out that costs A a few percent at `group` while
+costing B a few percent at `strict`, with no mechanism tying the sign to
+the durability setting, is not what a real regression or win in the
+compile-out itself would produce — that is the evidence this run reads
+as noise, not the absence of any pattern within a class.
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): this paragraph originally said "a real regression or win
+would be expected to show the same sign in both matched pairs of its
+durability class, and neither class does" — but the table two lines
+above it shows exactly the opposite: `g2`/`g4` both favor A and
+`s1`/`s2` both favor B, so both classes *do* show a consistent sign
+within themselves. What is inconsistent is between the two classes, not
+within either.*
 
 ## 8. Delta against this engine's own history (rule 4)
 
@@ -442,12 +546,24 @@ that number belongs, against AL-S8's own 8-core baseline.
   this result as evidence the latch itself is free would be a category
   error the work order's own two-cell split exists to prevent.
 - **Group durability's own run-to-run spread (9.6% on one arm's three
-  clean cells) is wider than either arm's mean difference from the
-  other** (1.0% group, 2.4% strict, §3/§7). On this host, at this shape,
-  the engine's own day-to-day variance at `cores = 1` is a larger signal
-  than a 535-line, mechanically-reasoned-to-be-inert code change. Any
-  future `cores = 1` A/B on this class of change should budget for a
-  floor at least this wide before calling a delta a result.
+  clean cells, cell-wise) is wider than either arm's mean difference from
+  the other under that same cell-wise counting** (1.0% group, 2.4%
+  strict, §3/§7). But §3's pair-wise reading — dropping `g1-A` alongside
+  its degraded partner, the way `g3`'s pair already was dropped — tightens
+  group's own floor to 0.2%/1.7% and turns the group delta into a
+  **1.9% A lead**, matching both matched group pairs (§7). The honest
+  statement is not "nothing measurable inside a 9.6% spread": it is that
+  the compile-out's bounded cost is **−1.9% (group, A ahead, both pairs
+  agree) and +2.4% (strict, B ahead, both pairs agree)** — opposite
+  signs across the two durability classes, each a few percent, neither
+  large enough on four samples to call a real effect, but not the flat
+  "no signal" the wider cell-wise spread implied either. On this host,
+  at this shape, the engine's own day-to-day variance at `cores = 1` is
+  still a larger source of uncertainty than a 535-line,
+  mechanically-reasoned-to-be-inert code change should need to clear;
+  any future `cores = 1` A/B on this class of change should exclude by
+  pair, not by cell, from the start, and should budget for a floor at
+  least this wide before calling a delta a result.
 
 Raw driver JSON, `SHOW META` text, cell records, server configs and the
 orchestrator/summary scripts for all twelve cells are archived at

@@ -127,9 +127,17 @@ session shipping it may be a peer.
 |---|---|---|
 | **Durability/commit (fsync or its batched equivalent)** | present but not the dominant lever here — `commit` p50 moves only 1,742→1,534 µs (group vs strict, cores=1), a ~12% difference, far smaller than scenario0's 3.6× | group and strict differ by far less here than in scenario0 because a booking's eight statements already serialize one transaction's round trips; the marginal cost of one more sync per commit is small next to that fixed structure |
 | **Cross-core statement shipping (peer→core 0 hop)** | dominant at `cores=8`: `commit` alone gains ~4,400–5,400 µs (§4) and every one of the seven statements before it pays the same per-hop cost when the session is peer-accepted | `cores=1` vs `cores=8` delta at fixed durability, isolated from the WAL question since every relation stays core-0-owned in both (§2) |
-| **Read wait** | `cargo-lookup`/`credit-lookup`/`capacity-read`/`recipe-read` each sit at 200–600 µs p50 (cores=1) rising to 350–600 µs p50 (cores=8) — small individually, four of them per booking | archived per-cell JSON, `phases` array |
+| **Read wait** | not uniform across the four reads at `cores=8`. `credit-lookup`/`capacity-read`/`recipe-read` sit at 317.4–512.1 µs p50 at `cores=1` (group and strict) rising to 335.6–597.3 µs p50 at `cores=8` — small individually, and the rise is modest. `cargo-lookup` is the outlier: 259.0/409.5 µs p50 at `cores=1` (strict/group) rising to **1,333.8/1,289.6 µs** at `cores=8` (strict/group) — a ~3–5× jump, ~880–1,075 µs, the same order of magnitude as the per-hop cost §5's own `commit` row prices | archived per-cell JSON, `phases` array; `s2-c8-g.stdout.txt`/`s2-c8-s.stdout.txt`'s phase tables directly |
 | **Lock/conflict wait** | small in aggregate (5–12 conflicts of 3,000 committed, §3) but not zero when it fires: a conflicted `operation-update` costs a full retry, visible in its own p99 (2,226–6,059 µs) running well above its p50 | `conflicted`/`retries` counters, `operation-update`'s own percentile spread |
 | **Client/socket round trip** | included in every number above; not separable from durability at this driver's granularity without `--log-level debug`, which was not used to avoid perturbing the fsync path being priced | — |
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): the Read wait row above originally said the four reads
+"each sit at 200–600 µs p50 (cores=1) rising to 350–600 µs p50
+(cores=8)," an average that hid `cargo-lookup`: `s2-c8-g.stdout.txt`'s
+phase table gives it a 1,289.6 µs p50 at `cores=8`, more than double the
+stated 600 µs upper bound, while `credit-lookup`/`capacity-read`/
+`recipe-read` do sit inside a range close to what was stated.*
 
 ## 6. Correctness — a finding orthogonal to this stage
 

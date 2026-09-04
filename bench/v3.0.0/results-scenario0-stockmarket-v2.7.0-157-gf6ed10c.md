@@ -164,9 +164,19 @@ earlier draft of this document mis-read it as the latter.)
 |---|---|---|
 | **Durability/commit (fsync or its group-batched equivalent)** | dominant: ~7,900 µs of `trade-insert`'s ~9,127 µs strict p50 (cores=1), collapsing to ~1,700 µs of its ~2,701 µs group p50 | the group-vs-strict delta at fixed cores, cleanest at `cores=1` where there is no peer-attach path to also account for |
 | **Client/socket round trip + dispatch** | ~1,100–1,200 µs floor | the `load-accounts` phase's own p50 (an uncontended single connection, one row each, no concurrent committers to batch with — "a batch of one is a batch") sits at 1,169–1,235 µs across every cell's load phase; this is the floor every statement in this document pays before durability is even asked for |
-| **Write-statement execution (page mutation itself)** | not separately measurable this run — would need `--log-level debug`, which was avoided so as not to add I/O to the fsync path being priced. Indirectly, `trade-insert` (WAL-logged) and `account-update` (not logged) costing the same in every cell (§4) is consistent with row mutation being a small fraction of either, since the two differ in exactly this term and show no gap | §4's own comparison |
+| **Write-statement execution (page mutation itself)** | not separately measurable this run — would need `--log-level debug`, which was avoided so as not to add I/O to the fsync path being priced. `trade-insert` and `account-update` cost the same in every cell (§4), but that is not evidence about the size of the mutation term: both are WAL-logged (§4's correction), so the two statements do not differ in whether they log — only in row shape — and their agreement says the commit's durability wait dominates both about equally, not that row mutation is cheap | §4's own comparison |
 | **Read wait** | n/a to `txn` itself (no read inside the four statements); `profit-scan`'s FilterScan runs concurrently and does not gate `txn` | — |
 | **Lock/conflict wait** | ~0: `torn = 0` in every cell, and each trader owns a disjoint account partition by construction (`--traders 8` against `--users 100`), so no two traders' `UPDATE accounts` can collide | scenario doc's own design; confirmed by the printed `torn` counter |
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): the row above originally called `account-update` "(not
+logged)" and read the trade-insert/account-update agreement as evidence
+row mutation is cheap because the two statements "differ in exactly this
+term." §4's own correction (above, dated after `680c763`) already
+established that `account-update` is WAL-logged like every other
+mutation; this row is fixed to match, and the inference is corrected
+along with it — the agreement is still real, it just says the commit
+wait dominates, not that logging is free.*
 
 ## 6. Correctness
 

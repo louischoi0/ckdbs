@@ -57,13 +57,6 @@ excluded here, per the two results files' own §2.
   data file is built once and then measured once, per
   `bench/docs/README.md`'s documented shape (`git show
   1769487:bench/docs/README.md`).
-- **`logs/<cell>/kdb.log`** — the server's own `log_level = warn` log for
-  that cell. Empty for every cell that raised nothing above `WARN`; for
-  the three spreading cells (`s0-c8-sp65536`, `s0-c8-sp65536-r2`,
-  `s0-c8-sp4096`) it holds exactly the `torn`-count's worth of `INSERT
-  ... -> ERR TXN_CONFLICT retryable=1 this transaction's writes are bound
-  to core 0 and relation '...' is owned by core N` lines the C2 results
-  file's §5 and §6 read.
 - **`run.json`** — `run_cells.py`'s own run-wide index: `describe`,
   `binary_sha256`, `started`/`finished`, and a `cells` list. **Only a
   partial index of this run**: `run_cells.py` was invoked twice (the
@@ -90,3 +83,20 @@ hashed `kds_server` binary copy, and `smoke-c1`'s own `.conf`/
 `.server.txt` (no measurement). `<cell>.server.txt` (the server process's
 own stdout/stderr capture) is also not archived — it is not one of the
 files either results file's numbers were read from.
+
+**`logs/<cell>/kdb.log` is also not archived, though `bench/README.md`'s
+rule calls for a scenario run to archive its logs alongside the JSON
+summaries.** *Corrected on `ar2-borrow-model` after `c40b3cc` (archive
+re-read 2026-09-04): this file previously described a `logs/<cell>/kdb.log`
+entry, quoting the `TXN_CONFLICT` lines the C2 results file's §5 reads,
+as one of the files present here — no `logs/` directory exists in this
+archive directory (`ls` at `c40b3cc` shows only `README.md`,
+`device-probes.txt`, `run.json`, `run_cells.py`, `summarize.py` and the
+thirteen cells' `.cell.json`/`.conf`/`.json`/`.meta.json`/
+`.run.stdout.txt`/`.schema-only.stdout.txt`/`.load-only.stdout.txt`).
+The C2 results file's own kdb.log quotation is therefore not
+independently reproducible from this archive; it is carried over from
+the run directory's own log file at measurement time, and is consistent
+with the archived `.meta.json` counters the results file cites beside
+it (`cross_core_write_refusals`, `shipped_refusals`, `trade-insert`
+`errors`, all matching 7/7/6 across the three spreading cells).*

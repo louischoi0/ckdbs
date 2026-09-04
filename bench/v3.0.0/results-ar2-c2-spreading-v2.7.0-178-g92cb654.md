@@ -203,20 +203,29 @@ core (or by local-vs-shipped origin) — it does not exist today.
 (first run only), core 0's `shipped_executed` (10,445) equals the exact
 sum of every peer's own `shipped_statements` (0 + 1,253 + 422 + 1,253 +
 3,760 + 1,253 + 2,504 = 10,445) — every shipped statement landed exactly
-once, on core 0, with no loss or double-count. **This exact equality
-does not hold in the other two spreading cells**: `sp65536-r2` sums to
-10,443 against core 0's own `shipped_executed` of only 9,194 (peers 2
-and 3 also show nonzero `shipped_executed`, 1 and 1,248); `sp4096` sums
-to 10,020 against 8,770 (peer 7 shows `shipped_executed = 1,250`). Every
-spreading cell's `SHOW META` carries `split_relations=2
-split_relation_detail=4018:6@6,4026:2@2` (`trades` split across 6 owner
-stages, `user_periodic_profit` across 2, identically in every cell) — so
-once `trades` has several owner cores, a statement can ship to
-**whichever peer currently owns the target range**, not only to core 0.
-The account-update-dominated total that matches core 0 exactly in the
-first `sp65536` run is not a general law; it is what happened when
-nothing this run needed from a peer-owned range crossed a *different*
-core's session boundary. **Decomposing the total precisely into
+once, on core 0, with no loss or double-count. **The same equality holds
+in the other two spreading cells too, once core 0's own outbound
+shipping is folded in.** In `sp65536-r2` and `sp4096`, `trades`'
+several owner cores mean core 0 itself now ships some statements out to
+a peer — 1,249 in `sp65536-r2` (to peers 2 and 3, per their
+`shipped_executed` of 1 and 1,248), 1,250 in `sp4096` (to peer 7).
+Summing `shipped_statements` across *every* core, including core 0's own
+1,249/1,250, gives 10,443 and 10,020 — and summing `shipped_executed`
+across every core gives the same two totals, so **instance-wide shipped
+equals executed in all three cells**. What does not equal core 0's
+`shipped_executed` (9,194 / 8,770) is the sum restricted to the *peers
+alone* — but that is the wrong subtraction, not a broken invariant:
+peer-only `shipped_statements` (9,194 / 8,770) already equals core 0's
+`shipped_executed` exactly, because core 0's own outbound 1,249/1,250
+is what accounts for the rest. Every spreading cell's `SHOW META`
+carries `split_relations=2`; the `trades` split (relation id 4018) is
+**not** identical across cells — `4018:6@6` in `sp65536`, `4018:5@5` in
+`sp65536-r2`, `4018:7@7` in `sp4096`, since the split point moves with
+each run's own insert timing — while `user_periodic_profit` (id 4026)
+does stay `2@2` in all three. So once `trades` has several owner cores,
+a statement can ship to **whichever peer currently owns the target
+range**, not only to core 0 — and, symmetrically, a write core 0 itself
+issues can now ship *out* to a peer too. **Decomposing the total precisely into
 "`UPDATE accounts`" versus "reporter/load rows" is not possible from
 these counters**: `account-update`'s own attempted count (10,014 =
 5,000×2 committed + 7×2 torn) is close to but does not equal any clean
@@ -224,6 +233,26 @@ subset of the totals above, and `shipped_statements` carries no
 per-statement-type breakdown. Treat "≈10,000 of it is `UPDATE
 accounts`, the rest is load/report/verify traffic that happened to land
 on a peer" as the right order of magnitude, not an exact accounting.
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): this passage originally said the exact equality "does not
+hold" in `sp65536-r2`/`sp4096`, comparing each cell's peer-only
+`shipped_statements` sum (10,443 / 10,020) against core 0's own
+`shipped_executed` (9,194 / 8,770) and reading the gap as a broken
+invariant. Those peer-only sums include core 0's own outbound
+`shipped_statements` in the raw `SHOW META` totals I quoted (1,249 /
+1,250 — a statement core 0 issued that shipped to a peer, once `trades`
+has several owner cores); once that is set aside, the peer-only sum
+(9,194 / 8,770) already equals core 0's `shipped_executed` exactly, and
+instance-wide `shipped_statements` equals `shipped_executed` in all
+three cells (10,443 = 10,443; 10,020 = 10,020). The equality holds; it
+was the reading, not the counters, that was wrong. Also corrected: the
+`split_relation_detail` value quoted was `4018:6@6` — true only for
+`sp65536` — read as identical across all three cells; it is `4018:6@6`
+(sp65536), `4018:5@5` (sp65536-r2), `4018:7@7` (sp4096), while
+`4026:2@2` genuinely is identical in all three. The paragraph's
+conclusion — that a multi-owner `trades` lets a statement ship to
+whichever peer currently owns the target range — stands.*
 
 **Item 1, continued — which cores the trader sessions landed on.** For
 the two *unarmed* cells (no multi-owner complication), the arithmetic
@@ -261,6 +290,21 @@ ERR TXN_CONFLICT retryable=1 this transaction's writes are bound to
 core 0 and relation 'trades_s0c8sp65536' is owned by core 7 ...  (×1)
 ERR TXN_CONFLICT retryable=1 ... is owned by core 6 ...           (×6)
 ```
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): the archive directory
+(`bench/v3.0.0/archive/ar2-c1c2-v2.7.0-178-g92cb654/`) holds no `logs/`
+directory — the run's own README describing one as archived was wrong
+(fixed there in this same pass) — so this quotation is not
+independently reproducible from the archive the way the rest of this
+document's numbers are; it is carried over from the run directory's own
+`kdb.log` at measurement time. It is consistent with what the archive
+does hold: `s0-c8-sp65536.meta.json`'s core-0 `cross_core_write_refusals=7`
+with detail `0>6:4018=6,0>7:4018=1` (the same 1/6 split quoted above),
+peer `shipped_refusals` summing to 7, and `trade-insert`'s own `errors=7`
+in `s0-c8-sp65536.run.stdout.txt` — and the same triple match holds for
+`sp65536-r2` (7/7/7) and `sp4096` (6/6/6), confirming the three-way
+match below without needing the log file itself.*
 
 matching core 0's own `cross_core_write_refusals=7`,
 `cross_core_write_refusal_detail=0>6:4018=6,0>7:4018=1` exactly. The
@@ -332,8 +376,12 @@ than AL-S8's own `cores=8` measurement** (289.3 µs) and instead sits in
 the same band as AL-S8's own `cores=1` number (2,475.7 µs) — consistent
 with, though not proven by, this run's own device probes (4 KiB +
 `fdatasync`: 2.39 ms and 2.69 ms; 64 MiB + `fdatasync`: 161 MB/s and
-174 MB/s — recorded during the run but not as a file this document can
-cite directly, so named here as unverified against a raw artifact). Read
+174 MB/s — `bench/v3.0.0/archive/ar2-c1c2-v2.7.0-178-g92cb654/device-probes.txt`,
+landed alongside this document in the same commit, `9e5068c`; *corrected
+on `ar2-borrow-model` after `c40b3cc`, archive re-read 2026-09-04 — this
+sentence originally said these values were "not as a file this document
+can cite," which was true only until the same session wrote the file
+below*). Read
 as: this whole session's `fdatasync` path was several times slower than
 whatever AL-S8's session experienced, uniformly across cells, which is a
 host/day fact (§8), not a per-cell contention signal — `sync` is not the
@@ -413,24 +461,34 @@ precheck rules out a concurrent build in every cell, §1).
 
 **The run-to-run floor from the clean repeat pairs:**
 
-| Pair | Values | Spread |
+| Pair | Values | Spread ((max−min)/min, matching `results-am-s1-page-latch-v2.7.0-183-gc985d37.md`'s "own spread" definition) |
 |---|---|---|
 | `s0-c8-sp0-r2` alone (no clean partner — `sp0` is excluded) | 703.9 | n/a |
-| `s0-c8-sp65536` / `-r2` | 590.1 / 533.8 | **9.5%** |
+| `s0-c8-sp65536` / `-r2` | 590.1 / 533.8 | **10.5%** |
 | `s0-c1-r2` alone (no clean partner — `s0-c1` is excluded) | 720.1 | n/a |
 
-**The `sp65536` pair's own 9.5% spread is wide** — wider than every
+**The `sp65536` pair's own 10.5% spread is wide** — wider than every
 floor this suite has previously recorded (AL-S8's 1.5%/5–8%, C1's own
 0.3–1.1% in the same run, §8 there) — and it is the reason §3 states
 C2's two `range_size_ids` values (590.1/533.8 vs 523.1) as "losing by
-roughly the same amount" rather than ranking them: the 66.7-point gap
-between `sp65536`'s two runs is wider than the 10.7-point gap between
+roughly the same amount" rather than ranking them: the 56.3-point gap
+between `sp65536`'s two runs (590.1 − 533.8) is wider than the 10.7-point gap between
 `sp65536-r2`'s and `sp4096`'s single runs, so this document cannot
 distinguish "4096 vs 65536" from "this cell's own run-to-run noise" at
 one repeat each. **Both spreading configurations losing to the shipped
 baseline is not in question — the margin is; both `sp65536` values and
 `sp4096`'s sit clearly and entirely below `sp0-r2` (703.9) even after
 allowing for a spread this wide.**
+
+*Corrected on `ar2-borrow-model` after `c40b3cc` (archive re-read
+2026-09-04): this passage originally computed the gap as 66.7 points and
+the spread as 9.5%, i.e. (max−min)/max. 590.1 − 533.8 is 56.3, not 66.7;
+and the spread is now read with the same definition
+`results-am-s1-page-latch-v2.7.0-183-gc985d37.md` uses for its own "own
+spread" columns, (max−min)/min, so the two documents' spread figures are
+comparable — for this pair that is 56.3/533.8 = 10.5%, not 9.5%
+((max−min)/max). The values 590.1/533.8 themselves, and the 10.7-point
+`sp65536-r2` vs `sp4096` gap, were already correct and are unchanged.*
 
 ## 9a. Row-set size — not swept, named as a gap
 
