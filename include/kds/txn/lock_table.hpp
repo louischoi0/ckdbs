@@ -31,12 +31,51 @@
 //
 // ---- What this stage is, and what it is not -------------------------------
 //
-// AO-S1 is **the pure core** and has no scheduler in it. A conflicting
-// `Acquire` **answers** `kConflict` and names one holder; it does not park.
-// The park is AO-S2's, the wait-for graph AO-S4a's, and the cutover that
-// gives this table its first caller is AO-S3 - until then nothing in the
-// engine constructs one, and a writer still meets the first-updater-wins
-// refusal at `src/txn/manager.cpp`.
+// AO-S1 built **the pure core**: the table, its keys, modes,
+// compatibility, the fence gate and the cap. **AO-S2 adds the wait** - a
+// refused `Acquire` hands back a slot the waiter parks on with
+// `sched::WaitUntil`, and a decide flips the slots of everyone queued on
+// what it released. What is still absent is a *caller*: the wait-for graph
+// is AO-S4a's, and the cutover that makes a statement take a borrow is
+// AO-S3, so a writer still meets the first-updater-wins refusal at
+// `src/txn/manager.cpp` today.
+//
+// **The re-check after a park is mandatory, and the slot does not replace
+// it** (AO-3's finding G). `manager.hpp`'s premise - "nothing suspends
+// between reading a tuple's header and overwriting it" - is exactly what a
+// wait breaks, so a woken waiter must ask again rather than assume the
+// grant it was woken for is still there. `Acquire` *is* that re-ask: the
+// waiter calls it again, and the slot only says "something changed, look".
+// A slot flipped for a grant another waiter took is therefore a wasted
+// poll and never a wrong answer.
+//
+// **A departure from AO-R4, and why it is sound here.** AO-R4 specifies
+// the predicate as a disjunction - "the slot flipped **or** the holder is
+// decided" - with the waiter registering before its last read of the
+// holder's state, because it assumes that last read is of the window or
+// `IsInFlight`, outside any lock the registration takes. This
+// implementation reads the holder's state from **the table's own holder
+// list, in the same critical section as the registration and the slot's
+// clear**, so "the registration precedes the last check" is true by
+// construction rather than by discipline and the second disjunct is
+// redundant. It is also tighter: "the holder is decided" would wake a
+// waiter that still conflicts with a *second* holder the disjunct never
+// named.
+//
+// **The premise dies at AO-S3.** There the re-check becomes
+// `CheckWriteConflict` re-run - a read of the tuple header and the window,
+// outside this latch - and the registration is no longer in the same
+// critical section as the last state read. S3 must re-argue this rather
+// than inherit it: either AO-R4's disjunction returns, or the borrow is
+// taken before the header is read.
+//
+// **Cross-core, a wake is late rather than lost, until AO-S5.** A slot
+// flip from a foreign thread is not one of the three things that end a
+// sleeping reactor's idle block (`Scheduler::IdleTimeoutMs`: an fd, a
+// timer, the ring waker), so a waiter whose reactor has gone idle learns
+// of the flip when the block expires - `max_idle_block_ms`, 10 ms - not
+// when it happens. Liveness is unaffected and latency is not:
+// AO-R4's `kLockWake` ring message is what closes it, and AO-S5 owes it.
 //
 // Two consequences of having no caller yet, stated so they are not read as
 // finished work:
@@ -242,6 +281,18 @@ inline constexpr std::size_t kMaxLocksPerTxnDefault = 65536;
 // AO-R2's partition count, per core. `[constant]`, re-measured in AO-S7.
 inline constexpr std::size_t kLockPartitionsPerCore = 64;
 
+// What a parked waiter polls. The table owns it and a decide flips it;
+// the waiter holds a `shared_ptr` so the slot outlives the entry it was
+// queued on - entries live in a `vector` that reallocates, so a raw
+// pointer into one would dangle the moment another key hashed to the same
+// partition.
+//
+// One bit and not a grant: the wake says "the unit changed, ask again",
+// which is what keeps the re-check mandatory rather than optional.
+struct LockWaitSlot {
+    std::atomic<bool> ready{false};
+};
+
 struct AcquireResult {
     bool granted = false;
     // Set only when `granted` is false: **one** conflicting holder, which
@@ -252,7 +303,27 @@ struct AcquireResult {
     // The transaction already held this unit at a covering mode, so no
     // entry was added and no cap was spent. `granted` is true.
     bool already_held = false;
+    // Set only when `granted` is false: what to park on
+    // (`sched::WaitUntil` over `LockWaitReady(slot)`), and what a decide on
+    // the blocking unit flips. Never null on a refusal, so a caller cannot
+    // mistake "no slot" for "no wait needed".
+    std::shared_ptr<LockWaitSlot> slot;
 };
+
+// The predicate a waiter parks on. Free rather than a member so the
+// `std::function` a `WaitUntil` holds captures a `shared_ptr` and nothing
+// else - it must not reach the table, because a predicate runs on the
+// reactor once per iteration and taking a partition latch there would put
+// the table's latch on the poll path of every parked task.
+inline bool LockWaitReady(const std::shared_ptr<LockWaitSlot>& slot) noexcept {
+    // **No null branch, deliberately.** A refusal always carries a slot, so
+    // a null one is a broken contract - and answering `true` for it would
+    // satisfy `WaitUntil::await_ready` on entry, which means the acquire
+    // loop spins the reactor inside one `resume()` instead of parking. That
+    // is the hang this stage already had to fix once; a crash at the bug is
+    // the better failure.
+    return slot->ready.load(std::memory_order_acquire);
+}
 
 // The per-transaction half of the borrow: the bounded list AO-R6 puts on
 // `Transaction`, its own type so this stage can be built and tested before
@@ -316,11 +387,22 @@ public:
     StatusOr<AcquireResult> Acquire(std::uint64_t txn, const LockKey& key, LockMode mode,
                                     LockHoldings& holdings);
 
-    // Releases every borrow `holdings` records **and withdraws its pending
-    // wait**, then empties it. The last act of a decide, after visibility
-    // is published (AO-R6), so a woken waiter's re-check reads a decided
-    // holder.
+    // Releases every borrow `holdings` records, **wakes everyone queued on
+    // the units it let go**, and withdraws its own pending wait, then
+    // empties it.
+    //
+    // The last act of a decide, **after** visibility is published (AO-R6):
+    // a waiter woken here re-checks immediately, and if it ran before the
+    // commit was published it would read the holder as still in flight and
+    // park again on a slot nobody will flip a second time. Order matters
+    // for liveness, not only for tidiness.
     void Release(std::uint64_t txn, LockHoldings& holdings);
+
+    // Wakes every waiter queued on `key` without releasing anything.
+    // `Release` is its only engine caller; it is public because "a wake is
+    // not a grant" cannot be asserted any other way - every `Release`
+    // removes a holder, and the cell's whole point is a wake with none.
+    void WakeWaiters(const LockKey& key);
 
     // Is a range- or slice-unit fence held over `pk` by anyone but `txn`,
     // in `S` or `X`? The probe AO-R3 puts in place of a persisted lock bit.
@@ -365,6 +447,8 @@ private:
     struct Tenant {
         std::uint64_t txn = 0;
         LockMode mode = LockMode::kIntentionShared;
+        // A waiter's slot; null for a holder.
+        std::shared_ptr<LockWaitSlot> slot;
     };
 
     struct Entry {

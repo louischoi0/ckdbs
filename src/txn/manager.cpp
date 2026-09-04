@@ -231,6 +231,15 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     wal::Lsn lsn = wal::kNoLsn;
     if (wal_ != nullptr) {
         auto committed = wal_->Commit(txn.id_, durability);
+        // **The borrows stay held here, and that is the contract, not an
+        // oversight** (AO-R6). The append failed, so this transaction is
+        // still active and may yet be rolled back; releasing its tenancies
+        // now would admit another writer to rows this one can still undo.
+        // The caller owes an `Abort`, which releases them -
+        // `command_dispatcher.cpp`'s failed-commit path does exactly that
+        // and says why. The autocommit write scope does **not**, and
+        // already leaks the `Transaction` itself; AO-S3 inherits that as a
+        // borrow leak and owns fixing it.
         if (!committed.ok()) return committed.status();
         lsn = committed.value();
     }
@@ -260,6 +269,13 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     }
     txn.active_ = false;
     PublishCoreBounds();
+    // **The borrows go last** (AO-R6). After the window entry and after
+    // `active_` falls, so a waiter this wakes re-checks against a
+    // transaction it can already see as committed. Releasing first would
+    // let the woken writer read a holder that is decided in fact and
+    // in-flight to every observer, and refuse itself for a conflict that no
+    // longer exists.
+    if (locks_ != nullptr) locks_->Release(txn.id_, txn.borrows_);
     return lsn;
 }
 
@@ -460,6 +476,10 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     // same fact the floor rests on, so nothing is owed here beyond letting
     // the transaction stop holding the floor down.
     PublishCoreBounds();
+    // And the borrows, last and for the same reason as at commit: the
+    // compensations above have already put every page back, so a waiter
+    // woken here reads the prior version rather than a half-undone one.
+    if (locks_ != nullptr) locks_->Release(txn.id_, txn.borrows_);
     // Undo pages are **not** freed; purge is a non-goal (section 9). Nor is
     // this transaction's undo separable from anyone else's - one page holds
     // many transactions' records (undo_log.hpp).

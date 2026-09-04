@@ -116,6 +116,23 @@ const std::atomic<std::uint64_t>& LockTable::FenceCounterFor(catalog::Oid rel) c
 StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key, LockMode mode,
                                            LockHoldings& holdings) {
     AcquireResult result;
+
+    // **A transaction waits on at most one unit**, which `LockHoldings`
+    // records as one field - so asking for a *different* unit abandons the
+    // previous wait, and the queued record has to go with it. Left behind
+    // it is an orphan nothing can ever withdraw: `Release` unwinds only
+    // `waiting_`, which now names the new key, so the old entry keeps a
+    // waiter for the life of the instance, `WaiterCount` - AO-R3's probe
+    // gate - never returns to zero, and AO-S4a's wait-for graph would read
+    // an edge for a wait nobody is in and close a cycle on it.
+    //
+    // Withdrawn **before** the partition latch below, so only one partition
+    // latch is ever held at a time (AO-R2's order).
+    if (holdings.waiting_ && !(*holdings.waiting_ == key)) {
+        DequeueWaiter(txn, *holdings.waiting_);
+        holdings.waiting_.reset();
+    }
+
     const bool fence = IsFence(key, mode);
 
     // A fence's counter rises **before** its entry is published, so that a
@@ -183,10 +200,45 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
                     // Without this the entry would outlive every holder and
                     // `WaiterCount` - AO-R3's probe gate - would stay
                     // nonzero for the life of the instance.
-                    const bool queued = std::any_of(
-                        entry->waiters.begin(), entry->waiters.end(),
-                        [&](const Tenant& w) { return w.txn == txn; });
-                    if (!queued) entry->waiters.push_back(Tenant{txn, mode});
+                    //
+                    // A re-ask by an already-queued waiter keeps the slot it
+                    // is parked on. Handing it a fresh one would strand the
+                    // `WaitUntil` predicate on a slot the next decide no
+                    // longer knows about - a lost wakeup whose only exit is
+                    // the fault net, which AO-R8 says is never the normal
+                    // end of a wait.
+                    Tenant* queued = nullptr;
+                    for (Tenant& w : entry->waiters) {
+                        if (w.txn == txn) {
+                            queued = &w;
+                            break;
+                        }
+                    }
+                    if (queued == nullptr) {
+                        entry->waiters.push_back(
+                            Tenant{txn, mode, std::make_shared<LockWaitSlot>()});
+                        queued = &entry->waiters.back();
+                    }
+                    // **The wake is consumed here, under this latch.** A
+                    // waiter that was woken, re-asked, and is refused again
+                    // must park on a slot that is *not* already flipped, or
+                    // its predicate is satisfied on entry, `WaitUntil` never
+                    // suspends, and the acquire loop spins the reactor
+                    // instead of waiting on it.
+                    //
+                    // Clearing it here rather than in the caller is what
+                    // makes the clear race-free: `WakeWaiters` takes this
+                    // same partition latch, so a wake either lands before
+                    // this clear - in which case the conflict check above
+                    // has just seen the state that wake announced - or
+                    // after it, in which case the flip stands and the next
+                    // poll picks it up. There is no interleaving that
+                    // clears a wake the waiter has not already accounted
+                    // for, which is the lost wakeup AO-R8's fault net would
+                    // otherwise be the only exit from.
+                    queued->slot->ready.store(false, std::memory_order_release);
+                    queued->mode = mode;
+                    result.slot = queued->slot;
                     holdings.waiting_ = key;
                     return result;
                 }
@@ -197,8 +249,13 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
             part.entries.push_back(Entry{key, {}, {}});
             entry = &part.entries.back();
         }
-        entry->holders.push_back(Tenant{txn, mode});
-        // A granted request leaves no queued request of its own behind.
+        entry->holders.push_back(Tenant{txn, mode, nullptr});
+        // A granted request leaves no queued request of its own behind. Its
+        // slot dies with the record unless the waiter still holds a
+        // `shared_ptr` to it, which is exactly the parked-and-since-granted
+        // case: that predicate reads a slot nobody will flip again, and it
+        // does not matter, because the waiter has already been granted and
+        // is not parked on it any more.
         entry->waiters.erase(std::remove_if(entry->waiters.begin(), entry->waiters.end(),
                                             [&](const Tenant& w) { return w.txn == txn; }),
                              entry->waiters.end());
@@ -210,12 +267,42 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
     return result;
 }
 
+void LockTable::WakeWaiters(const LockKey& key) {
+    // Flip every queued slot on the unit. **A wake is not a grant**: each
+    // woken waiter re-asks through `Acquire`, and those that still conflict
+    // queue again on the slot they already hold. That costs a poll per
+    // waiter per decide and never a wrong answer, which is the trade
+    // AO-R4's mandatory re-check makes unavoidable - a grant handed out
+    // here would be a grant decided under this latch and consumed after it,
+    // with nothing holding the unit in between.
+    Partition& part = PartitionFor(key);
+    LatchGuard guard(part.latch);
+    for (Entry& e : part.entries) {
+        if (!(e.key == key)) continue;
+        for (Tenant& w : e.waiters) {
+            if (w.slot != nullptr) w.slot->ready.store(true, std::memory_order_release);
+        }
+        return;
+    }
+}
+
 void LockTable::DequeueWaiter(std::uint64_t txn, const LockKey& key) {
     Partition& part = PartitionFor(key);
     LatchGuard guard(part.latch);
     for (std::size_t i = 0; i < part.entries.size(); ++i) {
         Entry& e = part.entries[i];
         if (!(e.key == key)) continue;
+        // **Flipped on the way out.** A withdrawal drops the record the
+        // next decide would have flipped, so a waiter still parked on this
+        // slot - AO-S4a's deadlock victim, AO-R8's fault net - would poll a
+        // bit nobody owns any more and never be entered again. The wake is
+        // not a grant (`WakeWaiters`), so telling a withdrawn waiter to
+        // look again costs one poll and cannot admit it to anything.
+        for (Tenant& w : e.waiters) {
+            if (w.txn == txn && w.slot != nullptr) {
+                w.slot->ready.store(true, std::memory_order_release);
+            }
+        }
         e.waiters.erase(std::remove_if(e.waiters.begin(), e.waiters.end(),
                                        [&](const Tenant& w) { return w.txn == txn; }),
                         e.waiters.end());
@@ -260,6 +347,12 @@ void LockTable::Release(std::uint64_t txn, LockHoldings& holdings) {
         if (removed_holder && IsFence(held.key, held.mode)) {
             FenceCounterFor(held.key.rel_oid).fetch_sub(1, std::memory_order_release);
         }
+        // Then wake whoever was queued on it, in a second acquisition of the
+        // same partition latch rather than inside the one above: a wake is
+        // a store nobody is waiting on synchronously, and keeping it out of
+        // the release's own critical section keeps that section the length
+        // of a vector erase.
+        if (removed_holder) WakeWaiters(held.key);
     }
     holdings.held_.clear();
 

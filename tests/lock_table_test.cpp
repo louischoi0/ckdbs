@@ -3,17 +3,32 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <functional>
 #include <thread>
 #include <vector>
 
+#include "kds/sched/clock.hpp"
+#include "kds/sched/coro.hpp"
+#include "kds/sched/io_backend.hpp"
+#include "kds/sched/scheduler.hpp"
+#include "kds/storage/in_memory_page_store.hpp"
+#include "kds/txn/manager.hpp"
+#include "kds/txn/trx_id.hpp"
+#include "kds/txn/undo_log.hpp"
+#include "kds/wal/manager.hpp"
 #include "kds/wire/error_registry.hpp"
 
-// AO-S1 (`instructions/v3.0.0/workorder-ao-m2-lock-family.md`): the lock
-// family's pure core - the table, its keys, its modes, its compatibility,
-// the relation entry's counters, the queue as a data structure, and the
-// cap. **No scheduler**: a conflict is an answer here, not a park, so
-// nothing in this file waits on anything. The park is AO-S2's and the
-// wait-for graph AO-S4a's.
+// AO-S1 and AO-S2 (`instructions/v3.0.0/workorder-ao-m2-lock-family.md`).
+//
+// **S1, the pure core** - the table, its keys, its modes, its
+// compatibility, the fence gate, the queue as a data structure, and the
+// cap. A conflict is an answer, not a park.
+//
+// **S2, the wait and the wake on one core** - the last section of this
+// file, where two transactions run as coroutines on one real `Scheduler`
+// and one of them genuinely parks on the other's borrow. The wait-for
+// graph is AO-S4a's and the cutover that gives the table an engine caller
+// is AO-S3's.
 
 namespace kds::txn {
 namespace {
@@ -588,6 +603,333 @@ TEST(LockTableTest, ContendedThreadsOnOneUnitProduceExactlyOneHolder) {
     EXPECT_EQ(blocked.load(), kThreads - 1);
     EXPECT_EQ(table->WaiterCount(key), static_cast<std::size_t>(kThreads - 1))
         << "every refused request is queued, which is what a decide reads before it probes";
+
+    // **The slot half, under a latch that is real.** Every reactor cell in
+    // this file runs at one core, where `LatchGuard(nullptr)` is a no-op -
+    // so without this the claim the stage rests on (the clear and the wake
+    // serialize on one partition latch) has no executing coverage at all.
+    // Here eight threads met on one key at eight cores, so the latch did
+    // the work; the winner now decides and every loser must see its slot.
+    std::size_t with_slot = 0;
+    for (int t = 0; t < kThreads; ++t) {
+        LockHoldings& h = holdings[static_cast<std::size_t>(t)];
+        if (h.waiting_on().has_value()) ++with_slot;
+    }
+    EXPECT_EQ(with_slot, static_cast<std::size_t>(kThreads - 1))
+        << "a refusal records the wait on the requester; without that record nothing can "
+           "withdraw it and the entry outlives every holder";
+
+    for (int t = 0; t < kThreads; ++t) {
+        table->Release(static_cast<std::uint64_t>(t) + 1, holdings[static_cast<std::size_t>(t)]);
+    }
+    EXPECT_EQ(table->EntryCount(), 0u)
+        << "the winner's release woke the seven, and each of them withdrew its own request";
+}
+
+
+// ---- AO-S2: the wait and the wake, on one reactor ------------------------
+
+// A two-session fixture on one reactor. AO-3's finding L records that none
+// existed: the nearest shape (`tests/txn_session_test.cpp`'s two sessions
+// on one dispatcher) runs over `Dispatch()`, which is synchronous and
+// **cannot park**, so it could never have shown a wait. This is that pair
+// moved onto a real `sched::Scheduler`, which is what makes the park
+// observable at all.
+class LockWaitOnOneReactor : public ::testing::Test {
+protected:
+    sched::ManualClock clock;
+    sched::NullIoBackend io;
+    sched::Scheduler scheduler{clock, io};
+    std::unique_ptr<LockTable> table = MakeTable(1);
+
+    // One transaction's whole life as a coroutine: take the borrow,
+    // parking for it if somebody else holds it, then wait to be told to
+    // decide, then release.
+    struct Session {
+        LockHoldings holdings;
+        // `pred` and `decide_pred` must be members: `WaitUntil` holds a
+        // `const std::function<bool()>*`, so the object outlives the
+        // frame's suspension.
+        std::function<bool()> pred;
+        bool granted = false;
+        bool released = false;
+        int parks = 0;
+        bool may_decide = false;
+        std::function<bool()> decide_pred;
+    };
+
+    sched::Coro Borrow(Session& s, std::uint64_t txn, LockKey key, LockMode mode) {
+        for (;;) {
+            auto r = table->Acquire(txn, key, mode, s.holdings);
+            if (!r.ok()) co_return r.status();
+            if (r.value().granted) break;
+            // **The park.** The predicate reads the slot and nothing else -
+            // it must not reach the table, because it runs once per reactor
+            // iteration for as long as the wait lasts.
+            ++s.parks;
+            s.pred = [slot = r.value().slot] { return LockWaitReady(slot); };
+            co_await sched::WaitUntil{&s.pred};
+            // **And the re-check**, which is the loop going round again.
+            // AO-3's finding G: a wait breaks the premise that nothing
+            // suspends between reading a header and overwriting it, so the
+            // grant is never assumed from the wake.
+        }
+        s.granted = true;
+
+        s.decide_pred = [&s] { return s.may_decide; };
+        co_await sched::WaitUntil{&s.decide_pred};
+
+        table->Release(txn, s.holdings);
+        s.released = true;
+        co_return Status::OK();
+    }
+
+    void Run(int iterations) {
+        for (int i = 0; i < iterations; ++i) scheduler.RunOnce();
+    }
+};
+
+TEST_F(LockWaitOnOneReactor, T2ParksOnT1sRowAndProceedsWhenT1Decides) {
+    const LockKey row = LockKey::Tuple(kRel, 5);
+    Session t1;
+    Session t2;
+    scheduler.Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, Borrow(t1, 1, row, LockMode::kExclusive)));
+    scheduler.Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, Borrow(t2, 2, row, LockMode::kExclusive)));
+
+    Run(4);
+    EXPECT_TRUE(t1.granted) << "the first asker holds the row";
+    EXPECT_FALSE(t2.granted);
+    EXPECT_EQ(t2.parks, 1) << "the second asker parked rather than being refused - axis 1, the "
+                              "whole point of M2";
+    EXPECT_EQ(table->WaiterCount(row), 1u);
+
+    // The reactor keeps turning and the parked task costs a predicate call
+    // per iteration and no resume (`sched.md` §3: waiting is suspension,
+    // not occupation).
+    Run(20);
+    EXPECT_FALSE(t2.granted) << "nothing granted it while the holder still held";
+    EXPECT_EQ(t2.parks, 1) << "and it did not spin round the acquire loop";
+
+    // T1 decides. Its release wakes the queue.
+    t1.may_decide = true;
+    Run(4);
+    EXPECT_TRUE(t1.released);
+    EXPECT_TRUE(t2.granted) << "the woken waiter re-asked and was granted";
+    EXPECT_EQ(table->WaiterCount(row), 0u);
+
+    t2.may_decide = true;
+    Run(4);
+    EXPECT_TRUE(t2.released);
+    EXPECT_EQ(table->EntryCount(), 0u) << "Release leaves no entry";
+}
+
+// ---- AO-R6: the borrows go back at the decide, and last ----------------
+
+// The manager half of AO-S2. Without a cell here the two `Release` calls
+// added to `Commit` and `Abort` never execute in the suite - nothing else
+// in the tree constructs a `TransactionManager` with a lock table, since
+// AO-S3 is the stage that wires one - and the ordering AO-R6 turns on
+// would be pinned by nothing.
+class BorrowsReleasedAtDecide : public ::testing::Test {
+protected:
+    void SetUp() override {
+        superblock_ = server::SuperBlock::CreateFresh(/*now_unix_seconds=*/1000);
+        ids_ = std::make_unique<TrxIdSequence>(superblock_);
+        undo_ = std::make_unique<UndoLog>(store_, /*wal=*/nullptr);
+        table_ = MakeTable(1);
+        mgr_ = std::make_unique<TransactionManager>(*ids_, *undo_, store_, /*wal=*/nullptr,
+                                                    /*visibility=*/nullptr, /*core=*/0,
+                                                    table_.get());
+    }
+
+    Transaction* Begin() {
+        auto txn = mgr_->Begin(IsolationLevel::kReadCommitted);
+        EXPECT_TRUE(txn.ok()) << txn.status().message();
+        return txn.ok() ? txn.value() : nullptr;
+    }
+
+    storage::InMemoryPageStore store_;
+    server::SuperBlock superblock_{};
+    std::unique_ptr<TrxIdSequence> ids_;
+    std::unique_ptr<UndoLog> undo_;
+    std::unique_ptr<LockTable> table_;
+    std::unique_ptr<TransactionManager> mgr_;
+};
+
+TEST_F(BorrowsReleasedAtDecide, ACommitGivesEveryBorrowBackAndWakesWhoWasQueued) {
+    Transaction* t1 = Begin();
+    ASSERT_NE(t1, nullptr);
+    const LockKey row = LockKey::Tuple(kRel, 31);
+    ASSERT_TRUE(table_->Acquire(t1->id(), LockKey::Relation(kRel),
+                                LockMode::kIntentionExclusive, t1->borrows())
+                    .value()
+                    .granted);
+    ASSERT_TRUE(table_->Acquire(t1->id(), row, LockMode::kExclusive, t1->borrows())
+                    .value()
+                    .granted);
+    EXPECT_EQ(t1->borrows().size(), 2u);
+    EXPECT_EQ(table_->EntryCount(), 2u);
+
+    // A second transaction queues behind the row.
+    LockHoldings peer;
+    auto refused = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    ASSERT_TRUE(refused.ok());
+    ASSERT_FALSE(refused.value().granted);
+    ASSERT_FALSE(LockWaitReady(refused.value().slot));
+
+    ASSERT_TRUE(mgr_->Commit(*t1, wal::DurabilityClass::kGroup).ok());
+    EXPECT_TRUE(t1->borrows().empty()) << "the decide gave them all back";
+    EXPECT_TRUE(LockWaitReady(refused.value().slot)) << "and woke who was queued behind them";
+    EXPECT_EQ(table_->WaiterCount(row), 1u) << "a wake is not a grant";
+
+    // The peer re-asks and is now admitted, which is the wait ending in the
+    // grant it waited for rather than in a refusal.
+    auto retry = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    ASSERT_TRUE(retry.ok());
+    EXPECT_TRUE(retry.value().granted);
+    table_->Release(999, peer);
+    EXPECT_EQ(table_->EntryCount(), 0u);
+}
+
+TEST_F(BorrowsReleasedAtDecide, AnAbortGivesThemBackToo) {
+    // AO-5's S2 row asks for the abort arm by name. It is the same release
+    // on the same list, reached after the compensations have already put
+    // every page back - so a waiter woken here reads the prior version
+    // rather than a half-undone one.
+    Transaction* t1 = Begin();
+    ASSERT_NE(t1, nullptr);
+    const LockKey row = LockKey::Tuple(kRel, 32);
+    ASSERT_TRUE(table_->Acquire(t1->id(), row, LockMode::kExclusive, t1->borrows())
+                    .value()
+                    .granted);
+    LockHoldings peer;
+    auto refused = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    ASSERT_TRUE(refused.ok());
+    ASSERT_FALSE(refused.value().granted);
+
+    ASSERT_TRUE(mgr_->Abort(*t1).ok());
+    EXPECT_TRUE(LockWaitReady(refused.value().slot));
+    auto retry = table_->Acquire(999, row, LockMode::kExclusive, peer);
+    ASSERT_TRUE(retry.ok());
+    EXPECT_TRUE(retry.value().granted) << "the loser's row is free the moment it decides";
+    table_->Release(999, peer);
+    EXPECT_EQ(table_->EntryCount(), 0u);
+}
+
+TEST_F(BorrowsReleasedAtDecide, AManagerTornDownWithALiveTransactionGivesItsBorrowsBack) {
+    // The lock table is the instance's and outlives a core's manager. A
+    // transaction still open at teardown would otherwise leave its holders
+    // in the table forever, with every waiter behind them parked forever.
+    Transaction* t1 = Begin();
+    ASSERT_NE(t1, nullptr);
+    ASSERT_TRUE(table_->Acquire(t1->id(), LockKey::Tuple(kRel, 33), LockMode::kExclusive,
+                                t1->borrows())
+                    .value()
+                    .granted);
+    EXPECT_EQ(table_->EntryCount(), 1u);
+
+    mgr_.reset();
+    EXPECT_EQ(table_->EntryCount(), 0u)
+        << "the transactions ceased to exist, so their tenancies did too";
+}
+
+TEST_F(LockWaitOnOneReactor, ThreeWaitersOnOneRowAreAllWokenAndOneWins) {
+    // A wake is not a grant. All three re-ask; one is granted and the other
+    // two queue again on the slots they already hold - which is why handing
+    // the same waiter a fresh slot on a re-ask would strand the predicate
+    // the first park is still holding.
+    const LockKey row = LockKey::Tuple(kRel, 7);
+    Session holder;
+    Session a;
+    Session b;
+    Session c;
+    scheduler.Submit(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                         Borrow(holder, 1, row, LockMode::kExclusive)));
+    std::uint64_t next = 10;
+    for (auto* s : {&a, &b, &c}) {
+        scheduler.Submit(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                             Borrow(*s, next++, row, LockMode::kExclusive)));
+    }
+    Run(6);
+    ASSERT_TRUE(holder.granted);
+    EXPECT_EQ(table->WaiterCount(row), 3u);
+
+    holder.may_decide = true;
+    Run(6);
+    const int granted = static_cast<int>(a.granted) + static_cast<int>(b.granted) +
+                        static_cast<int>(c.granted);
+    EXPECT_EQ(granted, 1) << "an exclusive borrow admits one, whoever the reactor reached first";
+    EXPECT_EQ(table->WaiterCount(row), 2u) << "the other two re-asked and queued again";
+    EXPECT_GE(a.parks + b.parks + c.parks, 4)
+        << "each parked once, and the two that lost the re-ask parked a second time";
+}
+
+TEST_F(LockWaitOnOneReactor, ACompatibleWaiterIsGrantedWithoutDisturbingTheHolder) {
+    // Two readers do not queue at all: `S` against `S` is compatible, so
+    // the second is granted on its first ask and never parks. The cell
+    // exists because a lock manager that queued every second arrival would
+    // pass every conflict test in this file and still serialize reads.
+    const LockKey fence = LockKey::Slice(kRel, 0, 100);
+    Session first;
+    Session second;
+    scheduler.Submit(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                         Borrow(first, 1, fence, LockMode::kShared)));
+    scheduler.Submit(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
+                                         Borrow(second, 2, fence, LockMode::kShared)));
+    Run(4);
+    EXPECT_TRUE(first.granted);
+    EXPECT_TRUE(second.granted);
+    EXPECT_EQ(second.parks, 0);
+    EXPECT_EQ(table->WaiterCount(fence), 0u);
+    EXPECT_EQ(table->RelationFenceCount(kRel), 2u) << "two fences, two counts";
+
+    first.may_decide = true;
+    second.may_decide = true;
+    Run(4);
+    EXPECT_EQ(table->RelationFenceCount(kRel), 0u);
+    EXPECT_EQ(table->EntryCount(), 0u);
+}
+
+TEST(LockTableTest, AWakeIsNotAGrant) {
+    // `WakeWaiters` flips slots and changes no holder. Stated as its own
+    // cell because the alternative design - handing the grant out at wake
+    // time - is the one that loses a lock: the grant would be decided under
+    // the releasing transaction's latch and consumed after it, with nothing
+    // holding the unit in between.
+    auto table = MakeTable();
+    const LockKey key = LockKey::Tuple(kRel, 21);
+    LockHoldings holder;
+    LockHoldings waiter;
+    ASSERT_TRUE(table->Acquire(1, key, LockMode::kExclusive, holder).value().granted);
+    auto refused = table->Acquire(2, key, LockMode::kExclusive, waiter);
+    ASSERT_TRUE(refused.ok());
+    ASSERT_FALSE(refused.value().granted);
+    ASSERT_NE(refused.value().slot, nullptr) << "a refusal always carries what to park on";
+    EXPECT_FALSE(LockWaitReady(refused.value().slot));
+
+    table->WakeWaiters(key);
+    EXPECT_TRUE(LockWaitReady(refused.value().slot)) << "the slot flipped";
+    EXPECT_EQ(table->WaiterCount(key), 1u) << "and nothing was granted";
+
+    // The woken waiter re-asks and is still refused, because the holder
+    // still holds - the re-check is what makes that answer right.
+    auto again = table->Acquire(2, key, LockMode::kExclusive, waiter);
+    ASSERT_TRUE(again.ok());
+    EXPECT_FALSE(again.value().granted);
+    EXPECT_EQ(again.value().slot, refused.value().slot)
+        << "a re-ask keeps the slot the waiter is parked on; a fresh one would strand the "
+           "predicate and the next decide would flip something nobody is watching";
+    EXPECT_FALSE(LockWaitReady(again.value().slot))
+        << "and the re-ask consumed the wake, under the same latch that delivers one. A slot "
+           "left flipped satisfies WaitUntil::await_ready on entry, so the acquire loop spins "
+           "the reactor inside one resume() instead of parking - the hang this stage had to fix, "
+           "and the only assertion that catches its return by failing rather than by hanging";
+
+    table->Release(1, holder);
+    table->Release(2, waiter);
+    EXPECT_EQ(table->EntryCount(), 0u);
 }
 
 }  // namespace

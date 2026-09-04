@@ -10,6 +10,7 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/instance_visibility.hpp"
+#include "kds/txn/lock_table.hpp"
 #include "kds/txn/read_view.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -188,6 +189,12 @@ public:
         prepare_lsn_ = lsn;
     }
 
+    // The borrow list AO-R6 puts here. Non-const because `LockTable`
+    // records into it; a transaction owns exactly one and it is move-only,
+    // so there is no way to hand a second owner the same borrows.
+    LockHoldings& borrows() noexcept { return borrows_; }
+    const LockHoldings& borrows() const noexcept { return borrows_; }
+
 private:
     friend class TransactionManager;
 
@@ -195,6 +202,13 @@ private:
     IsolationLevel isolation_ = IsolationLevel::kReadCommitted;
     ReadView view_;
     std::vector<TrailEntry> trail_;
+    // **The borrows this transaction holds** (AO-R6). Bounded by
+    // `max_locks_per_txn`, released as the last act of a decide - after the
+    // commit is published, so a waiter woken by the release re-checks
+    // against a holder it can already see as decided. Empty on every path
+    // until AO-S3 gives the table a caller; a manager with no lock table
+    // never touches it.
+    LockHoldings borrows_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     wal::Lsn prepare_lsn_ = 0;
     bool prepared_ = false;
@@ -271,12 +285,17 @@ public:
     // knows and reads nothing back**: at AN-S1 the predicate is still the
     // per-core `ReadView`, so this wiring is additive and the suite is what
     // proves it. `core` names the slot this manager owns.
+    // `locks` is the instance's lock table (AO-R2), borrowed on the same
+    // terms as `visibility` and **null everywhere today**: AO-S3 is the
+    // stage that constructs one and hands it to every core. Null means
+    // every decide releases nothing, which is exactly the behaviour before
+    // AO-S2.
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
                        wal::WalManager* wal = nullptr,
                        InstanceVisibility* visibility = nullptr,
-                       std::uint32_t core = 0)
+                       std::uint32_t core = 0, LockTable* locks = nullptr)
         : ids_(ids), undo_(undo), store_(store), wal_(wal), visibility_(visibility),
-          core_(core) {
+          core_(core), locks_(locks) {
         // **`noexcept` came off here when the floor did.** `Reclaim()` takes
         // the window latch, and `std::mutex::lock` is a throwing call - so
         // the old `noexcept` would have turned a lock failure into
@@ -310,7 +329,22 @@ public:
     // point, and "only this class ever calls it" is exactly the kind of
     // assumption the reader-registration review watched break (its B1) -
     // so the destructor removes the question instead of relying on it.
-    ~TransactionManager() { undo_.SetHorizonSource(nullptr); }
+    // Uninstalls the horizon source, and **gives back the borrows of every
+    // transaction that is still live** (AO-R6's other end). The lock table
+    // is the instance's and outlives this manager, so a core torn down with
+    // an open transaction would otherwise leave that transaction's holders
+    // in the table for the life of the instance, with every waiter behind
+    // them parked forever. The transactions themselves are about to cease
+    // to exist, so their tenancies must too - a crash reaches the same
+    // state by rolling the losers back at mount (AO-R13).
+    ~TransactionManager() {
+        if (locks_ != nullptr) {
+            for (auto& txn : live_) {
+                if (txn != nullptr) locks_->Release(txn->id_, txn->borrows_);
+            }
+        }
+        undo_.SetHorizonSource(nullptr);
+    }
 
     // Starts a transaction and takes its first read view. Fails with
     // OutOfSpace past kMaxTrackedLiveTxns live transactions - the bound
@@ -612,6 +646,10 @@ private:
     wal::WalManager* wal_;
     InstanceVisibility* visibility_;
     std::uint32_t core_;
+    // The instance lock table (AO-R2), borrowed on `visibility_`'s terms
+    // and null everywhere until AO-S3 constructs one. Null means a decide
+    // releases nothing, which is the behaviour that stood before AO-S2.
+    LockTable* locks_ = nullptr;
 
     // `ids_.peek()` as `MaybeBurnIdleBlock` last saw it. Equal on two
     // consecutive ticks means this core issued nothing between them, which
