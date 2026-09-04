@@ -973,10 +973,17 @@ private:
     //
     // **Capable: the re-run must be able to answer differently.** Under
     // `kRepeatableRead` the view is minted at `BEGIN` and `StartStatement`
-    // does not re-mint it, so a holder that commits after that view stays
-    // invisible and `CheckWriteConflict` refuses again on exactly the same
-    // ground. Waiting there converts an instant refusal into a stall
-    // ending in the same refusal, which is worse on every axis.
+    // does not re-mint it, so a holder that **commits** after that view
+    // stays invisible and `CheckWriteConflict` refuses again on the same
+    // ground - a stall ending in the refusal it was already owed.
+    //
+    // **Conservative, not exact, and the difference is worth knowing.** An
+    // *aborted* holder is a different case: the compensation restores the
+    // row's prior writer id, so the same view would admit the write. The
+    // level is excluded whole rather than split, because a wait that helps
+    // only when the holder rolls back is a narrower promise than the one
+    // this stage makes for every other level, and offering it silently
+    // would be the convenient answer rather than the true one.
     // `waiter` is the transaction the statement runs in, or null in
     // autocommit before one is opened - which is the safest case of all,
     // since a transaction that does not exist holds nothing and re-mints

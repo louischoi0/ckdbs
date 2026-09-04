@@ -1952,6 +1952,86 @@ TEST_F(LockDeadlockTest, AChainThatDoesNotCloseIsNotADeadlock) {
     EXPECT_EQ(locks_->WaitEdgeCount(), 0u);
 }
 
+TEST_F(LockDeadlockTest, AStatementThatHasWrittenRowsIsRefusedEvenWithADetector) {
+    // **The line AO-S3b would move, pinned where it currently sits.**
+    //
+    // AO-S4a lifted the *transaction*-level guard: a transaction holding
+    // rows from an earlier statement may wait, because the wait-for graph
+    // catches the cycle it could join. The *statement*-level rule is a
+    // different one and still stands - a statement that has already written
+    // rows of its own is not restartable, so `EndWrite` drops its blocker
+    // and it meets the conflict now.
+    //
+    // **This is the current line, not a permanent one.** A first reading of
+    // AO-S3b argued the wait could never help, because a statement's view is
+    // minted once at its boundary. That is wrong and the review disproved
+    // it: `CheckWriteConflict` is a function of the view *and* of `cur`, the
+    // writer id re-read from the tuple header, and an abort's compensation
+    // restores `prior_trx_id` along with the bytes
+    // (`src/txn/manager.cpp:409-411`), so the same view answers differently
+    // once the holder rolls back. A mid-statement park is therefore
+    // deliverable and AO-S3b's own row says what it still owes - an
+    // autocommit waiter's identity in the wait-for graph above all, since a
+    // parked autocommit scope holds rows and can join a cycle the detector
+    // has no edge for.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (2, 1)").rfind("INSERTED", 0), 0u);
+
+    // A holder takes row 2 and stays open.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 2", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    // A multi-row UPDATE that writes row 1 and then meets row 2. It is
+    // refused rather than waited on, and the detector's presence does not
+    // change that: what forbids the wait here is restartability, not
+    // deadlock.
+    Session writer;
+    Started w = Start("UPDATE t SET v = 3 WHERE id <= 2", writer);
+    Pump();
+    ASSERT_TRUE(*w.done) << "a statement that had written rows waited; nothing can make its "
+                            "re-check succeed under its own view: " << w.out->response;
+    EXPECT_EQ(StatusFromErrorReply(w.out->response).code(), StatusCode::kTxnConflict)
+        << w.out->response;
+    EXPECT_EQ(w.out->response.find("deadlock"), std::string::npos)
+        << "and it is an ordinary conflict, not a cycle: " << w.out->response;
+    // Deliberately *not* asserting `WaitEdgeCount() == 0` here: this writer
+    // is autocommit, so `session.transaction()` is null and no edge would be
+    // registered whether it waited or not. The assertion would pass for the
+    // wrong reason, and that exemption is the very thing AO-S3b has to
+    // remove.
+
+    // **What this costs a client inside a transaction, which is the case
+    // AO-S3b is for.** The refused statement does not unwind on its own -
+    // failure atomicity is per transaction, not per statement - but it
+    // **poisons** the session, so every following command is ignored until
+    // `ROLLBACK`, and the rollback then unwinds the rows the statement had
+    // already written. The client loses the whole transaction over one
+    // contended row, having done the work twice over: once writing rows 1
+    // and once again after it retries from `BEGIN`.
+    //
+    // That is the state a mid-statement park replaces - not "rows 1-6 are
+    // kept", which no client can observe today, but "the transaction
+    // survives at all".
+    Session boxed;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &boxed).response.rfind("BEGIN", 0), 0u);
+    Started b = Start("UPDATE t SET v = 5 WHERE id <= 2", boxed);
+    Pump();
+    ASSERT_TRUE(*b.done) << b.out->response;
+    EXPECT_EQ(StatusFromErrorReply(b.out->response).code(), StatusCode::kTxnConflict)
+        << b.out->response;
+    EXPECT_EQ(dispatcher_->Dispatch("SELECT id, v FROM t", &boxed).response,
+              "ERR current transaction is aborted; commands are ignored until ROLLBACK")
+        << "the transaction survived a refused statement, which would change what AO-S3b is "
+           "worth";
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &boxed).response.rfind("ROLLBACK", 0), 0u);
+    // And the rollback took the earlier row with it.
+    EXPECT_EQ(Rows().find("1,5"), std::string::npos)
+        << "the poisoned transaction's rollback left a row behind: " << Rows();
+}
+
 TEST_F(LockDeadlockTest, WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe) {
     // The two states stated side by side. Take the table away and the same
     // transaction that waited above is refused instead, because nothing
@@ -2029,13 +2109,21 @@ TEST_F(Txn2pcBlockedWriterTest, ATransactionThatAlreadyWroteIsRefusedRatherThanW
     EXPECT_TRUE(StatusFromErrorReply(out_a->response).retryable());
 }
 
-TEST_F(Txn2pcBlockedWriterTest, ARepeatableReadWriterIsRefusedBecauseTheReRunCannotSucceed) {
+TEST_F(Txn2pcBlockedWriterTest, ARepeatableReadWriterIsRefusedRatherThanOfferedANarrowerWait) {
     // The second guard. Under `kRepeatableRead` the view is minted at
-    // `BEGIN` and `StartStatement` does not re-mint it, so a holder that
-    // commits after that view stays invisible and the re-run refuses on
-    // exactly the ground it refused on the first time. Waiting there turns
-    // an instant refusal into a stall ending in the same refusal, plus a
-    // poisoned session - worse on every axis, so the wait is not offered.
+    // `BEGIN` and never re-minted, so a holder that **commits** after it
+    // stays invisible and the re-run refuses on the ground it refused on
+    // the first time - a stall ending in the refusal already owed.
+    //
+    // **The exclusion is conservative rather than exact**, and the cell is
+    // named for that. A holder that *aborts* restores the row's prior
+    // writer id, and the same view would then admit the write; so a wait
+    // here would help in one of the two decides. The level is excluded
+    // whole because a wait that pays off only on a rollback is a narrower
+    // promise than this stage makes everywhere else, and offering it
+    // without saying so would be the convenient answer rather than the
+    // true one. The cell below exercises an undecided holder, which is the
+    // case both readings agree on.
     ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
 
     Session holder;

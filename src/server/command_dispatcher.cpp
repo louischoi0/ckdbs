@@ -10737,8 +10737,13 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
         // one the graph has no reader and the narrow rule is what keeps the
         // stage deadlock-free.
         if (locks_ == nullptr && !waiter->trail().empty()) return;
-        // A repeatable-read waiter's re-run refuses on the same ground it
-        // refused on the first time, whatever the detector knows.
+        // A repeatable-read waiter's re-run is refused because its view
+        // cannot see a holder that **commits** after it was minted. The
+        // exclusion is conservative rather than exact: a holder that
+        // *aborts* restores the row's prior writer id and the same view
+        // would then admit the write. Waiting only for the abort arm is a
+        // narrower promise than this stage set out to make, so the level is
+        // excluded whole and AO-S3b is where the finer answer belongs.
         if (waiter->isolation() == txn::IsolationLevel::kRepeatableRead) return;
     }
     blocking_writer_ = trx;
