@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "kds/base/latch.hpp"
@@ -151,6 +152,51 @@
 // fence-taker scanning for conflicting descendants after it publishes -
 // and that is AO-S6's, where the fence gets its first taker. Until then
 // this is a gate on a probe, not a guarantee about a race.
+//
+// ---- The wait-for graph and the victim (AO-R7, D12) -----------------------
+//
+// A wait is an edge `waiter -> holder`, and a cycle among them is a
+// deadlock. AO-S4a records the edges here, beside the borrows, because
+// AO-S4b's detector runs on core 0 over edges from every core and needs
+// one place to read them.
+//
+// **Which waits are edges, exactly.** The dispatcher's write-block wait
+// (`command_dispatcher.cpp`) is one. **`Acquire`'s own queue wait is
+// not** - the slot a refusal hands back parks a caller with no edge
+// recorded anywhere - and nothing in this file registers one but
+// `NoteWaitFor`. Today that gap is unreachable, because no dispatch path
+// calls `Acquire`; AO-S6 is the stage that wires one, and it must close
+// this or a transaction will hold rows under the write-block graph while
+// waiting on a lock queue that the graph cannot see.
+//
+// **The graph is functional: one out-edge per waiter**, which is what
+// makes the walk below a unique chain and the cycle test decisive. A
+// waiter re-registering replaces its edge rather than adding one. That
+// holds while a wait has exactly one blocker, which is true of every wait
+// there is today. It stops being true the moment a waiter can wait on
+// *all* holders of a shared unit - `S` held by three transactions against
+// an `X` request - so AO-S6 owes the container as well as the edge.
+//
+// **Detection happens when the edge is added, not on a cadence, and that
+// is a departure from AO-R7 worth stating.** AO-R7 specifies a
+// `system`-group task on core 0 walking the edges every 100 ms. For the
+// same-core case that cadence buys nothing and costs the victim up to
+// 100 ms of stalling: a cycle can only close at the instant some waiter
+// adds the edge that closes it, and that waiter is holding the partition
+// latch and can walk the chain itself in the same breath. Checking there
+// makes the answer immediate and makes AO-R7's victim rule - "it aborts
+// the transaction whose edge closed it", PostgreSQL's detecting-waiter
+// choice - literally true rather than approximately.
+//
+// **The cadence is still owed, by AO-S4b, and not for the reason it is
+// tempting to give.** Visibility is not the problem: the table is the
+// instance's and `wait_latch_` orders every core's registrations, so a
+// registration-time walk would see a foreign core's edges too. What a
+// cross-core cycle can contain is a wait that registers *no* edge - the
+// shipped-statement park and the FK probe park are two - and a link
+// nobody recorded is one no registration can close. That is what the
+// periodic walk is for, together with `kLockAbort` for a victim that
+// lives on another core.
 //
 // ---- The cap (AO-R10, E2) -------------------------------------------------
 //
@@ -417,6 +463,23 @@ public:
     // for liveness, not only for tidiness.
     void Release(std::uint64_t txn, LockHoldings& holdings);
 
+    // Records that `waiter` is about to park for `holder`, and answers
+    // **whether that edge closes a cycle**. When it does, no edge is
+    // recorded and the caller must not park: it is the victim (AO-R7), and
+    // aborting it is what breaks the cycle.
+    //
+    // Idempotent per waiter: a transaction is one thread of control and
+    // waits for one thing at a time, so a second call replaces the first.
+    bool NoteWaitFor(std::uint64_t waiter, std::uint64_t holder);
+
+    // Drops `waiter`'s edge. Called when the wait ends, however it ends -
+    // granted, refused, or the transaction decided.
+    void ClearWaitFor(std::uint64_t waiter);
+
+    // Edges currently held. Zero when nothing is waiting, which is what a
+    // cell asserts after every wait in it has ended.
+    std::size_t WaitEdgeCount() const;
+
     // Wakes every waiter queued on `key` without releasing anything.
     // `Release` is its only engine caller; it is public because "a wake is
     // not a grant" cannot be asserted any other way - every `Release`
@@ -491,6 +554,15 @@ private:
     // Drops `txn`'s queued request on `key`, erasing the entry if that
     // leaves it empty. One partition, taken and released here.
     void DequeueWaiter(std::uint64_t txn, const LockKey& key);
+
+    // The wait-for graph, `waiter -> holder`. One entry per waiting
+    // transaction, so it is bounded by the number of live transactions and
+    // needs no eviction. Its own latch rather than a partition's: an edge
+    // is not a property of any one unit, and taking a partition latch for
+    // it would put two of them in one operation's path, which AO-R2's
+    // order forbids.
+    std::unique_ptr<Latch> wait_latch_;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> wait_edges_;
 
     std::vector<Partition> partitions_;
     std::vector<std::unique_ptr<Latch>> latches_;

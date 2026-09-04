@@ -63,6 +63,7 @@ LockTable::LockTable(std::uint32_t core_count, std::size_t max_locks_per_txn)
     // what compiles out. `LatchGuard(nullptr)` is then two predictable
     // branches, `base/latch.hpp`'s stated shape for exactly this.
     if (core_count > 1) {
+        wait_latch_ = std::make_unique<Latch>();
         latches_.reserve(partitions_.size());
         for (std::size_t i = 0; i < partitions_.size(); ++i) {
             latches_.push_back(std::make_unique<Latch>());
@@ -267,6 +268,50 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
     return result;
 }
 
+bool LockTable::NoteWaitFor(std::uint64_t waiter, std::uint64_t holder) {
+    LatchGuard guard(wait_latch_.get());
+    // Walk from the holder along the edges already recorded. If the walk
+    // reaches the waiter, the edge about to be added closes a cycle and the
+    // waiter is the victim (AO-R7). The walk is bounded by the edge count,
+    // which is bounded by the live transactions on this core, and it cannot
+    // loop forever: an existing cycle would have been refused at the
+    // registration that closed it, so the graph is acyclic on entry.
+    std::uint64_t at = holder;
+    for (std::size_t steps = 0; steps <= wait_edges_.size(); ++steps) {
+        if (at == waiter) return true;
+        bool advanced = false;
+        for (const auto& [w, h] : wait_edges_) {
+            if (w == at) {
+                at = h;
+                advanced = true;
+                break;
+            }
+        }
+        if (!advanced) break;  // the chain ends at a transaction that waits for nothing
+    }
+
+    for (auto& [w, h] : wait_edges_) {
+        if (w == waiter) {
+            h = holder;
+            return false;
+        }
+    }
+    wait_edges_.emplace_back(waiter, holder);
+    return false;
+}
+
+void LockTable::ClearWaitFor(std::uint64_t waiter) {
+    LatchGuard guard(wait_latch_.get());
+    wait_edges_.erase(std::remove_if(wait_edges_.begin(), wait_edges_.end(),
+                                     [&](const auto& e) { return e.first == waiter; }),
+                      wait_edges_.end());
+}
+
+std::size_t LockTable::WaitEdgeCount() const {
+    LatchGuard guard(wait_latch_.get());
+    return wait_edges_.size();
+}
+
 void LockTable::WakeWaiters(const LockKey& key) {
     // Flip every queued slot on the unit. **A wake is not a grant**: each
     // woken waiter re-asks through `Acquire`, and those that still conflict
@@ -356,11 +401,15 @@ void LockTable::Release(std::uint64_t txn, LockHoldings& holdings) {
     }
     holdings.held_.clear();
 
-    // A transaction that ended while queued takes its request with it.
+    // A transaction that ended while queued takes its request with it, and
+    // its wait-for edge with that: a decided transaction waits for nothing,
+    // and an edge left behind would be a false cycle for the next waiter to
+    // close against.
     if (holdings.waiting_) {
         DequeueWaiter(txn, *holdings.waiting_);
         holdings.waiting_.reset();
     }
+    ClearWaitFor(txn);
 }
 
 std::uint64_t LockTable::RelationFenceCount(catalog::Oid rel) const {

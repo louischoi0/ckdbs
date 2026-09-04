@@ -13,6 +13,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/sched/send_retry.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/txn/lock_table.hpp"
 #include "kds/server/shipped_statement_executor.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
@@ -1651,6 +1652,10 @@ TEST_F(Txn2pcBlockedWriterTest, AtTheFaultNetTheWriterIsAbortedAndTheRefusalName
     EXPECT_NE(refused.code(), StatusCode::kUnknownOutcome);
     EXPECT_EQ(refused.code(), StatusCode::kTxnConflict);
     EXPECT_NE(out->response.find("fault net"), std::string::npos) << out->response;
+    // The carried status too: a KWP client reads that one, and it held the
+    // pre-wait conflict rather than the fault the net exists to report.
+    EXPECT_NE(out->status.message().find("fault net"), std::string::npos)
+        << out->status.message();
     EXPECT_EQ(out->response.find("coordinator"), std::string::npos)
         << "the net is the lock family's, not 2PC's: " << out->response;
     // The holder is untouched by the refusal - R1 aborts the waiter and
@@ -1756,6 +1761,224 @@ TEST_F(Txn2pcBlockedWriterTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid
     EXPECT_TRUE(local.failed()) << "the failed statement left the transaction committable";
     EXPECT_NE(dispatcher_->Dispatch("COMMIT", &local).response.rfind("COMMIT", 0), 0u);
     EXPECT_EQ(dispatcher_->Dispatch("ROLLBACK", &local).response.rfind("ROLLBACK", 0), 0u);
+}
+
+// ---- AO-S4a: the wait-for graph and the victim ---------------------------
+
+// The same fixture with a lock table handed to the dispatcher, which is
+// what turns AO-S3's narrow rule ("only a transaction holding nothing may
+// wait") into AO-S4a's ("any transaction may wait, and the one that closes
+// a cycle is aborted").
+class LockDeadlockTest : public Txn2pcBlockedWriterTest {
+protected:
+    void SetUp() override {
+        Txn2pcBlockedWriterTest::SetUp();
+        auto table = txn::LockTable::Create(/*core_count=*/1);
+        ASSERT_TRUE(table.ok()) << table.status().message();
+        locks_ = std::move(table.value());
+        dispatcher_->set_locks(locks_.get());
+    }
+
+    // Starts a statement on the served path and returns its handles; the
+    // caller decides what it is waiting to observe, which is the only way
+    // to tell a park from a slow grant.
+    //
+    // **It owns the statement text, and that is not tidiness.**
+    // `DispatchAsync` takes a `std::string_view` and is a coroutine, so the
+    // view is copied into the frame while the characters are not: the
+    // caller must keep them alive until the statement finishes. Every cell
+    // that calls `DispatchAsync` directly passes a string *literal*, which
+    // has static storage and hides the requirement; a helper taking
+    // `const std::string&` binds a temporary that dies at the end of the
+    // caller's statement, long before the first `Pump`, and the parked
+    // coroutine then parses freed memory. That reads as `ERR unknown
+    // command` from a statement that is plainly a valid `UPDATE`.
+    struct Started {
+        std::shared_ptr<std::string> sql = std::make_shared<std::string>();
+        std::shared_ptr<DispatchOutcome> out = std::make_shared<DispatchOutcome>();
+        std::shared_ptr<bool> done = std::make_shared<bool>(false);
+    };
+
+    Started Start(std::string sql, Session& session) {
+        Started s;
+        *s.sql = std::move(sql);
+        scheduler_->Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground,
+            dispatcher_->DispatchAsync(*s.sql, &session, s.out.get()),
+            [d = s.done](const Status&) { *d = true; }));
+        return s;
+    }
+
+    void Pump(int turns = 64) {
+        for (int i = 0; i < turns; ++i) {
+            (void)wal_->DrainOnce();
+            scheduler_->RunOnce();
+        }
+    }
+
+    std::unique_ptr<txn::LockTable> locks_;
+};
+
+TEST_F(LockDeadlockTest, ATwoCycleAbortsTheWaiterThatClosedItAndTheOtherProceeds) {
+    // AO-5's S4a cell. Without a detector this is the deadlock AO-S3's
+    // guard exists to prevent; with one, the guard lifts and the cycle is
+    // resolved at the instant it closes.
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (8, 1)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &a)
+                  .response.rfind("UPDATED", 0),
+              0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 8", &b)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    // A wants B's row. It holds rows, so under AO-S3 alone it would have
+    // been refused; with a detector it parks, and one edge is recorded.
+    Started wa = Start("UPDATE t SET v = 3 WHERE id = 8", a);
+    Pump();
+    ASSERT_FALSE(*wa.done) << "A did not wait, so the guard did not lift: " << wa.out->response;
+    EXPECT_EQ(locks_->WaitEdgeCount(), 1u);
+
+    // B now wants A's row, which closes the cycle. B is the waiter that
+    // closed it, so B is the victim - deterministically, not by a race.
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 7", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the cycle was not detected; only the 11 s net would end this";
+    const Status victim = StatusFromErrorReply(wb.out->response);
+    EXPECT_EQ(victim.code(), StatusCode::kTxnConflict) << wb.out->response;
+    EXPECT_TRUE(victim.retryable()) << "the survivor will have released by the time it retries";
+    EXPECT_NE(wb.out->response.find("deadlock"), std::string::npos)
+        << "an operator meeting this needs to know to look for a lock-order bug rather than "
+           "for contention: " << wb.out->response;
+    // **And on the carried `Status`, which is the one a KWP client reads**
+    // (`KwpSession::OnStatementComplete` prefers `outcome.status` over the
+    // rendered line). A deadlock reported only in the text arm is reported
+    // to nobody on the default port.
+    EXPECT_NE(wb.out->status.message().find("deadlock"), std::string::npos)
+        << "the carried status still holds the pre-wait conflict: " << wb.out->status.message();
+
+    // A is untouched - a detector aborts the waiter, never the holder - and
+    // proceeds the moment B's transaction lets go.
+    EXPECT_FALSE(*wa.done);
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &b).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    EXPECT_TRUE(*wa.done) << "the survivor never proceeded, so the cycle was broken at both ends";
+    EXPECT_EQ(wa.out->response.rfind("UPDATED", 0), 0u) << wa.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "every wait ended, so no edge is left behind";
+}
+
+TEST_F(LockDeadlockTest, AThreeCycleIsCaughtByTheTransitiveWalk) {
+    // The chain the walk has to follow: A waits for B, B waits for C, and
+    // C's wait for A is what closes it. A cycle test that only looked one
+    // edge deep would miss this and leave three transactions for the net.
+    for (int id = 1; id <= 3; ++id) {
+        ASSERT_EQ(Local("INSERT INTO t VALUES (" + std::to_string(id) + ", 1)")
+                      .rfind("INSERTED", 0),
+                  0u);
+    }
+    Session a;
+    Session b;
+    Session c;
+    Session* sessions[] = {&a, &b, &c};
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", sessions[i]).response.rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(dispatcher_
+                      ->Dispatch("UPDATE t SET v = 2 WHERE id = " + std::to_string(i + 1),
+                                 sessions[i])
+                      .response.rfind("UPDATED", 0),
+                  0u);
+    }
+
+    Started wa = Start("UPDATE t SET v = 3 WHERE id = 2", a);  // A -> B
+    Pump();
+    ASSERT_FALSE(*wa.done);
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 3", b);  // B -> C
+    Pump();
+    ASSERT_FALSE(*wb.done);
+    EXPECT_EQ(locks_->WaitEdgeCount(), 2u);
+
+    Started wc = Start("UPDATE t SET v = 3 WHERE id = 1", c);  // C -> A closes it
+    Pump();
+    ASSERT_TRUE(*wc.done) << "the three-cycle was not detected";
+    EXPECT_NE(wc.out->response.find("deadlock"), std::string::npos) << wc.out->response;
+    EXPECT_FALSE(*wa.done) << "A and B are untouched; only the closer is aborted";
+    EXPECT_FALSE(*wb.done);
+}
+
+TEST_F(LockDeadlockTest, AChainThatDoesNotCloseIsNotADeadlock) {
+    // The false positive a naive detector would produce: A waits for B and
+    // B waits for C, which is three transactions and two edges and no
+    // cycle. Both waits must stand.
+    for (int id = 1; id <= 3; ++id) {
+        ASSERT_EQ(Local("INSERT INTO t VALUES (" + std::to_string(id) + ", 1)")
+                      .rfind("INSERTED", 0),
+                  0u);
+    }
+    Session a;
+    Session b;
+    Session c;
+    Session* sessions[] = {&a, &b, &c};
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", sessions[i]).response.rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(dispatcher_
+                      ->Dispatch("UPDATE t SET v = 2 WHERE id = " + std::to_string(i + 1),
+                                 sessions[i])
+                      .response.rfind("UPDATED", 0),
+                  0u);
+    }
+
+    Started wa = Start("UPDATE t SET v = 3 WHERE id = 2", a);  // A -> B
+    Pump();
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 3", b);  // B -> C, no cycle
+    Pump();
+    EXPECT_FALSE(*wa.done) << wa.out->response;
+    EXPECT_FALSE(*wb.done) << wb.out->response;
+    EXPECT_EQ(locks_->WaitEdgeCount(), 2u);
+
+    // C decides, and the chain unwinds from the far end.
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", sessions[2]).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    EXPECT_TRUE(*wb.done) << wb.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", sessions[1]).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    EXPECT_TRUE(*wa.done) << wa.out->response;
+    EXPECT_EQ(locks_->WaitEdgeCount(), 0u);
+}
+
+TEST_F(LockDeadlockTest, WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe) {
+    // The two states stated side by side. Take the table away and the same
+    // transaction that waited above is refused instead, because nothing
+    // would catch the cycle it could join - which is AO-S3's rule, and why
+    // it is a guard rather than a limitation.
+    dispatcher_->set_locks(nullptr);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (8, 1)").rfind("INSERTED", 0), 0u);
+
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &a)
+                  .response.rfind("UPDATED", 0),
+              0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 8", &b)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Started wa = Start("UPDATE t SET v = 3 WHERE id = 8", a);
+    Pump();
+    ASSERT_TRUE(*wa.done) << "a transaction holding rows waited with no detector present";
+    EXPECT_EQ(StatusFromErrorReply(wa.out->response).code(), StatusCode::kTxnConflict)
+        << wa.out->response;
+    EXPECT_EQ(wa.out->response.find("deadlock"), std::string::npos)
+        << "and it is an ordinary conflict, not a deadlock report: " << wa.out->response;
 }
 
 // ---- What AO-S3 deliberately does not wait for ---------------------------

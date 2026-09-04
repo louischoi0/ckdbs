@@ -660,6 +660,19 @@ private:
     std::optional<catalog::Catalog> catalog_;
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
+    // **The lock family's table** (AO-R2), built here **only at
+    // `core_count == 1`** and owned by this runtime rather than by the
+    // expeditor. One core is the case where per-core and instance-wide are
+    // the same object, and where AO-3 C's finding makes the cross-core path
+    // unreachable by construction - so the table can be real without
+    // touching anything AO-S5 owns and gates.
+    //
+    // Above one core it stays null and AO-S3's narrow rule runs: a wait is
+    // offered only to a transaction that holds nothing, which needs no
+    // detector. AO-S5 is where the instance table is built once and handed
+    // to every core, which is what lifts that.
+    std::unique_ptr<txn::LockTable> locks_;
+
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
 

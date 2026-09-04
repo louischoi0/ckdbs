@@ -339,8 +339,19 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     }
     // The undo log is already built - recovery wrote its compensations
     // through it above, before this stack existed.
+    // The lock table, at one core only - see the member's declaration for
+    // why that boundary and not another. Built before the manager so the
+    // manager can take it: a decide is where borrows and wait-for edges go
+    // back (AO-R6), and a manager without it would leave the dispatcher's
+    // own clear as the only cleaner.
+    if (config.core_count == 1) {
+        auto locks = txn::LockTable::Create(/*core_count=*/1);
+        if (!locks.ok()) return locks.status();
+        runtime->locks_ = std::move(locks.value());
+    }
     runtime->txn_manager_.emplace(*runtime->trx_ids_, *runtime->undo_log_, *runtime->store_,
-                                  &*runtime->wal_, config.visibility, config.core_id);
+                                  &*runtime->wal_, config.visibility, config.core_id,
+                                  runtime->locks_.get());
 
     // Recording off, deliberately and not as a default - see the header:
     // Waystone is advisory, so a peer returns identical rows without it and
@@ -364,6 +375,10 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // row is blocked whether or not this core has a transport - the
     // transaction that holds the row is this core's own.
     runtime->dispatcher_->set_in_doubt_ceiling_ns(config.in_doubt_ceiling_ns);
+    // Null above one core, which is AO-S3's narrow rule and needs no
+    // detector; non-null at one, where the wait-for graph is what lets a
+    // transaction holding rows wait at all (AO-S4a).
+    runtime->dispatcher_->set_locks(runtime->locks_.get());
     // `SHOW META`'s group-accounting block on this core (sched.md §4). Set
     // on every core, peer or not: the accounting question is about a
     // reactor, and every core runs one. Set on the startup thread, before

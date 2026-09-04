@@ -308,9 +308,29 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // broken - logged as a fault below, never as a busy answer.
         const sched::MonoTimeNs deadline_ns =
             NowNs() + static_cast<sched::MonoTimeNs>(txn::kLockWaitFaultNetNs);
+        // **The waiter's identity for the wait-for graph** (AO-S4a). Only
+        // an explicit transaction can be in a cycle: an autocommit
+        // statement holds nothing when it parks, so nothing can be waiting
+        // for it and its edge would have no incoming half. Zero means "no
+        // edge", not "unknown".
+        Session& waiting_session = session != nullptr ? *session : autocommit_session_;
+        const std::uint64_t waiter_id = waiting_session.transaction() != nullptr
+                                            ? waiting_session.transaction()->id()
+                                            : 0;
+        bool deadlocked = false;
         while (out->write_block.has_value()) {
             const DispatchOutcome::WriteBlock block = *out->write_block;
             if (NowNs() >= deadline_ns) break;
+            // **The edge, and the cycle test in the same breath.** A cycle
+            // can only close at the instant a waiter adds the edge that
+            // closes it, so the waiter that would close one is the victim
+            // and is refused rather than parked - AO-R7's rule, applied
+            // where it is exactly true instead of up to a cadence later.
+            if (locks_ != nullptr && waiter_id != 0 &&
+                locks_->NoteWaitFor(waiter_id, block.trx_id)) {
+                deadlocked = true;
+                break;
+            }
             // Settles the moment the transaction is decided, whichever way:
             // a committed one releases the row to a re-read, an aborted one
             // puts the old version back, and both are "no longer in doubt".
@@ -341,6 +361,53 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             *out = DispatchAndStage(line, session);
             may_park_ = false;
         }
+        // However the wait ended - granted, victim, or the net - this
+        // transaction is no longer waiting for anything, and an edge left
+        // behind would be a false cycle for the next waiter to close
+        // against.
+        //
+        // **The one exit this line does not cover is the decide's**, and
+        // that is deliberate rather than missed. A coroutine destroyed *at*
+        // the suspend point - a session dropped mid-wait - never runs this,
+        // so the edge outlives its statement. It cannot outlive its
+        // *transaction*: `TransactionManager::Commit` and `Abort` clear it
+        // with the borrows (AO-R6), and a stale edge matters only while the
+        // transaction it names is still in flight, since a waiter is only
+        // ever recorded against a holder `IsInFlight` admits. An RAII guard
+        // here would be the wrong shape: the table is instance-scoped and a
+        // destructor running during teardown would reach it after its
+        // owner is gone.
+        if (locks_ != nullptr && waiter_id != 0) locks_->ClearWaitFor(waiter_id);
+
+        if (deadlocked) {
+            // **The victim** (AO-R7). `TxnConflict` because that is the one
+            // retryable code and a deadlock genuinely is retryable - the
+            // transaction that survives will have released by the time this
+            // one comes back - and the message names deadlock, because an
+            // operator meeting a conflict needs to know whether to look for
+            // contention or for a lock-order bug in the application.
+            //
+            // The waiter is the victim and the holder is untouched (R1: a
+            // detector aborts the waiter, never revokes a holder), which is
+            // what makes the outcome deterministic rather than a race
+            // between two transactions to notice.
+            const DispatchOutcome::WriteBlock block = *out->write_block;
+            // **What is aborted is the statement; the transaction is
+            // poisoned and still holds its rows.** Saying "the other
+            // proceeds" without saying when would be the convenient
+            // sentence rather than the true one: the survivor's wait ends
+            // when this client rolls back, which is the same contract every
+            // other failed statement inside a transaction has (PostgreSQL
+            // holds locks to transaction end too).
+            RefuseParkedWrite(
+                *out, waiting_session,
+                Status::TxnConflict(
+                    "deadlock: this transaction waited for row id=" + std::to_string(block.pk) +
+                    ", held by transaction " + std::to_string(block.trx_id) +
+                    ", which is itself waiting on a row this transaction holds. This "
+                    "transaction closed the cycle, so its statement is the one refused; "
+                    "ROLLBACK to release its rows and let the other proceed"));
+        }
         if (out->write_block.has_value()) {
             // **The fault net fired, and that is not an outcome - it is a
             // defect report** (AO-R8, AR2-R10 as AR2-A amends it). A wait
@@ -358,28 +425,15 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // message: it names the net, so an operator meeting it looks
             // for the fault instead of concluding the row was busy.
             const DispatchOutcome::WriteBlock block = *out->write_block;
-            out->write_block.reset();
-            const Status refused = Status::TxnConflict(
-                "row id=" + std::to_string(block.pk) + " is held by transaction " +
-                std::to_string(block.trx_id) + ", which has not decided after " +
-                std::to_string(txn::kLockWaitFaultNetNs / 1'000'000'000) +
-                " s; the write hit the lock-wait fault net and was aborted. A wait ends when the "
-                "holder decides, so reaching the net means a deadlock went undetected or a "
-                "holder is stuck - not that the row was busy");
-            out->response = ErrorReply(refused);
-            // The poison `EndWrite` withheld while the wait was still
-            // possible. Inside an explicit transaction this refusal is a
-            // failed statement like any other, and the client must
-            // ROLLBACK; in autocommit the scope was already unwound.
-            Session& active = session != nullptr ? *session : autocommit_session_;
-            if (active.in_explicit_txn()) active.Poison();
-            // **Logged as a fault, at `kWarn`, under the lock family's own
-            // tag** - the component changed with the meaning: this is no
-            // longer a 2PC coordinator's stall but the lock family's net,
-            // and an operator grepping for one should not find the other.
-            if (logging(LogLevel::kWarn)) {
-                log_->Warn("lock", refused.message());
-            }
+            RefuseParkedWrite(
+                *out, waiting_session,
+                Status::TxnConflict(
+                    "row id=" + std::to_string(block.pk) + " is held by transaction " +
+                    std::to_string(block.trx_id) + ", which has not decided after " +
+                    std::to_string(txn::kLockWaitFaultNetNs / 1'000'000'000) +
+                    " s; the write hit the lock-wait fault net and was refused. A wait ends "
+                    "when the holder decides, so reaching the net means a deadlock went "
+                    "undetected or a holder is stuck - not that the row was busy"));
         }
     }
 
@@ -10653,6 +10707,20 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
     return scope;
 }
 
+void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session,
+                                          const Status& refused) {
+    out.write_block.reset();
+    out.response = ErrorReply(refused);
+    // The carried status, not only the rendered line - see the declaration.
+    out.status = refused;
+    // The poison `EndWrite` withheld while the wait was still possible.
+    // Inside an explicit transaction this is a failed statement like any
+    // other and the client must ROLLBACK; in autocommit the scope was
+    // already unwound.
+    if (session.in_explicit_txn()) session.Poison();
+    if (logging(LogLevel::kWarn)) log_->Warn("lock", refused.message());
+}
+
 void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx,
                                            std::uint64_t pk) {
     if (!may_park_ || clock_ == nullptr || txn_ == nullptr) return;
@@ -10661,9 +10729,16 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     // autocommit before its transaction is opened: it holds nothing and
     // will mint a fresh view, so both tests pass vacuously.
     if (waiter != nullptr) {
-        // No cycle can form while every waiter holds nothing.
-        if (!waiter->trail().empty()) return;
-        // A repeatable-read waiter's re-run refuses on the same ground.
+        // **No cycle can form while every waiter holds nothing** - AO-S3's
+        // guard, and it is lifted exactly where a detector exists. With a
+        // lock table this core records a `waiter -> holder` edge before it
+        // parks and refuses the wait outright when that edge would close a
+        // cycle (AO-S4a), so a transaction holding rows may wait; without
+        // one the graph has no reader and the narrow rule is what keeps the
+        // stage deadlock-free.
+        if (locks_ == nullptr && !waiter->trail().empty()) return;
+        // A repeatable-read waiter's re-run refuses on the same ground it
+        // refused on the first time, whatever the detector knows.
         if (waiter->isolation() == txn::IsolationLevel::kRepeatableRead) return;
     }
     blocking_writer_ = trx;

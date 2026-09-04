@@ -983,6 +983,17 @@ private:
     // its view by construction.
     void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t pk);
 
+    // Ends a parked write with `refused`, on every channel a client reads.
+    // Both endings a park can have - the deadlock victim and the fault net
+    // - are this call plus their own sentence, because writing them out
+    // twice is what let the `status` half be forgotten in both.
+    //
+    // **`response` is not enough.** `KwpSession::OnStatementComplete`
+    // prefers `out.status` over `StatusFromErrorReply(out.response)`, and
+    // KWP is the default port, so a refusal that sets only the rendered
+    // line reaches the debug arm and nobody else.
+    void RefuseParkedWrite(DispatchOutcome& out, Session& session, const Status& refused);
+
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
                                       std::uint64_t pk);
 
@@ -1695,6 +1706,14 @@ public:
     // other. It is not the server's default, and the operator ratified the
     // block; it *is* what an unconfigured dispatcher holds, for the reason
     // at the member's declaration.
+    // **The instance lock table** (AO-R2), borrowed and null until an
+    // expeditor hands one over. Its only use here is AO-S4a's wait-for
+    // graph: with a table this core detects deadlock and may therefore let
+    // a transaction that already holds rows wait; without one it keeps
+    // AO-S3's guard, where only a transaction holding nothing waits and no
+    // cycle can form. Both states are correct; the second is narrower.
+    void set_locks(txn::LockTable* locks) noexcept { locks_ = locks; }
+
     sched::MonoTimeNs InDoubtCeilingNs() const noexcept { return in_doubt_ceiling_ns_; }
     void set_in_doubt_ceiling_ns(sched::MonoTimeNs ns) noexcept { in_doubt_ceiling_ns_ = ns; }
 
@@ -2394,6 +2413,8 @@ private:
     // behaviour and the right one for a fixture with no cross-owner
     // transactions to be in doubt about.
     sched::MonoTimeNs in_doubt_ceiling_ns_ = 0;
+    // See `set_locks`. Null means no detector, which means AO-S3's guard.
+    txn::LockTable* locks_ = nullptr;
 
     // The transaction manager, or null when this dispatcher predates
     // transactions - which every socket-free test does, and which is why
