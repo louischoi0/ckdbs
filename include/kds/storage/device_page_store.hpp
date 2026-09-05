@@ -1060,6 +1060,20 @@ private:
     // no-ops.
     void ReleaseScanSlot(PageId page_id) noexcept;
 
+    // **A pin with no page latch, for the scan ring and nothing else**
+    // (AM-S2 step 3). `PinFrame` takes the pin *and* waits for the page
+    // latch, which a ring may not do: it hands its span back to a caller
+    // that holds it until the next `Fetch`, so a latch taken here would be
+    // held across arbitrary caller code and would deadlock against the
+    // foreground. What the ring needs is only EV4's guarantee - a pinned
+    // frame is never an eviction candidate - and that is the pin alone.
+    //
+    // The bytes are still unlatched, which is the scan's model and not a
+    // regression: this ring has never taken a page latch. What changes is
+    // that the frame under the span cannot be freed while the caller reads
+    // it, which is the whole of the decision recorded at `ScanRing`.
+    StatusOr<std::span<std::byte, kPageSize>> PinForScan(PageId page_id);
+
     class ScanRing;  // the ScanFetcher over this store; defined in the .cpp
 
     // PageRef's callbacks, overriding the base no-ops onto Frame metadata

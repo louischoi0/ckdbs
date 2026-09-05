@@ -568,8 +568,19 @@ TEST_F(EvictionTest, RingFetchesNeverBumpUsage) {
     for (int i = 0; i < 5; ++i) {
         ASSERT_TRUE(ring->Fetch(id).ok());
     }
-    EXPECT_EQ(store_->EvictColdFrames(8), 1u)
-        << "a scan's touches registered as heat (usage was bumped)";
+    // **A sweep cannot answer this any more, and the ring itself can**
+    // (AM-S2). A slot is pinned while it is occupied, so a sweep run here
+    // reclaims nothing whatever the usage counter reads - EV4 makes a
+    // pinned frame no victim at any pressure. What still answers the
+    // question is `ReleaseScanSlot`, which abandons a frame to the pool if
+    // its `usage > 0` and drops it otherwise: so if any of the five fetches
+    // had registered as heat, the page would *survive* the ring's death.
+    EXPECT_EQ(store_->EvictColdFrames(8), 0u) << "a pinned ring slot was reclaimed";
+    const std::size_t held = store_->resident_pages();
+    ring.reset();
+    EXPECT_EQ(store_->resident_pages(), held - 1)
+        << "a scan's touches registered as heat, so the ring abandoned the page "
+           "to the pool instead of dropping it";
 }
 
 TEST_F(EvictionTest, RotationSparesAPinnedPageAndDropsAColdOne) {
@@ -599,7 +610,15 @@ TEST_F(EvictionTest, RotationSparesAPinnedPageAndDropsAColdOne) {
     // ids[0] survived with the pin; ids[1] was rotated out; the ring holds
     // ids[2] and ids[3]: three resident of the four.
     EXPECT_EQ(store_->resident_pages(), 3u);
-    EXPECT_EQ(store_->pinned_frames(), 1u);
+    // **Three pinned, not one** (AM-S2): the foreground's handle on ids[0],
+    // and this ring's own two slots. A ring slot is pinned while it is
+    // occupied now, which is what keeps a scan's span from being freed
+    // under its reader once a second core can evict.
+    EXPECT_EQ(store_->pinned_frames(), 3u);
+    // And the ring's share comes back when the ring does, which is the
+    // other half of that statement: nothing leaks.
+    ring.reset();
+    EXPECT_EQ(store_->pinned_frames(), 1u) << "the ring did not give up its slots";
 }
 
 TEST_F(EvictionTest, TheRingNeverDropsADirtyFrameOrAResidentClassPage) {

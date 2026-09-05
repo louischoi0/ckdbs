@@ -718,6 +718,35 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     return InsertFrame(page_id, std::move(bytes), mark_dirty, bump_usage, /*sweep=*/true);
 }
 
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::PinForScan(PageId page_id) {
+    // Resident: pin it where it is, under the hold, so the find and the pin
+    // are one step for the reason every other pin here is.
+    {
+        LatchGuard structure(structure_latch());
+        if (auto it = frames_.find(page_id); it != frames_.end()) {
+            CountPin(it->second);
+            return std::span<std::byte, kPageSize>(*it->second.bytes);
+        }
+    }
+    // A miss faults through the ordinary path, which leaves the frame
+    // resident and unpinned, and then pins it. The gap between the two is
+    // the same one `FetchPinned`'s miss arm has and is answered the same
+    // way: if the frame is gone, fault again.
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        // `bump_usage=false`: a scan is not heat (§5), which is the property
+        // that made a ring worth having in the first place.
+        auto bytes = ResidentBytes(page_id, /*mark_dirty=*/false, /*bump_usage=*/false);
+        if (!bytes.ok()) return bytes.status();
+        LatchGuard structure(structure_latch());
+        if (auto it = frames_.find(page_id); it != frames_.end()) {
+            CountPin(it->second);
+            return std::span<std::byte, kPageSize>(*it->second.bytes);
+        }
+    }
+    return Status::ResourceExhausted("DevicePageStore: page " + std::to_string(page_id) +
+                                     " was evicted from under a scan on every attempt");
+}
+
 void DevicePageStore::ReleaseScanSlot(PageId page_id) noexcept {
     if (page_id == kInvalidPageId) return;
     // **The first of the three erasers to take the structure latch**, and
@@ -729,6 +758,15 @@ void DevicePageStore::ReleaseScanSlot(PageId page_id) noexcept {
     LatchGuard structure(structure_latch());
     auto it = frames_.find(page_id);
     if (it == frames_.end()) return;  // reclaimed by a sweep meanwhile: fine
+    // **The ring's own pin comes off first** (AM-S2 step 3). Every slot is
+    // pinned while it is occupied, so the refusals below would otherwise all
+    // see `pins > 0` - this ring's own - and no slot would ever be dropped.
+    // Dropped here rather than by the caller because a slot's pin and its
+    // release are one act: the caller has no other reason to touch the pin.
+    if (it->second.pins > 0) {
+        --it->second.pins;
+        if (live_pins_ > 0) --live_pins_;
+    }
     const Frame& frame = it->second;
     // The foreground got there: a dirty write must reach the device, a pin
     // is absolute, a usage bump means a foreground accessor touched it
@@ -768,22 +806,53 @@ public:
     //
     // The two ways out are to pin ring slots like any other frame (paying
     // the pin the ring exists to avoid) or to refuse a ring on a shared
-    // store and let scans take the ordinary path. **Neither is decided**;
-    // step 3 must decide before it shares the pool, because this is the one
-    // place a reader holds page bytes with nothing keeping the frame alive.
+    // store and let scans take the ordinary path.
+    //
+    // **Decided: pin the slots** (CLA, 2026-09-05, AM-S2 step 3). Three
+    // reasons, and the third is the one that settles it.
+    //
+    //   1. The exposure named above is "a reader holds page bytes with
+    //      nothing keeping the frame alive", and a pin is precisely the
+    //      thing that keeps a frame alive - EV4 makes a pinned frame no
+    //      eviction candidate at any pressure. It answers the stated
+    //      problem rather than routing around it.
+    //   2. The cost is bounded by the ring's **slot count**, not by the
+    //      scan's length. "The pin the ring exists to avoid" is a pin per
+    //      page *fetched*; this is a pin per slot, which is the ring's
+    //      whole working set and is fixed at construction.
+    //   3. Refusing the ring would send scans down the ordinary accessor,
+    //      which bumps the CLOCK usage counter - so a scan would become
+    //      heat, and §5's "a scan is not heat" is the *other* property this
+    //      ring exists for. That trades one invariant for another, where
+    //      pinning keeps both.
+    //
+    // What it costs, stated rather than discovered later: a slot's pin
+    // holds its frame for the life of the scan, so a ring of N slots takes
+    // N frames out of the pool's reclaimable set, and `kPinCeiling`'s
+    // debug bound has to admit N per scanning core.
     StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) override {
-        // In place when resident - the foreground's frame or one of this
-        // ring's own slots - never bumping usage: §5's interaction rule in
-        // one direction, and "a scan is not heat" in the other.
-        if (auto it = store_.frames_.find(page_id); it != store_.frames_.end()) {
+        // **A page this ring already holds needs nothing**: its slot's pin
+        // is what keeps the frame alive, so the span is good and no
+        // rotation is owed. Checked against the ring's own slots rather
+        // than against the table, which is the change the pinning forces
+        // and is also more honest - the old test asked "is it resident",
+        // and answered yes for a foreground frame this ring had no claim
+        // on at all.
+        for (const PageId held : slots_) {
+            if (held != page_id) continue;
+            LatchGuard structure(store_.structure_latch());
+            auto it = store_.frames_.find(page_id);
+            if (it == store_.frames_.end()) break;  // impossible while pinned; fault again
             return std::span<std::byte, kPageSize>(*it->second.bytes);
         }
 
-        // Rotate: the slot's previous occupant is dropped unless the
-        // foreground claimed it, then the new page faults in clean with
-        // its usage untouched.
+        // Rotate: the slot's previous occupant gives up this ring's pin and
+        // is dropped unless the foreground claimed it, then the new page is
+        // faulted if it has to be and pinned either way, with its usage
+        // untouched.
         store_.ReleaseScanSlot(slots_[hand_]);
-        auto bytes = store_.ResidentBytes(page_id, /*mark_dirty=*/false, /*bump_usage=*/false);
+        slots_[hand_] = kInvalidPageId;
+        auto bytes = store_.PinForScan(page_id);
         if (!bytes.ok()) return bytes.status();
         slots_[hand_] = page_id;
         hand_ = (hand_ + 1) % slots_.size();
@@ -851,6 +920,12 @@ void DevicePageStore::TryClaimByStamp(PageId page_id, std::unique_ptr<Page>& pre
     // headerless body happened to spell there and hand out write rights for
     // it. Refused downstream exactly as today.
     if (IsHeaderless(page_id)) return;
+    // **Unreachable on a shared store, which is why it takes no latch**
+    // (AM-S2 step 3). Its one caller gates on `lease_ != nullptr`
+    // (`ResidentBytes`), and a store every core borrows installs no lease -
+    // so this whole path, and the rights machinery it feeds, is core 0's
+    // per-store arrangement and goes with step 4 rather than getting a hold
+    // of its own.
     std::uint16_t stamp = 0;
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Resident without rights: redo faulted it at mount, before the
