@@ -34,7 +34,15 @@ protected:
         store_ = std::move(store.value());
         // Armed, or none of this is under test: unarmed the structure latch
         // is a null pointer and the guard is two branches (base/latch.hpp).
-        store_->SetLatchArmed(true);
+        //
+        // **And the pin ceiling is scaled for the pinners.** `kPinCeiling`
+        // bounds *one operation's* pin stack, and `live_pins_` was a proxy
+        // for it only while one core ran one operation. Left unscaled this
+        // cell sits exactly *at* the bound - eight threads, one handle each
+        // - so a ninth thread, or any one of them holding two handles as a
+        // btree descent does, aborts the process on entirely correct
+        // traffic. Measured, not reasoned: at nine it aborts.
+        store_->SetLatchArmed(true, /*concurrent_pinners=*/12);
     }
 
     PageId MakeResidentPage(std::byte fill) {
@@ -52,12 +60,27 @@ protected:
 };
 
 TEST_F(PinProtocolTest, ManyThreadsPinOneStoreAndTheLivePinGaugeReturnsToZero) {
-    // What this pins is the **ordering**, which is the whole of step 1: the
-    // pin is taken under the structure latch *before* the page latch is
-    // waited for, and released after it. Hold either across the other and
-    // this deadlocks rather than fails - so a run that finishes at all is
-    // already evidence, and the gauge check is what makes it a test.
-    constexpr int kThreads = 8;
+    // **What this discriminates, established by mutation rather than
+    // claimed.** An earlier version of this comment said it carried the
+    // pin-before-page-latch *ordering* - "hold either across the other and
+    // this deadlocks". Both halves are false, and the mutations say so:
+    // taking the pin *after* the page latch passes, and holding the
+    // structure latch across the page-latch acquire passes. It cannot
+    // deadlock, structurally, because this cell takes **shared holds only**
+    // and a shared acquire never blocks against other shared holders - so
+    // there is nothing being waited for that could be held across.
+    //
+    // What it does carry: the pin counters are under *some* mutual
+    // exclusion. Remove the structure latch and it fails on its own
+    // assertions - `live_pins` lands in the dozens and frames stay pinned.
+    // That is real and worth having, and it is all this is.
+    //
+    // **An ordering cell needs what this lacks**: at least one exclusive
+    // acquirer per page, so shared waiters actually block, and a concurrent
+    // eviction path, so the pin's protection is load-bearing rather than
+    // incidental. That belongs with step 2, which gives it a fault path to
+    // race against.
+    constexpr int kThreads = 12;
     constexpr int kPages = 16;
     constexpr int kTurnsPerThread = 3000;
 
@@ -104,11 +127,10 @@ TEST_F(PinProtocolTest, ManyThreadsPinOneStoreAndTheLivePinGaugeReturnsToZero) {
     // The coupling is kept because it is the right semantics, not because
     // this catches it.
     //
-    // What this *does* carry is the ordering, and it carries it
-    // structurally: hold either latch across the other and eight threads
-    // over sixteen frames deadlock rather than fail, so a run that finishes
-    // is the evidence. The gauge check is what turns "it finished" into an
-    // assertion about the accounting having balanced.
+    // **Twelve threads, deliberately past the old bound.** At eight this
+    // cell sat exactly on the unscaled `kPinCeiling`, so it passed only by
+    // arithmetic coincidence and a ninth reader aborted the process. Running
+    // it above the per-operation number is what keeps the scaling honest.
     EXPECT_EQ(store_->live_pins(), 0u)
         << "the live-pin gauge did not return to zero after every handle dropped";
     EXPECT_EQ(store_->pinned_frames(), 0u) << "a frame was left pinned after every handle dropped";

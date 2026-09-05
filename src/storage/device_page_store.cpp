@@ -1389,6 +1389,14 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
     // frame alive while this core waits for the page latch - where holding
     // the structure latch across that wait would put every other core's
     // frame lookup behind one page's contention.
+    //
+    // **Written in the voice of the shared future, and not yet true for the
+    // reason it gives.** Every eraser (`ReleaseScanSlot`, `EvictClean`,
+    // `EvictColdFrames`) reads `pins` *without* this latch, so what excludes
+    // them today is that eviction runs on the same thread - not that the
+    // latch makes this pin visible to a concurrent sweep. Latching the
+    // erasers is step 1b/3's; until then this ordering is correct by
+    // single-threadedness and merely *shaped* for sharing.
     Frame* frame = nullptr;
     {
         LatchGuard structure(structure_latch());
@@ -1406,11 +1414,12 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
         // more pins than the audit derived is either a new Shape-B site
         // missing its bound or a leak, and both should fail the test that
         // reaches them.
-        if (live_pins_ > kPinCeiling) {
+        if (live_pins_ > pin_ceiling_) {
             std::fprintf(stderr,
-                         "DevicePageStore: %zu live pins exceeds kPinCeiling %zu "
-                         "(docs/spec/page.md §3)\n",
-                         live_pins_, kPinCeiling);
+                         "DevicePageStore: %zu live pins exceeds the ceiling %zu "
+                         "(kPinCeiling %zu x the concurrent pinners SetLatchArmed was told "
+                         "about; docs/spec/page.md §3)\n",
+                         live_pins_, pin_ceiling_, kPinCeiling);
             std::abort();
         }
 #endif
@@ -1435,11 +1444,16 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
         // would fire on the first exclusive pin of an unshared frame.
         if (mode == PinMode::kExclusive && frame->pins > 1 &&
             PageLatch::HasSharedHolders(frame->latch)) {
+            // `pins - 1`, for the same reason the test above is `> 1`: the
+            // count includes this caller's own pin, and the number the
+            // message is about is the *pre-existing* shares. Printing the
+            // raw count reported one hold too many from the moment AM-S2
+            // moved the pin ahead of the check.
             std::fprintf(stderr,
                          "DevicePageStore: page %u is held shared by this core (%u pin(s)) "
                          "and was asked for exclusive - a page latch is never upgraded "
                          "(docs/spec/page.md section 6)\n",
-                         page_id, frame->pins);
+                         page_id, frame->pins - 1);
             // The census's whole value is naming the site: raw frames, for
             // `addr2line -e <binary>` - the executable is not linked
             // -rdynamic, so symbol names are not available here.

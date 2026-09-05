@@ -132,10 +132,10 @@
 // core (a per-task owner is AM-S2's escalation if the audit ever records
 // one). **Never upgraded**: a task holding a page shared may not ask for
 // it exclusive. That is a self-deadlock, aborted in debug naming the page
-// (PinFrame - the check reads this store's own `pins != 0` as "the shares
-// are mine", sound only while pools are per core) and an unbounded spin
-// on the reactor thread in release, which a recursive std::mutex at least
-// blocks on (base/latch.hpp).
+// (PinFrame - the check reads this store's own `pins > 1`, the caller's
+// own pin excluded, as "the shares are mine", sound only while pools are
+// per core) and an unbounded spin on the reactor thread in release, which
+// a recursive std::mutex at least blocks on (base/latch.hpp).
 //
 // Acquisition order (rules.md section 3's row):
 //   - **Outer to the WAL stream latch.** A task appends while holding its
@@ -687,7 +687,19 @@ public:
     // or every assembly-driven fixture would run the census unarmed at one
     // core and the "whole suite ran armed" claim would be narrower than it
     // reads.
-    void SetLatchArmed(bool armed) noexcept { latch_armed_ = armed || latch_forced_; }
+    // `concurrent_pinners` re-scopes `kPinCeiling` rather than adding a
+    // second knob for the same quantity (`CLAUDE.md`'s rule). **The ceiling
+    // is a *per-operation* bound and `live_pins_` was only ever a valid
+    // proxy for it because one core ran one operation at a time.** AM-S2
+    // breaks that coupling: once several threads pin one store, the global
+    // sum is the per-operation bound times the number of operations in
+    // flight, and asserting the unscaled value aborts the process on
+    // entirely correct traffic - measured, at nine concurrent readers.
+    // Callers that pin from one thread pass nothing and get today's bound.
+    void SetLatchArmed(bool armed, std::uint32_t concurrent_pinners = 1) noexcept {
+        latch_armed_ = armed || latch_forced_;
+        pin_ceiling_ = kPinCeiling * (concurrent_pinners == 0 ? 1 : concurrent_pinners);
+    }
     bool latch_armed() const noexcept { return latch_armed_; }
 
     // Test hooks: hold a resident frame's latch as if another core held it,
@@ -824,10 +836,19 @@ private:
         // core-local** - `page.md` §6 makes that the model rather than a
         // shortcut: one pool per core, and through M1 cross-core page
         // access does not exist (the latch word above is the one field a
-        // shared pool will read from another core; the pin count is not,
-        // and AM-S2 owns that change). A frame with pins > 0 is never a
-        // victim, at any pressure (EV4 answers OutOfSpace instead of
-        // waiting).
+        // shared pool will read from another core; the pin count is not).
+        // **AM-S2 decided against making this atomic** - the pointer this
+        // sentence used to carry to "AM-S2 owns that change" is retired:
+        // step 1 put pin *accounting* under the structure latch, so an
+        // atomic here would be redundant with it. It is still mutated
+        // unlatched in one place - `ResidentBytes`' inline-sweep guard pin -
+        // so what makes a plain integer safe today is that one thread
+        // reaches a store, not that every mutation is latched.
+        //
+        // A frame with pins > 0 is never a victim, at any pressure (EV4
+        // answers OutOfSpace instead of waiting) - and every eraser reads
+        // this field without the structure latch, so that exclusion also
+        // rests on the one-thread fact rather than on the latch.
         std::uint32_t pins = 0;
 
         // The CLOCK usage counter (`docs/spec/eviction.md` EV1 / §3.1-2):
@@ -1069,8 +1090,11 @@ private:
     // word; `frames_`, `clock_hand_`, `live_pins_`, `pin_high_water_`,
     // `dirty_eviction_queue_` and `Frame::pins` are plain, because through
     // M1 one pool serves one core (`page.md` §6). AM-S2 shares the pool, and
-    // this is what a shared table's structural changes and pin accounting
-    // run under.
+    // this is what a shared table's **pin accounting** runs under. Not its
+    // structural changes: `InsertFrame` and all three erasers are still
+    // unlatched, which the step-1 scope note below says outright - a claim
+    // that they were covered would have been contradicted twelve lines
+    // later in this same block.
     //
     // **Null where the store is not shared**, which is `LatchGuard`'s whole
     // shape and what keeps G2: at `cores = 1` the guard is a null test and
@@ -1088,11 +1112,29 @@ private:
     // other.
     //
     // **Step 1 scope, stated so nobody reads more into it**: this arms the
-    // pin protocol. The lookup-and-fault path keeps its unlatched shape
-    // until the stage's step 2 adds the per-frame *loading* state that lets
-    // a miss release the latch before the device read instead of holding it
-    // across one. Nothing is shared until step 3, so the gap is incomplete
-    // rather than unsound.
+    // pin protocol and nothing else. Two gaps remain, and the second is not
+    // the one the first draft of this comment named.
+    //
+    //   1. The lookup-and-fault path is still unlatched. Step 2's per-frame
+    //      *loading* state closes it, letting a miss release the latch
+    //      before the device read instead of holding one across it.
+    //   2. **The fetch-and-pin pair is not atomic, and step 2 does not close
+    //      that.** `page_store.hpp:140-147` records the obligation verbatim
+    //      - "the shared pool AM-S2 builds must latch the frame table across
+    //      the pair" - and every accessor there is `bytes = *Unpinned(id)`
+    //      followed by `PinFrame(id)`, which re-looks-up. Between the two a
+    //      frame can be evicted and its `Page` freed, and `PinFrame`'s
+    //      not-found branch then hands `PageRef` a dangling `data_`; worse,
+    //      an evict-and-re-fault in that window pins a *different* frame
+    //      while `data_` points at the freed page, and the pin gauges
+    //      balance perfectly. Closing it means fetch-and-pin becomes one
+    //      operation, which is a `PageStore` interface change rather than
+    //      anything this class can do alone.
+    //
+    // So "the pin keeps the frame alive" is true **from the pin onward** and
+    // says nothing about the window before it. Neither gap is live while the
+    // store is per-core (step 3 is what shares it), but steps 2-6 inherit
+    // both, and (2) is not on step 2's list.
     Latch frames_latch_;
     Latch* structure_latch() noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
     // See SetStampSuppressed. Off everywhere but inside a single-stream
@@ -1182,6 +1224,11 @@ private:
     PageId clock_hand_ = 0;
     std::size_t frame_budget_ = 0;  // 0 = unbounded (pre-eviction behaviour)
     std::size_t live_pins_ = 0;
+    // `kPinCeiling` scaled by how many threads may pin this store at once
+    // (`SetLatchArmed`). One operation's bound times the operations in
+    // flight; unscaled it is the per-operation number and the assert below
+    // fires on correct traffic the moment two threads pin together.
+    std::size_t pin_ceiling_ = kPinCeiling;
     std::size_t pin_high_water_ = 0;
 
     std::unordered_map<PageId, Frame> frames_;
