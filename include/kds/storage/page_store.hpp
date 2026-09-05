@@ -146,12 +146,31 @@ public:
     // builds must latch the frame table across the pair, and this comment
     // is where that obligation is recorded.
 
+    // ---- The fetch-and-pin pair (AM-S2) -------------------------------
+    //
+    // **One overridable operation, because the pair has to be atomic under
+    // a shared pool and cannot be made so from here.** The note above
+    // records the obligation; this is where a store discharges it. The
+    // default is exactly the fetch-then-pin the accessors used to inline,
+    // so a store with no eviction - `InMemoryPageStore`, `page_mgr`'s
+    // `BufferPool` - inherits its previous behaviour and needs no change.
+    //
+    // `for_read` picks which raw fetch runs, rather than the caller passing
+    // a functor: the two differ only in dirty marking, and a store that
+    // overrides this needs to know which one it is servicing.
+    virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
+                                                                 bool for_read) {
+        auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+        if (!bytes.ok()) return bytes.status();
+        PinFrame(page_id, mode);
+        return bytes.value();
+    }
+
     // Fetches an already-created page, pinned, for read or in-place
     // mutation. Fails with NotFound if page_id was never created.
     StatusOr<PageRef> Get(PageId page_id) {
-        auto bytes = GetUnpinned(page_id);
+        auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false);
         if (!bytes.ok()) return bytes.status();
-        PinFrame(page_id, PinMode::kExclusive);
         return PageRef(this, page_id, bytes.value());
     }
 
@@ -160,9 +179,8 @@ public:
     // (GetForReadUnpinned's note); a read fetch that turns out to write
     // calls MarkDirty() on the handle.
     StatusOr<PageRef> GetForRead(PageId page_id) {
-        auto bytes = GetForReadUnpinned(page_id);
+        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true);
         if (!bytes.ok()) return bytes.status();
-        PinFrame(page_id, PinMode::kShared);
         return PageRef(this, page_id, bytes.value());
     }
 

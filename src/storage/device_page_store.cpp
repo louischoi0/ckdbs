@@ -1375,6 +1375,65 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 
 // ---- Frame reclamation (docs/inflight/in-progress/workplan-eviction.md EV01-EV02) -------------
 
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId page_id, PinMode mode,
+                                                                      bool for_read) {
+    // **AM-S2: the pair the shared pool must not let anything between.**
+    // `page_store.hpp` records the obligation; this discharges it. Every
+    // accessor used to be `bytes = *Unpinned(id)` then `PinFrame(id)`, and
+    // in that window a frame can be evicted and its `Page` freed - so the
+    // pin lands on nothing and `PageRef` gets a dangling pointer - or
+    // evicted *and re-faulted*, so the pin lands on a **different** frame
+    // while the bytes point at the freed page, with every pin gauge
+    // balancing perfectly. That is the quiet form, and it is why this pair
+    // is one operation now rather than two calls the accessor makes.
+    Latch* latch = structure_latch();
+    if (latch == nullptr) {
+        // **Unarmed: today's shape and today's cost.** One thread reaches
+        // this store, nothing can evict between the two calls, and the
+        // window above does not exist - which is G2 as a property of the
+        // code rather than of a flag.
+        auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+        if (!bytes.ok()) return bytes.status();
+        PinFrame(page_id, mode);
+        return bytes.value();
+    }
+
+    // **Armed: the pair runs under one hold of the structure latch**, which
+    // is what closes the window. `PinFrame` takes the latch itself, so the
+    // pin is done inline here rather than by calling it - a second
+    // acquisition on this thread would hang, `Latch` being a plain
+    // `std::mutex`.
+    //
+    // **What this deliberately does not do yet, and the cost of that**: the
+    // raw fetch reads the device on a miss, so this hold spans a device
+    // read. That is the thing AM-S2's own design forbids, kept here for one
+    // release because correctness and cost separate cleanly - the window
+    // above is a wrong answer, the hold is a slow one, and no store is
+    // shared until step 3, so the slow one is unreachable in production
+    // today. **Step 2b removes it** with the per-frame *loading* state:
+    // a miss publishes a pinned, not-yet-valid frame, drops the latch, reads
+    // outside it, and republishes. That is also what makes this pair atomic
+    // *without* a bracket, so the two are one change and the bracket is the
+    // half that could land first.
+    std::lock_guard<Latch> hold(*latch);
+    auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+    if (!bytes.ok()) return bytes.status();
+    auto found = frames_.find(page_id);
+    if (found == frames_.end()) return bytes.status();
+    Frame& frame = found->second;
+    ++frame.pins;
+    ++live_pins_;
+    if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+    // The page latch is acquired *after* the pin, as `PinFrame` does and
+    // for the same reason - but here the structure latch is still held,
+    // which is safe only because it is this thread's own hold and
+    // `PageLatch::Acquire` never calls back into the store. Step 2b, which
+    // drops the latch before the wait, is where that stops being a
+    // parenthetical.
+    if (latch_armed_) (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
+    return bytes.value();
+}
+
 void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
     // Called by the base pinned accessors immediately after the raw fetch
     // made the frame resident, on the same single-threaded core - so the

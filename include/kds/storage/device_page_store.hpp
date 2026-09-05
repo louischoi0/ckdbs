@@ -1005,6 +1005,12 @@ private:
     // and a pin is only ever taken and dropped by a handle through the base
     // interface: a caller that could unpin by hand could unpin someone
     // else's frame.
+    // AM-S2: the fetch-and-pin pair, held together (`page_store.hpp`'s
+    // recorded obligation). See the definition for what this does and does
+    // not yet close.
+    StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
+                                                         bool for_read) override;
+
     void PinFrame(PageId page_id, PinMode mode) noexcept override;
     void UnpinFrame(PageId page_id) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
