@@ -361,15 +361,15 @@ public:
     }
     Status WritePage(PageId id, std::span<const std::byte, kPageSize> in) override {
         Note();
-        CheckDurable(in);
+        CheckDurable(id, in);
         ++page_writes_;
         return inner_.WritePage(id, in);
     }
     Status WritePageRun(PageId first, std::uint32_t nr, std::span<const std::byte> in) override {
         Note();
         for (std::uint32_t k = 0; k < nr; ++k) {
-            CheckDurable(std::span<const std::byte, kPageSize>(in.data() + k * kPageSize,
-                                                               kPageSize));
+            CheckDurable(first + k, std::span<const std::byte, kPageSize>(
+                                        in.data() + k * kPageSize, kPageSize));
         }
         ++run_writes_;
         return inner_.WritePageRun(first, nr, in);
@@ -394,8 +394,16 @@ public:
     }
 
 private:
-    void CheckDurable(std::span<const std::byte, kPageSize> page) {
+    void CheckDurable(PageId id, std::span<const std::byte, kPageSize> page) {
         if (gate_ == nullptr) return;
+        // **A map page has no `page_lsn` field**, so the bytes at that
+        // offset are bitmap and read back as an arbitrary number. Skipped by
+        // id, which is how every other caller decides it (`IsMapPageId` is
+        // arithmetic, not a flag) - and the omission was not theoretical: it
+        // made this cell pass alone and fail under `ctest -j4`, where the
+        // map is flushed often enough to be caught mid-run. A flaky cell is
+        // worse than none, and the flake was the probe's, not the engine's.
+        if (IsMapPageId(id)) return;
         const std::uint64_t lsn = GetPageLsn(page);
         if (lsn == wal::kNoLsn) return;  // never logged: nothing to be ahead of
         if (lsn >= gate_->durable_lsn()) {
@@ -538,6 +546,13 @@ TEST(EvictionWritebackTest, FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage) {
         }
     });
     for (std::thread& th : threads) th.join();
+    // **After the join, so the gate assertion cannot race the stampers.**
+    // The flusher's 200 passes can all complete before a stamper dirties
+    // anything - which under `ctest -j4`'s contention they sometimes did -
+    // and `gate.asked()` would then be false for a reason that says nothing
+    // about the engine. A flake in a cell is worse than no cell, and this
+    // one was the rig's.
+    ASSERT_TRUE(store.Flush().ok());
 
     EXPECT_GT(flushes.load(), 0) << "the writeback never completed a pass";
     EXPECT_TRUE(gate.asked()) << "writeback never consulted the gate";

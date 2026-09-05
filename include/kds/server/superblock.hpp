@@ -203,7 +203,27 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // itself. (v16 is the only version that can reach the field: `Decode`
 // refuses any other before reading it.) Same move as
 // `page_header.hpp:58`, twice.
-inline constexpr std::uint32_t kSuperBlockVersion = 16;
+// 16 -> 17 (2026-09-05, AM-S4 / AM-R4, on D14): **the first bump on this
+// list that protects nothing in the catalog and everything in the pages.**
+// Every entry above is about a fixed page id moving or a row's width
+// changing; this one is about what a *data* page's bytes mean. AM-S2 gives
+// one buffer pool to every core, so no core owns a frame, and PL-C's stream
+// stamp - the 2-byte field at offset 2 of every headered page, saying which
+// core's log the `page_lsn` beside it belongs to - has no reader left. A
+// version-16 file's pages carry that field with a meaning this build no
+// longer assigns, and its `page_lsn` is an offset into whichever of several
+// streams that core wrote.
+//
+// **Refusing is the whole of D14** ("no in-place migration; a new major
+// version mounts only volumes created by it"), and it is the first time in
+// this revision a v3 image stops mounting: M0 kept them mountable, which is
+// exactly how a version-16 image with `log_topology = kPerCoreStreams` still
+// exists to be refused. There is nothing to migrate *to* - a per-core-stream
+// volume's LSNs are not comparable across cores, so no rewrite of the field
+// could make them one stream's - and nothing to migrate *for*: the version
+// of record is `v2.7.0` and v3 is unreleased, so what this strands is
+// development volumes.
+inline constexpr std::uint32_t kSuperBlockVersion = 17;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

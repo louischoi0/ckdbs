@@ -61,9 +61,16 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
 
     std::memcpy(&f.version, base + kVersionOffset, sizeof(f.version));
     if (f.version != kSuperBlockVersion) {
-        // No migration path exists and none is wanted while the format is
-        // still moving: an image this build did not write is refused, not
-        // guessed at. Recreate the database instead.
+        // No migration path exists and none is wanted: an image this build
+        // did not write is refused, not guessed at. Recreate the database
+        // instead.
+        //
+        // **Since 17 that is D14 rather than caution** (AM-R4): a
+        // version-16 image's *pages* carry PL-C's stream stamp, a field this
+        // build neither writes nor reads, and its `page_lsn` is an offset
+        // into one of several per-core streams. Nothing could be migrated -
+        // those LSNs are not comparable across cores - so the refusal is the
+        // migration story, not a placeholder for one.
         return Status::Corruption("superblock version " + std::to_string(f.version) +
                                   " is not this build's (" +
                                   std::to_string(kSuperBlockVersion) + ")");
