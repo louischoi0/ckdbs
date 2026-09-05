@@ -95,9 +95,15 @@ and `sched_spurious_wakes` climbing far past `sched_wake_race_skips` would
 mean senders waking cores they have nothing for.
 
 **The wake, and its one atomic.** One `Waker` (an eventfd) per reactor,
-armed at `AttachTransport` and registered with that reactor's backend like
-any other readable handle — so a single-core build arms nothing and pays
-nothing. A sender wakes **only a destination that is actually asleep**,
+armed by whichever of `AttachTransport` and `AttachWakerTable` runs first
+and registered with that reactor's backend like any other readable handle —
+so a single-core build arms nothing and pays nothing. **Arming and being
+reachable are two things**: a reactor becomes wakeable *by a sender* only
+when `AttachWakerTable` registers it in the instance's one wake registry
+(`sched/waker_table.hpp`), which is where a ring send and a stop both go.
+A core that attached a transport and no table is never kicked and waits out
+its idle block — slow, never wrong. A sender wakes **only a destination that
+is actually asleep**,
 reading that core's `sleeping` flag first, because an eventfd write is a
 syscall on the sender's critical path and the cells shipping is already fast
 in are exactly the ones where the owner is never asleep. The flag cannot be
@@ -105,9 +111,14 @@ missed: sender and receiver touch the two variables in opposite orders with
 a `seq_cst` fence on **both** sides, so sequential consistency forbids both
 reads returning stale — either the sender sees the flag and writes the wake,
 or the receiver's pre-block re-check sees the message and does not sleep
-(`ring_transport.hpp` carries the argument; `Scheduler::wake_race_skips()`
-counts the second case). **The sender's fence is not optional**: its store
-is the ring's release, and StoreLoad is the one reordering x86 TSO permits.
+(`sched/waker_table.hpp` carries the argument, on `Kick`, where the sender's
+fence is; `Scheduler::wake_race_skips()` counts the second case). **The
+sender's fence is not optional**: its store is the ring's release, and
+StoreLoad is the one reordering x86 TSO permits. **The third leg is the
+caller's**, not the registry's: closing the window needs the receiver to
+re-read the predicate it is about to park on, which the ring has in
+`HasPending` and a caller with no queue does not — for that caller the kick
+is best-effort and the cost is one idle block.
 The simulated transport does not wake — its reactors are multiplexed by a
 seeded harness, and a second "who runs now" input is the nondeterminism §8
 forbids.

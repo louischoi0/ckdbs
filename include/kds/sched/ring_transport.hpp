@@ -9,6 +9,7 @@
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/spsc_ring.hpp"
 #include "kds/sched/waker.hpp"
+#include "kds/sched/waker_table.hpp"
 
 // The cross-core transport seam (docs/spec/sched.md §5, docs/inflight/in-progress/workplan-crosscore.md
 // M9 and P1).
@@ -34,17 +35,6 @@
 // transport runs every reactor on one thread and so satisfies it trivially.
 
 namespace kds::sched {
-
-// **Where a sender finds a sleeping destination** (`sched/waker.hpp`).
-//
-// Both halves belong to the *destination's* reactor and outlive every send:
-// the flag it raises before it blocks, and the handle that unblocks it. A
-// sender reads the flag and writes the handle only when it is set, so a
-// busy core costs no syscalls at all.
-struct WakeTarget {
-    const std::atomic<bool>* sleeping = nullptr;
-    const Waker* waker = nullptr;
-};
 
 class RingTransport {
 public:
@@ -83,26 +73,12 @@ public:
     // must load with at least acquire ordering for that reason.
     virtual bool HasPending(std::uint32_t dst_core) const = 0;
 
-    // Installs the destination's wake target. Called by that core's own
-    // reactor at `AttachTransport`, before any peer can send to it, and
-    // never again — so this is not synchronised and does not need to be.
-    // A core with no target set is simply never woken and falls back to
-    // its idle block, which is what every build did before this existed.
-    virtual void SetWakeTarget(std::uint32_t core, WakeTarget target) = 0;
-
     virtual std::uint32_t core_count() const noexcept = 0;
 
     // The largest payload `TrySend` will accept, in bytes - the same
     // number that call enforces, so a sender sizing against this one
     // cannot drift from what it will actually be allowed to send.
     virtual std::size_t max_payload() const noexcept = 0;
-
-    // Wakes written across every destination (waker.hpp). Instance-wide
-    // and diagnostic, so it is given a default rather than made pure: a
-    // transport that cannot wake anything - the simulated one, whose
-    // reactors are multiplexed by the harness - answers 0 truthfully and
-    // has nothing to override.
-    virtual std::uint64_t wakes_sent() const noexcept { return 0; }
 };
 
 // The real transport: one SpscRing per **ordered** core pair, so a channel
@@ -127,24 +103,31 @@ public:
 
     RealRingTransport(const RealRingTransport&) = delete;
     RealRingTransport& operator=(const RealRingTransport&) = delete;
-    // Hand-written for one member's sake: `wakes_sent_` is an atomic and so
-    // not movable, which would otherwise delete this. Moving a transport
-    // two reactors are using is not a supported operation and cannot be
-    // made one - `Create` returns by value and the Expeditor stores it,
-    // both before any worker exists - so carrying the counter's *value* is
-    // the honest move, exactly as `SpscRing` does for its indices.
-    RealRingTransport(RealRingTransport&& other) noexcept
-        : core_count_(other.core_count_),
-          rings_(std::move(other.rings_)),
-          wake_(std::move(other.wake_)),
-          wakes_sent_(other.wakes_sent_.load(std::memory_order_relaxed)),
-          next_peer_(std::move(other.next_peer_)) {}
+    // Defaulted since AU-S1b moved the wake counter to `WakerTable` and left
+    // nothing unmovable here. Moving a transport two reactors are using is
+    // still not a supported operation - `Create` returns by value and the
+    // Expeditor stores it, both before any worker exists.
+    RealRingTransport(RealRingTransport&& other) noexcept = default;
+
+    // **Where this transport's sends find a sleeping destination**
+    // (AR0-6-R1, `waker_table.hpp`). Instance-wide and installed once, not
+    // once per core: the table is registered into by each reactor for
+    // itself, so a send needs only to know which table to ask. Called on the
+    // startup thread before any worker exists; a transport with none simply
+    // never kicks, and every destination falls back to its idle block -
+    // which is what every build did before the wake existed at all.
+    void AttachWakers(const WakerTable* wakers) noexcept { wakers_ = wakers; }
+
+    // Which table, so an assembly test can say "this one" rather than
+    // "some one" - `expeditor_test.cpp`'s two-core cell does, because a
+    // transport left pointing at nothing is silent: every send still
+    // succeeds and every destination waits out its block.
+    const WakerTable* wakers() const noexcept { return wakers_; }
 
     Status TrySend(const MessageHeader& header, std::span<const std::byte> payload) override;
     bool TryReceive(std::uint32_t dst_core, MessageHeader& header,
                     std::vector<std::byte>& payload) override;
     bool HasPending(std::uint32_t dst_core) const override;
-    void SetWakeTarget(std::uint32_t core, WakeTarget target) override;
     std::uint32_t core_count() const noexcept override { return core_count_; }
 
     // Every ring in the matrix is created with the same `max_payload`
@@ -162,17 +145,9 @@ public:
         return rings_.empty() ? 0 : rings_.front().max_payload();
     }
 
-    // Wakes actually written across every destination. Zero on a
-    // single-core build and on any run where no core ever slept with work
-    // arriving; it is the count that says the path is live.
-    std::uint64_t wakes_sent() const noexcept override {
-        return wakes_sent_.load(std::memory_order_relaxed);
-    }
-
 private:
     RealRingTransport(std::uint32_t core_count, std::vector<SpscRing> rings)
-        : core_count_(core_count), rings_(std::move(rings)),
-          wake_(core_count), next_peer_(core_count, 0) {}
+        : core_count_(core_count), rings_(std::move(rings)), next_peer_(core_count, 0) {}
 
     // Row-major (src, dst): rings_[src * n + dst].
     SpscRing& RingFor(std::uint32_t src, std::uint32_t dst) noexcept {
@@ -185,14 +160,10 @@ private:
     std::uint32_t core_count_ = 0;
     std::vector<SpscRing> rings_;
 
-    // One per destination core, written once by that core's reactor at
-    // AttachTransport and read by every sender thereafter (waker.hpp). A
-    // plain vector because it is not mutated after that: the write happens
-    // on the startup thread before the destination's worker exists, which
-    // is the same ordering every other per-core wiring in this engine
-    // relies on.
-    std::vector<WakeTarget> wake_;
-    std::atomic<std::uint64_t> wakes_sent_{0};
+    // Borrowed, never owned: the table outlives this transport by design
+    // (AR0-6 retires the ring and keeps the wake), and the Expeditor builds
+    // it beside this one for exactly that reason.
+    const WakerTable* wakers_ = nullptr;
 
     // Where the next TryReceive(dst) starts its sweep over peers. A
     // rotating start is what keeps a busy peer from starving a quiet one:

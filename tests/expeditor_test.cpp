@@ -277,6 +277,24 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     EXPECT_TRUE(db.store().latch_armed()) << "core 0's store did not arm its page latch";
     EXPECT_TRUE(peer.store().latch_armed()) << "the peer's store did not arm its page latch";
 
+    // **The wake wiring, which fails silently or not at all** (AU-S1b). The
+    // transport kicks through the instance's `WakerTable` rather than
+    // through a copy of its own, so what has to be true is that it holds
+    // *this* table - the same shape as the stream assertion above, and for
+    // the same reason: a transport handed nothing still accepts every send,
+    // and every destination just waits out its 10 ms block. Nothing fails,
+    // nothing is wrong, and every cross-core message costs a block.
+    ASSERT_NE(db.transport(), nullptr) << "a two-core instance built no transport";
+    ASSERT_NE(db.wakers(), nullptr) << "a two-core instance built no waker table";
+    EXPECT_EQ(db.transport()->wakers(), db.wakers())
+        << "the transport kicks through a registry that is not this instance's";
+    // **The same silence one size down.** `Kick` returns without a sound for
+    // a core outside the table, so a table built smaller than the transport
+    // would disable send-wakes for the high cores and change no result. This
+    // is the only place in the tree that would notice.
+    EXPECT_EQ(db.wakers()->core_count(), db.transport()->core_count())
+        << "the waker table is not sized for every core the transport can address";
+
     // **The superblock image.** A peer used to hold a default-constructed
     // copy, and zero is a legal value of most of its fields - so it reported
     // `wal_topology=per-core` on a single-stream volume and `version=0`
@@ -326,6 +344,28 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // The shutdown tail cleared them, so a caller that asks afterwards sees
     // an instance with no cores rather than dangling ones.
     EXPECT_TRUE(db.cores().empty());
+}
+
+TEST_F(ExpeditorTest, AtOneCoreThereIsNoWakeRegistryAndNoTransportToAskIt) {
+    // The other half of the two-core wiring cell, and guideline 2's
+    // "zero messages, zero allocations" read literally: a single-core
+    // instance has no peer to kick, so neither object is built. Asserted
+    // rather than assumed because the cheap way to make the two-core cell
+    // pass is to build both unconditionally, which would put a table and an
+    // N=1 ring matrix in every single-core process.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(db.Start().ok());
+
+    EXPECT_EQ(db.transport(), nullptr);
+    EXPECT_EQ(db.wakers(), nullptr);
+    // And core 0's own reactor reports the counter honestly rather than
+    // omitting it: `sched_wakes_sent` is 0 because nothing can be woken,
+    // which is a different statement from "the block is missing".
+    const std::string meta = db.dispatcher().Dispatch("SHOW META").response;
+    EXPECT_NE(meta.find("sched_wakes_sent=0"), std::string::npos) << meta;
 }
 
 TEST_F(ExpeditorTest, AtOneCoreTheStreamsLatchIsNeverArmed) {

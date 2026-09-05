@@ -82,15 +82,25 @@ which is inside AT, not here.
 |---|---|---|---|---|
 | AU-S0 | This order; AR0-6 filed; AO-R4's text and the AO-S5 row amended; the rig order re-lettered per D26 | the files at the commit | the hour | — |
 | AU-S1 | `Waker::Kick`, the `sleeping` protocol moved in; `SimWaker` | `cores = 1` byte-identical (no eventfd write on a self-kick, asserted); a kick to a sleeping peer ends its idle block within one `RunOnce` (real threads, the existing two-core `core_runtime_test` fixture); a kick to a busy peer writes nothing (counter); `SimWaker` reproduces a seed's `(tick, dst)` log across three runs | S–M | — |
+| AU-S1b | **The two registries collapsed into one.** AU-S1 built `WakerTable` *beside* `RingTransport::WakeTarget` rather than in place of it, so every reactor registered the same two pointers twice and a send kicked through one copy while a stop kicked through the other. `WakeTarget`, `SetWakeTarget`, `RealRingTransport::wake_`, its `wakes_sent_` and `RingTransport::wakes_sent()` are deleted; `RealRingTransport` holds a `const WakerTable*` and its send calls `Kick`; `TrySend`'s explicit seq_cst fence moves into `Kick`, where every caller gets it; `Scheduler::wakes_sent()` (`SHOW META`'s `sched_wakes_sent`) reads the table. AU-S5 then removes a *user* of the wake rather than unpicking a registry | the instance's transport holds the instance's table (mutation: deleting the one wiring line leaves the whole suite green but for this cell — measured); at one core neither object is built; the four existing wake cells re-pointed at the table's counters | S | AU-S1 |
 | AU-S2 | **AO-S5 re-based**: cross-core lock wake and victim notification as write-then-kick; no `kLockWake`/`kLockAbort` kind is ever added | AO-S5's cells unchanged in statement — the waiter on core 1 proceeds at the kick rather than at idle-block expiry (`sched_wakes_received` moves); the victim's refusal **reaches the client**, which is `c168acb`'s lesson (a report reaching nobody is the defect class) | M | the rig, on `SimWaker` |
 | AU-S3 | `kShutdown` → atomic stop flag + `Kick`; the kind struck, count **34** | `STOP` at `cores = 4` stops every reactor within one idle block; the expeditor's join ordering re-read against the flag | S | D23 |
 | AU-S4 | The three page-rights kinds struck with their grants — `kRelationFaultGrant` at AM-S2, `kRelationWriteGrant` and `kRelationGrantRequest` at AO-S5. Count **31** | no `GrantFaultPages`/`GrantWritePages` caller remains | S | AM-S2, AO-S5 |
 | AU-S5 | **At AT**, one sub-stage per replacement, covering the remaining 31: catalog broadcast, the three allocator kinds, checkpoint, statistics, remote steps, shipped statements, index build, assertion build, foreign-key probes, 2PC | per group: the replacement carries the traffic, and the kind's handler is unreachable (a call-site grep in the cell) | inside AT | AT |
 | AU-S6 | Count reaches 0: `RingTransport`, `RealRingTransport`, `SimRingTransport`, `ring_message.hpp`, phase 3, the N² preallocation, `AttachTransport` and the two transport tests removed; `sched.md` §5 rewritten; `rules.md` §3's row; G1's sentence | the suite; the golden log CRC unchanged (the transport never touched the log); `SHOW META` loses its ring counters and `client-manual.md` says so | M | AU-S5 |
 
-**Order**: S0 → S1 → S2 (needs the rig, which now needs only S1) → S3 → S4
-(with its two milestones) → S5, S6 inside AT. **S1 and S3 are independent of
-every other lane** and are the two that can land without AT.
+**Order**: S0 → S1 → S1b → S2 (needs the rig, which now needs only S1) → S3
+→ S4 (with its two milestones) → S5, S6 inside AT. **S1, S1b and S3 are
+independent of every other lane** and are the three that can land without AT.
+
+**S1b is a correction, not a plan**, which is why it carries a letter rather
+than a number: S1 was written as "the pair moves house" and built as "the
+pair gets a second house", and the order did not catch the difference because
+its cells asked whether a kick works, never whether there is one registry.
+The cell that would have caught it is S1b's own - the instance's transport
+holds the instance's table - and it is the shape every wiring step here
+should have: not "does the path work" but "is it wired to the one object
+this instance has".
 
 ## AU-5 — What this changes in orders already written
 

@@ -19,15 +19,9 @@
 // through a transport that is being retired. Both halves belong to the
 // destination's reactor and outlive every send.
 //
-// **Until AU-S5 retires the ring, the pair has two homes, not one.**
-// `RingTransport::WakeTarget` is this `Entry` field for field, `wake_` is
-// this `entries_` element for element, and `Scheduler::AttachTransport` and
-// `AttachWakerTable` each register the same two pointers into their own
-// copy - so a send kicks through one and a stop through the other. That is
-// duplication with a scheduled end, not a design: the two must be collapsed
-// (the transport delegating to this table, `SetWakeTarget`/`WakeTarget`
-// deleted) at latest when the ring goes, and sooner if anything else starts
-// registering.
+// **This is the instance's only wake registry** (AU-S1b). A ring send is a
+// caller of this path, not a second copy of it, so AU-S5 removes a user
+// rather than unpicking a registry.
 //
 // ---- Why the flag, and what a missed kick costs -------------------------
 //
@@ -42,14 +36,8 @@
 // which is exactly `waker.hpp`'s existing contract for a lost or coalesced
 // wake, and AR0-6-R1 adopts it deliberately rather than inheriting it.
 //
-// **The transport closed that window and this does not.** `RingTransport`
-// had `HasPending`: the destination, having raised its flag, asked the queue
-// once more whether anything had arrived. There is no queue here, so there is
-// no such question to ask - the general form is "re-evaluate the predicate
-// you are about to park on", and that belongs with a consumer that has one.
-// AU-S2 (AO-S5 re-based onto the kick) is the first, and is where the
-// re-check goes in with something to test it. Building it now would be a
-// mechanism with no caller.
+// **Whether that race is closed is a property of the caller, not of this
+// table**, and the argument sits on `Kick`, with the fence it is about.
 
 namespace kds::sched {
 
@@ -67,26 +55,39 @@ public:
     }
 
     // **Callable from any thread**, which is the whole point: the caller is
-    // another core. Reads the destination's flag and writes the eventfd
-    // only when it is set.
+    // another core. The caller has already published whatever it wants seen;
+    // this reads the destination's flag and writes the eventfd only when it
+    // is set.
     //
-    // **This is not `TrySend`'s store-buffer pair, and must not be read as
-    // one.** That pair needs three things - the sender fencing its publish
-    // into the seq_cst order, the destination storing the flag with a fence,
-    // and *the destination re-reading the predicate after raising it*. Only
-    // the middle one is here: there is no `HasPending` analogue on this path
-    // (see the header block above), so the seq_cst load below is a load with
-    // no partner and buys no exclusion on its own. The kick is therefore
-    // **best-effort by construction**: a publisher that lands between the
-    // destination's last look and its raising of the flag reads clear, skips
-    // the kick, and the destination waits out one idle block. Slow, never
-    // wrong, and AR0-6-R1's stated cost. AU-S2 adds the re-check, and the
-    // sender-side fence belongs in the same commit - alone, either half is
-    // ceremony.
+    // **The fence is the sender's half of a store-buffer pair, and it lives
+    // here because every caller needs it and none can be trusted to write
+    // it.** Two threads, two variables, opposite orders:
+    //
+    //   sender:   publish, then read `sleeping`
+    //   receiver: set `sleeping`, then read the published state
+    //
+    // This fence and its twin in `Scheduler::RunOnce` make sequential
+    // consistency forbid *both* reads returning the stale value, so at least
+    // one of two things happens: the sender sees the flag and kicks, or the
+    // receiver sees the state and does not sleep. It moved here from
+    // `RealRingTransport::TrySend` when the ring became a caller of this
+    // path rather than a second copy of it.
+    //
+    // **What the fence buys depends on the caller, and is the one thing to
+    // read carefully.** The pair has three legs, and this supplies one: the
+    // receiver must *also* store its flag with a fence (`RunOnce` does) and
+    // *re-read the predicate after raising it*. The ring has that third leg
+    // in `HasPending`, so for a send the window is genuinely closed. A caller
+    // with no such predicate has only two legs, and for it the kick stays
+    // **best-effort**: a publisher landing between the destination's last
+    // look and its raising of the flag reads clear, skips the kick, and the
+    // destination waits out one idle block. Slow, never wrong, and
+    // AR0-6-R1's stated cost.
     void Kick(std::uint32_t core) const noexcept {
         if (core >= entries_.size()) return;
         const Entry& entry = entries_[core];
         if (entry.sleeping == nullptr || entry.waker == nullptr) return;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         if (!entry.sleeping->load(std::memory_order_seq_cst)) {
             skipped_.fetch_add(1, std::memory_order_relaxed);
             return;
@@ -98,11 +99,29 @@ public:
     // Kicks written, and kicks a busy destination made unnecessary. The
     // second is the counter that shows the flag is doing its job: on a
     // loaded instance it should dwarf the first.
+    //
+    // `kicks()` is what `SHOW META`'s `sched_wakes_sent` reports, and
+    // `sched.md` §4's check - that it equals the sum of the cores'
+    // `sched_wakes_received` - **holds by construction now and did not
+    // before**. Every counted kick is one `Waker::Wake()`, and `Wake()`
+    // increments the destination's own received counter on the sender's
+    // thread. While the transport kept its own counter, AU-S3's stop-kicks
+    // moved a destination's received count and left the sent count alone,
+    // so the identity was already false on any instance that stopped a
+    // peer. The one residual gap is a *failed* eventfd write, which is
+    // `EAGAIN` at 2^64 pending wakes and lands in `wake_failures_`.
     std::uint64_t kicks() const noexcept { return kicks_.load(std::memory_order_relaxed); }
     std::uint64_t kicks_skipped() const noexcept {
         return skipped_.load(std::memory_order_relaxed);
     }
 
+    // **The size, and it has exactly one caller for a reason.** `Kick`
+    // returns silently for a core outside the table, so a table built
+    // smaller than the transport it serves disables send-wakes for the high
+    // cores with no failure, no counter and no wrong answer - the same
+    // silence `AttachWakers` being forgotten would produce. The two-core
+    // assembly cell compares this against the transport's own count, which
+    // is the only thing in the tree that would notice.
     std::uint32_t core_count() const noexcept {
         return static_cast<std::uint32_t>(entries_.size());
     }

@@ -157,11 +157,15 @@ public:
     // AU-S1: register this reactor in the instance's waker table, so a peer
     // can kick it without a transport (AR0-6-R1, `waker_table.hpp`).
     //
-    // Separate from `AttachTransport` because it outlives it: the transport
-    // is being retired and the wake is not. A reactor that calls neither is
-    // never woken and falls back to its idle block, which is what every
-    // single-core build does. Creates the `Waker` if attaching a transport
-    // has not already, so the two entry points do not have to be ordered.
+    // **This is where a reactor becomes wakeable at all**, since AU-S1b -
+    // the table is the instance's one wake registry, and a send goes
+    // through it like a stop does. `AttachTransport` gives this core a
+    // *queue*; this gives peers a way to say something is in it. A reactor
+    // that calls only the first is never woken and falls back to its idle
+    // block, which is what every single-core build does; one that calls
+    // only this is kicked with no queue to drain, which is what every
+    // caller after AU-S5 will be. Creates the `Waker` if attaching a
+    // transport has not already, so the two need no ordering between them.
     Status AttachWakerTable(WakerTable* table, std::uint32_t core_id);
 
 private:
@@ -374,14 +378,20 @@ private:
     // ---- Cross-core (sched.md §5) ---------------------------------------
     RingTransport* transport_ = nullptr;
 
-    // **The wake path** (waker.hpp), armed at AttachTransport and absent
-    // on every single-core build.
+    // The instance's wake registry, borrowed. Held for one reason beyond
+    // registering into it: `wakes_sent()` reads its counter, and after
+    // AU-S1b that counter is the only one there is.
+    const WakerTable* wakers_ = nullptr;
+
+    // **The wake path** (waker.hpp), armed by whichever attach point runs
+    // first and absent on every single-core build.
     //
     // `sleeping_` is read by *other cores' threads*, which is the one place
     // in this reactor where that is true and why it is atomic. It is
     // sequentially consistent on both sides on purpose: the argument that
     // a message cannot be stranded is the store-buffer one, and it needs
-    // seq_cst — `RealRingTransport::TrySend` carries it in full.
+    // seq_cst — `WakerTable::Kick` carries the sender's half and
+    // `HasPending` the third leg (`waker_table.hpp`).
     std::optional<Waker> waker_;
     std::atomic<bool> sleeping_{false};
     // Iterations that blocked with the flag raised, and iterations whose
@@ -452,12 +462,13 @@ public:
     std::uint64_t wakes_received() const noexcept {
         return waker_.has_value() ? waker_->wakes() : 0;
     }
-    // Wakes this instance's transport has written to *every* destination,
-    // so the same number on every core and equal to the sum of every
-    // core's `wakes_received()`. Instance-wide because the counter is the
-    // transport's: one object serves all N reactors.
+    // Wakes this instance has written to *every* destination, so the same
+    // number on every core and equal to the sum of every core's
+    // `wakes_received()`. Instance-wide because the counter is the waker
+    // table's: one object serves all N reactors, and since AU-S1b a ring
+    // send and a stop are both counted there.
     std::uint64_t wakes_sent() const noexcept {
-        return transport_ != nullptr ? transport_->wakes_sent() : 0;
+        return wakers_ != nullptr ? wakers_->kicks() : 0;
     }
     // Wakes this reactor read whose iteration then drained no message.
     // Not a defect: the sender publishes before it wakes, so the message

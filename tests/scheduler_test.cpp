@@ -18,6 +18,7 @@
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/waker.hpp"
+#include "kds/sched/waker_table.hpp"
 
 // Phase-2 timers, driven off a ManualClock so "an interval elapsed" is a
 // statement about the injected clock and never about wall time (rules.md
@@ -734,7 +735,14 @@ TEST_F(SchedulerWakeTest, AMessageToABlockedReactorArrivesWithoutWaitingOutTheBl
     SchedulerConfig config;
     config.max_idle_block_ms = 1000;
     Scheduler scheduler(clock_, backend.value(), config);
+    // **Both**, since AU-S1b: the transport gives this core a queue, the
+    // table is what lets a sender find it asleep. A send through a transport
+    // with no table attached is not wrong, it is slow - the destination
+    // waits out its block, which is the whole thing this test measures.
+    WakerTable wakers(2);
+    ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
     ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+    transport.value().AttachWakers(&wakers);
 
     std::atomic<bool> handled{false};
     ASSERT_TRUE(scheduler
@@ -777,13 +785,13 @@ TEST_F(SchedulerWakeTest, AMessageToABlockedReactorArrivesWithoutWaitingOutTheBl
     EXPECT_TRUE(handled.load()) << "the message never arrived";
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(latency).count(), 100)
         << "the message waited out the idle block instead of interrupting it";
-    EXPECT_GE(transport.value().wakes_sent(), 1u)
+    EXPECT_GE(wakers.kicks(), 1u)
         << "the sender never wrote a wake, so the arrival was luck";
-    // D7's pair, from the two ends: what the transport wrote is what this
+    // D7's pair, from the two ends: what the sender wrote is what this
     // reactor's own eventfd received, and `SHOW META` prints both so the
     // sum over cores can be checked against the instance total.
     EXPECT_GE(scheduler.wakes_received(), 1u) << "the wake reached no eventfd";
-    EXPECT_EQ(scheduler.wakes_sent(), transport.value().wakes_sent());
+    EXPECT_EQ(scheduler.wakes_sent(), wakers.kicks());
 }
 
 // The other half of the wake's contract, and the half a latency test cannot
@@ -803,7 +811,10 @@ TEST_F(SchedulerWakeTest, AnAwakeTargetIsNeverWoken) {
     ASSERT_TRUE(backend.ok());
 
     Scheduler scheduler(clock_, backend.value());
+    WakerTable wakers(2);
+    ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
     ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+    transport.value().AttachWakers(&wakers);
     ASSERT_TRUE(scheduler.wake_armed());
 
     // The reactor is not running, so its `sleeping` flag is clear - the
@@ -815,8 +826,10 @@ TEST_F(SchedulerWakeTest, AnAwakeTargetIsNeverWoken) {
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
     for (int i = 0; i < 4; ++i) ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
 
-    EXPECT_EQ(transport.value().wakes_sent(), 0u)
+    EXPECT_EQ(wakers.kicks(), 0u)
         << "the sender paid a syscall for a target that was not asleep";
+    EXPECT_EQ(wakers.kicks_skipped(), 4u)
+        << "the four sends must each have looked at the flag and declined";
 }
 
 TEST_F(SchedulerWakeTest, ARefusedSendWakesNobody) {
@@ -830,8 +843,12 @@ TEST_F(SchedulerWakeTest, ARefusedSendWakesNobody) {
 
     // No reactor here: the flag is driven by hand, which is the only way to
     // hold a target "asleep" across a send that is going to be refused.
+    // Registering into the table directly is what a reactor's
+    // `AttachWakerTable` does with its own two pointers.
     std::atomic<bool> sleeping{true};
-    transport.value().SetWakeTarget(1, WakeTarget{&sleeping, &waker.value()});
+    WakerTable wakers(2);
+    wakers.Register(1, &sleeping, &waker.value());
+    transport.value().AttachWakers(&wakers);
 
     MessageHeader header{};
     header.src_core = 0;
@@ -840,10 +857,10 @@ TEST_F(SchedulerWakeTest, ARefusedSendWakesNobody) {
     header.sched_group = static_cast<std::uint16_t>(SchedulingGroup::kSystem);
 
     ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
-    ASSERT_EQ(transport.value().wakes_sent(), 1u) << "a sleeping target must be woken";
+    ASSERT_EQ(wakers.kicks(), 1u) << "a sleeping target must be woken";
 
     ASSERT_FALSE(transport.value().TrySend(header, {}).ok()) << "the ring should be full";
-    EXPECT_EQ(transport.value().wakes_sent(), 1u)
+    EXPECT_EQ(wakers.kicks(), 1u)
         << "a refused send woke the target anyway, for a message it does not have";
 }
 
@@ -861,7 +878,10 @@ TEST_F(SchedulerWakeTest, TheBlockAndTheWakesAroundItAreCounted) {
     SchedulerConfig config;
     config.max_idle_block_ms = 50;
     Scheduler scheduler(clock_, backend.value(), config);
+    WakerTable wakers(2);
+    ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
     ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+    transport.value().AttachWakers(&wakers);
 
     EXPECT_EQ(scheduler.idle_block_ns(), 0u);
     EXPECT_EQ(scheduler.wakes_received(), 0u);
@@ -1093,7 +1113,10 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
     SchedulerConfig config;
     config.max_idle_block_ms = 1000;
     Scheduler scheduler(clock_, backend.value(), config);
+    WakerTable wakers(2);
+    ASSERT_TRUE(scheduler.AttachWakerTable(&wakers, /*core_id=*/1).ok());
     ASSERT_TRUE(scheduler.AttachTransport(&transport.value(), /*core_id=*/1).ok());
+    transport.value().AttachWakers(&wakers);
 
     std::atomic<bool> resumed{false};
     bool released = false;
@@ -1146,7 +1169,7 @@ TEST_F(SchedulerWakeTest, AParkedCoroutineWithOnlyARingWakeIsResumedPromptly) {
     ASSERT_TRUE(resumed.load()) << "the parked coroutine was never resumed";
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(latency).count(), 100)
         << "the park waited out the idle block instead of being woken";
-    EXPECT_GE(transport.value().wakes_sent(), 1u)
+    EXPECT_GE(wakers.kicks(), 1u)
         << "nothing wrote a wake, so the resume was the block expiring";
 }
 
