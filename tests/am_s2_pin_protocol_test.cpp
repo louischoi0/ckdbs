@@ -8,6 +8,7 @@
 // themselves can host the contention now, and the stand-in is no longer
 // what is being tested.
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <random>
@@ -134,6 +135,56 @@ TEST_F(PinProtocolTest, ManyThreadsPinOneStoreAndTheLivePinGaugeReturnsToZero) {
     EXPECT_EQ(store_->live_pins(), 0u)
         << "the live-pin gauge did not return to zero after every handle dropped";
     EXPECT_EQ(store_->pinned_frames(), 0u) << "a frame was left pinned after every handle dropped";
+}
+
+
+TEST_F(PinProtocolTest, ConcurrentMissesOnOnePageIssueOneDeviceRead) {
+    // **Step 2b's loading set, and the one property of it that can be
+    // asserted deterministically here.** A miss records the page id, drops
+    // the structure latch, reads outside it, then re-takes it to publish. A
+    // second core missing the same page finds the id in flight and waits,
+    // rather than issuing its own read whose `InsertFrame` would race the
+    // first.
+    //
+    // The device trace is what makes that checkable: one `kRead` for the
+    // page, however many threads fault it at once.
+    const PageId id = MakeResidentPage(std::byte{0x5A});
+
+    // Evict it so the next touch is a genuine miss. `EvictClean` is the path
+    // with no dirty bytes to write back, which is what a freshly synced page
+    // is.
+    const std::array<PageId, 1> victims{id};
+    ASSERT_TRUE(store_->EvictClean(victims).ok());
+    device_->ClearTrace();
+
+    constexpr int kFaulters = 8;
+    std::atomic<int> failures{0};
+    std::vector<std::thread> threads;
+    threads.reserve(kFaulters);
+    for (int t = 0; t < kFaulters; ++t) {
+        threads.emplace_back([&] {
+            auto ref = store_->GetForRead(id);
+            if (!ref.ok() || ref.value().bytes()[kPageBodyOffset] != std::byte{0x5A}) ++failures;
+        });
+    }
+    for (std::thread& thread : threads) thread.join();
+    EXPECT_EQ(failures.load(), 0);
+
+    int reads = 0;
+    for (const MemoryPageDevice::TraceEntry& entry : device_->trace()) {
+        if (entry.kind == MemoryPageDevice::OpKind::kRead && entry.first_page_id == id) ++reads;
+    }
+    EXPECT_EQ(reads, 1) << "eight concurrent faults on one page issued " << reads
+                        << " device reads; the loading set is what makes that one";
+
+    // **What this cell does not assert**, stated rather than left to be
+    // discovered: that a hit on a *different* page proceeds while this read
+    // is in flight - which is the actual reason step 2b exists. Showing it
+    // needs a device that can be made slow on demand, and `MemoryPageDevice`
+    // has fault injection but no delay hook. The count above would still be
+    // 1 with the latch held across the read, because the other seven would
+    // then block on the latch and find the page resident. So this pins the
+    // duplicate-read half of the loading set and not the no-blocking half.
 }
 
 }  // namespace

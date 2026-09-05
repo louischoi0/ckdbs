@@ -6,6 +6,8 @@
 #include <memory>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
+#include <condition_variable>
 #include <utility>
 #include <vector>
 
@@ -1143,6 +1145,33 @@ private:
     // both, and (2) is not on step 2's list.
     Latch frames_latch_;
     Latch* structure_latch() noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
+
+    // ---- AM-S2 step 2b: the loading set ---------------------------------
+    //
+    // The page ids a fault is in flight for, and the only reason the miss
+    // path can drop the structure latch before the device read.
+    //
+    // **A set of ids rather than a flag on `Frame`, because of where the
+    // bytes live.** `EnsureResident` reads into a standalone
+    // `unique_ptr<Page>` and calls `InsertFrame` only afterwards, so there
+    // is no frame to mark while the read runs - a placeholder frame would
+    // have to be invented, with invalid bytes that every other reader of the
+    // table would then have to be taught to skip. An id here is invisible to
+    // all of them.
+    //
+    // Two things it buys, and the second is what the rest of the stage
+    // needs: a second core missing the same page **waits** instead of
+    // issuing a duplicate read whose `InsertFrame` would race the first;
+    // and the inline sweep `EnsureResident` runs on the miss path (EV5)
+    // happens outside the latch, which is what makes latching the erasers
+    // possible at all - the deadlock `FetchPinned`'s comment warns about.
+    std::unordered_set<PageId> loading_;
+    // Broadcast when a load finishes, either way. Waiters re-check their own
+    // page and sleep again if it was not theirs: loads are rare against
+    // hits, so spurious wakes are cheaper than a condition variable per
+    // frame - which would also make `Frame` non-movable, and the table
+    // moves frames in.
+    std::condition_variable loading_done_;
     // See SetStampSuppressed. Off everywhere but inside a single-stream
     // mount pass.
     bool stamp_suppressed_ = false;

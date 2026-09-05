@@ -1404,47 +1404,66 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
     // acquisition on this thread would hang, `Latch` being a plain
     // `std::mutex`.
     //
-    // **What this deliberately does not do yet, and the cost of that**: the
-    // raw fetch reads the device on a miss, so this hold spans a device
-    // read. That is the thing AM-S2's own design forbids, kept here for one
-    // release because correctness and cost separate cleanly - the window
-    // above is a wrong answer, the hold is a slow one, and no store is
-    // shared until step 3, so the slow one is unreachable in production
-    // today. **Step 2b removes it** with the per-frame *loading* state:
-    // a miss publishes a pinned, not-yet-valid frame, drops the latch, reads
-    // outside it, and republishes. That is also what makes this pair atomic
-    // *without* a bracket, so the two are one change and the bracket is the
-    // half that could land first.
-    //
-    // **Do not latch the erasers before step 2b lands, or this deadlocks.**
-    // The miss path evicts *inline*: `EnsureResident` calls
-    // `EvictColdFrames` when the fault takes the pool past its budget (EV5,
-    // the `frame_budget_` block below the device read). This hold therefore
-    // already spans a sweep. Nothing hangs today only because the three
-    // erasers - `ReleaseScanSlot`, `EvictClean`, `EvictColdFrames` - take no
-    // latch; the moment they take this one, on a non-recursive `std::mutex`,
-    // the armed fault path acquires it twice on one thread. Step 3 needs
-    // them latched (a pin must be visible to another core's sweep for
-    // "pinned frames are never victims" to mean anything across threads), so
-    // the order is forced: **2b before the erasers, and the erasers before
-    // step 3.**
-    std::lock_guard<Latch> hold(*latch);
-    auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
-    if (!bytes.ok()) return bytes.status();
-    auto found = frames_.find(page_id);
-    if (found == frames_.end()) return bytes.status();
-    Frame& frame = found->second;
-    ++frame.pins;
-    ++live_pins_;
-    if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
-    // The page latch is acquired *after* the pin, as `PinFrame` does and
-    // for the same reason - but here the structure latch is still held,
-    // which is safe only because it is this thread's own hold and
-    // `PageLatch::Acquire` never calls back into the store. Step 2b, which
-    // drops the latch before the wait, is where that stops being a
-    // parenthetical.
-    if (latch_armed_) (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
-    return bytes.value();
+    // **Step 2b: the latch is never held across the device read.** A miss
+    // records the page id in `loading_`, drops the latch, does the raw fetch
+    // outside it, then re-takes it to publish. That is what keeps one core's
+    // miss from blocking every other core's *hit* for the length of a disk
+    // read - and it is also what puts the inline sweep `EnsureResident` runs
+    // on that path (EV5) outside the latch, which is the precondition for
+    // latching the erasers at all.
+    std::unique_lock<Latch> hold(*latch);
+    for (;;) {
+        const bool resident = frames_.find(page_id) != frames_.end();
+        if (resident && loading_.find(page_id) == loading_.end()) {
+            // **The hit path runs the raw fetch under the latch, and that is
+            // not the thing forbidden above.** On a hit the fetch touches no
+            // device: it finds the frame, applies the dirty mark and the
+            // usage bump, and returns the span. Calling it here rather than
+            // reproducing those two side effects is what keeps `Get` and
+            // `GetForRead` meaning exactly what they meant.
+            auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+            if (!bytes.ok()) return bytes.status();
+            auto found = frames_.find(page_id);
+            if (found == frames_.end()) continue;  // evicted under us; load it
+            Frame& frame = found->second;
+            ++frame.pins;
+            ++live_pins_;
+            if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+            hold.unlock();
+            // Pin first, then wait for the page latch - `PinFrame`'s order,
+            // for `PinFrame`'s reason, and now with the structure latch
+            // genuinely released rather than parenthetically held.
+            if (latch_armed_) (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
+            return bytes.value();
+        }
+        if (loading_.find(page_id) != loading_.end()) {
+            // Another core is faulting this page. Wait rather than issue a
+            // second read whose `InsertFrame` would race the first, and
+            // **re-check from the top** on waking rather than assuming the
+            // outcome - which is what lets the failure arm below simply
+            // erase and broadcast without telling anyone why.
+            loading_done_.wait(hold);
+            continue;
+        }
+
+        loading_.insert(page_id);
+        hold.unlock();
+        // The device read, the checksum verify and the inline sweep, all
+        // outside the latch.
+        auto loaded = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+        hold.lock();
+        loading_.erase(page_id);
+        // Broadcast on **both** arms: a waiter that is never woken because
+        // this load failed would sleep until some unrelated fault happened
+        // to wake it.
+        loading_done_.notify_all();
+        if (!loaded.ok()) return loaded.status();
+        // Round the loop rather than pinning here. The frame is resident
+        // now, but it is also unpinned for the instant between
+        // `InsertFrame` and this point, so another core's sweep may already
+        // have taken it - and the loop's hit path handles that by loading it
+        // again, where pinning here would have to special-case it.
+    }
 }
 
 void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
