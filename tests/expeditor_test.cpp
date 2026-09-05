@@ -277,6 +277,16 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     EXPECT_TRUE(db.store().latch_armed()) << "core 0's store did not arm its page latch";
     EXPECT_TRUE(peer.store().latch_armed()) << "the peer's store did not arm its page latch";
 
+    // **EV3's floor, installed or not** (AM-S2). Everything below
+    // `kFirstUserPageId` is a fixed system structure and is never an
+    // eviction candidate - a protection every *peer* got through
+    // `SetCoreOwnership` and core 0 got nowhere, so it depended on whether
+    // a lease was installed. Asserted here because its absence changes no
+    // result: the catalog pages would simply be re-read after a sweep
+    // reclaimed them, which is slower and never wrong.
+    EXPECT_EQ(db.store().first_evictable_page_id(), kFirstUserPageId)
+        << "core 0's store came up without the resident-by-class floor";
+
     // **The wake wiring, which fails silently or not at all** (AU-S1b). The
     // transport kicks through the instance's `WakerTable` rather than
     // through a copy of its own, so what has to be true is that it holds

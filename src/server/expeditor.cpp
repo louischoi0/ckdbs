@@ -740,6 +740,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
     if (!store.ok()) return store.status();
+    // **EV3's floor, which core 0's store never had** (AM-S2). Everything
+    // below `kFirstUserPageId` is a fixed system structure - the superblock,
+    // the two bitmaps, the catalog's pages - and EV3 says that class is
+    // never an eviction candidate at any pressure. Every *peer* got this
+    // through `SetCoreOwnership`'s `system_page_limit`, and core 0 got it
+    // nowhere, so the protection depended on whether a lease was installed.
+    // That is an accident of where the call sat: the floor is a property of
+    // the volume's layout, not of a core's arrangement, and once one store
+    // serves every core the instance would otherwise lose a protection all
+    // of its peers had.
+    store.value()->SetResidentLimit(kFirstUserPageId);
+
     // Only when the config asks for one. Zero means "unbounded", which is
     // already what Open() left unless the debug `KDS_TEST_FRAME_BUDGET`
     // override set a budget - and setting zero here would silently undo

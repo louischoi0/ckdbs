@@ -669,6 +669,13 @@ public:
     // by class and are allocated above the system range.
     void SetResidentLimit(PageId first_evictable_page_id) noexcept;
 
+    // The floor, for the assembly cell that checks it was installed. The
+    // *mechanism* has cells of its own (`eviction_test.cpp`); what has no
+    // other witness is whether anything called the setter, which is the
+    // failure this class has now seen twice - a wiring line whose absence
+    // changes no result and no cell (`AttachWakers`, AU-S1b).
+    PageId first_evictable_page_id() const noexcept { return first_evictable_page_id_; }
+
     // ---- The frame budget: what arms the sweep (MG06) -------------------
     //
     // How many frames may stay resident. 0 - the default - means unbounded,
