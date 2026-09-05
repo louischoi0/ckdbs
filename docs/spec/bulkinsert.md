@@ -1,5 +1,14 @@
 # Bulk ingestion: multi-row VALUES and the KWP load stream
 
+> **SUS-1 (2026-09-05): heap relations are suspended, and this subsystem is
+> heap-gated — so for every relation created since the suspension, the sorted-fill fast path below is never taken
+> (`src/server/command_dispatcher.cpp:7416` requires `clustered_type == kHeap`).
+> Nothing here is deprecated or wrong; it is **unreachable for new
+> relations** until the suspension lifts, and it still serves every
+> relation created before it. The order, its rulings and its resume
+> condition are `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`;
+> AS-Q5 is where the operator's word on this banner goes.**
+
 How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
 (multi-row `VALUES`) and **Tier 2** (the KWP load stream) are built; Tier 3
 (§8) is not. Consistent with `docs/spec/protocol.md`, `docs/spec/wal.md`,

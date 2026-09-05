@@ -1,5 +1,14 @@
 # Physical Optimizer — Two Parts: Relayout (Part I) and the Cabin Controller (Part II)
 
+> **SUS-1 (2026-09-05): heap relations are suspended, and this subsystem is
+> heap-gated — so for every relation created since the suspension, the planner below proposes nothing at all
+> (`src/stats/relayout_planner.cpp:89`, `:238` build plans only for `kHeap`).
+> Nothing here is deprecated or wrong; it is **unreachable for new
+> relations** until the suspension lifts, and it still serves every
+> relation created before it. The order, its rulings and its resume
+> condition are `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`;
+> AS-Q5 is where the operator's word on this banner goes.**
+
 **One umbrella, two halves.** Part I (this file through §10) is
 **statistics-driven relayout** — shadow-only, decisions `R1`-`R12`: the
 decay score, the page epoch, the planner and `SHOW RELAYOUT` exist; no

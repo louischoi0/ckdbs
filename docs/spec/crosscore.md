@@ -1,5 +1,16 @@
 # Cross-Core Execution
 
+> **SUS-1 (2026-09-05): heap relations are suspended, and range splitting
+> is heap-gated** — `src/server/command_dispatcher.cpp:7224` keys routing on
+> `heap_omitting_pk`, so **no relation created since the suspension can be
+> range-split at all**. Everything below about multi-range relations,
+> the directory, id-based write routing and the K-series therefore
+> describes relations created *before* the suspension, and is unreachable
+> for new ones until it lifts. Spreading also ships off independently
+> (§6b), so this is the second of two gates, not the only one. The order
+> is `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`; AS-Q5 is
+> where the operator's word on this banner goes.
+
 How a single statement that references relations owned by different cores
 executes. This is the concept spec for the mechanism `docs/spec/protocol.md` D3
 reserved ("server-side forwarding — clients are core-topology-unaware") and
