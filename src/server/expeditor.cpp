@@ -1596,6 +1596,11 @@ Status Expeditor::Start() {
         // by design - AR0-6 retires the ring and keeps the wake - so it is
         // built beside it rather than inside it.
         wakers_.emplace(config_.cores);
+        // AU-S1b: and the transport asks *it* who is asleep. Instance-wide
+        // and installed once, because a reactor registers itself: a send and
+        // a stop now kick through the same registry, where until AU-S1b the
+        // transport carried its own copy of every entry.
+        transport_->AttachWakers(&*wakers_);
 
         // Arms core 0's wake path too (sched/waker.hpp): core 0 is a
         // destination like any other, and a peer's reply to a statement

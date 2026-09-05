@@ -112,14 +112,15 @@ public:
     bool TryReceive(std::uint32_t dst_core, MessageHeader& header,
                     std::vector<std::byte>& payload) override;
 
-    // The wake path's two halves (waker.hpp), answered honestly and used by
-    // nothing: a simulated reactor is pumped by the simulation loop and
-    // never blocks in a real backend, so it has no sleep to interrupt.
+    // This transport has no wake half at all, and since AU-S1b there is no
+    // no-op to write for one: a simulated reactor is pumped by the
+    // simulation loop and never blocks in a real backend, so it has no sleep
+    // to interrupt, and the kick is `RealRingTransport`'s own call into the
+    // instance's `WakerTable` rather than anything this interface carries.
     // `HasPending` still answers truthfully rather than `false`, because a
     // scheduler that *did* block on this transport must not be told its
     // inbox is empty when it is not.
     bool HasPending(std::uint32_t dst_core) const override;
-    void SetWakeTarget(std::uint32_t, WakeTarget) override {}
 
     std::uint32_t core_count() const noexcept override { return core_count_; }
 

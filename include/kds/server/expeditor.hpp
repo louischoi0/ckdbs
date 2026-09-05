@@ -694,6 +694,19 @@ public:
     // runtime is this object.
     const std::vector<std::unique_ptr<CoreRuntime>>& cores() const noexcept { return cores_; }
 
+    // **The instance's one wake registry** (AU-S1b, `sched/waker_table.hpp`),
+    // and the transport that kicks through it. Null at `cores = 1`, where
+    // neither is built. Exposed for the same reason `wal()` and `store()`
+    // are: whether the transport was handed *this* table is the kind of
+    // wiring whose failure is silent - every cross-core message would pay
+    // its destination's idle block, and no result would change.
+    const sched::WakerTable* wakers() const noexcept {
+        return wakers_.has_value() ? &*wakers_ : nullptr;
+    }
+    const sched::RealRingTransport* transport() const noexcept {
+        return transport_.has_value() ? &*transport_ : nullptr;
+    }
+
     // The `SIGTERM`/`SIGINT` descriptor the platform layer installed
     // (`server/stop_signal.hpp`). `Serve()` registers it with its reactor, so a
     // process-manager stop takes the same path a client's `STOP` does - the

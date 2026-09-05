@@ -81,12 +81,13 @@ Status Scheduler::ArmWaker() {
 
 Status Scheduler::AttachWakerTable(WakerTable* table, std::uint32_t core_id) {
     core_id_ = core_id;
+    wakers_ = table;
     if (table == nullptr) return Status::OK();
     if (Status s = ArmWaker(); !s.ok()) return s;
-    // Published last, so no peer can find a half-registered target - the
-    // same ordering `SetWakeTarget` uses, and safe unsynchronised for the
-    // same reason: this runs on the startup thread before this core's
-    // worker exists.
+    // Published last, so no peer can find a half-registered entry. Safe
+    // unsynchronised: this runs on the startup thread before this core's
+    // worker exists, which is where every other per-core wiring in this
+    // engine is done.
     table->Register(core_id_, &sleeping_, &*waker_);
     return Status::OK();
 }
@@ -96,14 +97,22 @@ Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_i
     core_id_ = core_id;
     if (transport_ == nullptr) return Status::OK();
 
-    if (Status s = ArmWaker(); !s.ok()) return s;
-
-    // Published last, so no peer can find a target that is not yet
-    // registered. Safe unsynchronised: this runs on the startup thread
-    // before this core's worker exists, which is where every other per-core
-    // wiring in this engine is done.
-    transport_->SetWakeTarget(core_id_, WakeTarget{&sleeping_, &*waker_});
-    return Status::OK();
+    // The waker is armed here and **not registered anywhere** - since AU-S1b
+    // the wake registry is the instance's `WakerTable` and this reactor
+    // enters it through `AttachWakerTable`, once, whether the sender is a
+    // ring send or a stop.
+    //
+    // What arming still buys on this path is the **pre-block re-check**, not
+    // the block: `RunOnce`'s `may_sleep` is `timeout_ms != 0 &&
+    // waker_.has_value()`, and it gates the `sleeping_` store and the
+    // `HasPending` look that follows it - never the `PollReady` timeout,
+    // which is `IdleTimeoutMs`'s alone. A reactor with no waker at all
+    // blocks for exactly as long (measured: a 300 ms `max_idle_block_ms`
+    // with nothing attached spends 300 ms inside `PollReady`); what it
+    // loses is the one look that would have found a message published just
+    // before it went to sleep. A core that attached a transport and no
+    // table keeps that look and is simply never kicked.
+    return ArmWaker();
 }
 
 Status Scheduler::RegisterMessageHandler(RingMessageKind kind, MessageHandler handler) {
@@ -428,8 +437,9 @@ bool Scheduler::RunOnce() {
     // read the flag as clear and skipped the wake, so its message would
     // wait out the whole block — the millisecond this path exists to
     // remove. The fence makes the pair a store-buffer, and sequential
-    // consistency forbids both sides reading stale: `TrySend` carries the
-    // argument.
+    // consistency forbids both sides reading stale: `WakerTable::Kick`
+    // carries the sender's half of the argument, and since AU-S1b it is
+    // the only copy of it.
     //
     // Only when this iteration would actually sleep. A timeout of 0 is a
     // reactor with work to do, and it neither needs waking nor may pay two

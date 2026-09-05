@@ -37,30 +37,16 @@ Status RealRingTransport::TrySend(const MessageHeader& header,
         return sent;
     }
 
-    // **The wake** (waker.hpp). The message is published; if the
-    // destination is asleep it will not see it until its idle block
-    // expires, which was measured at a millisecond and is what this exists
-    // to remove.
+    // **The wake** (`waker_table.hpp`). The message is published; if the
+    // destination is asleep it will not see it until its idle block expires,
+    // which was measured at a millisecond and is what this exists to remove.
     //
-    // **Why the flag cannot be missed**, which is the whole correctness of
-    // this path. Two threads, two variables, in opposite orders:
-    //
-    //   sender:   publish the message, then read `sleeping`
-    //   receiver: set `sleeping`, then read the ring
-    //
-    // The fence below and its twin in `Scheduler::RunOnce` make that the
-    // store-buffer pattern, where sequential consistency forbids *both*
-    // reads returning the stale value. So at least one of two things
-    // happens: the sender sees the flag and writes the wake, or the
-    // receiver sees the message and does not sleep. Never neither - which
-    // would be a message stranded for the whole block - and both is
-    // harmless, costing one skipped sleep.
-    const WakeTarget& target = wake_[header.dst_core];
-    if (target.sleeping == nullptr) return Status::OK();
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    if (!target.sleeping->load(std::memory_order_seq_cst)) return Status::OK();
-    target.waker->Wake();
-    wakes_sent_.fetch_add(1, std::memory_order_relaxed);
+    // The flag read, the fence and the counter live in `Kick` (AU-S1b).
+    // **What this site owns is where the call is**, which no other site can
+    // state: the message is in the ring before the kick, and a refused send
+    // returns above without reaching here, so no destination is ever woken
+    // for a message it does not have. The third leg is `HasPending`, below.
+    if (wakers_ != nullptr) wakers_->Kick(header.dst_core);
     return Status::OK();
 }
 
@@ -74,11 +60,6 @@ bool RealRingTransport::HasPending(std::uint32_t dst_core) const {
         if (!RingFor(src, dst_core).empty()) return true;
     }
     return false;
-}
-
-void RealRingTransport::SetWakeTarget(std::uint32_t core, WakeTarget target) {
-    if (core >= core_count_) return;
-    wake_[core] = target;
 }
 
 bool RealRingTransport::TryReceive(std::uint32_t dst_core, MessageHeader& header,
