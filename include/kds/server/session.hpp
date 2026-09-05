@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "kds/base/common.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
@@ -49,6 +50,64 @@
 // manager's live set, which is what makes their read views differ.
 
 namespace kds::server {
+
+// Where a write walk stopped, so the same walk can be resumed after a park
+// (AO-S3b). `active` false is "from the head", which is what an unset
+// cursor means and what every first walk carries.
+//
+// **Slots, not accepted rows** - the opposite of `exec::WalkMark`, and for
+// a reason that only a *write* walk has. A mark counts rows the walk
+// accepted, which is stable for a SELECT because nothing it does changes
+// whether a row matches; an UPDATE changes exactly that (`SET v = 1 WHERE
+// v = 0` unmatches every row it writes), so an accepted-row ordinal would
+// resume in the wrong place the moment the statement's own writes are
+// counted again. `ChainVisitOnePage` walks `0..slot_count()` in slot
+// order, so the slot is the position.
+//
+// **Why skipping is sound across a park.** Resuming at
+// `(range, page, slot)` skips every earlier range, every earlier page of
+// this chain, and every lower slot of this page. A row can appear in one
+// of those places while this statement is parked - another session on this
+// core may insert - but such a row is invisible to this statement's
+// snapshot, which was minted before the park, so skipping it changes no
+// answer. Heap pages append slots and a heap chain never loses a page, so
+// nothing this walk already passed moves to a position it has yet to reach.
+//
+// **A btree resumes by key instead, and `pk` is that key.** A clustered
+// btree leaf splits by moving its upper half to a new right sibling, so a
+// split whose midpoint fell below a `(page, slot)` cursor would carry rows
+// this walk had already written into a page it had yet to visit, and it
+// would write them twice. The key ordering is what removes the hazard: the
+// resume **descends afresh** to whichever leaf now holds `pk` and skips
+// every key below it, so wherever a split moved a row, one this walk has
+// finished sorts below `pk` and one it has not sorts at or above. That
+// makes the btree arm immune to concurrent structure change rather than
+// merely unlikely to meet it.
+//
+// Lives here rather than on `CommandDispatcher` because the state it
+// positions is the *session's*: two sessions on one reactor can be parked
+// at once (that is what a deadlock cell needs), so a dispatcher member
+// would be one cursor shared by both.
+struct WalkCursor {
+    std::size_t range = 0;
+    PageId page = kInvalidPageId;
+    std::uint16_t slot = 0;
+    // The key the walk stopped **at** - the row it is waiting for, which it
+    // has not written - so a resume offers that same key again rather than
+    // stepping past it. Btree relations only: a heap page is unordered
+    // (invariant 4), so there is no key to resume a heap walk from and the
+    // position above is what it carries.
+    std::uint64_t pk = 0;
+    bool active = false;
+    // **How many rows the statement has written so far**, carried because
+    // the count a client is told is the *statement's* and the resume is a
+    // fresh call with a fresh counter. Without it a ten-row UPDATE that
+    // parked at row 7 answers `UPDATED 4` - the rows the resume wrote -
+    // which is a wrong answer rather than a slow one. Not touched by the
+    // walk itself; the caller that owns the counter seeds it and writes it
+    // back.
+    std::uint32_t rows_done = 0;
+};
 
 class Session {
 public:
@@ -147,6 +206,41 @@ public:
         txn_ = txn;
         state_ = State::kInTxn;
     }
+
+    // ---- AO-S3b: a write statement parked in the middle of its walk -----
+    //
+    // Everything the resume needs that the coroutine above it does not
+    // have: the scope it must **keep open** (the rows already written live
+    // in that transaction and nothing may unwind them), the snapshot the
+    // first run minted, and where the walk stopped.
+    //
+    // **The scope is the reason this exists.** Every other park in the
+    // dispatcher ends its scope and re-runs the statement whole
+    // (`AbandonWriteForShipping`); this one cannot, because a statement
+    // that has written rows is not re-runnable - there are no savepoints,
+    // so an explicit transaction's rows cannot be rolled back to a
+    // statement boundary.
+    struct ParkedWrite {
+        txn::Transaction* txn = nullptr;
+        // The scope owned the transaction (autocommit). Carried because
+        // `session.transaction()` is null on that arm and the resume's
+        // `EndWrite` must still commit what it opened.
+        bool owned = false;
+        txn::Snapshot snapshot{};
+        WalkCursor cursor{};
+        // R6-5's `statement_trail_mark_`, which is a property of the
+        // statement and so must survive its park: another statement runs
+        // on this core while this one waits, and the mark is a dispatcher
+        // member.
+        std::size_t trail_mark = 0;
+        // Which handler to re-enter. The statement text is the coroutine's
+        // and is re-parsed on the resume, so this is only the fork.
+        bool is_delete = false;
+    };
+
+    const std::optional<ParkedWrite>& parked_write() const noexcept { return parked_write_; }
+    void set_parked_write(ParkedWrite parked) noexcept { parked_write_ = std::move(parked); }
+    void clear_parked_write() noexcept { parked_write_.reset(); }
 
     // A statement inside an explicit transaction failed. In autocommit this
     // is not called: there is no transaction to poison, and the statement's
@@ -449,6 +543,9 @@ private:
     std::optional<wal::DurabilityClass> txn_durability_;  // BEGIN ... DURABILITY
     Role role_ = Role::kAdmin;
     txn::Transaction* txn_ = nullptr;
+    // AO-S3b. Absent on every session that is not parked mid-walk, which
+    // is every session almost all of the time.
+    std::optional<ParkedWrite> parked_write_ = std::nullopt;
     std::uint32_t home_core_ = kUnbound;
     std::uint64_t ship_id_ = 0;
     std::uint64_t ship_sequence_ = 0;

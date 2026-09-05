@@ -314,9 +314,22 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // for it and its edge would have no incoming half. Zero means "no
         // edge", not "unknown".
         Session& waiting_session = session != nullptr ? *session : autocommit_session_;
-        const std::uint64_t waiter_id = waiting_session.transaction() != nullptr
-                                            ? waiting_session.transaction()->id()
-                                            : 0;
+        // **AO-S3b: a mid-walk park holds rows even in autocommit**, which
+        // is what makes the sentence above no longer true of every waiter.
+        // Before this stage an autocommit statement's scope was unwound by
+        // `EndWrite` before this loop ran, so the waiter held nothing, no
+        // cycle could contain it and 0 was the honest identity. A statement
+        // parked *inside* its walk keeps its scope open with rows written
+        // into it: it can be the other half of a cycle, and a waiter the
+        // graph cannot name is a link no registration can close - a
+        // deadlock invisible to AO-S4a's detector and ended only by the
+        // fault net, which kills both waiters and is what AR2-R10 forbids.
+        const Session::ParkedWrite* parked =
+            waiting_session.parked_write().has_value() ? &*waiting_session.parked_write() : nullptr;
+        const std::uint64_t waiter_id =
+            parked != nullptr && parked->txn != nullptr ? parked->txn->id()
+            : waiting_session.transaction() != nullptr  ? waiting_session.transaction()->id()
+                                                        : 0;
         bool deadlocked = false;
         while (out->write_block.has_value()) {
             const DispatchOutcome::WriteBlock block = *out->write_block;
@@ -8009,11 +8022,187 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
                               " has an unknown clustered_type");
 }
 
+Status CommandDispatcher::WalkHeapChains(
+    const std::vector<PageId>& heads, storage::PageAccess page_access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn,
+    WalkCursor* cursor) {
+    // Where this walk starts. A cursor that is not active is a first walk,
+    // which starts at the first range's head and slot 0 - written as the
+    // same three variables so the resumed and the first walk are one loop
+    // rather than two shapes that have to be kept agreeing.
+    const bool resuming = cursor != nullptr && cursor->active;
+    std::size_t range_index = resuming ? cursor->range : 0;
+    // A resumed cursor names a page in the middle of its chain; a first
+    // walk starts at the head. Both are "the page this range starts at".
+    PageId resume_page = resuming ? cursor->page : kInvalidPageId;
+    std::uint16_t resume_slot = resuming ? cursor->slot : 0;
+
+    // **Set by the wrapper below, read by both loops.** `ChainVisitOnePage`
+    // answers a visitor stop and a chain end with the same kInvalidPageId,
+    // so the flag is the only thing that tells them apart - and the
+    // difference is load-bearing here in a way it never was for
+    // `heap::ChainVisit`: a stop must end the walk over *every remaining
+    // range*, where a chain end must step to the next one (RD6). The
+    // pre-AO-S3b code called `ChainVisit` per range and so continued to the
+    // next range after a stop; no visitor of a split relation returned one,
+    // which is why that never showed.
+    bool cut = false;
+    PageId cut_page = kInvalidPageId;
+    std::uint16_t cut_slot = 0;
+
+    for (; range_index < heads.size(); ++range_index) {
+        PageId cur = resume_page != kInvalidPageId ? resume_page : heads[range_index];
+        // Consumed: only the range the cursor named resumes mid-chain, and
+        // every range after it starts at its own head.
+        const std::uint16_t first_slot = resume_page != kInvalidPageId ? resume_slot : 0;
+        resume_page = kInvalidPageId;
+        resume_slot = 0;
+
+        // Per chain, as `heap::ChainVisit` applies it - the budget bounds
+        // one chain's hops, not the relation's, and a walk of several
+        // ranges is several chains.
+        const PageId walk_origin = cur;
+        for (std::uint32_t pages = 0;; ++pages) {
+            if (Status s = storage::CheckPageWalkBudget(pages, walk_origin, "relation walk");
+                !s.ok()) {
+                return s;
+            }
+            const bool on_resume_page = pages == 0 && first_slot != 0;
+            const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                                std::uint16_t)>
+                guarded = [&](PageId page_id, heap::PageView& page,
+                              std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                // The skip is here rather than in `ChainVisitOnePage`
+                // because it costs nothing to iterate a slot we do not
+                // read: the tuple is only touched inside `fn`.
+                if (on_resume_page && slot < first_slot) return storage::VisitControl::kContinue;
+                auto outcome = fn(page_id, page, slot);
+                if (!outcome.ok() || !outcome.has_value()) return outcome;
+                if (outcome.value() == storage::VisitControl::kStop) {
+                    cut = true;
+                    cut_page = page_id;
+                    // **The slot the walk stops *at*, not after it.** The
+                    // visitor that stopped did not finish this row - it is
+                    // the row it is waiting for - so a resume must offer
+                    // the same slot again rather than step past it.
+                    cut_slot = slot;
+                }
+                return outcome;
+            };
+            auto next = heap::ChainVisitOnePage(page_store_, cur, page_access, guarded);
+            if (!next.ok()) return next.status();
+            if (cut) break;
+            if (next.value() == kInvalidPageId) break;
+            cur = next.value();
+        }
+        if (cut) break;
+    }
+
+    if (cursor != nullptr) {
+        if (cut) {
+            cursor->range = range_index;
+            cursor->page = cut_page;
+            cursor->slot = cut_slot;
+            cursor->active = true;
+        } else {
+            // The walk covered what it was given, so a cursor left active
+            // would resume a finished statement in the middle of itself.
+            // `rows_done` survives the reset: it is the statement's count,
+            // not a position, and the walk is not what owns it.
+            const std::uint32_t done = cursor->rows_done;
+            *cursor = WalkCursor{};
+            cursor->rows_done = done;
+        }
+    }
+    return Status::OK();
+}
+
+Status CommandDispatcher::WalkBtreeLeaves(
+    PageId root, storage::PageAccess page_access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn,
+    WalkCursor* cursor) {
+    const bool resuming = cursor != nullptr && cursor->active;
+    const std::uint64_t resume_pk = resuming ? cursor->pk : 0;
+
+    // **A fresh descent, not a remembered leaf**, and that is the whole of
+    // the btree arm's safety argument. While the statement was parked
+    // another session may have split the leaf it stopped in, moving the
+    // upper half of that leaf - possibly including rows this walk had
+    // already written - into a new right sibling. Returning to the
+    // remembered page would visit those rows a second time. Descending by
+    // key cannot: the tree is ordered by Keystone id, so a row this walk
+    // finished sorts below `resume_pk` wherever a split has since put it,
+    // and the skip below is exact rather than positional.
+    auto start = resuming ? btree::BtreeSeekLeaf(page_store_, root, resume_pk)
+                          : btree::BtreeLeftmostLeaf(page_store_, root);
+    if (!start.ok()) return start.status();
+
+    bool cut = false;
+    std::uint64_t cut_pk = 0;
+    PageId leaf = start.value();
+    const PageId walk_origin = leaf;
+    for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
+        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation walk");
+            !s.ok()) {
+            return s;
+        }
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>
+            guarded = [&](PageId page_id, heap::PageView& page,
+                          std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            // The key is read for two reasons and only where each is
+            // needed: to skip what a resume has already written, and to
+            // record where a stop happened. A first walk that never stops
+            // reads none of them.
+            const auto key_at = [&](std::uint16_t at) -> std::optional<std::uint64_t> {
+                auto payload = page.PayloadAt(at, page.slot_count());
+                if (!payload.ok()) return std::nullopt;  // dead or retired slot
+                auto key = KeystoneIdOfPayload(payload.value());
+                if (!key.ok()) return std::nullopt;
+                return key.value();
+            };
+            if (resuming) {
+                const std::optional<std::uint64_t> key = key_at(slot);
+                // A slot with no readable key is left to `fn`, which is the
+                // one place that decides what a dead slot means. Skipping
+                // it here would hide a corrupt page behind a resume.
+                if (key.has_value() && *key < resume_pk) return storage::VisitControl::kContinue;
+            }
+            auto outcome = fn(page_id, page, slot);
+            if (!outcome.ok() || !outcome.has_value()) return outcome;
+            if (outcome.value() == storage::VisitControl::kStop) {
+                cut = true;
+                const std::optional<std::uint64_t> key = key_at(slot);
+                if (key.has_value()) cut_pk = *key;
+            }
+            return outcome;
+        };
+        auto next = btree::BtreeVisitLeafPage(page_store_, leaf, page_access, guarded);
+        if (!next.ok()) return next.status();
+        if (cut) break;
+        leaf = next.value();
+    }
+
+    if (cursor != nullptr) {
+        if (cut) {
+            cursor->pk = cut_pk;
+            cursor->active = true;
+        } else {
+            const std::uint32_t done = cursor->rows_done;
+            *cursor = WalkCursor{};
+            cursor->rows_done = done;
+        }
+    }
+    return Status::OK();
+}
+
 Status CommandDispatcher::VisitRelation(
     const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    catalog::PkSpan span) {
+    catalog::PkSpan span, WalkCursor* cursor) {
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap:
             // RD6: **one chain per range** (CC8), so a walk is one walk per
@@ -8052,20 +8241,19 @@ Status CommandDispatcher::VisitRelation(
                             "pipeline's (docs/spec/crosscore.md §2a)");
                     }
                 }
+                std::vector<PageId> heads;
+                heads.reserve(touched.value().size());
                 for (const catalog::RangeTarget& range : touched.value()) {
-                    if (Status s = heap::ChainVisit(page_store_, range.entry_page, page_access, fn);
-                        !s.ok()) {
-                        return s;
-                    }
+                    heads.push_back(range.entry_page);
                 }
-                return Status::OK();
+                return WalkHeapChains(heads, page_access, fn, cursor);
             }
-            return heap::ChainVisit(page_store_, access.desc_page_id, page_access, fn);
+            return WalkHeapChains({access.desc_page_id}, page_access, fn, cursor);
         case catalog::ClusteredType::kBtree:
             // No range arm: D1 declines every btree relation, so one never
             // has a directory. Left as an absence rather than a refusal,
             // because the gate is what makes it unreachable.
-            return btree::BtreeVisit(page_store_, access.desc_page_id, page_access, fn);
+            return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor);
     }
     return Status::Corruption("relation oid " + std::to_string(access.oid) +
                               " has an unknown clustered_type");
@@ -9713,23 +9901,61 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<stats::Instan
 }
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {
-    auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
-    WriteScope scope = opened.value();
+    WriteScope scope;
+    txn::Snapshot snap;
+    WalkCursor resume_from;
 
-    // The read view this UPDATE filters through. An UPDATE reads before it
-    // writes, and it must not see a row a SELECT in the same transaction
-    // would not - so it takes the snapshot the same way.
-    auto snapshot = SnapshotFor(session);
-    // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse with a
-    // TxnConflict (a spent transaction-id lease on a peer), and the
-    // wire's `retryable=1` is what a client's retry loop reads. The
-    // DELETE site has always rendered it this way; these two did not,
-    // so the same refusal carried the bit on one verb and lost it on
-    // the other (the SS2 review's cut 2).
-    if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+    // **AO-S3b: a resume re-enters the scope and the view it already had.**
+    // Not `BeginWrite` and not `SnapshotFor`: the rows this statement has
+    // already written live in that transaction, and a second snapshot would
+    // read the rows it has yet to reach under a different view than the
+    // ones it wrote - the same statement seeing two states of the database,
+    // which is what "under one snapshot" in AO-S3b's cell rules out.
+    if (session.parked_write().has_value() && !session.parked_write()->is_delete) {
+        const Session::ParkedWrite& parked = *session.parked_write();
+        scope = WriteScope{parked.txn, parked.owned, &session};
+        snap = parked.snapshot;
+        resume_from = parked.cursor;
+        // R6-5's mark belongs to the *statement*, and the resume is the
+        // same statement - so it is restored rather than re-taken, which
+        // would say this statement had written nothing.
+        statement_trail_mark_ = parked.trail_mark;
+        session.clear_parked_write();
+    } else {
+        auto opened = BeginWrite(session);
+        if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
+        scope = opened.value();
 
-    DispatchOutcome out = UpdateInner(line, scope, snapshot.value().snap);
+        // The read view this UPDATE filters through. An UPDATE reads before
+        // it writes, and it must not see a row a SELECT in the same
+        // transaction would not - so it takes the snapshot the same way.
+        auto snapshot = SnapshotFor(session);
+        // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse with a
+        // TxnConflict (a spent transaction-id lease on a peer), and the
+        // wire's `retryable=1` is what a client's retry loop reads. The
+        // DELETE site has always rendered it this way; these two did not,
+        // so the same refusal carried the bit on one verb and lost it on
+        // the other (the SS2 review's cut 2).
+        if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+        snap = snapshot.value().snap;
+    }
+
+    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from);
+
+    // **AO-S3b: parked in the middle of the walk - the scope stays open.**
+    // Every other pending arm below ends its scope, because the statement
+    // it parks has written nothing and will run whole on the resume. This
+    // one has written rows, and there is no savepoint to unwind them to,
+    // so what parks is the statement *in progress*: the transaction, the
+    // view and the position are handed to the session and picked up by the
+    // branch at the top of this function when `DispatchAsync` runs the
+    // statement again.
+    if (out.parked_mid_walk) {
+        session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
+                                                      out.walk_cursor, statement_trail_mark_,
+                                                      /*is_delete=*/false});
+        return out;
+    }
 
     // Shipped: HandleInsert's branch, for its reason.
     // **A parked foreign-key probe ends its scope the way a shipped
@@ -9768,7 +9994,18 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
 }
 
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
-                                               const txn::Snapshot& snapshot) {
+                                               const txn::Snapshot& snapshot,
+                                               WalkCursor resume_from) {
+    // AO-S3b: set by the row callback when it meets a row held by a writer
+    // that has not decided and the wait is one this statement may make.
+    // The callback cannot park - it runs under a page span, which AO-R2
+    // forbids parking under - so it records the fact and stops the walk,
+    // and the park happens in `DispatchAsync` with no span held.
+    // `blocked_verdict` is the conflict it stopped on, kept because a
+    // statement that turns out to have written nothing is answered with it
+    // after all (see the stop's arm below).
+    bool parked_on_row = false;
+    Status blocked_verdict;
     // H6 step 2: the parse leg. One of `observability.md` §10's three
     // request-level spans, and the cheapest to attribute wrongly - a
     // statement that is slow to *parse* looks identical from outside to
@@ -9934,7 +10171,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (out_probe.pending_fk_probe.has_value()) return out_probe;
     }
 
-    std::uint32_t updated = 0;
+    std::uint32_t updated = resume_from.rows_done;  // AO-S3b: the statement's count, not this run's
     std::uint32_t pages_touched = 0;
     PageId last_page = kInvalidPageId;
 
@@ -10019,6 +10256,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // function of the tuple's current writer and this view.
         if (scope.txn != nullptr) {
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value()); !s.ok()) {
+                // **AO-S3b: a conflict a wait can get past stops the walk
+                // rather than failing the statement.** `blocking_writer_`
+                // is the discriminator `CheckWriteConflictBlocking` already
+                // sets, and it is set only under `may_park_` with a live
+                // clock - so a non-zero one here is a wait something can
+                // act on. Every other conflict is the refusal it always
+                // was. Returning OK is what lets the caller turn this into
+                // a `kStop`: the row is not written, and the walk ends
+                // holding no span.
+                if (blocking_writer_ != 0) {
+                    parked_on_row = true;
+                    blocked_verdict = s;
+                    return Status::OK();
+                }
                 return s;
             }
         }
@@ -10280,20 +10531,28 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
     }
 
+    // AO-S3b's resume position. A first walk starts inactive, which is
+    // "from the head"; a resumed statement is handed the one its park left.
+    WalkCursor walk_cursor = resume_from;
     Status scan = VisitRelation(
         ta, storage::PageAccess::kWrite,
         [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            // UPDATE has no early exit: it must consider every row, since
-            // the WHERE is evaluated per tuple and any of them may match.
+            // UPDATE has no early exit *of its own*: it must consider every
+            // row, since the WHERE is evaluated per tuple and any of them
+            // may match. The one stop it can make is AO-S3b's - a row held
+            // by a writer that has not decided, where the walk stops so the
+            // page span is released and the statement above can park.
             if (Status s = apply(page_id, page, slot); !s.ok()) return s;
+            if (parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
         // R4/IS4: the pk window this statement can touch. Whole unless the
         // predicate is a bare pk equality, in which case one range holds
         // every row it can match and the rest are somebody else's.
         target_id.has_value() ? catalog::PkSpan::Equality(*target_id)
-                              : catalog::PkSpan::Whole());
+                              : catalog::PkSpan::Whole(),
+        &walk_cursor);
     if (!scan.ok()) {
         // Partial **within the statement**, which is section 6's stated
         // rule rather than an exposure now. In autocommit EndWrite() aborts
@@ -10302,6 +10561,33 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // they stay written and the session is poisoned - the client must
         // ROLLBACK, which undoes all of them.
         return {ErrorReply(scan), false, 0, scan};
+    }
+
+    // **AO-S3b: the walk stopped on a held row, so this is not an answer.**
+    // Reported before the count is rendered, because `updated` here is the
+    // number of rows written *so far* and returning it would be a silent
+    // partial UPDATE - the one outcome this stage must never produce.
+    if (parked_on_row) {
+        // **Only a statement that has written rows resumes.** One that has
+        // not is answered with its conflict and re-run whole by
+        // `DispatchAsync`, which is AO-S3's shape and is *better* here
+        // rather than merely older: the re-run mints a fresh snapshot, so
+        // a holder that **committed** while it waited is visible to it and
+        // the write goes through against the new version. A resume carries
+        // the statement's original view by construction - it has to, or
+        // the rows it already wrote and the rows it has yet to reach would
+        // be read under two views - and under that view a committed holder
+        // is invisible, so the wait would end in the same refusal it
+        // started with. Resuming buys something only once there are rows
+        // that cannot be re-applied, which is exactly this test.
+        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_) {
+            return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
+        }
+        DispatchOutcome parked;
+        parked.parked_mid_walk = true;
+        walk_cursor.rows_done = updated;
+        parked.walk_cursor = walk_cursor;
+        return parked;
     }
 
     if (updated > 0 && logging(LogLevel::kTrace)) {
@@ -10709,6 +10995,26 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
 
 void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session,
                                           const Status& refused) {
+    // **AO-S3b: the wait ended badly and the statement is still holding a
+    // scope open.** A statement parked mid-walk left its transaction, its
+    // view and its position on the session so the resume could pick them
+    // up; a refusal means there is no resume, so the scope has to be ended
+    // here or it is never ended at all - an autocommit transaction never
+    // released, and the *next* statement on this session resuming into it.
+    // Ended through `EndWrite` rather than by hand so that both arms are
+    // the ones every other failed statement takes: an owned scope aborts
+    // and releases, an explicit transaction keeps its rows and poisons.
+    if (session.parked_write().has_value()) {
+        const Session::ParkedWrite parked = *session.parked_write();
+        session.clear_parked_write();
+        WriteScope scope{parked.txn, parked.owned, &session};
+        statement_trail_mark_ = parked.trail_mark;
+        if (Status s = EndWrite(session, scope, refused); !s.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("lock", "the scope of a refused mid-walk write did not end cleanly: " +
+                                   s.message());
+        }
+    }
+    out.parked_mid_walk = false;
     out.write_block.reset();
     out.response = ErrorReply(refused);
     // The carried status, not only the rendered line - see the declaration.
@@ -10900,14 +11206,40 @@ std::uint64_t CommandDispatcher::WriterId(const WriteScope& scope) {
 }
 
 DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& session) {
-    auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
-    WriteScope scope = opened.value();
+    WriteScope scope;
+    txn::Snapshot snap;
+    WalkCursor resume_from;
 
-    auto snapshot = SnapshotFor(session);
-    if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+    // AO-S3b's resume: `HandleUpdate`'s branch, for its reason.
+    if (session.parked_write().has_value() && session.parked_write()->is_delete) {
+        const Session::ParkedWrite& parked = *session.parked_write();
+        scope = WriteScope{parked.txn, parked.owned, &session};
+        snap = parked.snapshot;
+        resume_from = parked.cursor;
+        statement_trail_mark_ = parked.trail_mark;
+        session.clear_parked_write();
+    } else {
+        auto opened = BeginWrite(session);
+        if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
+        scope = opened.value();
 
-    DispatchOutcome out = DeleteInner(line, scope, snapshot.value().snap);
+        auto snapshot = SnapshotFor(session);
+        if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+        snap = snapshot.value().snap;
+    }
+
+    DispatchOutcome out = DeleteInner(line, scope, snap, resume_from);
+
+    // AO-S3b's park: `HandleUpdate`'s arm, for its reason. Ahead of the
+    // probe and ship arms below because those *end* the scope and this one
+    // must not - a DELETE that has already marked rows has nothing to roll
+    // them back to.
+    if (out.parked_mid_walk) {
+        session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
+                                                      out.walk_cursor, statement_trail_mark_,
+                                                      /*is_delete=*/true});
+        return out;
+    }
 
     // Parked on the reverse fan-out: `HandleUpdate`'s arm, for its reason -
     // the scope closes without committing and, crucially, without ending
@@ -10951,7 +11283,11 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 }
 
 DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope& scope,
-                                               const txn::Snapshot& snapshot) {
+                                               const txn::Snapshot& snapshot,
+                                               WalkCursor resume_from) {
+    // AO-S3b, and `UpdateInner`'s site states the argument.
+    bool parked_on_row = false;
+    Status blocked_verdict;
     // H6 step 2: the parse leg. One of `observability.md` §10's three
     // request-level spans, and the cheapest to attribute wrongly - a
     // statement that is slow to *parse* looks identical from outside to
@@ -11070,7 +11406,10 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                 return storage::VisitControl::kContinue;
             },
             target_id.has_value() ? catalog::PkSpan::Equality(*target_id)
-                                  : catalog::PkSpan::Whole());
+                                  : catalog::PkSpan::Whole(),
+            // The collect pass marks nothing and takes no conflict, so it
+            // has nothing to park on: it runs whole or fails.
+            /*cursor=*/nullptr);
         if (!walked.ok()) return walked;
         return pks;
     };
@@ -11105,7 +11444,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         }
     }
 
-    std::uint32_t deleted = 0;
+    std::uint32_t deleted = resume_from.rows_done;  // AO-S3b, as UPDATE
 
     auto mark = [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
         std::uint64_t trx_id = 0;
@@ -11139,6 +11478,12 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
         if (scope.txn != nullptr) {
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id); !s.ok()) {
+                // AO-S3b, and `UpdateInner`'s site states the argument.
+                if (blocking_writer_ != 0) {
+                    parked_on_row = true;
+                    blocked_verdict = s;
+                    return Status::OK();
+                }
                 return s;
             }
         }
@@ -11258,17 +11603,34 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         }
     }
 
+    // AO-S3b, and `UpdateInner`'s site states the argument.
+    WalkCursor walk_cursor = resume_from;
     Status scan = VisitRelation(
         ta, storage::PageAccess::kWrite,
         [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (Status s = mark(page_id, page, slot); !s.ok()) return s;
+            // AO-S3b, and UPDATE's walk states the argument.
+            if (parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
         // R4/IS4, and UPDATE's site states the argument.
         target_id.has_value() ? catalog::PkSpan::Equality(*target_id)
-                              : catalog::PkSpan::Whole());
+                              : catalog::PkSpan::Whole(),
+        &walk_cursor);
     if (!scan.ok()) return {ErrorReply(scan), false, 0, scan};
+
+    // AO-S3b, and `UpdateInner`'s site states both arms of the argument.
+    if (parked_on_row) {
+        if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_) {
+            return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
+        }
+        DispatchOutcome parked;
+        parked.parked_mid_walk = true;
+        walk_cursor.rows_done = deleted;
+        parked.walk_cursor = walk_cursor;
+        return parked;
+    }
 
     return {"DELETED " + std::to_string(deleted), false, deleted};
 }

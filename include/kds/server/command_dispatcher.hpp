@@ -547,6 +547,18 @@ struct DispatchOutcome {
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
+    // **AO-S3b: the walk stopped inside the statement and the scope is
+    // still open.** `write_block` says which row and which holder; this
+    // says the statement is *resumable* rather than re-runnable, which is
+    // the distinction the comment above draws and could not act on: a
+    // statement that had written rows used to be answered with its
+    // conflict, because re-running it would write those rows twice and
+    // there are no savepoints to undo them with. Resuming writes them
+    // once. `Session::parked_write` carries what the resume needs; this
+    // flag is only what tells the handler's tail not to end the scope.
+    bool parked_mid_walk = false;
+    WalkCursor walk_cursor = {};
+
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/spec/wal.md
     // D2). `kNoLsn` means there is nothing to wait for - every relaxed
@@ -924,6 +936,10 @@ private:
         Session* session = nullptr;
         bool ok() const noexcept { return txn != nullptr; }
     };
+
+    // AO-S3b's resume position is `server::WalkCursor` (`session.hpp`),
+    // which is where its rules are written down and where the parked
+    // statement's own state lives.
 
     // Fails only if a transaction cannot be started. A dispatcher with no
     // manager returns an empty scope, and the write path then stamps
@@ -1938,10 +1954,21 @@ private:
     // dropping its entry would break the superset invariant. The surplus is
     // subtracted at read time, which now includes the visibility predicate.
     DispatchOutcome HandleDelete(std::string_view line, Session& session);
+    // `resume_from` is where a parked walk of this statement stopped
+    // (AO-S3b); an inactive cursor is a first run and starts at the head,
+    // which is what every caller but `DispatchAsync`'s resume passes. Not
+    // defaulted - `WalkCursor`'s member initializers are not available to a
+    // default argument until this class is complete, and the file's rule
+    // for `VisitRelation`'s `span` applies anyway: a caller that starts
+    // from the head says so.
+    //
+    // The snapshot is the *same* one the first run minted - the resumed
+    // statement must not re-mint it, or the rows it already wrote and the
+    // rows it has yet to reach would be read under two views.
     DispatchOutcome DeleteInner(std::string_view line, WriteScope& scope,
-                                const txn::Snapshot& snapshot);
+                                const txn::Snapshot& snapshot, WalkCursor resume_from);
     DispatchOutcome UpdateInner(std::string_view line, WriteScope& scope,
-                                const txn::Snapshot& snapshot);
+                                const txn::Snapshot& snapshot, WalkCursor resume_from);
     DispatchOutcome HandleSync();
 
     // Runs the insert against whichever storage the relation uses, and
@@ -1992,11 +2019,36 @@ private:
     // between walking one range and meeting the ownership refusal on
     // somebody else's. Not defaulted: both callers have an answer, and a
     // default here would let a third one walk every range by omission.
+    // `cursor` is AO-S3b's resume position: null for a walk that cannot
+    // park (every read walk), otherwise in **and** out - read to start
+    // where a parked walk stopped, written when this walk stops. Not
+    // defaulted, for `span`'s reason: a caller that cannot park says so by
+    // passing null rather than by omission.
     Status VisitRelation(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        catalog::PkSpan span);
+        catalog::PkSpan span, WalkCursor* cursor);
+
+    // The page loop `VisitRelation`'s heap arm owns since AO-S3b, hoisted
+    // out of `heap::ChainVisit` so the gap between two pages - no pin, no
+    // span - is a place the statement above it may park (AO-R2).
+    // `heads` is one chain per range in `lo` order (RD6).
+    Status WalkHeapChains(
+        const std::vector<PageId>& heads, storage::PageAccess page_access,
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>& fn,
+        WalkCursor* cursor);
+
+    // The same for a clustered btree, and **not the same shape**: a resume
+    // descends by key rather than returning to a remembered leaf, which is
+    // what makes it safe against a split that happened while the statement
+    // was parked (`WalkCursor`, `session.hpp`).
+    Status WalkBtreeLeaves(
+        PageId root, storage::PageAccess page_access,
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>& fn,
+        WalkCursor* cursor);
 
     // Appends the record set above for one placed tuple, stamps page_lsn
     // on every page it touched, and applies the durability class. A no-op
