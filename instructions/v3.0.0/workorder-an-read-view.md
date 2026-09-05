@@ -493,10 +493,45 @@ as *one long-running transaction holds reclamation for its lifetime* —
 **per core**. AN-R3 makes the horizon instance-global, so one idle
 session's open `BEGIN` now holds the whole instance's undo, and
 `shipped_statement_executor.hpp:157` already names the five-minute
-abandoned-transaction case against the per-core cost. CLA proposes no
-resolution and proposes that **AN-S2 not land without one**: the stage
-that changes the horizon's scope is the stage that changes this cost, and
-the two cannot be separated afterwards. It blocks nothing before AN-S2.
+abandoned-transaction case against the per-core cost. AN-S2 does
+not land without a resolution: the stage that changes the horizon's scope
+is the stage that changes this cost, and the two cannot be separated
+afterwards. It blocks nothing before AN-S2.
+
+**CLA's proposal, 2026-09-05: bound the transaction, not the snapshot —
+by re-scoping `kShippedTxnIdleCeilingNs` rather than adding anything.**
+That constant (`shipped_statement_executor.hpp:171`, five minutes) already
+bounds an *abandoned enrolment*, and the paragraph above it already prices
+the case in the words this ruling needs: "an abandoned transaction pinning
+`ReadHorizon()` for five minutes". AN-R3 makes that pin instance-wide, so
+the bound simply has to cover every transaction rather than only the
+enrolled ones. Three things recommend it over the alternatives:
+
+- **It keeps `txn.md` §4.1 literally true.** The spec declines a byte-cap
+  retention and promises `SnapshotTooOld` is never raised. A reader is
+  still never told its snapshot expired; a *transaction* is aborted for
+  idling, which it learns at its next statement as an ordinary abort. A
+  byte cap or a snapshot-age cap would both break that promise, and
+  breaking it is the operator's call, not this stage's.
+- **It obeys `CLAUDE.md`'s rule on quantities.** "Never add a second name
+  for a quantity an existing setting expresses; re-scope the existing
+  one." A new `undo_retention_bytes` or `max_snapshot_age` would be a
+  second name for what this constant already measures.
+- **The exclusion it needs is already written.** The same header states
+  that `Expire` is sound only while nothing has prepared (D4), so the
+  sweep must skip prepared contexts — the rule this proposal inherits
+  rather than has to invent.
+
+What it does not fix, stated so the mark is not read as covering it: a
+transaction that is *busy* rather than idle for a long time still holds
+the instance's undo, and no wall-clock bound touches that. That is the
+cost `txn.md` §4.1 accepted per core and this ruling makes global, and
+CLA proposes accepting it — a long-running reporting transaction is a
+shape this engine's OLTP scope does not serve, and the honest place to
+say so is the spec rather than a timeout. **AN-R11 would reduce the
+exposure further** by minting at first read, which removes
+`BEGIN`-then-idle entirely, but it is a user-visible semantic change and
+stays the operator's.
 
 **AN-R11 — Snapshot acquisition at first read. [operator, separable]**
 `ratification-an-commit-order.md` AN-Q6: `manager.cpp:101` mints inside
@@ -524,7 +559,15 @@ predicate: one latched accessor answering both together — a
 `{commit_lsn, floor}` pair read under the window latch — or the rule that
 branch 4's miss re-reads `Floor()` before answering, which is sound
 because a miss caused by the erase proves the latch was taken after the
-CAS. **AN-S2 does not land without one of the two.** This is
+CAS. **AN-S2 does not land without one of the two, and CLA proposes the first:
+the latched `{commit_lsn, floor}` pair.** The second is sound — a branch-4
+miss caused by the erase does prove the latch was taken after the CAS —
+but it is sound *by an argument about an ordering the code does not
+state*, and it survives only while nobody adds a second way to miss.
+Reading both under the one latch removes the straddle rather than
+explaining why it is harmless, and this session's record is that the
+explaining kind is where the defects live. It costs one latch acquisition
+on a path that already takes it. This is
 `ratification-an-commit-order.md` AN-Q3's "the one place this design can
 be implemented wrongly and pass every test", one layer below where AN-R9
 went looking for it: AN-R9 found the *publication* window and closed it,
@@ -682,7 +725,7 @@ nothing and is not scheduled.
 | AN-S1 | **landed at `b5abab6`, suite green.** `include/kds/txn/instance_visibility.hpp` and `src/txn/instance_visibility.cpp`; publication from `TransactionManager` at three points plus its constructor; `CoreRuntime::Config::visibility` and the `Expeditor`'s `visibility_`, gated on `single_stream()`; ten cells in `tests/instance_visibility_test.cpp`. **3263/3263 pass** in Debug — the additive claim holds, since every existing cell reads the unchanged per-core predicate. **Its `critics-developer` pass was still running when it landed**, on the operator's word, and AN-7 gains its record when it returns; a finding against S1's code is therefore a fix on top of this commit rather than a change to it |
 | AN-S1 (fixes) | **two bugs found by review after `b5abab6` landed and fixed on top of it**, plus four cells over a real `WalManager` covering the publication points. 3267/3267. See AN-7's third pass; AN-R13 is live at this stage and unresolved |
 | AN-S1b | **built, suite green at 3274/3274, review running.** AN-R13's marked exit (a). `TrxIdSequence::can_burn()`/`BurnWindow()`; `InstanceVisibility::PinsFloor()`/`attached_cores()`; `TransactionManager::MaybeBurnIdleBlock()` with its three-part gate; the peer's tick asks through `burn_requested_` and core 0 rides the writeback tick. Seven cells |
-| AN-S2 | not started; **gated on AN-R10 and AN-R12** |
+| AN-S2 | not started; **gated on AN-R10 and AN-R12, both of which now carry a CLA proposal** (2026-09-05): AN-R10 re-scopes `kShippedTxnIdleCeilingNs` to bound any idle transaction rather than only an enrolment, which keeps §4.1's "`SnapshotTooOld` is never raised" literally true and adds no second name for a quantity; AN-R12 takes the latched `{commit_lsn, floor}` pair over the re-read, because the re-read is sound by an argument the code does not state |
 | AN-S3..S5 | not started |
 
 ## AN-7 — Review record
