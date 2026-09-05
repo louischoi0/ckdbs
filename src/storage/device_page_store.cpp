@@ -1,5 +1,7 @@
 #include "kds/storage/device_page_store.hpp"
 
+#include <unordered_set>
+
 #include "kds/base/current_core.hpp"
 
 #include <algorithm>
@@ -1825,6 +1827,20 @@ void DevicePageStore::CountPin(Frame& frame) noexcept {
 #endif
 }
 
+#ifndef NDEBUG
+namespace {
+// **The pages this thread holds shared**, and nothing else reads it: it is
+// the never-upgrade detector's whole state (AM-S2 step 3b). A function
+// rather than a bare variable so the thread-local is initialised on first
+// use in every translation unit that could reach it, and a multiset because
+// two handles on one page are two shared holds.
+std::unordered_multiset<PageId>& SharedHoldsHere() {
+    static thread_local std::unordered_multiset<PageId> held;
+    return held;
+}
+}  // namespace
+#endif
+
 // The page-latch half of taking a pin, with **no** latch held: the pin is
 // already counted, and a frame with pins > 0 is never an eviction victim
 // (EV4), so it is this frame that is waited for however long the wait is.
@@ -1832,33 +1848,35 @@ void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mod
     if (latch_armed_) {
         // The page latch (AM-S1, the header's "The page latch" section).
         // Taken where the pin is taken, in the accessor's mode, and never
-        // upgraded: a task that holds this frame shared and now asks for
-        // it exclusive would wait for its own share forever. Through M1
-        // every pin on this frame is this core's - the pools are per core
-        // and no task parks holding a pin - so "shared holders exist and
-        // this frame is pinned here" *is* that upgrade, and it is a
-        // protocol defect in the caller, aborted in debug naming the page.
-        // A release build hangs in the spin below, as a recursive
-        // std::mutex acquisition does (base/latch.hpp). AM-S2 must revisit
-        // this test once a foreign core can hold a share.
+        // upgraded: a task that holds this frame shared and now asks for it
+        // exclusive would wait for its own share forever. That is a protocol
+        // defect in the caller, aborted in debug naming the page; a release
+        // build hangs in the spin below, as a recursive std::mutex
+        // acquisition does (base/latch.hpp).
 #ifndef NDEBUG
-        // **`> 1`, not `!= 0`, because AM-S2 moved the pin ahead of this.**
-        // The test means "this core already held a share and is now asking
-        // for exclusive"; the pin taken above is this caller's own, so the
-        // pre-existing holders are everything past it. Left as `!= 0` it
-        // would fire on the first exclusive pin of an unshared frame.
-        if (mode == PinMode::kExclusive && frame.pins > 1 &&
-            PageLatch::HasSharedHolders(frame.latch)) {
-            // `pins - 1`, for the same reason the test above is `> 1`: the
-            // count includes this caller's own pin, and the number the
-            // message is about is the *pre-existing* shares. Printing the
-            // raw count reported one hold too many from the moment AM-S2
-            // moved the pin ahead of the check.
+        // **The test is the thread's own record, and it had to become one**
+        // (AM-S2 step 3b). It read `frame.pins > 1 &&
+        // HasSharedHolders(...)`, on the argument `page_latch.hpp` states
+        // outright: the word cannot tell two holders on one core apart, but
+        // the store can, "its pins are this core's through M1". Step 3 ends
+        // that - one table serves every core, so `pins > 1` becomes "two
+        // cores hold one pin each" as readily as "this core holds two", and
+        // the detector would fire on correct traffic while missing the
+        // defect it exists for. `page_latch.hpp` said AM-S2 must revisit
+        // this test once a foreign core can hold a share; this is that.
+        //
+        // A thread-local multiset of the pages *this thread* holds shared is
+        // exact where the proxy was circumstantial, and exact on the same
+        // premise `CurrentCore()` rests on: one reactor per thread, no
+        // handle crossing threads. A multiset because two handles on one
+        // page are two shared holds. Debug only - it is a detector, and the
+        // release build's failure is the hang.
+        if (mode == PinMode::kExclusive && SharedHoldsHere().count(page_id) != 0) {
             std::fprintf(stderr,
-                         "DevicePageStore: page %u is held shared by this core (%u pin(s)) "
+                         "DevicePageStore: page %u is held shared by this thread (%zu hold(s)) "
                          "and was asked for exclusive - a page latch is never upgraded "
                          "(docs/spec/page.md section 6)\n",
-                         page_id, frame.pins - 1);
+                         page_id, SharedHoldsHere().count(page_id));
             // The census's whole value is naming the site: raw frames, for
             // `addr2line -e <binary>` - the executable is not linked
             // -rdynamic, so symbol names are not available here.
@@ -1901,6 +1919,11 @@ void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mod
         // cores, which is a shape production cannot reach; they take a
         // `CurrentCoreGuard` then.
         (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), CurrentCore());
+#ifndef NDEBUG
+        // Recorded **after** the acquire, so the set never claims a hold
+        // this thread is still waiting for.
+        if (mode == PinMode::kShared) SharedHoldsHere().insert(page_id);
+#endif
     }
 }
 
@@ -1929,7 +1952,20 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
     // The same identity that took it, for the same reason: release under
     // `X` checks the owner field against the asking core, so acquire and
     // release must read `CurrentCore()` alike.
-    if (latch_armed_) PageLatch::Release(frame->latch, CurrentCore());
+    if (latch_armed_) {
+#ifndef NDEBUG
+        // Erase one instance if this thread had a share on this page, and
+        // before the release rather than after: the word is the authority
+        // and this set only mirrors it. An exclusive hold was never
+        // recorded, so the find misses and nothing is erased - and a thread
+        // holding one page both shared and exclusively is the state the
+        // detector aborts on, so it cannot be the case here.
+        if (auto held = SharedHoldsHere().find(page_id); held != SharedHoldsHere().end()) {
+            SharedHoldsHere().erase(held);
+        }
+#endif
+        PageLatch::Release(frame->latch, CurrentCore());
+    }
     {
         LatchGuard structure(structure_latch());
         // **The two decrements stay coupled**, as they were before this
