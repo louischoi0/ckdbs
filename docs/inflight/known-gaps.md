@@ -10,6 +10,40 @@ Every entry names the commit it was verified at and the doc that owns the
 fix. An entry whose verification predates its subsystem's last change is a
 statement about an engine that no longer exists; re-verify or strike it.
 
+## Eviction
+
+- **EV8's exhaustion protocol is not built, and `eviction.md` describes it
+  as though it were.** Verified at `dd0bfe9`: nothing in the tree reads
+  `kds.evict_retry_budget`, and no path returns `ResourceExhausted` for a
+  full pool - the only occurrences in `src/` are the lock table's, the
+  row codec's, the sort's, and AM-S2's own scan-ring retry. §3.3 spells out
+  a three-step protocol (yield, retry to a budget, then a truthful statement
+  error naming the core and pool size) and EV8's row promises "no waiting,
+  ever" with occurrences counted. None of that exists.
+
+  **What the code does instead**: `buffer_pool_frames` is a *soft* target.
+  `InsertFrame` sweeps for the excess when a fault takes the pool past it
+  (`device_page_store.cpp`, the `sweep` arm), and if the sweep reclaims
+  nothing - every candidate pinned, dirty, or resident by class - the insert
+  proceeds anyway and the pool grows past its budget. So an undersized pool
+  is not a visible, countable, truthful signal; it is memory growth. That is
+  a different operational answer from the one an operator reading
+  `eviction.md` §3.3 would expect, and it is the one they get.
+
+  **Found while sizing AM-S3**, whose ruling AM-R6 says to "keep the budget
+  and the truthful error, and count the cross-core case separately" - a
+  narrowing of something that is not there. The premise AM-R6 argues from is
+  false in the same way: it says the retry budget "stops being a
+  statement-local fact" under a shared pool, and there is no retry budget.
+  What *is* newly true under sharing is that a frame a statement waits on
+  may be held by another core's task, which matters exactly when an
+  exhaustion path exists to be distorted by it.
+
+  Owned by `docs/spec/eviction.md` (EV8, §3.3, and the
+  `kds.evict_retry_budget` row in §7's settings table) and by
+  `instructions/v3.0.0/workorder-am-m1-shared-pool.md` AM-R6, which needs
+  re-scoping onto a stage that builds EV8 first.
+
 ## Testing
 
 - **The assertion scan's floor is a fixed defect with no regression test
