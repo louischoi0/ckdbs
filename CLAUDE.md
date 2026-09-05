@@ -40,6 +40,7 @@ stated in its spec as a fact, and nowhere here as a plan.
 | Subsystem | Built | Owning docs |
 |---|---|---|
 | Pages, semi-sorted heap, Keystone, fixed-length tuples, var-heap | Built | `docs/spec/heap-and-tuple.md` (authoritative), `docs/rules/rule-fixed-length-tuple.md`, `docs/spec/page.md` |
+| Heap relations | **Suspended (SUS-1, 2026-09-05), not removed.** No new one is created — `CREATE TABLE … HEAP` is refused `Unsupported` and the storage default is `BTREE`; every existing heap relation mounts and serves, and no heap code or cell is deleted | `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`, `docs/spec/heap-and-tuple.md` §3.1b |
 | Multi-page free map | Region-based, ceiling 2^31 pages / 16 TiB, no superblock bump. The map is unlogged; recovery repairs it | `docs/spec/page.md` §5 |
 | Clustered B+ tree | Built. An append-split publishes the separator before the sibling link | `docs/spec/heap-and-tuple.md` §5 |
 | WAL | **One stream for the instance** (AR0 M0): core 0 owns the log, peers attach and append under its latch, and the superblock's `log_topology` says which topology a volume was written with — a pre-M0 volume still mounts per-core. Every data mutation logged (heap, undo, var-heap, index, assertions, catalog/DDL) except ALLOC/FREE and the advisory Waystone classes invariant 8 exempts. Recovery runs at mount, once per log — analysis/redo/high-water/undo, a completion checkpoint, `SHOW META`'s recovery block; a torn catalog page refuses the mount | `docs/spec/wal.md` |

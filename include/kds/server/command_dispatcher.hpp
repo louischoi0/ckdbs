@@ -937,10 +937,6 @@ private:
         bool ok() const noexcept { return txn != nullptr; }
     };
 
-    // AO-S3b's resume position is `server::WalkCursor` (`session.hpp`),
-    // which is where its rules are written down and where the parked
-    // statement's own state lives.
-
     // Fails only if a transaction cannot be started. A dispatcher with no
     // manager returns an empty scope, and the write path then stamps
     // kBootstrapXid exactly as it always did.
@@ -1957,10 +1953,12 @@ private:
     // `resume_from` is where a parked walk of this statement stopped
     // (AO-S3b); an inactive cursor is a first run and starts at the head,
     // which is what every caller but `DispatchAsync`'s resume passes. Not
-    // defaulted - `WalkCursor`'s member initializers are not available to a
-    // default argument until this class is complete, and the file's rule
-    // for `VisitRelation`'s `span` applies anyway: a caller that starts
-    // from the head says so.
+    // defaulted, for `VisitRelation`'s `span` reason alone: a caller that
+    // starts from the head says so. (An earlier note here claimed `= {}`
+    // would not compile. That was true while `WalkCursor` was nested in
+    // this class and stopped being true when it moved to namespace scope
+    // in `session.hpp`; it is deleted rather than corrected, because the
+    // rule above never needed it.)
     //
     // The snapshot is the *same* one the first run minted - the resumed
     // statement must not re-mint it, or the rows it already wrote and the
@@ -2035,7 +2033,7 @@ private:
     // span - is a place the statement above it may park (AO-R2).
     // `heads` is one chain per range in `lo` order (RD6).
     Status WalkHeapChains(
-        const std::vector<PageId>& heads, storage::PageAccess page_access,
+        std::span<const PageId> heads, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
         WalkCursor* cursor);

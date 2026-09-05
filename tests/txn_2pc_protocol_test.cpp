@@ -2241,13 +2241,18 @@ TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
         << "the key-ordered skip did not hold - rows below the resume key were written twice";
 }
 
-TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
-    // The hazard the key-ordered resume exists for, made to happen: while
-    // the statement is parked, another session inserts enough keys to split
-    // the leaf it stopped in. A positional cursor would come back to a page
-    // whose upper half - including rows this statement already wrote - now
-    // lives in a new sibling it has yet to visit, and would write them
-    // twice. Descending by key cannot see that difference.
+TEST_F(MidWalkWaitTest, ThePointLookupArmStillReportsTheConflictItCannotWriteThrough) {
+    // **The arm that does not walk at all.** A bare `WHERE id = k` on a
+    // btree relation is answered by a descent, not by `VisitRelation` - so
+    // it never reaches the stop the walk carries, and it renders its reply
+    // straight from the row counter. AO-S3b made `apply` answer OK for a
+    // row it declined to write, which turned that reply into `UPDATED 0`
+    // for a row a writer holds: a success line for a write that never
+    // happened, with the autocommit commit behind it.
+    //
+    // One row is in scope, so nothing was written and there is nothing to
+    // resume from: the answer is the conflict, and the wait is the
+    // whole-statement one AO-S3 already built.
     Session holder;
     ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
     ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
@@ -2255,44 +2260,236 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
               0u);
 
     Session w;
-    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
-    Started walk = Start("UPDATE tb SET v = 1", w);
+    Started point = Start("UPDATE tb SET v = 1 WHERE id = 7", w);
     Pump();
-    ASSERT_FALSE(*walk.done) << walk.out->response;
-    const std::size_t held = w.transaction()->trail().size();
+    ASSERT_FALSE(*point.done)
+        << "the point UPDATE answered instead of waiting: " << point.out->response;
 
-    // **The leaf count before, so the cell cannot pass vacuously.** A
-    // resume that never met a split would prove nothing about surviving
-    // one, and "300 inserts surely split it" is an assumption rather than a
-    // fact - so it is read off `DESCRIBE`, which reports the btree's shape,
-    // and asserted below.
-    const std::string shape_before = Local("DESCRIBE tb");
-    ASSERT_NE(shape_before.find("leaves="), std::string::npos) << shape_before;
+    // The holder commits and the wait ends. **This is AO-S3's arm, not
+    // AO-S3b's**: the statement wrote nothing, so it is re-run whole under
+    // a *fresh* snapshot, which sees the committed version and writes
+    // through it. One row, written once - the outcome the premature
+    // `UPDATED 0` replaced with a silent no-op.
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*point.done) << "the wait never ended";
+    EXPECT_EQ(point.out->response.rfind("UPDATED 1", 0), 0u) << point.out->response;
+    // Read back off `tb` itself - the fixture's `Rows()` helper selects
+    // from `t`, so it would answer this question about the wrong relation.
+    EXPECT_NE(Local("SELECT * FROM tb WHERE id = 7").find(",1"), std::string::npos)
+        << "the row the wait was for was never written";
 
-    // Enough rows to force at least one leaf division under the parked
-    // walk. They are all invisible to its snapshot, so none of them may
-    // appear in its count.
-    for (int id = 100; id < 400; ++id) {
-        ASSERT_EQ(Local("INSERT INTO tb VALUES (" + std::to_string(id) + ", 7)")
+    // And the DELETE arm beside it, which renders its count the same way.
+    Session holder2;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder2).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 3", &holder2)
+                  .response.rfind("UPDATED", 0),
+              0u);
+    Session d;
+    Started point_delete = Start("DELETE FROM tb WHERE id = 3", d);
+    Pump();
+    ASSERT_FALSE(*point_delete.done)
+        << "the point DELETE answered instead of waiting: " << point_delete.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder2).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*point_delete.done);
+    EXPECT_EQ(point_delete.out->response.rfind("DELETED 1", 0), 0u)
+        << "a held row was answered as a delete of zero rows: " << point_delete.out->response;
+}
+
+TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
+    // The hazard the key-ordered resume exists for, made to happen: while
+    // the statement is parked, another session inserts enough keys to split
+    // the leaf it stopped in. A positional cursor would come back to a page
+    // whose upper half - including rows this statement already wrote - now
+    // lives in a new sibling it has yet to visit, and would write them
+    // twice. Descending by key cannot see that difference.
+    //
+    // **The keys are sparse, and that is the whole setup.** A split divides
+    // a leaf at its middle key, so filling `tb` (ids 1..10) with ids above
+    // 100 divides it far above the resume key and leaves every row this
+    // walk wrote exactly where it was - a cell that meets a split and never
+    // meets the hazard, which a positional cursor passes. The relation here
+    // is keyed 1000, 2000 .. 10000 and the fillers are all *below* the held
+    // key, so the division falls between the rows the walk already wrote
+    // and the ones it has yet to reach. That is the case that tells the two
+    // resume shapes apart.
+    ASSERT_EQ(Local("CREATE TABLE ts (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    for (int id = 1000; id <= 10000; id += 1000) {
+        ASSERT_EQ(Local("INSERT INTO ts VALUES (" + std::to_string(id) + ", 0)")
                       .rfind("INSERTED", 0),
                   0u)
             << "id " << id;
     }
 
-    const std::string shape_after = Local("DESCRIBE tb");
-    ASSERT_NE(shape_after, shape_before)
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE ts SET v = 9 WHERE id = 7000", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    Started walk = Start("UPDATE ts SET v = 1", w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << walk.out->response;
+    ASSERT_EQ(w.transaction()->trail().size(), 6u)
+        << "the park must be at the seventh key for the split to straddle it";
+
+    // **The leaf count before and after, so the cell cannot pass
+    // vacuously.** `DESCRIBE`'s whole line will not do: it carries
+    // `ids_issued`, which moves with every insert whether or not a leaf
+    // ever divided, so comparing the lines would assert nothing about the
+    // tree. The assertion is on `leaves=` itself.
+    const auto leaf_count = [&]() -> int {
+        const std::string shape = Local("DESCRIBE ts");
+        const std::size_t at = shape.find("leaves=");
+        EXPECT_NE(at, std::string::npos) << shape;
+        if (at == std::string::npos) return -1;
+        return std::atoi(shape.c_str() + at + std::string("leaves=").size());
+    };
+    const int leaves_before = leaf_count();
+    ASSERT_EQ(leaves_before, 1)
+        << "the ten rows must start in one leaf for it to be the leaf the split divides";
+
+    // Enough keys *below* the held one to force the division there. They
+    // are all invisible to the parked walk's snapshot, so none of them may
+    // appear in its count.
+    for (int id = 1; id <= 400; ++id) {
+        ASSERT_EQ(Local("INSERT INTO ts VALUES (" + std::to_string(id) + ", 7)")
+                      .rfind("INSERTED", 0),
+                  0u)
+            << "id " << id;
+    }
+    EXPECT_GT(leaf_count(), leaves_before)
         << "no leaf ever divided, so this cell would pass without exercising the hazard it is "
-           "named for: " << shape_after;
+           "named for";
 
     ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
     Pump();
     ASSERT_TRUE(*walk.done) << "the wait never ended after a split under the park";
     EXPECT_EQ(walk.out->response.rfind("UPDATED 10", 0), 0u)
-        << "the resumed walk must see its own ten rows and none of the 300 inserted after its "
+        << "the resumed walk must see its own ten rows and none of the 400 inserted after its "
            "snapshot: " << walk.out->response;
     EXPECT_EQ(w.transaction()->trail().size(), 10u)
         << "a row below the resume key was written a second time after the split";
-    EXPECT_EQ(held, 6u);
+}
+
+TEST_F(MidWalkWaitTest, ADeadlockBetweenTwoMidWalkParksUnwindsTheVictimsOpenScope) {
+    // A cycle in which **both** transactions are parked mid-walk holding
+    // rows, which no other cell in this file produces: every existing
+    // deadlock cell uses `WHERE id = k` statements that write nothing
+    // before conflicting.
+    //
+    // **What it does not prove**, stated because the first version of this
+    // comment claimed it did: it does not exercise `RefuseParkedWrite`'s
+    // scope cleanup. Both victims here are inside explicit transactions,
+    // where `EndWrite`'s unowned arm only poisons - which `RefuseParkedWrite`
+    // does anyway - so the cell passes with the cleanup compiled out. It was
+    // checked that way. The cleanup's own cell is the autocommit one below,
+    // where the scope is *owned* and someone has to end it.
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+
+    // The two anchors, at opposite ends of the walk order.
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 1 WHERE id = 1", &a)
+                  .response.rfind("UPDATED", 0),
+              0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 10", &b)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    // A walks 5..9, writes them, and meets row 10 - B's. It parks holding
+    // six rows, and the graph gets the edge A -> B.
+    Started wa = Start("UPDATE t SET v = 3 WHERE id >= 5", a);
+    Pump();
+    ASSERT_FALSE(*wa.done) << "A did not park mid-walk: " << wa.out->response;
+    EXPECT_EQ(locks_->WaitEdgeCount(), 1u);
+
+    // B walks 2..4, writes them, and meets row 5 - which A is now holding.
+    // That edge closes the cycle, so B is the victim by AO-R7's rule, and
+    // B is parked mid-walk with an open scope of its own.
+    Started wb = Start("UPDATE t SET v = 4 WHERE id >= 2", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "the cycle was not detected; only the 11 s net would end this";
+    const Status victim = StatusFromErrorReply(wb.out->response);
+    EXPECT_EQ(victim.code(), StatusCode::kTxnConflict) << wb.out->response;
+    EXPECT_NE(wb.out->response.find("deadlock"), std::string::npos) << wb.out->response;
+
+    // **The scope was ended, not abandoned.** Inside an explicit
+    // transaction that means poisoned rather than unwound - the rows stay
+    // and the client must ROLLBACK - which is exactly what `EndWrite`'s
+    // unowned arm does for every other failed statement.
+    EXPECT_TRUE(b.failed()) << "the victim's scope was left open and its session unpoisoned";
+    EXPECT_EQ(dispatcher_->Dispatch("SELECT id, v FROM t", &b).response,
+              "ERR current transaction is aborted; commands are ignored until ROLLBACK");
+
+    // And the ROLLBACK is clean: it takes back both B's anchor and the
+    // three rows its parked statement had written.
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &b).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+
+    // A was never touched - a detector aborts the waiter, never the holder
+    // - and proceeds once B's rollback releases row 10.
+    ASSERT_TRUE(*wa.done) << "the survivor never proceeded, so the cycle was broken at both ends";
+    EXPECT_EQ(wa.out->response.rfind("UPDATED 6", 0), 0u)
+        << "rows 5..10, counted across A's park: " << wa.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+    EXPECT_EQ(locks_->WaitEdgeCount(), 0u);
+    // B's writes are gone and A's are all there: nothing of the victim's
+    // open scope survived its refusal.
+    EXPECT_EQ(RowsWith(4), 0) << "the victim's rows outlived its rollback";
+    EXPECT_EQ(RowsWith(3), 6);
+}
+
+TEST_F(MidWalkWaitTest, ARefusedAutocommitParkDoesNotLeaveItsScopeForTheNextStatement) {
+    // **`RefuseParkedWrite`'s scope cleanup, and the hazard it exists for.**
+    // An autocommit statement parked mid-walk owns its transaction: the
+    // session does not know about it (`session.transaction()` is null and
+    // `in_explicit_txn()` is false), so if the refusal does not end that
+    // scope, nothing does. Worse than the leak is what it leaves behind -
+    // `session.parked_write()` stays set, and the **next** statement on this
+    // session takes the resume branch at the top of `HandleUpdate`, picking
+    // up a dead transaction and a stale cursor and skipping every row below
+    // it.
+    //
+    // The wait is ended by the fault net rather than a decide, because that
+    // is the refusal arm reachable with a holder that never decides.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 9 WHERE id = 10", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    Started walk = Start("UPDATE t SET v = 3 WHERE id >= 5", w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << "the autocommit statement did not park: " << walk.out->response;
+
+    // Past the net. The holder never decides, so this is the arm that ends
+    // it - and AO-R8 calls reaching it a defect report rather than an
+    // outcome, which is what this cell is standing in for.
+    clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+    Pump();
+    ASSERT_TRUE(*walk.done) << "the fault net never fired";
+    EXPECT_EQ(StatusFromErrorReply(walk.out->response).code(), StatusCode::kTxnConflict)
+        << walk.out->response;
+
+    // **The decisive assertion.** A fresh statement on the same session must
+    // be a *fresh* statement. With the cleanup compiled out it resumes from
+    // the refused statement's cursor instead and answers `UPDATED 6`,
+    // covering only rows 5..10 - the rows below the stale cursor silently
+    // skipped, which is the wrong answer this block prevents.
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Started after = Start("UPDATE t SET v = 5 WHERE id >= 1", w);
+    Pump();
+    ASSERT_TRUE(*after.done) << after.out->response;
+    EXPECT_EQ(after.out->response.rfind("UPDATED 10", 0), 0u)
+        << "the next statement resumed into the refused one's scope and cursor: "
+        << after.out->response;
+    EXPECT_EQ(RowsWith(5), 10);
 }
 
 TEST_F(MidWalkWaitTest, WithoutADetectorTheMidWalkParkIsNotOffered) {

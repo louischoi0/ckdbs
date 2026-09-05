@@ -35,6 +35,17 @@ The epoch lives in the **common page header** as `relayout_epoch` — `PageHeade
 
 ### 3.1b Chain growth by tail append
 
+> **SUSPENDED — SUS-1, operator, 2026-09-05.** No new heap relation can be
+> created: `CREATE TABLE … HEAP` is refused `Unsupported` naming SUS-1, and
+> the storage-form default is `BTREE`. **Everything in this section remains
+> true and remains implemented.** An existing heap relation mounts, reads,
+> writes, walks its chain, replays its redo and undo, and refuses a key
+> below its high-water mark for exactly the reasons below. The suspension is
+> a refusal at *creation* and a default, and nothing else — nothing here is
+> deprecated and nothing is to be deleted. The order, the rulings and the
+> resume condition are
+> `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`.
+
 A relation is a **chain of heap pages** linked through the `next_page_id` tail reservation (§3.2), rooted at `sys.tables.desc_page_id` (`include/kds/storage/heap/heap_chain.hpp`).
 
 - **Growth is tail append, never a split.** Every insert goes to the last page. When it has no room, a new page is allocated, the tuple is written into it, and only then is the page linked on — the link is what makes a page reachable, so publishing it first would expose an empty tail.

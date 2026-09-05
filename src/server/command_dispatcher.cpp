@@ -324,15 +324,34 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // graph cannot name is a link no registration can close - a
         // deadlock invisible to AO-S4a's detector and ended only by the
         // fault net, which kills both waiters and is what AR2-R10 forbids.
-        const Session::ParkedWrite* parked =
-            waiting_session.parked_write().has_value() ? &*waiting_session.parked_write() : nullptr;
-        const std::uint64_t waiter_id =
-            parked != nullptr && parked->txn != nullptr ? parked->txn->id()
-            : waiting_session.transaction() != nullptr  ? waiting_session.transaction()->id()
-                                                        : 0;
+        //
+        // **Re-read every turn, because the identity can appear mid-loop.**
+        // An autocommit statement that met the held row before it had
+        // written anything is refused, re-run whole, and only *then* writes
+        // rows and parks mid-walk - so a value taken once, before the first
+        // wait, is 0 for the rest of a loop whose waiter has since become a
+        // holder. That is the invisible link this stage exists to remove,
+        // reintroduced by the caching alone.
+        const auto waiter_now = [&waiting_session]() -> std::uint64_t {
+            if (const std::optional<Session::ParkedWrite>& parked =
+                    waiting_session.parked_write();
+                parked.has_value() && parked->txn != nullptr) {
+                return parked->txn->id();
+            }
+            return waiting_session.transaction() != nullptr
+                       ? waiting_session.transaction()->id()
+                       : 0;
+        };
+        std::uint64_t waiter_id = waiter_now();
         bool deadlocked = false;
         while (out->write_block.has_value()) {
             const DispatchOutcome::WriteBlock block = *out->write_block;
+            // An identity that changed leaves the old one's edge behind,
+            // and a stale edge is a false cycle for the next waiter to
+            // close against - so it goes with the identity it named.
+            const std::uint64_t was = waiter_id;
+            waiter_id = waiter_now();
+            if (was != waiter_id && was != 0 && locks_ != nullptr) locks_->ClearWaitFor(was);
             if (NowNs() >= deadline_ns) break;
             // **The edge, and the cycle test in the same breath.** A cycle
             // can only close at the instant a waiter adds the edge that
@@ -8023,7 +8042,7 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
 }
 
 Status CommandDispatcher::WalkHeapChains(
-    const std::vector<PageId>& heads, storage::PageAccess page_access,
+    std::span<const PageId> heads, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
     WalkCursor* cursor) {
@@ -8173,9 +8192,28 @@ Status CommandDispatcher::WalkBtreeLeaves(
             auto outcome = fn(page_id, page, slot);
             if (!outcome.ok() || !outcome.has_value()) return outcome;
             if (outcome.value() == storage::VisitControl::kStop) {
-                cut = true;
                 const std::optional<std::uint64_t> key = key_at(slot);
-                if (key.has_value()) cut_pk = *key;
+                // **A stop with no readable key is `Corruption`, not a
+                // resume from zero.** `fn` has just read this slot live, so
+                // failing to read it back is a corrupt page rather than an
+                // ordinary dead slot - and the tempting fallback is the
+                // worst outcome the stage can produce. Leaving `cut_pk` at
+                // 0 while the cursor goes active makes the resume descend
+                // to the *leftmost* leaf and skip nothing, so every row
+                // already written is written a second time: the trail
+                // doubles, the count doubles, and a ten-row statement
+                // answers `UPDATED 16`. That is the silent double-write
+                // this arm's key ordering exists to prevent, so it is
+                // refused here rather than carried into the resume.
+                if (!key.has_value()) {
+                    return Status::Corruption(
+                        "btree walk stopped at page " + std::to_string(page_id) + " slot " +
+                        std::to_string(slot) +
+                        " whose Keystone id cannot be read back, so there is no key to resume "
+                        "from; refusing rather than resuming from the start of the relation");
+                }
+                cut = true;
+                cut_pk = *key;
             }
             return outcome;
         };
@@ -8248,7 +8286,7 @@ Status CommandDispatcher::VisitRelation(
                 }
                 return WalkHeapChains(heads, page_access, fn, cursor);
             }
-            return WalkHeapChains({access.desc_page_id}, page_access, fn, cursor);
+            return WalkHeapChains({&access.desc_page_id, 1}, page_access, fn, cursor);
         case catalog::ClusteredType::kBtree:
             // No range arm: D1 declines every btree relation, so one never
             // has a directory. Left as an absence rather than a refusal,
@@ -10260,12 +10298,23 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 // rather than failing the statement.** `blocking_writer_`
                 // is the discriminator `CheckWriteConflictBlocking` already
                 // sets, and it is set only under `may_park_` with a live
-                // clock - so a non-zero one here is a wait something can
-                // act on. Every other conflict is the refusal it always
-                // was. Returning OK is what lets the caller turn this into
-                // a `kStop`: the row is not written, and the walk ends
-                // holding no span.
-                if (blocking_writer_ != 0) {
+                // clock - so one naming *this row's* writer is a wait
+                // something can act on. Every other conflict is the refusal
+                // it always was. Returning OK is what lets the caller turn
+                // this into a `kStop`: the row is not written, and the walk
+                // ends holding no span.
+                //
+                // **Compared against `trx_id`, not merely tested non-zero.**
+                // The member is the statement's, not the row's: the forward
+                // foreign-key check records a busy *parent's* holder into it
+                // before the walk starts (`ResolveForeignKeyParents`). A
+                // bare non-zero test would then read that leftover as this
+                // row's verdict and park the statement on a transaction that
+                // holds nothing it wants - waiting for the wrong decide and
+                // resuming into the same refusal. `NoteBlockingWriter` is
+                // called here with `cur`, so equality is exactly "this row's
+                // check is the one that recorded it".
+                if (trx_id != 0 && blocking_writer_ == trx_id) {
                     parked_on_row = true;
                     blocked_verdict = s;
                     return Status::OK();
@@ -10520,6 +10569,19 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 heap::PageView page(bytes.value().bytes());
                 if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
                     return {ErrorReply(s), false, 0, s};
+                }
+                // **AO-S3b: `apply` now answers OK for a row it declined to
+                // write**, so the count below is no longer proof that it
+                // did. Without this test a point UPDATE against a held row
+                // renders `UPDATED 0` - a success reply for a write that
+                // never happened, and an autocommit commit on top of it.
+                // There is exactly one row in scope here, so nothing was
+                // written and nothing can be resumed from: the conflict is
+                // the answer, and `EndWrite` keeps the blocker that makes
+                // `DispatchAsync` wait for the holder and run the whole
+                // statement again - the pre-AO-S3b behaviour of this arm.
+                if (parked_on_row) {
+                    return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
                 }
                 if (logging(LogLevel::kTrace)) {
                     log_->Trace("query", "pk " + std::to_string(*pk) + " updated at " +
@@ -11478,8 +11540,9 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
         if (scope.txn != nullptr) {
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id); !s.ok()) {
-                // AO-S3b, and `UpdateInner`'s site states the argument.
-                if (blocking_writer_ != 0) {
+                // AO-S3b, and `UpdateInner`'s site states the argument,
+                // including why this is an equality and not a non-zero test.
+                if (trx_id != 0 && blocking_writer_ == trx_id) {
                     parked_on_row = true;
                     blocked_verdict = s;
                     return Status::OK();
@@ -11597,6 +11660,13 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                 heap::PageView page(bytes.value().bytes());
                 if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
                     return {ErrorReply(s), false, 0, s};
+                }
+                // AO-S3b, and UPDATE's point arm states the argument: a
+                // held row leaves `mark` answering OK with nothing marked,
+                // and rendering the count would answer `DELETED 0` for a
+                // row this statement is waiting on.
+                if (parked_on_row) {
+                    return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
                 }
                 return {"DELETED " + std::to_string(deleted), false, deleted};
             }
