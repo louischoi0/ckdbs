@@ -665,6 +665,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
 
 void DevicePageStore::ReleaseScanSlot(PageId page_id) noexcept {
     if (page_id == kInvalidPageId) return;
+    // **The third eraser, and it takes the structure latch like the other
+    // two will** (AM-S2). The check and the erase have to be one hold: a pin
+    // taken between them would be missed and the frame freed under whoever
+    // took it. Both callers - the ring's rotation and its destructor - reach
+    // this with the latch not held.
+    LatchGuard structure(structure_latch());
     auto it = frames_.find(page_id);
     if (it == frames_.end()) return;  // reclaimed by a sweep meanwhile: fine
     const Frame& frame = it->second;
@@ -694,6 +700,21 @@ public:
         for (const PageId id : slots_) store_.ReleaseScanSlot(id);
     }
 
+    // **This ring is not safe on a shared pool, and a latch will not make
+    // it so** (AM-S2, recorded here rather than in a plan nobody reads at
+    // the call site). Its model is *no pin, drop on rotation*: `Fetch`
+    // hands back a span into a frame it has not pinned, and
+    // `heap_chain.hpp` promises that span lives until the next `Fetch`.
+    // That promise is a statement about one thread. Once another core can
+    // evict, the span can be freed under its reader, and no amount of
+    // latching *inside* `Fetch` fixes it - the exposure is after the latch
+    // would drop, for as long as the caller holds the span.
+    //
+    // The two ways out are to pin ring slots like any other frame (paying
+    // the pin the ring exists to avoid) or to refuse a ring on a shared
+    // store and let scans take the ordinary path. **Neither is decided**;
+    // step 3 must decide before it shares the pool, because this is the one
+    // place a reader holds page bytes with nothing keeping the frame alive.
     StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) override {
         // In place when resident - the foreground's frame or one of this
         // ring's own slots - never bumping usage: §5's interaction rule in
@@ -1482,6 +1503,22 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
     // rather than a slow read.
     std::unique_lock<Latch> hold(*latch);
     for (;;) {
+        // **The `loading_` half of the test below is not an optimisation,
+        // and no functional cell can prove it.** The window where a page is
+        // *both* resident and in flight is narrow and specific: the loader
+        // has passed `InsertFrame` and is running the inline sweep, which
+        // takes a temporary hand-pin **outside** this latch (the
+        // `frame_budget_` block in `ResidentBytes`). Without the
+        // `loading_` test a second thread would take the hit path there and
+        // pin the same frame under the latch - racing the sweep's unlatched
+        // increment on the very same counter.
+        //
+        // That is a data race, not a wrong answer, so it does not surface as
+        // a failing assertion: deleting the test leaves
+        // `am_s2_pin_protocol_test.cpp` green, measured five runs out of
+        // five **with a frame budget set so the sweep genuinely runs**.
+        // Proving it needs TSan, which this tree does not build. Recorded
+        // rather than covered, so nobody deletes it for looking redundant.
         const bool resident = frames_.find(page_id) != frames_.end();
         if (resident && loading_.find(page_id) == loading_.end()) {
             // **The hit path runs the raw fetch under the latch, and that is

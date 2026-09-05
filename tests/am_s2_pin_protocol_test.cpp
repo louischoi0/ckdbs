@@ -44,6 +44,16 @@ protected:
         // btree descent does, aborts the process on entirely correct
         // traffic. Measured, not reasoned: at nine it aborts.
         store_->SetLatchArmed(true, /*concurrent_pinners=*/12);
+        // **A budget, so the inline sweep actually runs** (AM-S2). The
+        // fault path sweeps only when a miss takes the pool past
+        // `frame_budget_` (EV5/MG06), and the review found this fixture left
+        // it at 0 - so the cell written to show the sweep moved out from
+        // under the structure latch never executed a sweep at all, and the
+        // hit path's `loading_` test, which is what keeps a second thread
+        // off a frame the loader is still inside `ResidentBytes` for, could
+        // be deleted with every cell still passing. Small enough that the
+        // rounds below cross it repeatedly.
+        store_->SetFrameBudget(8);
     }
 
     PageId MakeResidentPage(std::byte fill) {
