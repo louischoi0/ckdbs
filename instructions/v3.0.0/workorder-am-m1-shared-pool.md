@@ -186,6 +186,39 @@ today. **A pre-M1 volume then does not mount**, per D14, and that is the
 first time in this revision that has been true: M0 kept them mountable.
 Say it out loud in the milestone row rather than discovering it.
 
+**AM-R4a — What D14 costs, and the ruling in this order it contradicts.
+[CLA, 2026-09-05, sizing AM-S4]** AM-R4 leans on D14 to make the format
+event payable, and D14 is pending (`ar0-architecture-revision.md` §5, and
+the ratification's "everything not listed stays pending" names it). Its
+proposal is *no in-place migration; a new major version mounts only volumes
+created by it*. **CLA affirms it**, and the price is small in a way worth
+stating rather than assuming: the version of record is `v2.7.0` and v3 is
+unreleased, so no user volume exists to strand - what has to be recreated is
+every v2.x database file and every v3 development volume, and there is no
+migration path and none planned.
+
+**The consequence AM-R2 did not anticipate.** AM-R2 says "extent leases stay
+(allocator authority, retained by AR0-4)". Under D14 they do not, and the
+chain is short: `Expeditor` shares the pool where `single_stream()` holds,
+D14 makes every mountable volume one this build created, and every such
+volume is single-stream - so `share_pool` is always true, no peer is handed
+an extent, and `CoreRuntime::Open` installs no `LeasedIdSource`. A lease is
+core 0's only in the sense that core 0 never had one. So the whole per-core
+*store* arrangement goes unreachable at AM-S4, and with it the lease,
+`MayFault`, the CC7 fault grants, `TryClaimByStamp`, `RefreshFreeMapFromDevice`'s
+peer arm, and `CoreRuntimePerCoreStreamTest` - which AM-S0(b) kept
+deliberately, "because deleting them would leave the branch untested while it
+is still reachable", a condition D14 ends.
+
+That is a larger deletion than AM-R4's "the stamp field goes" reads as, and
+it is the same deletion AM-R2 scheduled for AM-S2 and this order then moved
+to AM-S4 (`dd0bfe9`). **The two arrive together or not at all**: refusing the
+volume is what makes the machinery unreachable, and deleting the machinery is
+what makes refusing the volume worth the format event. AM-S4's cell list
+gains the third item that follows - no `LeasedIdSource` is constructed on any
+mountable volume - and AM-R2's "leases stay" is struck by this row rather
+than left for a reader to reconcile.
+
 **AM-R5 — The free map and the superblock stay core 0's.** D4 proposes
 moving allocator authority to "the log core"; under M0 the log core *is*
 core 0, so the proposal is already satisfied and needs no work. CC11's
@@ -224,7 +257,7 @@ review, the full suite, sync with `origin/main` on the branch, stop.
 | AM-S1 | The page latch (AM-R3): the primitive, its `cores = 1` compile-out, and its acquisition order against the WAL latch | contention cell at 8 cores; a `cores = 1` A/B showing the acquire/release pair costs nothing measurable | M |
 | AM-S2 | The shared pool: one frame table, one CLOCK hand, `buffer_pool_frames` an undivided instance total (AM-R2's `MayFault` removal here) | a page faulted on core 1 is served from the frame core 0 loaded; the boot refusal for `frames < cores` goes | L |
 | AM-S3 | Writeback and the WAL gate under sharing; EV8's new bound and counter (AM-R6) | flush-before-evict holds with two cores dirtying one page; the cross-core exhaustion counter is nonzero exactly when it should be | M |
-| AM-S4 | The stamp field (AM-R4) and the format event; `page-lsn-cross-stream.md` leaves the tree | a pre-M1 volume is refused at mount, naming why; no reader of `flags` at offset 2 remains | M |
+| AM-S4 | The stamp field (AM-R4) and the format event; `page-lsn-cross-stream.md` leaves the tree. **And the per-core store arrangement with it** (AM-R4a): refusing a pre-M1 volume is what makes the lease, `MayFault`, the CC7 fault grants, `TryClaimByStamp` and `CoreRuntimePerCoreStreamTest` unreachable, so they go in the same commit | a pre-M1 volume is refused at mount, naming why; no reader of `flags` at offset 2 remains; **no `LeasedIdSource` is constructed on any mountable volume** | M |
 | AM-S5 | Prose: `eviction.md` §1/EV4 as AM-R7 asks, `page.md` §6, `heap-and-tuple.md` §6, `rules.md` §3's fourth row, `crosscore.md` CC7, `CLAUDE.md` | no spec claims a core-local pool | M |
 | AM-S6 | The baseline against AL-S8's, same cells, same host | one results file per cell under `bench/v3.0.0/`, and **the delta to AL-S8 is the point** — that pair is within one engine and is exactly what D15 permits | M |
 
