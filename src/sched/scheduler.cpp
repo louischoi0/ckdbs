@@ -47,15 +47,18 @@ Status Scheduler::UnregisterIoHandler(IoHandle handle) {
     return io_backend_.Unregister(handle);
 }
 
-Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) {
-    transport_ = transport;
-    core_id_ = core_id;
-    if (transport_ == nullptr) return Status::OK();
+// **The wake path** (waker.hpp), armed on demand by whichever attach point
+// runs first. Extracted at AU-S1: it used to sit inside `AttachTransport`,
+// which made a reactor's wakeability a property of having a transport - and
+// AR0-6 retires the transport while keeping the wake. Idempotent, so the two
+// callers need no ordering between them.
+//
+// Armed here rather than at construction because this is the first moment a
+// peer exists to be woken by, and because a single-core reactor must not pay
+// for a handle it can never need.
+Status Scheduler::ArmWaker() {
+    if (waker_.has_value()) return Status::OK();
 
-    // **The wake path** (waker.hpp). Armed here rather than at
-    // construction because this is the first moment a peer exists to be
-    // woken by, and because a single-core reactor must not pay for a
-    // handle it can never need.
     auto waker = Waker::Create();
     if (!waker.ok()) return waker.status();
     waker_.emplace(std::move(waker.value()));
@@ -64,14 +67,36 @@ Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_i
         waker_.reset();
         return s;
     }
-    // Draining is all the handler does: the wake carries no data, the ring
-    // is the queue, and phase 3 of this same iteration is what reads it.
+    // Draining is all the handler does: the wake carries no data. With a
+    // transport, phase 3 of this same iteration reads the queue; with a
+    // kick, the woken task re-checks the structure it parked on.
     io_handlers_[waker_->handle()] = [this](const IoEvent&) {
         waker_->Drain();
         // D7's `sched_spurious_wakes`: read once, after phase 3, against
         // whether that drain found anything.
         woken_by_waker_ = true;
     };
+    return Status::OK();
+}
+
+Status Scheduler::AttachWakerTable(WakerTable* table, std::uint32_t core_id) {
+    core_id_ = core_id;
+    if (table == nullptr) return Status::OK();
+    if (Status s = ArmWaker(); !s.ok()) return s;
+    // Published last, so no peer can find a half-registered target - the
+    // same ordering `SetWakeTarget` uses, and safe unsynchronised for the
+    // same reason: this runs on the startup thread before this core's
+    // worker exists.
+    table->Register(core_id_, &sleeping_, &*waker_);
+    return Status::OK();
+}
+
+Status Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) {
+    transport_ = transport;
+    core_id_ = core_id;
+    if (transport_ == nullptr) return Status::OK();
+
+    if (Status s = ArmWaker(); !s.ok()) return s;
 
     // Published last, so no peer can find a target that is not yet
     // registered. Safe unsynchronised: this runs on the startup thread
@@ -409,7 +434,13 @@ bool Scheduler::RunOnce() {
     // Only when this iteration would actually sleep. A timeout of 0 is a
     // reactor with work to do, and it neither needs waking nor may pay two
     // atomics to say so.
-    const bool may_sleep = timeout_ms != 0 && transport_ != nullptr && waker_.has_value();
+    // **Not gated on the transport** (AU-S1). This read
+    // `transport_ != nullptr` until AR0-6, which meant a reactor with no
+    // transport never raised its flag and so could never be woken - it only
+    // ever timed out. Retiring the transport would have silently disabled
+    // every cross-core wake with it. What a reactor needs to be wakeable is
+    // its own `Waker`, and nothing else.
+    const bool may_sleep = timeout_ms != 0 && waker_.has_value();
     // The block this iteration is about to take is one the reactor used to
     // spin through whenever a parked task was queued. Counted where the
     // decision is visible.
@@ -419,7 +450,15 @@ bool Scheduler::RunOnce() {
     if (may_sleep) {
         sleeping_.store(true, std::memory_order_seq_cst);
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        if (transport_->HasPending(core_id_)) {
+        // The re-check that closes the window the flag opens. **A
+        // transport supplies one; a kick has none** (AR0-6-R1, and
+        // `waker_table.hpp` says why): with no queue there is nothing to
+        // ask, and the general form - re-evaluate the predicate you are
+        // about to park on - belongs with a consumer that has one. Until
+        // AU-S2 gives it one, a reactor with no transport takes the
+        // accepted cost of a lost kick: one idle block, slow and never
+        // wrong.
+        if (transport_ != nullptr && transport_->HasPending(core_id_)) {
             sleeping_.store(false, std::memory_order_seq_cst);
             timeout_ms = 0;
             wake_race_skips_.fetch_add(1, std::memory_order_relaxed);

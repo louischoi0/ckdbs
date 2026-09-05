@@ -18,6 +18,7 @@
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/waker.hpp"
+#include "kds/sched/waker_table.hpp"
 #include "kds/sched/task.hpp"
 
 // The reactor (docs/spec/sched.md sections 2-4). One Scheduler runs on the
@@ -146,6 +147,23 @@ public:
     // stores and no syscalls: the fast path is exactly what it was
     // (guideline 2).
     Status AttachTransport(RingTransport* transport, std::uint32_t core_id);
+
+    // AU-S1: register this reactor in the instance's waker table, so a peer
+    // can kick it without a transport (AR0-6-R1, `waker_table.hpp`).
+    //
+    // Separate from `AttachTransport` because it outlives it: the transport
+    // is being retired and the wake is not. A reactor that calls neither is
+    // never woken and falls back to its idle block, which is what every
+    // single-core build does. Creates the `Waker` if attaching a transport
+    // has not already, so the two entry points do not have to be ordered.
+    Status AttachWakerTable(WakerTable* table, std::uint32_t core_id);
+
+private:
+    // Creates and registers this reactor's eventfd, once, for whichever
+    // attach point runs first (AU-S1).
+    Status ArmWaker();
+
+public:
 
     // What to run when a message of `kind` arrives. Replaces any previous
     // handler for that kind. Fails with InvalidArgument for `kUnset`, which
