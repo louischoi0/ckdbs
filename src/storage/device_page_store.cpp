@@ -322,12 +322,22 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
     // resident by construction: the id came from an allocation that had to
     // load or create its region to hand it out.
     const PageId headerless_page = created.value().first;
+    // Both map lookups run **before** the hold, because either may reach the
+    // device; the region is resident by construction (the allocation above
+    // had to load or create it), so neither does in practice.
     auto map = EnsureHeaderlessMap(headerless_page);
     if (!map.ok()) return map.status();
-    FreeMapAllocate(map.value(), FreeMapBitIndexOf(headerless_page));
     auto region = EnsureRegionResident(FreeMapRegionOf(headerless_page));
     if (!region.ok()) return region.status();
-    region.value()->dirty = true;
+    {
+        // **The mark is a read-modify-write of one byte in a page every core
+        // shares** (AM-S2), so it takes the latch even though the *id* is
+        // this caller's alone: a neighbouring id's bit in the same byte
+        // belongs to somebody else.
+        LatchGuard alloc(structure_latch());
+        FreeMapAllocate(map.value(), FreeMapBitIndexOf(headerless_page));
+        region.value()->dirty = true;
+    }
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("pagestore",
                     "alloc headerless page=" + std::to_string(created.value().first));
@@ -961,6 +971,83 @@ bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
     return HasWriteRight(page_id);
 }
 
+StatusOr<PageId> DevicePageStore::ClaimNextFreeIdLocked(std::uint32_t* missing_region) {
+    // FM3/FM5: the search crosses regions. It does **not** create one - that
+    // is a device write, and this runs under the structure latch; a missing
+    // region goes back to the caller to load outside the hold.
+    for (PageId candidate = next_new_page_id_; candidate < kMaxPageCount;) {
+        const std::uint32_t region = FreeMapRegionOf(candidate);
+        MapRegion* pages = MutableRegion(region);
+        if (pages == nullptr) {
+            *missing_region = region;
+            return kInvalidPageId;
+        }
+        auto map = std::span<std::byte, kPageSize>(pages->free_map);
+        auto found = FreeMapFindFirstFree(std::span<const std::byte, kPageSize>(map),
+                                          FreeMapBitIndexOf(candidate));
+        if (found.has_value()) {
+            const PageId id = FreeMapRegionBase(region) + *found;
+            // A bitmap id is not a free page even when its bit is clear:
+            // under FM6 the headerless map's id carries no bit until the
+            // page is placed. Arithmetic rather than a reserved bit.
+            if (IsMapPageId(id)) {
+                candidate = id + 1;
+                continue;
+            }
+            // **The mark, in the hold that found it.** Everything below this
+            // line is why the function exists.
+            FreeMapAllocate(map, FreeMapBitIndexOf(id));
+            pages->dirty = true;
+            ++allocated_pages_;
+            next_new_page_id_ = id + 1;
+            return id;
+        }
+        candidate = FreeMapRegionBase(region + 1);
+    }
+    return Status::OutOfSpace("DevicePageStore: no free page id at or above " +
+                              std::to_string(next_new_page_id_));
+}
+
+StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(PageId page_id,
+                                                                           bool zeros_known,
+                                                                           bool device_zeros) {
+    // An allocated id is in use unless the device proves it was never
+    // written - the page redo re-creates after a PAGE_INIT outran its first
+    // flush (`ResidentBytes` answers NotFound for the same page, and says
+    // why the map can be ahead of the bytes). Decided by a resident frame or
+    // the device's bytes, never by the map alone: the map bit is exactly
+    // what is true of both a live page and a never-written one.
+    //
+    // The two maps live in this object, not in a frame, and may not have
+    // reached the device yet - in use by definition. Any region's bitmaps,
+    // not just region 0's.
+    if (IsMapPageId(page_id)) return Status::AlreadyExists("page id already in use");
+    const MapRegion* pages = FindRegion(FreeMapRegionOf(page_id));
+    if (pages == nullptr) {
+        // The caller loaded it before taking the hold and regions are never
+        // removed, so this is unreachable; it is a refusal rather than an
+        // assert because the alternative is a null dereference.
+        return Status::Corruption("DevicePageStore: free-map region for page " +
+                                std::to_string(page_id) + " went missing under the latch");
+    }
+    const std::uint32_t bit = FreeMapBitIndexOf(page_id);
+    const bool allocated =
+        FreeMapIsAllocated(std::span<const std::byte, kPageSize>(pages->free_map), bit);
+    if (allocated) {
+        if (frames_.count(page_id) != 0) return Status::AlreadyExists("page id already in use");
+        // The bit is set and the caller did not read the device, because it
+        // saw the bit clear before it took the hold. It has to look now.
+        if (!zeros_known) return ClaimOutcome::kNeedsDeviceRead;
+        if (!device_zeros) return Status::AlreadyExists("page id already in use");
+    } else {
+        ++allocated_pages_;
+    }
+    MapRegion* mutable_pages = MutableRegion(FreeMapRegionOf(page_id));
+    FreeMapAllocate(std::span<std::byte, kPageSize>(mutable_pages->free_map), bit);
+    mutable_pages->dirty = true;
+    return ClaimOutcome::kClaimed;
+}
+
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(PageId page_id) {
     if (lease_ != nullptr) {
         // Placing a page at a *chosen* id is a claim on the free map, and
@@ -977,33 +1064,34 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
                                   " is beyond the " + std::to_string(kMaxPageCount) +
                                   "-page design ceiling");
     }
-    // An allocated id is in use unless the device proves it was never
-    // written - the page redo re-creates after a PAGE_INIT outran its first
-    // flush (ResidentBytes answers NotFound for the same page, and says why
-    // the map can be ahead of the bytes). Decided by a resident frame or
-    // the device's bytes, never by the map alone: the map bit is exactly
-    // what is true of both a live page and a never-written one.
-    // The two maps live in this object, not in a frame, and may not have
-    // reached the device yet - in use by definition.
-    // Any region's bitmaps, not just region 0's: IsMapPageId is the
-    // arithmetic form of the two fixed ids this check used to name.
-    if (IsMapPageId(page_id) ||
-        (IsAllocated(page_id) &&
-         (frames_.count(page_id) != 0 || !DeviceHoldsOnlyZeros(page_id)))) {
-        return Status::AlreadyExists("page id already in use");
-    }
+    // **The device work first, the claim under the hold** (AM-S2). Growing
+    // the file and reading it to prove a page was never written are exactly
+    // what the structure latch may not span, so they run here and the
+    // decision they feed is re-taken inside `ClaimNamedIdLocked` - the
+    // retry idiom `FetchPinned` uses for a page in flight.
     if (Status s = EnsureAddressable(page_id); !s.ok()) return s;
-
-    auto region = EnsureRegionResident(FreeMapRegionOf(page_id));
-    if (!region.ok()) return region.status();
-    auto free_map = std::span<std::byte, kPageSize>(region.value()->free_map);
-    const std::uint32_t bit = FreeMapBitIndexOf(page_id);
-    if (!FreeMapIsAllocated(std::span<const std::byte, kPageSize>(region.value()->free_map),
-                            bit)) {
-        ++allocated_pages_;
+    if (auto region = EnsureRegionResident(FreeMapRegionOf(page_id)); !region.ok()) {
+        return region.status();
     }
-    FreeMapAllocate(free_map, bit);
-    region.value()->dirty = true;
+    // Read only if the bit looks set, which is the one case the answer is
+    // needed for; a clear bit is a free page and the device says nothing
+    // about it. Racy on purpose - a bit that changes under us comes back as
+    // `kNeedsDeviceRead` and this loop reads it then.
+    bool zeros_known = false;
+    bool device_zeros = false;
+    for (;;) {
+        if (IsAllocated(page_id) && !zeros_known) {
+            device_zeros = DeviceHoldsOnlyZeros(page_id);
+            zeros_known = true;
+        }
+        LatchGuard alloc(structure_latch());
+        auto claimed = ClaimNamedIdLocked(page_id, zeros_known, device_zeros);
+        if (!claimed.ok()) return claimed.status();
+        if (claimed.value() == ClaimOutcome::kClaimed) break;
+        // The bit was set after all and nobody had asked the device yet.
+        // The hold ends here, and the next turn asks.
+        zeros_known = false;
+    }
 
     auto bytes = std::make_unique<Page>();
     bytes->fill(std::byte{0});
@@ -1043,41 +1131,44 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // (expeditor.cpp grants leases to cores 1..N-1 only), so this is the
     // whole of a single-core deployment's allocation and the hint keeps it
     // to one region's map in the steady state.
+    // **Scan and mark are one hold, and the device work is outside it**
+    // (AM-S2). This used to choose an id here and mark it two calls away
+    // inside `CreateAtUnpinned`, so any number of threads could scan the
+    // same clear bit before one of them set it: four threads measured ~14%
+    // duplicate ids (`tests/alloc_race_test.cpp`). The loop turns only when
+    // the scan reaches a region this store has not loaded, which is the one
+    // thing `ClaimNextFreeIdLocked` refuses to do for itself.
     PageId page_id = kInvalidPageId;
-    for (PageId candidate = next_new_page_id_; candidate < kMaxPageCount;) {
-        const std::uint32_t region = FreeMapRegionOf(candidate);
-        auto bytes = FreeMapBytesForRegion(region);
-        if (!bytes.ok()) return bytes.status();
-        auto found = FreeMapFindFirstFree(bytes.value(), FreeMapBitIndexOf(candidate));
-        if (found.has_value()) {
-            const PageId id = FreeMapRegionBase(region) + *found;
-            // A bitmap id is not a free page even when its bit is clear:
-            // under FM6 the headerless map's id carries no bit until the
-            // page is placed. Arithmetic rather than a reserved bit, so
-            // this cannot go wrong by a bit being set late.
-            if (IsMapPageId(id)) {
-                candidate = id + 1;
-                continue;
-            }
-            page_id = id;
-            break;
+    for (;;) {
+        std::uint32_t missing_region = 0;
+        {
+            LatchGuard alloc(structure_latch());
+            auto claimed = ClaimNextFreeIdLocked(&missing_region);
+            if (!claimed.ok()) return claimed.status();
+            page_id = claimed.value();
         }
-        candidate = FreeMapRegionBase(region + 1);
+        if (page_id != kInvalidPageId) break;
+        // Outside the hold: this reads the device, or grows the file.
+        if (auto region = EnsureRegionResident(missing_region); !region.ok()) {
+            return region.status();
+        }
     }
-    if (page_id == kInvalidPageId) {
-        return Status::OutOfSpace("DevicePageStore: no free page id at or above " +
-                                  std::to_string(next_new_page_id_));
-    }
-    // The raw sibling, not the pinned base accessor, for the reason
-    // CreateNewHeaderlessUnpinned() states: this *is* the raw seam, and
-    // pinning here takes a pin no handle asked for - balanced only by the
-    // temporary's destructor, and counted against the debug ceiling in
-    // between.
-    auto created = CreateAtUnpinned(page_id);
-    if (!created.ok()) return created.status();
 
-    next_new_page_id_ = page_id + 1;
-    return std::make_pair(page_id, created.value());
+    // The id is this caller's alone now - the bit is set and
+    // `next_new_page_id_` is past it - so the rest needs no hold. The in-use
+    // test `CreateAtUnpinned` makes is not repeated here and never was
+    // reachable: it asks whether an *allocated* id is live, and this bit was
+    // clear one instruction ago.
+    if (Status s = EnsureAddressable(page_id); !s.ok()) return s;
+    auto bytes = std::make_unique<Page>();
+    bytes->fill(std::byte{0});
+    if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+        log_->Trace("pagestore", "alloc page=" + std::to_string(page_id) + " (allocated=" +
+                                     std::to_string(allocated_pages()) + ")");
+    }
+    // A brand-new page exists only in this frame until it is written back,
+    // so it is dirty by definition.
+    return std::make_pair(page_id, InsertFrame(page_id, std::move(bytes), /*dirty=*/true));
 }
 
 Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {

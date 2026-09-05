@@ -7,6 +7,7 @@ add_executable(kds_tests
     am_s2_pin_protocol_test.cpp
     waker_table_test.cpp
     current_core_test.cpp
+    alloc_race_test.cpp
     status_test.cpp
     crc32c_test.cpp
     page_header_test.cpp

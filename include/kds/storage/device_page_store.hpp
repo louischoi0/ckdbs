@@ -927,11 +927,50 @@ private:
         return it == map_regions_.end() ? nullptr : &it->second;
     }
 
+    // The same lookup for a caller that is about to mark a bit. Separate
+    // from `EnsureRegionResident` because it is the half that cannot touch
+    // the device, which is what lets it run under the structure latch.
+    MapRegion* MutableRegion(std::uint32_t region) noexcept {
+        auto it = map_regions_.find(region);
+        return it == map_regions_.end() ? nullptr : &it->second;
+    }
+
     // Loads `region` from the device if it holds one, formats a fresh one
     // if it does not (FM5's growth), and returns it resident either way.
     // A torn or wrong-typed map page is Corruption and refuses, the rule
     // Open has always applied to region 0 and RV3 applied to the catalog.
     StatusOr<MapRegion*> EnsureRegionResident(std::uint32_t region);
+
+    // ---- Allocation, with the structure latch held ----------------------
+    //
+    // **The claim and the mark are one step, and that is the whole of it**
+    // (AM-S2). They used to be two calls in two functions -
+    // `FreeMapFindFirstFree` chose an id in `CreateNewUnpinned` and
+    // `FreeMapAllocate` marked it inside `CreateAtUnpinned` - so any number
+    // of threads could scan the same clear bit before one of them set it.
+    // Measured at four threads: **~14% of allocations handed the same id to
+    // two callers** (`tests/alloc_race_test.cpp`). No latch that fails to
+    // span the gap fixes that, which is why this is a split rather than a
+    // guard added at the top of what was there.
+    //
+    // **The device work stays outside the hold**, which is the rule this
+    // latch has had since 2b: `EnsureRegionResident` may read the device or
+    // grow the file, so a scan that runs into a region this store has not
+    // loaded returns `kInvalidPageId` and names the region in
+    // `missing_region`. The caller drops the hold, loads it, and asks again
+    // - the retry idiom `FetchPinned` already uses for a page in flight.
+    // What is left under the hold is a bitmap scan over one 8 KiB page.
+    StatusOr<PageId> ClaimNextFreeIdLocked(std::uint32_t* missing_region);
+
+    // The named-id half, same hold, same reason: the in-use test and the
+    // mark decide one question together. `device_zeros` is the answer to
+    // `DeviceHoldsOnlyZeros(page_id)` read *outside* the hold, and
+    // `zeros_known` says whether it was read at all - a caller that found
+    // the bit clear has no need for it, and gets `AlreadyExists`'s
+    // `kNeedsDeviceRead` back if the bit turned out to be set after all.
+    enum class ClaimOutcome : std::uint8_t { kClaimed, kNeedsDeviceRead };
+    StatusOr<ClaimOutcome> ClaimNamedIdLocked(PageId page_id, bool zeros_known,
+                                              bool device_zeros);
 
     // Loads `region` only if the device already holds it, leaving it
     // absent otherwise. What mount walks: a region the file is not large
