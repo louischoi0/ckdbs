@@ -37,6 +37,15 @@ namespace kds::server {
 // (`Expeditor::Serve` detaches its listener before its scheduler leaves
 // scope), so a peer's teardown is the same sequence as the system core's.
 CoreRuntime::~CoreRuntime() {
+    // **This runs as this core, wherever it is called from** (AM-S2 step 3).
+    // The Expeditor calls this on a peer from *core 0's* thread on the way
+    // down, and the work below writes pages: `StampPageLsn` records whose
+    // stream the page_lsn beside it belongs to, so without this the peer's
+    // pages would go out stamped core 0's - the lie `page_header.hpp`'s rule
+    // 5 refuses at the next mount. It was the store's own `core_id_` that
+    // hid this, and that member is gone because a shared store cannot have
+    // one.
+    const CurrentCoreGuard as_this_core(core_id());
     listener_.reset();
     // R6-2: any cross-owner transaction this core was a participant in ends
     // here, rolled back. The worker has joined, so nothing will decide one
@@ -202,15 +211,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // yet, because `TrxIdSequence` caches the transaction ceiling at
     // construction (txn/trx_id.hpp).
     //
-    // **The stamp identity goes in first, though** (PW1c-3, PL §9 rule 4).
+    // **The stamp identity needs no ordering here any more** (AM-S2 step 3).
     // Recovery's undo phase writes compensations through `StampPageLsn`,
-    // which stamps `core_id_` beside the page_lsn - and `core_id_` is still
-    // the default 0 until `SetCoreOwnership` below. A peer would therefore
-    // stamp its own pages as core 0's while writing core N's LSNs into them,
-    // which is exactly the lie rule 5 refuses at the *next* mount. Only the
-    // identity moves up; the lease still may not be installed yet, for the
-    // reason above.
-    runtime->store_->SetStreamCoreId(config.core_id);
+    // which records whose stream the page_lsn belongs to; this used to come
+    // from the store's own `core_id_`, which `SetCoreOwnership` set *below*
+    // - so a `SetStreamCoreId` call had to be hoisted above the recovery or
+    // a peer stamped its own pages as core 0's, the lie rule 5 refuses at
+    // the next mount. The identity is the thread's now, and the
+    // `CurrentCoreGuard` at the top of this function covers the whole pass.
     // The page latch (AM-S1): armed from the instance's core count, which
     // the superblock pinned at bootstrap and `Expeditor::Open` copied here -
     // after the identity above, so the owner field the word records is this
@@ -311,7 +319,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // A peer with no transport still publishes nothing and still rescans,
     // which describes a test fixture rather than a server. Core 0's own
     // checkpoint runs in Expeditor::Open.
-    runtime->store_->SetCoreOwnership(config.core_id, &runtime->lease_, kFirstUserPageId);
+    runtime->store_->SetCoreOwnership(&runtime->lease_, kFirstUserPageId);
 
     // The catalog, read-only in practice: DDL is core 0's, and the store
     // above refuses a write to the pages it lives on. What this instance
@@ -563,6 +571,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
 }
 
 Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+
     if (Status s = scheduler_->AttachTransport(&transport, config_.core_id); !s.ok()) {
         return s;
     }
@@ -952,6 +963,9 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
 }
 
 void CoreRuntime::GrantRelationFault(storage::Extent extent) {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+
     // C1 of the 95b45e8 review: a peer's free-map snapshot predates any
     // relation created after it started, so without this refresh every
     // granted page answered "page id not found" however many rights the
@@ -971,6 +985,9 @@ void CoreRuntime::GrantRelationFault(storage::Extent extent) {
 }
 
 void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+
     if (!AdmitWritePages(pages)) return;
     // Whatever asked for these is answered (PW1c-7's latch); a demand that
     // waited behind it goes out on the next tick. **Only the relation
@@ -1141,6 +1158,9 @@ storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
 }
 
 void CoreRuntime::InvalidateCatalog() {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+
     // The catalog's own growth is the case no grant covers: `sys.indexes`
     // spills onto `kCatalogOverflowFirst`, and without this the chain walk
     // the eviction below forces answers `page id not found` forever - 58
@@ -1191,6 +1211,9 @@ void CoreRuntime::InvalidateCatalog() {
 }
 
 void CoreRuntime::Run() {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+
     // The two `system`-group cadences Expeditor already ran on the single
     // core, now per core. Both are no-ops on a core with nothing logged -
     // which today is every core but 0 (see the header) - so arming them
@@ -1505,6 +1528,9 @@ void CoreRuntime::MaybeRefillTrxIds() {
 }
 
 Status CoreRuntime::Checkpoint() {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+
     // Nothing to do on a core that has no checkpointer: core 0, whose one
     // lives on `Expeditor`, and any runtime built without a transport, which
     // has nowhere to publish an anchor to.
@@ -1539,6 +1565,9 @@ Status CoreRuntime::Checkpoint() {
 }
 
 Status CoreRuntime::ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor) {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+
     // Pages first, and unconditionally: the flush is this core's own work
     // and wants no checkpointer, while only the publish below does. The
     // header says why the order matters.
@@ -1565,6 +1594,8 @@ Status CoreRuntime::ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor) {
 Status CoreRuntime::ListenAndAttach(std::uint16_t port, Protocol protocol,
                                     wal::DurabilityClass durability,
                                     TcpServer::IdentitySource identity) {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
     auto listener = TcpServer::Listen(port, /*reuse_port=*/true);
     if (!listener.ok()) return listener.status();
     listener_.emplace(std::move(listener.value()));
@@ -1599,6 +1630,10 @@ Status CoreRuntime::ListenAndAttach(std::uint16_t port, Protocol protocol,
     return Status::OK();
 }
 
-Status CoreRuntime::Sync() { return wal_->SyncAll(); }
+Status CoreRuntime::Sync() {
+    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
+    const CurrentCoreGuard as_this_core(core_id());
+    return wal_->SyncAll();
+}
 
 }  // namespace kds::server

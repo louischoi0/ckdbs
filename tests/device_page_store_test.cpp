@@ -1,3 +1,4 @@
+#include "kds/base/current_core.hpp"
 #include "kds/storage/device_page_store.hpp"
 
 #include <cstring>
@@ -556,7 +557,13 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreAllocatesOnlyFromItsExtent) {
     ASSERT_NE(store, nullptr);
 
     LeasedIdSource lease(Extent{1000, 3});
-    store->SetCoreOwnership(/*core_id=*/2, &lease);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_2(2);
+    store->SetCoreOwnership(&lease);
 
     for (PageId expected : {1000u, 1001u, 1002u}) {
         auto created = store->CreateNew();
@@ -581,7 +588,13 @@ TEST(DevicePageStoreOwnershipTest, AWriteGrantAdmitsExactPagesAndNothingElse) {
     ASSERT_NE(store, nullptr);
 
     LeasedIdSource lease(Extent{1000, 4});
-    store->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_1(1);
+    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     // Own lease writable; a core-0 page and the system range are not.
     EXPECT_TRUE(store->MayWrite(1000));
@@ -641,7 +654,13 @@ TEST(DevicePageStoreOwnershipTest, AMissingGrantIsRetryableAndASystemPageIsNot) 
     ASSERT_NE(store, nullptr);
 
     LeasedIdSource lease(Extent{1000, 4});
-    store->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_1(1);
+    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
     // The fault rights a relation grant conveys - read only, which is the
     // whole point: this core can see page 130 and still may not write it.
     store->GrantFaultPages(Extent{130, 1});
@@ -682,7 +701,13 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverMutatesTheFreeMap) {
     const std::uint32_t before = store->allocated_pages();
 
     LeasedIdSource lease(Extent{1000, 4});
-    store->SetCoreOwnership(2, &lease);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_2(2);
+    store->SetCoreOwnership(&lease);
     ASSERT_TRUE(store->CreateNew().ok());
     ASSERT_TRUE(store->CreateNew().ok());
 
@@ -718,7 +743,13 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverWritesTheMapsBackToTheDevice
     // exist yet: a page placed at a chosen id, which marks the map.
     ASSERT_TRUE(peer->CreateAt(300).ok());
     LeasedIdSource lease(Extent{1000, 4});
-    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_1(1);
+    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     ASSERT_TRUE(peer->Sync().ok());
 
@@ -755,7 +786,13 @@ TEST(DevicePageStoreOwnershipTest, ARefreshAdoptsTheDevicesBitsAndSubtractsNone)
     // below so nothing but the map can answer for it.
     ASSERT_TRUE(peer->CreateAt(300).ok());
     LeasedIdSource lease(Extent{1000, 4});
-    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_1(1);
+    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     auto later = core0->CreateNew();
     ASSERT_TRUE(later.ok()) << later.status().message();
@@ -791,7 +828,13 @@ TEST(DevicePageStoreOwnershipTest, ALeasedPageIsReadableThoughTheMapDoesNotKnowI
     ASSERT_NE(store, nullptr);
 
     LeasedIdSource lease(Extent{1000, 2});
-    store->SetCoreOwnership(2, &lease);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_2(2);
+    store->SetCoreOwnership(&lease);
 
     auto created = store->CreateNew();
     ASSERT_TRUE(created.ok());
@@ -811,7 +854,13 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreMayNotPlaceAPageAtAChosenId) {
     ASSERT_NE(store, nullptr);
 
     LeasedIdSource lease(Extent{1000, 4});
-    store->SetCoreOwnership(2, &lease);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_2(2);
+    store->SetCoreOwnership(&lease);
 
     EXPECT_EQ(store->CreateAt(300).status().code(), StatusCode::kInvalidArgument);
 }
@@ -822,8 +871,10 @@ TEST(DevicePageStoreOwnershipTest, TheSystemCoreMayFaultAnything) {
     ASSERT_NE(store, nullptr);
 
     // No lease installed is core 0's arrangement, and it is also every
-    // construction site that predates multicore.
-    EXPECT_EQ(store->core_id(), 0u);
+    // construction site that predates multicore. The store carries no core
+    // id of its own since AM-S2 step 3; the thread's is what any of it
+    // reads, and this thread never declared one.
+    EXPECT_EQ(CurrentCore(), 0u);
     EXPECT_TRUE(store->MayFault(1));
     EXPECT_TRUE(store->MayFault(50'000));
 }
@@ -841,7 +892,13 @@ TEST(DevicePageStoreOwnershipTest, ALeasedCoreMayNotFaultAForeignPage) {
     ASSERT_TRUE(store->Sync().ok());
 
     LeasedIdSource lease(Extent{1000, 4});
-    store->SetCoreOwnership(2, &lease);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_2(2);
+    store->SetCoreOwnership(&lease);
 
     EXPECT_FALSE(store->MayFault(foreign));
     EXPECT_TRUE(store->MayFault(1000));
@@ -874,7 +931,13 @@ TEST(DevicePageStoreOwnershipTest, APeerAdoptsTheDeviceMapBeforeCallingASystemPa
     ASSERT_NE(peer, nullptr);
 
     LeasedIdSource lease(Extent{1000, 4});
-    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_1(1);
+    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     // Core 0 grows the system range after the peer's snapshot was taken,
     // and publishes both halves - the bytes and the map bit.
@@ -923,7 +986,13 @@ TEST(DevicePageStoreOwnershipTest, APeerAdoptsARegionThatDidNotExistAtItsMount) 
     ASSERT_NE(peer, nullptr);
 
     LeasedIdSource lease(Extent{1000, 4});
-    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_1(1);
+    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     // Core 0 grows the map into region 1, which the peer has never seen.
     const PageId in_region_one = kFreeMapBitsPerPage + 64;
@@ -1007,7 +1076,13 @@ TEST(DevicePageStoreOwnershipTest, APageStampedByThisStreamIsClaimedWithoutAGran
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
     LeasedIdSource lease(Extent{1000, 4});
-    store->SetCoreOwnership(/*core_id=*/2, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_2(2);
+    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     // Before the fault: no lease, no grant, no rights - as any restart.
     EXPECT_FALSE(store->MayFault(own));
@@ -1324,7 +1399,13 @@ TEST(FreeMapRegionTest, ALeasedStoreGetsAPrivateRegionAndNeverReadsTheDevicesMap
 
     const PageId region1 = FreeMapRegionBase(1);
     LeasedIdSource lease(Extent{region1 + 100, 4});
-    store->SetCoreOwnership(/*core_id=*/3, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_3(3);
+    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     auto created = store->CreateNewHeaderless();
     ASSERT_TRUE(created.ok()) << created.status().message();
@@ -1408,7 +1489,13 @@ TEST(FreeMapRegionTest, AGrantAboveRegionZeroIsHeldAndHonoured) {
 
     const PageId high = FreeMapRegionBase(3) + 777;
     LeasedIdSource lease(Extent{FreeMapRegionBase(1), 4});
-    store->SetCoreOwnership(/*core_id=*/2, &lease, /*system_page_limit=*/128);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_2(2);
+    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
 
     EXPECT_FALSE(store->MayWrite(high));
     const PageId granted[] = {high};
@@ -1509,7 +1596,8 @@ TEST(DevicePageStoreStampSuppressionTest, ASuppressedPassLeavesAnothersStampAlon
     auto device = MakeDevice(64, 0);
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
-    store->SetStreamCoreId(0);
+    // Core 0 by default: the stamp is the calling thread's identity now, and
+    // this thread declared none (AM-S2 step 3).
 
     auto created = store->CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
@@ -1536,7 +1624,9 @@ TEST(DevicePageStoreStampSuppressionTest, AnOrdinaryWriteStillClaimsThePage) {
     auto device = MakeDevice(64, 0);
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
-    store->SetStreamCoreId(2);
+    // The stamp records the *calling* core since AM-S2 step 3, so the cell
+    // declares one rather than telling the store to pretend.
+    const CurrentCoreGuard as_core_two(2);
     EXPECT_FALSE(store->stamp_suppressed());
 
     auto created = store->CreateNew();

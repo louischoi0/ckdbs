@@ -1,3 +1,4 @@
+#include "kds/base/current_core.hpp"
 #include "kds/server/core_runtime.hpp"
 
 #include "kds/storage/anchor_page.hpp"
@@ -3679,6 +3680,14 @@ void CoreRuntimeTest::PeerPagesSurviveARestart(bool flush_before_restart,
 
         txn::TrxIdSequence core0_ids(core0_->superblock);
         auto fund = [&](CoreRuntime& peer) {
+            // **As the peer** (AM-S2 step 3). In an instance these grants
+            // arrive as ring messages and are handled on the peer's own
+            // reactor, which declares its core; here the test thread makes
+            // them directly, and the row-id grant writes the relation's
+            // anchor page - `StampPageLsn` would record core 0's stream on
+            // a page core 1 owns, and the restart below would then decline
+            // to claim it from its stamp. That is the whole cell.
+            const CurrentCoreGuard as_the_peer(peer.core_id());
             auto first = catalog2.AllocateRowIdRange(oid.value(), 1024);
             ASSERT_TRUE(first.ok());
             peer.row_id_leases().Grant(oid.value(), first.value(), 1024);

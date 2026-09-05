@@ -19,6 +19,7 @@
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_latch.hpp"
+#include "kds/base/current_core.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/durability.hpp"
 
@@ -380,9 +381,15 @@ public:
     //
     // `lease` must outlive the store. Null (the default) is core 0's
     // arrangement and behaves exactly as this class always has.
-    void SetCoreOwnership(std::uint32_t core_id, LeasedIdSource* lease,
-                          PageId system_page_limit = 0) noexcept {
-        core_id_ = core_id;
+    // **No longer takes a core id** (AM-S2 step 3): a store had one because
+    // each core had a store, and this one is about to be every core's. What
+    // it once fed - the page latch's owner field, the PL-C stream stamp, and
+    // `TryClaimByStamp`'s "is this mine" - are all questions about the
+    // *caller*, and all read `CurrentCore()` now
+    // (`base/current_core.hpp`). The lease and the system range stay,
+    // because those are properties of this store's arrangement rather than
+    // of whoever is calling; they are step 4's to remove.
+    void SetCoreOwnership(LeasedIdSource* lease, PageId system_page_limit = 0) noexcept {
         lease_ = lease;
         system_page_limit_ = system_page_limit;
         // The same boundary by the same definition, so it is adopted rather
@@ -392,15 +399,14 @@ public:
         SetResidentLimit(system_page_limit);
     }
 
-    // The identity half of the above, on its own. `StampPageLsn` writes
-    // `core_id + 1` into the page's PL-C stream stamp (PL §9 rule 4), and
-    // mount-time recovery stamps pages *before* the lease may be installed
-    // (server/core_runtime.cpp says why) - so a peer needs its id early or
-    // it stamps core 0's onto its own pages. Sets nothing else: the lease
-    // is what MayFault/MayWrite/CreateAt key on, and it stays absent.
-    void SetStreamCoreId(std::uint32_t core_id) noexcept { core_id_ = core_id; }
-
-    std::uint32_t core_id() const noexcept { return core_id_; }
+    // **`SetStreamCoreId` and `core_id()` are gone** (AM-S2 step 3). The
+    // first existed for an ordering that no longer exists: recovery stamps
+    // pages before the lease may be installed, so a peer had to be told its
+    // id early or it stamped core 0's onto its own pages. `CurrentCore()` is
+    // set by the thread rather than by the object, so `CoreRuntime::Open`'s
+    // guard supplies it for the whole mount pass and there is no ordering
+    // left to get wrong. The second had one caller, a cell asserting the
+    // default.
 
     // **Suppresses the PL-C stream stamp on the mutation path** for the
     // length of a recovery pass that is not this core's own (AR0 M0,
@@ -1135,7 +1141,6 @@ private:
 
     // Core ownership (see SetCoreOwnership). The defaults are core 0's, so
     // every construction site that predates multicore keeps its behaviour.
-    std::uint32_t core_id_ = 0;
     // The page latch's switch and gauge (SetLatchArmed). Off by default:
     // arming is the assembly's act, on the superblock's core count.
     bool latch_armed_ = false;

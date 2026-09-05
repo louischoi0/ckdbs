@@ -3,6 +3,7 @@
 #include "kds/txn/lock_table.hpp"
 
 #include "kds/base/crash_point.hpp"  // RP7: the coordinator's three kill points
+#include "kds/base/current_core.hpp"
 
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/fk_probe_service.hpp"
@@ -986,6 +987,23 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
 }
 
 DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Session* session) {
+    // **This statement runs as this dispatcher's core** (AM-S2 step 3,
+    // `base/current_core.hpp`). On a reactor thread it is what
+    // `Scheduler::RunOnce` already declared and this costs a redundant
+    // store; off one - a fixture driving several cores' dispatchers from the
+    // test thread - it is the only thing that makes the identity true, and
+    // the identity is written to *disk*: `StampPageLsn` records whose
+    // stream the page_lsn beside it belongs to, and a peer's page stamped
+    // core 0's is the lie `page_header.hpp`'s rule 5 refuses at the next
+    // mount. Measured before it was here: 6,250 stamps in the suite carried
+    // the wrong core, all of them from fixtures, none from `ExpeditorTest`'s
+    // real instance.
+    //
+    // One statement is one core's work by construction - the dispatcher
+    // belongs to a core and a statement never migrates - so this is the
+    // seam, rather than a guard at each of the sites that stamp.
+    const CurrentCoreGuard as_this_core(core_id_);
+
     // Read only when something might report it; a dispatcher with no
     // logger does no clock reads at all.
     const sched::MonoTimeNs started_ns = log_ == nullptr ? 0 : NowNs();

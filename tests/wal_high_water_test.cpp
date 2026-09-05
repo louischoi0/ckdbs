@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/server/superblock.hpp"
+#include "kds/base/current_core.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/extent_lease.hpp"
 #include "kds/storage/free_map.hpp"
@@ -299,7 +300,13 @@ TEST(HighWaterTest, ALeasedStoreRefusesRatherThanSilentlyDoingNothing) {
     ASSERT_NE(store, nullptr);
 
     storage::LeasedIdSource lease(storage::Extent{/*first=*/1024, /*count=*/64});
-    store->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/kFirstUser);
+    // The core this store acts as is the *thread's* now (AM-S2 step 3):
+    // `SetCoreOwnership` carries the lease and the system range, and the
+    // identity that the page latch, the stream stamp and the stamp claim
+    // read comes from `CurrentCore()`. A fixture off a reactor thread
+    // declares it the way `CoreRuntime::Open` does.
+    const CurrentCoreGuard as_core_1(1);
+    store->SetCoreOwnership(&lease, /*system_page_limit=*/kFirstUser);
 
     auto repair = RaiseHighWater(*store, Named(1100));
     ASSERT_FALSE(repair.ok());

@@ -568,7 +568,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // and a test can assert on the code where it could not on a SIGABRT.
     if (!MayFault(page_id)) {
         return Status::InvalidArgument(
-            "DevicePageStore: core " + std::to_string(core_id_) + " may not fault page " +
+            "DevicePageStore: core " + std::to_string(CurrentCore()) + " may not fault page " +
             std::to_string(page_id) + "; it belongs to another core");
     }
 #endif
@@ -610,7 +610,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     if (mark_dirty && !MayWrite(page_id)) {
         const bool permanent = page_id < system_page_limit_;
         const std::string message =
-            "DevicePageStore: core " + std::to_string(core_id_) + " may not write page " +
+            "DevicePageStore: core " + std::to_string(CurrentCore()) + " may not write page " +
             std::to_string(page_id) +
             (permanent ? "; the system range has one writer, the system core"
                        : "; it is not from this core's extent lease, carries no write grant, and "
@@ -864,13 +864,16 @@ void DevicePageStore::TryClaimByStamp(PageId page_id, std::unique_ptr<Page>& pre
     // stream has written since it was formatted - a creation page core 0
     // handed off but this core never acquired, which the grant path's
     // acquisition restamp (rule 6) settles, never a claim.
-    if (stamp != StreamStampFor(core_id_)) return;
+    // `CurrentCore()`, for `StampPageLsn`'s reason: the question is whether
+    // *this caller's* stream wrote the page, and a store shared by every
+    // core cannot answer that from a member of its own.
+    if (stamp != StreamStampFor(CurrentCore())) return;
     RightsRegion& rights = RightsFor(page_id);
     if (rights.write == nullptr) rights.write = std::make_unique<Page>();
     FreeMapAllocate(std::span<std::byte, kPageSize>(*rights.write), FreeMapBitIndexOf(page_id));
     ++stamp_claims_;
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("pagestore", "core " + std::to_string(core_id_) + " claimed page " +
+        log_->Debug("pagestore", "core " + std::to_string(CurrentCore()) + " claimed page " +
                                      std::to_string(page_id) + " from its stream stamp");
     }
 }
@@ -966,7 +969,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
         // core 0's by M5 - so this is unreachable rather than restrictive,
         // and it is here so that it stays that way.
         return Status::InvalidArgument(
-            "DevicePageStore: core " + std::to_string(core_id_) +
+            "DevicePageStore: core " + std::to_string(CurrentCore()) +
             " may not place a page at a chosen id; the free map belongs to the system core");
     }
     if (page_id >= kMaxPageCount) {
@@ -1028,7 +1031,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
         bytes->fill(std::byte{0});
         if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
             log_->Trace("pagestore", "alloc page=" + std::to_string(id.value()) + " from core " +
-                                         std::to_string(core_id_) + "'s lease (" +
+                                         std::to_string(CurrentCore()) + "'s lease (" +
                                          std::to_string(lease_->remaining()) + " left)");
         }
         return std::make_pair(id.value(),
@@ -1080,7 +1083,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
 Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
     if (lease_ != nullptr) {
         return Status::Unsupported(
-            "DevicePageStore: core " + std::to_string(core_id_) +
+            "DevicePageStore: core " + std::to_string(CurrentCore()) +
             " allocates from an extent lease, whose floor this store does not own; raising it "
             "here would change nothing");
     }
@@ -1173,7 +1176,7 @@ Status DevicePageStore::NotAllocated(PageId page_id) const {
     // which authority answered.
     std::string msg = "page id " + std::to_string(page_id) + " not found";
     if (lease_ != nullptr) {
-        msg += " (core " + std::to_string(core_id_) +
+        msg += " (core " + std::to_string(CurrentCore()) +
                ", leased: not in this core's extent lease and not set in its free-map copy)";
     }
     return Status::NotFound(std::move(msg));
@@ -1205,9 +1208,16 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
     // the header's `SetStampSuppressed` says why). The page_lsn above is
     // still stamped, because idempotence is that field's job; what is
     // withheld is the claim.
+    //
+    // **`CurrentCore()`, not `core_id_`** (AM-S2 step 3, the same argument
+    // the page latch's owner field made). The stamp answers *whose* offset
+    // the page_lsn beside it is, which is a fact about the core that wrote
+    // the record - not about the store the frame happens to live in. They
+    // are the same thing only while each core has a store of its own, and
+    // step 3 ends that.
     if (!stamp_suppressed_) {
         SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
-                           StreamStampFor(core_id_));
+                           StreamStampFor(CurrentCore()));
     }
     it->second.dirty = true;
     // First record since the frame was last written back wins: recLSN is
@@ -1479,7 +1489,7 @@ Status DevicePageStore::EvictClean(std::span<const PageId> page_ids) {
     }
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("pagestore", "evicted " + std::to_string(page_ids.size()) +
-                                     " page(s) for re-read on core " + std::to_string(core_id_));
+                                     " page(s) for re-read on core " + std::to_string(CurrentCore()));
     }
     return Status::OK();
 }
@@ -2173,7 +2183,7 @@ std::size_t DevicePageStore::EvictColdFramesLocked(std::size_t budget) {
 
     if (reclaimed != 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("pagestore", "clock reclaimed " + std::to_string(reclaimed) +
-                                     " frame(s) on core " + std::to_string(core_id_) + ", " +
+                                     " frame(s) on core " + std::to_string(CurrentCore()) + ", " +
                                      std::to_string(frames_.size()) + " resident");
     }
     return reclaimed;
