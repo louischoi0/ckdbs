@@ -158,6 +158,12 @@ public:
     // `for_read` picks which raw fetch runs, rather than the caller passing
     // a functor: the two differ only in dirty marking, and a store that
     // overrides this needs to know which one it is servicing.
+    //
+    // **The create accessors have their own** (`CreatePinned`, below).
+    // This block announced the obligation discharged while sitting
+    // directly above three accessors that still did create-then-pin
+    // inline - which is worse than not claiming it, because a reader
+    // checking the seam would have stopped here.
     virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
                                                                  bool for_read) {
         auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
@@ -184,21 +190,42 @@ public:
         return PageRef(this, page_id, bytes.value());
     }
 
+    // **The create half of the fetch-and-pin pair** (AM-S2). Same obligation
+    // as `FetchPinned` and the same default - create, then pin - so a store
+    // with no eviction inherits its previous behaviour untouched.
+    //
+    // `which` picks the raw create rather than three virtuals: the three
+    // differ only in how the id is chosen and whether a header is stamped,
+    // and a store overriding this needs to know which it is servicing.
+    enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless };
+
+    virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
+        CreateKind which, PageId page_id) {
+        if (which == CreateKind::kAt) {
+            auto bytes = CreateAtUnpinned(page_id);
+            if (!bytes.ok()) return bytes.status();
+            PinFrame(page_id, PinMode::kExclusive);
+            return std::pair<PageId, std::span<std::byte, kPageSize>>(page_id, bytes.value());
+        }
+        auto made = which == CreateKind::kNew ? CreateNewUnpinned() : CreateNewHeaderlessUnpinned();
+        if (!made.ok()) return made.status();
+        PinFrame(made.value().first, PinMode::kExclusive);
+        return made;
+    }
+
     // Creates a brand-new page at exactly `page_id`, zero-initialized and
     // pinned. Fails with AlreadyExists if that id is already in use.
     StatusOr<PageRef> CreateAt(PageId page_id) {
-        auto bytes = CreateAtUnpinned(page_id);
-        if (!bytes.ok()) return bytes.status();
-        PinFrame(page_id, PinMode::kExclusive);
-        return PageRef(this, page_id, bytes.value());
+        auto made = CreatePinned(CreateKind::kAt, page_id);
+        if (!made.ok()) return made.status();
+        return PageRef(this, made.value().first, made.value().second);
     }
 
     // Creates a brand-new page at an id the store chooses, zero-
     // initialized and pinned. Fails with OutOfSpace when out of ids.
     StatusOr<std::pair<PageId, PageRef>> CreateNew() {
-        auto made = CreateNewUnpinned();
+        auto made = CreatePinned(CreateKind::kNew, kInvalidPageId);
         if (!made.ok()) return made.status();
-        PinFrame(made.value().first, PinMode::kExclusive);
         return std::pair<PageId, PageRef>(
             made.value().first, PageRef(this, made.value().first, made.value().second));
     }
@@ -206,9 +233,8 @@ public:
     // CreateNew() for a page with no common header - see
     // CreateNewHeaderlessUnpinned() for who needs that and why.
     StatusOr<std::pair<PageId, PageRef>> CreateNewHeaderless() {
-        auto made = CreateNewHeaderlessUnpinned();
+        auto made = CreatePinned(CreateKind::kNewHeaderless, kInvalidPageId);
         if (!made.ok()) return made.status();
-        PinFrame(made.value().first, PinMode::kExclusive);
         return std::pair<PageId, PageRef>(
             made.value().first, PageRef(this, made.value().first, made.value().second));
     }

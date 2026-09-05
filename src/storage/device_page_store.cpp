@@ -1580,6 +1580,76 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
     }
 }
 
+StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::CreatePinned(
+    CreateKind which, PageId page_id) {
+    // **The create half of AM-S2's pair, and its window is narrower than
+    // `Get`'s for a reason worth stating.** A freshly created frame is
+    // **dirty**, not clean - `InsertFrame` is called with `dirty=true` on
+    // both create paths - and a dirty frame is refused outright by
+    // `EvictClean` and only *queued* by `EvictColdFrames`. So losing it
+    // between the create and the pin takes a concurrent writeback first:
+    // narrow, and still real, which is why this closes the window rather
+    // than documenting it as improbable.
+    Latch* latch = structure_latch();
+    if (latch == nullptr) {
+        // Unarmed: one thread, nothing can evict between the two calls, and
+        // the window does not exist. Today's shape and today's cost.
+        return PageStore::CreatePinned(which, page_id);
+    }
+
+    // The raw create runs **outside** the latch. It grows the file, reads the
+    // device to prove a page was never written, and takes the free map -
+    // exactly the work step 2b moved off this latch on the fetch side.
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> made =
+        Status::InvalidArgument("unreachable");
+    if (which == CreateKind::kAt) {
+        auto bytes = CreateAtUnpinned(page_id);
+        if (!bytes.ok()) return bytes.status();
+        made = std::pair<PageId, std::span<std::byte, kPageSize>>(page_id, bytes.value());
+    } else {
+        made = which == CreateKind::kNew ? CreateNewUnpinned() : CreateNewHeaderlessUnpinned();
+        if (!made.ok()) return made.status();
+    }
+    const PageId id = made.value().first;
+
+    Frame* frame = nullptr;
+    {
+        LatchGuard structure(latch);
+        auto found = frames_.find(id);
+        // **Still the frame this call created?** Comparing the bytes rather
+        // than merely finding the id is what separates "nobody touched it"
+        // from "it was evicted and something faulted the same id back in" -
+        // and the second is the case whose pin would otherwise land on a
+        // frame this caller never created, while its span pointed at freed
+        // memory. That is the quiet failure the whole pair exists to remove.
+        if (found != frames_.end() && found->second.bytes != nullptr &&
+            static_cast<const void*>(found->second.bytes->data()) ==
+                static_cast<const void*>(made.value().second.data())) {
+            frame = &found->second;
+            ++frame->pins;
+            ++live_pins_;
+            if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+        }
+    }
+
+    if (frame != nullptr) {
+        // Pin first, page latch after, with the structure latch released -
+        // `PinFrame`'s order, for `PinFrame`'s reason.
+        if (latch_armed_) {
+            (void)PageLatch::Acquire(frame->latch, LatchModeFor(PinMode::kExclusive), core_id_);
+        }
+        return made;
+    }
+
+    // Evicted under us - which means it was written back first, a created
+    // frame being dirty. The bytes are on the device, so faulting it back is
+    // both correct and the only thing left; the id is already allocated, so
+    // this cannot re-enter the create path.
+    auto refetched = FetchPinned(id, PinMode::kExclusive, /*for_read=*/false);
+    if (!refetched.ok()) return refetched.status();
+    return std::pair<PageId, std::span<std::byte, kPageSize>>(id, refetched.value());
+}
+
 void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
     // Called by the base pinned accessors immediately after the raw fetch
     // made the frame resident, on the same single-threaded core - so the

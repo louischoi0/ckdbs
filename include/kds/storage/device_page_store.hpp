@@ -1013,6 +1013,11 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
                                                          bool for_read) override;
 
+    // The create half of the same pair. See the definition for why its
+    // window is narrower than `Get`'s and why it can still close.
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
+        CreateKind which, PageId page_id) override;
+
     void PinFrame(PageId page_id, PinMode mode) noexcept override;
     void UnpinFrame(PageId page_id) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
