@@ -32,7 +32,7 @@ protected:
 
         // Enough rows to span several pages, so `min_key` pruning has
         // something to prune. Both forms hold the same values.
-        ASSERT_EQ(Run("CREATE TABLE h (id int64, v int64)").substr(0, 7), "CREATED");
+        ASSERT_EQ(Run("CREATE TABLE h (id int64, v int64) HEAP").substr(0, 7), "CREATED");
         ASSERT_EQ(Run("CREATE TABLE b (id int64, v int64) BTREE").substr(0, 7), "CREATED");
         for (int i = 1; i <= kRows; ++i) {
             const std::string v = std::to_string(i * 10);

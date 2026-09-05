@@ -9,7 +9,7 @@
 namespace kds::parser {
 namespace {
 
-TEST(ParserTest, CreateTableDefaultsToHeap) {
+TEST(ParserTest, CreateTableDefaultsToBtree) {
     auto stmt = Parse("CREATE TABLE accounts (id uint64, name varchar)");
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
 
@@ -21,7 +21,12 @@ TEST(ParserTest, CreateTableDefaultsToHeap) {
     EXPECT_EQ(ct->columns[0].type_name, "uint64");
     EXPECT_EQ(ct->columns[1].name, "name");
     EXPECT_EQ(ct->columns[1].type_name, "varchar");
-    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kHeap);
+    // **BTREE since SUS-1.** The default was `kHeap` until heap relations
+    // were suspended; the ambiguity `clustered_given` exists to resolve moved
+    // with it rather than going away - `kBtree` is now both "the writer asked
+    // for a btree" and "the writer said nothing".
+    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree);
+    EXPECT_FALSE(ct->clustered_given);
 }
 
 TEST(ParserTest, CreateTableExplicitBtree) {
@@ -41,7 +46,7 @@ TEST(ParserTest, CreateTableDefaultsToAssigned) {
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
     auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
     ASSERT_NE(ct, nullptr);
-    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kHeap);
+    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree);  // SUS-1
 }
 
 TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
@@ -65,7 +70,7 @@ TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
     ASSERT_TRUE(bare.ok()) << bare.status().message();
     auto* bare_ct = std::get_if<CreateTableStmt>(&bare.value());
     ASSERT_NE(bare_ct, nullptr);
-    EXPECT_EQ(bare_ct->clustered, catalog::ClusteredType::kHeap);
+    EXPECT_EQ(bare_ct->clustered, catalog::ClusteredType::kBtree);
     EXPECT_FALSE(bare_ct->clustered_given);
 }
 

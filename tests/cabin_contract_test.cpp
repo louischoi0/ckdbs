@@ -89,7 +89,10 @@ private:
 void Load(Instance& db) {
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar, qty int64) BTREE").substr(0, 7),
               "CREATED");
-    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar, qty int64)").substr(0, 7),
+    // **HEAP, pinned since SUS-1**: "a heap has no descent at all and must
+    // abandon the Cabin for the walk" is the arm this relation carries, and
+    // the flipped default would leave it uncovered.
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar, qty int64) HEAP").substr(0, 7),
               "CREATED");
     const char* kSyms[] = {"aaa", "bbb", "aaa", "ccc", "bbb", "aaa", "ddd", "bbb"};
     for (int i = 0; i < 8; ++i) {

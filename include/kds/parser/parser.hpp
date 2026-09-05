@@ -22,6 +22,48 @@
 
 namespace kds::parser {
 
+// ---- SUS-1's test seam, and it is only that ------------------------------
+//
+// Heap relations are **suspended**, not removed
+// (`instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`): no new one is
+// created, so `CREATE TABLE ... HEAP` is refused `Unsupported` and `BTREE` is
+// what an unqualified statement means. Everything below the parser is
+// untouched - an existing heap relation mounts, serves and walks its chain.
+//
+// The refusal lives in the parser, so the bypass has to as well: the cells
+// whose subject *is* heap storage keep exercising those paths through this
+// switch (AS-R5). Three things it deliberately is not - a config key,
+// anything reachable from KWP or the debug text port, and not `NDEBUG`-gated,
+// because a release test build needs it and a debug-only seam would make the
+// gate and the nightly run different engines.
+//
+// The raw setter is used exactly once, by `tests/heap_suspension_env.cpp`,
+// which needs a permanent arm rather than a scope. Everything else uses the
+// guard below.
+void SetHeapStorageAllowedForTest(bool allowed) noexcept;
+bool HeapStorageAllowedForTest() noexcept;
+
+// The test binary runs with the suspension **lifted**, so a cell that means
+// to observe the refusal has to put it back. Restores what it found, so
+// nothing leaks into the next cell.
+//
+// There is deliberately no `AllowHeapStorageForTest` counterpart: one existed
+// briefly, had zero call sites, and was byte-identical to this but for a
+// literal. If both directions are ever wanted, one `HeapStorageForTest(bool)`
+// replaces this rather than sitting beside it.
+class SuspendHeapStorageForTest {
+public:
+    SuspendHeapStorageForTest() noexcept : saved_(HeapStorageAllowedForTest()) {
+        SetHeapStorageAllowedForTest(false);
+    }
+    ~SuspendHeapStorageForTest() { SetHeapStorageAllowedForTest(saved_); }
+    SuspendHeapStorageForTest(const SuspendHeapStorageForTest&) = delete;
+    SuspendHeapStorageForTest& operator=(const SuspendHeapStorageForTest&) = delete;
+
+private:
+    bool saved_;
+};
+
 class Parser {
 public:
     explicit Parser(std::string_view sql) noexcept : sql_(sql), lexer_(sql) {}

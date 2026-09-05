@@ -35,7 +35,7 @@ namespace {
 constexpr std::uint32_t kGoldenLogCrc = 0x07b052c3u;
 
 const char* const kScript[] = {
-    "CREATE TABLE golden_heap (id int64, v int64, name varchar)",
+    "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",
     "CREATE TABLE golden_tree (id int64, v int64, name varchar) BTREE",
     "INSERT INTO golden_heap VALUES (1, 10, 'one')",
     "INSERT INTO golden_heap VALUES (2, 20, 'two')",

@@ -123,11 +123,19 @@ CREATE TABLE [<namespace>.]<name>
                      [, ...] ) [HEAP | BTREE] [EXPLICIT];
 ```
 
-- The storage clause defaults to `HEAP`. `BTREE` gives the relation a
-  clustered B+ tree on the primary key; only a btree relation can carry a
-  secondary index or be an FK parent — and only a btree relation accepts a
-  caller-named key that sorts *below* keys already placed (see the Keystone
-  contract below).
+- **`HEAP` is suspended and the storage clause defaults to `BTREE`.** Writing
+  `HEAP` is refused: `ERR HEAP storage is suspended (SUS-1) and no new heap
+  relation is created (byte <n>); BTREE is the default and every existing
+  heap relation still mounts and serves`. The suspension is a refusal at
+  *creation* only — a database that already holds heap relations opens,
+  reads, writes and recovers them exactly as before, and nothing about them
+  is deprecated.
+- `BTREE` gives the relation a clustered B+ tree on the primary key; only a
+  btree relation can carry a secondary index or be an FK parent — and only a
+  btree relation accepts a caller-named key that sorts *below* keys already
+  placed (see the Keystone contract below). With `HEAP` suspended those are
+  no longer distinctions between two choices you can make: they describe the
+  one storage form a new relation takes.
 - **There is no key mode.** Every relation takes a caller-named primary key
   or issues one when `INSERT` omits it, so nothing about keys is declared
   here. `EXPLICIT` is still accepted and **does nothing** — it states what is
@@ -143,8 +151,8 @@ CREATE TABLE [<namespace>.]<name>
 - The words are ordinary **identifiers**, not reserved (see the appendix) — a
   column may still be named `explicit` or `btree`.
 - **`EXPLICIT` does not change the storage default.** `CREATE TABLE t (...)`
-  and `CREATE TABLE t (...) EXPLICIT` are both `HEAP`. Write `BTREE` when you
-  want one.
+  and `CREATE TABLE t (...) EXPLICIT` are both `BTREE`, as is every
+  unqualified `CREATE TABLE` while `HEAP` is suspended.
 - At least one column is required.
 - The optional per-column suffixes come in a **fixed order**: nullability,
   then `REFERENCES`, then the cabin policy. Two optional suffixes in either

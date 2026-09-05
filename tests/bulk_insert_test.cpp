@@ -183,7 +183,7 @@ TEST_F(BulkInsertTest, RowsMayNameTheirOwnKeysOrNotWithinOneStatement) {
 TEST_F(BulkInsertTest, ABelowMarkKeyIsRefusedWithItsOrdinal) {
     // What is still refused on a heap relation, and what BI4 does with it:
     // the offending row is named and the whole statement inserts nothing.
-    Ok("CREATE TABLE t (id int64, n int64)");
+    Ok("CREATE TABLE t (id int64, n int64) HEAP");
     Ok("INSERT INTO t VALUES (500, 1)");
     const std::string out = Run("INSERT INTO t VALUES (600, 2), (550, 3)");
     EXPECT_EQ(out.rfind("ERR", 0), 0u) << out;
@@ -338,7 +338,7 @@ TEST_F(BulkInsertTest, ASortedFillRollsBackWhole) {
 // allocated, so a refused statement burns *nothing* - and a failure past
 // the range (a bad literal at encode) burns exactly the range.
 TEST_F(BulkInsertTest, TheSortedFillBurnsItsWholeRangeAndANamedKeyDeclinesIt) {
-    Ok("CREATE TABLE t (id int64, n int64)");
+    Ok("CREATE TABLE t (id int64, n int64) HEAP");  // SUS-1: the sorted fill is heap-gated
 
     // Every row omits its key, so the fill is eligible: it carves 1..3 up
     // front, the encode fails at row 2 on a literal no int column can hold -

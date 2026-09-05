@@ -104,16 +104,17 @@ TEST_F(SuppliedKeySqlTest, AWrongArityNamesBothAcceptedCounts) {
     EXPECT_NE(out.response.find("or 1 to have it issued"), std::string::npos) << out.response;
 }
 
-TEST_F(SuppliedKeySqlTest, TheShippedStorageDefaultIsStillHeap) {
-    // The key mode used to be able to move this - an `explicit` default
-    // pulled storage to btree so its own statements were not all refused.
-    // With the mode gone, silence means the heap and nothing else.
+TEST_F(SuppliedKeySqlTest, TheShippedStorageDefaultIsBtreeSinceSUS1) {
+    // **The line SUS-1 moved.** The key mode used to be able to move this -
+    // an `explicit` default pulled storage to btree so its own statements
+    // were not all refused - and with the mode gone, silence meant the heap.
+    // Heap relations are now suspended, so silence means a btree, and the
+    // cell that used to pin the old answer pins the new one.
     auto d = Dispatcher();
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, qty int64)").response.substr(0, 7), "CREATED");
 
     auto described = d.Dispatch("DESCRIBE t");
-    EXPECT_NE(described.response.find("clustered_type=HEAP key_order=ascending"),
-              std::string::npos)
+    EXPECT_NE(described.response.find("clustered_type=BTREE"), std::string::npos)
         << described.response;
 
     // And it takes a named key like any other relation, ascending - which
@@ -658,9 +659,13 @@ TEST_F(SuppliedKeySqlTest, HeapExplicitIsCreatedRatherThanRefused) {
     // And bare EXPLICIT no longer drags storage to btree with it - the
     // resolution that did so existed only to keep the refusal above
     // reachable from a written word alone.
+    // **Since SUS-1 that default is BTREE**, so what this half now pins is
+    // the unchanged half of the claim: `EXPLICIT` still moves nothing, and
+    // the relation lands on whatever the default is rather than on a form
+    // the word dragged it to.
     auto defaulted = d.Dispatch("CREATE TABLE h2 (id int64, qty int64) EXPLICIT");
     EXPECT_EQ(defaulted.response.substr(0, 7), "CREATED") << defaulted.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE h2").response.find("clustered_type=HEAP"), std::string::npos);
+    EXPECT_NE(d.Dispatch("DESCRIBE h2").response.find("clustered_type=BTREE"), std::string::npos);
 }
 
 TEST_F(SuppliedKeySqlTest, AssignedIsRefusedAtCreateWithItsByte) {

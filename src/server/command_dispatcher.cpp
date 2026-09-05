@@ -2668,8 +2668,15 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
 
         catalog::Schema schema;
         DdlScope ddl = DdlScopeFor(scope);
+        // **SUS-1: BTREE, the third spelling of the storage default.**
+        // `HandleCreateTableSql`'s fallback and `ast.hpp`'s field are the
+        // other two; the work order names only those, so this one was
+        // missed. Inert today - `schema` is empty and `CreateTable` refuses
+        // a relation with no columns before the storage form is read - but
+        // `kHeap` on a creation path is the exact shape SUS-1 forbids, and
+        // it would have become live the moment the bare form gained columns.
         auto oid = catalog_.CreateTable(create_ns.value(), name, schema,
-                                         catalog::ClusteredType::kHeap, ddl.trx_id, ddl.sink());
+                                         catalog::ClusteredType::kBtree, ddl.trx_id, ddl.sink());
         NoteDdlRows(ddl);  // before the status, for the partial-write reason above
         if (!oid.ok()) {
             return {ErrorReply(oid.status()), false, 0, oid.status()};
@@ -5428,7 +5435,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // `AdmitExplicitRowId` - so no `CREATE TABLE` shape is refused for a
         // key-mode reason at all.
         const catalog::ClusteredType clustered =
-            stmt.clustered_given ? stmt.clustered : catalog::ClusteredType::kHeap;
+            stmt.clustered_given ? stmt.clustered : catalog::ClusteredType::kBtree;  // SUS-1: BTREE is the default
 
         DdlScope ddl = DdlScopeFor(scope);
         auto oid = catalog_.CreateTable(create_ns.value(), stmt.table_name, schema,

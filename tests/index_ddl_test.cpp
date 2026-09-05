@@ -92,7 +92,7 @@ TEST(IndexGrammarTest, DropNamesTheIndexAndNothingElse) {
 TEST(IndexGrammarTest, NothingIsReservedSoAColumnMayStillBeNamedIndex) {
     // `index`, `covering` and `unique` are ordinary identifiers to the
     // lexer, which is what keeps kFingerprintVersion where it is.
-    auto create = Parse("CREATE TABLE t (id int64, index int64, covering int64)");
+    auto create = Parse("CREATE TABLE t (id int64, index int64, covering int64) HEAP");
     EXPECT_TRUE(create.ok()) << create.status().message();
 
     auto select = Parse("SELECT index FROM t WHERE covering = 1");
@@ -180,7 +180,7 @@ TEST_F(IndexDdlTest, CreateThenShowThenDrop) {
 }
 
 TEST_F(IndexDdlTest, AHeapRelationIsRefusedAndSaysWhy) {
-    ASSERT_EQ(Run("CREATE TABLE h (id int64, owner int64)").response.substr(0, 3), "CRE");
+    ASSERT_EQ(Run("CREATE TABLE h (id int64, owner int64) HEAP").response.substr(0, 3), "CRE");
     const std::string out = Run("CREATE INDEX ix ON h (owner)").response;
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_NE(out.find("heap-clustered"), std::string::npos) << out;

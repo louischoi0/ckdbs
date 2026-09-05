@@ -35,12 +35,20 @@
 
 # ---- CREATE TABLE — accepted -----------------------------------------------
 # CREATE is not a patternable leading word, so every line here is "-".
+#
+# **The two HEAP lines flipped to Unsupported on 2026-09-05 (SUS-1,
+# instructions/v3.0.0/workorder-as-sus1-heap-suspended.md)** - the task that
+# intended the move, as this file's header requires. The corpus runs with the
+# suspension **in force**: the test binary otherwise lifts it binary-wide
+# (tests/heap_suspension_env.cpp) so the heap paths stay exercised, and a
+# corpus recorded through that lift would pin a verdict no client can
+# observe. This file states what the shipped parser does.
 ok	-	-	CREATE TABLE t (id int)
 ok	-	-	CREATE TABLE t (id int, name varchar)
 ok	-	-	CREATE TABLE t (id bigint, a int, b varchar, c uint64)
-ok	-	-	CREATE TABLE t (id int) HEAP
+Unsupported	-	-	CREATE TABLE t (id int) HEAP
 ok	-	-	CREATE TABLE t (id int) BTREE
-ok	-	-	CREATE TABLE t (id int) heap
+Unsupported	-	-	CREATE TABLE t (id int) heap
 ok	-	-	CREATE TABLE t (id int);
 ok	-	-	create table t (id int)
 # The key-mode words after the mode's removal (heap-and-tuple.md §4.1,
@@ -51,6 +59,9 @@ ok	-	-	create table t (id int)
 # way, so kFingerprintVersion did not (fingerprint_test.cpp).
 Unsupported	-	-	CREATE TABLE t (id int) ASSIGNED
 ok	-	-	CREATE TABLE t (id int) EXPLICIT
+# Still Unsupported, but since SUS-1 for the *first* word rather than the
+# second: HEAP is refused before ASSIGNED is read. The code did not move, the
+# reason did.
 Unsupported	-	-	CREATE TABLE t (id int) HEAP ASSIGNED
 ok	-	-	CREATE TABLE t (id int) BTREE EXPLICIT
 ok	-	-	CREATE TABLE t (id int) EXPLICIT BTREE
@@ -70,7 +81,12 @@ InvalidArgument	-	-	CREATE TABLE t (id int) FOO
 InvalidArgument	-	-	CREATE TABLE
 # [PK03] one word per category, and an unknown word after both still
 # reaches the trailing-garbage check.
-InvalidArgument	-	-	CREATE TABLE t (id int) HEAP BTREE
+#
+# **SUS-1 moved this one from InvalidArgument to Unsupported**: the
+# duplicate-storage-word refusal is never reached, because the first word is
+# `HEAP` and the suspension refuses it where it is read. `BTREE BTREE` below
+# is the line that still pins the duplicate refusal itself.
+Unsupported	-	-	CREATE TABLE t (id int) HEAP BTREE
 InvalidArgument	-	-	CREATE TABLE t (id int) BTREE BTREE
 Unsupported	-	-	CREATE TABLE t (id int) ASSIGNED EXPLICIT
 InvalidArgument	-	-	CREATE TABLE t (id int) EXPLICIT EXPLICIT

@@ -52,7 +52,7 @@ protected:
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
                             exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
                             /*access_statistics=*/true, /*cabins=*/nullptr, &*mgr_);
-        Run("CREATE TABLE t (id int64, v int64)");
+        Run("CREATE TABLE t (id int64, v int64) HEAP");
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
@@ -396,7 +396,7 @@ class RangeEquivalenceTest : public RangeChainTest {
 protected:
     void SetUp() override {
         RangeChainTest::SetUp();
-        Run("CREATE TABLE u (id int64, v int64)");
+        Run("CREATE TABLE u (id int64, v int64) HEAP");
         // The third relation, unsplit and named by neither substitution:
         // the join and subquery shapes below need a partner that is *not*
         // the twin, or they would compare `t JOIN u` against `u JOIN u`,

@@ -153,7 +153,7 @@ private:
 // 400 rows over several pages, 300 of them delete-marked - plus a btree
 // relation, which must report shapes and no plans.
 void Load(Instance& db) {
-    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64) HEAP").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64) BTREE").substr(0, 7), "CREATED");
     for (int i = 1; i <= 400; ++i) {
         ASSERT_EQ(db.Run("INSERT INTO h VALUES (" + std::to_string(i) + ")").substr(0, 8),

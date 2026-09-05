@@ -72,7 +72,9 @@ private:
 void Load(Instance& db) {
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64, label varchar) BTREE").substr(0, 7),
               "CREATED");
-    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64, label varchar)").substr(0, 7),
+    // **HEAP, pinned since SUS-1**: the comment above is this line's
+    // contract, and on the flipped default `h` would be a second btree.
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64, label varchar) HEAP").substr(0, 7),
               "CREATED");
     ASSERT_EQ(db.Run("CREATE TABLE j (id int64, w int64) BTREE").substr(0, 7), "CREATED");
     // Declared before the rows, so the write hook fills it rather than the

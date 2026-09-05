@@ -191,6 +191,11 @@ Actual Observe(const std::string& sql) {
 // refuses. Compared only where the parse succeeded, because a failed parse
 // stops mid-stream by design and hashes a prefix - see Parser::fingerprint().
 TEST(ParserGoldenTest, TheParseTimeFingerprintMatchesTheStandaloneOne) {
+    // The corpus is an oracle for the **shipped** parser (see the guard's
+    // reason in EveryStatementStillBehavesAsRecorded below), so it is read
+    // with SUS-1's suspension in force rather than through the lift the test
+    // binary arms binary-wide.
+    SuspendHeapStorageForTest suspended;
     const std::vector<std::string> lines = ReadLines();
     ASSERT_FALSE(lines.empty());
 
@@ -287,6 +292,14 @@ TEST(ParserGoldenTest, CorpusIsWellFormed) {
 }
 
 TEST(ParserGoldenTest, EveryStatementStillBehavesAsRecorded) {
+    // **SUS-1: the corpus records what the shipped parser does.**
+    // `tests/heap_suspension_env.cpp` lifts the heap suspension for the whole
+    // test binary so the heap paths below the parser stay exercised - but the
+    // one thing this file exists to pin is the parser's own verdict set, and
+    // a verdict observed through the lift is one no client can ever get. So
+    // the corpus is read with the suspension put back, and the two `HEAP`
+    // lines read `Unsupported` accordingly.
+    SuspendHeapStorageForTest suspended;
     const std::vector<std::string> lines = ReadLines();
     const bool regen = std::getenv("KDS_CORPUS_REGEN") != nullptr;
 

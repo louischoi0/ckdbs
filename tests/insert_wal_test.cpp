@@ -227,7 +227,7 @@ constexpr int kWideColumns = 20;
 std::string WideCreateTable() {
     std::string sql = "CREATE TABLE t (id int64";
     for (int i = 0; i < kWideColumns; ++i) sql += ", v" + std::to_string(i) + " varchar";
-    return sql + ")";
+    return sql + ") HEAP";  // SUS-1: this pair is about heap chain growth and page-init
 }
 
 std::string WideInsert() {

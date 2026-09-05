@@ -329,7 +329,7 @@ TEST_F(CommandDispatcherTest, DescribeReportsANewRelationAsAscending) {
 
     auto out = d.Dispatch("DESCRIBE acct");
     // Beside the storage, which is the DDL-only fact on the line.
-    EXPECT_NE(out.response.find("clustered_type=HEAP key_order=ascending"), std::string::npos)
+    EXPECT_NE(out.response.find("clustered_type=BTREE key_order=ascending"), std::string::npos)
         << out.response;
     EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted"),
               std::string::npos)
@@ -567,6 +567,108 @@ TEST_F(CommandDispatcherTest, CreateTableAcceptsAnExplicitBtreeRelation) {
               "CREATED ");
 }
 
+TEST_F(CommandDispatcherTest, HeapStorageIsRefusedWhileSuspendedAndSaysWhy) {
+    // **SUS-1, and the only cell that sees the refusal**: the test binary
+    // runs with the suspension lifted so the heap paths stay exercised, so
+    // this one puts it back for its own duration.
+    parser::SuspendHeapStorageForTest suspended;
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    auto refused = d.Dispatch("CREATE TABLE t (id int64) HEAP");
+    // **The token, not just `ERR`** - AS-R1 is a ruling about *which* code
+    // this is, and `ERR` alone is satisfied by `NOT_IMPLEMENTED` and by
+    // `INVALID_ARGUMENT` too, so the one thing the operator decided would
+    // have had nothing under it. `TheTwoRefusalTokensAreDistinctAndRoundTrip`
+    // above is the rule this obeys: a client asks the token, not the prose.
+    EXPECT_EQ(refused.response.rfind("ERR UNSUPPORTED retryable=0 ", 0), 0u) << refused.response;
+    EXPECT_EQ(StatusFromErrorReply(refused.response).code(), StatusCode::kUnsupported)
+        << refused.response;
+    EXPECT_NE(refused.response.find("SUS-1"), std::string::npos)
+        << "a reader meeting this needs the reason, not just the code: " << refused.response;
+    // **The byte, like every other refusal in this file.** `HEAP` sits at
+    // offset 26 of the statement above.
+    EXPECT_NE(refused.response.find("byte 26"), std::string::npos) << refused.response;
+    // And it names where the decision and its resume condition live, because
+    // `Unsupported` on something that is *built* would otherwise read as
+    // "the engine cannot do this".
+    EXPECT_NE(refused.response.find("workorder-as-sus1"), std::string::npos)
+        << refused.response;
+
+    // **The default moved with it**: an unqualified statement is a btree,
+    // and it is created rather than refused.
+    auto created = d.Dispatch("CREATE TABLE t (id int64)");
+    EXPECT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("clustered_type=BTREE"), std::string::npos);
+}
+
+TEST_F(CommandDispatcherTest, DISABLED_HeapSuspensionIsLifted) {
+    // **SUS-1's resume condition, as a test rather than a paragraph**
+    // (AS-R6). Drop the `DISABLED_` prefix when the suspension lifts; until
+    // then this cell is the condition written down somewhere executable, and
+    // it fails by design.
+    //
+    // This is **half** of it. The other half - `docs/spec/parser-v2.md` §9
+    // item 8's three-way execution-equivalence corpus (heap x heap,
+    // heap x btree, btree x btree) green at `cores = 4` under tsan - is not
+    // expressible in one cell and is named in the work order. Note §9, not
+    // §8: the order's wording points at §8, which has been "Open decisions"
+    // with an empty body since the 2026-09-02 compaction, so a condition
+    // written against it would never have been runnable.
+    //
+    // `SuspendHeapStorageForTest` here is not a test contrivance - it is the
+    // *production* state, which the test binary otherwise lifts. Asserting
+    // CREATED under it is exactly "a client can make a heap relation again".
+    parser::SuspendHeapStorageForTest production_state;
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    auto created = d.Dispatch("CREATE TABLE h (id int64, v int64) HEAP");
+    EXPECT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE h").response.find("clustered_type=HEAP"), std::string::npos);
+}
+
+TEST_F(CommandDispatcherTest, ASuspendedHeapRelationStillMountsAndServes) {
+    // **The claim the whole suspension rests on**: SUS-1 refuses *creation*
+    // and nothing else, so a relation that already exists still mounts,
+    // reads and writes. That is why no heap code is deleted and why
+    // `heap-and-tuple.md` §3.1b keeps its text under a banner.
+    //
+    // **It has to re-open, or it does not test "mounts".** An earlier
+    // version created and served in one process against one live store and
+    // wrapped it in a suspension guard - but `INSERT`, `SELECT` and the rest
+    // consult nothing about storage suspension, so that guard was decorative
+    // and the cell asserted only "the dispatcher serves a heap relation",
+    // which forty other cells already pin. The re-open is the half that was
+    // missing, and it is the half a mount path growing a storage-form
+    // assumption would break.
+    {
+        // The volume as it was written before the suspension.
+        CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+        ASSERT_EQ(d.Dispatch("CREATE TABLE h (id int64, v int64) HEAP").response.substr(0, 7),
+                  "CREATED");
+        ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (1, 10)").response.substr(0, 8), "INSERTED");
+        ASSERT_EQ(d.Dispatch("SYNC").response.substr(0, 2), "OK");
+    }
+
+    // Now open it again with the suspension **in force**, which is the state
+    // every pre-SUS-1 volume comes up in: a fresh catalog over the same
+    // store, nothing carried over in the process.
+    parser::SuspendHeapStorageForTest suspended;
+    catalog::Catalog reopened(store_);
+    CommandDispatcher d(boot_->superblock, reopened, store_);
+
+    EXPECT_NE(d.Dispatch("DESCRIBE h").response.find("clustered_type=HEAP"), std::string::npos);
+    EXPECT_NE(d.Dispatch("SELECT id, v FROM h").response.find("1,10"), std::string::npos);
+    ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (2, 20)").response.substr(0, 8), "INSERTED");
+    EXPECT_EQ(d.Dispatch("UPDATE h SET v = 99 WHERE id = 1").response.substr(0, 7), "UPDATED");
+    EXPECT_NE(d.Dispatch("SELECT id, v FROM h").response.find("1,99"), std::string::npos);
+    EXPECT_EQ(d.Dispatch("DELETE FROM h WHERE id = 2").response.substr(0, 7), "DELETED");
+
+    // And creating one is still refused on that same reopened volume - the
+    // suspension survives the mount rather than being a property of the
+    // process that set it.
+    EXPECT_EQ(d.Dispatch("CREATE TABLE h2 (id int64) HEAP").response.substr(0, 3), "ERR");
+}
+
 TEST_F(CommandDispatcherTest, CreateTableNoLongerRefusesAnExplicitHeapRelation) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
 
@@ -577,12 +679,13 @@ TEST_F(CommandDispatcherTest, CreateTableNoLongerRefusesAnExplicitHeapRelation) 
     EXPECT_EQ(spelled.response.substr(0, 7), "CREATED") << spelled.response;
     EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("clustered_type=HEAP"), std::string::npos);
 
-    // And a bare EXPLICIT no longer pulls storage to btree with it - that
-    // resolution existed only to keep the refusal above reachable from a
-    // written word alone.
+    // And a bare EXPLICIT still moves storage nowhere - that resolution
+    // existed only to keep the refusal above reachable from a written word
+    // alone. **What it lands on is BTREE since SUS-1**, which is the default
+    // rather than anything this word did.
     auto implied = d.Dispatch("CREATE TABLE t2 (id int64) EXPLICIT");
     EXPECT_EQ(implied.response.substr(0, 7), "CREATED") << implied.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE t2").response.find("clustered_type=HEAP key_order=ascending"),
+    EXPECT_NE(d.Dispatch("DESCRIBE t2").response.find("clustered_type=BTREE"),
               std::string::npos);
 }
 
@@ -635,7 +738,7 @@ TEST_F(CommandDispatcherTest, SupplyingThePrimaryKeyOnInsertIsAdmittedAndMovesTh
     // mark is the part worth keeping: a named key moves it, so the next
     // issued id clears the named one instead of colliding with it.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar) HEAP").response.substr(0, 7),
               "CREATED");
 
     auto out = d.Dispatch("INSERT INTO acct VALUES (7, 'alice')");
@@ -1450,7 +1553,7 @@ TEST_F(DispatcherLogTest, ASuccessfulReplyIsSummarizedNotEchoed) {
 
 TEST_F(DispatcherLogTest, HeapInsertIsLoggedAtTraceWithPageSlotAndKey) {
     CommandDispatcher d = Make(LogLevel::kTrace);
-    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, name varchar)").response.substr(0, 7),
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, name varchar) HEAP").response.substr(0, 7),
               "CREATED");
     sink_.lines.clear();
 

@@ -39,7 +39,7 @@ private:
 };
 
 void Load(Instance& db) {
-    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64) HEAP").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64) BTREE").substr(0, 7), "CREATED");
     for (int i = 1; i <= 8; ++i) {
         ASSERT_EQ(db.Run("INSERT INTO h VALUES (" + std::to_string(i) + ")").substr(0, 8),

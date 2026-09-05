@@ -412,7 +412,17 @@ struct CreateTableStmt {
     std::string schema;
     std::uint32_t table_byte_offset = 0;
     std::vector<ColumnDef> columns;
-    catalog::ClusteredType clustered = catalog::ClusteredType::kHeap;
+    // **BTREE since SUS-1** (2026-09-05,
+    // `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`): heap
+    // relations are suspended, so an unqualified `CREATE TABLE` makes a
+    // btree one. The default is spelled **three** times - here, in
+    // `HandleCreateTableSql`'s `clustered_given` fallback, and in
+    // `HandleCreateTable`'s call for the bare debug form - and all three
+    // are `kBtree`. The work order counted two and the third was missed on
+    // the first pass, so the count is written down: the dispatch path reads
+    // the fallback, several test fixtures read this field straight off the
+    // parsed statement, and the bare form reads neither.
+    catalog::ClusteredType clustered = catalog::ClusteredType::kBtree;
 
     // There is no key-mode field. The trailing `ASSIGNED` | `EXPLICIT` word
     // set one until 2026-08-25; the mode is gone (docs/spec/heap-and-tuple.md
@@ -422,9 +432,12 @@ struct CreateTableStmt {
     // dispatcher to resolve.
 
     // Whether the statement *said* a storage word, as opposed to landing on
-    // `clustered`'s default above. The field cannot answer this itself:
-    // `HEAP` is also what an unqualified statement means, so kHeap is both
-    // "the writer asked for a heap" and "the writer said nothing".
+    // `clustered`'s default above. The field cannot answer this itself,
+    // because the default is one of the two values the writer may name: it
+    // used to be `kHeap`, so `kHeap` meant both "the writer asked for a
+    // heap" and "the writer said nothing"; since SUS-1 it is `kBtree` and
+    // `kBtree` carries the same ambiguity. The flip moved which value is
+    // ambiguous, never removed the need for this flag.
     bool clustered_given = false;
 };
 

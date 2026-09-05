@@ -409,8 +409,8 @@ TEST_F(ExecBudgetTest, TheMemoDoesNotFireOnAHeapRelation) {
     // chain walk (step_vm.cpp's RunPointStep) and there is no descent to
     // memoize. Worth pinning: a memo that "hit" here would be caching
     // something the code never looked up.
-    Create("CREATE TABLE hp (id int64, label varchar)");
-    Create("CREATE TABLE hc (id int64, p_id int64, tag varchar)");
+    Create("CREATE TABLE hp (id int64, label varchar) HEAP");
+    Create("CREATE TABLE hc (id int64, p_id int64, tag varchar) HEAP");
     for (int i = 0; i < 3; ++i) Insert("hp", {Str("l" + std::to_string(i))});
     for (int r = 0; r < 4; ++r) Insert("hc", {Int(1), Str("t")});
 
@@ -425,8 +425,8 @@ TEST_F(ExecBudgetTest, TheMemoDoesNotFireOnAHeapRelation) {
 // ---- The meters -----------------------------------------------------------
 
 TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
-    Create("CREATE TABLE o2 (id int64, tag int64)");
-    Create("CREATE TABLE i2 (id int64, tag int64)");
+    Create("CREATE TABLE o2 (id int64, tag int64) HEAP");
+    Create("CREATE TABLE i2 (id int64, tag int64) HEAP");
     for (int i = 0; i < 5; ++i) {
         Insert("o2", {Int(i)});
         Insert("i2", {Int(i)});

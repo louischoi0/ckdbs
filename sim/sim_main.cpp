@@ -19,6 +19,7 @@
 #include <cstring>
 #include <string>
 
+#include "kds/parser/parser.hpp"
 #include "sim/loop.hpp"
 #include "sim/minimize.hpp"
 
@@ -40,6 +41,17 @@ int Usage(const char* argv0) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // **SUS-1's seam, armed for this binary** (`instructions/v3.0.0/
+    // workorder-as-sus1-heap-suspended.md`). The workload emits
+    // `CREATE TABLE ... HEAP` for the tables it decides are heap
+    // (`sim/workload.cpp:196`), so without this every such statement is
+    // refused and `loop.cpp`'s "every CREATE TABLE was lost" arm fails the
+    // iteration - the corpus would verify nothing rather than verify less.
+    // Same reason as `tests/heap_suspension_env.cpp`: the harness exercises
+    // paths the suspension does not remove. `ckdbs-sim` is a developer
+    // harness, not the server; no config key and no wire path reaches this.
+    kds::parser::SetHeapStorageAllowedForTest(true);
+
     kds::sim::SimConfig config;
     bool have_seed = false;
     bool pair = false;

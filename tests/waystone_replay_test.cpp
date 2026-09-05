@@ -38,7 +38,10 @@ protected:
         MakeDispatcher(/*record=*/true, /*replay=*/true);
 
         ASSERT_EQ(Run("CREATE TABLE t (id int64, v int64) BTREE").substr(0, 7), "CREATED");
-        ASSERT_EQ(Run("CREATE TABLE h (id int64, v int64)").substr(0, 7), "CREATED");
+        // **HEAP, pinned since SUS-1**: `t` above is the btree half. Replay
+        // replaces a descent on one and a chain scan on the other, so a pair
+        // that is btree twice tests one of the two.
+        ASSERT_EQ(Run("CREATE TABLE h (id int64, v int64) HEAP").substr(0, 7), "CREATED");
         for (int i = 1; i <= 5; ++i) {
             ASSERT_EQ(Run("INSERT INTO t VALUES (" + std::to_string(i * 10) + ")").substr(0, 8),
                       "INSERTED");

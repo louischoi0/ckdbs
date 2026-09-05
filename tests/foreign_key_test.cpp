@@ -247,7 +247,7 @@ TEST_F(ForeignKeyTest, AnUnknownParentRefusesAndCreatesNothing) {
 // F1 puts the reference on the parent's Keystone id, and a heap relation
 // has no index for it - so every check would scan the parent.
 TEST_F(ForeignKeyTest, AHeapParentIsRefused) {
-    ASSERT_EQ(Run("CREATE TABLE accounts (id int64, owner varchar)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE TABLE accounts (id int64, owner varchar) HEAP").substr(0, 7), "CREATED");
 
     const std::string out =
         Run("CREATE TABLE trades (id int64, account_id int64 REFERENCES accounts) BTREE");

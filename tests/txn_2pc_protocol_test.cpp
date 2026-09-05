@@ -90,7 +90,17 @@ protected:
         executor_.emplace(/*core_id=*/1, *dispatcher_, *scheduler_, clock_, /*log=*/nullptr,
                           wal_.get());
 
-        ASSERT_EQ(Local("CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+        // **HEAP, pinned since SUS-1** (AS-R5, `instructions/v3.0.0/
+        // workorder-as-sus1-heap-suspended.md`). `t` is this chain's only
+        // heap relation, and `MidWalkWaitTest` below spells out why it has
+        // to stay one: it resumes its walk **by position** while `tb`
+        // resumes **by key**, so on the flipped default the two arms would
+        // be the same walk run twice and the position arm - AO-S3b's, the
+        // one that already shipped a wrong answer once - would execute
+        // nowhere. The test binary lifts the suspension
+        // (`tests/heap_suspension_env.cpp`), which is what lets this word
+        // stand.
+        ASSERT_EQ(Local("CREATE TABLE t (id int64, v int64) HEAP").rfind("CREATED", 0), 0u);
     }
 
     // `group` by default, because that is what a server runs and what makes
