@@ -1,5 +1,7 @@
 #include "kds/storage/device_page_store.hpp"
 
+#include "kds/base/current_core.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -1868,7 +1870,37 @@ void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mod
 #endif
         // The turns it spun are dropped: a contention gauge is AM-S3's, when
         // it has a number to want (the cells read Acquire's return directly).
-        (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
+        //
+        // **`CurrentCore()`, not `core_id_`** (AM-S2 step 3,
+        // `base/current_core.hpp`). The word records the core that *asked*,
+        // and step 3 gives one store to every core - a store stamping its
+        // own id would then record core 0 for every holder and make the
+        // owner field a lie, taking the re-entrancy rule and the
+        // never-upgrade census with it.
+        //
+        // **The two do not agree everywhere, and a first draft of this
+        // comment claimed they did.** Instrumented, the armed suite takes
+        // **14,965** acquisitions where `CurrentCore() != core_id_`, all of
+        // them in fixtures: `CoreRuntimeTest` (10,792) and
+        // `CoreRuntimePerCoreStreamTest` (4,144) build several cores and
+        // drive all of their stores from the one test thread, and
+        // `ExpeditorTest` (12) dispatches into a peer between `Start()` and
+        // `RunUntilStopped()`. Production takes none - every acquisition
+        // there is on a reactor thread, which declares itself in
+        // `Scheduler::RunOnce`, or in the mount pass, which declares the
+        // core it is opening.
+        //
+        // Sound in both, and for the same reason rather than by luck: the
+        // owner field's job is to say who may re-enter and who may release,
+        // and in a fixture that one thread is the only holder of any of
+        // those words. Acquire and release read the same value, so
+        // `PageLatch::Release`'s owner check is what enforces it - a
+        // disagreement between the two would fail there rather than pass
+        // quietly. **What those fixtures do become at step 4** is a thread
+        // holding one shared table's word while claiming to be several
+        // cores, which is a shape production cannot reach; they take a
+        // `CurrentCoreGuard` then.
+        (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), CurrentCore());
     }
 }
 
@@ -1894,7 +1926,10 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
     // The latch leaves with the pin: one handle, one hold of each. The word
     // knows whether this core is the exclusive owner, so no mode travels
     // here.
-    if (latch_armed_) PageLatch::Release(frame->latch, core_id_);
+    // The same identity that took it, for the same reason: release under
+    // `X` checks the owner field against the asking core, so acquire and
+    // release must read `CurrentCore()` alike.
+    if (latch_armed_) PageLatch::Release(frame->latch, CurrentCore());
     {
         LatchGuard structure(structure_latch());
         // **The two decrements stay coupled**, as they were before this

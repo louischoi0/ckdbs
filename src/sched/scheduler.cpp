@@ -1,5 +1,7 @@
 #include "kds/sched/scheduler.hpp"
 
+#include "kds/base/current_core.hpp"
+
 #include <atomic>
 
 #include <algorithm>
@@ -400,6 +402,15 @@ bool Scheduler::RunReadyTasks(bool& advanced) {
 }
 
 bool Scheduler::RunOnce() {
+    // **This thread is this reactor's core** (AM-S2 step 3,
+    // `base/current_core.hpp`). Declared here rather than in `Run` so a
+    // reactor driven by hand - which is most of the suite - is covered by
+    // the same statement as one in the loop; a relaxed thread-local store
+    // per iteration is not a cost anything here can measure. The shared
+    // buffer pool needs it because the page latch records the core that
+    // *asked*, and one store serving every core cannot answer that from a
+    // member.
+    SetCurrentCore(core_id_);
     ++iterations_;
     // The wall-clock origin for group accounting (scheduler.hpp's
     // run_wall_ns): the first iteration, not construction.

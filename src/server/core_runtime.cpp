@@ -1,5 +1,7 @@
 #include "kds/server/core_runtime.hpp"
 
+#include "kds/base/current_core.hpp"
+
 #include "kds/catalog/core_placement.hpp"
 
 #include <algorithm>
@@ -108,6 +110,16 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             "CoreRuntime: core " + std::to_string(config.core_id) +
             " was given no superblock; a core cannot be opened without the volume's image");
     }
+
+    // **This whole pass acts as the core it is opening** (AM-S2 step 3,
+    // `base/current_core.hpp`). `Open` runs on the *startup* thread, not on
+    // the reactor thread this core will get, and it takes page latches -
+    // recovery's redo does, with no second thread alive. Declaring the
+    // identity here rather than letting it default to 0 is what makes the
+    // page latch's owner field exact instead of harmless-by-accident: today
+    // nothing contends with the mount pass, and step 3 is not the place to
+    // start relying on that.
+    const CurrentCoreGuard as_this_core(config.core_id);
 
     auto runtime = std::unique_ptr<CoreRuntime>(new CoreRuntime(config, log));
     // The whole decoded image, not a field of it. `anchor` and `anchors`
