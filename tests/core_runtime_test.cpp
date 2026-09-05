@@ -291,9 +291,15 @@ TEST_F(CoreRuntimePerCoreStreamTest, EachCoreOpensItsOwnWalStream) {
     EXPECT_EQ(segments, 3) << "three cores did not produce three streams";
 }
 
-TEST_F(CoreRuntimeTest, AShutdownMessageStopsTheReactorFromItsOwnThread) {
-    // The reason shutdown is a message at all: `Scheduler::Stop()` writes a
-    // plain bool owned by the reactor's thread, so core 0 may not call it.
+TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
+    // **Renamed with the mechanism it tests** (AU-S3). It was
+    // `AShutdownMessageStopsTheReactorFromItsOwnThread`, and both halves of
+    // that name are now false: there is no message, and the point is that
+    // the stop comes from a thread that is *not* the reactor's.
+    //
+    // `Scheduler::Stop()` wrote a plain bool, so only the reactor's own
+    // thread could flip it - which is the whole reason `kShutdown` existed.
+    // The flag is atomic now and the message is gone.
     auto transport = sched::RealRingTransport::Create(2, 16, 64);
     ASSERT_TRUE(transport.ok());
 
@@ -303,13 +309,13 @@ TEST_F(CoreRuntimeTest, AShutdownMessageStopsTheReactorFromItsOwnThread) {
 
     std::thread worker([&] { core.value()->Run(); });
 
-    sched::MessageHeader header{};
-    header.src_core = 0;
-    header.dst_core = 1;
-    header.session_core = 0;
-    header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
-    header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-    ASSERT_TRUE(transport.value().TrySend(header, {}).ok());
+    // **AU-S3: a direct call, not a message.** `Scheduler::stopped_` is
+    // atomic now, so another thread may flip it - which is exactly what the
+    // comment above this test used to say was impossible, and the reason
+    // `kShutdown` existed. No kick here: the default idle block is 10 ms, so
+    // the reactor notices within one, and a test that needed it sooner would
+    // register a `WakerTable`.
+    core.value()->scheduler().Stop();
 
     // If the message is not noticed the test hangs, which is the honest
     // failure for "the reactor never stopped" - a timeout here would only
@@ -359,7 +365,7 @@ TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
         ASSERT_TRUE(transport.value().TrySend(h, {}).ok());
     };
 
-    send(1, sched::RingMessageKind::kShutdown);
+    cores[0]->scheduler().Stop();  // AU-S3: the flag is atomic; no message
     workers[0].join();
     // Safe here and only here: the join is what makes core 1's writes
     // visible to this thread.
@@ -374,7 +380,7 @@ TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
     EXPECT_EQ(served.load(std::memory_order_relaxed), 1)
         << "one core's stop took another down with it";
 
-    send(2, sched::RingMessageKind::kShutdown);
+    cores[1]->scheduler().Stop();  // AU-S3
     workers[1].join();
     EXPECT_TRUE(cores[1]->scheduler().stopped());
 }
@@ -399,14 +405,7 @@ TEST_F(CoreRuntimeTest, ManyCoresStartAndJoinCleanly) {
     std::vector<std::thread> workers;
     for (auto& core : cores) workers.emplace_back([&core] { core->Run(); });
 
-    for (auto& core : cores) {
-        sched::MessageHeader h{};
-        h.src_core = 0;
-        h.dst_core = core->core_id();
-        h.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
-        h.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-        ASSERT_TRUE(transport.value().TrySend(h, {}).ok());
-    }
+    for (auto& core : cores) core->scheduler().Stop();  // AU-S3
 
     for (auto& worker : workers) worker.join();
     for (auto& core : cores) {
@@ -4300,6 +4299,11 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
     ASSERT_EQ(row.value().owner_core, 1u);
     peer.value()->GrantRelationFault(
         RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    // AU-S3: what the instance installs on every peer, standing in for
+    // `Expeditor`'s `instance_stop_`. Installed **before** the listener, so
+    // the stop handler it feeds exists by the time a client can send STOP.
+    std::atomic<bool> instance_stopped{false};
+    peer.value()->set_instance_stop([&instance_stopped] { instance_stopped.store(true); });
     ASSERT_TRUE(peer.value()->ListenAndAttach(kPort, Protocol::kText).ok());
 
     std::thread worker([&] { peer.value()->Run(); });
@@ -4335,34 +4339,23 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
     EXPECT_NE(write.find("lease"), std::string::npos)
         << "the refusal should name the funding wall, not a page or a read: " << write;
 
-    // STOP: replied to, and routed - the kShutdown lands on core 0's ring
-    // rather than stopping this reactor.
+    // STOP: replied to, and **routed to the instance rather than to this
+    // reactor**. That is the contract - a stopped peer would still take its
+    // kernel share of new connections while core 0 reported healthy - and it
+    // is now observed directly. Until AU-S3 this asserted on a `kShutdown`
+    // appearing in core 0's ring, which tested the transport rather than the
+    // routing; the hook is what the instance actually installs.
     (void)RoundTrip(fd, "STOP");
     ::close(fd);
 
-    sched::MessageHeader header{};
-    std::vector<std::byte> payload;
-    bool routed = false;
-    for (int spins = 0; spins < 5000 && !routed; ++spins) {
-        while (transport.value().TryReceive(/*dst_core=*/0, header, payload)) {
-            if (header.kind == static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown)) {
-                EXPECT_EQ(header.src_core, 1u);
-                routed = true;
-                break;
-            }
-        }
+    for (int spins = 0; spins < 5000 && !instance_stopped.load(); ++spins) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_TRUE(routed) << "STOP on a peer never reached the system core";
+    EXPECT_TRUE(instance_stopped.load()) << "STOP on a peer never reached the instance";
 
-    // What Serve's tail would then do: stop the peer over its ring.
-    sched::MessageHeader stop{};
-    stop.src_core = 0;
-    stop.dst_core = 1;
-    stop.session_core = 0;
-    stop.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
-    stop.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-    ASSERT_TRUE(transport.value().TrySend(stop, {}).ok());
+    // What Serve's tail would then do: stop the peer. A direct call since
+    // AU-S3, the flag being atomic.
+    peer.value()->scheduler().Stop();
     worker.join();
 }
 

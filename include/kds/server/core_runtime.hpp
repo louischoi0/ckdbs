@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -505,6 +506,18 @@ public:
 
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     sched::Scheduler& scheduler() noexcept { return *scheduler_; }
+
+    // **How a peer stops the instance** (AU-S3). A client's `STOP` accepted
+    // on this core must stop the *instance*, not this reactor - a stopped
+    // peer still takes its kernel share of new connections while core 0
+    // reports healthy. That used to route a `kShutdown` to the system core
+    // so that core 0's own thread would flip its stop flag; the flag is
+    // atomic now, so this is a direct call plus a kick.
+    //
+    // One callback rather than a pair of pointers to core 0's scheduler and
+    // to the waker table: the peer has no business knowing either, and what
+    // it actually needs is the single verb "stop the instance".
+    void set_instance_stop(std::function<void()> stop) { instance_stop_ = std::move(stop); }
     wal::WalManager& wal() noexcept { return *wal_; }
     catalog::Catalog& catalog() noexcept { return *catalog_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
@@ -545,6 +558,11 @@ private:
     // This core's own supply of page ids, and the store that allocates from
     // it. Declared before the store, which holds a pointer to it.
     storage::LeasedIdSource lease_;
+    // AU-S3. Empty on a single-core instance and in every fixture that
+    // wires a listener with no instance around it, where a peer's STOP has
+    // nothing to route to and stopping this reactor is the whole instance.
+    std::function<void()> instance_stop_;
+
     std::unique_ptr<storage::DevicePageStore> store_;
 
     // The refill this core is waiting on, if any. It outlives the coroutine

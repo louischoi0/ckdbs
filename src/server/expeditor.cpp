@@ -1236,25 +1236,26 @@ void Expeditor::BroadcastCatalogInvalidation(sched::Scheduler& core0_scheduler) 
 }
 
 void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
-    if (!transport_.has_value()) return;
-
+    // **AU-S3: a flag and a kick, not a message.** This sent every peer a
+    // `kShutdown` and then hand-pumped core 0's ready queue for up to a
+    // thousand turns, because core 0's reactor had already left `Run()` and
+    // nothing was draining the sends. The comment there conceded the shape's
+    // weakness outright: a peer whose ring was full and whose reactor had
+    // already stopped would otherwise hang the shutdown.
+    //
+    // `Scheduler::stopped_` is atomic since AU-S3, so `Stop()` crosses
+    // threads directly - which is the entire reason the message existed, and
+    // therefore the entire reason it can go. A flag has no queue to be full,
+    // so the bound, the retry task and the pump all go with it.
+    (void)core0_scheduler;
+    if (!wakers_.has_value()) return;
     for (const auto& core : cores_) {
-        sched::MessageHeader header{};
-        header.src_core = 0;
-        header.dst_core = core->core_id();
-        header.session_core = 0;
-        header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
-        header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-        core0_scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, {}));
-    }
-
-    // Core 0's reactor has already left Run(), so nothing is draining its
-    // ready queue - the sends above have to be pumped by hand. Bounded
-    // rather than "until empty": a peer whose ring is full and whose reactor
-    // has already stopped would otherwise hang the shutdown, and a core that
-    // misses its message is joined below anyway once it notices its own
-    // stop.
-    for (int i = 0; i < 1000 && core0_scheduler.RunOnce(); ++i) {
+        // Write, then kick (AR0-6-R1). The flag ends the loop; the kick ends
+        // the block the loop is sitting in. A kick that races a reactor which
+        // is not yet asleep is skipped, and that reactor sees the flag on its
+        // next turn without ever blocking.
+        core->scheduler().Stop();
+        wakers_->Kick(core->core_id());
     }
 }
 
@@ -1582,31 +1583,37 @@ Status Expeditor::Start() {
             config_.cores, sched::kCoreRingSlots, sched::kCoreRingPayloadBytes);
         if (!transport.ok()) return transport.status();
         transport_.emplace(std::move(transport.value()));
+        // AU-S3: the waker table, sized like the transport and registered
+        // into by every core including this one. It outlives the transport
+        // by design - AR0-6 retires the ring and keeps the wake - so it is
+        // built beside it rather than inside it.
+        wakers_.emplace(config_.cores);
 
         // Arms core 0's wake path too (sched/waker.hpp): core 0 is a
         // destination like any other, and a peer's reply to a statement
         // it shipped lands here.
+        if (Status s = scheduler.AttachWakerTable(&*wakers_, /*core_id=*/0); !s.ok()) {
+            return s;
+        }
         if (Status s = scheduler.AttachTransport(&*transport_, /*core_id=*/0); !s.ok()) {
             return s;
         }
 
-        // The receiving half of a peer's STOP (CoreRuntime::ListenAndAttach
-        // routes it here): stop core 0's reactor, after which Serve's tail
-        // broadcasts kShutdown to every peer and joins - the same sequence
-        // a STOP on core 0's own listener has always produced.
+        // **The receiving half of a peer's STOP, no longer a message**
+        // (AU-S3). A peer used to send `kShutdown` here so that core 0's own
+        // thread would flip its stop flag; the flag is atomic now, so the
+        // peer calls this hook directly and kicks core 0 awake. Serve's tail
+        // then broadcasts shutdown to every peer and joins - the same
+        // sequence a STOP on core 0's own listener has always produced.
         sched::Scheduler* core0_sched = &scheduler;
-        if (Status s = scheduler.RegisterMessageHandler(
-                sched::RingMessageKind::kShutdown,
-                [core0_sched, this](const sched::MessageHeader& header,
-                                    std::span<const std::byte>) {
-                    logger_->Info("expeditor", "stop routed from core " +
-                                                   std::to_string(header.src_core) +
-                                                   "; the shutdown tail follows");
-                    core0_sched->Stop();
-                });
-            !s.ok()) {
-            return s;
-        }
+        sched::WakerTable* wakers = &*wakers_;
+        instance_stop_ = [core0_sched, wakers, this] {
+            logger_->Info("expeditor", "stop routed from a peer; the shutdown tail follows");
+            // Write, then kick (AR0-6-R1): the flag ends core 0's loop, the
+            // kick ends the block it is sitting in.
+            core0_sched->Stop();
+            wakers->Kick(0);
+        };
 
         // The system core's half of the anchor path (M5): the superblock is
         // page 0 and belongs to core 0, so a peer's completed checkpoint
@@ -1744,6 +1751,14 @@ Status Expeditor::Start() {
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
             if (Status s = core.value()->AttachTransport(*transport_); !s.ok()) return s;
+            // AU-S3: and into the waker table, so core 0 can stop this
+            // reactor with a flag plus a kick rather than a message.
+            core.value()->set_instance_stop(instance_stop_);
+            if (Status s = core.value()->scheduler().AttachWakerTable(
+                    &*wakers_, core.value()->core_id());
+                !s.ok()) {
+                return s;
+            }
             if (config_.peer_listeners) {
                 if (Status s = core.value()->ListenAndAttach(
                         config_.port, Protocol::kKwp, config_.durability, identity);

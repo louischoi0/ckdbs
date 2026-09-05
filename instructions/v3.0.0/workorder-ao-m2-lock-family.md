@@ -313,11 +313,16 @@ L-size cross-cutting change with a byte-for-byte hazard.
 `WaitUntil` on a per-wait slot the table owns; the waiter holds no pin, no
 span and no latch when it parks (`SuspendAudit` is the proof in debug); the
 predicate reads the table. Same core: the holder's decide flips the slot;
-the waiter's next poll proceeds. Cross core: the decide sends one ring
+the waiter's next poll proceeds. Cross core: **the decide flips the slot itself and
+kicks the waiter's core** — write-then-kick, AR0-6-R1, built at AU-S1 as
+`WakerTable::Kick`. *(Amended at AU-S3. This read "the decide sends one ring
 message (`kLockWake`, a new `ring_message.hpp` kind with no payload of
-substance) to the waiter's core, whose handler flips the slot — the message
-is a wake, never the decision, so a delayed message costs latency and never
-liveness. After every park the waiter **re-checks** (finding G).
+substance) to the waiter's core, whose handler flips the slot". AR0-6 retires
+the transport and AU-R4 forbids adding a kind, so `kLockWake` is never built;
+the slot is already shared state under the partition latch, and only the
+interrupt was ever needed.)* The kick is a wake, never the decision, so a
+delayed or lost kick costs latency and never liveness — at most one idle
+block, which is the cost AR0-6-R1 accepts by name. After every park the waiter **re-checks** (finding G).
 
 **The predicate is a disjunction, and the registration precedes the last
 check.** A waiter that saw the holder in flight, then registered *after*
@@ -433,7 +438,7 @@ branch, stop.
 | AO-S3 | **Same-core cutover, zero-write statements**: `:10633` widened; the in-doubt loop generalised and its clock-end removed; F3's forward busy on a same-core parent; `src/txn/manager.cpp:59-61` fixed | the first-updater-wins cells that assert `TXN_CONFLICT` now assert the wait's outcome; an autocommit `UPDATE` against a row an open transaction holds returns after its `COMMIT` with the new value; a child `INSERT` against an in-flight parent waits, passes after commit, `FkViolation` after abort; the `txn_2pc_*` in-doubt cell waits past 200 ms | M–L |
 | AO-S3b | **The mid-statement wait**: `HandleUpdate`/`HandleDelete` on the coroutine path, the park at a no-span boundary | a ten-row `UPDATE` meeting a held row 7 keeps rows 1–6 and waits; `SuspendAudit` clean; the same statement inside an explicit transaction | L |
 | AO-S4a | **D12, same core**: edges in the table; the detector task (core 0, `system`, 100 ms); the victim's abort; the net as a logged fault | a 2-cycle between two sessions on one core: one aborted `TxnConflict` naming deadlock within one cadence, the other proceeds; a 3-cycle; with the detector disabled in the cell, the net fires at 1 s and the log line is asserted | M |
-| AO-S5 | **Cross core**: the table across reactors, `kLockWake`/`kLockAbort`, `MayWrite`'s grant arm and `RelationWriteRightsPending` retired; **a deterministic two-`CoreRuntime` rig over `SimRingTransport`, first** (finding L). Gate: AM-S1 (latch order), AM-S2 (shared pool), AN-S2 (view) | a waiter on core 1 woken by a decide on core 0 while core 1's reactor sleeps (`sched_wakes_received` moves); with every message delayed to the transport's maximum the waiter still proceeds after the wake; at the store, `MayWrite` admits a page its lease/grant arm refused at `9e5068c`, under the lock — owner routing still in force (AO-1), so the cell is the store's, not dispatch's | L |
+| AO-S5 | **Cross core**: the table across reactors, the wake and the victim notification as **write-then-kick** (AR0-6-R1 — `kLockWake`/`kLockAbort` are never built, since AU-R4 forbids adding a kind and `WakerTable::Kick` landed at AU-S1), `MayWrite`'s grant arm and `RelationWriteRightsPending` retired; **a deterministic two-`CoreRuntime` rig over a `SimWaker`, first** (finding L; `SimRingTransport` was the pre-AR0-6 plan). Gate: AM-S1 (latch order), AM-S2 (shared pool), AN-S2 (view) | a waiter on core 1 woken by a decide on core 0 while core 1's reactor sleeps (`sched_wakes_received` moves); with every kick delayed to the sim waker's maximum the waiter still proceeds; at the store, `MayWrite` admits a page its lease/grant arm refused at `9e5068c`, under the lock — owner routing still in force (AO-1), so the cell is the store's, not dispatch's | L |
 | AO-S4b | **D12, cross core**: core 0's detector over edges from every core; a victim on a peer aborted by message | a 2-cycle across two cores resolved within one cadence | M |
 | AO-S6 | **The units**: relation `X` for DDL (`IndexBuildPending` → wait), D8's slice fence (AS4 struck), `IS` at the slice (R14) with R13's gate, the range key | `CREATE INDEX` waits for an open writer and proceeds after its commit; a writer arriving during the build waits; an assertion's bounded false rejection admits after the reserver aborts; `DROP TABLE` waits for a positioned reader on a peer; a slice fence survives a leaf division | L |
 | AO-S7 | **C3** (AR2 §9 step 5) under `bench/README.md`'s five rules, and the price of R3's relation-level key | one results file per cell under `bench/v3.0.0/`, `git describe --tags` in each; E7's default and E12's price read from them, not decided | M |

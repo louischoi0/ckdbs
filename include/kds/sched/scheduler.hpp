@@ -37,13 +37,19 @@
 // (workplan-crosscore.md guideline 1).
 //
 // **The read-only accessors are covered by that same rule**, and it has to
-// be said because a getter reads as safe: stopped(), iterations(),
-// messages_drained() and the group-accounting block below all read plain
-// fields the reactor's thread writes without synchronization, so calling
-// one from another thread while Run() proceeds is a data race - the same
-// one kShutdown exists to avoid for stopped(). Every caller today reaches
-// them from the reactor's own thread (`SHOW META` runs as a task on it) or
-// after a join; a future off-core reader needs a message, not a getter.
+// be said because a getter reads as safe: iterations(), messages_drained()
+// and the group-accounting block below all read plain fields the reactor's
+// thread writes without synchronization, so calling one from another thread
+// while Run() proceeds is a data race. Every caller today reaches them from
+// the reactor's own thread (`SHOW META` runs as a task on it) or after a
+// join; a future off-core reader needs its own answer, not a getter.
+//
+// **`stopped()` is the one exception, and only it** (AU-S3). Its flag is
+// atomic, so `Stop()` and `stopped()` are safe from any thread - which is
+// what let `kShutdown` go, since that message existed precisely to make a
+// peer's own thread do the flip. Nothing else in this block became safe
+// alongside it, and the next accessor to need cross-thread reads has to
+// earn it the same way rather than by pointing here.
 
 namespace kds::sched {
 
@@ -299,8 +305,12 @@ public:
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
     // Requests Run() to return after the current iteration. Idempotent.
-    void Stop() noexcept { stopped_ = true; }
-    bool stopped() const noexcept { return stopped_; }
+    // **Callable from any thread** (AU-S3). Pair it with
+    // `WakerTable::Kick` on the stopped core: the flag ends the loop, the
+    // kick ends the block the loop is sitting in - write-then-kick, as every
+    // cross-core signal is now (AR0-6-R1).
+    void Stop() noexcept { stopped_.store(true, std::memory_order_relaxed); }
+    bool stopped() const noexcept { return stopped_.load(std::memory_order_relaxed); }
 
 private:
     struct Timer {
@@ -486,7 +496,16 @@ private:
     std::unordered_set<TimerId> cancelled_timers_;
     TimerId next_timer_id_ = kInvalidTimerId + 1;
 
-    bool stopped_ = false;
+    // **Atomic since AU-S3, and that is the whole of why `kShutdown` could
+    // go.** A plain bool here is what made `Stop()` un-callable from another
+    // thread, and a message was the workaround: core 0 sent `kShutdown` so
+    // that the *peer's own* thread would flip it. With the flag atomic the
+    // stop crosses cores directly and the message has nothing left to carry.
+    //
+    // Relaxed on both sides: nothing is published through this flag. It says
+    // only "leave the loop", and everything the stopping core needs to see is
+    // ordered by the join that follows.
+    std::atomic<bool> stopped_{false};
     std::function<bool()> post_task_hook_;
 };
 

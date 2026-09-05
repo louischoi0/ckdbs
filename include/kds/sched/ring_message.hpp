@@ -73,7 +73,10 @@ enum class RingMessageKind : std::uint16_t {
     // indices, against workplan guideline 1. The seam is the only channel a
     // core may use to reach another, and shutdown is not an exception to
     // that - it is the case that proves it.
-    kShutdown = 20,
+    // 20 was kShutdown, struck at AU-S3: stopping a reactor is an atomic
+    // flag plus a kick, not a message. **The value is not reused** - a
+    // number a stale peer might still send must not come to mean something
+    // else, and the gap is the record that it was spent.
 
     // core 0 -> owner core: fault rights over a relation's page range
     // (crosscore.md CC7, workplan P6b). Sent at DDL publish, strictly
@@ -276,7 +279,6 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kExtentLease:
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kCatalogInvalidate:
-        case RingMessageKind::kShutdown:
         case RingMessageKind::kRelationFaultGrant:
         case RingMessageKind::kRowIdLease:
         case RingMessageKind::kRelationWriteGrant:

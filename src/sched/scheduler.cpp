@@ -566,7 +566,17 @@ bool Scheduler::RunOnce() {
 }
 
 void Scheduler::Run() {
-    stopped_ = false;
+    // **No reset here since AU-S3, and the reset was the bug.** This began
+    // `stopped_ = false`, which was harmless while a stop could only arrive
+    // as a message - the handler runs *inside* the loop, so the flag could
+    // not already be set on entry. With `Stop()` callable from another
+    // thread, a stop that lands between the worker thread being spawned and
+    // this line was silently erased and the reactor ran forever. Found by
+    // hanging the suite rather than by reading.
+    //
+    // A stop is therefore **sticky**: a scheduler that has been stopped stays
+    // stopped, and re-running one is not a supported shape (no caller does -
+    // every `Run()` in the tree is a fresh scheduler on a fresh thread).
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("sched", "reactor loop entered, " + std::to_string(timers_.size()) +
                                  " timer(s) armed");

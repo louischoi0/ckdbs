@@ -555,21 +555,12 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         return s;
     }
 
-    // Stops *this* reactor, from this reactor's own thread - which is the
-    // whole reason shutdown is a message (ring_message.hpp's kShutdown).
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kShutdown,
-            [this](const sched::MessageHeader& header, std::span<const std::byte>) {
-                if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-                    log_->Debug("core", "core " + std::to_string(config_.core_id) +
-                                            " stopping on request from core " +
-                                            std::to_string(header.src_core));
-                }
-                scheduler_->Stop();
-            });
-        !s.ok()) {
-        return s;
-    }
+    // **No shutdown handler since AU-S3.** Stopping this reactor used to be
+    // a message, and the reason was narrow and specific: `Scheduler::Stop()`
+    // wrote a plain bool, so only this reactor's own thread could safely
+    // flip it. The flag is atomic now, so core 0 stops a peer directly and
+    // kicks it awake (`Expeditor::BroadcastShutdown`, AR0-6-R1) - the kind
+    // is gone from `ring_message.hpp` with it.
 
     // Core 0 did a DDL. Drop every cached fact so the next statement
     // re-reads the catalog pages off the device, which core 0 flushed
@@ -1576,21 +1567,16 @@ Status CoreRuntime::ListenAndAttach(std::uint16_t port, Protocol protocol,
     // reactor (the review's BUG 2: a stopped peer's socket keeps
     // receiving a kernel share of new connections nobody drains, and its
     // ring goes undrained while core 0 reports healthy). So it routes: a
-    // kShutdown to the system core, whose handler stops core 0's reactor,
-    // and Serve's ordinary tail then broadcasts shutdown to every peer -
-    // one stop path, whichever core the client landed on. The transport
-    // is attached before any listener exists (Serve's ordering), so the
-    // fallback below is for tests that wire a listener with no rings.
-    if (transport_ != nullptr) {
-        listener_->set_stop_handler([this] {
-            sched::MessageHeader header{};
-            header.src_core = config_.core_id;
-            header.dst_core = 0;
-            header.session_core = config_.core_id;
-            header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
-            header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-            scheduler_->Submit(sched::MakeSendRetryTask(*transport_, header, {}));
-        });
+    // straight to core 0's stop flag, which is atomic since AU-S3, plus a
+    // kick to end the block it is sitting in; Serve's ordinary tail then
+    // broadcasts shutdown to every peer - one stop path, whichever core the
+    // client landed on. It used to route a `kShutdown` message for one
+    // reason only: the flag was a plain bool, so core 0's own thread had to
+    // be the one to flip it. The hook is installed by the instance, so a
+    // fixture that wires a listener with no instance around it simply has
+    // none and falls through to the reactor-local stop below.
+    if (instance_stop_) {
+        listener_->set_stop_handler([this] { instance_stop_(); });
     }
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) +

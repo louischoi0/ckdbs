@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -11,6 +12,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/ring_transport.hpp"
+#include "kds/sched/waker_table.hpp"
 #include "kds/server/config_file.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -812,6 +814,16 @@ private:
     // it was before this existed. That asymmetry is deliberate - it is what
     // makes the single-core path unchanged rather than merely equivalent.
     std::optional<sched::RealRingTransport> transport_;
+    // AU-S3: how core 0 reaches a peer's reactor without a message. Sized
+    // at open and registered into by each core, so a `Stop()` from this
+    // thread is followed by a kick that ends the block the peer is in.
+    // Outlives the transport deliberately - AR0-6 retires the ring and
+    // keeps the wake.
+    std::optional<sched::WakerTable> wakers_;
+    // AU-S3: what a peer calls when a client says STOP on it. Built once
+    // core 0's scheduler and the waker table both exist, and handed to every
+    // peer so none of them needs to know about either.
+    std::function<void()> instance_stop_;
 
     // The session side of remote reads (workplan P4c), armed with the
     // transport: core 0 ships eligible single-step reads to owning cores.
