@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -628,6 +630,152 @@ TEST_F(EvictionTest, TheRingNeverDropsADirtyFrameOrAResidentClassPage) {
     auto back = store_->GetForRead(dirty);
     ASSERT_TRUE(back.ok());
     EXPECT_EQ(back.value().bytes()[kPageBodyOffset], std::byte{77});
+}
+
+// ---- AM-S2 R3: armed and unarmed must agree about a fault --------------
+//
+// **The claim is an equivalence, so the cell runs the same traffic twice.**
+// The armed miss path used to publish the frame and then *round the loop*,
+// taking the hit path on the second pass - and the hit path's raw fetch
+// bumps the CLOCK usage counter, so one armed fault applied the bump twice
+// and left a freshly faulted frame at usage 2 where the unarmed path leaves
+// it at 1. Nothing could see it: usage has no accessor, and a sweep with one
+// frame walks any counter to zero inside a single call.
+//
+// What makes it visible is a **second** frame and a budget of one. The sweep
+// decrements in id order and reclaims the first frame it finds at zero, so
+// with the faulted page warmer than its neighbour the neighbour falls first.
+// The victim's identity is therefore a reading of the counter, and the
+// device's read count is how the victim is identified without a residency
+// accessor this class does not have.
+PageId SweepVictimAfterAFault(bool armed) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    EXPECT_TRUE(device.ok());
+    if (!device.ok()) return kInvalidPageId;
+    auto store = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    EXPECT_TRUE(store.ok());
+    if (!store.ok()) return kInvalidPageId;
+    // The one difference between the two runs - **asserted, not assumed**.
+    // `SetLatchArmed` is `armed || latch_forced_`, so under the census
+    // override the unarmed arm comes back armed and the cell compares a
+    // configuration against itself. Measured rather than reasoned: with R3
+    // reverted this cell fails by default and **passes** under
+    // `KDS_TEST_PAGE_LATCH=1`. The TEST body skips there; this is the
+    // backstop for any other route to a forced store.
+    store.value()->SetLatchArmed(armed, /*concurrent_pinners=*/4);
+    EXPECT_EQ(store.value()->latch_armed(), armed)
+        << "the two arms of this equivalence must actually differ";
+    if (store.value()->latch_armed() != armed) return kInvalidPageId;
+
+    PageId ids[2] = {kInvalidPageId, kInvalidPageId};
+    for (PageId& id : ids) {
+        auto made = store.value()->CreateNew();
+        EXPECT_TRUE(made.ok()) << made.status().message();
+        if (!made.ok()) return kInvalidPageId;
+        id = made.value().first;
+        FormatPage(made.value().second.bytes(), PageType::kHeap);
+    }
+    // Clean, or the sweep would only queue them (EV02).
+    EXPECT_TRUE(store.value()->Sync().ok());
+    EXPECT_LT(ids[0], ids[1]) << "the sweep walks in id order; the cell reads that order";
+
+    // Drop the first page's frame, then fault it back. `GetForRead` and not
+    // `Get`: a write fault marks the frame dirty, and a dirty frame is
+    // queued rather than reclaimed, which would make every run agree for
+    // the wrong reason.
+    EXPECT_TRUE(store.value()->EvictClean(std::span<const PageId>(&ids[0], 1)).ok());
+    {
+        auto faulted = store.value()->GetForRead(ids[0]);
+        EXPECT_TRUE(faulted.ok()) << faulted.status().message();
+        if (!faulted.ok()) return kInvalidPageId;
+    }
+
+    // One victim, so which one it is says what the counters were.
+    EXPECT_EQ(store.value()->EvictColdFrames(1), 1u)
+        << "the sweep reclaimed nothing, so the victim below is not a reading";
+
+    // Whoever needs a device read is the one that went.
+    device.value()->ResetStats();
+    auto probe = store.value()->GetForRead(ids[0]);
+    EXPECT_TRUE(probe.ok()) << probe.status().message();
+    return device.value()->stats().reads != 0 ? ids[0] : ids[1];
+}
+
+// **The in-insert sweep, which the gate did not reach at all** (AM-S2). The
+// review that moved MG06's sweep inside `InsertFrame`'s latch hold
+// instrumented it and counted **0 executions** in both `ctest` runs, plain
+// and `KDS_TEST_PAGE_LATCH=1`: the sweep is on the *miss* path after the
+// insert, and no cell in the tree faults more distinct pages than a budget.
+// So "the sweep runs under the hold and does not self-deadlock" was a claim
+// with no coverage in either configuration the gate runs.
+//
+// This is that rig, and it is small: a budget, and more distinct pages
+// faulted than the budget holds. **A deadlock here hangs rather than fails**,
+// which is the honest failure for "the sweep took a latch its caller already
+// held" - a timeout would only convert a hang into a flake.
+TEST(EvictionInsertSweepTest, AFaultPastTheBudgetSweepsUnderTheInsertsOwnHold) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+    // Armed, because an unarmed store's `LatchGuard` is a null test and the
+    // question this cell asks - does the sweep deadlock against the hold the
+    // insert already has - does not exist there.
+    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/4);
+    ASSERT_TRUE(store.value()->latch_armed());
+    constexpr std::size_t kBudget = 4;
+    store.value()->SetFrameBudget(kBudget);
+
+    // Twelve pages, written and flushed, then dropped - so each `GetForRead`
+    // below is a genuine miss and reaches the block under test.
+    std::vector<PageId> ids;
+    for (int i = 0; i < 12; ++i) {
+        auto made = store.value()->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        FormatPage(made.value().second.bytes(), PageType::kHeap);
+        ids.push_back(made.value().first);
+    }
+    ASSERT_TRUE(store.value()->Sync().ok());
+    ASSERT_TRUE(store.value()->EvictClean(std::span<const PageId>(ids)).ok());
+
+    // `GetForRead` and not `Get`: a write fault leaves every frame dirty,
+    // and a dirty frame is queued rather than reclaimed, so the sweep would
+    // run and take nothing - which would pass this cell for the wrong
+    // reason. The handle is dropped each round so nothing stays pinned.
+    for (const PageId id : ids) {
+        auto ref = store.value()->GetForRead(id);
+        ASSERT_TRUE(ref.ok()) << ref.status().message();
+        ASSERT_EQ(ref.value().page_id(), id);
+    }
+
+    // The sweep ran and took something: twelve distinct pages were faulted
+    // against a budget of four, so a pool that never reclaimed would hold
+    // all twelve. The bound is loose because the free map's own pages are
+    // resident by class (EV3) and are never victims - what is asserted is
+    // that reclamation happened, not how much.
+    EXPECT_LT(store.value()->resident_pages(), ids.size())
+        << "nothing was reclaimed, so the block under test did not run";
+}
+
+TEST(EvictionArmedEquivalenceTest, AFaultLeavesAFrameEquallyWarmArmedAndUnarmed) {
+    // The census override arms every store at `Open()` and `SetLatchArmed`
+    // cannot undo it, so the unarmed half of this equivalence does not exist
+    // there - the same reason `PageLatchStoreTest.AnUnarmedStoreNeverTouches
+    // TheWord` and `ExpeditorTest.AtOneCoreThePageLatchIsNeverArmed` skip.
+    // Skipped rather than faked, and it matters here more than for those
+    // two: without this guard the cell is **green with the R3 bug present**
+    // under exactly the armed run this stage is verified with.
+    if (std::getenv("KDS_TEST_PAGE_LATCH") != nullptr) {
+        GTEST_SKIP() << "the census override arms every store; this cell needs an unarmed one";
+    }
+    const PageId unarmed = SweepVictimAfterAFault(/*armed=*/false);
+    const PageId armed = SweepVictimAfterAFault(/*armed=*/true);
+    ASSERT_NE(unarmed, kInvalidPageId);
+    ASSERT_NE(armed, kInvalidPageId);
+    EXPECT_EQ(armed, unarmed)
+        << "the armed fault left its frame warmer than the unarmed one, so the two "
+           "configurations disagree about how many sweep rotations a page survives "
+           "its own fault";
 }
 
 }  // namespace

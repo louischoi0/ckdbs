@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -746,6 +748,13 @@ public:
     // the knob EV1 leaves open, and a sweep sizes its own laps from it.
     static constexpr std::uint8_t kClockUsageCap = 5;
 
+    // **Takes the structure latch** (AM-S2 step 3's eraser half). Every
+    // caller outside this class reaches it with the latch not held - the
+    // eviction cells, and `MaintainFreeReserve`, whose loop must drop it
+    // between rotations because the drain in between does device I/O.
+    // The fault path's inline sweep does *not* come through here: it runs
+    // inside `InsertFrame`, under the hold that insert already has, and
+    // calls the `Locked` body directly.
     std::size_t EvictColdFrames(std::size_t budget);
 
     // Pages the sweep found dirty at usage zero, in the order it found them
@@ -842,15 +851,14 @@ private:
         // **AM-S2 decided against making this atomic** - the pointer this
         // sentence used to carry to "AM-S2 owns that change" is retired:
         // step 1 put pin *accounting* under the structure latch, so an
-        // atomic here would be redundant with it. It is still mutated
-        // unlatched in one place - `ResidentBytes`' inline-sweep guard pin -
-        // so what makes a plain integer safe today is that one thread
-        // reaches a store, not that every mutation is latched.
+        // atomic here would be redundant with it. **Every mutation is now
+        // latched**: the last unlatched one was `ResidentBytes`' inline-sweep
+        // guard pin, and step 3 moved that inside `InsertFrame`'s own hold.
         //
         // A frame with pins > 0 is never a victim, at any pressure (EV4
-        // answers OutOfSpace instead of waiting) - and every eraser reads
-        // this field without the structure latch, so that exclusion also
-        // rests on the one-thread fact rather than on the latch.
+        // answers OutOfSpace instead of waiting), and all three erasers read
+        // this field under the structure latch - so that exclusion rests on
+        // the latch now rather than on one thread reaching a store.
         std::uint32_t pins = 0;
 
         // The CLOCK usage counter (`docs/spec/eviction.md` EV1 / §3.1-2):
@@ -1033,11 +1041,37 @@ private:
     // other (PinFrame's comment says why).
     void CountPin(Frame& frame) noexcept;
     void AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept;
+
+    // **The pin tail, with `hold` held on entry** (AM-S2). One copy, because
+    // `FetchPinned`'s hit and miss arms had grown into the same seven lines
+    // - find, pin, take the span, release the structure latch, wait for the
+    // page latch - and the miss arm's comment said "exactly as the hit path
+    // above", which is a duplication warning written in prose.
+    //
+    // `nullopt` means the frame is gone, **with `hold` still held**: nothing
+    // was unlocked on that arm, so both callers answer it by rounding the
+    // loop and re-testing from the top. On the value arm `hold` is released
+    // before the page latch is waited for, which is the ordering the whole
+    // stage is about.
+    std::optional<std::span<std::byte, kPageSize>> PinResidentAndRelease(
+        PageId page_id, PinMode mode, std::unique_lock<Latch>& hold) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }
+    // `sweep` runs MG06's inline reclaim **inside this call's own latch
+    // hold**, which is the only place it can run without a window: the
+    // frame it must protect is the one just inserted, and a hold that ends
+    // at the insert leaves that frame unprotected for the instant before
+    // the sweep re-takes the latch. Only `ResidentBytes`' miss path passes
+    // it - the create paths never swept and still do not, since a create
+    // that evicted would be a behaviour change nobody asked for.
     std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes,
-                                                bool dirty, bool warm = true);
+                                                bool dirty, bool warm = true, bool sweep = false);
+
+    // The sweep body, with the structure latch **already held**. Split from
+    // the public entry point because the two callers differ in exactly that:
+    // `InsertFrame` has the hold, everyone else needs it taken.
+    std::size_t EvictColdFramesLocked(std::size_t budget);
     Status EnsureAddressable(PageId page_id);
 
     // The two bitmaps covering `page_id`, read-only, answering as an empty
@@ -1113,13 +1147,13 @@ private:
     //
     // The frame **table** has never had one. AM-S1 gave each *frame* a latch
     // word; `frames_`, `clock_hand_`, `live_pins_`, `pin_high_water_`,
-    // `dirty_eviction_queue_` and `Frame::pins` are plain, because through
+    // `dirty_eviction_queue_` and `Frame::pins` were plain, because through
     // M1 one pool serves one core (`page.md` §6). AM-S2 shares the pool, and
-    // this is what a shared table's **pin accounting** runs under. Not its
-    // structural changes: `InsertFrame` and all three erasers are still
-    // unlatched, which the step-1 scope note below says outright - a claim
-    // that they were covered would have been contradicted twelve lines
-    // later in this same block.
+    // this is what a shared table runs under: the pin accounting (step 1),
+    // the insert (2b), and **all three erasers** - `ReleaseScanSlot`,
+    // `EvictClean` and `EvictColdFrames`. What is still outside it is every
+    // *reader* of the table that is not one of those, which is step 3's
+    // list and is stated below rather than implied.
     //
     // **Null where the store is not shared**, which is `LatchGuard`'s whole
     // shape and what keeps G2: at `cores = 1` the guard is a null test and
@@ -1136,30 +1170,33 @@ private:
     // waits, so the two are ordered without either being held across the
     // other.
     //
-    // **Step 1 scope, stated so nobody reads more into it**: this arms the
-    // pin protocol and nothing else. Two gaps remain, and the second is not
-    // the one the first draft of this comment named.
+    // **What is under it and what is not, stated so nobody reads more into
+    // it.** The two gaps step 1 named are closed, and by the stages that
+    // said they would be:
     //
-    //   1. The lookup-and-fault path is still unlatched. Step 2's per-frame
-    //      *loading* state closes it, letting a miss release the latch
-    //      before the device read instead of holding one across it.
-    //   2. **The fetch-and-pin pair is not atomic, and step 2 does not close
-    //      that.** `page_store.hpp:140-147` records the obligation verbatim
-    //      - "the shared pool AM-S2 builds must latch the frame table across
-    //      the pair" - and every accessor there is `bytes = *Unpinned(id)`
-    //      followed by `PinFrame(id)`, which re-looks-up. Between the two a
-    //      frame can be evicted and its `Page` freed, and `PinFrame`'s
-    //      not-found branch then hands `PageRef` a dangling `data_`; worse,
-    //      an evict-and-re-fault in that window pins a *different* frame
-    //      while `data_` points at the freed page, and the pin gauges
-    //      balance perfectly. Closing it means fetch-and-pin becomes one
-    //      operation, which is a `PageStore` interface change rather than
-    //      anything this class can do alone.
+    //   1. The lookup-and-fault path. Closed at 2b by the `loading_` set
+    //      below: a miss releases the latch before the device read instead
+    //      of holding one across it, and a second core missing the same page
+    //      waits rather than issuing a duplicate read.
+    //   2. **The fetch-and-pin pair.** Closed by `FetchPinned` and
+    //      `CreatePinned` - one operation each, latched across the pair, so
+    //      the window where a frame could be evicted between the fetch and
+    //      the pin no longer exists. It cost a `PageStore` interface change,
+    //      which is why it was never something this class could do alone.
     //
-    // So "the pin keeps the frame alive" is true **from the pin onward** and
-    // says nothing about the window before it. Neither gap is live while the
-    // store is per-core (step 3 is what shares it), but steps 2-6 inherit
-    // both, and (2) is not on step 2's list.
+    // **What is still outside is everything else**, stated as a rule rather
+    // than a list because the list is long and a short one would read as
+    // exhaustive: every `frames_` access that is not a pin, an insert or an
+    // erase runs with no hold. That includes **writers**, not only readers -
+    // `ResidentBytes`' resident branch sets `dirty` and bumps `usage`,
+    // `StampPageLsn` and `MarkFrameDirty` set `dirty`, `WriteBack` clears it
+    // and `rec_lsn` with it - as well as `TryClaimByStamp`,
+    // `CreateAtUnpinned`'s in-use test, `ScanRing::Fetch`, `AwaitWalGate`,
+    // `Flush`, the dirty-page enumerations, `IsPinnedClass`,
+    // `resident_pages()` and the test hooks. Step 3 takes them one at a
+    // time; the erasers went first because a reader racing an erase is a
+    // torn read, while an *eraser* racing a pin is a freed frame under a
+    // live handle.
     Latch frames_latch_;
     Latch* structure_latch() noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
 
@@ -1176,12 +1213,23 @@ private:
     // table would then have to be taught to skip. An id here is invisible to
     // all of them.
     //
-    // Two things it buys, and the second is what the rest of the stage
-    // needs: a second core missing the same page **waits** instead of
-    // issuing a duplicate read whose `InsertFrame` would race the first;
-    // and the inline sweep `EnsureResident` runs on the miss path (EV5)
-    // happens outside the latch, which is what makes latching the erasers
-    // possible at all - the deadlock `FetchPinned`'s comment warns about.
+    // **What it buys is one thing, and the second thing it was written to
+    // buy stopped being true when the erasers took the latch.** What it buys
+    // is the dedup: a second core missing the same page **waits** instead of
+    // issuing a duplicate read whose `InsertFrame` would race the first.
+    //
+    // What it no longer buys - and the note is here because the argument was
+    // load-bearing and is now inverted - is cover for the inline sweep. That
+    // sweep used to run *after* `InsertFrame` returned and outside every
+    // hold, taking a hand-pin on the fresh frame that raced any latched pin
+    // on the same counter; keeping a second core off the frame through
+    // `loading_` was how that race was survived. The sweep runs inside
+    // `InsertFrame`'s own hold now (`InsertFrame`'s `sweep`), so there is no
+    // unlatched increment to race and no window in which the fresh frame is
+    // unprotected. The deadlock that shape was avoiding is avoided by
+    // `EvictColdFramesLocked` instead, which is the honest place for it:
+    // `base/latch.hpp` is not recursive, so a body that may be reached with
+    // the hold already taken has to say so in its name.
     std::unordered_set<PageId> loading_;
     // Broadcast when a load finishes, either way. Waiters re-check their own
     // page and sleep again if it was not theirs: loads are rare against
