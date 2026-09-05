@@ -106,5 +106,65 @@ TEST(FrameTableRaceTest, StampingSurvivesConcurrentGrowthOfTheTable) {
               static_cast<std::size_t>(created.load()) + seeded.size());
 }
 
+// **The collecting readers, whose walk is the whole table** (AM-S2 step 3f).
+// `Flush` reserves `frames_.size()` and then iterates every entry, so a
+// concurrent insert can rehash under the iterator - and unlike `StampPageLsn`
+// there is no id to come back missing, only an iterator into a freed bucket
+// array. Survival is the assertion, which is what this tree already says of
+// an ordering carried structurally (`am_s2_pin_protocol_test.cpp`).
+TEST(FrameTableRaceTest, FlushingSurvivesConcurrentGrowthOfTheTable) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/8);
+
+    // **Sized against the flusher, not the inserters.** Each pass writes
+    // every dirty frame, so a table of N pages costs O(N) per flush and the
+    // pair is quadratic; what the cell needs is only that a walk overlaps a
+    // growth, which a few dozen passes over a growing table gives.
+    constexpr int kInserters = 3;
+    constexpr int kRounds = 600;
+    constexpr int kFlushPasses = 40;
+    std::atomic<int> ready{0};
+    std::atomic<int> flushes{0};
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < kInserters; ++t) {
+        threads.emplace_back([&, t] {
+            SetCurrentCore(static_cast<std::uint32_t>(t));
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) < kInserters + 1) {
+                std::this_thread::yield();
+            }
+            for (int i = 0; i < kRounds; ++i) {
+                auto made = store.value()->CreateNew();
+                if (!made.ok()) continue;
+                FormatPage(made.value().second.bytes(), PageType::kHeap);
+                made.value().second.Release();
+            }
+        });
+    }
+    threads.emplace_back([&] {
+        SetCurrentCore(kInserters);
+        ready.fetch_add(1, std::memory_order_acq_rel);
+        while (ready.load(std::memory_order_acquire) < kInserters + 1) {
+            std::this_thread::yield();
+        }
+        for (int pass = 0; pass < kFlushPasses; ++pass) {
+            if (store.value()->Flush().ok()) flushes.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    for (std::thread& th : threads) th.join();
+
+    EXPECT_GT(flushes.load(), 0) << "the flusher never completed a pass";
+    // Nothing is left dirty that the last pass should have taken: the
+    // inserters are joined, so a final flush has the table to itself.
+    ASSERT_TRUE(store.value()->Flush().ok());
+    EXPECT_TRUE(store.value()->DirtyPageIds().empty())
+        << "a dirty page survived a quiescent flush, so a walk lost an entry";
+}
+
 }  // namespace
 }  // namespace kds::storage

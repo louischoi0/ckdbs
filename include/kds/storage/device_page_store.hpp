@@ -768,7 +768,14 @@ public:
     // task. Cleared by `TakeDirtyEvictionQueue()`.
     std::vector<PageId> TakeDirtyEvictionQueue();
 
-    std::size_t resident_pages() const noexcept { return frames_.size(); }
+    // Under the hold (AM-S2 step 3f): `size()` on a table another core may
+    // be growing is a read of a member the growth writes. Not `noexcept` any
+    // more - `LatchGuard` locks a `std::mutex`, which may throw - and no
+    // caller relied on it: the log line in `Sync` and the eviction cells.
+    std::size_t resident_pages() const {
+        LatchGuard structure(structure_latch());
+        return frames_.size();
+    }
 
     // How many frames currently hold at least one pin. Test and §11
     // observability: an unbalanced pin shows up here as a number that never
@@ -1241,8 +1248,14 @@ private:
     // time; the erasers went first because a reader racing an erase is a
     // torn read, while an *eraser* racing a pin is a freed frame under a
     // live handle.
-    Latch frames_latch_;
-    Latch* structure_latch() noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
+    // **`mutable`, because the const readers need it too** (AM-S2 step 3f).
+    // `DirtyPageIds`, `DirtyPagesWithRecLsn` and `resident_pages()` walk or
+    // measure the table and are `const` - const of the *logical* state,
+    // which a latch does not change. This is the standard reason a mutex is
+    // mutable, and the alternative was to un-const three accessors whose
+    // callers correctly treat them as reads.
+    mutable Latch frames_latch_;
+    Latch* structure_latch() const noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
 
     // ---- AM-S2 step 2b: the loading set ---------------------------------
     //

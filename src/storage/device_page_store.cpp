@@ -1335,10 +1335,19 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
 Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
     if (wal_gate_ == nullptr) return Status::OK();
 
+    // **The scan under the hold, the wait outside it** (AM-S2 step 3f), and
+    // this one was owed rather than noticed: `device_page_store.hpp`'s
+    // acquisition-order block already said "whatever latch that scan comes
+    // to need must be dropped before `EnsureDurable`, or the wait acquires
+    // exactly the 'latched across a durability wait' shape this bullet
+    // rules out". `EnsureDurable` waits on the writer thread's `fdatasync`.
+    //
     // One EnsureDurable for the batch maximum, not one per page: the call
     // is a no-op once the watermark is past, so the highest page_lsn in
     // the batch subsumes every other.
     wal::Lsn highest = wal::kNoLsn;
+    {
+    LatchGuard structure(structure_latch());
     for (const PageId page_id : page_ids) {
         auto it = frames_.find(page_id);
         if (it == frames_.end() || !it->second.dirty) continue;
@@ -1356,6 +1365,7 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
         const std::uint64_t page_lsn =
             GetPageLsn(std::span<const std::byte, kPageSize>(*it->second.bytes));
         if (page_lsn > highest) highest = page_lsn;
+    }
     }
     if (highest == wal::kNoLsn) return Status::OK();  // nothing logged in this batch
 
@@ -1382,52 +1392,69 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // moves - the whole of flush-before-evict.
     if (Status s = AwaitWalGate(ordered); !s.ok()) return s;
 
+    // **Three phases per run, and the device call is the one between the
+    // holds** (AM-S2 step 3f). The run detection, the checksum stamp and the
+    // clean all walk `frames_`, which another core may be growing; the write
+    // is device I/O, which this latch may never span.
+    //
+    // **What makes the single-page arm safe without a copy is the dirty
+    // invariant**, and it is worth naming because the whole phase split
+    // rests on it: no eraser removes a dirty frame. `EvictClean` refuses one
+    // outright, `ReleaseScanSlot` abandons it, and the sweep only *queues*
+    // it. So a pointer taken under the first hold is still good at the
+    // device call, and the frame is still there for the third. A run copies
+    // into scratch for the reason it always did - frames are separate heap
+    // allocations - not for this one.
     std::size_t written = 0;
     std::vector<std::byte> scratch;
     for (std::size_t i = 0; i < ordered.size();) {
-        auto it = frames_.find(ordered[i]);
-        if (it == frames_.end() || !it->second.dirty) {
-            ++i;  // evicted, or already written by someone else: not ours
-            continue;
-        }
-
-        // Extend the run while the next ids are consecutive, resident and
-        // dirty - the shape one WritePageRun can take.
-        std::size_t run = 1;
-        while (run < kWritebackRunPages && i + run < ordered.size() &&
-               ordered[i + run] == ordered[i] + run) {
-            auto next = frames_.find(ordered[i + run]);
-            if (next == frames_.end() || !next->second.dirty) break;
-            ++run;
-        }
-
-        // (2) checksum, the last thing that touches a page before it goes
-        // out (page.md section 8) - skipped for a headerless page, which
-        // has no field to put one in.
-        for (std::size_t k = 0; k < run; ++k) {
-            auto& frame = frames_.find(ordered[i + k])->second;
-            StampIfHeadered(ordered[i + k], std::span<std::byte, kPageSize>(*frame.bytes));
-        }
-
-        // (3) write: one device call for a run, per page otherwise. The
-        // run copies into scratch because frames are separate heap
-        // allocations - bounded by kWritebackRunPages, and best-effort by
-        // spec §4: a device without a real scatter write still sees the
-        // pages land in file order.
-        Status wrote = Status::OK();
-        if (run > 1) {
-            scratch.resize(run * kPageSize);
-            for (std::size_t k = 0; k < run; ++k) {
-                const auto& frame = frames_.find(ordered[i + k])->second;
-                std::memcpy(scratch.data() + k * kPageSize, frame.bytes->data(), kPageSize);
+        std::size_t run = 0;
+        const std::byte* single = nullptr;
+        {
+            LatchGuard structure(structure_latch());
+            auto it = frames_.find(ordered[i]);
+            if (it == frames_.end() || !it->second.dirty) {
+                ++i;  // evicted, or already written by someone else: not ours
+                continue;
             }
-            wrote = device_.WritePageRun(ordered[i], static_cast<std::uint32_t>(run),
-                                         std::span<const std::byte>(scratch));
-        } else {
-            const auto& frame = frames_.find(ordered[i])->second;
-            wrote = device_.WritePage(ordered[i],
-                                      std::span<const std::byte, kPageSize>(*frame.bytes));
+
+            // Extend the run while the next ids are consecutive, resident
+            // and dirty - the shape one WritePageRun can take.
+            run = 1;
+            while (run < kWritebackRunPages && i + run < ordered.size() &&
+                   ordered[i + run] == ordered[i] + run) {
+                auto next = frames_.find(ordered[i + run]);
+                if (next == frames_.end() || !next->second.dirty) break;
+                ++run;
+            }
+
+            // (2) checksum, the last thing that touches a page before it
+            // goes out (page.md section 8) - skipped for a headerless page,
+            // which has no field to put one in.
+            for (std::size_t k = 0; k < run; ++k) {
+                auto& frame = frames_.find(ordered[i + k])->second;
+                StampIfHeadered(ordered[i + k], std::span<std::byte, kPageSize>(*frame.bytes));
+            }
+
+            if (run > 1) {
+                scratch.resize(run * kPageSize);
+                for (std::size_t k = 0; k < run; ++k) {
+                    const auto& frame = frames_.find(ordered[i + k])->second;
+                    std::memcpy(scratch.data() + k * kPageSize, frame.bytes->data(), kPageSize);
+                }
+            } else {
+                single = it->second.bytes->data();
+            }
         }
+
+        // (3) write: one device call for a run, per page otherwise, and
+        // best-effort by spec §4 - a device without a real scatter write
+        // still sees the pages land in file order.
+        const Status wrote =
+            run > 1 ? device_.WritePageRun(ordered[i], static_cast<std::uint32_t>(run),
+                                           std::span<const std::byte>(scratch))
+                    : device_.WritePage(
+                          ordered[i], std::span<const std::byte, kPageSize>(single, kPageSize));
         if (!wrote.ok()) {
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore", "write failed for page " +
@@ -1439,12 +1466,16 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
 
         // (4) clean, only now: a failure above leaves the frame dirty and
         // its recLSN intact, so the next writeback retries it.
-        for (std::size_t k = 0; k < run; ++k) {
-            auto& frame = frames_.find(ordered[i + k])->second;
-            frame.dirty = false;
-            frame.rec_lsn = wal::kNoLsn;  // clean: nothing to replay into it
-            if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
-                log_->Trace("pagestore", "wrote page=" + std::to_string(ordered[i + k]));
+        {
+            LatchGuard structure(structure_latch());
+            for (std::size_t k = 0; k < run; ++k) {
+                auto cleaned = frames_.find(ordered[i + k]);
+                if (cleaned == frames_.end()) continue;
+                cleaned->second.dirty = false;
+                cleaned->second.rec_lsn = wal::kNoLsn;  // nothing to replay into it
+                if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+                    log_->Trace("pagestore", "wrote page=" + std::to_string(ordered[i + k]));
+                }
             }
         }
         written += run;
@@ -1499,10 +1530,18 @@ std::size_t DevicePageStore::MaintainFreeReserve(std::size_t pool_frames,
 }
 
 Status DevicePageStore::Flush() {
+    // **Collect under the hold, write outside it** (AM-S2 step 3f). The walk
+    // is a read of a table another core may be growing; the writeback below
+    // is device I/O, which this latch may never span. A page that turns
+    // dirty after the collection is next flush's, which is what "flush what
+    // was dirty when asked" has always meant.
     std::vector<PageId> dirty;
-    dirty.reserve(frames_.size());
-    for (const auto& [page_id, frame] : frames_) {
-        if (frame.dirty) dirty.push_back(page_id);
+    {
+        LatchGuard structure(structure_latch());
+        dirty.reserve(frames_.size());
+        for (const auto& [page_id, frame] : frames_) {
+            if (frame.dirty) dirty.push_back(page_id);
+        }
     }
 
     auto written = WriteBack(dirty);
@@ -1531,6 +1570,9 @@ Status DevicePageStore::Sync() {
 }
 
 std::vector<PageId> DevicePageStore::DirtyPageIds() const {
+    // The whole body under the hold: it is a collection and touches no
+    // device, so there is nothing to hoist out (AM-S2 step 3f).
+    LatchGuard structure(structure_latch());
     std::vector<PageId> dirty;
     dirty.reserve(frames_.size());
     for (const auto& [page_id, frame] : frames_) {
@@ -1541,6 +1583,8 @@ std::vector<PageId> DevicePageStore::DirtyPageIds() const {
 }
 
 std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn() const {
+    // As `DirtyPageIds`, and for the same reason.
+    LatchGuard structure(structure_latch());
     std::vector<std::pair<PageId, wal::Lsn>> dirty;
     dirty.reserve(frames_.size());
     for (const auto& [page_id, frame] : frames_) {
