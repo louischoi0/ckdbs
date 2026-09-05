@@ -1016,6 +1016,18 @@ private:
     void PinFrame(PageId page_id, PinMode mode) noexcept override;
     void UnpinFrame(PageId page_id) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
+
+    // The two halves of taking a pin, split because `FetchPinned`'s armed
+    // path reaches them already holding the structure latch and cannot call
+    // `PinFrame` (which takes it). One definition each: writing the
+    // increments out at the second site is what silently took the MG04
+    // ceiling and the never-upgrade census off the armed path.
+    //
+    // `CountPin` runs **under** the structure latch, `AcquirePageLatch`
+    // **outside** it - the order that keeps neither latch held across the
+    // other (PinFrame's comment says why).
+    void CountPin(Frame& frame) noexcept;
+    void AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }

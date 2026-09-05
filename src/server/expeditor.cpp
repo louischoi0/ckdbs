@@ -822,7 +822,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // pays nothing for. At one core the word is never touched.
     static_assert(kMaxWalCores - 1 <= storage::kPageLatchMaxCoreId,
                   "the latch word's owner field must name every core the superblock admits");
-    expeditor->store_->SetLatchArmed(expeditor->database_->superblock.core_count() > 1);
+    // The pinner count as well as the arm - core_runtime.cpp'''s site states
+    // the argument (AM-S2: kPinCeiling is per-operation, and live_pins_ is a
+    // proxy for it only while one thread reaches this store).
+    expeditor->store_->SetLatchArmed(expeditor->database_->superblock.core_count() > 1,
+                                     expeditor->database_->superblock.core_count());
 
     // **The idle sync stops touching the reactor here.** D3's loss-window
     // tick moves to the WAL writer thread (wal/writer.hpp) - and only it.

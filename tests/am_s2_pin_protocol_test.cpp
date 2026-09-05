@@ -146,45 +146,96 @@ TEST_F(PinProtocolTest, ConcurrentMissesOnOnePageIssueOneDeviceRead) {
     // rather than issuing its own read whose `InsertFrame` would race the
     // first.
     //
-    // The device trace is what makes that checkable: one `kRead` for the
-    // page, however many threads fault it at once.
+    // The device trace is what makes that checkable: one `kRead` per round,
+    // however many threads fault the page in that round.
+    //
+    // **Rounds and a reusable barrier, because neither is optional here.**
+    // The first version of this cell spawned eight threads in a loop and
+    // asserted one read. It passed 40/40 with the entire wait arm compiled
+    // out, because `std::thread` construction costs far more than a
+    // `MemoryPageDevice` read and the first faulter was finished before the
+    // second was running - so it raced nothing and discriminated nothing. A
+    // start barrier alone raises the catch rate to only one run in ten: the
+    // window is a memcpy and a CRC, microseconds wide. Many rounds is what
+    // converts a flaky detector into a reliable one - with the wait arm
+    // removed this fails on essentially every run, and with it present the
+    // count is exactly `kRounds`.
     const PageId id = MakeResidentPage(std::byte{0x5A});
 
-    // Evict it so the next touch is a genuine miss. `EvictClean` is the path
-    // with no dirty bytes to write back, which is what a freshly synced page
-    // is.
-    const std::array<PageId, 1> victims{id};
-    ASSERT_TRUE(store_->EvictClean(victims).ok());
-    device_->ClearTrace();
-
     constexpr int kFaulters = 8;
+    constexpr int kRounds = 200;
+    const std::array<PageId, 1> victims{id};
+
     std::atomic<int> failures{0};
+    // Counted, never asserted inside the loop: a bail-out mid-round leaves
+    // eight threads parked on a barrier nobody will release, and the test
+    // binary aborts instead of reporting. Every round is driven to the end
+    // and the counts are read after the join.
+    int evict_failures = 0;
+    // The barrier: `arrived` counts faulters parked before a round, `round`
+    // is the generation they wait to see, `finished` counts them out again
+    // so the next eviction cannot run while a `PageRef` is still alive.
+    std::atomic<int> arrived{0};
+    std::atomic<int> round{0};
+    std::atomic<int> finished{0};
+
     std::vector<std::thread> threads;
     threads.reserve(kFaulters);
     for (int t = 0; t < kFaulters; ++t) {
         threads.emplace_back([&] {
-            auto ref = store_->GetForRead(id);
-            if (!ref.ok() || ref.value().bytes()[kPageBodyOffset] != std::byte{0x5A}) ++failures;
+            for (int r = 0; r < kRounds; ++r) {
+                ++arrived;
+                while (round.load(std::memory_order_acquire) != r + 1) std::this_thread::yield();
+                {
+                    auto ref = store_->GetForRead(id);
+                    if (!ref.ok() || ref.value().bytes()[kPageBodyOffset] != std::byte{0x5A}) {
+                        ++failures;
+                    }
+                }  // the handle drops here: an eviction between rounds must
+                   // find the frame unpinned.
+                ++finished;
+            }
         });
     }
-    for (std::thread& thread : threads) thread.join();
-    EXPECT_EQ(failures.load(), 0);
 
     int reads = 0;
-    for (const MemoryPageDevice::TraceEntry& entry : device_->trace()) {
-        if (entry.kind == MemoryPageDevice::OpKind::kRead && entry.first_page_id == id) ++reads;
+    for (int r = 0; r < kRounds; ++r) {
+        while (arrived.load() != kFaulters * (r + 1)) std::this_thread::yield();
+        // Evicted with every faulter parked, so the next round is a genuine
+        // miss for all of them. `EvictClean` is the path with no dirty bytes
+        // to write back, which is what a freshly synced page is.
+        if (!store_->EvictClean(victims).ok()) ++evict_failures;
+        device_->ClearTrace();
+        round.store(r + 1, std::memory_order_release);
+        while (finished.load() != kFaulters * (r + 1)) std::this_thread::yield();
+        for (const MemoryPageDevice::TraceEntry& entry : device_->trace()) {
+            if (entry.kind == MemoryPageDevice::OpKind::kRead && entry.first_page_id == id) {
+                ++reads;
+            }
+        }
     }
-    EXPECT_EQ(reads, 1) << "eight concurrent faults on one page issued " << reads
-                        << " device reads; the loading set is what makes that one";
+    for (std::thread& thread : threads) thread.join();
+
+    EXPECT_EQ(failures.load(), 0);
+    // A refused eviction is the loading set's absence showing up as damage
+    // rather than as a count: two concurrent loads of one page both reach
+    // `InsertFrame`, whose `insert_or_assign` replaces the `Frame` - latch
+    // word, pin count and all - under a thread that is holding it.
+    EXPECT_EQ(evict_failures, 0)
+        << "a round could not evict the page between faults; a frame was left pinned or latched";
+    EXPECT_EQ(reads, kRounds) << "eight concurrent faults per round over " << kRounds
+                              << " rounds issued " << reads
+                              << " device reads; the loading set is what makes that one each";
 
     // **What this cell does not assert**, stated rather than left to be
     // discovered: that a hit on a *different* page proceeds while this read
     // is in flight - which is the actual reason step 2b exists. Showing it
     // needs a device that can be made slow on demand, and `MemoryPageDevice`
     // has fault injection but no delay hook. The count above would still be
-    // 1 with the latch held across the read, because the other seven would
-    // then block on the latch and find the page resident. So this pins the
-    // duplicate-read half of the loading set and not the no-blocking half.
+    // one per round with the latch held across the read, because the other
+    // seven would then block on the latch and find the page resident. So
+    // this pins the duplicate-read half of the loading set and not the
+    // no-blocking half.
 }
 
 }  // namespace

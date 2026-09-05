@@ -24,6 +24,38 @@ bool PageIsAllZero(const std::array<std::byte, kPageSize>& page) noexcept {
     return std::all_of(page.begin(), page.end(), [](std::byte b) { return b == std::byte{0}; });
 }
 
+// Erase-and-broadcast on **every** exit from `FetchPinned`'s load window,
+// including one an exception takes. The window is the only place the
+// structure latch is dropped mid-operation, and an id left behind in
+// `loading_` is not a leak that costs memory: every later fetch of that
+// page finds it in flight and parks on the condition variable for the life
+// of the process, because the thread that would have woken them is gone.
+// `std::make_unique<Page>()` inside the device read is enough to make that
+// reachable, and the build enables exceptions.
+class LoadingGuard {
+public:
+    LoadingGuard(std::unique_lock<Latch>& hold, std::unordered_set<PageId>& loading,
+                 std::condition_variable& done, PageId page_id) noexcept
+        : hold_(hold), loading_(loading), done_(done), page_id_(page_id) {}
+    LoadingGuard(const LoadingGuard&) = delete;
+    LoadingGuard& operator=(const LoadingGuard&) = delete;
+    ~LoadingGuard() {
+        // Re-taken here rather than by the caller, so the erase and the
+        // broadcast are reached by the normal path and by unwinding alike.
+        if (!hold_.owns_lock()) hold_.lock();
+        loading_.erase(page_id_);
+        // Both arms: a waiter never woken because this load *failed* would
+        // sleep until some unrelated fault happened to wake it.
+        done_.notify_all();
+    }
+
+private:
+    std::unique_lock<Latch>& hold_;
+    std::unordered_set<PageId>& loading_;
+    std::condition_variable& done_;
+    PageId page_id_;
+};
+
 }  // namespace
 
 DevicePageStore::DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept
@@ -413,6 +445,30 @@ Status DevicePageStore::EnsureAddressable(PageId page_id) {
 std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
                                                              std::unique_ptr<Page> bytes,
                                                              bool dirty, bool warm) {
+    // **AM-S2 R1: the table's one structural mutation takes the structure
+    // latch itself.** 2a held the latch across the whole raw fetch, so this
+    // insert was covered; 2b moved the fetch outside to keep a device read
+    // off the latch, and took the insert out with it. Under a shared pool
+    // that is an `unordered_map` rehashing while other cores are inside
+    // `find` - undefined behaviour rather than a slow path - so the cover
+    // has to come back, and here is where it costs nothing to hold.
+    //
+    // **Taken here rather than by the callers**, because all three of them
+    // reach this with the latch *not* held and would each have to be
+    // trusted to remember: `ResidentBytes`' miss path (2b drops the latch
+    // before the read), and the two `Create*Unpinned` paths, which never
+    // took it. `FetchPinned`'s hit path does hold it - and does not reach
+    // here, because a resident page's branch in `ResidentBytes` is a find,
+    // a flag and a span.
+    //
+    // What this does **not** fix: `insert_or_assign` below replaces a whole
+    // `Frame` - latch word and pin count with it - if one is already there.
+    // The loading set makes that unreachable for two concurrent faults of
+    // one page, but `ScanRing::Fetch` faults outside that set entirely, so
+    // the clobber is still reachable by a ring fetch racing a load. That is
+    // a hole in the protocol, not in this latch, and it is named in the
+    // AM-S2 row.
+    LatchGuard structure(structure_latch());
     std::span<std::byte, kPageSize> view(*bytes);
     Frame frame{std::move(bytes), dirty};
     // An ordinary miss starts warm (usage 1), not cold: the inline sweep
@@ -1411,6 +1467,19 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
     // read - and it is also what puts the inline sweep `EnsureResident` runs
     // on that path (EV5) outside the latch, which is the precondition for
     // latching the erasers at all.
+    //
+    // **What that sentence rests on, since it is not local.** The *hit* path
+    // below still calls the whole raw fetch under the latch, and `Resolve`
+    // begins with `IsAllocated`, whose false arm is `AdoptDeviceMapOnMiss` -
+    // region loads and `RefreshFreeMapFromDevice`, both device reads. No
+    // resident page reaches it, because a page is only ever made resident
+    // after its bit is set and free-map bits are never cleared (page.md §5) -
+    // so "no I/O on a hit" is a property of *that* invariant, not of this
+    // function. Same for the sweep: `ResidentBytes` runs it only after
+    // `InsertFrame`, on the branch a resident page does not take. A hit path
+    // that could ever insert would put both back under the latch, and once
+    // the erasers take it (step 3) the sweep half becomes a self-deadlock
+    // rather than a slow read.
     std::unique_lock<Latch> hold(*latch);
     for (;;) {
         const bool resident = frames_.find(page_id) != frames_.end();
@@ -1424,16 +1493,26 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
             auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
             if (!bytes.ok()) return bytes.status();
             auto found = frames_.find(page_id);
-            if (found == frames_.end()) continue;  // evicted under us; load it
+            // Defensive, and **unreachable as the code stands**: the latch
+            // is held continuously from the `resident` test above through
+            // this find, and the only eraser the raw fetch can reach is the
+            // inline sweep, which runs on its miss branch - the branch a
+            // resident page does not take. Kept rather than asserted because
+            // it is the arm a future hit path that could insert would need,
+            // but "evicted under us" is not what happens today.
+            if (found == frames_.end()) continue;
             Frame& frame = found->second;
-            ++frame.pins;
-            ++live_pins_;
-            if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+            // The same accounting `PinFrame` does, **including its two debug
+            // checks**: this path replaced the `PinFrame` call the accessors
+            // used to make, so writing the increments out by hand here took
+            // the MG04 ceiling and the AM-S1 never-upgrade census off the
+            // armed path - the only path either one is about.
+            CountPin(frame);
             hold.unlock();
             // Pin first, then wait for the page latch - `PinFrame`'s order,
             // for `PinFrame`'s reason, and now with the structure latch
             // genuinely released rather than parenthetically held.
-            if (latch_armed_) (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
+            AcquirePageLatch(page_id, frame, mode);
             return bytes.value();
         }
         if (loading_.find(page_id) != loading_.end()) {
@@ -1447,16 +1526,14 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
         }
 
         loading_.insert(page_id);
+        // Re-takes the latch, erases the id and broadcasts on every way out
+        // of this scope - the two `return`s below, falling off the end, and
+        // an exception. See LoadingGuard for what a missed erase costs.
+        LoadingGuard published(hold, loading_, loading_done_, page_id);
         hold.unlock();
         // The device read, the checksum verify and the inline sweep, all
         // outside the latch.
         auto loaded = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
-        hold.lock();
-        loading_.erase(page_id);
-        // Broadcast on **both** arms: a waiter that is never woken because
-        // this load failed would sleep until some unrelated fault happened
-        // to wake it.
-        loading_done_.notify_all();
         if (!loaded.ok()) return loaded.status();
         // Round the loop rather than pinning here. The frame is resident
         // now, but it is also unpinned for the instant between
@@ -1497,24 +1574,39 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
         // References into an `unordered_map` survive its rehashing, so this
         // pointer stays good after the guard drops - the property that lets
         // the page-latch wait happen outside the latch at all.
-        ++frame->pins;
-        ++live_pins_;
-        if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
-#ifndef NDEBUG
-        // MG04's ceiling, asserted rather than logged: a workload that holds
-        // more pins than the audit derived is either a new Shape-B site
-        // missing its bound or a leak, and both should fail the test that
-        // reaches them.
-        if (live_pins_ > pin_ceiling_) {
-            std::fprintf(stderr,
-                         "DevicePageStore: %zu live pins exceeds the ceiling %zu "
-                         "(kPinCeiling %zu x the concurrent pinners SetLatchArmed was told "
-                         "about; docs/spec/page.md §3)\n",
-                         live_pins_, pin_ceiling_, kPinCeiling);
-            std::abort();
-        }
-#endif
+        CountPin(*frame);
     }
+    AcquirePageLatch(page_id, *frame, mode);
+}
+
+// The pin accounting, with the structure latch already held by the caller.
+// Shared by `PinFrame` and by `FetchPinned`'s armed hit path, which is the
+// same act reached two ways: one call each keeps the gauge, the high-water
+// mark and the ceiling from having two definitions that can drift.
+void DevicePageStore::CountPin(Frame& frame) noexcept {
+    ++frame.pins;
+    ++live_pins_;
+    if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+#ifndef NDEBUG
+    // MG04's ceiling, asserted rather than logged: a workload that holds
+    // more pins than the audit derived is either a new Shape-B site
+    // missing its bound or a leak, and both should fail the test that
+    // reaches them.
+    if (live_pins_ > pin_ceiling_) {
+        std::fprintf(stderr,
+                     "DevicePageStore: %zu live pins exceeds the ceiling %zu "
+                     "(kPinCeiling %zu x the concurrent pinners SetLatchArmed was told "
+                     "about; docs/spec/page.md §3)\n",
+                     live_pins_, pin_ceiling_, kPinCeiling);
+        std::abort();
+    }
+#endif
+}
+
+// The page-latch half of taking a pin, with **no** latch held: the pin is
+// already counted, and a frame with pins > 0 is never an eviction victim
+// (EV4), so it is this frame that is waited for however long the wait is.
+void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept {
     if (latch_armed_) {
         // The page latch (AM-S1, the header's "The page latch" section).
         // Taken where the pin is taken, in the accessor's mode, and never
@@ -1533,8 +1625,8 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
         // for exclusive"; the pin taken above is this caller's own, so the
         // pre-existing holders are everything past it. Left as `!= 0` it
         // would fire on the first exclusive pin of an unshared frame.
-        if (mode == PinMode::kExclusive && frame->pins > 1 &&
-            PageLatch::HasSharedHolders(frame->latch)) {
+        if (mode == PinMode::kExclusive && frame.pins > 1 &&
+            PageLatch::HasSharedHolders(frame.latch)) {
             // `pins - 1`, for the same reason the test above is `> 1`: the
             // count includes this caller's own pin, and the number the
             // message is about is the *pre-existing* shares. Printing the
@@ -1544,7 +1636,7 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
                          "DevicePageStore: page %u is held shared by this core (%u pin(s)) "
                          "and was asked for exclusive - a page latch is never upgraded "
                          "(docs/spec/page.md section 6)\n",
-                         page_id, frame->pins - 1);
+                         page_id, frame.pins - 1);
             // The census's whole value is naming the site: raw frames, for
             // `addr2line -e <binary>` - the executable is not linked
             // -rdynamic, so symbol names are not available here.
@@ -1556,7 +1648,7 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
 #endif
         // The turns it spun are dropped: a contention gauge is AM-S3's, when
         // it has a number to want (the cells read Acquire's return directly).
-        (void)PageLatch::Acquire(frame->latch, LatchModeFor(mode), core_id_);
+        (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
     }
 }
 

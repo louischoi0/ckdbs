@@ -205,7 +205,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // core's. `core_count > 1` alone: frames have no stream topology, so the
     // WAL's `single_stream()` conjunct has no counterpart. At one core the
     // word is never touched (device_page_store.hpp, "The page latch").
-    runtime->store_->SetLatchArmed(config.core_count > 1);
+    // **The pinner count, not just the arm** (AM-S2). `kPinCeiling` bounds
+    // *one operation*'''s pin stack, and `live_pins_` is a proxy for it only
+    // while one thread reaches this store. That holds today and stops
+    // holding at step 3, where N threads each running a 7-deep descent
+    // against one store would trip a debug abort on correct traffic. Passing
+    // the count here scales the bound with the operations that can be in
+    // flight, and only ever loosens a debug assert.
+    runtime->store_->SetLatchArmed(config.core_count > 1, config.core_count);
     runtime->undo_log_.emplace(*runtime->store_, &*runtime->wal_);
     // Timed, as core 0's is (`Expeditor::Open` passes its clock): `SHOW META`
     // prints the whole RC09 block only when `timings.timed` says a clock was
