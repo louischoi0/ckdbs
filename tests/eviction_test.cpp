@@ -1,12 +1,15 @@
 #include <algorithm>
 #include <cstdlib>
+#include <atomic>
 #include <memory>
+#include <thread>
 #include <span>
 #include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "kds/base/current_core.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 
@@ -327,17 +330,25 @@ TEST_F(EvictionTest, AnEmptyOrZeroBudgetSweepIsAWellDefinedNoOp) {
 // a counter that must stay zero, not an inspection.
 class GateProbe final : public wal::WalDurability {
 public:
-    wal::Lsn durable_lsn() const noexcept override { return durable_; }
+    // **Atomic since AM-S3**: one store now serves every core, so a
+    // writeback and a stamper reach this from two threads and the
+    // single-threaded cells below are unaffected by the change.
+    wal::Lsn durable_lsn() const noexcept override {
+        return durable_.load(std::memory_order_acquire);
+    }
     Status EnsureDurable(wal::Lsn lsn) override {
-        asked_ = true;
-        if (lsn >= durable_) durable_ = lsn + 1;
+        asked_.store(true, std::memory_order_release);
+        wal::Lsn seen = durable_.load(std::memory_order_acquire);
+        while (lsn >= seen && !durable_.compare_exchange_weak(seen, lsn + 1,
+                                                             std::memory_order_acq_rel)) {
+        }
         return Status::OK();
     }
-    bool asked() const noexcept { return asked_; }
+    bool asked() const noexcept { return asked_.load(std::memory_order_acquire); }
 
 private:
-    wal::Lsn durable_ = 1;  // a real record LSN is never 0
-    bool asked_ = false;
+    std::atomic<wal::Lsn> durable_{1};  // a real record LSN is never 0
+    std::atomic<bool> asked_{false};
 };
 
 class ProbedDevice final : public PageDevice {
@@ -350,11 +361,16 @@ public:
     }
     Status WritePage(PageId id, std::span<const std::byte, kPageSize> in) override {
         Note();
+        CheckDurable(in);
         ++page_writes_;
         return inner_.WritePage(id, in);
     }
     Status WritePageRun(PageId first, std::uint32_t nr, std::span<const std::byte> in) override {
         Note();
+        for (std::uint32_t k = 0; k < nr; ++k) {
+            CheckDurable(std::span<const std::byte, kPageSize>(in.data() + k * kPageSize,
+                                                               kPageSize));
+        }
         ++run_writes_;
         return inner_.WritePageRun(first, nr, in);
     }
@@ -366,8 +382,26 @@ public:
     std::size_t page_writes() const noexcept { return page_writes_; }
     std::size_t run_writes() const noexcept { return run_writes_; }
     std::size_t writes_before_gate() const noexcept { return writes_before_gate_; }
+    // **The sharp question** (AM-S3): not "was the gate ever asked" but "was
+    // *this page* durable when it went out". `writes_before_gate()` stops
+    // being able to fail after the first gate call, which is enough for a
+    // single-threaded cell and says almost nothing once several threads are
+    // dirtying at once. This reads the page_lsn out of the bytes on their
+    // way to the device and compares it against the watermark, which is the
+    // invariant itself: `IsDurable(l)` is `durable_lsn() > l`.
+    std::size_t writes_past_durable() const noexcept {
+        return writes_past_durable_.load(std::memory_order_acquire);
+    }
 
 private:
+    void CheckDurable(std::span<const std::byte, kPageSize> page) {
+        if (gate_ == nullptr) return;
+        const std::uint64_t lsn = GetPageLsn(page);
+        if (lsn == wal::kNoLsn) return;  // never logged: nothing to be ahead of
+        if (lsn >= gate_->durable_lsn()) {
+            writes_past_durable_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     void Note() {
         if (gate_ != nullptr && !gate_->asked()) ++writes_before_gate_;
     }
@@ -376,6 +410,7 @@ private:
     std::size_t page_writes_ = 0;
     std::size_t run_writes_ = 0;
     std::size_t writes_before_gate_ = 0;
+    std::atomic<std::size_t> writes_past_durable_{0};
 };
 
 TEST_F(EvictionTest, TheDrainWritesQueuedDirtCleanAndTheNextSweepReclaims) {
@@ -439,6 +474,75 @@ TEST(EvictionWritebackTest, NoPageWritePrecedesItsWalDurabilityPoint) {
     EXPECT_TRUE(gate.asked()) << "writeback never consulted the gate";
     EXPECT_EQ(probed.writes_before_gate(), 0u)
         << "a page write reached the device before its WAL durability point";
+}
+
+// **Flush-before-evict with two cores dirtying one page** (AM-S3). The rule
+// is EV02's and it is the one the shared pool puts most at risk: a page's
+// bytes may not reach the device before the log record describing them is
+// durable. With a frame table per core that was a statement about one
+// thread; with one table, a stamper on one core and a writeback on another
+// touch the same frame, and the gate call and the write are separated by
+// exactly the window AM-S2 spent its stages closing.
+//
+// The check is the invariant rather than a proxy: the probe reads each
+// page's own `page_lsn` out of the bytes on their way to the device and
+// compares it against the watermark, so "was the gate asked" cannot stand in
+// for "was this page durable".
+TEST(EvictionWritebackTest, FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/64, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    GateProbe gate;
+    ProbedDevice probed(*device.value(), &gate);
+    auto opened = DevicePageStore::Open(probed, /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    store.SetWalGate(&gate);
+    store.SetLatchArmed(true, /*concurrent_pinners=*/8);
+
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.Release();
+
+    constexpr int kStampers = 2;
+    constexpr int kRounds = 2000;
+    std::atomic<int> ready{0};
+    std::atomic<int> flushes{0};
+    std::vector<std::thread> threads;
+
+    for (int t = 0; t < kStampers; ++t) {
+        threads.emplace_back([&, t] {
+            SetCurrentCore(static_cast<std::uint32_t>(t));
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) < kStampers + 1) {
+                std::this_thread::yield();
+            }
+            // Two cores, one page, rising LSNs from disjoint ranges - the
+            // shape a shared pool makes possible and a per-core pool did not.
+            for (int i = 1; i <= kRounds; ++i) {
+                const std::uint64_t lsn =
+                    static_cast<std::uint64_t>(t) * kRounds * 2 + static_cast<std::uint64_t>(i);
+                (void)store.StampPageLsn(page, lsn);
+            }
+        });
+    }
+    threads.emplace_back([&] {
+        SetCurrentCore(kStampers);
+        ready.fetch_add(1, std::memory_order_acq_rel);
+        while (ready.load(std::memory_order_acquire) < kStampers + 1) {
+            std::this_thread::yield();
+        }
+        for (int pass = 0; pass < 200; ++pass) {
+            if (store.Flush().ok()) flushes.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    for (std::thread& th : threads) th.join();
+
+    EXPECT_GT(flushes.load(), 0) << "the writeback never completed a pass";
+    EXPECT_TRUE(gate.asked()) << "writeback never consulted the gate";
+    EXPECT_EQ(probed.writes_past_durable(), 0u)
+        << "a page reached the device while its own page_lsn was past the durable point";
 }
 
 TEST(EvictionWritebackTest, ContiguousRunsCoalesceIntoOneDeviceCall) {

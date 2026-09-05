@@ -1472,19 +1472,19 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // clean all walk `frames_`, which another core may be growing; the write
     // is device I/O, which this latch may never span.
     //
-    // **What makes the single-page arm safe without a copy is the dirty
-    // invariant**, and it is worth naming because the whole phase split
-    // rests on it: no eraser removes a dirty frame. `EvictClean` refuses one
-    // outright, `ReleaseScanSlot` abandons it, and the sweep only *queues*
-    // it. So a pointer taken under the first hold is still good at the
-    // device call, and the frame is still there for the third. A run copies
-    // into scratch for the reason it always did - frames are separate heap
-    // allocations - not for this one.
+    // **Every run is copied under the first hold**, which is AM-S3's answer
+    // to a defect the phase split alone did not close: the bytes and the
+    // `page_lsn` have to be frozen together, or the gate is asked about a
+    // record other than the one describing what goes out. The dirty
+    // invariant is still what keeps the *frame* alive across the three
+    // phases - no eraser removes a dirty frame; `EvictClean` refuses one
+    // outright, `ReleaseScanSlot` abandons it, the sweep only queues it -
+    // and it is what makes the third phase's `find` certain to hit.
     std::size_t written = 0;
     std::vector<std::byte> scratch;
     for (std::size_t i = 0; i < ordered.size();) {
         std::size_t run = 0;
-        const std::byte* single = nullptr;
+        std::uint64_t run_lsn = wal::kNoLsn;
         {
             LatchGuard structure(structure_latch());
             auto it = frames_.find(ordered[i]);
@@ -1511,14 +1511,52 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 StampIfHeadered(ordered[i + k], std::span<std::byte, kPageSize>(*frame.bytes));
             }
 
-            if (run > 1) {
-                scratch.resize(run * kPageSize);
-                for (std::size_t k = 0; k < run; ++k) {
-                    const auto& frame = frames_.find(ordered[i + k])->second;
-                    std::memcpy(scratch.data() + k * kPageSize, frame.bytes->data(), kPageSize);
+            // **Copied under the hold, always, and that is what makes the
+            // gate below mean anything** (AM-S3). The batch gate above runs
+            // once for the batch maximum, and with one table a stamper on
+            // another core can raise a page's `page_lsn` between that call
+            // and this write - so the bytes going out would be described by
+            // a log record the gate never covered. Measured before this
+            // copy: **34 pages** reached the device past the durable point
+            // in one run of
+            // `EvictionWritebackTest.FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage`.
+            //
+            // The copy freezes the bytes *and* the LSN together, so the
+            // number gated on below is the number in what is written. The
+            // single-page arm used to skip this, safe because the stamper
+            // and the writeback were one thread; that is what sharing ends,
+            // and the memcpy is the cost AM-S3 exists to price.
+            scratch.resize(run * kPageSize);
+            for (std::size_t k = 0; k < run; ++k) {
+                const auto& frame = frames_.find(ordered[i + k])->second;
+                std::memcpy(scratch.data() + k * kPageSize, frame.bytes->data(), kPageSize);
+                // **Skipped for a headerless page**, for the reason
+                // `AwaitWalGate` and the stamping loop skip it: there is no
+                // page_lsn field there, so the bytes at that offset are
+                // payload and read back as an arbitrary number. Found by the
+                // simulation corpus, which failed on nine seeds with
+                // `lsn 18446744073709551615 is at or past the append point`
+                // - a var-heap body's bytes, gated on as though they were a
+                // record.
+                if (IsHeaderless(ordered[i + k])) continue;
+                const std::uint64_t lsn = GetPageLsn(std::span<const std::byte, kPageSize>(
+                    scratch.data() + k * kPageSize, kPageSize));
+                if (lsn > run_lsn) run_lsn = lsn;
+            }
+        }
+
+        // **The gate, on exactly what is about to go out.** `AwaitWalGate`
+        // above is the batch's one call and stays, because it is a no-op
+        // once the watermark is past and covers the ordinary case in one
+        // round trip; this is the arm that catches a page whose record
+        // arrived after it.
+        if (wal_gate_ != nullptr && run_lsn != wal::kNoLsn && !wal_gate_->IsDurable(run_lsn)) {
+            if (Status s = wal_gate_->EnsureDurable(run_lsn); !s.ok()) {
+                if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                    log_->Error("pagestore", "WAL gate refused a writeback up to page_lsn " +
+                                                 std::to_string(run_lsn) + ": " + s.message());
                 }
-            } else {
-                single = it->second.bytes->data();
+                return s;
             }
         }
 
@@ -1528,8 +1566,8 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         const Status wrote =
             run > 1 ? device_.WritePageRun(ordered[i], static_cast<std::uint32_t>(run),
                                            std::span<const std::byte>(scratch))
-                    : device_.WritePage(
-                          ordered[i], std::span<const std::byte, kPageSize>(single, kPageSize));
+                    : device_.WritePage(ordered[i], std::span<const std::byte, kPageSize>(
+                                                        scratch.data(), kPageSize));
         if (!wrote.ok()) {
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore", "write failed for page " +
