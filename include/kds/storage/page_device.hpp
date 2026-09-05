@@ -42,6 +42,26 @@
 // would need real synchronization. (This comment said "owned by one core"
 // until the AL-S9 review; it had not been true since the store went
 // per-core.)
+//
+// **That argument covers `page_capacity_` and nothing else** (AM-S2 R8).
+// It is about a monotonically rising bound read racily; it says nothing
+// about whether two threads may be *inside* an operation at once. They may,
+// and already are: one device serves every core's store, so two cores
+// faulting different pages are both inside `ReadPage` - which
+// `core_runtime_test.cpp` has been doing over a shared `MemoryPageDevice`
+// with a worker thread per core since before AM-S2. AM-S2's step 2b, which
+// drops the frame table's latch before the read, adds a second route to the
+// same place rather than the first.
+//
+// **The contract, stated rather than inferred**: `ReadPage`/`ReadPageRun`
+// may be called concurrently, including with each other, and an
+// implementation owes internal synchronisation for whatever state they
+// touch. `MemoryPageDevice` did not - its trace `push_back` reallocates a
+// vector under a concurrent reader - and now takes a latch over its whole
+// mutating surface. `FilePageDevice` reads through `pread`, which is
+// thread-safe for distinct offsets, and holds no per-read state.
+// Write, grow and sync remain the caller's to serialise; nothing here
+// promises they are safe against a concurrent read.
 
 namespace kds::storage {
 

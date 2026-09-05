@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -163,6 +164,23 @@ private:
 
     // Sparse, and split so Crash() can drop exactly the un-synced half.
     // Reads see pending_ overlaid on durable_.
+    // **Guards every mutating operation below** (AM-S2 R8). One device
+    // serves every core's store, and `core_runtime_test.cpp` already runs a
+    // worker thread per `CoreRuntime` over one of these - so two threads
+    // reach `ReadPageRun` concurrently, where the trace `push_back`
+    // reallocates a vector and three `stats_` fields increment. **That race
+    // predates AM-S2**; 2b's concurrent reads of different pages are a
+    // second way to reach it, not the first.
+    //
+    // Coarse on purpose: this is the test and simulator device, the
+    // simulator is single-threaded so the mutex is uncontended there, and a
+    // finer split would buy nothing measurable against a memcpy. The
+    // accessors that hand out references - `trace()`, `stats()` - are
+    // deliberately **not** guarded: a caller holding the reference is
+    // outside any lock this could take, and every caller reads them after
+    // its threads have joined.
+    mutable std::mutex mu_;
+
     std::unordered_map<PageId, Page> durable_;
     std::unordered_map<PageId, Page> pending_;
 

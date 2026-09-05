@@ -1,3 +1,5 @@
+#include <mutex>
+
 #include "kds/storage/memory_page_device.hpp"
 
 #include <algorithm>
@@ -84,6 +86,7 @@ Status MemoryPageDevice::WritePage(PageId page_id, std::span<const std::byte, kP
 
 Status MemoryPageDevice::ReadPageRun(PageId first_page_id, std::uint32_t nr_pages,
                                      std::span<std::byte> out) {
+    std::lock_guard<std::mutex> guard(mu_);
     Status status = CheckPageRunRange(first_page_id, nr_pages, page_capacity_);
     if (!status.ok()) {
         return status;
@@ -112,6 +115,7 @@ Status MemoryPageDevice::ReadPageRun(PageId first_page_id, std::uint32_t nr_page
 
 Status MemoryPageDevice::WritePageRun(PageId first_page_id, std::uint32_t nr_pages,
                                       std::span<const std::byte> in) {
+    std::lock_guard<std::mutex> guard(mu_);
     Status status = CheckPageRunRange(first_page_id, nr_pages, page_capacity_);
     if (!status.ok()) {
         return status;
@@ -160,6 +164,7 @@ Status MemoryPageDevice::WritePageRun(PageId first_page_id, std::uint32_t nr_pag
 }
 
 Status MemoryPageDevice::EnsureCapacity(std::uint32_t nr_pages) {
+    std::lock_guard<std::mutex> guard(mu_);
     if (nr_pages > kMaxPageCount) {
         return Status::InvalidArgument("MemoryPageDevice: requested capacity " +
                                        std::to_string(nr_pages) + " pages exceeds the " +
@@ -181,6 +186,7 @@ Status MemoryPageDevice::EnsureCapacity(std::uint32_t nr_pages) {
 }
 
 Status MemoryPageDevice::Sync() {
+    std::lock_guard<std::mutex> guard(mu_);
     trace_.push_back(TraceEntry{OpKind::kSync, 0, 0});
     ++stats_.syncs;
     if (auto failure = Take(fail_next_sync_); failure.has_value()) {
@@ -196,16 +202,30 @@ Status MemoryPageDevice::Sync() {
     return Status::OK();
 }
 
-void MemoryPageDevice::FailNextRead(Status status) { fail_next_read_ = std::move(status); }
-void MemoryPageDevice::FailNextWrite(Status status) { fail_next_write_ = std::move(status); }
-void MemoryPageDevice::FailNextSync(Status status) { fail_next_sync_ = std::move(status); }
-void MemoryPageDevice::FailNextGrow(Status status) { fail_next_grow_ = std::move(status); }
+void MemoryPageDevice::FailNextRead(Status status) {
+    std::lock_guard<std::mutex> guard(mu_);
+    fail_next_read_ = std::move(status);
+}
+void MemoryPageDevice::FailNextWrite(Status status) {
+    std::lock_guard<std::mutex> guard(mu_);
+    fail_next_write_ = std::move(status);
+}
+void MemoryPageDevice::FailNextSync(Status status) {
+    std::lock_guard<std::mutex> guard(mu_);
+    fail_next_sync_ = std::move(status);
+}
+void MemoryPageDevice::FailNextGrow(Status status) {
+    std::lock_guard<std::mutex> guard(mu_);
+    fail_next_grow_ = std::move(status);
+}
 
 void MemoryPageDevice::TearNextWrite(std::size_t prefix_bytes) {
+    std::lock_guard<std::mutex> guard(mu_);
     tear_next_write_ = prefix_bytes;
 }
 
 void MemoryPageDevice::ClearInjections() noexcept {
+    std::lock_guard<std::mutex> guard(mu_);
     fail_next_read_.reset();
     fail_next_write_.reset();
     fail_next_sync_.reset();
@@ -214,6 +234,7 @@ void MemoryPageDevice::ClearInjections() noexcept {
 }
 
 void MemoryPageDevice::Crash() {
+    std::lock_guard<std::mutex> guard(mu_);
     pending_.clear();
     page_capacity_ = durable_page_capacity_;
 }
