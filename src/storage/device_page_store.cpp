@@ -461,13 +461,14 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
     // here, because a resident page's branch in `ResidentBytes` is a find,
     // a flag and a span.
     //
-    // What this does **not** fix: `insert_or_assign` below replaces a whole
-    // `Frame` - latch word and pin count with it - if one is already there.
-    // The loading set makes that unreachable for two concurrent faults of
-    // one page, but `ScanRing::Fetch` faults outside that set entirely, so
-    // the clobber is still reachable by a ring fetch racing a load. That is
-    // a hole in the protocol, not in this latch, and it is named in the
-    // AM-S2 row.
+    // What this latch does not do on its own: `insert_or_assign` below
+    // replaces a whole `Frame` - latch word and pin count with it - if one
+    // is already there. What excludes that is the loading set, and **since
+    // AM-R8a every fault is inside it**: `ScanRing::Fetch` was the one
+    // caller that reached here outside the set, and it now fetches through
+    // `FetchPinned` like everything else. So the clobber is closed by the
+    // protocol rather than by this latch, and a future caller that faults
+    // without publishing into `loading_` reopens it.
     LatchGuard structure(structure_latch());
     std::span<std::byte, kPageSize> view(*bytes);
     Frame frame{std::move(bytes), dirty};
@@ -653,12 +654,39 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // first version of this block claimed one usage point was enough; the
     // MG05 poisoner run found the freed frame within ten thousand ops.)
     // The pin is safe to take by hand here: pinned frames are never erased,
-    // so the iterator stays valid across the sweep.
-    if (frame_budget_ != 0 && frames_.size() > frame_budget_) {
-        auto guard = frames_.find(page_id);
-        ++guard->second.pins;
-        EvictColdFrames(frames_.size() - frame_budget_);
-        --guard->second.pins;
+    // so **the page survives the sweep** - but the iterator does not survive
+    // the sweep's own erases under a shared table, which is why the find is
+    // done twice and the hold is dropped over the sweep rather than kept.
+    //
+    // **The test, the pin and the counter are one hold** (AM-R10). They were
+    // three unlatched reads of `frames_` next to a call that erases from it,
+    // and `BudgetedPinProtocolTest` - the first cell that ever entered this
+    // block - turned that into a double free on its first run. Nothing here
+    // is new protocol: it is the same act `ReleaseScanSlot` took at
+    // `cdc2d46` and `EvictColdFrames` takes now.
+    if (frame_budget_ != 0) {
+        std::size_t excess = 0;
+        {
+            LatchGuard structure(structure_latch());
+            if (frames_.size() > frame_budget_) {
+                // Another core may have reclaimed the frame between
+                // `InsertFrame` and this hold; then there is nothing to
+                // protect and nothing to sweep on this page's behalf.
+                if (auto guard = frames_.find(page_id); guard != frames_.end()) {
+                    excess = frames_.size() - frame_budget_;
+                    ++guard->second.pins;
+                    ++inline_sweeps_;
+                }
+            }
+        }
+        if (excess != 0) {
+            EvictColdFrames(excess);
+            LatchGuard structure(structure_latch());
+            if (auto guard = frames_.find(page_id);
+                guard != frames_.end() && guard->second.pins != 0) {
+                --guard->second.pins;
+            }
+        }
     }
     return view;
 }
@@ -695,49 +723,89 @@ public:
         : store_(store), slots_(frames == 0 ? 1 : frames, kInvalidPageId) {}
 
     ~ScanRing() override {
+        // **Unpin, then release** (AM-R8b), for the reason `Fetch` gives: a
+        // slot still carrying this ring's own pin is one `ReleaseScanSlot`
+        // refuses.
+        DropHeld();
         // The scan is over: every slot the foreground did not claim goes
         // back to the device's keeping.
         for (const PageId id : slots_) store_.ReleaseScanSlot(id);
     }
 
-    // **This ring is not safe on a shared pool, and a latch will not make
-    // it so** (AM-S2, recorded here rather than in a plan nobody reads at
-    // the call site). Its model is *no pin, drop on rotation*: `Fetch`
-    // hands back a span into a frame it has not pinned, and
-    // `heap_chain.hpp` promises that span lives until the next `Fetch`.
-    // That promise is a statement about one thread. Once another core can
-    // evict, the span can be freed under its reader, and no amount of
-    // latching *inside* `Fetch` fixes it - the exposure is after the latch
-    // would drop, for as long as the caller holds the span.
-    //
-    // The two ways out are to pin ring slots like any other frame (paying
-    // the pin the ring exists to avoid) or to refuse a ring on a shared
-    // store and let scans take the ordinary path. **Neither is decided**;
-    // step 3 must decide before it shares the pool, because this is the one
-    // place a reader holds page bytes with nothing keeping the frame alive.
+    // **The ring pins the one page it has handed out, and nothing else**
+    // (AM-R8, marked 2026-09-05). The model was *no pin, drop on rotation*,
+    // and a span into an unpinned frame is a promise about there being one
+    // thread rather than about the pool; a pin is what makes it a promise
+    // about the pool, which is what `PlainScanFetcher` has always done with
+    // its `PageRef`. The other `frames - 1` slots stay unpinned and any core
+    // may evict them: by the contract no outstanding span points into them.
+    // Every other §5 property is unchanged - no usage bump, drop on
+    // rotation, abandon to the pool when the foreground claimed the frame.
+    // `instructions/v3.0.0/workorder-am-s2-step3-scan-ring.md` §1.1 and §2
+    // carry the argument and the two options this ruling turned down.
     StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) override {
-        // In place when resident - the foreground's frame or one of this
-        // ring's own slots - never bumping usage: §5's interaction rule in
-        // one direction, and "a scan is not heat" in the other.
-        if (auto it = store_.frames_.find(page_id); it != store_.frames_.end()) {
-            return std::span<std::byte, kPageSize>(*it->second.bytes);
-        }
+        // **The previous fetch's pin goes first** (AM-R8b). Its span died at
+        // this call by contract (`page_store.hpp`), so nothing is lost, and
+        // the slot the rotation below may release is then already unpinned
+        // when `ReleaseScanSlot` tests `pins > 0`. The reverse order would
+        // keep every slot resident for the life of the process - a ring that
+        // "works" while the pool fills. Within this function it also means
+        // no second page latch is ever held across the wait below.
+        DropHeld();
 
-        // Rotate: the slot's previous occupant is dropped unless the
-        // foreground claimed it, then the new page faults in clean with
-        // its usage untouched.
-        store_.ReleaseScanSlot(slots_[hand_]);
-        auto bytes = store_.ResidentBytes(page_id, /*mark_dirty=*/false, /*bump_usage=*/false);
+        // **One pin path, armed or not** (AM-R8a): the same `loading_`
+        // protocol every other fetch takes, with the usage bump refused -
+        // not a copy of that body with the bump threaded through by hand,
+        // which is the shape F1 was. Two things follow that this class did
+        // not have. R2 closes: a ring fetch used to reach `ResidentBytes`
+        // directly, outside the loading set, so `InsertFrame`'s
+        // `insert_or_assign` could replace a `Frame` - latch word and pin
+        // count with it - under a concurrent loader. And AM-R8c: the shared
+        // page latch means a foreground writer holding this page exclusive
+        // is waited for, exactly as `GetForRead` waits, which is why this is
+        // a latched pin rather than a pin alone. It also puts ring fetches
+        // behind `Resolve`'s allocation gate for the first time.
+        bool faulted = false;
+        auto bytes = store_.FetchAndPin(page_id, PinMode::kShared, /*for_read=*/true,
+                                        /*bump_usage=*/false, &faulted);
         if (!bytes.ok()) return bytes.status();
-        slots_[hand_] = page_id;
-        hand_ = (hand_ + 1) % slots_.size();
-        return bytes;
+        held_ = page_id;
+        if (faulted) {
+            // Rotate, and **only** on a fault: a page found resident - the
+            // foreground's frame or one of this ring's own slots - is used
+            // in place and costs no slot (§5's interaction rule). The answer
+            // comes from the fetch rather than from a probe before it,
+            // because a probe is stale before the fetch acts on it and the
+            // ring would then record slots it did not fault.
+            //
+            // Released *after* the fault rather than before, which is what
+            // taking an exact answer costs: residency peaks at `frames + 1`
+            // for the length of this call. `ReleaseScanSlot` refuses a
+            // pinned frame, so the degenerate case - re-faulting the page
+            // this slot already names - keeps the frame and re-records it.
+            store_.ReleaseScanSlot(slots_[hand_]);
+            slots_[hand_] = page_id;
+            hand_ = (hand_ + 1) % slots_.size();
+        }
+        return bytes.value();
     }
 
 private:
+    // Drops the hold the last `Fetch` took. The only place `held_` is
+    // cleared, so one fetch can never be unpinned twice.
+    void DropHeld() noexcept {
+        if (held_ == kInvalidPageId) return;
+        store_.UnpinFrame(held_);
+        held_ = kInvalidPageId;
+    }
+
     DevicePageStore& store_;
     std::vector<PageId> slots_;
     std::size_t hand_ = 0;
+    // The page the last `Fetch` returned, pinned and latched shared until
+    // the next one. Not always a slot occupant: an in-place hit is held too,
+    // and takes no slot.
+    PageId held_ = kInvalidPageId;
 };
 
 std::unique_ptr<ScanFetcher> DevicePageStore::OpenScanRing(std::size_t frames) {
@@ -1059,19 +1127,19 @@ Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetUnpinned(PageId page_id) {
-    return Resolve(page_id, /*mark_dirty=*/true);
+    return Resolve(page_id, /*mark_dirty=*/true, /*bump_usage=*/true);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForReadUnpinned(PageId page_id) {
-    return Resolve(page_id, /*mark_dirty=*/false);
+    return Resolve(page_id, /*mark_dirty=*/false, /*bump_usage=*/true);
 }
 
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
-                                                                  bool mark_dirty) {
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id, bool mark_dirty,
+                                                                  bool bump_usage) {
     if (!IsAllocated(page_id) && !AdoptDeviceMapOnMiss(page_id)) {
         return NotAllocated(page_id);
     }
-    return ResidentBytes(page_id, mark_dirty);
+    return ResidentBytes(page_id, mark_dirty, bump_usage);
 }
 
 bool DevicePageStore::AdoptDeviceMapOnMiss(PageId page_id) {
@@ -1380,6 +1448,12 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
 }
 
 Status DevicePageStore::EvictClean(std::span<const PageId> page_ids) {
+    // **The first eraser takes it too**, and for the same reason as the
+    // sweep: the check loop and the erase loop have to be one hold, or a pin
+    // taken between them is missed and the frame freed under whoever took
+    // it. Its three callers (`core_runtime.cpp`, `range_alloc.cpp`,
+    // `expeditor.cpp`) reach it with the latch not held.
+    LatchGuard structure(structure_latch());
     // Checked before anything is dropped, so a bad call leaves the store
     // exactly as it was rather than half-evicted.
     for (const PageId id : page_ids) {
@@ -1452,8 +1526,20 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 
 // ---- Frame reclamation (docs/inflight/in-progress/workplan-eviction.md EV01-EV02) -------------
 
+// The virtual seam, which is `FetchAndPin` with the ring's fault answer
+// thrown away: nothing reachable through `PageStore` has a use for it, and
+// widening the base's signature to carry a parameter one nested class reads
+// would put it in every store that never faults anything.
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId page_id, PinMode mode,
-                                                                      bool for_read) {
+                                                                      bool for_read,
+                                                                      bool bump_usage) {
+    return FetchAndPin(page_id, mode, for_read, bump_usage, /*faulted=*/nullptr);
+}
+
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId page_id, PinMode mode,
+                                                                      bool for_read,
+                                                                      bool bump_usage,
+                                                                      bool* faulted) {
     // **AM-S2: the pair the shared pool must not let anything between.**
     // `page_store.hpp` records the obligation; this discharges it. Every
     // accessor used to be `bytes = *Unpinned(id)` then `PinFrame(id)`, and
@@ -1468,10 +1554,17 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
         // **Unarmed: today's shape and today's cost.** One thread reaches
         // this store, nothing can evict between the two calls, and the
         // window above does not exist - which is G2 as a property of the
-        // code rather than of a flag.
-        auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+        // code rather than of a flag. `Resolve` is what `GetUnpinned` and
+        // `GetForReadUnpinned` are, with the usage bump made the caller's
+        // (AM-R8a): the ring is the one caller that passes false, and at
+        // `cores = 1` its pin below is two plain integer increments. The
+        // find is the ring's fault answer and is **exact** here for the
+        // same reason the window does not exist: one thread.
+        const bool was_resident = frames_.find(page_id) != frames_.end();
+        auto bytes = Resolve(page_id, /*mark_dirty=*/!for_read, bump_usage);
         if (!bytes.ok()) return bytes.status();
         PinFrame(page_id, mode);
+        if (faulted != nullptr) *faulted = !was_resident;
         return bytes.value();
     }
 
@@ -1502,6 +1595,25 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
     // the erasers take it (step 3) the sweep half becomes a self-deadlock
     // rather than a slow read.
     std::unique_lock<Latch> hold(*latch);
+    // **AM-R9: one CLOCK point per call, whichever branch succeeds.** A
+    // loader runs the raw fetch twice - once on the miss branch that loads
+    // the page, once on the hit branch it then rounds into - and both used
+    // to bump, so a page faulted through the armed path warmed to 2 where
+    // the unarmed path warms it to 1. Armed and unarmed disagreeing on a
+    // usage counter is a difference in what the sweep reclaims, which is
+    // exactly what `SetLatchArmed` must not change.
+    //
+    // The second fetch stays: on a hit it is a find, a dirty mark and a
+    // span, and running it rather than reproducing those side effects is
+    // what keeps `Get` and `GetForRead` meaning what they mean - including
+    // when another core evicted and re-faulted the page in the window, so
+    // that the frame this call returns is not the one it loaded. What it no
+    // longer does is charge twice.
+    //
+    // A *waiter* is not the same case and still bumps: it ran no raw fetch,
+    // so its hit is its one touch of the page, as it would be with no
+    // contention at all.
+    bool charged = false;
     for (;;) {
         // **The `loading_` half of the test below is not an optimisation,
         // and no functional cell can prove it.** The window where a page is
@@ -1519,14 +1631,19 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
         //
         // **And that measurement is weaker than it first read.** It was
         // recorded as "with a frame budget set so the sweep genuinely runs";
-        // a counter on the sweep block says the count was **0**, because
-        // neither cell there takes a miss with more frames resident than the
-        // budget (`am_s2_pin_protocol_test.cpp`'s SetUp carries the
-        // arithmetic). So the five runs say only that the *rest* of the
-        // fixture is indifferent to this test - the window it guards was
-        // never entered. Proving it needs TSan and a rig that faults past
-        // the budget, neither of which this tree has. Recorded rather than
-        // covered, so nobody deletes it for looking redundant.
+        // a counter on the sweep block said the count was **0**, because no
+        // cell took a miss with more frames resident than the budget. So the
+        // five runs said only that the *rest* of the fixture is indifferent
+        // to this test - the window it guards was never entered.
+        //
+        // **R6 closes at the fixture, not at the race** (AM-R10): the
+        // counter is `inline_sweeps()` now and
+        // `BudgetedPinProtocolTest.ConcurrentFaultsPastTheBudgetRunTheInlineSweep`
+        // drives it above zero from several threads, so the window is
+        // genuinely entered. What still has no cell is the race *inside* it,
+        // which is a data race rather than a wrong answer and needs TSan.
+        // Recorded rather than covered, so nobody deletes this test for
+        // looking redundant.
         const bool resident = frames_.find(page_id) != frames_.end();
         if (resident && loading_.find(page_id) == loading_.end()) {
             // **The hit path runs the raw fetch under the latch, and that is
@@ -1535,7 +1652,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
             // usage bump, and returns the span. Calling it here rather than
             // reproducing those two side effects is what keeps `Get` and
             // `GetForRead` meaning exactly what they meant.
-            auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+            auto bytes = Resolve(page_id, /*mark_dirty=*/!for_read, bump_usage && !charged);
             if (!bytes.ok()) return bytes.status();
             auto found = frames_.find(page_id);
             // Defensive, and **unreachable as the code stands**: the latch
@@ -1553,6 +1670,16 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
             // the MG04 ceiling and the AM-S1 never-upgrade census off the
             // armed path - the only path either one is about.
             CountPin(frame);
+            // **The fault answer, and it is `charged`'s other meaning**
+            // (AM-R8): this call ran the miss branch below, which is the
+            // only place a fetch reaches `InsertFrame`. One inexactness,
+            // in the safe direction: if another core loaded the page while
+            // this call was outside the latch, the miss branch's `Resolve`
+            // found it resident and inserted nothing, and this still says
+            // faulted. The ring then takes a slot for a frame that core
+            // faulted - which its own `InsertFrame` left at usage 1, so
+            // `ReleaseScanSlot` abandons rather than drops it.
+            if (faulted != nullptr) *faulted = charged;
             hold.unlock();
             // Pin first, then wait for the page latch - `PinFrame`'s order,
             // for `PinFrame`'s reason, and now with the structure latch
@@ -1577,9 +1704,16 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
         LoadingGuard published(hold, loading_, loading_done_, page_id);
         hold.unlock();
         // The device read, the checksum verify and the inline sweep, all
-        // outside the latch.
-        auto loaded = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
+        // outside the latch. The bump is the caller's here and *not*
+        // suppressed by `charged`: on this branch it is `InsertFrame`'s
+        // `warm`, which is MG06's one rotation of protection for the frame
+        // whose fault triggered the inline sweep, and a second time round
+        // this branch is a second frame that needs it just as much. What
+        // `charged` suppresses is the hit branch above, which would put a
+        // second point on the frame this branch just loaded.
+        auto loaded = Resolve(page_id, /*mark_dirty=*/!for_read, bump_usage);
         if (!loaded.ok()) return loaded.status();
+        charged = true;
         // Round the loop rather than pinning here. The frame is resident
         // now, but it is also unpinned for the instant between
         // `InsertFrame` and this point, so another core's sweep may already
@@ -1662,7 +1796,8 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // frame being dirty. The bytes are on the device, so faulting it back is
     // both correct and the only thing left; the id is already allocated, so
     // this cannot re-enter the create path.
-    auto refetched = FetchPinned(id, PinMode::kExclusive, /*for_read=*/false);
+    auto refetched = FetchPinned(id, PinMode::kExclusive, /*for_read=*/false,
+                                 /*bump_usage=*/true);
     if (!refetched.ok()) return refetched.status();
     return std::pair<PageId, std::span<std::byte, kPageSize>>(id, refetched.value());
 }
@@ -1682,13 +1817,14 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
     // the structure latch across that wait would put every other core's
     // frame lookup behind one page's contention.
     //
-    // **Written in the voice of the shared future, and not yet true for the
-    // reason it gives.** Every eraser (`ReleaseScanSlot`, `EvictClean`,
-    // `EvictColdFrames`) reads `pins` *without* this latch, so what excludes
-    // them today is that eviction runs on the same thread - not that the
-    // latch makes this pin visible to a concurrent sweep. Latching the
-    // erasers is step 1b/3's; until then this ordering is correct by
-    // single-threadedness and merely *shaped* for sharing.
+    // **And true now for the reason it gives.** This paragraph used to end
+    // "written in the voice of the shared future": all three erasers read
+    // `pins` without this latch, so what excluded them was one thread, not
+    // the latch. They all take it now - `ReleaseScanSlot` at `cdc2d46`,
+    // `EvictClean` and `EvictColdFrames` with AM-R10's budgeted rig, which
+    // entered the fault path's inline sweep from eight threads and found the
+    // double free the same afternoon. So a pin taken under this latch is
+    // genuinely visible to a concurrent sweep.
     Frame* frame = nullptr;
     {
         LatchGuard structure(structure_latch());
@@ -1904,6 +2040,15 @@ void DevicePageStore::SetResidentLimit(PageId first_evictable_page_id) noexcept 
     }
 }
 
+StatusOr<std::uint8_t> DevicePageStore::frame_usage_for_test(PageId page_id) const {
+    auto found = frames_.find(page_id);
+    if (found == frames_.end()) {
+        return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
+                                " is not resident");
+    }
+    return found->second.usage;
+}
+
 std::size_t DevicePageStore::pinned_frames() const noexcept {
     std::size_t pinned = 0;
     for (const auto& [id, frame] : frames_) {
@@ -1913,6 +2058,17 @@ std::size_t DevicePageStore::pinned_frames() const noexcept {
 }
 
 std::size_t DevicePageStore::EvictColdFrames(std::size_t budget) {
+    // **The second eraser takes the structure latch** (AM-S2; `ReleaseScanSlot`
+    // was the third, at `cdc2d46`, and its comment said "like the other two
+    // will"). The whole body, not the erase alone: the pass builds a sorted
+    // id list from `frames_`, re-finds by id and erases, so a concurrent
+    // insert rehashing the table under the walk is undefined behaviour
+    // rather than a stale read. Held across a sort and up to
+    // `kClockUsageCap + 1` laps, which is a long hold and is what EV05's
+    // open-addressed frame table is for; no caller reaches here holding it
+    // (the fault path's inline sweep drops it first, `MaintainFreeReserve`
+    // never takes it).
+    LatchGuard structure(structure_latch());
     if (budget == 0 || frames_.empty()) return 0;
 
     // The sweep order. `frames_` is an unordered_map, so "where the hand is"

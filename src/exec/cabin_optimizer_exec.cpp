@@ -202,6 +202,14 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
             // Phase 2: decode and collect. Spill fetches are legal here - the
             // page span is finished with - and they go through the ordinary
             // path, never the ring.
+            //
+            // **The span is finished with; the ring's hold is not** (AM-R8).
+            // A `ScanFetcher` drops its pin and its shared page latch at the
+            // *next* `Fetch`, so these fetches run under `S(leaf)` and the
+            // pair `S(leaf) -> S(var-heap page)` is on
+            // `device_page_store.hpp`'s page-against-page list because of
+            // this loop. Two shares never block each other, so nothing waits
+            // here today.
             for (const StagedRow& row : staged) {
                 std::vector<PendingSpill> spills;
                 auto decoded = DecodeRow(access.schema, access.layout, row.payload, &spills);

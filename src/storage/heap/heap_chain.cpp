@@ -285,11 +285,15 @@ StatusOr<PageId> ChainVisitOnePage(
     // dirty protocol. The visitor's per-page discipline is what makes
     // the ring's stricter lifetime safe: each page is finished before
     // the next fetch can rotate its frame away.
-    // Peak pins held by this call: 1 - dropped on return, which is the
-    // between-pages suspension property the header promises. The ring
-    // branch holds no pin at all: its frame's lifetime is the ring's own
-    // (valid until the next Fetch), which is exactly the same per-page
-    // discipline.
+    // Peak pins held by this call: 1. On the two `store` branches it is
+    // dropped on return, which is the between-pages suspension property the
+    // header promises. **On the ring branch the pin is the fetcher's and
+    // outlives this call** (AM-R8): a ScanFetcher holds one pin, and the
+    // shared page latch, on the page its last Fetch returned, and drops it
+    // at its next Fetch or when it is destroyed. The per-page discipline is
+    // the same - each page is finished before the next fetch - but the
+    // suspension point between pages is not, which is why the header
+    // promises it for the no-fetcher forms only.
     storage::PageRef page_ref;
     std::byte* page_data = nullptr;
     if (access == storage::PageAccess::kWrite) {

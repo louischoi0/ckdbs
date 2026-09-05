@@ -59,7 +59,12 @@
 // touch. `MemoryPageDevice` did not - its trace `push_back` reallocates a
 // vector under a concurrent reader - and now takes a latch over its whole
 // mutating surface. `FilePageDevice` reads through `pread`, which is
-// thread-safe for distinct offsets, and holds no per-read state.
+// thread-safe for distinct offsets, and holds no per-read state - **read
+// rather than assumed** (AM-R11, 2026-09-05): every transfer is a `pread`
+// or `pwrite` at an offset computed from the page id
+// (`file_page_device.cpp:97` and `:129`), never `lseek` plus `read`, and
+// the loop's `offset`, `buffer` and `remaining` are locals. It needed no
+// change; its own header's "core-local" claim did.
 // Write, grow and sync remain the caller's to serialise; nothing here
 // promises they are safe against a concurrent read.
 

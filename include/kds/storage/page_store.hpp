@@ -159,13 +159,19 @@ public:
     // a functor: the two differ only in dirty marking, and a store that
     // overrides this needs to know which one it is servicing.
     //
+    // `bump_usage` is the scan ring's (AM-R8a): the ring pins the page it
+    // hands out and must still not register as heat
+    // (`docs/spec/eviction.md` section 5). Every other caller passes true,
+    // and a store with no reclaim has no counter to bump.
+    //
     // **The create accessors have their own** (`CreatePinned`, below).
     // This block announced the obligation discharged while sitting
     // directly above three accessors that still did create-then-pin
     // inline - which is worse than not claiming it, because a reader
     // checking the seam would have stopped here.
     virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                                 bool for_read) {
+                                                                 bool for_read,
+                                                                 bool /*bump_usage*/) {
         auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
         PinFrame(page_id, mode);
@@ -175,7 +181,8 @@ public:
     // Fetches an already-created page, pinned, for read or in-place
     // mutation. Fails with NotFound if page_id was never created.
     StatusOr<PageRef> Get(PageId page_id) {
-        auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false);
+        auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false,
+                                 /*bump_usage=*/true);
         if (!bytes.ok()) return bytes.status();
         return PageRef(this, page_id, bytes.value());
     }
@@ -185,7 +192,8 @@ public:
     // (GetForReadUnpinned's note); a read fetch that turns out to write
     // calls MarkDirty() on the handle.
     StatusOr<PageRef> GetForRead(PageId page_id) {
-        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true);
+        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
+                                 /*bump_usage=*/true);
         if (!bytes.ok()) return bytes.status();
         return PageRef(this, page_id, bytes.value());
     }

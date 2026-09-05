@@ -118,8 +118,14 @@
 // still route to the relation's owner). In AM-S1 the pools are still per
 // core, so no second core can reach a frame and the latch is inert; the
 // primitive, its order and its cells are what that stage lands. Writeback,
-// StampPageLsn, the hit path's usage bump and the scan ring still touch
-// frames unlatched - AM-S2 and AM-S3 own those.
+// StampPageLsn, `Flush`/`DirtyPageIds`' walks and the `*Unpinned`
+// accessors' hit path still touch frames unlatched - AM-S2's remaining
+// steps and AM-S3 own those. **Two sites stopped as of AM-R8/R10.** The
+// scan ring fetches through FetchPinned and holds the pin and the shared
+// page latch on the one page its last Fetch returned (OpenScanRing,
+// below); and **all three erasers now take the structure latch** -
+// ReleaseScanSlot, EvictClean and EvictColdFrames - together with the
+// fault path's inline sweep and the hand-pin that guards it.
 //
 // Taken where the pin is taken and released where it is released: a
 // PageRef holds both. Get and the Create* accessors take it exclusive,
@@ -172,8 +178,15 @@
 //     the pin and the latch share a handle; nothing covers it in release.
 //   - **Page against page: unordered through M1, and AM-S2 owes the
 //     rule.** Two page latches are held at once on every split (the old
-//     leaf and its new sibling) and every chain growth (the old tail and
-//     the new page) - a descent holds one at a time, its handle dying per
+//     leaf and its new sibling), every chain growth (the old tail and
+//     the new page), and - since AM-R8 - **a scan ring's shared hold on a
+//     heap leaf across its consumer's var-heap fetches**: the ring drops
+//     its hold at the *next* `Fetch`, so the Cabin build's spill fetches
+//     (`cabin_optimizer_exec.cpp`, phase 2) run inside it, `S(leaf)` then
+//     `S(var-heap page)`. Shares never block shares, so a cycle needs an
+//     exclusive waiter on both, and that is S3c's to admit or exclude when
+//     it states the order rather than this stage's to leave unlisted.
+//     A descent holds one at a time, its handle dying per
 //     iteration; through M1 one core
 //     owns its pool, so no two holders of different pages can ever wait on
 //     each other and no order is needed. The shared pool is where an ABBA
@@ -755,6 +768,22 @@ public:
 
     std::size_t resident_pages() const noexcept { return frames_.size(); }
 
+    // How many times a fault ran the inline sweep (EV5's on-demand
+    // fallback, MG06's trigger). **Test observability, and it exists
+    // because a comment needed a witness** (AM-R10): the `loading_` half of
+    // `FetchAndPin`'s hit test guards a window that opens only while a
+    // loader is inside that sweep, and the claim "five green runs with the
+    // test deleted" turned out to mean the fixture never entered the sweep
+    // at all. A cell that intends to reach it now says so with this rather
+    // than with arithmetic in a `SetUp` comment.
+    std::size_t inline_sweeps() const noexcept { return inline_sweeps_; }
+
+    // A resident frame's CLOCK usage counter; NotFound if the page is not
+    // resident. Test observability for AM-R9 - "armed and unarmed charge a
+    // faulted page the same" is a statement about this byte, and nothing
+    // else in the store reports it.
+    StatusOr<std::uint8_t> frame_usage_for_test(PageId page_id) const;
+
     // How many frames currently hold at least one pin. Test and §11
     // observability: an unbalanced pin shows up here as a number that never
     // returns to its floor.
@@ -785,8 +814,11 @@ private:
     // The gate every accessor goes through, so a third one cannot forget
     // it: the allocation check, the adoption below when it misses, then
     // the frame. `mark_dirty` is the only thing Get and GetForRead differ
-    // in.
-    StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty);
+    // in; `bump_usage` is what the scan ring differs in (AM-R8a), and the
+    // ring reaches this gate through `FetchPinned` rather than dropping
+    // past it into `ResidentBytes` as it used to.
+    StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
+                                                      bool bump_usage);
 
     // A leased core's free-map copy is a **mount-time snapshot**, and the
     // only thing that advanced it was a relation fault/write grant
@@ -1011,7 +1043,21 @@ private:
     // recorded obligation). See the definition for what this does and does
     // not yet close.
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                         bool for_read) override;
+                                                         bool for_read, bool bump_usage) override;
+
+    // `FetchPinned`'s whole body, plus the one answer the scan ring needs
+    // and no other caller does: **did this call fault the page in, or find
+    // it resident?** The ring uses it to tell a rotation from an in-place
+    // hit (`eviction.md` section 5), and it comes from here rather than
+    // from a residency probe of the ring's own because a probe outside this
+    // function's latch hold is stale before the fetch acts on it - which
+    // would leave the ring recording slots it did not fault and dropping
+    // slots it did. `faulted` may be null, and `FetchPinned` passes null:
+    // the virtual seam stays four parameters, since nothing reachable
+    // through `PageStore` has a use for the fifth.
+    StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
+                                                          bool for_read, bool bump_usage,
+                                                          bool* faulted);
 
     // The create half of the same pair. See the definition for why its
     // window is narrower than `Get`'s and why it can still close.
@@ -1275,6 +1321,8 @@ private:
     // becomes open-addressed at EV05 (page.md §16-7).
     PageId clock_hand_ = 0;
     std::size_t frame_budget_ = 0;  // 0 = unbounded (pre-eviction behaviour)
+    // Inline sweeps run on the fault path (`inline_sweeps()`).
+    std::size_t inline_sweeps_ = 0;
     std::size_t live_pins_ = 0;
     // `kPinCeiling` scaled by how many threads may pin this store at once
     // (`SetLatchArmed`). One operation's bound times the operations in
