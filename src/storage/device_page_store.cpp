@@ -1382,8 +1382,39 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
     // as a no-op pin rather than an abort: the failure it produces (a frame
     // evictable while a handle lives) is the one the poisoner (MG05)
     // detects deterministically.
-    auto it = frames_.find(page_id);
-    if (it == frames_.end()) return;
+    // **AM-S2: the pin is taken first, under the structure latch, and the
+    // page latch is waited for afterwards.** That order is the whole of why
+    // neither latch is held across the other. A frame with `pins > 0` is
+    // never an eviction victim (EV4), so taking the pin is what keeps this
+    // frame alive while this core waits for the page latch - where holding
+    // the structure latch across that wait would put every other core's
+    // frame lookup behind one page's contention.
+    Frame* frame = nullptr;
+    {
+        LatchGuard structure(structure_latch());
+        auto found = frames_.find(page_id);
+        if (found == frames_.end()) return;
+        frame = &found->second;
+        // References into an `unordered_map` survive its rehashing, so this
+        // pointer stays good after the guard drops - the property that lets
+        // the page-latch wait happen outside the latch at all.
+        ++frame->pins;
+        ++live_pins_;
+        if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+#ifndef NDEBUG
+        // MG04's ceiling, asserted rather than logged: a workload that holds
+        // more pins than the audit derived is either a new Shape-B site
+        // missing its bound or a leak, and both should fail the test that
+        // reaches them.
+        if (live_pins_ > kPinCeiling) {
+            std::fprintf(stderr,
+                         "DevicePageStore: %zu live pins exceeds kPinCeiling %zu "
+                         "(docs/spec/page.md §3)\n",
+                         live_pins_, kPinCeiling);
+            std::abort();
+        }
+#endif
+    }
     if (latch_armed_) {
         // The page latch (AM-S1, the header's "The page latch" section).
         // Taken where the pin is taken, in the accessor's mode, and never
@@ -1396,15 +1427,19 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
         // A release build hangs in the spin below, as a recursive
         // std::mutex acquisition does (base/latch.hpp). AM-S2 must revisit
         // this test once a foreign core can hold a share.
-        Frame& frame = it->second;
 #ifndef NDEBUG
-        if (mode == PinMode::kExclusive && frame.pins != 0 &&
-            PageLatch::HasSharedHolders(frame.latch)) {
+        // **`> 1`, not `!= 0`, because AM-S2 moved the pin ahead of this.**
+        // The test means "this core already held a share and is now asking
+        // for exclusive"; the pin taken above is this caller's own, so the
+        // pre-existing holders are everything past it. Left as `!= 0` it
+        // would fire on the first exclusive pin of an unshared frame.
+        if (mode == PinMode::kExclusive && frame->pins > 1 &&
+            PageLatch::HasSharedHolders(frame->latch)) {
             std::fprintf(stderr,
                          "DevicePageStore: page %u is held shared by this core (%u pin(s)) "
                          "and was asked for exclusive - a page latch is never upgraded "
                          "(docs/spec/page.md section 6)\n",
-                         page_id, frame.pins);
+                         page_id, frame->pins);
             // The census's whole value is naming the site: raw frames, for
             // `addr2line -e <binary>` - the executable is not linked
             // -rdynamic, so symbol names are not available here.
@@ -1416,40 +1451,51 @@ void DevicePageStore::PinFrame(PageId page_id, PinMode mode) noexcept {
 #endif
         // The turns it spun are dropped: a contention gauge is AM-S3's, when
         // it has a number to want (the cells read Acquire's return directly).
-        (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), core_id_);
+        (void)PageLatch::Acquire(frame->latch, LatchModeFor(mode), core_id_);
     }
-    ++it->second.pins;
-    ++live_pins_;
-    if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
-#ifndef NDEBUG
-    // MG04's ceiling, asserted rather than logged: a workload that holds
-    // more pins than the audit derived is either a new Shape-B site missing
-    // its bound or a leak, and both should fail the test that reaches them.
-    if (live_pins_ > kPinCeiling) {
-        std::fprintf(stderr,
-                     "DevicePageStore: %zu live pins exceeds kPinCeiling %zu "
-                     "(docs/spec/page.md §3)\n",
-                     live_pins_, kPinCeiling);
-        std::abort();
-    }
-#endif
 }
 
 void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
-    auto it = frames_.find(page_id);
-    if (it == frames_.end()) return;
-    // Saturating rather than wrapping. An unpin with no pin is a defect in
-    // the handle, not in the caller, and the two failure modes are not
-    // symmetric: a floor leaves a frame resident forever (a leak, visible in
-    // pinned_frames()), where an underflow makes it evictable while somebody
-    // still holds it.
-    if (it->second.pins != 0) {
-        --it->second.pins;
-        if (live_pins_ != 0) --live_pins_;
-        // The latch leaves with the pin: one handle, one hold of each. The
-        // word knows whether this core is the exclusive owner, so no mode
-        // travels here.
-        if (latch_armed_) PageLatch::Release(it->second.latch, core_id_);
+    // **The mirror of `PinFrame`'s order: the page latch is released first,
+    // then the pin drops under the structure latch.** Dropping the pin first
+    // would let a sweep evict the frame out from under the latch release
+    // that follows it, which is the one interleaving this pair has to
+    // exclude - and it is excluded by ordering rather than by holding both.
+    Frame* frame = nullptr;
+    {
+        LatchGuard structure(structure_latch());
+        auto found = frames_.find(page_id);
+        if (found == frames_.end()) return;
+        // Saturating rather than wrapping. An unpin with no pin is a defect
+        // in the handle, not in the caller, and the two failure modes are
+        // not symmetric: a floor leaves a frame resident forever (a leak,
+        // visible in pinned_frames()), where an underflow makes it evictable
+        // while somebody still holds it.
+        if (found->second.pins == 0) return;
+        frame = &found->second;
+    }
+    // The latch leaves with the pin: one handle, one hold of each. The word
+    // knows whether this core is the exclusive owner, so no mode travels
+    // here.
+    if (latch_armed_) PageLatch::Release(frame->latch, core_id_);
+    {
+        LatchGuard structure(structure_latch());
+        // **The two decrements stay coupled**, as they were before this
+        // stage split them apart and put them back. The gauge must move with
+        // the pin or `kPinCeiling` stops meaning anything.
+        //
+        // Honest about how much that buys: the early return above already
+        // filters `pins == 0`, so an uncoupled pair misbehaves only if two
+        // unpins race at `pins == 1` - and `pins == 1` means one handle
+        // exists, so only one unpin can be in flight. The window is
+        // unreachable under correct handle usage, and
+        // `am_s2_pin_protocol_test.cpp` passes with the pair split, which is
+        // how that was established rather than assumed. This is the original
+        // semantics kept because they are right, not a live defect fixed.
+        if (frame->pins != 0) {
+            --frame->pins;
+            if (live_pins_ != 0) --live_pins_;
+        }
     }
 }
 

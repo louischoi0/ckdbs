@@ -4,6 +4,7 @@ find_package(Threads REQUIRED)
 add_executable(kds_tests
     alloc_counter.cpp
     heap_suspension_env.cpp
+    am_s2_pin_protocol_test.cpp
     status_test.cpp
     crc32c_test.cpp
     page_header_test.cpp

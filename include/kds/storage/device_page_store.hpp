@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "kds/base/latch.hpp"
 #include "kds/base/log.hpp"
 #include "kds/storage/extent_lease.hpp"
 #include "kds/storage/free_map.hpp"
@@ -1061,6 +1062,39 @@ private:
     // Set by Open()'s debug census override and never cleared: SetLatchArmed
     // keeps the store armed once this is true.
     bool latch_forced_ = false;
+
+    // ---- AM-S2's structure latch --------------------------------------
+    //
+    // The frame **table** has never had one. AM-S1 gave each *frame* a latch
+    // word; `frames_`, `clock_hand_`, `live_pins_`, `pin_high_water_`,
+    // `dirty_eviction_queue_` and `Frame::pins` are plain, because through
+    // M1 one pool serves one core (`page.md` §6). AM-S2 shares the pool, and
+    // this is what a shared table's structural changes and pin accounting
+    // run under.
+    //
+    // **Null where the store is not shared**, which is `LatchGuard`'s whole
+    // shape and what keeps G2: at `cores = 1` the guard is a null test and
+    // no atomic (`base/latch.hpp`). Armed by the same switch as the page
+    // latch, so the two cannot disagree about whether this store is shared.
+    //
+    // **Acquisition order: the page latch is taken OUTSIDE this one, and
+    // this one is never held across device I/O.** Both halves matter.
+    // Holding the structure latch while spinning for a page latch would put
+    // every core's frame lookup behind one page's contention; holding it
+    // across a read would put them behind a disk. `PinFrame` therefore takes
+    // the pin *first*, under this latch, and only then waits for the page
+    // latch - the pin is what keeps the frame from being evicted while it
+    // waits, so the two are ordered without either being held across the
+    // other.
+    //
+    // **Step 1 scope, stated so nobody reads more into it**: this arms the
+    // pin protocol. The lookup-and-fault path keeps its unlatched shape
+    // until the stage's step 2 adds the per-frame *loading* state that lets
+    // a miss release the latch before the device read instead of holding it
+    // across one. Nothing is shared until step 3, so the gap is incomplete
+    // rather than unsound.
+    Latch frames_latch_;
+    Latch* structure_latch() noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
     // See SetStampSuppressed. Off everywhere but inside a single-stream
     // mount pass.
     bool stamp_suppressed_ = false;
