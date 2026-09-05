@@ -140,6 +140,23 @@ public:
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth;
         std::uint32_t core_count = 1;
 
+        // **The instance's one buffer pool** (AM-S2 step 3). Non-null means
+        // this core does not open a store: it borrows core 0's, which is
+        // what "shared pool" means and what makes a page faulted on one core
+        // serve every other. Null keeps the arrangement every build had
+        // before - a frame table per core over the same device.
+        //
+        // **Conditional on one WAL stream, and that is not a detail.** The
+        // store's writeback gate is a `wal::WalDurability`, which is a
+        // property of the *log*: under AR0 M0 every core's manager attaches
+        // to core 0's stream, so any of them answers for all. A pre-M0
+        // volume mounts per-core, and a shared store there would check a
+        // page logged in core 1's stream against core 0's watermark and
+        // could write it back ahead of the record describing it. `Expeditor`
+        // therefore passes this only where `single_stream()` holds, until
+        // AM-S4 refuses such a volume outright.
+        storage::DevicePageStore* shared_store = nullptr;
+
         // This core's share of the instance frame budget
         // (`buffer_pool_frames`, docs/spec/eviction.md §6: the key is a
         // total, divided evenly per core - EV4). 0 = unbounded, the same
@@ -147,8 +164,13 @@ public:
         // `Expeditor::Open` at store open rather than through this struct,
         // and it is the **same** `frames / cores` every peer gets: this said
         // "the even part plus the division remainder", and `FrameBudgetShare`
-        // (`expeditor.cpp`) is one division. The remainder is dropped, so an
-        // instance holds up to `cores - 1` fewer frames than configured.
+        // (`expeditor.cpp`) is one division, so the remainder is dropped.
+        //
+        // **Ignored where `shared_store` is set**, and the division goes
+        // with it: one pool takes the whole `buffer_pool_frames`, which
+        // `Expeditor::Start` applies to that pool where it decides to share
+        // it. That is what EV4 asked for, and dividing was standing in for a
+        // pool that could not be shared.
         std::size_t buffer_pool_frames = 0;
 
         // Settings a peer shares with core 0. Recording is *not* among
@@ -575,7 +597,16 @@ private:
     // nothing to route to and stopping this reactor is the whole instance.
     std::function<void()> instance_stop_;
 
-    std::unique_ptr<storage::DevicePageStore> store_;
+    // **Owned, or borrowed** (AM-S2 step 3). `owned_store_` is empty where
+    // `Config::shared_store` named the instance's pool; `store_` points at
+    // whichever it is and is what every member and every caller uses, so
+    // nothing below this line knows the difference. The destruction order
+    // matters and is why these are a pair rather than a `variant`: a
+    // borrowed store outlives this object and must not be destroyed here,
+    // while an owned one is destroyed with everything else that reaches
+    // back into it (see the destructor's note on reverse order).
+    std::unique_ptr<storage::DevicePageStore> owned_store_;
+    storage::DevicePageStore* store_ = nullptr;
 
     // The refill this core is waiting on, if any. It outlives the coroutine
     // that waits on it, which is `WaitFor`'s one requirement - a flag on the

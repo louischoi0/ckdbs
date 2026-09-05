@@ -287,6 +287,22 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     EXPECT_EQ(db.store().first_evictable_page_id(), kFirstUserPageId)
         << "core 0's store came up without the resident-by-class floor";
 
+    // **One buffer pool for the instance** (AM-S2 step 3), which is the
+    // stage's own definition of done: a page faulted on core 1 is served
+    // from the frame core 0 loaded.
+    //
+    // **This one line is the whole claim, and two that stood beside it were
+    // not.** A first version also compared `frame_budget()` and watched
+    // `resident_pages()` across a peer dispatch; the review measured both as
+    // vacuous - the budgets are equal under either arrangement, and the
+    // count was core 0's own on both sides of a *peer* read, which two
+    // tables do not move either. Naming the same object is not a weaker
+    // statement than a behavioural one here, it is the same statement
+    // earlier: one object is one frame table, and there is no second table
+    // for a page to be missing from.
+    EXPECT_EQ(&peer.store(), &db.store())
+        << "the peer opened a frame table of its own over the shared device";
+
     // **The wake wiring, which fails silently or not at all** (AU-S1b). The
     // transport kicks through the instance's `WakerTable` rather than
     // through a copy of its own, so what has to be true is that it holds

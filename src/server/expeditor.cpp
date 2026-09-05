@@ -1702,9 +1702,49 @@ Status Expeditor::Start() {
         // dirty itself (extent_lease.hpp, PW3b's finding).
         extents_.emplace(*store_, extent_hint);
 
+        // **One pool for the instance, where the volume allows it**
+        // (AM-S2 step 3), and the answer does not vary by core - it is a
+        // property of the volume, so it is decided once here rather than
+        // per peer inside the loop.
+        //
+        // **Gated on `single_stream()`**, and the gate is the writeback
+        // path rather than the pool. The store's gate is a
+        // `wal::WalDurability` - a property of the log, not of a core -
+        // and under AR0 M0 every core's manager attaches to core 0's
+        // stream, so core 0's gate answers for all. A pre-M0 volume mounts
+        // per-core, where one gate would check a page logged in core 1's
+        // stream against core 0's watermark and could write it out ahead of
+        // the record that describes it. AM-S4 refuses such a volume
+        // outright and this branch goes with it.
+        const bool share_pool = database_->superblock.single_stream();
+        // **And the one pool takes the whole budget** (EV4). `Open` above
+        // applied core 0's *share* - `buffer_pool_frames / cores` - because
+        // there were `cores` frame tables to divide the instance total
+        // between. Sharing leaves one, so the division would shrink the
+        // operator's configured pool by a factor of `cores` and nothing
+        // downstream would restore it: the peers pass 0 below precisely
+        // because this line is what applies the total. Nonzero only, for
+        // `Open`'s reason - writing 0 would undo the debug
+        // `KDS_TEST_FRAME_BUDGET` override the store may be carrying.
+        if (share_pool && config_.buffer_pool_frames != 0) {
+            store_->SetFrameBudget(config_.buffer_pool_frames);
+        }
+
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
-            auto lease = extents_->Reserve(storage::kDefaultExtentPages);
-            if (!lease.ok()) return lease.status();
+            // **No extent for a core that borrows the pool** (AM-S2 step 3).
+            // A reservation marks 64 pages allocated in the free map for a
+            // lease `CoreRuntime::Open` no longer installs, and nothing ever
+            // frees an extent - so it would repeat every mount, permanently.
+            // `extent_lease.hpp` says leases exist because "per-core page
+            // stores do not work without it"; a core reaching core 0's free
+            // map under the structure latch is the arrangement that removes
+            // the need.
+            storage::Extent lease_for_core{};
+            if (!share_pool) {
+                auto lease = extents_->Reserve(storage::kDefaultExtentPages);
+                if (!lease.ok()) return lease.status();
+                lease_for_core = lease.value();
+            }
 
             CoreRuntime::Config core_config;
             core_config.core_id = core_id;
@@ -1724,9 +1764,18 @@ Status Expeditor::Start() {
             // AK-S2: and the Cabin's, now that a peer holds a store.
             core_config.cabins = config_.cabins;
             core_config.cabin_limits = config_.CabinLimitsOf();
+            // **This peer borrows the instance's pool** (AM-S2 step 3,
+            // `share_pool` above): a frame table of its own over the same
+            // device is what sharing replaces, so a page faulted on one
+            // core is served from the frame another core loaded.
+            core_config.shared_store = share_pool ? store_.get() : nullptr;
+            // **The division is what sharing removes** (EV4). Splitting the
+            // instance total N ways was standing in for a pool that could
+            // not be shared; the whole number went on that pool above, so
+            // passing a share here would hand one pool a fraction of itself.
             core_config.buffer_pool_frames =
-                FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
-            core_config.lease = lease.value();
+                share_pool ? 0 : FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
+            core_config.lease = lease_for_core;
             // This peer's own anchor, copied out of the superblock core 0
             // decoded. A peer's `SuperBlock` member is a default-constructed
             // one whose anchor slots are all zero, and a peer's checkpointer

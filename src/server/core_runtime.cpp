@@ -178,19 +178,32 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     }
     runtime->wal_->SetLogger(log);
 
-    // This core's own page store over the shared device. `first_new_page_id`
-    // is irrelevant here - allocation comes from the lease, never from the
-    // free map - but it is passed for the range check the store still does.
-    auto store = storage::DevicePageStore::Open(device, kFirstUserPageId);
-    if (!store.ok()) return store.status();
-    runtime->store_ = std::move(store.value());
-    runtime->store_->SetLogger(log);
-    runtime->store_->SetWalGate(runtime->wal_.get());
+    // **The instance's one pool, or this core's own** (AM-S2 step 3). A
+    // shared store arrives already opened, logged, gated, budgeted and
+    // armed by `Expeditor` - core 0 did all of it before any peer existed -
+    // so a peer that borrows one applies none of those again. Applying them
+    // would not be redundant, it would be wrong: `SetWalGate` would swap the
+    // instance's gate for this core's manager, and `SetFrameBudget` would
+    // hand one pool a per-core share of itself.
+    //
+    // `first_new_page_id` on the unshared arm is irrelevant - allocation
+    // comes from the lease, never from the free map - but it is passed for
+    // the range check the store still does.
+    if (config.shared_store != nullptr) {
+        runtime->store_ = config.shared_store;
+    } else {
+        auto store = storage::DevicePageStore::Open(device, kFirstUserPageId);
+        if (!store.ok()) return store.status();
+        runtime->owned_store_ = std::move(store.value());
+        runtime->store_ = runtime->owned_store_.get();
+        runtime->store_->SetLogger(log);
+        runtime->store_->SetWalGate(runtime->wal_.get());
+    }
     // Only when the config carries a share. Zero must not be written:
     // Open() may already hold the debug KDS_TEST_FRAME_BUDGET override,
     // and writing zero here would silently undo it on every peer store -
     // the same rule the core-0 site follows (expeditor.cpp).
-    if (config.buffer_pool_frames != 0) {
+    if (runtime->owned_store_ != nullptr && config.buffer_pool_frames != 0) {
         runtime->store_->SetFrameBudget(config.buffer_pool_frames);
     }
 
@@ -232,7 +245,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // against one store would trip a debug abort on correct traffic. Passing
     // the count here scales the bound with the operations that can be in
     // flight, and only ever loosens a debug assert.
-    runtime->store_->SetLatchArmed(config.core_count > 1, config.core_count);
+    // Core 0 armed a shared store when it opened it, with the same two
+    // numbers; re-arming would be harmless and re-stating it here would
+    // still be a second place for the decision to live.
+    if (runtime->owned_store_ != nullptr) {
+        runtime->store_->SetLatchArmed(config.core_count > 1, config.core_count);
+    }
     runtime->undo_log_.emplace(*runtime->store_, &*runtime->wal_);
     // Timed, as core 0's is (`Expeditor::Open` passes its clock): `SHOW META`
     // prints the whole RC09 block only when `timings.timed` says a clock was
@@ -319,7 +337,17 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // A peer with no transport still publishes nothing and still rescans,
     // which describes a test fixture rather than a server. Core 0's own
     // checkpoint runs in Expeditor::Open.
-    runtime->store_->SetCoreOwnership(&runtime->lease_, kFirstUserPageId);
+    // **Not on a shared store** (AM-S2 step 3). The lease exists because
+    // "per-core page stores do not work without it"
+    // (`storage/extent_lease.hpp`) - a core that does not own the free map
+    // has to reserve ids up front. A core borrowing core 0's store *is*
+    // reaching the free map, under the structure latch, so there is nothing
+    // for a lease to work around and installing one would put this core's
+    // allocation behind a reservation the store no longer needs. The lease
+    // and the rights sets it keys are step 4's to remove outright.
+    if (runtime->owned_store_ != nullptr) {
+        runtime->store_->SetCoreOwnership(&runtime->lease_, kFirstUserPageId);
+    }
 
     // The catalog, read-only in practice: DDL is core 0's, and the store
     // above refuses a write to the pages it lives on. What this instance
@@ -973,8 +1001,15 @@ void CoreRuntime::GrantRelationFault(storage::Extent extent) {
     // the maps before this grant left. Failure is logged and the grant
     // still installed: a stale map is the pre-refresh behavior, not a
     // reason to drop rights.
-    if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok() && log_ != nullptr) {
-        log_->Error("core", "free-map refresh at fault grant failed: " + s.message());
+    // **A borrowed pool has nothing to refresh** (AM-S2 step 3): what this
+    // reconciles is a *leased* store's private copy of the map, and a core
+    // reading core 0's own map under the structure latch is already looking
+    // at the original. `RefreshFreeMapFromDevice` refuses outright without a
+    // lease, so on a borrowing peer this call fails every time.
+    if (owned_store_ != nullptr) {
+        if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok() && log_ != nullptr) {
+            log_->Error("core", "free-map refresh at fault grant failed: " + s.message());
+        }
     }
     store_->GrantFaultPages(extent);
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
@@ -1030,11 +1065,17 @@ bool CoreRuntime::AdmitWritePages(std::span<const PageId> pages) {
     // whose pages may answer NotFound is C1's silent uselessness with
     // extra steps, and re-delivery is the re-grant debt's, not this
     // path's.
-    if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok()) {
-        if (log_ != nullptr) {
-            log_->Error("core", "free-map refresh at write grant failed: " + s.message());
+    // Skipped on a borrowed pool for `GrantRelationFault`'s reason, and here
+    // it is not merely wasted: the failure policy below treats any step's
+    // refusal as fatal, so an unconditional call would abandon **every**
+    // write grant a peer is offered.
+    if (owned_store_ != nullptr) {
+        if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok()) {
+            if (log_ != nullptr) {
+                log_->Error("core", "free-map refresh at write grant failed: " + s.message());
+            }
+            return false;
         }
-        return false;
     }
     // Rule 6's precondition made true by construction, not by "nothing
     // below exists": the acquisition record's erase declares everything
@@ -1181,8 +1222,16 @@ void CoreRuntime::InvalidateCatalog() {
     // same page, whose window is one `WritePage` wide; giving up instead
     // would leave the peer unable to reach the grown page until the next
     // *bumping* DDL, which may never come.
-    Status refreshed = store_->RefreshFreeMapFromDevice();
-    if (!refreshed.ok()) refreshed = store_->RefreshFreeMapFromDevice();
+    // Skipped on a borrowed pool (AM-S2 step 3). The message below says a
+    // catalog page core 0 just allocated "stays unreachable here", which is
+    // false where this core reads core 0's own map: there is no private copy
+    // to fall behind. Logging it anyway on every DDL broadcast would be an
+    // error that describes an arrangement this instance is not in.
+    Status refreshed = Status::OK();
+    if (owned_store_ != nullptr) {
+        refreshed = store_->RefreshFreeMapFromDevice();
+        if (!refreshed.ok()) refreshed = store_->RefreshFreeMapFromDevice();
+    }
     if (!refreshed.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
         log_->Error("core", "core " + std::to_string(config_.core_id) +
                                 ": free-map refresh at catalog invalidation failed twice, so a "
@@ -1301,7 +1350,16 @@ void CoreRuntime::Run() {
     // counters are core-local (exec/step_vm.cpp), so installing it once on
     // the startup thread would leave every worker unguarded. The core's
     // own store rides along for the pin half of the rule (P4d-3).
-    exec::InstallSuspendAudit(store_.get());
+    // **The pin half of the audit is this core's only where the store is**
+    // (AM-S2 step 3). `step_vm.cpp`'s `g_audit_store` tests `live_pins() != 0`
+    // at a park, on the premise its own comment states - "each core has its
+    // own store". On a borrowed pool that count is the instance's sum, so a
+    // peer parking while core 0 holds a pin would record a park-with-pin
+    // that never happened. The audit is a debug recorder, so a false entry
+    // costs a diagnostic rather than a run; a false entry is still worse
+    // than a missing one, because it makes the record untrustworthy where a
+    // gap is merely narrower. The coroutine half is unaffected and stays.
+    exec::InstallSuspendAudit(owned_store_ != nullptr ? store_ : nullptr);
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor running");
