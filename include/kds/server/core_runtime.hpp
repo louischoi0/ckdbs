@@ -143,9 +143,12 @@ public:
         // This core's share of the instance frame budget
         // (`buffer_pool_frames`, docs/spec/eviction.md §6: the key is a
         // total, divided evenly per core - EV4). 0 = unbounded, the same
-        // meaning SetFrameBudget gives it. Core 0's share - the even part
-        // plus the division remainder - is applied by Expeditor::Open at
-        // store open, not through this struct.
+        // meaning SetFrameBudget gives it. Core 0's share is applied by
+        // `Expeditor::Open` at store open rather than through this struct,
+        // and it is the **same** `frames / cores` every peer gets: this said
+        // "the even part plus the division remainder", and `FrameBudgetShare`
+        // (`expeditor.cpp`) is one division. The remainder is dropped, so an
+        // instance holds up to `cores - 1` fewer frames than configured.
         std::size_t buffer_pool_frames = 0;
 
         // Settings a peer shares with core 0. Recording is *not* among
