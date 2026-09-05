@@ -1415,6 +1415,19 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
     // outside it, and republishes. That is also what makes this pair atomic
     // *without* a bracket, so the two are one change and the bracket is the
     // half that could land first.
+    //
+    // **Do not latch the erasers before step 2b lands, or this deadlocks.**
+    // The miss path evicts *inline*: `EnsureResident` calls
+    // `EvictColdFrames` when the fault takes the pool past its budget (EV5,
+    // the `frame_budget_` block below the device read). This hold therefore
+    // already spans a sweep. Nothing hangs today only because the three
+    // erasers - `ReleaseScanSlot`, `EvictClean`, `EvictColdFrames` - take no
+    // latch; the moment they take this one, on a non-recursive `std::mutex`,
+    // the armed fault path acquires it twice on one thread. Step 3 needs
+    // them latched (a pin must be visible to another core's sweep for
+    // "pinned frames are never victims" to mean anything across threads), so
+    // the order is forced: **2b before the erasers, and the erasers before
+    // step 3.**
     std::lock_guard<Latch> hold(*latch);
     auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
     if (!bytes.ok()) return bytes.status();
