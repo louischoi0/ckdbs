@@ -1278,6 +1278,20 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
         return Status::InvalidArgument(
             "DevicePageStore: page_lsn 0 means 'never logged' and cannot be stamped");
     }
+    // **Under the structure latch** (AM-S2 step 3e). This walks a table
+    // another core may be growing, and the failure is not theoretical: with
+    // three inserters against three stampers,
+    // `tests/frame_table_race_test.cpp` reports "a stamp failed on a
+    // resident page" without this hold - the `find` raced a rehash and
+    // missed, so a page that was certainly resident answered `NotFound` and
+    // its caller lost the stamp. Held across the byte writes too, which
+    // costs nothing: they are memory, and the page latch the caller already
+    // holds is what makes them safe.
+    //
+    // No path reaches this with the latch held - every caller is a
+    // transaction, catalog, recovery or assertion write that got here
+    // through a checked accessor first.
+    LatchGuard structure(structure_latch());
     auto it = frames_.find(page_id);
     if (it == frames_.end()) {
         return Status::NotFound("DevicePageStore: page " + std::to_string(page_id) +
@@ -2089,6 +2103,11 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
 }
 
 void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
+    // The same table walk and the same hold as `StampPageLsn` (AM-S2 step
+    // 3e). Its miss is quieter - a dirty mark lost to a rehash is a page
+    // that never reaches the device - which is why it goes in beside the
+    // one that could be measured rather than waiting for a cell of its own.
+    LatchGuard structure(structure_latch());
     auto it = frames_.find(page_id);
     if (it != frames_.end()) it->second.dirty = true;
 }
