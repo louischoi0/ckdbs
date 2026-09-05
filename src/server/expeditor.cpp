@@ -1248,14 +1248,22 @@ void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
     // therefore the entire reason it can go. A flag has no queue to be full,
     // so the bound, the retry task and the pump all go with it.
     (void)core0_scheduler;
-    if (!wakers_.has_value()) return;
     for (const auto& core : cores_) {
         // Write, then kick (AR0-6-R1). The flag ends the loop; the kick ends
         // the block the loop is sitting in. A kick that races a reactor which
         // is not yet asleep is skipped, and that reactor sees the flag on its
         // next turn without ever blocking.
+        //
+        // **The stop is unconditional and only the kick is gated.** This
+        // returned early on `!wakers_.has_value()`, which made the flag - the
+        // half that actually ends the loop - depend on the half that is only
+        // a latency saving. The two are built together today, so the two
+        // shapes agree; they are not the same statement, and the disagreeing
+        // case is `join()` below waiting on a reactor nobody ever stopped.
+        // A missing table costs one idle block per peer, which is what
+        // `waker_table.hpp` prices it at.
         core->scheduler().Stop();
-        wakers_->Kick(core->core_id());
+        if (wakers_.has_value()) wakers_->Kick(core->core_id());
     }
 }
 
@@ -2299,10 +2307,11 @@ void Expeditor::StopStartedCores() {
     // An empty `workers` is `cores = 1` and every failure before the spawn
     // loop; a non-empty one is strictly after `live.scheduler.emplace`, so
     // the dereference below is safe wherever it is reached. The two steps
-    // are the shutdown tail's and in its order: a core is stopped by a ring
-    // message rather than by a flag another thread writes
-    // (`ring_message.hpp` says why), so the broadcast has to reach a reactor
-    // that is still turning.
+    // are the shutdown tail's and in its order: since AU-S3 the broadcast is
+    // a flag another thread writes plus a kick, so it does *not* need to
+    // reach a reactor that is still turning - a peer already inside its idle
+    // block leaves it, and one that has not reached the block yet sees the
+    // flag on its next turn.
     if (running_ != nullptr && !running_->workers.empty()) {
         BroadcastShutdown(*running_->scheduler);
         for (auto& worker : running_->workers) {
@@ -2345,9 +2354,9 @@ Status Expeditor::RunUntilStopped() {
     exec::UninstallSuspendAudit();
     logger_->Info("expeditor", "stopping");
 
-    // Every peer is told to stop, then joined. The message is how a core is
-    // stopped at all - `Scheduler::Stop()` writes a plain bool owned by that
-    // core's own thread (ring_message.hpp's kShutdown says why).
+    // Every peer is told to stop, then joined. A flag and a kick since
+    // AU-S3: `Scheduler::stopped_` is atomic, so this thread writes it
+    // directly and the kick only ends the idle block the peer is sitting in.
     BroadcastShutdown(scheduler);
     for (auto& worker : workers) {
         if (worker.joinable()) worker.join();

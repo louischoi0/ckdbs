@@ -117,8 +117,12 @@
 // A CoreRuntime is created on the startup thread and then handed to exactly
 // one worker, which owns it for the rest of its life. Nothing in it is
 // synchronized (rules.md #3), and nothing outside that worker may touch it
-// once `Run()` has begun - including to stop it, which is why shutdown is a
-// message (`RingMessageKind::kShutdown`) and not a method call.
+// once `Run()` has begun - **with one exception, and only one**:
+// `scheduler().Stop()` and `WakerTable::Kick`, both of which are atomic and
+// both of which core 0 uses on the way down (AU-S3). Stopping a peer was a
+// `kShutdown` ring message until then, for the single reason that
+// `Scheduler::stopped_` was a plain bool; the kind is struck and the
+// exception is stated here rather than left to be inferred from the call.
 
 namespace kds::server {
 
@@ -298,7 +302,7 @@ public:
     // which by the reverse-order rule would destroy it *last* - and the
     // scheduler owns coroutine frames (`sched::CoroTask` destroys a
     // suspended one), whose locals reach back into those members. A
-    // pipeline stage parked at a credit gate when `kShutdown` arrives holds
+    // pipeline stage parked at a credit gate when the reactor stops holds
     // a `txn::ReaderLease` on its frame, and that lease's destructor calls
     // `txn_manager_->UnregisterReader()` - on a manager the reverse order
     // has already destroyed. Safe here because nothing destroyed below
@@ -311,8 +315,10 @@ public:
     ~CoreRuntime();
 
     // Attaches this core to the ring matrix and installs the handlers every
-    // core needs - today just `kShutdown`, which is what lets core 0 stop
-    // this one without touching its memory. `transport` must outlive this.
+    // core needs - catalog invalidation, the CC7 grants, and the services
+    // below. **Not a stop handler**: since AU-S3 core 0 stops this reactor
+    // with `scheduler().Stop()` plus a kick, so shutdown reaches a core that
+    // never attached a transport at all. `transport` must outlive this.
     Status AttachTransport(sched::RingTransport& transport);
 
     // PW5: binds `port` with SO_REUSEPORT and attaches the listener to
@@ -344,8 +350,11 @@ public:
     // sync order core 0's own teardown has always had. Idempotent.
     void CloseListener() noexcept { listener_.reset(); }
 
-    // Runs this core's reactor until a `kShutdown` message arrives. This is
-    // the worker thread's whole body.
+    // Runs this core's reactor until another thread sets its stop flag
+    // (`scheduler().Stop()`, AU-S3). This is the worker thread's whole body.
+    // **The stop is sticky**: `Scheduler::Run` no longer clears the flag on
+    // entry, so a stop that lands before this is called returns immediately
+    // rather than being erased, and a CoreRuntime is run exactly once.
     void Run();
 
     // Drains and syncs this core's log. Called on the way down, after Run()

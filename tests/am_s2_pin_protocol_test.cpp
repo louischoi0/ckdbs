@@ -44,16 +44,23 @@ protected:
         // btree descent does, aborts the process on entirely correct
         // traffic. Measured, not reasoned: at nine it aborts.
         store_->SetLatchArmed(true, /*concurrent_pinners=*/12);
-        // **A budget, so the inline sweep actually runs** (AM-S2). The
-        // fault path sweeps only when a miss takes the pool past
-        // `frame_budget_` (EV5/MG06), and the review found this fixture left
-        // it at 0 - so the cell written to show the sweep moved out from
-        // under the structure latch never executed a sweep at all, and the
-        // hit path's `loading_` test, which is what keeps a second thread
-        // off a frame the loader is still inside `ResidentBytes` for, could
-        // be deleted with every cell still passing. Small enough that the
-        // rounds below cross it repeatedly.
-        store_->SetFrameBudget(8);
+        // **No frame budget, because no budget can make the sweep run
+        // here** - measured with a counter on the sweep block, not reasoned.
+        // A previous version of this set `SetFrameBudget(8)` and claimed the
+        // rounds below crossed it repeatedly; the count was **0 in both
+        // cells**. The sweep sits on the *miss* path, after `InsertFrame`
+        // (EV5/MG06), and neither cell reaches it:
+        //
+        //   - `ManyThreads...` makes its 16 pages with `CreateNew`, which
+        //     does not pass through that block at all, and then only ever
+        //     *hits*. No miss, no sweep, whatever the budget.
+        //   - `ConcurrentMisses...` evicts down to nothing and faults one
+        //     page, so `frames_.size()` is 1 at the miss - under any budget
+        //     that is not disabled.
+        //
+        // A cell that reaches the sweep has to fault **more distinct pages
+        // than the budget**, which is a different rig, not a line here. Left
+        // out rather than left in looking load-bearing.
     }
 
     PageId MakeResidentPage(std::byte fill) {

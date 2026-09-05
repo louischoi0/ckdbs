@@ -891,8 +891,10 @@ private:
     // that installed it.
     std::optional<storage::ExtentAllocator> extents_;
 
-    // Sends every peer a kShutdown. Called on the way down, from core 0's
-    // thread, before the workers are joined.
+    // Sets every peer's stop flag and kicks it awake (AU-S3: write, then
+    // kick). Called on the way down, from core 0's thread, before the
+    // workers are joined. A no-op at `cores = 1`, where no waker table was
+    // built and there is no peer to stop.
     void BroadcastShutdown(sched::Scheduler& core0_scheduler);
 
     // The failure half of `Start()`: stops and joins whatever core threads

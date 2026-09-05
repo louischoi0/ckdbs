@@ -1566,15 +1566,16 @@ Status CoreRuntime::ListenAndAttach(std::uint16_t port, Protocol protocol,
     // STOP accepted on this core must stop the *instance*, not this
     // reactor (the review's BUG 2: a stopped peer's socket keeps
     // receiving a kernel share of new connections nobody drains, and its
-    // ring goes undrained while core 0 reports healthy). So it routes: a
-    // straight to core 0's stop flag, which is atomic since AU-S3, plus a
-    // kick to end the block it is sitting in; Serve's ordinary tail then
-    // broadcasts shutdown to every peer - one stop path, whichever core the
-    // client landed on. It used to route a `kShutdown` message for one
-    // reason only: the flag was a plain bool, so core 0's own thread had to
-    // be the one to flip it. The hook is installed by the instance, so a
-    // fixture that wires a listener with no instance around it simply has
-    // none and falls through to the reactor-local stop below.
+    // ring goes undrained while core 0 reports healthy). So it routes,
+    // through the instance's hook, straight to core 0's stop flag - atomic
+    // since AU-S3 - plus a kick to end the block it is sitting in; Serve's
+    // ordinary tail then broadcasts shutdown to every peer, one stop path
+    // whichever core the client landed on. It used to route a `kShutdown`
+    // message for one reason only: the flag was a plain bool, so core 0's
+    // own thread had to be the one to flip it. The hook is installed by the
+    // instance, so a fixture that wires a listener with no instance around
+    // it simply has none and `TcpServer` falls back to stopping the reactor
+    // this listener is attached to (`tcp_server.cpp`'s `scheduler_->Stop()`).
     if (instance_stop_) {
         listener_->set_stop_handler([this] { instance_stop_(); });
     }

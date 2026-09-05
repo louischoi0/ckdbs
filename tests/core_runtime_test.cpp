@@ -328,13 +328,13 @@ TEST_F(CoreRuntimeTest, ShutdownStopsOnlyTheCoreItIsAddressedTo) {
     auto transport = sched::RealRingTransport::Create(3, 16, 64);
     ASSERT_TRUE(transport.ok());
 
-    // The survivor is checked by **liveness, not by reading its flag**.
-    //
-    // `Scheduler::stopped_` is a plain bool owned by its reactor's thread,
-    // so reading it from here while that thread runs is a data race - the
-    // very thing kShutdown exists to avoid, and something ThreadSanitizer
-    // catches in a test that tries it. A running core is instead shown to be
-    // running by making it do something observable.
+    // The survivor is checked by **liveness, not by reading its flag**, and
+    // the reason changed at AU-S3 without the practice changing. Reading
+    // `stopped()` from here is no longer a data race - the flag is atomic -
+    // but it was never the assertion worth making: `false` says only that
+    // nobody asked this core to stop, where the claim is that it is still
+    // serving. A running core is shown to be running by making it do
+    // something observable.
     std::atomic<int> served{0};
 
     std::vector<std::unique_ptr<CoreRuntime>> cores;
@@ -4271,8 +4271,9 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesAnUnfundedWriteA
     // anything. This is the whole loop over a real socket - a rotated
     // relation is served on the peer that owns it, a core-0 relation is
     // refused with the affinity answer, and STOP does not stop this
-    // reactor: it routes a kShutdown to the system core
-    // (tcp_server.hpp's stop contract, CoreRuntime::ListenAndAttach).
+    // reactor: it fires the instance's stop hook (tcp_server.hpp's stop
+    // contract, CoreRuntime::ListenAndAttach; a `kShutdown` message to the
+    // system core until AU-S3).
     constexpr std::uint16_t kPort = 25442;
 
     auto transport = sched::RealRingTransport::Create(2, 16, 256);

@@ -1515,10 +1515,18 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
         //
         // That is a data race, not a wrong answer, so it does not surface as
         // a failing assertion: deleting the test leaves
-        // `am_s2_pin_protocol_test.cpp` green, measured five runs out of
-        // five **with a frame budget set so the sweep genuinely runs**.
-        // Proving it needs TSan, which this tree does not build. Recorded
-        // rather than covered, so nobody deletes it for looking redundant.
+        // `am_s2_pin_protocol_test.cpp` green, five runs out of five.
+        //
+        // **And that measurement is weaker than it first read.** It was
+        // recorded as "with a frame budget set so the sweep genuinely runs";
+        // a counter on the sweep block says the count was **0**, because
+        // neither cell there takes a miss with more frames resident than the
+        // budget (`am_s2_pin_protocol_test.cpp`'s SetUp carries the
+        // arithmetic). So the five runs say only that the *rest* of the
+        // fixture is indifferent to this test - the window it guards was
+        // never entered. Proving it needs TSan and a rig that faults past
+        // the budget, neither of which this tree has. Recorded rather than
+        // covered, so nobody deletes it for looking redundant.
         const bool resident = frames_.find(page_id) != frames_.end();
         if (resident && loading_.find(page_id) == loading_.end()) {
             // **The hit path runs the raw fetch under the latch, and that is
@@ -1616,28 +1624,37 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     {
         LatchGuard structure(latch);
         auto found = frames_.find(id);
-        // **Still the frame this call created?** Comparing the bytes rather
-        // than merely finding the id is what separates "nobody touched it"
-        // from "it was evicted and something faulted the same id back in" -
-        // and the second is the case whose pin would otherwise land on a
-        // frame this caller never created, while its span pointed at freed
-        // memory. That is the quiet failure the whole pair exists to remove.
+        // **Does the resident frame for this id own the bytes we are about
+        // to hand out?** That, and only that, is what the address compare
+        // decides: pass it and the span points into the frame pinned on the
+        // next line, so the pin and the bytes cannot disagree. It is *not*
+        // proof that nobody touched the frame - an evict-and-re-fault whose
+        // `Page` allocation reuses the freed 8 KiB block passes too - and
+        // does not need to be: that case is a frame this caller did not
+        // create holding bytes at the address it was handed, which is
+        // exactly as safe. What it excludes is the quiet failure the pair
+        // exists to remove: pinning a *different* allocation while the span
+        // still points at a freed one.
         if (found != frames_.end() && found->second.bytes != nullptr &&
             static_cast<const void*>(found->second.bytes->data()) ==
                 static_cast<const void*>(made.value().second.data())) {
             frame = &found->second;
-            ++frame->pins;
-            ++live_pins_;
-            if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+            // `CountPin`, not the increments written out - the same reason
+            // `FetchPinned`'s hit path calls it: a third copy of the gauge,
+            // the high-water mark and MG04's ceiling is a third definition
+            // to drift, and writing it by hand here took the ceiling off
+            // the create path.
+            CountPin(*frame);
         }
     }
 
     if (frame != nullptr) {
         // Pin first, page latch after, with the structure latch released -
-        // `PinFrame`'s order, for `PinFrame`'s reason.
-        if (latch_armed_) {
-            (void)PageLatch::Acquire(frame->latch, LatchModeFor(PinMode::kExclusive), core_id_);
-        }
+        // `PinFrame`'s order, for `PinFrame`'s reason. Through
+        // `AcquirePageLatch` for `FetchPinned`'s reason: acquiring the word
+        // directly here would take AM-S1's never-upgrade census off this
+        // path, and that census is only ever about the armed path.
+        AcquirePageLatch(id, *frame, PinMode::kExclusive);
         return made;
     }
 

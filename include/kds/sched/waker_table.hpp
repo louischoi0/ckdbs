@@ -17,7 +17,17 @@
 // It exists because the pair it needs - the destination's `sleeping` flag and
 // its `Waker` - lived on `RingTransport` as `WakeTarget`, reachable only
 // through a transport that is being retired. Both halves belong to the
-// destination's reactor and outlive every send; only their *home* moves.
+// destination's reactor and outlive every send.
+//
+// **Until AU-S5 retires the ring, the pair has two homes, not one.**
+// `RingTransport::WakeTarget` is this `Entry` field for field, `wake_` is
+// this `entries_` element for element, and `Scheduler::AttachTransport` and
+// `AttachWakerTable` each register the same two pointers into their own
+// copy - so a send kicks through one and a stop through the other. That is
+// duplication with a scheduled end, not a design: the two must be collapsed
+// (the transport delegating to this table, `SetWakeTarget`/`WakeTarget`
+// deleted) at latest when the ring goes, and sooner if anything else starts
+// registering.
 //
 // ---- Why the flag, and what a missed kick costs -------------------------
 //
@@ -57,10 +67,22 @@ public:
     }
 
     // **Callable from any thread**, which is the whole point: the caller is
-    // another core. Reads the destination's flag with sequential
-    // consistency - the same ordering the reactor stores it with, so the
-    // pair is a store-buffer and neither side may read stale - and writes
-    // the eventfd only when it is set.
+    // another core. Reads the destination's flag and writes the eventfd
+    // only when it is set.
+    //
+    // **This is not `TrySend`'s store-buffer pair, and must not be read as
+    // one.** That pair needs three things - the sender fencing its publish
+    // into the seq_cst order, the destination storing the flag with a fence,
+    // and *the destination re-reading the predicate after raising it*. Only
+    // the middle one is here: there is no `HasPending` analogue on this path
+    // (see the header block above), so the seq_cst load below is a load with
+    // no partner and buys no exclusion on its own. The kick is therefore
+    // **best-effort by construction**: a publisher that lands between the
+    // destination's last look and its raising of the flag reads clear, skips
+    // the kick, and the destination waits out one idle block. Slow, never
+    // wrong, and AR0-6-R1's stated cost. AU-S2 adds the re-check, and the
+    // sender-side fence belongs in the same commit - alone, either half is
+    // ceremony.
     void Kick(std::uint32_t core) const noexcept {
         if (core >= entries_.size()) return;
         const Entry& entry = entries_[core];

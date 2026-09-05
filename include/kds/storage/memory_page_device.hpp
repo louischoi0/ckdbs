@@ -47,7 +47,13 @@
 // that the background writer really did coalesce an id-sorted batch into
 // one transfer (page.md section 18-7).
 //
-// Concurrency: core-local, no synchronization, like every PageDevice.
+// Concurrency: **not core-local, and not unsynchronized** (AM-S2 R8). One
+// device serves every core's store, so `page_device.hpp`'s contract - reads
+// may run concurrently, including with each other - applies here, and the
+// whole mutating surface is under `mu_` below. The two accessors that hand
+// out a reference (`trace()`, `stats()`) are the stated exception: a lock
+// cannot cover a reference the caller still holds, so they need the device
+// quiescent.
 
 namespace kds::storage {
 
@@ -141,10 +147,23 @@ public:
 
     // ---- Instrumentation -------------------------------------------------
 
+    // **Unguarded, and they are the exception `mu_` names**: a lock here
+    // would end at the return and the caller holds the reference past it,
+    // so both need the device quiescent - after a join, or between rounds
+    // of a rig that barriers its threads (`am_s2_pin_protocol_test.cpp`).
     const Stats& stats() const noexcept { return stats_; }
     const std::vector<TraceEntry>& trace() const noexcept { return trace_; }
-    void ClearTrace() noexcept { trace_.clear(); }
-    void ResetStats() noexcept { stats_ = Stats{}; }
+    // These two are **mutators**, not accessors, so they take the latch like
+    // every other one: `ClearInjections()` is the same shape. The reference
+    // argument above does not apply - nothing escapes.
+    void ClearTrace() noexcept {
+        std::lock_guard<std::mutex> guard(mu_);
+        trace_.clear();
+    }
+    void ResetStats() noexcept {
+        std::lock_guard<std::mutex> guard(mu_);
+        stats_ = Stats{};
+    }
 
 private:
     using Page = std::array<std::byte, kPageSize>;
@@ -174,11 +193,13 @@ private:
     //
     // Coarse on purpose: this is the test and simulator device, the
     // simulator is single-threaded so the mutex is uncontended there, and a
-    // finer split would buy nothing measurable against a memcpy. The
+    // finer split would buy nothing measurable against a memcpy. The two
     // accessors that hand out references - `trace()`, `stats()` - are
-    // deliberately **not** guarded: a caller holding the reference is
-    // outside any lock this could take, and every caller reads them after
-    // its threads have joined.
+    // deliberately **not** guarded, because a caller holding the reference
+    // is outside any lock this could take; what they require is a quiescent
+    // device, which is a join for most callers and a round barrier with
+    // every faulter parked for `am_s2_pin_protocol_test.cpp`. Everything
+    // else, `ClearTrace()`/`ResetStats()` included, takes the latch.
     mutable std::mutex mu_;
 
     std::unordered_map<PageId, Page> durable_;
