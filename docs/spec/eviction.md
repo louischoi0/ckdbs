@@ -135,9 +135,35 @@ Bulk sequential readers declare ring mode on their scan handle:
   32), reused cyclically; pages read through the ring bypass the page table
   insert-for-retention path (they are mapped while in the ring, then
   dropped) and never bump usage counters.
+- **The ring holds a shared pin, and the page latch, on exactly the page
+  its last `Fetch` returned; every other slot is an ordinary evictable
+  frame** (AM-R8, 2026-09-06). That is what makes "the span is valid until
+  the next `Fetch`" a statement about the pool rather than about there
+  being one thread: the pin is dropped on the next `Fetch`, before the
+  rotation, and in the ring's destructor. Bypassing the retention insert
+  and the usage bump is what a ring is for; a pin was never on that list.
+  The latch is the other half — without it a scan reads a page a writer on
+  another core is in the middle of, which is a wrong answer rather than a
+  slow one. A consumer therefore finishes with the span before the next
+  `Fetch` **and does not park while it holds one**, which is `heap_chain`'s
+  rule about which walks may take a fetcher, stated once more at the seam
+  because a ring's span is the one page handle in the tree that is not a
+  `PageRef`.
+- **A slot rotates only when the fetch faulted.** A page found resident —
+  the foreground's frame, or one this ring already faulted — is used in
+  place and costs no slot. The fetch itself reports which it was, rather
+  than a residency probe taken before it, because on a shared pool such a
+  probe is stale before it is acted on. The release therefore follows the
+  fault instead of preceding it, so residency grows by at most the ring's
+  size, plus one frame for the length of a `Fetch` that faults.
 - Foreground point reads that hit a page currently held by the ring use it
   in place (it is a normal frame; only its lifecycle differs).
-- Consumers: the CREATE ASSERTION builder and aggregate full scans.
+- Consumers, as the tree has them: the Cabin optimizer's build walk
+  (`src/exec/cabin_optimizer_exec.cpp`, where PO4 makes ring routing
+  structural) and the relayout planner's survey
+  (`src/stats/relayout_planner.cpp`). This line read "the CREATE ASSERTION
+  builder and aggregate full scans" until 2026-09-06; neither has ever
+  opened a ring.
 - A ring-mode dirty write is not expected in v1 (scans are read paths); a
   writer that needs ring mode must go through the standard dirty
   protocol — the ring never bypasses flush-before-evict.

@@ -13,13 +13,23 @@ named commit.
 combined; the better code wins per item. This order records the per-item
 verdict (§2) and the port that follows from it (§5).
 
-**Status: S-P0, S-P1 and S-P2 done 2026-09-06 on `worktree-am-s2-port`
-from `16e6c5c`.** §7 is S-P0's table and §8 is what S-P1 and S-P2 built.
+**Status: complete. S-P0..S-P4 done 2026-09-06 on `worktree-am-s2-port`
+from `16e6c5c`** (`75f81a8`, `6cbd6f8`, `7804a33`, `a140e8d`, and S-P4's
+own commit). §7 is S-P0's table and §8 is what S-P1 and S-P2 built.
 Between them they move four of this order's own rulings: `main` closed R3
 and the 2a/2b R6 with better mechanisms than `c7c3a67`'s (§7 rows 6-9),
 and F-1 — the defect S-P0 filed against `main`'s R3 fix and S-P1 was to
 close — turned out to be closed by AM-R8a itself, so the fix CLA built for
-it was reverted (§8.2). S-P3 and S-P4 are not started.
+it was reverted (§8.2).
+
+**S-P4 found one thing this order does not mention.**
+`raft-marks-2026-09-05.md` — the operator's marks of that day on AR0-5's
+D17–D22, AR0-6's D24–D26 and AS's Q1–Q6, plus the AN-R10 paragraph that
+gates AN-S2 — existed **only** on `worktree-am-s2`, the branch §5's last
+cell retires. Three of those four blocks have nothing to do with this
+ring. The document is carried onto `main` with its §1 rewritten from what
+each mark obliged to where each mark ended up, and `origin/worktree-am-s2`
+is not deleted until that has landed.
 
 ---
 
