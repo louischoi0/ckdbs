@@ -478,11 +478,13 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
     // **And a resident frame is never replaced** (AM-S2 R2). This used to
     // `insert_or_assign`, which overwrote a whole `Frame` - latch word and
     // pin count with it - whenever one was already there. The `loading_`
-    // set makes that unreachable for two concurrent faults of one page, but
-    // `ScanRing::Fetch` faults outside that set entirely, so a ring fetch
-    // racing a load could reset a word another core held and a count another
-    // core's handle depended on. Latching this call made the overwrite
-    // atomic against the table without making it any less wrong.
+    // set makes that unreachable for two concurrent faults of one page, and
+    // the ring was the one caller it did not cover: `ScanRing::Fetch` faulted
+    // outside that set entirely until AM-S2-P S-P1 routed it through
+    // `FetchAndPin`, so a ring fetch racing a load could reset a word another
+    // core held and a count another core's handle depended on. Latching this
+    // call made the overwrite atomic against the table without making it any
+    // less wrong.
     //
     // The fix is to lose the race rather than win it: whoever got here first
     // has the authoritative frame, so the bytes read second are dropped and

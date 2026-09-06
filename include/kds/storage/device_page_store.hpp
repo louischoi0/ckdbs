@@ -355,11 +355,24 @@ public:
     // bump (only foreground accessors bump; ring fetches never do), a
     // dirty write, or pinned-class membership each abandon the frame to
     // the table instead of dropping it, which is §5's interaction rule and
-    // the whole of pin-safety. A page already resident - foreground's or a
-    // ring slot's - is used in place, with no usage bump and no rotation.
+    // the whole of pin-safety - and so does a latch another core holds,
+    // which is the refusal a shared pool adds. A page already resident -
+    // foreground's or a ring slot's - is used in place, with no usage bump
+    // and no rotation.
+    //
+    // **The ring holds a shared pin, and the page latch, on exactly the
+    // page its last `Fetch` returned** (AM-R8); every other slot is an
+    // ordinary evictable frame. That is what makes "the span is valid
+    // until the next `Fetch`" a statement about the pool rather than about
+    // there being one thread, and the latch is what keeps a scan from
+    // reading a page a writer on another core is in the middle of. It also
+    // runs in the other direction: a foreground *exclusive* request on the
+    // page the ring is holding waits until the ring's next `Fetch`.
     //
     // What this bounds: a full scan grows residency by at most the ring's
-    // size, whatever the relation's. The frames are ordinary frames in the
+    // size, plus one frame for the length of a `Fetch` that faults - the
+    // slot is released after the fault, not before, because the fault
+    // answer comes from the fetch. The frames are ordinary frames in the
     // page table while resident, so a foreground hit on one behaves as a
     // hit anywhere - only the lifecycle differs.
     std::unique_ptr<ScanFetcher> OpenScanRing(std::size_t frames = kScanRingFrames) override;
@@ -1107,7 +1120,7 @@ private:
     // already holds one across arbitrary caller code, and the hazard it
     // reached for - a latch held across a *park* - is `heap_chain.hpp`'s
     // rule about which walks may take a fetcher, not a reason to omit the
-    // latch. The function itself It faulted through
+    // latch. The function itself faulted through
     // `ResidentBytes` **outside** the loading set and then re-found the
     // frame under the latch, up to eight times, answering a lost race
     // with `ResourceExhausted`. That re-created in one function the race

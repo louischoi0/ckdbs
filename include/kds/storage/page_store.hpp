@@ -49,13 +49,15 @@ enum class PageAccess {
 // heat and the foreground working set stays where it was.
 //
 // The seam is a virtual fetcher rather than a store method because the
-// callers that need it - the relayout planner's survey, the cabin
-// optimizer's builds (PO4 makes ring routing mandatory there), aggregate
-// full scans - hold a `PageStore&` and must not know which concrete store
-// is under them. The base-class ring is deliberately plain: a store that
-// never evicts has no pool to protect, so fetching through `GetForRead`
-// *is* its correct ring, and only `DevicePageStore` overrides with the
-// real cyclic one.
+// callers that need it - the relayout planner's survey and the cabin
+// optimizer's builds (PO4 makes ring routing mandatory there), which are
+// the two the tree has - hold a `PageStore&` and must not know which
+// concrete store is under them. Aggregate full scans stood in this list
+// and in `eviction.md` §5's until 2026-09-06; neither they nor the CREATE
+// ASSERTION builder has ever opened a ring. The base-class ring is
+// deliberately plain: a store that never evicts has no pool to protect, so
+// fetching through `GetForRead` *is* its correct ring, and only
+// `DevicePageStore` overrides with the real cyclic one.
 class ScanFetcher {
 public:
     virtual ~ScanFetcher() = default;

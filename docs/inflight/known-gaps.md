@@ -13,10 +13,17 @@ statement about an engine that no longer exists; re-verify or strike it.
 ## Eviction
 
 - **EV8's exhaustion protocol is not built, and `eviction.md` describes it
-  as though it were.** Verified at `dd0bfe9`: nothing in the tree reads
-  `kds.evict_retry_budget`, and no path returns `ResourceExhausted` for a
-  full pool - the only occurrences in `src/` are the lock table's, the
-  row codec's, the sort's, and AM-S2's own scan-ring retry. §3.3 spells out
+  as though it were.** Verified at `dd0bfe9` and re-verified at `a140e8d`:
+  nothing in the tree reads `kds.evict_retry_budget`, and no path returns
+  `ResourceExhausted` for a full pool. The occurrences in `src/` belong to
+  other subsystems - the lock table's, the row codec's, the sort's, the
+  aggregate's and the lease services' among them - and `src/storage/`
+  returns it in one place only, `anchor_page.cpp`'s slot cap, which is not
+  the pool. **The scan ring's own retry was the fourth name on that list
+  until 2026-09-06 and is gone**: `PinForScan`'s eight attempts and its
+  `ResourceExhausted` left with the ring's port to the `loading_` protocol
+  at `6cbd6f8` (AM-S2-P S-P1), so a ring fault waits for the loader like
+  every other accessor. §3.3 spells out
   a three-step protocol (yield, retry to a budget, then a truthful statement
   error naming the core and pool size) and EV8's row promises "no waiting,
   ever" with occurrences counted. None of that exists.

@@ -331,7 +331,7 @@ migration-era `*Unpinned` accessors reach that arm from
 `KDS_TEST_PAGE_LATCH` arms those stores, so it would fire on correct
 single-threaded traffic.
 
-### 8.3 Cells — six mutants, six kills
+### 8.3 Cells — seven mutants, seven kills
 
 | mutation | cell that failed |
 |---|---|
@@ -343,14 +343,16 @@ single-threaded traffic.
 | rotate on every fetch, not only on a fault | `AnInPlaceHitCostsTheRingNoSlot` |
 | `ReleaseScanSlot` ignores the latch word | `ARingSlotIsNotDroppedWhileAnotherCoreHoldsIt` |
 
-**Two of those cells exist because a mutation survived first.**
+**One of those cells exists because a mutation survived first**, and the
+count in this heading said two until the S-P4 fact-check corrected it.
 `always-rotate` passed every ring cell in the tree: the page being fetched
 is pinned by the time the rotation runs, so `ReleaseScanSlot` refuses it
 and the slot is simply re-recorded. The difference only shows when the hit
 is a page the ring does *not* hold — a foreground frame — which is what
-`AnInPlaceHitCostsTheRingNoSlot` sets up. And the latch mutant passed once
-because the mutation itself was a no-op comment rather than a removed
-acquire; corrected, it kills.
+`AnInPlaceHitCostsTheRingNoSlot` sets up. The latch mutant is a different
+story and not a second instance: it passed once because the mutation
+itself was a no-op comment rather than a removed acquire, so what survived
+was the mutation, not the code.
 
 ### 8.4 What the `critics-developer` pass changed, and what it refuted
 

@@ -131,7 +131,10 @@ implementation (single code path, deterministic tests cover both callers).
 
 Bulk sequential readers declare ring mode on their scan handle:
 
-- Frames come from a small per-core ring (`kds.scan_ring_frames`, PROPOSED
+- Frames come from a small ring, one per `OpenScanRing` call and not per
+  core — the wording said "per-core" until 2026-09-06, and the pool it
+  drew that from stopped being per-core when the frame table became one
+  table for the instance (`kds.scan_ring_frames`, PROPOSED
   32), reused cyclically; pages read through the ring bypass the page table
   insert-for-retention path (they are mapped while in the ring, then
   dropped) and never bump usage counters.
@@ -144,7 +147,11 @@ Bulk sequential readers declare ring mode on their scan handle:
   and the usage bump is what a ring is for; a pin was never on that list.
   The latch is the other half — without it a scan reads a page a writer on
   another core is in the middle of, which is a wrong answer rather than a
-  slow one. A consumer therefore finishes with the span before the next
+  slow one. It is armed only where the page latch is, at `cores > 1`,
+  which is the only configuration where that writer can exist. It runs in
+  both directions: a foreground **exclusive** request on the page the ring
+  is holding waits until the ring's next `Fetch`, where the read below
+  does not. A consumer therefore finishes with the span before the next
   `Fetch` **and does not park while it holds one**, which is `heap_chain`'s
   rule about which walks may take a fetcher, stated once more at the seam
   because a ring's span is the one page handle in the tree that is not a
@@ -175,7 +182,7 @@ Bulk sequential readers declare ring mode on their scan handle:
 | `kds.buffer_pool_frames` | 0 = unbounded until sized | total, divided **equally** per core (EV4): each core's share is `total / cores` (`FrameBudgetShare`), the remainder undistributed and bounded by `cores`, with no remainder seat for core 0; a nonzero total below `cores` is refused at boot (`CheckFrameBudget`). Known asymmetry: the even split hands most of the pool to peers while core 0 alone carries the listener, the catalog and every session, so an operator budgeting a mostly-single-core instance should expect core 0's pool to shrink by the core count |
 | `kds.free_watermark` | pool/16 per core | background sweep target |
 | `kds.evict_retry_budget` | 8 | EV8 bounded retry |
-| `kds.scan_ring_frames` | 32 per core | EV6 |
+| `kds.scan_ring_frames` | 32 per ring | EV6; a ring is per `OpenScanRing` call, not per core (§5) |
 | usage counter cap | 5 | compile-time constant |
 
 ## 7. Non-goals (v1, documented)
