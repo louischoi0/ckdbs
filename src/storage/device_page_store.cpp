@@ -802,10 +802,13 @@ public:
     // exposure, and its `ReleaseScanSlot` dropped the ring's own pin so
     // drop-on-rotation survived - but it holds up to `kScanRingFrames`
     // frames out of the pool per scanning core against a `kPinCeiling` that
-    // scales with cores and not with rings (the order's §1.5), and holding
-    // a *shared page latch* on every slot for the life of a scan is a
-    // foreground writer's `X` request turned into a debug abort. The armed
-    // suite found that the afternoon the latch landed:
+    // scales with cores and not with rings (the order's §1.5). And once
+    // the port's pin is *latched*, slot-pinning holds a shared page latch
+    // on every slot for the life of a scan, which turns a foreground
+    // writer's `X` request into a debug abort - a cost the shipped
+    // slot-pin model did not have, because its `PinForScan` took no page
+    // latch at all and so read pages a writer was mid-write on. The armed
+    // suite found the abort the afternoon the latch landed:
     // `RotationSparesAPinnedPageAndDropsAColdOne` asks for `X` on a page an
     // open ring is still holding `S`, which is the never-upgrade check
     // firing on entirely correct traffic. One pin has neither problem.

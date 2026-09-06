@@ -828,6 +828,7 @@ public:
     // `InMemoryPageStore`, whose `OpenScanRing` is the pass-through
     // fetcher. Which is the whole reason to write the arithmetic down here
     // rather than trust the suite.
+    //
     // The number is unchanged because the ring's cost is now the same 1 an
     // outer chain walk already contributes.
     static constexpr std::size_t kPinCeiling = 8;
