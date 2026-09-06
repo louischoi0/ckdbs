@@ -8,10 +8,12 @@ document (AV) that gates what comes after them. Every `path:line` is
 `[source-read]` at `15a57c2`; the rest is `[design]`; the one
 `[measured]` deliverable is AW-S5's and does not exist until it is run.
 
-**Status: AW-S0 done 2026-09-06 on `worktree-aw-m1-close` from
-`15a57c2`.** Its cell was already satisfied when the stage opened — §7
-says why, and records the one thing this order was written without
-knowing. S1–S6 are not started.
+**Status: AW-S0, S1 and S2 done 2026-09-06 on `worktree-aw-m1-close` from
+`15a57c2`.** §7 is AW-S0's record — its cell was already satisfied when
+the stage opened, and it carries the one thing this order was written
+without knowing. §8 is what S1 and S2 built. **AW-S1b was inserted by the
+operator after AW-S0's fact-check** (§0 item 4); it, S3, S4, S5 and S6 are
+not started.
 
 ## 0. Operator's decisions, 2026-09-06 (verbal)
 
@@ -30,6 +32,15 @@ the operator's own:
    transaction should complete within **10 seconds**; one that exceeds
    **60 seconds** may be aborted. Recorded as AN-R14 (§2) with the three
    exceptions CLA proposed and the operator accepted.
+4. **AM-S4's deletion half becomes AW-S1b, before S5** (operator,
+   2026-09-06, after AW-S0's fact-check found the half missing). The
+   reason is the measurement's, and it is the one that settles it: **an
+   AM-S6 baseline taken on an engine that still carries `MayFault` and the
+   lease measures "half of M1 plus the old guards", not M1's overhead** —
+   the number AW-R1 exists to produce would be attributable to neither
+   arrangement. It also restores AM-R4a's atomicity rule, which the split
+   commit broke. Size M, and a precondition of AW-S5 rather than a stage
+   beside it.
 
 ## 1. Where the tree is
 
@@ -39,8 +50,9 @@ which is D14's mount refusal); AM-S2-P (the ring port) closed at
 field, the lease, `MayFault`, the CC7 fault grants, `TryClaimByStamp`,
 `CoreRuntimePerCoreStreamTest` and `page-lsn-cross-stream.md` are all
 still in the tree at `15a57c2`, against AM-R4a's "the two halves arrive
-together or not at all" — so AM-S4 is open beside S5 and S6, and this
-order carries no stage for it. AN: S0/S1 landed; S2 gated until now. AO:
+together or not at all" — so AM-S4 is open beside S5 and S6. **AW-S1b
+carries it**, on the operator's decision of 2026-09-06 (§0 item 4); this
+order carried no stage for it as first written. AN: S0/S1 landed; S2 gated until now. AO:
 S0–S4a within one core; S5 gated on AM-S6, AN-S2 and AU-S2. AU:
 S1/S1b/S3; **S2 is gated on two things, not one** — the rig order AV,
 which does not exist, and `SimWaker`, which is AU-S1c, filed at `1e4e446`
@@ -174,24 +186,25 @@ review; suite plain and armed (`KDS_TEST_PAGE_LATCH=1`), plus
 |---|---|---|---|---|
 | AW-S0 | **Housekeeping.** `origin/worktree-am-s2` deleted; the AM-S2 row says so; `index.md` gains this order | `git ls-remote` shows no `worktree-am-s2` | XS | — |
 | AW-S1 | **AM-S5** prose as its row lists: `eviction.md` §1/EV4 (AM-R7), `page.md` §6, `heap-and-tuple.md` §6, `rules.md` §3 fourth row, `crosscore.md` CC7, `CLAUDE.md` | H4's grep returns nothing; every struck sentence is replaced by the mechanism, not deleted | M | S0 |
+| AW-S1b | **AM-S4's deletion half** (AM-R4a), which landed at `16e6c5c` without its other half: the pre-M1 mount refusal is what makes the lease, `MayFault`, the CC7 fault grants, `TryClaimByStamp` and `CoreRuntimePerCoreStreamTest` unreachable, so they leave in one commit, and `page-lsn-cross-stream.md` leaves the tree with them. **A precondition of AW-S5, not a parallel stage**: AM-S6 measured against an engine still carrying the old guards is not M1's overhead (§0 item 4) | AM-S4's own cells: a pre-M1 volume is refused at mount naming why; no reader of `flags` at offset 2 remains; **no `LeasedIdSource` is constructed on any mountable volume**. Plus the one AM-R4a implies: `grep -rn "MayFault\|TryClaimByStamp\|LeasedIdSource"` over `src/` and `include/` returns nothing | M | S1 |
 | AW-S2 | **AN-R12** — the latched pair on `InstanceVisibility`; `Visible` branch 3 reads it; `Floor()` kept for reclamation's own callers | the straddle cell and its mutation (§2); AN-R9's publication cell still green beside it | S | — |
 | AW-S3 | **AN-R14** — `kds.txn_lifetime_ceiling` replaces `kShippedTxnIdleCeilingNs`; the sweep keys on `began_at_ns`; DDL and prepared exempt; background tasks re-mint and resume; `txn.md` §1 envelope sentence and §4.1 rewritten *per instance* | (1) a transaction idle past 60 s is aborted and its next statement sees an ordinary abort, never `SnapshotTooOld`; (2) a busy transaction past 60 s likewise — **the cell CLA's first proposal did not have**; (3) `CREATE INDEX` on a relation whose build takes > 60 s completes; (4) a Cabin build past 60 s re-mints and finishes with a correct result; (5) a prepared context is not swept; (6) `grep kShippedTxnIdleCeilingNs` returns nothing. **Mutation** for (2): exempt busy transactions and the cell fails | M | S2 |
 | AW-S4 | **AN-S2** — the cutover as its row (`:711`) states: `ReadView` gains `snapshot_lsn`, loses `up_to_trx_id`/`in_flight`; four-branch `Visible` with the pair from S2; `MintReadView` reads AN-R9's ceiling; `ReadHorizon()` answers an LSN; `Everything()` replaced (AN-R3) | the row's list, in its order: H1, H2 (§3 H1 here — both fail before, pass after); pinned view across a peer's commit; RC re-mint; visibility exactly at in-flight departure (AN-R9); rollback finds its own undo after a purge pass; the floor cell from AN-R13 | L | S2, S3 |
-| AW-S5 | **AM-S6** — the baseline, per AW-R1 | one results file per AL-S8 cell; the delta table; H3's verdict per cell in the file's header, `[measured]` with the invocation | M | S1, S4, and the operator's host |
+| AW-S5 | **AM-S6** — the baseline, per AW-R1 | one results file per AL-S8 cell; the delta table; H3's verdict per cell in the file's header, `[measured]` with the invocation | M | S1, **S1b**, S4, and the operator's host |
 | AW-S6 | **AV drafted** — the two-core rig order: what the rig is (two reactors, one store, one stream, `WakerTable::Kick` as the only cross-core primitive), its first three cells (a kick wakes a parked peer; a lost kick is detected by the cadence; a page `X` on core 0 blocks a `Fetch` on core 1 — the S-P2 cell promoted to two reactors), and which AU-S2 and AO-S5 cells it must host | the document exists, cites AR0-6 D26 and AU-R6, and lists every AU-S2/AO-S5 cell by name; nothing built | S | — (parallel) |
 
-Done when: AN-S2 landed; `bench/v3.0.0/` carries the AL-S8 → AM-S6 delta;
-`instructions/v3.0.0/workorder-av-two-core-rig.md` exists.
+Done when: AM has no open stage; AN-S2 landed; `bench/v3.0.0/` carries
+the AL-S8 → AM-S6 delta; `instructions/v3.0.0/workorder-av-two-core-rig.md`
+exists. At that point AO-S5's gates are AU-S2, and AU-S2's are AV and
+AU-S1c's `SimWaker`.
 
-**"AM has no open stage" stood here and is unreachable as this order is
-written** (AW-S0's fact-check). AW carries stages for AM-S5 and AM-S6
-only, and AM-S4's deletion half — `MayFault`, the lease, the CC7 fault
-grants, `TryClaimByStamp`, `CoreRuntimePerCoreStreamTest` and
-`page-lsn-cross-stream.md` — is still in the tree against AM-R4a's "the
-two halves arrive together or not at all". Either AW gains a stage for it
-or the condition is re-scoped; **that is the operator's, and it is left
-open rather than decided here.** At that point AO-S5's gates are AU-S2,
-and AU-S2's are AV and AU-S1c's `SimWaker`.
+**"AM has no open stage" was unreachable as this order was first
+written** — AW-S0's fact-check found AM-S4's deletion half still in the
+tree with no stage carrying it — and the operator's decision of
+2026-09-06 made it reachable by inserting AW-S1b rather than by re-scoping
+the condition (§0 item 4). Recorded because the alternative was live: a
+"Done when" quietly narrowed to what the stages happen to cover is how a
+milestone closes over an open half.
 
 ## 6. What this order does not do
 
@@ -248,3 +261,80 @@ Three things about it that matter to a later reader:
   hold is the post-crossing version, and **the tag's own message says
   "does not hold" flatly, which overstates it.** Not fixable without
   re-cutting the tag; recorded here so a reader of both is not misled.
+
+
+---
+
+## 8. AW-S1 and AW-S2 as built — 2026-09-06 on `worktree-aw-m1-close`
+
+### 8.1 AW-S1 (= AM-S5)
+
+The row listed six documents; the sweep needed eight. `page.md` §6 was
+titled *Per-Core Buffer Pools* and opened with "multi-core adds instances,
+not synchronization", which is the sentence `2663001` falsified; it now
+states what synchronizes the one table, and that sharing is conditional on
+the **log topology** rather than the core count, so a pre-M0 volume reads
+the old text as live. `eviction.md` §1 and EV4 keep their lock-free
+argument rather than dropping it, per AM-R7 — it survives as the price now
+being paid, **with the second column stated as empty**, since AM-S6 has
+not run. `heap-and-tuple.md` §6's "adding pages to `rules.md` §3's
+declared shared list would be a spec change there before a code change
+here" turned out to describe exactly the order it happened in. CC7's
+flush-then-grant no longer ends "and the owner faults fresh frames".
+
+**Two sites the row did not list.** `wal.md`'s fuzzy-checkpoint sentence
+claimed each core checkpoints "its own pools"; a peer's checkpoint target
+is the shared store (`core_runtime.cpp:954`), so under one stream N cores
+walk one table. Corrected to what the code does, with *how many*
+checkpointers a shared pool should have left to AM-S3 rather than answered
+in prose — it is a behaviour question and this was a prose stage. And
+`device_page_store.hpp` still described the self-deadlock check as a
+`pins` proxy "sound only while pools are per core", which step 3b had
+already replaced with a thread-local multiset.
+
+### 8.2 AW-S2 (= AN-R12)
+
+`LookupCommit(trx_id)` answers `{commit_lsn, floor}` under one hold of the
+window latch, which is sound because `Reclaim()` erases entries and raises
+the floor under that same latch — so a reader sees the pass wholly before
+or wholly after, never half of each.
+
+**`CommitLsnOf` is retired rather than kept beside it**, which the ruling
+did not ask for and the ruling's own argument requires. AN-R12 chose the
+latched pair over a re-read rule because it "removes the straddle rather
+than explaining why it is harmless"; leaving a window-only accessor in the
+header leaves the straddle one call site away, and the explaining kind is
+where this session's defects have been. `Floor()` **stays** as the ruling
+says — reclamation's own accounting and `SHOW META` need only the floor —
+with the header stating that a caller deciding whether a transaction
+committed asks `LookupCommit`.
+
+**The cell** is `AReclaimedWinnerIsNeverAnsweredUncommitted`, and the
+invariant it asserts is the one hold buys: for a transaction that has
+committed, an absent window entry is an entry **below the floor**. A
+reader sweeps 3,000 committed ids while the floor climbs through them in
+120 passes; a violation is `commit_lsn == kNoCommitLsn && id >= floor`.
+**Mutation**: split the pair into a `Floor()` read outside the latch and a
+separately latched lookup — 5 runs, 5 failures, each on the violation
+itself rather than on a liveness check.
+
+**Its liveness took three tries, and the first two are worth recording.**
+The cell first asserted the reader outlived one sweep — it failed on a
+*correct* implementation, because 120 passes over 3,000 ids finish inside
+a single sweep. Rewritten to assert the reader saw both live and reclaimed
+entries, it failed again: thread construction outran the whole climb, so
+the reader started after every pass and saw nothing live. A start barrier
+fixed that in isolation but **flaked once in five under `ctest -j8`** —
+the flag proves the thread is alive, not that it has read anything, and
+under load it can be descheduled for the entire climb. Both liveness
+assertions are structural now: the writer waits for the reader's first
+*observation* rather than its first instruction, and the reader takes one
+unconditional sweep after `done`. Four armed suite runs since, clean.
+
+### 8.3 Suite
+
+**3364/3364 plain and 3364/3364 armed** (`KDS_TEST_PAGE_LATCH=1`), the
+armed run repeated four times after the flake was closed and the new cell
+run eight times standalone. `KDS_TEST_FRAME_BUDGET=8` not run: neither
+stage touches the store. **Overhead not measured** — the suspension is
+lifted for AW-S5 alone.

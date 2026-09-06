@@ -159,15 +159,43 @@ public:
     // disagree (AN-R2, AN-R9). Reclaims opportunistically.
     void PublishCommit(std::uint64_t trx_id, std::uint64_t commit_lsn);
 
-    // The commit LSN of `trx_id`, or `kNoCommitLsn` when the window does
-    // not hold it - which means uncommitted, aborted, or reclaimed. The
-    // caller separates the last from the first two by the floor, never by
-    // this answer alone.
-    std::uint64_t CommitLsnOf(std::uint64_t trx_id) const;
+    // **The window and the floor, answered together under one hold**
+    // (AN-R12). `commit_lsn` is `kNoCommitLsn` when the window does not
+    // hold `trx_id` - uncommitted, aborted, or reclaimed - and `floor` is
+    // what separates the last from the first two.
+    //
+    // **Together is the whole point, and a separate `CommitLsnOf` used to
+    // make it impossible.** `Reclaim()` erases entries below `reachable`
+    // and raises the floor to it, both under this latch. A reader that took
+    // the floor *before* a pass and looked the window up *after* it sees
+    // `trx_id >= floor_old` (so the floor does not answer) and no entry (the
+    // pass erased it), and concludes **not committed for a transaction
+    // committed long ago** - a lost row from two reads straddling one pass.
+    // The alternative fix was a rule that a window miss re-reads the floor,
+    // which is sound by an argument about an ordering the code does not
+    // state and survives only while nobody adds a second way to miss. This
+    // removes the straddle instead of explaining that it is harmless.
+    //
+    // The invariant it buys, and the one the cell asserts: **an entry that
+    // is absent is an entry below the floor**, for every transaction that
+    // ever committed. Under one hold there is no third state.
+    struct CommitLookup {
+        std::uint64_t commit_lsn = kNoCommitLsn;
+        std::uint64_t floor = 0;
+    };
+    CommitLookup LookupCommit(std::uint64_t trx_id) const;
 
     // ---- Derived ----------------------------------------------------------
 
     // Below this, a version still on a page was written by a winner.
+    //
+    // **Not the visibility decision's floor** (AN-R12). This is the atomic
+    // read, taken outside the window latch, and it is kept for the callers
+    // that need only the floor and nothing about the window - reclamation's
+    // own accounting, `SHOW META`, a cell asserting the floor moved. A
+    // caller that is deciding whether a transaction committed asks
+    // `LookupCommit`, which answers both under one hold; pairing this call
+    // with a window lookup is the straddle that ruling exists to close.
     std::uint64_t Floor() const noexcept { return floor_.load(std::memory_order_acquire); }
 
     // The oldest snapshot LSN any core holds; `kUnboundedBound` with none.

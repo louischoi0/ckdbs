@@ -1,7 +1,9 @@
 #include "kds/txn/instance_visibility.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <thread>
 
 #include <gtest/gtest.h>
 
@@ -49,11 +51,11 @@ TEST(InstanceVisibilityTest, FreshInstanceConstrainsNothing) {
 TEST(InstanceVisibilityTest, WindowRecordsCommitLsnAndMissesEverythingElse) {
     InstanceVisibility vis;
     vis.PublishCommit(7, 400);
-    EXPECT_EQ(vis.CommitLsnOf(7), 400u);
+    EXPECT_EQ(vis.LookupCommit(7).commit_lsn, 400u);
     EXPECT_EQ(vis.window_size(), 1u);
     // Uncommitted, aborted and reclaimed are one answer here; the floor is
     // what separates them, never this call.
-    EXPECT_EQ(vis.CommitLsnOf(8), kNoCommitLsn);
+    EXPECT_EQ(vis.LookupCommit(8).commit_lsn, kNoCommitLsn);
 }
 
 TEST(InstanceVisibilityTest, IssueCursorNeverMovesBackwards) {
@@ -93,8 +95,8 @@ TEST(InstanceVisibilityTest, ALiveTransactionHoldsTheFloorAtItsOwnId) {
     // Only what is below the live transaction goes.
     EXPECT_EQ(vis.Reclaim(), 1u);
     EXPECT_EQ(vis.Floor(), 8500u);
-    EXPECT_EQ(vis.CommitLsnOf(8600), 20u);
-    EXPECT_EQ(vis.CommitLsnOf(8000), kNoCommitLsn);
+    EXPECT_EQ(vis.LookupCommit(8600).commit_lsn, 20u);
+    EXPECT_EQ(vis.LookupCommit(8000).commit_lsn, kNoCommitLsn);
 }
 
 // AN-R8, and AN-3 E's H2 as a cell. Core 1 holds a block *below* core 0's
@@ -133,7 +135,7 @@ TEST(InstanceVisibilityTest, FloorStopsAtALowerCoresUnspentRange) {
     // `t < Floor()` is the branch that would have answered "committed".
     // The floor is at 5000, not above it, so it does not.
     EXPECT_LE(vis.Floor(), 5000u);
-    EXPECT_EQ(vis.CommitLsnOf(5000), kNoCommitLsn);
+    EXPECT_EQ(vis.LookupCommit(5000).commit_lsn, kNoCommitLsn);
 }
 
 TEST(InstanceVisibilityTest, FloorNeverFallsWhenTheCandidateDoes) {
@@ -184,8 +186,8 @@ TEST(InstanceVisibilityTest, AReaderHoldsTheFloorBelowItsSnapshot) {
     // 200, so 300 stays with it.
     EXPECT_EQ(vis.Reclaim(), 1u);
     EXPECT_EQ(vis.Floor(), 200u);
-    EXPECT_EQ(vis.CommitLsnOf(200), 30u);
-    EXPECT_EQ(vis.CommitLsnOf(300), 50u);
+    EXPECT_EQ(vis.LookupCommit(200).commit_lsn, 30u);
+    EXPECT_EQ(vis.LookupCommit(300).commit_lsn, 50u);
 
     // The reader goes away and the rest follows.
     vis.PublishSnapshotBound(kCore1, kUnboundedBound);
@@ -295,7 +297,7 @@ TEST_F(VisibilityWiringTest, CommitEntersTheWindowAtTheLsnItReturned) {
     auto lsn = mgr->Commit(*txn.value(), wal::DurabilityClass::kRelaxed);
     ASSERT_TRUE(lsn.ok()) << lsn.status().message();
     EXPECT_NE(lsn.value(), wal::kNoLsn);
-    EXPECT_EQ(vis_.CommitLsnOf(id), lsn.value());
+    EXPECT_EQ(vis_.LookupCommit(id).commit_lsn, lsn.value());
     EXPECT_EQ(vis_.window_size(), 1u);
     // And the transaction stops holding the floor down.
     EXPECT_EQ(vis_.slot(kCore0).oldest_unresolved.load(), kUnboundedBound);
@@ -312,7 +314,7 @@ TEST_F(VisibilityWiringTest, AbortLeavesNoWindowEntry) {
     ASSERT_TRUE(mgr->Abort(*txn.value()).ok());
     // A loser is invisible by absence: no entry, and the floor is free to
     // rise past it because its page changes are undone.
-    EXPECT_EQ(vis_.CommitLsnOf(id), kNoCommitLsn);
+    EXPECT_EQ(vis_.LookupCommit(id).commit_lsn, kNoCommitLsn);
     EXPECT_EQ(vis_.window_size(), 0u);
     EXPECT_EQ(vis_.slot(kCore0).oldest_unresolved.load(), kUnboundedBound);
     vis_.Reclaim();
@@ -543,6 +545,112 @@ TEST_F(VisibilityWiringTest, ABareManagerNeverBurns) {
     EXPECT_EQ(bare.MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
     EXPECT_EQ(bare.MaybeBurnIdleBlock(), TransactionManager::BurnOutcome::kNotNeeded);
     EXPECT_EQ(ids_->peek(), before);
+}
+
+// ---- AN-R12: the floor and the window are read together -------------------
+
+TEST(InstanceVisibilityTest, AReclaimedWinnerIsNeverAnsweredUncommitted) {
+    // **The straddle AN-R12 closes.** `Reclaim()` erases entries below
+    // `reachable` and raises the floor to it, both under the window latch.
+    // A reader that took the floor *before* a pass and looked the window up
+    // *after* it sees no entry and `trx_id >= floor_old`, and concludes not
+    // committed for a transaction committed long ago - a lost row, from two
+    // reads straddling one pass.
+    //
+    // **The invariant, and it is exactly what one hold buys**: for a
+    // transaction that has committed, an absent window entry is an entry
+    // *below the floor*. There is no third state under `LookupCommit`,
+    // because the pass cannot run between its two reads.
+    //
+    // **Mutation** (the one this cell is written against): give
+    // `LookupCommit` a `Floor()` read outside the latch and a separately
+    // latched window lookup - two holds - and the violation count goes
+    // above zero. The reader below runs while the floor is climbing through
+    // its ids, which is the only time the window between two such reads
+    // contains anything.
+    constexpr std::uint64_t kIds = 3000;
+    InstanceVisibility vis;
+
+    // Every id has committed, so an absent entry can only mean reclaimed -
+    // which is what makes the invariant testable at all. An id that never
+    // committed is legitimately absent at any floor.
+    for (std::uint64_t id = 1; id <= kIds; ++id) vis.PublishCommit(id, id * 10);
+    vis.PublishOldestUnresolved(kCore0, kUnboundedBound);
+
+    std::atomic<bool> done{false};
+    std::atomic<std::uint64_t> violations{0};
+    // **The liveness pair, and it is what makes the cell non-vacuous.** A
+    // reader that ran entirely before the passes sees every entry present;
+    // one that ran entirely after sees every entry absent. Seeing *both* is
+    // the proof it was reading while the floor climbed, which is the only
+    // state where a straddle is possible at all. Counting sweeps instead
+    // does not discriminate: the first version of this cell asserted the
+    // reader outlived one sweep and failed on a correct implementation,
+    // because 120 passes over 3000 ids finish inside a single sweep.
+    std::atomic<std::uint64_t> seen_present{0};
+    std::atomic<std::uint64_t> seen_reclaimed{0};
+
+    // **A start barrier, because thread construction outran the passes.**
+    // Without it the writer's 120 reclaims finished before the reader's
+    // first lookup and `seen_present` was 0 - the reader raced nothing and
+    // the cell proved nothing. Measured, not reasoned: that is exactly how
+    // it failed.
+    std::atomic<bool> reader_running{false};
+
+    const auto sweep = [&] {
+        for (std::uint64_t id = 1; id <= kIds; ++id) {
+            const InstanceVisibility::CommitLookup found = vis.LookupCommit(id);
+            if (found.commit_lsn != kNoCommitLsn) {
+                seen_present.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            seen_reclaimed.fetch_add(1, std::memory_order_relaxed);
+            // The lost row: no entry, and the floor does not cover it.
+            if (id >= found.floor) violations.fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+
+    std::thread reader([&] {
+        reader_running.store(true, std::memory_order_release);
+        while (!done.load(std::memory_order_acquire)) sweep();
+        // **One sweep after the passes, unconditionally.** Without it
+        // `seen_reclaimed` depends on where the reader happened to be when
+        // `done` was set, which under a loaded `ctest -j8` is a coin toss -
+        // and a liveness assertion that flakes is worse than none.
+        sweep();
+    });
+
+    // **Wait for the reader to have *read*, not merely to have started.**
+    // The flag alone proves the thread is alive; under load it can then be
+    // descheduled for the whole climb below, leaving `seen_present` at 0
+    // and the cell failing on a correct implementation. One observed live
+    // entry is the state the straddle needs to exist at all.
+    while (!reader_running.load(std::memory_order_acquire)) std::this_thread::yield();
+    while (seen_present.load(std::memory_order_relaxed) == 0) std::this_thread::yield();
+
+    // The floor climbs through the ids in steps, so the reader is looking
+    // at entries the passes are erasing rather than at a settled window.
+    // A yield per step widens the overlap; without one the whole climb fits
+    // inside a fraction of a single sweep.
+    for (std::uint64_t cursor = 1; cursor <= kIds; cursor += 25) {
+        vis.PublishIssueCursor(kCore0, cursor);
+        vis.Reclaim();
+        std::this_thread::yield();
+    }
+    vis.PublishIssueCursor(kCore0, kIds + 1);
+    vis.Reclaim();
+    done.store(true, std::memory_order_release);
+    reader.join();
+
+    EXPECT_EQ(vis.window_size(), 0u) << "the passes did not drain the window, so nothing raced";
+    EXPECT_EQ(vis.Floor(), kIds + 1);
+    EXPECT_GT(seen_present.load(), 0u)
+        << "the reader saw no live entry, so it started after every pass had run";
+    EXPECT_GT(seen_reclaimed.load(), 0u)
+        << "the reader saw no reclaimed entry, so it finished before any pass ran";
+    EXPECT_EQ(violations.load(), 0u)
+        << "a reclaimed winner was answered uncommitted: the floor and the window were read "
+           "on either side of a Reclaim() pass";
 }
 
 }  // namespace

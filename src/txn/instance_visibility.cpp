@@ -87,10 +87,17 @@ void InstanceVisibility::PublishCommit(std::uint64_t trx_id, std::uint64_t commi
     if (reclaim) Reclaim();
 }
 
-std::uint64_t InstanceVisibility::CommitLsnOf(std::uint64_t trx_id) const {
+InstanceVisibility::CommitLookup InstanceVisibility::LookupCommit(std::uint64_t trx_id) const {
+    // One hold, both reads (AN-R12). `Reclaim()` erases and raises the
+    // floor under this same latch, so what this returns is either wholly
+    // before that pass or wholly after it - never the half-and-half that
+    // answers "not committed" for a reclaimed winner.
     LatchGuard guard(&window_latch_);
+    CommitLookup found;
     auto it = window_.find(trx_id);
-    return it == window_.end() ? kNoCommitLsn : it->second;
+    if (it != window_.end()) found.commit_lsn = it->second;
+    found.floor = floor_.load(std::memory_order_acquire);
+    return found;
 }
 
 std::size_t InstanceVisibility::window_size() const {
