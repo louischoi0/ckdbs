@@ -7,8 +7,7 @@ namespace kds::bootstrap {
 StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
                                              std::uint64_t now_unix_seconds,
                                              std::uint32_t inline_cell_width,
-                                             std::uint32_t cores, Logger* log,
-                                             std::uint32_t log_topology) {
+                                             std::uint32_t cores, Logger* log) {
     // Checked before anything is read or created: an illegal width must not
     // be the reason a fresh database gets pinned to a number no build can
     // use, and it must not be reported as a *mismatch* below when it is
@@ -109,14 +108,17 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     auto created = store.CreateAt(server::kSuperBlockPageId);
     if (!created.ok()) return created.status();
 
-    // **One WAL stream for the instance** (AR0 M0, AL-S1c's flip). Chosen
-    // here and pinned for the life of the volume: recovery reads it to know
-    // how many streams to look for, and no later mount may change it. A
-    // database created before this build says `kPerCoreStreams` and keeps
-    // every per-core rule, which is what lets the two be read side by side
-    // rather than one silently misread as the other.
+    // **One WAL stream for the instance, and no way to ask for another**
+    // (AR0 M0, AL-S1c's flip; AM-R4a, D14). Chosen here and pinned for the
+    // life of the volume: recovery reads it to know how many streams to
+    // look for, and no later mount may change it. The `log_topology`
+    // parameter that let a caller ask for `kPerCoreStreams` is gone - under
+    // D14 a v3 build mounts only volumes it created, so leaving a way to
+    // create a per-core-stream one would have kept the whole per-core store
+    // arrangement reachable from tests after the refusal was supposed to
+    // have made it dead.
     server::SuperBlock sb = server::SuperBlock::CreateFresh(
-        now_unix_seconds, inline_cell_width, cores, log_topology);
+        now_unix_seconds, inline_cell_width, cores, server::kSingleStream);
     sb.Encode(created.value().bytes());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +

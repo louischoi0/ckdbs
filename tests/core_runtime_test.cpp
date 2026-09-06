@@ -64,13 +64,12 @@ namespace {
 
 class CoreRuntimeTest : public ::testing::Test {
 protected:
-    // **Which volume this fixture bootstraps** (AM-S0). `kSingleStream` is
-    // what this build writes and what every cell below is about;
-    // `CoreRuntimePerCoreStreamTest` overrides it to `kPerCoreStreams` and inherits
-    // everything else, which is the only honest way to keep a legacy cell:
-    // over a volume that genuinely says per-core, not over a single-stream
-    // one with its image rewritten on a copy.
-    virtual std::uint32_t LogTopology() const { return kSingleStream; }
+    // **Which volume this fixture bootstraps** (AM-S0). `kSingleStream`, and
+    // since AW-S1b there is no other: a `LogTopology()` hook stood here so
+    // a derived fixture could ask for `kPerCoreStreams` over a volume that
+    // genuinely said so, which was the only honest way to keep the legacy
+    // cells. D14 made that volume unmountable and `BootstrapDatabase`
+    // unable to write one, so the hook had nothing left to vary.
 
     void SetUp() override {
         dir_ = std::filesystem::temp_directory_path() /
@@ -96,7 +95,7 @@ protected:
         // has no core 1 to publish an anchor for, and the refusal is right.
         auto boot = bootstrap::BootstrapDatabase(*core0_store_, 1000,
                                                  storage::kDefaultInlineCellWidth, /*cores=*/2,
-                                                 /*log=*/nullptr, LogTopology());
+                                                 /*log=*/nullptr);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         core0_.emplace(std::move(boot.value()));
 
@@ -121,18 +120,13 @@ protected:
         // recorded (closed and deleted at AM-S0(b), which is this fixture).
         // The override is gone; the stream is real.
         //
-        // Cells that genuinely test the **legacy** topology — a peer opening
-        // its own `wal-<core>-*`, running its own recovery, publishing its
-        // own anchor — live in `CoreRuntimePerCoreStreamTest` below, over a volume
-        // actually says `kPerCoreStreams`.
-        //
-        // **Skipped whole on the per-core arm** (`CoreRuntimePerCoreStreamTest`):
-        // is no stream to attach to on a volume that says every core opens
-        // its own, and `ConfigFor` hands nothing.
-        if (LogTopology() != kSingleStream) {
-            config_superblock_ = core0_->superblock;
-            return;
-        }
+        // Cells that genuinely tested the **legacy** topology — a peer
+        // opening its own `wal-<core>-*`, running its own recovery,
+        // publishing its own anchor — stood below this fixture until
+        // AW-S1b, and the branch they covered was reachable then. It is not
+        // now: D14 refuses any image that is not version 17 and nothing can
+        // write a per-core-stream one, so the skip that guarded this
+        // attachment has no arm to guard against.
         auto log_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
         ASSERT_TRUE(log_device.ok()) << log_device.status().message();
         core0_log_device_ = std::move(log_device.value());
@@ -244,53 +238,7 @@ protected:
     std::optional<storage::ExtentAllocator> extents_;
 };
 
-// ---- The legacy arm ------------------------------------------------------
-//
-// **A volume this build does not create, mounted the way it still mounts.**
-// `wal.md` §3 keeps per-core streams as a live branch: a pre-M0 volume says
-// `kPerCoreStreams` in its superblock and every core opens its own
-// `wal-<core>-*`, runs its own recovery and publishes its own anchor. The
-// cells marked `CoreRuntimePerCoreStreamTest` are the ones that are *about*
-// that
-// branch, and they are here rather than deleted because deleting them would
-// leave the branch untested while it is still reachable.
-//
-// **The name carries the `CoreRuntime` prefix on purpose**: cells are
-// registered as `Fixture.Name` (`gtest_discover_tests`), so a fixture named
-// anything else would drop this arm out of `ctest -R CoreRuntime` - the very
-// command the work order names as the stage's verification, and the arm this
-// stage exists to preserve.
-//
-// The whole difference is `LogTopology()`, and it is the difference that
-// matters: `BootstrapDatabase` writes the topology into the image, so this
-// arm's peers see per-core streams because the volume says so - not because
-// `SetUp` rewrote the image on its own copy, which is the defect AM-S0
-// removed (recorded while it stood, at
-// `git show 30e0377:docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`).
-class CoreRuntimePerCoreStreamTest : public CoreRuntimeTest {
-protected:
-    std::uint32_t LogTopology() const override { return kPerCoreStreams; }
-};
 
-TEST_F(CoreRuntimePerCoreStreamTest, EachCoreOpensItsOwnWalStream) {
-    // The segment naming (`wal-<core_id>-<segment_no>.log`) predates
-    // multicore, which is why N streams share one directory without
-    // colliding. Asserted because it is load-bearing and invisible.
-    std::vector<std::unique_ptr<CoreRuntime>> cores;
-    for (std::uint32_t id = 0; id < 3; ++id) {
-        auto core = CoreRuntime::Open(ConfigFor(id), *device_, clock_, nullptr);
-        ASSERT_TRUE(core.ok()) << core.status().message();
-        EXPECT_EQ(core.value()->core_id(), id);
-        EXPECT_EQ(core.value()->wal().core_id(), id);
-        cores.push_back(std::move(core.value()));
-    }
-
-    int segments = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(dir_)) {
-        if (entry.path().filename().string().rfind("wal-", 0) == 0) ++segments;
-    }
-    EXPECT_EQ(segments, 3) << "three cores did not produce three streams";
-}
 
 TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
     // **Renamed with the mechanism it tests** (AU-S3). It was
@@ -1066,204 +1014,6 @@ TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
     EXPECT_GE(core0_->superblock.wal_anchor(0).checkpoint_lsn, folded);
 }
 
-TEST_F(CoreRuntimePerCoreStreamTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) {
-    // PW3b. Core 0 checkpoints at three points - the completion checkpoint
-    // at mount, the cadence, and the way out - and PW3 gave a peer the first
-    // two. Without the third a graceful restart replayed every peer's stream
-    // from its last cadence tick (docs/inflight/known-gaps.md; the core-0 property is
-    // the sim harness's AMountAfterACleanStopDoesNotRereadTheRunsWholeLog).
-    //
-    // The shape is Serve's tail after the worker join: Sync(), then
-    // ShutdownCheckpoint through core 0's own SuperBlockCheckpointAnchor -
-    // direct, with no reactor pumped on either side, which is the point
-    // (remote_checkpoint_anchor.hpp's last section). The control iteration
-    // stops the old way, so the test shows the gap and not only the bound.
-    for (const bool clean_stop : {false, true}) {
-        SCOPED_TRACE(clean_stop ? "stopped with the shutdown checkpoint"
-                                : "stopped without it - the PW3 gap");
-        catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
-                                  /*core_count=*/2);
-        catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-        const std::string name = clean_stop ? "stop_clean" : "stop_gap";
-        auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
-                                        catalog::ClusteredType::kHeap);
-        ASSERT_TRUE(oid.ok()) << oid.status().message();
-        auto row = catalog2.GetSysTableRow(oid.value());
-        ASSERT_TRUE(row.ok());
-        ASSERT_EQ(row.value().owner_core, 1u);
-        ASSERT_TRUE(core0_store_->Sync().ok());
-
-        // Core 0's half, as Serve wires it: the ring and the receiving anchor.
-        auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
-        ASSERT_TRUE(transport.ok()) << transport.status().message();
-        sched::NullIoBackend io0;
-        sched::Scheduler core0(clock_, io0);
-        ASSERT_TRUE(core0.AttachTransport(&transport.value(), 0).ok());
-        SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
-        RegisterAnchorReceiver(core0, receiver);
-
-        CoreRuntime::Config first_run = ConfigFor(1);
-        auto peer = CoreRuntime::Open(first_run, *device_, clock_, nullptr);
-        ASSERT_TRUE(peer.ok()) << peer.status().message();
-        ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
-        // The completion checkpoint's anchor lands over the ring, as at a
-        // real start - so the control's next mount starts from *that*
-        // anchor, and what it re-reads is exactly this run.
-        for (int i = 0; i < 20; ++i) {
-            peer.value()->scheduler().RunOnce();
-            core0.RunOnce();
-        }
-        ASSERT_EQ(receiver.publishes(), 1u);
-        // **Slot 1, because this volume says per-core.**
-        // `SuperBlockCheckpointAnchor::Publish` folds into slot 0 only under
-        // `single_stream()`; here every core keeps its own slot and nothing
-        // is a minimum over anything, so the peer's anchor is read where the
-        // peer wrote it. A core-0 stand-in has nothing to contribute for the
-        // same reason - there is no fold for it to hold open.
-        const WalAnchorFields mount_anchor = core0_->superblock.wal_anchor(1);
-        ASSERT_GT(mount_anchor.checkpoint_lsn, 0u);
-
-        // Funded the ordinary way, then a run's worth of rows.
-        peer.value()->GrantRelationFault(
-            RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
-        const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
-        peer.value()->GrantRelationWrite(pages);
-        auto first = catalog2.AllocateRowIdRange(oid.value(), 256);
-        ASSERT_TRUE(first.ok());
-        peer.value()->row_id_leases().Grant(oid.value(), first.value(), 256);
-        txn::TrxIdSequence core0_ids(core0_->superblock);
-        auto block = core0_ids.Carve(256);
-        ASSERT_TRUE(block.ok());
-        peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
-        for (int i = 0; i < 200; ++i) {
-            const auto ins = peer.value()
-                                 ->dispatcher()
-                                 .Dispatch("INSERT INTO " + name + " VALUES (" +
-                                           std::to_string(i) + ")")
-                                 .response;
-            ASSERT_NE(ins.rfind("ERR", 0), 0u) << "row " << i << ": " << ins;
-        }
-
-        // Serve's tail after the join: the log sync, then - on a clean stop -
-        // the shutdown checkpoint, published directly.
-        ASSERT_TRUE(peer.value()->Sync().ok());
-        if (clean_stop) {
-            ASSERT_TRUE(peer.value()->ShutdownCheckpoint(receiver).ok());
-            EXPECT_EQ(receiver.publishes(), 2u)
-                << "the shutdown anchor must reach page 0 with no reactor running";
-            EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn,
-                      mount_anchor.checkpoint_lsn);
-        } else {
-            EXPECT_EQ(receiver.publishes(), 1u);  // the mount's alone
-        }
-        const WalAnchorFields stop_anchor = core0_->superblock.wal_anchor(1);
-        peer.value().reset();
-
-        // The restart, with the anchor Expeditor copies out of the superblock.
-        CoreRuntime::Config again = ConfigFor(1);
-        again.anchor = stop_anchor;
-        auto reopened = CoreRuntime::Open(again, *device_, clock_, nullptr);
-        ASSERT_TRUE(reopened.ok()) << reopened.status().message();
-
-        const auto count =
-            reopened.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM " + name).response;
-        EXPECT_NE(count.find("200"), std::string::npos) << count;
-        const MountRecovery& mount = reopened.value()->recovery();
-        if (clean_stop) {
-            // The checkpoint's own two records and nothing to redo - the
-            // bound rather than the constant, as the core-0 test asserts it.
-            EXPECT_LT(mount.records, 20u)
-                << "the mount re-read " << mount.records << " records after a clean stop";
-            EXPECT_EQ(mount.redo_applied, 0u);
-        } else {
-            EXPECT_GT(mount.records, 200u) << "the control re-read only " << mount.records
-                                           << " records, so it no longer shows the gap";
-        }
-        // And the block is where an operator reads it: this core's SHOW META.
-        const auto meta = reopened.value()->dispatcher().Dispatch("SHOW META").response;
-        EXPECT_NE(meta.find("recovery_records=" + std::to_string(mount.records)),
-                  std::string::npos)
-            << meta;
-        // Whole, not half: the `_us` fields are printed only when the mount
-        // supplied a clock (command_dispatcher.cpp), so this is what says a
-        // peer's block is core 0's block and not a subset of it - and it is
-        // the only route by which `checkpoint_ns`, timed at AttachTransport,
-        // is ever read.
-        EXPECT_NE(meta.find("recovery_checkpoint_us="), std::string::npos) << meta;
-        // A core that ran its own pass does not carry the marker: its
-        // absence is what says "these numbers are mine".
-        EXPECT_EQ(meta.find("recovery_by="), std::string::npos) << meta;
-
-        // **AR0 M0, AL-R5: the same stop, mounted as one stream.** A third
-        // open of the same peer, differing only in what the volume says its
-        // log is. Core 0's pass would be the whole instance's there, so this
-        // core must recover nothing at all - and the clean-stop arm is what
-        // makes that checkable, because the pages are already on the platter
-        // and "recovered nothing" and "still serves its rows" are true at
-        // once. On the crash arm they would not be, which is exactly why the
-        // cutover may not precede this stage.
-        if (clean_stop) {
-            reopened.value().reset();
-
-            // The instance's log, as `Expeditor::Open` builds it: one device
-            // at `wal-0-*`, a stream with its latch armed, and the writer
-            // every attached core asks for its syncs.
-            auto shared_device = wal::FileLogDevice::Open(dir_.string(), /*core_id=*/0);
-            ASSERT_TRUE(shared_device.ok()) << shared_device.status().message();
-            wal::WalManagerConfig shared_config;
-            shared_config.shared_stream = true;
-            auto owner = wal::WalManager::Open(shared_device.value().get(), clock_,
-                                               /*core_id=*/0, shared_config);
-            ASSERT_TRUE(owner.ok()) << owner.status().message();
-            owner.value()->StartWriter();
-
-            CoreRuntime::Config as_one_stream = ConfigFor(1);
-            as_one_stream.anchor = stop_anchor;
-            // **The one place in this file that still hands a peer an image
-            // its volume disagrees with, and it is deliberate.** Everywhere
-            // else that was the defect AM-S0 removed; here the disagreement
-            // *is* the experiment - the same volume, the same stop, differing
-            // only in what the log topology says - and it is sound because
-            // under `kSingleStream` this core reads no log at all, so there
-            // is no per-core log content for the claim to be wrong about.
-            // The assertion below is exactly that: it recovered nothing.
-            SuperBlock one_stream_image = core0_->superblock;
-            ASSERT_TRUE(one_stream_image.SetLogTopology(kSingleStream).ok());
-            as_one_stream.superblock = &one_stream_image;
-            as_one_stream.shared_stream = owner.value()->stream();
-            as_one_stream.shared_writer = owner.value()->writer();
-            auto single = CoreRuntime::Open(as_one_stream, *device_, clock_, nullptr);
-            ASSERT_TRUE(single.ok()) << single.status().message();
-
-            // It opened no log of its own: the manager it holds is attached
-            // to core 0's, and its writes land in core 0's stream.
-            EXPECT_TRUE(single.value()->wal().attached())
-                << "the peer opened a second stream on a single-stream volume";
-            EXPECT_EQ(single.value()->wal().stream(), owner.value()->stream());
-
-            const MountRecovery& skipped = single.value()->recovery();
-            EXPECT_EQ(skipped.records, 0u)
-                << "the peer re-read a log core 0's pass already covered";
-            EXPECT_EQ(skipped.redo_applied, 0u);
-            EXPECT_EQ(skipped.transactions_rolled_back, 0u);
-
-            const auto still =
-                single.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM " + name).response;
-            EXPECT_NE(still.find("200"), std::string::npos) << still;
-
-            // And the block still prints whole. This core measured a
-            // completion checkpoint even though it recovered nothing, and a
-            // `_us` field that was taken must not be hidden by the skip.
-            const auto one_meta =
-                single.value()->dispatcher().Dispatch("SHOW META").response;
-            EXPECT_NE(one_meta.find("recovery_records=0"), std::string::npos) << one_meta;
-            EXPECT_NE(one_meta.find("recovery_checkpoint_us="), std::string::npos) << one_meta;
-            // And it says *why* those zeroes are zero, which is the whole
-            // difference between a measurement and an absence of one.
-            EXPECT_NE(one_meta.find("recovery_by=core0"), std::string::npos) << one_meta;
-        }
-    }
-}
 
 
 // A peer that is told the volume has one stream, and handed nothing to
@@ -3773,13 +3523,6 @@ TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {
     PeerPagesSurviveARestart(/*flush_before_restart=*/true, "survives_flushed");
 }
 
-TEST_F(CoreRuntimePerCoreStreamTest, APeersOwnPagesSurviveARestartByRedosStamp) {
-    // **The resident-frame path**, and it is per-core by construction: the
-    // pages live only in the log, so what leaves them resident and stamped
-    // is the peer's *own* redo - and under one stream a peer runs no
-    // recovery at all (core 0's pass is the instance's).
-    PeerPagesSurviveARestart(/*flush_before_restart=*/false, "survives_logged");
-}
 
 TEST_F(CoreRuntimeTest, AnUnacquiredRelationIsAskedForAndTheRegrantLands) {
     // PW1c-7's other half: the stamp claims only what this stream wrote,

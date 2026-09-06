@@ -68,28 +68,26 @@ struct BootstrapResult {
 // was a fresh database or an existing one. The returned Catalog carries
 // the same logger, so catalog writes are reported from here on. It must
 // outlive both the call and the returned result.
-// `log_topology` is **last, and defaulted, because production never passes
-// it**: every volume this build creates is `kSingleStream` (AR0 M0,
-// AL-S1c's flip), chosen once here and pinned for the life of the volume.
+// **Every volume this build creates is `kSingleStream`** (AR0 M0, AL-S1c's
+// flip), chosen once here and pinned for the life of the volume.
 //
-// What it exists for is the one thing nothing else can build: a
-// **pre-M0 volume**. `wal.md` §3 keeps per-core streams as a live branch
-// that still mounts, and until this parameter existed the only way to
-// exercise that branch was to bootstrap a single-stream volume and then
-// overwrite its topology on a *copy* of the image - which is a combination
-// no instance can be in, and which 123 cells had been written against
-// (recorded while the defect stood, at
-// `git show 30e0377:docs/inflight/bugs/core-runtime-fixture-models-per-core-streams.md`;
-// `tests/core_runtime_test.cpp`'s `CoreRuntimePerCoreStreamTest` is the arm
-// that closed it). A legacy arm needs a volume that genuinely says
-// per-core, and this is where one comes from.
+// **There is no longer a parameter for the other topology** (AM-R4a, D14).
+// One existed, defaulted, so a test could build the one thing nothing else
+// could: a genuine pre-M0 volume, since `wal.md` §3 kept per-core streams
+// as a live branch that still mounted. D14 ends that - a v3 build mounts
+// only volumes it created - and `superblock.cpp`'s `Decode` refuses any
+// image that is not version 17. Keeping a way to *create* a per-core-stream
+// volume would have left the branch reachable from tests alone, which is
+// the state AM-R4a calls "refusing the volume without deleting the
+// machinery": the refusal is what makes the lease, `MayFault`, the CC7
+// fault grants and `TryClaimByStamp` unreachable, and a bootstrap
+// parameter that reopens them makes the refusal a formality.
 //
-// A caller that passes `kPerCoreStreams` is asking for a volume this build
-// would not create, and gets every per-core rule with it.
+// `kPerCoreStreams` survives as a *value* `Decode` still names, because a
+// field it cannot read is a field it must refuse rather than assume.
 StatusOr<BootstrapResult> BootstrapDatabase(
     storage::PageStore& store, std::uint64_t now_unix_seconds,
     std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
-    std::uint32_t cores = 1, Logger* log = nullptr,
-    std::uint32_t log_topology = server::kSingleStream);
+    std::uint32_t cores = 1, Logger* log = nullptr);
 
 }  // namespace kds::bootstrap

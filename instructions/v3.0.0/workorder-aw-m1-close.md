@@ -8,8 +8,9 @@ document (AV) that gates what comes after them. Every `path:line` is
 `[source-read]` at `15a57c2`; the rest is `[design]`; the one
 `[measured]` deliverable is AW-S5's and does not exist until it is run.
 
-**Status: AW-S0, S1 and S2 done 2026-09-06 on `worktree-aw-m1-close` from
-`15a57c2`.** §7 is AW-S0's record — its cell was already satisfied when
+**Status: AW-S0, S1 and S2 done, AW-S1b *begun and not done*, 2026-09-06
+on `worktree-aw-m1-close` from `15a57c2`.** §9 is what AW-S1b found and
+where it stopped; it is the stage's sizing that is wrong, not its ruling. §7 is AW-S0's record — its cell was already satisfied when
 the stage opened, and it carries the one thing this order was written
 without knowing. §8 is what S1 and S2 built. **AW-S1b was inserted by the
 operator after AW-S0's fact-check** (§0 item 4); it, S3, S4, S5 and S6 are
@@ -338,3 +339,57 @@ armed run repeated four times after the flake was closed and the new cell
 run eight times standalone. `KDS_TEST_FRAME_BUDGET=8` not run: neither
 stage touches the store. **Overhead not measured** — the suspension is
 lifted for AW-S5 alone.
+
+
+---
+
+## 9. AW-S1b — begun, not done, and the sizing is the finding
+
+**What landed: the refusal half is airtight now, which it was not.**
+AM-R4a's chain is *D14 makes every mountable volume one this build created,
+and every such volume is single-stream* — and the second clause was false.
+`BootstrapDatabase` carried a `log_topology` parameter, defaulted to
+`kSingleStream` but **accepting `kPerCoreStreams`**, precisely so a test
+could build the one thing nothing else could: a genuine pre-M0 volume. So
+after `16e6c5c` refused every non-17 image, the per-core arrangement was
+still reachable — from tests, through the parameter. The parameter is gone
+and the three cells that used it (`CoreRuntimePerCoreStreamTest`, its
+fixture and the base's `LogTopology()` hook) with it. Nothing can now
+create or mount a per-core-stream volume, so `single_stream()` is true on
+every volume that exists and the machinery is provably dead.
+
+**That is a hole in AM-R4a the ruling does not name**, and it is the
+reason the refusal at `16e6c5c` was not the refusal AM-R4a described.
+
+**What did not land: the deletion.** It is enumerated rather than
+estimated:
+
+| what | where |
+|---|---|
+| `lease_` and `LeasedIdSource` | 18 sites in `device_page_store.cpp` alone; 15 in `src`+`include`, 42 in tests |
+| `MayFault`, `HasFaultRight` | 16 in `src`+`include`, 19 in tests |
+| `TryClaimByStamp`, `GetPageStreamStamp` | 19 in `src`+`include`, 14 in tests |
+| the per-core-stream mount branches | `core_runtime.cpp`'s `single_stream()` else-arms: the log device, the recovery pass, the anchor |
+| `page-lsn-cross-stream.md` | leaves the tree |
+
+**26 files.** And it is not a symbol sweep: `lease_` gates `MayWrite`'s
+grant arm, `AdoptDeviceMapOnMiss`, `RefreshFreeMapFromDevice`'s peer arm
+and `TryClaimByStamp`, while **AM-R2 keeps `MayWrite`** and AO-R14 keeps
+it "while owner routing is in force". So the work is removing one
+predicate's *lease arm* from four call paths that must keep their other
+arms — surgery on the allocator and the free map, with recovery downstream
+of it — not deleting a symbol and its callers.
+
+**AW-S1b is L, not M**, and it wants its own `critics-developer` pass and
+its own cells over the allocator rather than riding the suite. CLA stopped
+rather than produce a large under-reviewed deletion across recovery and
+allocation in one pass, and rather than leave it half-applied against
+AM-R4a's own "together or not at all".
+
+**What the tree is in the meantime**, stated so nobody reads it as done:
+the machinery is dead code, unreachable from any volume and from any test.
+That is the same shape `16e6c5c` left — refusal without deletion — with
+the refusal now complete instead of leaky. AW-S5 still must not run before
+the deletion lands: §0 item 4 is that AM-S6 measured against an engine
+carrying the old guards is not M1's overhead, and dead code that still
+compiles into the binary is exactly such an engine.
