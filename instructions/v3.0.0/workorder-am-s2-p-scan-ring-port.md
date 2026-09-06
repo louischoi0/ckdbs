@@ -13,10 +13,13 @@ named commit.
 combined; the better code wins per item. This order records the per-item
 verdict (§2) and the port that follows from it (§5).
 
-**Status: S-P0 done 2026-09-06 on `worktree-am-s2-port` from `16e6c5c`.**
-§7 is its table, and it moves three of this order's own rulings: `main`
-closed R3 and the 2a/2b R6 with better mechanisms than `c7c3a67`'s, and
-the read found one defect in `main`'s R3 fix that S-P1 now owns.
+**Status: S-P0, S-P1 and S-P2 done 2026-09-06 on `worktree-am-s2-port`
+from `16e6c5c`.** §7 is S-P0's table and §8 is what S-P1 and S-P2 built.
+Between them they move four of this order's own rulings: `main` closed R3
+and the 2a/2b R6 with better mechanisms than `c7c3a67`'s (§7 rows 6-9),
+and F-1 — the defect S-P0 filed against `main`'s R3 fix and S-P1 was to
+close — turned out to be closed by AM-R8a itself, so the fix CLA built for
+it was reverted (§8.2). S-P3 and S-P4 are not started.
 
 ---
 
@@ -260,3 +263,128 @@ suite — no cell rings more than a handful of pages at `cores > 1` — and
 reachable in production the moment the Cabin build walks a 17-page
 relation on a two-core instance. The port removes the condition rather
 than the comment: one pin per scan, and AM-R13 stands as written.
+
+---
+
+## 8. S-P1 and S-P2 as built — 2026-09-06 on `worktree-am-s2-port` from `75f81a8`
+
+**One commit, not two, and the reason is that S-P1 alone is broken.** S-P1
+removes `PinForScan`, so the ring must fetch through `FetchAndPin` — which
+takes the page latch. With the slot-pin model still in place that is a
+shared latch on every occupied slot for the life of a scan, and the armed
+suite aborted on `RotationSparesAPinnedPageAndDropsAColdOne`: the
+foreground asks for `X` on a page an open ring is holding `S`, which is
+the never-upgrade check firing on entirely correct traffic. §1.3 argued
+the latch was safe and it is — under **one** pin. S-P2's `DropHeld()`
+before the fetch is what makes it so, and a tree that stopped between the
+two stages would not build a story anyone should bisect to.
+
+### 8.1 What landed
+
+- `Resolve` gains `bump_usage`; `FetchPinned` gains it and becomes a
+  four-argument forwarder; the private `FetchAndPin` carries the body and
+  the `bool* faulted` answer. The three `for_read ? GetForReadUnpinned :
+  GetUnpinned` ternaries collapse to `Resolve(page_id, !for_read,
+  bump_usage)` — a net subtraction, since those two accessors *are*
+  `Resolve` with the bump fixed at true.
+- `PinForScan`, its eight-attempt loop and its `ResourceExhausted` are
+  gone. The ring is inside `loading_` like every other accessor.
+- `ScanRing` is `c7c3a67`'s: one shared, page-latched pin on the page its
+  last `Fetch` returned, `DropHeld()` first on every fetch and in the
+  destructor, and a slot rotated **only** when the fetch faulted.
+- `ReleaseScanSlot` no longer owns a pin; the ring unpins through
+  `UnpinFrame`, which is what takes the page latch off with it.
+- AM-R8c's sentence at the `ScanFetcher` seam, and the consumer comments
+  in `heap_chain.cpp` and `cabin_optimizer_exec.cpp`.
+
+### 8.2 F-1 was withdrawn, and the withdrawal is the finding
+
+S-P0 filed F-1 as a live defect in `main`'s R3 fix and S-P1 was to close
+it with a `mark_dirty` re-application in the pin tail. **CLA built that,
+then found it guards nothing and reverted it.** `InsertFrame` has four
+call sites; the three `Create*` paths insert **dirty**, and
+`ResidentBytes`' miss is reached from `FetchAndPin`, which publishes to
+`loading_` before it loads — so a concurrent fault of the same page waits
+instead of inserting. `LoadingGuard`'s destructor re-locks and *leaves*
+the structure latch held into `PinResidentAndRelease`, so the gap between
+the erase and the pin is zero rather than small. And `InsertFrame`'s
+lost-race arm already carries a loser's dirty flag to the winner.
+
+The one path that inserted without publishing was `PinForScan` — the
+ring's. **So AM-R8a is the fix for F-1**, and a guard in the tail would
+have been a third instance of the pattern two earlier reviews caught in
+this milestone: a fix whose cell passes with the fix reverted. The
+invariant is recorded at `InsertFrame`, where it is kept. A debug
+assertion there was proposed by the review and **declined**: the
+migration-era `*Unpinned` accessors reach that arm from
+`mount_recovery_test.cpp` and `btree_test.cpp` with no loading entry, and
+`KDS_TEST_PAGE_LATCH` arms those stores, so it would fire on correct
+single-threaded traffic.
+
+### 8.3 Cells — six mutants, six kills
+
+| mutation | cell that failed |
+|---|---|
+| the ring points back at `ResidentBytes` (outside `loading_`) | `TwoRingsFaultingOnePageIssueOneDeviceRead` — 400 reads over 200 rounds against 200 |
+| the ring's pin dropped immediately after the fetch | `ARingSpanSurvivesAConcurrentSweepBecauseTheRingPinsIt`, `RotationSparesAPinnedPageAndDropsAColdOne` |
+| `AcquirePageLatch` dropped from the pin tail | `ARingFetchWaitsForAPageAnotherCoreHoldsExclusive` |
+| the destructor releases slots before it unpins | `RingFetchesNeverBumpUsage` |
+| the ring fetch passes `bump_usage = true` | `ARingBounds…`, `RingFetchesNeverBumpUsage`, `RotationSparesAPinnedPage…` |
+| rotate on every fetch, not only on a fault | `AnInPlaceHitCostsTheRingNoSlot` |
+| `ReleaseScanSlot` ignores the latch word | `ARingSlotIsNotDroppedWhileAnotherCoreHoldsIt` |
+
+**Two of those cells exist because a mutation survived first.**
+`always-rotate` passed every ring cell in the tree: the page being fetched
+is pinned by the time the rotation runs, so `ReleaseScanSlot` refuses it
+and the slot is simply re-recorded. The difference only shows when the hit
+is a page the ring does *not* hold — a foreground frame — which is what
+`AnInPlaceHitCostsTheRingNoSlot` sets up. And the latch mutant passed once
+because the mutation itself was a no-op comment rather than a removed
+acquire; corrected, it kills.
+
+### 8.4 What the `critics-developer` pass changed, and what it refuted
+
+The tree moved under it — it was launched against S-P1 and read S-P2 —
+which it says plainly rather than reporting stale line numbers as current.
+
+- **Confirmed, independently:** the S-P1 latch shape had both a same-thread
+  `S`-then-`X` abort *and* a cross-core ABBA against the chain-growth path,
+  which holds two exclusive latches. `DropHeld()` before the fetch is what
+  removes both, and that ordering is load-bearing rather than tidy.
+- **Refuted, and CLA's own claim:** §1.6's reason for the `Create*` paths
+  not producing F-1 — "they take ids nothing else holds" — is *not*
+  strictly true. `FetchAndPin` publishes to `loading_` before `Resolve`
+  runs the `IsAllocated` check, so a page can be in `loading_` with its
+  free-map bit clear and `CreateNew` can claim it. That race is real; it
+  cannot lose a write, because the insert it makes is dirty. The record
+  now says the load-bearing fact rather than the convenient one.
+- **F-2 confirmed as stated and closed by the port:** the ceiling is
+  `kPinCeiling × core_count`, nothing widens it for a ring, and the S-P1
+  shape could abort a debug build once a Cabin build walked a 17-page
+  relation at `cores = 2`. One pin per scan closes it. AM-R13 stands.
+- **Applied:** twelve dead lines of `PinForScan`'s doc block that argued
+  the ring must *never* take the latch it now takes; `was_resident`
+  computed only when a caller asked for it (it was a second hash and probe
+  on the single-core hot path); the `faulted`-on-error-return caveat; the
+  cell's stale message and its non-vacuity note; the ring's open site in
+  `cabin_optimizer_exec.cpp`; and the invariant paragraph at `InsertFrame`.
+- **Recorded, not fixed (C-7):** the eight-attempt cap left with
+  `PinForScan`, so a ring fault that loses its frame to a sweep now rounds
+  `FetchAndPin`'s unbounded loop. The ring is structurally the most exposed
+  caller, because its fault inserts at usage 0 and is the first victim of
+  the next lap where a foreground fault inserts warm and survives one. Each
+  turn re-reads the device, so progress is probabilistically fine, and the
+  armed budgeted suite is green — but if it ever hangs, this is the first
+  place to look. Re-introducing a cap would restore a truthful error in
+  place of a correct answer, which is the trade S-P1 deliberately took.
+- **Also recorded:** the pair `S(heap leaf) → S(var-heap page)` is safe
+  today only because the Cabin build runs on the relation's owner core and
+  every write to that relation routes to the same owner — one thread. The
+  page-against-page bullet now says so, and says that nothing enforces it.
+
+### 8.5 Suite
+
+**3363/3363 plain, 3363/3363 armed (`KDS_TEST_PAGE_LATCH=1`), and
+3363/3363 armed with `KDS_TEST_FRAME_BUDGET=8`**, plus three by-design
+skips and one disabled cell. **Overhead not measured**: the interleaved
+A/B is suspended by operator decision, and H4 waits for AM-S6.

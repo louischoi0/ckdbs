@@ -110,6 +110,14 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
 
     // PO4's mandate, structural: the walk's pages come from the scan ring,
     // so the build cannot displace the foreground working set.
+    //
+    // **What the ring costs this loop** (AM-R8): it holds one pin and one
+    // shared page latch, on the page its last `Fetch` returned, until the
+    // next `Fetch` or until it is destroyed. So a page this walk is reading
+    // cannot be reclaimed under it, a foreground writer holding that page
+    // exclusive is waited for rather than read through, and this function
+    // must not park while a span is live - it does not, there is no
+    // `co_await` in this file.
     auto ring = store_.OpenScanRing();
 
     // A btree leaf is a heap page, so one loop serves both clustered forms
@@ -199,6 +207,17 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
                 next = page.next_page_id();
             }
 
+            // **The span is finished with; the ring's hold is not** (AM-R8).
+            // A `ScanFetcher` drops its pin and its shared page latch at the
+            // *next* `Fetch`, so the fetches below run under `S(leaf)` and
+            // the pair `S(heap leaf) -> S(var-heap page)` is on
+            // `device_page_store.hpp`'s page-against-page list because of
+            // this loop. Two shares never block each other, so nothing waits
+            // here today. What this loop must not do is *park*: a fetcher's
+            // pin and latch outlive the call that returned the span, and
+            // AR2 R2 forbids holding a latch across a suspension. It does
+            // not - there is no `co_await` in this file.
+            //
             // Phase 2: decode and collect. Spill fetches are legal here - the
             // page span is finished with - and they go through the ordinary
             // path, never the ring.

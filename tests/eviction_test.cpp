@@ -681,25 +681,36 @@ TEST_F(EvictionTest, RingFetchesNeverBumpUsage) {
     const PageId id = MakeCleanResidentPage(std::byte{9});
     ASSERT_GT(store_->EvictColdFrames(8), 0u);  // start absent
 
-    // Fetched through the ring five times: if any fetch bumped usage, the
-    // single sweep below could not reclaim it in one pass.
+    // One fault and four in-place hits: this is the *hit* arm's no-bump,
+    // where the rotation cell below is the fault arm's.
+    device_->ClearTrace();
     auto ring = store_->OpenScanRing(/*frames=*/2);
     for (int i = 0; i < 5; ++i) {
         ASSERT_TRUE(ring->Fetch(id).ok());
     }
-    // **A sweep cannot answer this any more, and the ring itself can**
-    // (AM-S2). A slot is pinned while it is occupied, so a sweep run here
-    // reclaims nothing whatever the usage counter reads - EV4 makes a
-    // pinned frame no victim at any pressure. What still answers the
-    // question is `ReleaseScanSlot`, which abandons a frame to the pool if
-    // its `usage > 0` and drops it otherwise: so if any of the five fetches
-    // had registered as heat, the page would *survive* the ring's death.
-    EXPECT_EQ(store_->EvictColdFrames(8), 0u) << "a pinned ring slot was reclaimed";
-    const std::size_t held = store_->resident_pages();
+    // **In place when resident** (§5), read off the device rather than
+    // inferred: five fetches of one page are one device read, so four of
+    // them used the frame the first one made rather than rotating a slot
+    // and faulting again.
+    int reads = 0;
+    for (const MemoryPageDevice::TraceEntry& entry : device_->trace()) {
+        if (entry.kind == MemoryPageDevice::OpKind::kRead && entry.first_page_id == id) ++reads;
+    }
+    EXPECT_EQ(reads, 1) << "the ring re-read a page it already held";
+
+    // **The reader is the ring's own destructor, not a sweep** (AM-R8, and
+    // this cell was rewritten twice on the way here). It first ended the
+    // scan and counted what `EvictColdFrames` reclaimed - but that sweep
+    // makes `size x (kClockUsageCap + 1)` steps in one call, so it
+    // reclaimed the frame whether or not a fetch had bumped it. It then
+    // asserted the sweep reclaimed *nothing*, which was the slot-pin model
+    // stated as a property rather than the property itself. What reads the
+    // counter directly is `ReleaseScanSlot`: at usage 0 the slot is
+    // dropped, and at anything above it the frame is abandoned to ordinary
+    // pool life and is still here.
     ring.reset();
-    EXPECT_EQ(store_->resident_pages(), held - 1)
-        << "a scan's touches registered as heat, so the ring abandoned the page "
-           "to the pool instead of dropping it";
+    EXPECT_FALSE(store_->latch_word_for_test(id).ok())
+        << "a scan's touches registered as heat: the slot was abandoned rather than dropped";
 }
 
 TEST_F(EvictionTest, RotationSparesAPinnedPageAndDropsAColdOne) {
@@ -729,15 +740,57 @@ TEST_F(EvictionTest, RotationSparesAPinnedPageAndDropsAColdOne) {
     // ids[0] survived with the pin; ids[1] was rotated out; the ring holds
     // ids[2] and ids[3]: three resident of the four.
     EXPECT_EQ(store_->resident_pages(), 3u);
-    // **Three pinned, not one** (AM-S2): the foreground's handle on ids[0],
-    // and this ring's own two slots. A ring slot is pinned while it is
-    // occupied now, which is what keeps a scan's span from being freed
-    // under its reader once a second core can evict.
-    EXPECT_EQ(store_->pinned_frames(), 3u);
+    // **Two pinned, not three** (AM-R8): the foreground's handle on ids[0]
+    // and the ring's own hold on ids[3], the page its last `Fetch`
+    // returned. The ring shows in the gauge - which is what keeps a scan's
+    // span from being freed under its reader once a second core can evict -
+    // and it shows once, because the pin travels with the fetch: ids[2]'s
+    // went when ids[3] was fetched.
+    EXPECT_EQ(store_->pinned_frames(), 2u);
+    EXPECT_EQ(store_->live_pins(), 2u);
     // And the ring's share comes back when the ring does, which is the
     // other half of that statement: nothing leaks.
     ring.reset();
-    EXPECT_EQ(store_->pinned_frames(), 1u) << "the ring did not give up its slots";
+    EXPECT_EQ(store_->pinned_frames(), 1u) << "the scan ended and its pin went with it";
+}
+
+TEST_F(EvictionTest, AnInPlaceHitCostsTheRingNoSlot) {
+    // **A slot rotates only on a fault** (AM-R8), which is what makes the
+    // residency bound exact rather than "the ring's size, give or take what
+    // it spent on pages it did not fault".
+    //
+    // **This needed a rig, and finding that out is the point.** The obvious
+    // mutation - rotate on every fetch - *passes* every other ring cell,
+    // because the page being fetched is pinned by the time the rotation
+    // runs, so `ReleaseScanSlot` refuses it and the slot is simply
+    // re-recorded. The difference only shows when the hit is a page the
+    // ring does **not** hold: a foreground frame. Then always-rotating
+    // spends a slot on it and drops one of the ring's own pages a rotation
+    // early, which is a frame of residency this cell can count.
+    std::vector<PageId> ids;
+    for (int i = 0; i < 3; ++i) {
+        ids.push_back(MakeCleanResidentPage(std::byte{static_cast<unsigned char>(60 + i)}));
+    }
+    while (store_->EvictColdFrames(16) > 0) {
+    }
+    ASSERT_EQ(store_->resident_pages(), 0u);
+
+    auto ring = store_->OpenScanRing(/*frames=*/2);
+    ASSERT_TRUE(ring->Fetch(ids[0]).ok());
+    ASSERT_TRUE(ring->Fetch(ids[1]).ok());
+    // The foreground makes a third page resident and warm - not the ring's,
+    // and not something `ReleaseScanSlot` would drop even if the ring
+    // claimed it.
+    ASSERT_TRUE(store_->GetForRead(ids[2]).ok());
+    ASSERT_EQ(store_->resident_pages(), 3u);
+
+    // A hit on that page: no fault, so no rotation, so ids[0] keeps its
+    // slot and its frame.
+    ASSERT_TRUE(ring->Fetch(ids[2]).ok());
+    EXPECT_EQ(store_->resident_pages(), 3u)
+        << "an in-place hit spent a ring slot and dropped a page the ring still held";
+    EXPECT_TRUE(store_->latch_word_for_test(ids[0]).ok())
+        << "the ring rotated on a hit and dropped its oldest slot a fetch early";
 }
 
 TEST_F(EvictionTest, TheRingNeverDropsADirtyFrameOrAResidentClassPage) {

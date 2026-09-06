@@ -255,5 +255,198 @@ TEST_F(PinProtocolTest, ConcurrentMissesOnOnePageIssueOneDeviceRead) {
     // no-blocking half.
 }
 
+TEST_F(PinProtocolTest, TwoRingsFaultingOnePageIssueOneDeviceRead) {
+    // **AM-S2-P S-P1: the ring is inside the loading set now.** It used to
+    // fault through `PinForScan`, which called `ResidentBytes` directly and
+    // then re-found the frame under the latch, up to eight times, answering
+    // a lost race with `ResourceExhausted`. Two rings on one page therefore
+    // issued two device reads and the second `InsertFrame` lost - the race
+    // step 2b closed for every other accessor, re-created in one function.
+    //
+    // **And the read count is not the larger half.** `PinForScan` was the
+    // only path in the store that inserted a frame without publishing the
+    // page id to `loading_`, which is exactly what made `FetchPinned`'s
+    // miss arm safe: the arm pins whatever is resident when its guard
+    // re-takes the latch, so a frame evicted and re-faulted **clean** in
+    // that window would swallow a `Get`'s dirty mark and lose the write.
+    // Routing the ring here is what closes that (AM-S2-P F-1), and this
+    // cell is the closest thing to a witness for it - the duplicate insert
+    // is the observable half.
+    //
+    // **Rounds and a start barrier, for `ConcurrentMisses...`'s reason**:
+    // thread construction costs more than a `MemoryPageDevice` read, so one
+    // round races nothing. With the ring pointed back at `ResidentBytes`
+    // the count is 2 per round.
+    //
+    // **The barrier is not the proof.** It guarantees the two *rings*
+    // overlap, not the two *faults*: a round where the second scanner
+    // starts after the first fetch returned counts one read either way. So
+    // what makes this cell non-vacuous is the mutation - 400 reads over 200
+    // rounds with the ring pointed back at `ResidentBytes`, 200 with it
+    // inside the loading set - and not the barrier by itself.
+    const PageId id = MakeResidentPage(std::byte{0x6B});
+
+    constexpr int kScanners = 2;
+    constexpr int kRounds = 200;
+    const std::array<PageId, 1> victims{id};
+
+    std::atomic<int> failures{0};
+    std::atomic<int> arrived{0};
+    std::atomic<int> round{0};
+    std::atomic<int> fetched{0};
+    std::atomic<int> finished{0};
+    int evict_failures = 0;
+
+    std::vector<std::thread> threads;
+    threads.reserve(kScanners);
+    for (int t = 0; t < kScanners; ++t) {
+        threads.emplace_back([&] {
+            for (int r = 0; r < kRounds; ++r) {
+                ++arrived;
+                while (round.load(std::memory_order_acquire) != r + 1) std::this_thread::yield();
+                {
+                    auto ring = store_->OpenScanRing(/*frames=*/2);
+                    auto bytes = ring->Fetch(id);
+                    if (!bytes.ok() || bytes.value()[kPageBodyOffset] != std::byte{0x6B}) {
+                        ++failures;
+                    }
+                    // **Both rings stay alive until both have fetched**, and
+                    // the first version of this cell did not do that: a ring
+                    // drops its slot on destruction, so the faster scanner
+                    // had already returned the page to the device before the
+                    // slower one asked for it, and *both* misses were
+                    // genuine. It read 378 of a possible 400 and
+                    // discriminated nothing. The race this is about needs
+                    // the two fetches in flight together.
+                    ++fetched;
+                    while (fetched.load(std::memory_order_acquire) != kScanners * (r + 1)) {
+                        std::this_thread::yield();
+                    }
+                }  // the rings die here, so the next round's eviction is free
+                ++finished;
+            }
+        });
+    }
+
+    int reads = 0;
+    for (int r = 0; r < kRounds; ++r) {
+        while (arrived.load() != kScanners * (r + 1)) std::this_thread::yield();
+        if (!store_->EvictClean(victims).ok()) ++evict_failures;
+        device_->ClearTrace();
+        round.store(r + 1, std::memory_order_release);
+        while (finished.load() != kScanners * (r + 1)) std::this_thread::yield();
+        for (const MemoryPageDevice::TraceEntry& entry : device_->trace()) {
+            if (entry.kind == MemoryPageDevice::OpKind::kRead && entry.first_page_id == id) {
+                ++reads;
+            }
+        }
+    }
+    for (std::thread& thread : threads) thread.join();
+
+    EXPECT_EQ(failures.load(), 0);
+    EXPECT_EQ(evict_failures, 0)
+        << "a round could not evict the page between scans; a ring left it pinned or latched";
+    EXPECT_EQ(reads, kRounds) << "two rings faulting one page over " << kRounds << " rounds issued "
+                              << reads << " device reads; the loading set is what makes that one";
+    EXPECT_EQ(store_->live_pins(), 0u) << "a ring did not give up its pin";
+}
+
+TEST_F(PinProtocolTest, ARingSpanSurvivesAConcurrentSweepBecauseTheRingPinsIt) {
+    // **AM-R8, and the reason it exists.** A scan reader holds a span into a
+    // frame while another thread sweeps the pool. Before the ruling the ring
+    // pinned nothing, `EvictColdFrames` saw a clean, unpinned, usage-0 frame
+    // and reclaimed it - correctly by its own rule - and freed the bytes
+    // under the reader with every pin gauge balancing perfectly.
+    //
+    // **Deterministic, not a race**: the reader is parked on `sweep_done`
+    // while the sweep runs, so there is exactly one thread inside the frame
+    // table and the only thing under test is whether the pin stops the
+    // reclaim.
+    const PageId id = MakeResidentPage(std::byte{0x3C});
+    // Absent to start, so the ring faults it rather than pinning a frame
+    // somebody else made resident.
+    ASSERT_GT(store_->EvictColdFrames(8), 0u);
+
+    std::atomic<bool> fetched{false};
+    std::atomic<bool> sweep_done{false};
+    std::atomic<int> failures{0};
+    std::thread scan([&] {
+        auto ring = store_->OpenScanRing(/*frames=*/2);
+        auto bytes = ring->Fetch(id);
+        if (!bytes.ok()) {
+            ++failures;
+            fetched.store(true, std::memory_order_release);
+            return;
+        }
+        fetched.store(true, std::memory_order_release);
+        while (!sweep_done.load(std::memory_order_acquire)) std::this_thread::yield();
+        // Read *after* the sweep walked over this frame.
+        if (bytes.value()[kPageBodyOffset] != std::byte{0x3C}) ++failures;
+    });
+
+    while (!fetched.load(std::memory_order_acquire)) std::this_thread::yield();
+    // Laps enough to walk any counter to zero and reclaim; a ring fetch left
+    // this frame's usage at zero, so the pin is the only thing standing
+    // between the sweep and the reader's bytes.
+    (void)store_->EvictColdFrames(8);
+    EXPECT_EQ(store_->pinned_frames(), 1u) << "the ring's page was not pinned during the scan";
+    EXPECT_TRUE(store_->latch_word_for_test(id).ok())
+        << "the sweep reclaimed the frame a scan was reading";
+    sweep_done.store(true, std::memory_order_release);
+    scan.join();
+
+    EXPECT_EQ(failures.load(), 0);
+    EXPECT_EQ(store_->live_pins(), 0u) << "the ring did not release its pin";
+}
+
+TEST_F(PinProtocolTest, ARingFetchWaitsForAPageAnotherCoreHoldsExclusive) {
+    // **AM-R8c**: the ring's pin is a *latched* pin, so a page another core
+    // holds exclusive is waited for exactly as `GetForRead` waits. A pin
+    // alone would let the scan read a page mid-write on another core, which
+    // is the quiet-wrong this milestone exists to close.
+    //
+    // The hold is taken through the test hook because this store is core 0
+    // and the word admits a shared acquire under its *own* core's exclusive
+    // (page_latch.hpp) - two threads of one store cannot stand in for two
+    // cores here, which is the same reason `page_latch_test.cpp` uses the
+    // hook for the sweep's refusal.
+    const PageId id = MakeResidentPage(std::byte{0x7E});
+    ASSERT_TRUE(store_->LatchFrameForTest(id, PinMode::kExclusive, /*core=*/7).ok());
+
+    std::atomic<bool> started{false};
+    std::atomic<bool> fetched{false};
+    std::atomic<int> failures{0};
+    std::thread scan([&] {
+        auto ring = store_->OpenScanRing(/*frames=*/1);
+        started.store(true, std::memory_order_release);
+        auto bytes = ring->Fetch(id);
+        if (!bytes.ok() || bytes.value()[kPageBodyOffset] != std::byte{0x7E}) ++failures;
+        fetched.store(true, std::memory_order_release);
+    });
+
+    while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
+    // Bounded rather than timed, and the bound is far past the latch's
+    // spin-then-yield: what is asserted is that a wait happens, not how long
+    // it is. The one thing this cannot exclude is that the scan thread had
+    // not yet reached `Fetch` - which two thousand yields after it published
+    // `started` makes remote, and which the join below turns into a hang
+    // rather than a false pass if the wait were unbounded.
+    for (int turn = 0; turn < 2000 && !fetched.load(std::memory_order_acquire); ++turn) {
+        std::this_thread::yield();
+    }
+    EXPECT_FALSE(fetched.load(std::memory_order_acquire))
+        << "the ring read a page another core held exclusive";
+
+    // **`EXPECT`, not `ASSERT`**: `scan` is joinable and parked in
+    // `PageLatch::Acquire` right now, so a fatal assert here would return
+    // from the body and `~thread` would call `std::terminate` - the binary
+    // dying instead of one cell failing. Release, join, then judge.
+    EXPECT_TRUE(store_->UnlatchFrameForTest(id, /*core=*/7).ok());
+    scan.join();
+    EXPECT_TRUE(fetched.load()) << "the ring never got the page after the hold dropped";
+    EXPECT_EQ(failures.load(), 0);
+    EXPECT_EQ(store_->live_pins(), 0u);
+}
+
 }  // namespace
 }  // namespace kds::storage

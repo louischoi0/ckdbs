@@ -20,7 +20,10 @@
 // frame and no pin; then what the store does with it (the arming, the
 // modes the accessors pick, the sweep's and EvictClean's refusals) on
 // `PageLatchStoreTest` below. The scan ring's refusal (ReleaseScanSlot)
-// has no cell. The arming on the real assembly is `expeditor_test.cpp`'s.
+// has one since AM-S2-P S-P2 - `ARingSlotIsNotDroppedWhileAnotherCoreHoldsIt`
+// at the bottom of this file, which is the only one of the three erasers
+// whose latch refusal a *ring* reaches. The arming on the real assembly is
+// `expeditor_test.cpp`'s.
 //
 // Two rules the cells pin because the header states them as rules rather
 // than as behaviour that happens to hold: the word is never upgraded (an
@@ -410,6 +413,44 @@ TEST_F(PageLatchStoreTest, TheSweepAndEvictCleanRefuseAFrameAnotherCoreHolds) {
     ASSERT_TRUE(store_->UnlatchFrameForTest(held, /*core=*/7).ok());
     EXPECT_EQ(WordOf(held), 0u);
     EXPECT_TRUE(store_->EvictClean(ids).ok()) << "released, the frame may go";
+}
+
+TEST_F(PageLatchStoreTest, ARingSlotIsNotDroppedWhileAnotherCoreHoldsIt) {
+    // **The third eraser's latch refusal, which had no cell** (AM-S2-P
+    // S-P2). `EvictColdFrames` and `EvictClean` are covered above; the ring
+    // reaches the same rule through `ReleaseScanSlot`, and the rule matters
+    // more there because a ring drops frames as a matter of course rather
+    // than only under pressure.
+    //
+    // The hold is core 7's, taken through the test hook: a hold by another
+    // core carries no pin in this table, so the word is the only thing
+    // saying the frame is spoken for - which is exactly the shape a shared
+    // pool makes ordinary.
+    store_->SetLatchArmed(true);
+    const PageId held = MakeCleanResidentPage(std::byte{0x91});
+    const PageId victim = MakeCleanResidentPage(std::byte{0x92});
+    while (store_->EvictColdFrames(16) > 0) {
+    }
+
+    // Both pages go through one two-slot ring, so both are the ring's to
+    // drop when it dies. Core 7 takes `held` **after** the ring has it, or
+    // the fetch itself would wait (AM-R8c's subject, not this one).
+    {
+        auto ring = store_->OpenScanRing(/*frames=*/2);
+        ASSERT_TRUE(ring->Fetch(held).ok());
+        ASSERT_TRUE(ring->Fetch(victim).ok());
+        ASSERT_TRUE(store_->LatchFrameForTest(held, PinMode::kShared, /*core=*/7).ok());
+    }  // the scan ends: both slots are released
+
+    // In the same pass, so the refusal is not a sweep that did nothing:
+    // `victim` fell, `held` did not.
+    EXPECT_FALSE(store_->latch_word_for_test(victim).ok())
+        << "the ring kept a slot nothing was holding";
+    EXPECT_TRUE(store_->latch_word_for_test(held).ok())
+        << "the ring dropped a frame another core was holding";
+
+    ASSERT_TRUE(store_->UnlatchFrameForTest(held, /*core=*/7).ok());
+    EXPECT_EQ(WordOf(held), 0u);
 }
 
 }  // namespace

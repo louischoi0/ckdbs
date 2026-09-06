@@ -175,8 +175,21 @@
 //     the pin and the latch share a handle; nothing covers it in release.
 //   - **Page against page: unordered through M1, and AM-S2 owes the
 //     rule.** Two page latches are held at once on every split (the old
-//     leaf and its new sibling) and every chain growth (the old tail and
-//     the new page) - a descent holds one at a time, its handle dying per
+//     leaf and its new sibling), every chain growth (the old tail and
+//     the new page), and - since AM-R8 - **a scan ring's shared hold on a
+//     heap leaf across its consumer's var-heap fetches**: the ring drops
+//     its hold at the *next* `Fetch`, so the Cabin build's spill fetches
+//     (`cabin_optimizer_exec.cpp`, phase 2) run inside it, `S(leaf)` then
+//     `S(var-heap page)`. Shares never block shares, so a cycle needs an
+//     exclusive waiter on both, and today there can be none: the Cabin
+//     build runs on the relation's owner core (`cabin_optimizer_exec.cpp`,
+//     `ServableBy`) and every write to that relation routes to the same
+//     owner, so the ring's consumer and the only writer of both pages are
+//     one thread. **That is the invariant keeping this pair safe, and
+//     nothing enforces it** - it dissolves the day a cross-core write path
+//     lands, which is the shape to check when the order below is finally
+//     stated rather than one to leave unlisted.
+//     A descent holds one at a time, its handle dying per
 //     iteration; through M1 one core
 //     owns its pool, so no two holders of different pages can ever wait on
 //     each other and no order is needed. The shared pool is where an ABBA
@@ -815,7 +828,8 @@ private:
     // it: the allocation check, the adoption below when it misses, then
     // the frame. `mark_dirty` is the only thing Get and GetForRead differ
     // in.
-    StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty);
+    StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
+                                                      bool bump_usage);
 
     // A leased core's free-map copy is a **mount-time snapshot**, and the
     // only thing that advanced it was a relation fault/write grant
@@ -1067,19 +1081,21 @@ private:
     // no-ops.
     void ReleaseScanSlot(PageId page_id) noexcept;
 
-    // **A pin with no page latch, for the scan ring and nothing else**
-    // (AM-S2 step 3). `PinFrame` takes the pin *and* waits for the page
-    // latch, which a ring may not do: it hands its span back to a caller
-    // that holds it until the next `Fetch`, so a latch taken here would be
-    // held across arbitrary caller code and would deadlock against the
-    // foreground. What the ring needs is only EV4's guarantee - a pinned
-    // frame is never an eviction candidate - and that is the pin alone.
-    //
-    // The bytes are still unlatched, which is the scan's model and not a
-    // regression: this ring has never taken a page latch. What changes is
-    // that the frame under the span cannot be freed while the caller reads
-    // it, which is the whole of the decision recorded at `ScanRing`.
-    StatusOr<std::span<std::byte, kPageSize>> PinForScan(PageId page_id);
+    // `PinForScan` stood here until AM-S2-P S-P1, under a doc block that
+    // argued a ring "may not" take the page latch because it would deadlock
+    // against the foreground. That argument is retired: `UnpinFrame`
+    // releases the page latch with the pin, so every `PageRef` in the tree
+    // already holds one across arbitrary caller code, and the hazard it
+    // reached for - a latch held across a *park* - is `heap_chain.hpp`'s
+    // rule about which walks may take a fetcher, not a reason to omit the
+    // latch. The function itself It faulted through
+    // `ResidentBytes` **outside** the loading set and then re-found the
+    // frame under the latch, up to eight times, answering a lost race
+    // with `ResourceExhausted`. That re-created in one function the race
+    // step 2b closed for every other accessor, and the retry loop was the
+    // symptom rather than the remedy. The ring fetches through
+    // `FetchAndPin` now (AM-R8a), where the pin is taken under the hold
+    // that made the frame resident and there is nothing left to retry.
 
     class ScanRing;  // the ScanFetcher over this store; defined in the .cpp
 
@@ -1092,7 +1108,27 @@ private:
     // recorded obligation). See the definition for what this does and does
     // not yet close.
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                         bool for_read) override;
+                                                         bool for_read, bool bump_usage) override;
+
+    // `FetchPinned`'s whole body, plus the one answer the scan ring needs
+    // and no other caller does: **did this call fault the page in, or find
+    // it resident?** The ring rotates a slot only on a fault (AM-R8), and
+    // the answer comes from here rather than from a residency probe of the
+    // ring's own because a probe outside this function's hold is stale
+    // before the fetch acts on it. `faulted` may be null, and `FetchPinned`
+    // passes null: the virtual seam stays four parameters, since nothing
+    // reachable through `PageStore` has a use for the fifth.
+    //
+    // **Meaningful only on the ok arm.** A rounded miss sets it before the
+    // pin, so an error returned on a later turn of the loop leaves it true;
+    // the ring reads it after `bytes.ok()` and nothing else reads it at
+    // all. It over-reports in one other place, and correctly: if another
+    // core loaded the page while this call was outside the latch, the miss
+    // arm inserted nothing and this still says faulted, because the
+    // question it answers is "did this call take the branch that loads".
+    StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
+                                                          bool for_read, bool bump_usage,
+                                                          bool* faulted);
 
     // The create half of the same pair. See the definition for why its
     // window is narrower than `Get`'s and why it can still close.
@@ -1126,6 +1162,15 @@ private:
     // loop and re-testing from the top. On the value arm `hold` is released
     // before the page latch is waited for, which is the ordering the whole
     // stage is about.
+    //
+    // **It does not re-apply the dirty mark, and that is a conclusion
+    // rather than an omission** (AM-S2-P F-1). The frame this pins need not
+    // be the one the caller loaded - the miss arm runs outside the latch -
+    // so a frame evicted and re-faulted clean in that window would take a
+    // `Get`'s write and never carry it. What makes that unreachable is the
+    // loading set, not this function: see `ScanRing::Fetch` for the one
+    // path that used to insert without publishing to it, and which S-P1
+    // removed.
     std::optional<std::span<std::byte, kPageSize>> PinResidentAndRelease(
         PageId page_id, PinMode mode, std::unique_lock<Latch>& hold) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {

@@ -66,6 +66,15 @@ public:
     // may drop the previous page's frame - which is a *stricter* lifetime
     // than the ordinary accessors give, and the reason a ring consumer
     // finishes each page before fetching the next.
+    //
+    // **And does not suspend while it holds one** (AM-R8c). A fetcher holds
+    // a pin, and DevicePageStore's ring holds the page latch with it, from
+    // the Fetch that returned the span until the next one - so a consumer
+    // that parks in between parks holding both, which AR2 R2 forbids and
+    // which no PageRef in the tree does either. heap_chain.hpp states the
+    // same rule for the walk that takes a fetcher; this is it at the seam,
+    // because a ring's span is the one page handle here that is not a
+    // PageRef and so carries no destructor to make the rule automatic.
     virtual StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) = 0;
 };
 
@@ -164,8 +173,13 @@ public:
     // directly above three accessors that still did create-then-pin
     // inline - which is worse than not claiming it, because a reader
     // checking the seam would have stopped here.
+    // `bump_usage` is the scan ring's (AM-R8a): the ring pins the page it
+    // hands out and must still not register as heat
+    // (`docs/spec/eviction.md` section 5). Every other caller passes true,
+    // and a store with no reclaim has no counter to bump.
     virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                                 bool for_read) {
+                                                                 bool for_read,
+                                                                 bool /*bump_usage*/) {
         auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
         PinFrame(page_id, mode);
@@ -175,7 +189,8 @@ public:
     // Fetches an already-created page, pinned, for read or in-place
     // mutation. Fails with NotFound if page_id was never created.
     StatusOr<PageRef> Get(PageId page_id) {
-        auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false);
+        auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false,
+                                 /*bump_usage=*/true);
         if (!bytes.ok()) return bytes.status();
         return PageRef(this, page_id, bytes.value());
     }
@@ -185,7 +200,8 @@ public:
     // (GetForReadUnpinned's note); a read fetch that turns out to write
     // calls MarkDirty() on the handle.
     StatusOr<PageRef> GetForRead(PageId page_id) {
-        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true);
+        auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
+                                 /*bump_usage=*/true);
         if (!bytes.ok()) return bytes.status();
         return PageRef(this, page_id, bytes.value());
     }
