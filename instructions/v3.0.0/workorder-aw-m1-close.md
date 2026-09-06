@@ -393,3 +393,68 @@ the refusal now complete instead of leaky. AW-S5 still must not run before
 the deletion lands: §0 item 4 is that AM-S6 measured against an engine
 carrying the old guards is not M1's overhead, and dead code that still
 compiles into the binary is exactly such an engine.
+
+
+---
+
+## 10. AW-a — the `MayWrite` repair, split out of AW-S1b
+
+**Why it is its own item.** The L attempt at AW-S1b (§9) got the store-side
+deletion written and compiling before it stopped, and on the way it found a
+live defect that does not need the deletion to fix. The operator split it
+out; this is it.
+
+**The defect had two halves, and the second is the one that matters.**
+
+1. `MayWrite` opened with `if (lease_ == nullptr) return true` — "core 0's
+   store, which may write anything" — written when only a peer's store
+   carried an extent lease. AM-S2 step 3 made a peer *borrow core 0's
+   store*, and `SetCoreOwnership` runs only on an **owned** store
+   (`core_runtime.cpp:348`), so every core reached the predicate with a
+   null lease and was told yes to everything.
+2. Worse: the store carried **two members for one boundary**.
+   `system_page_limit_`, which `MayWrite` read, was set only by
+   `SetCoreOwnership`; `first_evictable_page_id_`, the EV3 resident floor,
+   is *also* set directly by `Expeditor` for core 0's store. On a shared
+   store the first was **0**, so `MayWrite`'s system arm was unreachable
+   before the early return even got to it.
+
+`MayWrite` has four callers outside the store — `mount_recovery.cpp:303`,
+`core_runtime.cpp:1116`, `command_dispatcher.cpp:6641` and `:6643` — that
+read it as a real gate, and AM-R2 and AO-R14 both keep it as one. It has
+not been one since `2663001`.
+
+**The same shape had already been found once and half-fixed.**
+`Expeditor`'s own comment beside `SetResidentLimit` records it: "every
+*peer* got this through `SetCoreOwnership`'s `system_page_limit`, and core
+0 got it nowhere, so the protection depended on whether a lease was
+installed". That was written *about the eviction floor* while the
+identical bug sat in the writability boundary one member away.
+
+**The repair.** The two members collapse into one, per `CLAUDE.md`'s "never
+add a second name for a quantity an existing setting expresses" — the store
+already said they were the same boundary. And the system arm distinguishes
+the two arrangements: a **leased** store is a peer's by construction,
+whatever thread asks, so it answers `false` exactly as before; a **shared**
+store is every core's, so only `CurrentCore()` can say.
+
+**Three existing cells caught CLA's first attempt at this.**
+`APeerReadsTheCatalogAndCannotWriteIt` and two others assert the property
+and query a peer's store *from the test thread*, where `CurrentCore()` is
+0. A repair that answered from the running core unconditionally broke the
+leased case while fixing the shared one — the right answer for the wrong
+reason. That is why the arms are split rather than unified.
+
+**Cell**: `APeerMayNotWriteTheSystemRangeOnASharedStore`, modelling the
+production arrangement (no `SetCoreOwnership`, the boundary installed the
+way `Expeditor` installs it). **Two mutations, both killed**: restoring the
+null-lease early return, and reinstating a second boundary member.
+
+**What this does not do.** `MayFault` is vacuous in the same way and is
+left alone — AM-R4a deletes it at AW-S1b, and giving it a gate days before
+removing it would be work with a known expiry. It is a debug-only check
+whose call site pre-filters the system range, so unlike `MayWrite` it
+gates nothing in a release build.
+
+**Suite: 3362/3362 plain, armed, and armed with `KDS_TEST_FRAME_BUDGET=8`.**
+Overhead not measured.

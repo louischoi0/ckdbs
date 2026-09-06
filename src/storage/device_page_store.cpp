@@ -350,7 +350,7 @@ Status DevicePageStore::FlushMaps() {
 
     // **A leased store never writes the maps** - SetCoreOwnership's rule in
     // as many words, and MayWrite's too: region 0's map pages sit below
-    // `system_page_limit_`, which a peer may read and may never write. This
+    // the system range, which a peer may read and may never write. This
     // is the one write path that reaches `device_.WritePage` without asking
     // MayWrite, so the check has to be here.
     //
@@ -582,7 +582,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // device read a claim makes is the miss path's own, handed down rather
     // than repeated.
     std::unique_ptr<Page> prefetched;
-    if (lease_ != nullptr && page_id >= system_page_limit_ &&
+    if (lease_ != nullptr && page_id >= first_evictable_page_id_ &&
         (mark_dirty ? !MayWrite(page_id) : !MayFault(page_id))) {
         TryClaimByStamp(page_id, prefetched);
     }
@@ -636,7 +636,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // loop whose INSERT omits its pk cannot tell a pre-write refusal from a
     // reply lost after the commit.
     if (mark_dirty && !MayWrite(page_id)) {
-        const bool permanent = page_id < system_page_limit_;
+        const bool permanent = page_id < first_evictable_page_id_;
         const std::string message =
             "DevicePageStore: core " + std::to_string(CurrentCore()) + " may not write page " +
             std::to_string(page_id) +
@@ -891,7 +891,7 @@ bool DevicePageStore::MayFault(PageId page_id) const noexcept {
     if (lease_ == nullptr) return true;
     // The fixed system range is readable by every core: the catalog lives
     // there, and a core that cannot read it cannot serve a statement (P6).
-    if (page_id < system_page_limit_) return true;
+    if (page_id < first_evictable_page_id_) return true;
     if (lease_->Owns(page_id)) return true;
     // CC7: pages of a relation the catalog assigns to this core, granted at
     // DDL publish - read rights only, MayWrite never consults them. And
@@ -1049,13 +1049,44 @@ Status DevicePageStore::RefreshFreeMapFromDevice() {
 }
 
 bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
-    if (lease_ == nullptr) return true;
     // Read-only for a peer, deliberately: one writer per catalog page is
     // what makes a peer's stale view a retryable "not found" rather than a
     // torn read. The system check stays first: a write grant names
     // relation creation pages, never a system page, and keeping the order
     // makes that a structural fact rather than a convention.
-    if (page_id < system_page_limit_) return false;
+    //
+    // **Asked of the running core, and it had stopped being asked at all.**
+    // This function opened with `if (lease_ == nullptr) return true`, which
+    // read "core 0, which may write anything" while a lease was the thing
+    // that made a store a peer's. AM-S2 step 3 ended that: a peer borrows
+    // core 0's store (`core_runtime.cpp`, `SetCoreOwnership` runs only on an
+    // owned store), so **every** core reached this predicate with a null
+    // lease, took the early return, and was told it may write anything -
+    // system pages included. Nothing caught it because the one store-side
+    // call site pre-filters the system range out, so the arm below was
+    // unreachable from there and the four callers outside this class each
+    // got an unconditional yes.
+    //
+    // The lease cannot be the key any more, and `CurrentCore()` is the one
+    // that survives sharing: it answers "who am I", which is the question,
+    // where a member id would answer "whose store is this"
+    // (`base/current_core.hpp` makes the same argument for the latch word).
+    // For a leased store this is the identical answer - such a store is a
+    // peer's by construction and its core is never 0 - so the behaviour that
+    // changes is exactly the one that was wrong.
+    if (page_id < first_evictable_page_id_) {
+        // **A leased store is a peer's by construction**, whatever thread
+        // asks: the lease is the arrangement, not the caller. Answering
+        // from `CurrentCore()` here instead broke three cells that query a
+        // peer's store from the test thread - `APeerReadsTheCatalogAnd`
+        // `CannotWriteIt` among them - which is the right answer arriving
+        // for the wrong reason, since that thread is core 0.
+        if (lease_ != nullptr) return false;
+        // **A shared store is every core's**, so only the asker can say.
+        // This is the arm that had no gate at all.
+        return CurrentCore() == 0;
+    }
+    if (lease_ == nullptr) return true;
     if (lease_->Owns(page_id)) return true;
     // PW1c-4: the exact pages core 0 formatted for this core's relations,
     // granted after their handoff records went durable (GrantWritePages);

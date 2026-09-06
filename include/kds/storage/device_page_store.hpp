@@ -418,11 +418,17 @@ public:
     // of whoever is calling; they are step 4's to remove.
     void SetCoreOwnership(LeasedIdSource* lease, PageId system_page_limit = 0) noexcept {
         lease_ = lease;
-        system_page_limit_ = system_page_limit;
-        // The same boundary by the same definition, so it is adopted rather
-        // than restated: everything below `system_page_limit` is a fixed
-        // system structure, and a fixed system structure is resident by
-        // class (docs/inflight/in-progress/workplan-eviction.md EV3).
+        // **One boundary, one member** (AW-a). This kept its own
+        // `system_page_limit_` and *also* called the setter below, on the
+        // reasoning that they are "the same boundary by the same
+        // definition: everything below is a fixed system structure, and a
+        // fixed system structure is resident by class" (EV3). That
+        // reasoning is right and the second copy was the defect: a store
+        // reached any other way - core 0's, which `Expeditor` gives the
+        // resident floor directly - got one of the two and not the other,
+        // so `MayWrite`'s system range was 0 on every shared store. Two
+        // names for one quantity is what `CLAUDE.md` forbids, and this is
+        // the failure it forbids it for.
         SetResidentLimit(system_page_limit);
     }
 
@@ -1419,7 +1425,6 @@ private:
     std::uint64_t map_refreshes_on_miss_ = 0;
     // First non-system page id; 0 means no readable system range. See
     // SetCoreOwnership.
-    PageId system_page_limit_ = 0;
 
     // FM2: the resident map pages, keyed by region (free_map.hpp's
     // placement arithmetic). Ordered rather than hashed so a flush writes

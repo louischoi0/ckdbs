@@ -579,6 +579,60 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreAllocatesOnlyFromItsExtent) {
     EXPECT_EQ(spent.status().code(), StatusCode::kTxnConflict);
 }
 
+TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore) {
+    // **The gate that stopped being one, and nothing failed when it did.**
+    // `MayWrite` opened with `if (lease_ == nullptr) return true`, which
+    // meant "core 0, which may write anything" while only a peer's store
+    // carried a lease. AM-S2 step 3 made every core borrow core 0's store -
+    // `SetCoreOwnership` runs only on an *owned* store - so from then on
+    // every core reached this predicate with a null lease and was told yes
+    // to everything, the system range included. `MayWrite` has four callers
+    // outside the store (`mount_recovery.cpp`, `core_runtime.cpp`,
+    // `command_dispatcher.cpp` twice) that read it as a real gate, and
+    // AM-R2 and AO-R14 both keep it as one.
+    //
+    // A shared store is exactly a store with **no lease**, which is what
+    // makes this cell the shared case: no `SetCoreOwnership`, and the
+    // identity comes from the running thread.
+    //
+    // **Mutation**: restore `if (lease_ == nullptr) return true;` above the
+    // system check and the peer arm below answers true.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    // **The production arrangement of a shared store**: no
+    // `SetCoreOwnership` - that runs only on an *owned* store - and the
+    // system boundary installed directly, which is what `Expeditor` does
+    // for core 0 (`SetResidentLimit(kFirstUserPageId)`). Before AW-a the
+    // two were separate members and only this one was set here, so
+    // `MayWrite`'s range was 0 and its system arm was unreachable even
+    // before the null-lease early return got to it. One boundary now, so
+    // installing it installs both readings.
+    constexpr PageId kSystemLimit = 128;
+    store->SetResidentLimit(kSystemLimit);
+    const PageId system_page = 4;
+    const PageId user_page = 1000;
+
+    // Core 0 writes anything, which is what it did before this repair and
+    // after it.
+    EXPECT_TRUE(store->MayWrite(system_page));
+    EXPECT_TRUE(store->MayWrite(user_page));
+
+    {
+        // A peer on the same store. One writer per catalog page is the
+        // property; a user page stays writable because routing to the
+        // relation's owner is what gates that, not this predicate.
+        const CurrentCoreGuard as_peer(3);
+        EXPECT_FALSE(store->MayWrite(system_page))
+            << "a peer was admitted to the system range on a shared store";
+        EXPECT_TRUE(store->MayWrite(user_page));
+    }
+
+    // The identity is scoped, not sticky.
+    EXPECT_TRUE(store->MayWrite(system_page));
+}
+
 TEST(DevicePageStoreOwnershipTest, AWriteGrantAdmitsExactPagesAndNothingElse) {
     // PW1c-4 (workplan-peer-writer.md §8 rule 1): write rights are
     // exact-page, never extent - a fault grant's superset stays unwritable,
