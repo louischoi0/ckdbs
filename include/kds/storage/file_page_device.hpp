@@ -37,10 +37,24 @@
 // (page.md section 9) does not exist yet to satisfy. Nothing in this
 // class's shape blocks it later.
 //
-// Concurrency: core-local, like every PageDevice. pread/pwrite are used
-// rather than seek+read so there is no shared file offset to serialize on,
-// which also keeps the class usable from a second core's device instance
-// over a disjoint id range if that becomes the ownership model.
+// Concurrency: **it meets `page_device.hpp`'s contract without a lock, and
+// that is a source read rather than an expectation** (AM-R11, 2026-09-06).
+// Concurrent ReadPage/ReadPageRun of *distinct* pages from distinct threads
+// is permitted there, and this class holds no per-read state to
+// synchronise: every transfer is a pread/pwrite at an offset computed from
+// the page id (`file_page_device.cpp:97`, `:129`), never lseek plus read,
+// so there is no shared file offset; the caller owns the buffer; and the
+// loop's `offset`, `buffer` and `remaining` are locals. The only mutable
+// member a read touches is `page_capacity_`, which is exactly the
+// monotonically rising bound `page_device.hpp` argues about. Write, grow
+// and sync stay the caller's to serialise - `EnsureCapacity` writes
+// `page_capacity_`, and core 0 alone grows the file.
+//
+// (This said "core-local, like every PageDevice" until AM-R11. It had not
+// been true since one device began serving every core's store, and the
+// clause it justified - "usable from a second core's instance over a
+// disjoint id range if that becomes the ownership model" - was hedging
+// about a future that had already arrived.)
 
 namespace kds::storage {
 

@@ -812,6 +812,24 @@ public:
     // the debug assert in PinFrame() is what turns the estimate into a
     // measurement, because a workload that exceeds it aborts naming the
     // count rather than quietly holding more of the pool than EV8 assumes.
+    //
+    // **A scan ring adds 1 to a walk, not `kds.scan_ring_frames`**
+    // (AM-R13): it holds one pin, on the page its last Fetch returned. The
+    // slot-pinning ring this milestone tried first held one per occupied
+    // slot - up to 32 - against a ceiling that scales with *cores* and not
+    // with rings, so a Cabin build walking a 17-page relation at
+    // `cores = 2` would have aborted a debug build on entirely correct
+    // traffic. No cell reached it, and not because the walks are short -
+    // `eviction_test.cpp`'s four-slot ring walks twelve pages. What bounded
+    // the old model was the *slot* count, since a rotation released the
+    // previous occupant's pin, and no cell opens a ring wider than four;
+    // the two consumers that take the 32-slot default - the relayout
+    // survey and the Cabin build - are reached in the suite only over an
+    // `InMemoryPageStore`, whose `OpenScanRing` is the pass-through
+    // fetcher. Which is the whole reason to write the arithmetic down here
+    // rather than trust the suite.
+    // The number is unchanged because the ring's cost is now the same 1 an
+    // outer chain walk already contributes.
     static constexpr std::size_t kPinCeiling = 8;
 
     std::uint32_t allocated_pages() const noexcept;
