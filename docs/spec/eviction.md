@@ -15,11 +15,34 @@ The buffer pool without an eviction path is a memory-bounded cache that
 eventually exhausts its frames. This document closes that path with a design
 that follows directly from standing engine contracts:
 
-- **Per-core pools (S7) + thread-per-core** ⇒ the entire replacement
-  mechanism is core-local. There are no latches, no lock-free tricks, and no
-  cross-core coordination anywhere in this design. This is the structural
-  advantage over shared-pool engines (PostgreSQL's buffer mapping and clock
-  sweep contend on locks; KDS simply has nothing to contend on).
+- **This design was built on per-core pools, and AR0 M1 gave that up.** The
+  argument is kept rather than deleted, because it is the price now being
+  paid and a spec that quietly drops an argument it used to make cannot be
+  audited (AM-R7). It read: per-core pools plus thread-per-core ⇒ the entire
+  replacement mechanism is core-local, no latches, no lock-free tricks, no
+  cross-core coordination anywhere, which is the structural advantage over
+  shared-pool engines — PostgreSQL's buffer mapping and clock sweep contend
+  on locks; KDS simply had nothing to contend on.
+
+  **What replaced it, and what it bought.** Since AM-S2 step 3 (`2663001`)
+  one frame table serves every core, and the contention the argument
+  avoided is now real: a structure latch on every frame-table operation and
+  a per-frame latch word, both armed only at `cores > 1`. What that buys is
+  the thing per-core pools could not do — a peer reads a page core 0 already
+  faulted instead of faulting its own copy, so `buffer_pool_frames` is an
+  undivided instance total rather than `total / cores` per core, and the
+  asymmetry the old split had (core 0 alone carrying the listener, the
+  catalog and every session, on `1/cores` of the pool) is gone. **The cost
+  is not yet a number**: AM-S1's `cores = 1` A/B bounded the compile-out at
+  −1.9% group and +2.4% strict, and the armed cost has been carried as "not
+  measured" since. AM-S6 measures it against AL-S8's baseline on AL-S8's
+  host, and until that file exists this bullet states a trade whose second
+  column is empty.
+
+  **G2 is what keeps the trade honest at one core**: unarmed, the structure
+  latch is a null pointer and the guard is a branch, the latch word is never
+  touched, and the sharing is not wired at all — so a single-core instance
+  pays none of this and reads the paragraph above as history.
 - **Cooperative event loop** ⇒ blocking is not an available primitive.
   Exhaustion is handled by bounded cooperative retry and a truthful error,
   never by waiting (consistent with fail-fast semantics elsewhere).
@@ -34,7 +57,7 @@ that follows directly from standing engine contracts:
 | EV1 | Replacement policy: **CLOCK (second-chance) with a per-frame usage counter**. Access bumps the counter (saturating); the sweep hand decrements and reclaims frames at zero. No LRU lists. A temperature-model variant reusing the physical-optimizer lazy-decay score (`docs/spec/physical-optimizer.md` R1) is an **experimental hook only**, gated behind the same experimental status as the physical optimizer itself. |
 | EV2 | Dirty handling: a **background writeback task** (background scheduling group) keeps a supply of clean frames; eviction prefers clean frames. Forced synchronous writeback is the fallback only. **Flush-before-evict** is mandatory: WAL durable up to the page LSN before the frame is reused. Page checksums (S9) are computed at writeback. |
 | EV3 | Pinning is a **page-class attribute**, not a per-page runtime flag. v1 pinned classes: **fixed catalog pages** and **Bound Cabin pages** (`docs/spec/assertion.md` §5). Waystone/trail pages and meta-pool pages are evictable (Waystone is advisory — loss is a performance event, never a correctness event; the meta pool has its own entry-level eviction and is not double-pinned at page level). Debug builds assert on any eviction attempt against a pinned class. PageRef (S2) pins are, as always, absolute: a frame with a live pin is never a sweep candidate. |
-| EV4 | Strict per-core pools. **No cross-core frame stealing, no rebalancing in v1.** Pool size is a boot-time setting, divided evenly across cores by default. (Rationale: any stealing path reintroduces cross-core synchronization, forfeiting the lock-free property.) |
+| EV4 | **One pool for the instance** (AR0 M1, AM-S2 step 3, `2663001`), where this row read *strict per-core pools, no cross-core frame stealing, no rebalancing in v1* — the rationale being that any stealing path reintroduces cross-core synchronization and forfeits the lock-free property. That property was given up deliberately (§1): the pool is one frame table under a structure latch, `kds.buffer_pool_frames` is an undivided total rather than a per-core share, and "stealing" is not a mechanism because there is nothing to steal from. **Sharing is conditional on the volume having one WAL stream**, since the writeback gate is a property of the log; a pre-M0 volume mounts a store per core and this row's original text is what it runs under. What is still per core: the *owner* of a relation's pages (`crosscore.md` CC7) and the write routing that follows from it — M1 shared the cache, not the ownership. |
 | EV5 | Eviction trigger: **low-watermark background sweep with an on-demand fallback**. The background task keeps the per-core free-frame reserve above a configured low watermark; foreground allocation takes frames from the free list in O(1). If allocation finds the free list empty, it runs the sweep inline (on-demand fallback). |
 | EV6 | Scan resistance: bulk sequential scans in the background group (CREATE ASSERTION builder, aggregate full scans, maintenance scans) run through a **small dedicated ring buffer** of frames, cycling within it and **not bumping usage counters**, so foreground OLTP working sets are never displaced by a scan. |
 | EV7 | No page-kind priorities in v1: **uniform CLOCK** across all evictable classes. B+tree inner nodes are protected naturally by their access frequency. No artificial weighting (e.g., elevated initial usage counts for index pages) without a measurement that justifies it. |
@@ -111,7 +134,8 @@ configuration into a visible, countable, truthful signal instead of a stall.
 A background-group task per core:
 
 - Maintains the free-frame reserve above `kds.free_watermark` (PROPOSED:
-  1/16 of the per-core pool) by running sweep rotations.
+  1/16 of the pool, which is the instance's since AM-S2 step 3 and was the
+  core's share before it) by running sweep rotations.
 - Drains a dirty queue populated by the sweep (usage==0 dirty frames) and,
   opportunistically, by age.
 - For each dirty page: **(1)** ensure WAL durable ≥ page LSN
@@ -179,8 +203,8 @@ Bulk sequential readers declare ring mode on their scan handle:
 
 | Setting | Default (PROPOSED) | Notes |
 |---|---|---|
-| `kds.buffer_pool_frames` | 0 = unbounded until sized | total, divided **equally** per core (EV4): each core's share is `total / cores` (`FrameBudgetShare`), the remainder undistributed and bounded by `cores`, with no remainder seat for core 0; a nonzero total below `cores` is refused at boot (`CheckFrameBudget`). Known asymmetry: the even split hands most of the pool to peers while core 0 alone carries the listener, the catalog and every session, so an operator budgeting a mostly-single-core instance should expect core 0's pool to shrink by the core count |
-| `kds.free_watermark` | pool/16 per core | background sweep target |
+| `kds.buffer_pool_frames` | 0 = unbounded until sized | **An undivided instance total** since AM-S2 step 3 (EV4): one frame table holds it and every core draws from it, so the number an operator sets is the number of frames the instance has. It read *total, divided equally per core* — `total / cores` via `FrameBudgetShare`, the remainder undistributed, a nonzero total below `cores` refused at boot — and carried a known asymmetry with it: the even split handed most of the pool to peers while core 0 alone carried the listener, the catalog and every session. Sharing removes the split and the asymmetry together. On a volume with per-core streams the old division is still what runs |
+| `kds.free_watermark` | pool/16 | background sweep target; the pool is the instance's (§1) |
 | `kds.evict_retry_budget` | 8 | EV8 bounded retry |
 | `kds.scan_ring_frames` | 32 per ring | EV6; a ring is per `OpenScanRing` call, not per core (§5) |
 | usage counter cap | 5 | compile-time constant |

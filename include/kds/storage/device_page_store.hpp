@@ -137,9 +137,10 @@
 // core (a per-task owner is AM-S2's escalation if the audit ever records
 // one). **Never upgraded**: a task holding a page shared may not ask for
 // it exclusive. That is a self-deadlock, aborted in debug naming the page
-// (PinFrame - the check reads this store's own `pins > 1`, the caller's
-// own pin excluded, as "the shares are mine", sound only while pools are
-// per core) and an unbounded spin on the reactor thread in release, which
+// (PinFrame - a thread-local multiset of the pages this thread holds
+// shared, since AM-S2 step 3b; it read this store's own `pins > 1` as
+// "the shares are mine", which one table serving every core makes
+// indistinguishable from two cores holding one pin each) and an unbounded spin on the reactor thread in release, which
 // a recursive std::mutex at least blocks on (base/latch.hpp).
 //
 // Acquisition order (rules.md section 3's row):
