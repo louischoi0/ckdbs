@@ -36,7 +36,8 @@
 //
 // **Unleased on purpose.** A leased store takes ids from a run core 0
 // reserved for it and touches no shared state, which is exactly the
-// arrangement the shared pool removes (`storage/extent_lease.hpp`: leases
+// arrangement the shared pool removes (the extent leases, struck at
+// AW-S1b:
 // exist because "per-core page stores do not work without it"). The unleased
 // path is core 0's today and every core's after step 3c.
 

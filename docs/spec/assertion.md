@@ -278,10 +278,13 @@ atomic CAS loops, no cross-core sharing. v1 assertions are single-relation
 
 - **`CREATE ASSERTION` on a relation another core owns is built by that
   core.** Core 0 keeps §3.1's checks, the id and the `sys.assertions` row;
-  the owner scans under its own view, allocates the chain from its own
-  extent lease, logs `ASSERT_BUILD` and AS6a's base itself, and adopts the
-  directory at the end of its build. No page crosses an owner
-  (`docs/spec/crosscore.md` CC7's owner-builds exception).
+  the owner scans under its own view, allocates the chain, logs
+  `ASSERT_BUILD` and AS6a's base itself, and adopts the directory at the
+  end of its build. No page crosses an owner (`docs/spec/crosscore.md`
+  CC7's owner-builds exception). It allocated from its own extent lease
+  until AW-S1b; it allocates from the instance's free map now, and the
+  reason the owner builds is `Backfill`'s rather than the chain's
+  writability.
 - **The enforcing core is the owning core, at every mount too.** Recovery's
   assertion resume runs per core and takes on only the relations that core
   owns; the owner's own checkpoint carries the group snapshots, so the base

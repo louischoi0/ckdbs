@@ -18,9 +18,9 @@
 
 // The row-id lease over the ring (`RingMessageKind::kRowIdLease`): how a
 // peer that may not write the catalog obtains blocks of Keystone ids for
-// one relation. The extent-lease service's shape exactly
-// (extent_lease_service.hpp), applied to the sequence that is per-relation
-// rather than per-instance - which is why every payload carries the oid.
+// one relation. The extent-lease service's shape exactly - that service was
+// struck at AW-S1b - applied to the sequence that is per-relation rather
+// than per-instance, which is why every payload carries the oid.
 //
 // The block size default is `kRowIdLeasePerGrant` = 4096: the measured
 // floor `docs/rules/keystoneid-invariant.md` K-M2 established for bump-ahead
@@ -86,8 +86,8 @@ Status RegisterRowIdGrantHandler(sched::Scheduler& system_scheduler,
                                  stats::CabinStore* cabins = nullptr,
                                  CabinSplitDiscardCounters* discards = nullptr);
 
-// One core's refill state, owned by the caller for the coroutine's reason
-// (extent_lease_service.hpp): it must outlive the wait.
+// One core's refill state, owned by the caller for the coroutine's reason:
+// it must outlive the wait.
 struct RowIdRefill {
     bool granted = false;
     std::uint64_t table_oid = 0;

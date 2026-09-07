@@ -48,7 +48,10 @@
 // member a read touches is `page_capacity_`, which is exactly the
 // monotonically rising bound `page_device.hpp` argues about. Write, grow
 // and sync stay the caller's to serialise - `EnsureCapacity` writes
-// `page_capacity_`, and core 0 alone grows the file.
+// `page_capacity_`, and **nothing serialises that write any more**: this
+// paragraph ended "and core 0 alone grows the file", which stopped being
+// true when a peer began allocating through the instance's free map
+// (`docs/inflight/bugs/device-growth-is-not-core-0s-any-more.md`, AM-S3's).
 //
 // (This said "core-local, like every PageDevice" until AM-R11. It had not
 // been true since one device began serving every core's store, and the

@@ -1,11 +1,12 @@
-# `FlushMaps` still keys on the lease, and walks the shared region map unlatched
+# `FlushMaps` walks the shared region map unlatched (defect 1 closed at AW-S1b)
 
 **Found** 2026-09-07 by the `critics-developer` pass on AW-a (finding C),
-verified at `8eabbc3` on `worktree-aw-m1-close`. **Not fixed.** Two
-defects in one function, one of them the same shape AW-a just repaired in
-`MayWrite` and one of them worse.
+verified at `8eabbc3` on `worktree-aw-m1-close`. Two defects in one
+function. **Defect 1 is closed** — AW-S1b deleted the lease and with it the
+guard and the private map copy the guard protected; see below for why the
+deletion is a fix rather than a removal of the check. **Defect 2 is open.**
 
-## 1. The lease guard is vacuous on a shared store
+## 1. The lease guard is vacuous on a shared store — CLOSED at AW-S1b
 
 `src/storage/device_page_store.cpp:366`:
 
@@ -22,18 +23,27 @@ opened — reverting every allocation and every extent reservation core 0 has
 made since". Under AM-S2 step 3 a peer *borrows core 0's store*, whose
 `lease_` is null (`core_runtime.cpp:348` guards `SetCoreOwnership` on
 `owned_store_ != nullptr`), so **every core takes the else branch and runs
-the map writeback**. This is exactly the defect AW-a fixed one function
+the map writeback**. This was exactly the defect AW-a fixed one function
 away, and it was hidden the same way: nothing distinguishes the cores once
 the lease is gone.
 
-**It also makes a claim beside it false.** The comment at `:351-356` argues
-the arm is equivalent to `MayWrite`'s refusal. It is not, since AW-a:
-region 0's map pages are ids 1 and 2, below the 128-page system boundary,
-so `MayWrite` now refuses a peer those pages while `FlushMaps` writes them
-straight to the device through `device_.WritePage`, which consults no
-predicate at all.
+**Why the deletion closes it.** The arm existed because a peer's map copy
+was taken at that peer's mount and went stale; publishing it would have
+reverted every allocation core 0 had made since. AW-S1b removed the private
+copy along with the lease, so the writeback every core now runs writes the
+one live map — there is nothing stale to publish. What is left is
+*duplicate* work (N checkpointers each flushing the same map), which is
+AM-S3's writeback-under-sharing decision and not a correctness defect.
 
-## 2. The region walk takes no structure latch
+**It also made a claim beside it false.** The comment there argued the arm
+was equivalent to `MayWrite`'s refusal. It was not, since AW-a: region 0's
+map pages are ids 1 and 2, below the 128-page system boundary, so
+`MayWrite` refuses a peer those pages while `FlushMaps` writes them
+straight to the device through `device_.WritePage`, which consults no
+predicate at all. That asymmetry survives the deletion and is stated in the
+function's own comment now.
+
+## 2. The region walk takes no structure latch — OPEN
 
 The same loop, and the writeback below it, iterate `map_regions_` and read
 `pages.free_map` **without the structure latch**, while peers allocate
@@ -46,14 +56,14 @@ This is the same class as AM-S2's frame-table work (`frames_` got a
 structure latch; `map_regions_` did not), and the free map is the one
 structure a peer both reads and grows.
 
-## Why it is not fixed here
+## Why defect 2 is not fixed here
 
-AW-a's subject was `MayWrite`. Fixing this is behaviour-changing in a way
-that needs a decision rather than a patch: **who runs the map writeback
-when one store serves every core?** Today N checkpointers would each run
-it. The latch is the smaller half and could land alone, but landing it
-would make the unlatched walk correct without making the *duplicate* walk
-right, and a half-fix here reads as done.
+Taking the structure latch around the walk is not the one-line change it
+looks like: `FlushMaps` calls `device_.WritePage` inside the loop, and
+AM-S2's whole discipline is that device work runs *outside* the hold. The
+fix is the copy-then-write shape the frame table already uses, which is the
+same work as deciding **who runs the map writeback when one store serves
+every core** — today N checkpointers each would.
 
 `wal.md`'s fuzzy-checkpoint sentence carries the same open question for the
 frame table (AW-S1 corrected the prose and left the behaviour to AM-S3);
@@ -61,7 +71,5 @@ this is the free-map half of it.
 
 ## Owner
 
-AM-S3 owns writeback under sharing. AW-S1b's deletion removes `lease_`
-entirely, which turns defect 1 into a compile error and forces the
-decision — so the natural home is AW-S1b or AM-S3, whichever lands first.
-Defect 2 is independent of both and could be pulled forward.
+AM-S3 owns writeback under sharing, and defect 2 with it. Verified still
+open after AW-S1b.

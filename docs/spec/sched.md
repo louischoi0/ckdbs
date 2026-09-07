@@ -160,7 +160,7 @@ indistinguishable from one that has a wake it never needed.
 
 | Park site | Predicate | What satisfies it | Ends the block? |
 |---|---|---|---|
-| `extent_lease_service.cpp:110`, `row_id_lease_service.cpp:142`, `trx_id_lease_service.cpp:106` | `WaitFor{&refill.granted}` | core 0's grant reply | ring message → **wake** |
+| `row_id_lease_service.cpp:142`, `trx_id_lease_service.cpp:106` | `WaitFor{&refill.granted}` | core 0's grant reply | ring message → **wake** |
 | `command_dispatcher.cpp:238` | the remote read is done or torn down | the pipeline's reply | ring message → **wake** |
 | `remote_step_service.cpp:600` (`actionable`), `:734` (`output_ok`), `exec/step_vm.cpp:1858` (`resume_gate_`) | pipeline credit, cancel, data | a peer's message | ring message → **wake** |
 | `command_dispatcher.cpp:225` (shipped statement), `:252` (index build), `:266` (assertion build) | `Settled(id)`, **with the deadline read inside the predicate** | the owner's reply, or the deadline | the reply is a ring message → **wake**; the *deadline* has no timer of its own and is noticed only when the task is next polled, so it is honored to within one idle block. **This is what the ceiling above is for** — under an unbounded block a timed-out shipped statement would never answer |

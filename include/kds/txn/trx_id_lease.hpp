@@ -17,7 +17,9 @@
 // This is `catalog/row_id_lease.hpp` again for the sequence that is
 // per-instance rather than per-relation - which is why nothing here carries
 // an oid, and why the window lives in the `TrxIdSequence` itself instead of
-// in a table. Both are `storage/extent_lease.hpp`'s design at a third layer.
+// in a table. Both are the page-id lease's design at a third layer - that
+// one was struck at AW-S1b, when one frame table and one free map for the
+// instance removed the problem it solved.
 //
 // The same trade as every lease here: ids are **unique and monotonic per
 // core, never gapless**. A crash, a stopped core, or a grant that arrives

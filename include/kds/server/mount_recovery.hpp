@@ -65,12 +65,14 @@
 //      `SuperBlock::SetNextTrxId` plus a persist *before* it builds the
 //      sequence, not after. Raising it afterwards changes a field nothing
 //      reads again.
-//   2. **Seed the extent allocator above `page_floor`.** RC04's named
-//      obligation 1: `storage::ExtentAllocator` searches from a hint, and
-//      an extent covering a page the log names is RV4's hazard wearing the
-//      multicore shape.
+//   2. RC04's named obligation 1, **seeding the extent allocator above
+//      `page_floor`**, went with the extent leases at AW-S1b: an extent was
+//      carved from the free map rather than through the store's allocation
+//      floor, so a run could cover a page the log named - RV4's hazard
+//      wearing the multicore shape. Every core allocates through the floor
+//      now, which obligation 1 above raises.
 //
-// Neither is done here, because both write structures a peer may not touch
+// The first is not done here, because it writes a structure a peer may not touch
 // (page 0 is core 0's, M5) and a function that did them would be right on
 // one mount path and wrong on the other.
 

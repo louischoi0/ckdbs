@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#include "kds/storage/extent_lease.hpp"
 #include "kds/storage/file_page_device.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -544,71 +543,41 @@ TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesThe
     EXPECT_EQ(written[written.size() - 2], kHeaderlessMapPageId);
 }
 
-// ---- Core ownership and leases (workplan-crosscore.md M5, P2) ---------
+// ---- Core ownership: the system range (AM-R2, AO-R14) ----------------
 //
-// A store bound to a non-system core allocates from a lease and **never
-// touches the free map**, which is what keeps that one durable page
-// single-owner. These pin both halves: that it uses the lease, and that it
-// leaves the map alone.
-
-TEST(DevicePageStoreOwnershipTest, ALeasedStoreAllocatesOnlyFromItsExtent) {
-    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    LeasedIdSource lease(Extent{1000, 3});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_2(2);
-    store->SetCoreOwnership(&lease);
-
-    for (PageId expected : {1000u, 1001u, 1002u}) {
-        auto created = store->CreateNew();
-        ASSERT_TRUE(created.ok()) << created.status().message();
-        EXPECT_EQ(created.value().first, expected);
-    }
-
-    // Spent, and the failure is retryable rather than "the disk is full" -
-    // kTxnConflict because that is the one code the wire's `retryable` bit
-    // follows (status.hpp's IsRetryable).
-    auto spent = store->CreateNew();
-    ASSERT_FALSE(spent.ok());
-    EXPECT_EQ(spent.status().code(), StatusCode::kTxnConflict);
-}
+// **The lease's cells went with the lease** (AW-S1b). A store bound to a
+// non-system core used to allocate from a leased extent and never touch the
+// free map, and a dozen cells pinned each half of that. One frame table
+// serves every core now, so what is left of ownership in this class is the
+// boundary below which only core 0 may write.
 
 TEST(DevicePageStoreOwnershipTest, APeerMayNotWriteTheSystemRangeOnASharedStore) {
     // **The gate that stopped being one, and nothing failed when it did.**
     // `MayWrite` opened with `if (lease_ == nullptr) return true`, which
     // meant "core 0, which may write anything" while only a peer's store
-    // carried a lease. AM-S2 step 3 made every core borrow core 0's store -
-    // `SetCoreOwnership` runs only on an *owned* store - so from then on
-    // every core reached this predicate with a null lease and was told yes
-    // to everything, the system range included. `MayWrite` has four callers
-    // outside the store (`mount_recovery.cpp`, `core_runtime.cpp`,
-    // `command_dispatcher.cpp` twice) that read it as a real gate, and
-    // AM-R2 and AO-R14 both keep it as one.
+    // carried a lease. AM-S2 step 3 made every core borrow core 0's store,
+    // and the lease was only ever installed on an *owned* one - so from then
+    // on every core reached this predicate with a null lease and was told
+    // yes to everything, the system range included. AW-S1b then removed the
+    // lease outright, which is why this is now the whole of the predicate:
+    // `MayWrite` has four callers outside the store
+    // (`mount_recovery.cpp`, `core_runtime.cpp`, `command_dispatcher.cpp`
+    // twice) that read it as a real gate, and AM-R2 and AO-R14 both keep it
+    // as one.
     //
-    // A shared store is exactly a store with **no lease**, which is what
-    // makes this cell the shared case: no `SetCoreOwnership`, and the
-    // identity comes from the running thread.
-    //
-    // **Mutation**: restore `if (lease_ == nullptr) return true;` above the
-    // system check and the peer arm below answers true.
+    // **Mutation**: make the system arm `return true` and the peer arm
+    // below answers true.
     auto device = MakeDevice(64, 0);
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
 
-    // **The production arrangement of a shared store**: no
-    // `SetCoreOwnership` - that runs only on an *owned* store - and the
-    // system boundary installed directly, which is what `Expeditor` does
-    // for core 0 (`SetResidentLimit(kFirstUserPageId)`). Before AW-a the
-    // two were separate members and only this one was set here, so
-    // `MayWrite`'s range was 0 and its system arm was unreachable even
-    // before the null-lease early return got to it. One boundary now, so
-    // installing it installs both readings.
+    // **The production arrangement**: the system boundary installed
+    // directly, which is what `Expeditor` does for core 0
+    // (`SetResidentLimit(kFirstUserPageId)`). Before AW-a two members held
+    // one boundary and only this one was set here, so `MayWrite`'s range
+    // was 0 and its system arm was unreachable even before the null-lease
+    // early return got to it. One boundary now, so installing it installs
+    // both readings.
     constexpr PageId kSystemLimit = 128;
     store->SetResidentLimit(kSystemLimit);
     const PageId system_page = 4;
@@ -682,636 +651,36 @@ TEST(DevicePageStoreOwnershipTest, ASharedStoreRefusesAPeersSystemWriteAndNotIts
     EXPECT_TRUE(admitted.ok()) << admitted.status().message();
 }
 
-TEST(DevicePageStoreOwnershipTest, AWriteGrantAdmitsExactPagesAndNothingElse) {
-    // PW1c-4 (workplan-peer-writer.md §8 rule 1): write rights are
-    // exact-page, never extent - a fault grant's superset stays unwritable,
-    // which is the objection that ruled out widening GrantFaultPages.
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_1(1);
-    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    // Own lease writable; a core-0 page and the system range are not.
-    EXPECT_TRUE(store->MayWrite(1000));
-    EXPECT_FALSE(store->MayWrite(130));
-    EXPECT_FALSE(store->MayWrite(4));
-
-    const PageId granted[] = {130, 131};
-    store->GrantWritePages(granted);
-    EXPECT_TRUE(store->MayWrite(130));
-    EXPECT_TRUE(store->MayWrite(131));
-    EXPECT_FALSE(store->MayWrite(132)) << "the rest of the extent stays unwritable";
-    EXPECT_FALSE(store->MayWrite(4)) << "a grant never reaches the system range";
-
-    // Idempotent re-grant (a republish resends), and order-independent.
-    const PageId regrant[] = {131, 130};
-    store->GrantWritePages(regrant);
-    EXPECT_TRUE(store->MayWrite(130));
-    EXPECT_TRUE(store->MayWrite(131));
-}
-
-// ---- H4: the two refusals are not the same kind of refusal ---------------
-//
-// `Get()` on an unwritable page refused with `InvalidArgument` for both
-// reasons until 2026-08-29, while the code's own comment said
-// "refused-retryably beats detected-later". A client cannot act on a
-// comment: `IsRetryable` admits `kTxnConflict` alone, so the wire carried
-// no `retryable=1` and a driver had to match on message text to know
-// whether waiting would help.
-//
-// RB6 found it once in twenty cells of a freshly-placed relation's early
-// INSERTs, and its first fix was on the *driver* side - retry any `ERR` -
-// which manufactured real duplicate rows, because a loop whose INSERT
-// omits its pk cannot tell a refusal that wrote nothing from a reply lost
-// after a commit. Getting the classification right on the engine side is
-// what makes that safe rather than careful.
-TEST(DevicePageStoreOwnershipTest, AMissingGrantIsRetryableAndASystemPageIsNot) {
-    auto device = MakeDevice(64, 0);
-
-    // The pages have to **exist on the device** for the write check to be
-    // what refuses: a page this store cannot fault at all answers NotFound
-    // first, which is a different (and correct) refusal. So core 0 places
-    // them and flushes, exactly as a relation publish does before a peer is
-    // told about it.
-    {
-        auto core0 = OpenStore(*device);
-        ASSERT_NE(core0, nullptr);
-        auto system_page = core0->CreateAt(4);
-        ASSERT_TRUE(system_page.ok()) << system_page.status().message();
-        FormatPage(system_page.value().bytes(), PageType::kHeap);
-        auto relation_page = core0->CreateAt(130);
-        ASSERT_TRUE(relation_page.ok()) << relation_page.status().message();
-        FormatPage(relation_page.value().bytes(), PageType::kHeap);
-        ASSERT_TRUE(core0->Sync().ok());
-    }
-
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_1(1);
-    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-    // The fault rights a relation grant conveys - read only, which is the
-    // whole point: this core can see page 130 and still may not write it.
-    store->GrantFaultPages(Extent{130, 1});
-
-    // A page whose *write* grant has not arrived: transient by construction
-    // - the drain tick asks for it and a later attempt succeeds - and
-    // refused **before** anything is dirtied, which makes a retry safe.
-    auto ungranted = store->Get(130);
-    ASSERT_FALSE(ungranted.ok());
-    EXPECT_EQ(ungranted.status().code(), StatusCode::kTxnConflict)
-        << ungranted.status().message();
-    EXPECT_TRUE(ungranted.status().retryable())
-        << "a client cannot tell 'wait for the grant' from 'never' without the bit";
-
-    // A system page has one writer for the life of the instance, so a peer
-    // asking is wrong now and wrong on every retry. Telling a client to
-    // retry that would cost it a loop against a promise nothing can keep.
-    auto system_page = store->Get(4);
-    ASSERT_FALSE(system_page.ok());
-    EXPECT_EQ(system_page.status().code(), StatusCode::kInvalidArgument)
-        << system_page.status().message();
-    EXPECT_FALSE(system_page.status().retryable());
-
-    // And once the grant lands the page is writable, which is the retry the
-    // bit was promising.
-    const PageId granted[] = {130};
-    store->GrantWritePages(granted);
-    EXPECT_TRUE(store->MayWrite(130));
-}
-
-TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverMutatesTheFreeMap) {
-    // The guideline-1 property: the free map is core 0's, so a second writer
-    // would be shared mutable state between cores.
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    const std::uint32_t before = store->allocated_pages();
-
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_2(2);
-    store->SetCoreOwnership(&lease);
-    ASSERT_TRUE(store->CreateNew().ok());
-    ASSERT_TRUE(store->CreateNew().ok());
-
-    EXPECT_EQ(store->allocated_pages(), before)
-        << "a leased core set bits in the free map it does not own";
-}
-
-TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverWritesTheMapsBackToTheDevice) {
-    // The write-out half of the rule above, and the one a peer reaches: the
-    // map bit a leased store can hold is redo's, set by `CreateAt` at mount
-    // *before* the lease is installed (server/core_runtime.cpp orders it so),
-    // and `FlushMaps` is the only path to those two page ids that does not go
-    // through MayWrite. A peer that published its copy would write the map as
-    // it stood when this store opened - reverting every allocation core 0 has
-    // made since, which is silent reuse of live pages.
-    auto device = MakeDevice(64, 0);
-
-    auto core0 = OpenStore(*device);
-    ASSERT_NE(core0, nullptr);
-    ASSERT_TRUE(core0->CreateNew().ok());
-    ASSERT_TRUE(core0->Sync().ok());
-
-    // The peer's copy of the map: taken here, and stale from the next line on.
-    auto peer = OpenStore(*device);
-    ASSERT_NE(peer, nullptr);
-
-    auto later = core0->CreateNew();
-    ASSERT_TRUE(later.ok()) << later.status().message();
-    const PageId core0_page = later.value().first;
-    ASSERT_TRUE(core0->Sync().ok());
-
-    // What redo does on a peer's stream, at the point the lease does not
-    // exist yet: a page placed at a chosen id, which marks the map.
-    ASSERT_TRUE(peer->CreateAt(300).ok());
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_1(1);
-    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    ASSERT_TRUE(peer->Sync().ok());
-
-    Page map{};
-    ASSERT_TRUE(device->ReadPage(kFreeMapPageId, std::span<std::byte, kPageSize>(map)).ok());
-    EXPECT_TRUE(FreeMapIsAllocated(std::span<const std::byte, kPageSize>(map), core0_page))
-        << "a leased store wrote its stale free map over core 0's";
-    EXPECT_FALSE(FreeMapIsAllocated(std::span<const std::byte, kPageSize>(map), 300u))
-        << "a leased store published a free-map bit it does not own";
-}
-
-TEST(DevicePageStoreOwnershipTest, ARefreshAdoptsTheDevicesBitsAndSubtractsNone) {
-    // `RefreshFreeMapFromDevice`'s two halves, and the second is the one
-    // no caller can demonstrate: a leased store's own ids answer from the
-    // lease (`IsAllocated` short-circuits on `Owns`), so a test that
-    // refreshes over a *leased* page proves nothing about the merge. The
-    // only bit that lives in this copy and not on the device is redo's -
-    // `CreateAt` at mount, before the lease is installed
-    // (server/core_runtime.cpp orders it so), which is the construction
-    // `ALeasedStoreNeverWritesTheMapsBackToTheDevice` above uses for the
-    // write-out half of the same rule. Replacement instead of union would
-    // subtract exactly that page.
-    auto device = MakeDevice(64, 0);
-
-    auto core0 = OpenStore(*device);
-    ASSERT_NE(core0, nullptr);
-    ASSERT_TRUE(core0->Sync().ok());
-
-    // The peer's copy: taken here, and stale from core 0's next allocation.
-    auto peer = OpenStore(*device);
-    ASSERT_NE(peer, nullptr);
-
-    // Redo's bit, in this copy alone - never flushed, and outside the lease
-    // below so nothing but the map can answer for it.
-    ASSERT_TRUE(peer->CreateAt(300).ok());
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_1(1);
-    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    auto later = core0->CreateNew();
-    ASSERT_TRUE(later.ok()) << later.status().message();
-    const PageId core0_page = later.value().first;
-    ASSERT_FALSE(peer->IsAllocated(core0_page)) << "the snapshot predates it";
-    ASSERT_TRUE(core0->Sync().ok());
-
-    ASSERT_TRUE(peer->RefreshFreeMapFromDevice().ok());
-
-    EXPECT_TRUE(peer->IsAllocated(core0_page)) << "the device's bit was not adopted";
-    EXPECT_TRUE(peer->IsAllocated(300u))
-        << "the refresh replaced the copy instead of unioning into it, subtracting the page "
-           "this store's own recovery rebuilt";
-}
-
-TEST(DevicePageStoreOwnershipTest, TheSystemCoresOwnMapIsNotRefreshable) {
-    // The refusal is the contract, not a guard: core 0's copy *is* the
-    // authority, so re-reading the device over it would overwrite the
-    // allocations it has made since its last flush.
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    EXPECT_EQ(store->RefreshFreeMapFromDevice().code(), StatusCode::kInvalidArgument);
-}
-
-TEST(DevicePageStoreOwnershipTest, ALeasedPageIsReadableThoughTheMapDoesNotKnowIt) {
-    // A non-zero core reads its free map at Open(); core 0 marks the lease's
-    // bits later, in *its* copy. So the lease has to answer for the core's
-    // own ids or every page it allocates reads back NotFound.
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    LeasedIdSource lease(Extent{1000, 2});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_2(2);
-    store->SetCoreOwnership(&lease);
-
-    auto created = store->CreateNew();
-    ASSERT_TRUE(created.ok());
-    const PageId id = created.value().first;
-    EXPECT_TRUE(store->IsAllocated(id));
-
-    auto again = store->Get(id);
-    EXPECT_TRUE(again.ok()) << again.status().message();
-}
-
-TEST(DevicePageStoreOwnershipTest, ALeasedStoreMayNotPlaceAPageAtAChosenId) {
-    // CreateAt is a claim on the free map. Every caller of it is bootstrap
-    // or a fixed system page, all core 0's - so this is unreachable rather
-    // than restrictive, and the check is here so it stays that way.
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_2(2);
-    store->SetCoreOwnership(&lease);
-
-    EXPECT_EQ(store->CreateAt(300).status().code(), StatusCode::kInvalidArgument);
-}
-
-TEST(DevicePageStoreOwnershipTest, TheSystemCoreMayFaultAnything) {
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    // No lease installed is core 0's arrangement, and it is also every
-    // construction site that predates multicore. The store carries no core
-    // id of its own since AM-S2 step 3; the thread's is what any of it
-    // reads, and this thread never declared one.
-    EXPECT_EQ(CurrentCore(), 0u);
-    EXPECT_TRUE(store->MayFault(1));
-    EXPECT_TRUE(store->MayFault(50'000));
-}
-
-TEST(DevicePageStoreOwnershipTest, ALeasedCoreMayNotFaultAForeignPage) {
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    // A page that genuinely exists, allocated before the store became a
-    // leased one - so this is an ownership refusal and not a NotFound.
-    auto other = store->CreateNew();
-    ASSERT_TRUE(other.ok());
-    const PageId foreign = other.value().first;
-    ASSERT_TRUE(store->Sync().ok());
-
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_2(2);
-    store->SetCoreOwnership(&lease);
-
-    EXPECT_FALSE(store->MayFault(foreign));
-    EXPECT_TRUE(store->MayFault(1000));
-
-#ifndef NDEBUG
-    // Debug builds refuse the fault outright. In release the check is
-    // compiled out, so this says nothing there and the test does not ask.
-    auto refused = store->Get(foreign);
-    EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
-#endif
-}
-
-TEST(DevicePageStoreOwnershipTest, APeerAdoptsTheDeviceMapBeforeCallingASystemPageAbsent) {
-    // G1 (docs/inflight/known-gaps.md): a peer's free-map copy is a **mount-time
-    // snapshot**, advanced only by a relation fault/write grant. Core 0
-    // allocating a system page after that - a catalog page, which a peer
-    // must read to resolve any relation of its own - left an id the peer's
-    // copy has no bit for, and the fault seam turned that staleness into a
-    // permanent NotFound: nothing on the failing path asked the device
-    // again, so the relation stayed unwritable for the rest of the mount.
-    //
-    // The shape here is that sequence, minus the 58 index builds it took to
-    // reach it at the server: the peer opens first (its snapshot predates
-    // the page), core 0 then allocates and flushes.
-    auto device = MakeDevice(64, 0);
-    auto core0 = OpenStore(*device, /*first_new_page_id=*/3);
-    ASSERT_NE(core0, nullptr);
-    auto peer = OpenStore(*device, /*first_new_page_id=*/3);
-    ASSERT_NE(peer, nullptr);
-
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_1(1);
-    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    // Core 0 grows the system range after the peer's snapshot was taken,
-    // and publishes both halves - the bytes and the map bit.
-    auto grown = core0->CreateNew();
-    ASSERT_TRUE(grown.ok()) << grown.status().message();
-    const PageId later_system_page = grown.value().first;
-    ASSERT_LT(later_system_page, 128u) << "the test needs a page in the peer's readable system range";
-    Fill(grown.value().second.bytes(), 3);
-    ASSERT_TRUE(core0->Sync().ok());
-
-    EXPECT_FALSE(peer->IsAllocated(later_system_page))
-        << "the premise: the peer's copy predates this page";
-
-    auto read = peer->GetForRead(later_system_page);
-    ASSERT_TRUE(read.ok()) << read.status().message();
-    EXPECT_TRUE(Matches(read.value().bytes(), 3));
-    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u)
-        << "the adoption is what healed the miss, not an accident of timing";
-
-    // Adopted, so the next read costs nothing: the miss does not repeat.
-    auto again = peer->GetForRead(later_system_page);
-    ASSERT_TRUE(again.ok()) << again.status().message();
-    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u);
-
-    // And an id that genuinely is not allocated anywhere still refuses -
-    // naming itself, which is what the bare "page id not found" withheld.
-    auto absent = peer->GetForRead(120);
-    EXPECT_FALSE(absent.ok());
-    EXPECT_EQ(absent.status().code(), StatusCode::kNotFound);
-    EXPECT_NE(absent.status().message().find("page id 120"), std::string::npos)
-        << absent.status().message();
-    EXPECT_EQ(peer->map_refreshes_on_miss(), 2u);
-}
-
-TEST(DevicePageStoreOwnershipTest, APeerAdoptsARegionThatDidNotExistAtItsMount) {
-    // The same defect one level up, and the FM series is what made it
-    // reachable: RefreshFreeMapFromDevice walks *resident* regions, and an
-    // absent one reads as all zeroes - so before this, a page core 0
-    // placed in a region created after the peer mounted could not be
-    // adopted at all, even one the peer had been granted. The refusal was
-    // permanent for exactly the same reason.
-    auto device = MakeDevice(64, 0);
-    auto core0 = OpenStore(*device, /*first_new_page_id=*/3);
-    ASSERT_NE(core0, nullptr);
-    auto peer = OpenStore(*device, /*first_new_page_id=*/3);
-    ASSERT_NE(peer, nullptr);
-
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_1(1);
-    peer->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    // Core 0 grows the map into region 1, which the peer has never seen.
-    const PageId in_region_one = kFreeMapBitsPerPage + 64;
-    ASSERT_TRUE(core0->RaiseAllocationFloor(in_region_one).ok());
-    auto grown = core0->CreateNew();
-    ASSERT_TRUE(grown.ok()) << grown.status().message();
-    ASSERT_EQ(FreeMapRegionOf(grown.value().first), 1u);
-    Fill(grown.value().second.bytes(), 5);
-    ASSERT_TRUE(core0->Sync().ok());
-
-    // The peer is granted the page: rights alone were never the problem.
-    peer->GrantFaultPages(Extent{grown.value().first, 1});
-    EXPECT_TRUE(peer->MayFault(grown.value().first));
-    EXPECT_FALSE(peer->IsAllocated(grown.value().first))
-        << "the premise: region 1 is not resident here";
-
-    auto read = peer->GetForRead(grown.value().first);
-    ASSERT_TRUE(read.ok()) << read.status().message();
-    EXPECT_TRUE(Matches(read.value().bytes(), 5));
-    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u);
-
-    // Loaded once, counted once: LoadRegionIfPresent adds the region's
-    // allocated count, so adopting a region already held would double it.
-    const std::uint32_t after_first = peer->allocated_pages();
-    auto again = peer->GetForRead(grown.value().first);
-    ASSERT_TRUE(again.ok()) << again.status().message();
-    EXPECT_EQ(peer->allocated_pages(), after_first);
-    EXPECT_EQ(peer->map_refreshes_on_miss(), 1u);
-}
-
-TEST(DevicePageStoreOwnershipTest, TheSystemCoreDoesNotAdoptItsOwnMap) {
-    // Core 0's copy **is** the free map, so a miss is an absence and there
-    // is nothing to adopt. Pinned because the adoption is a device read on
-    // an error path, and putting it on core 0's misses would price every
-    // genuine NotFound the engine reports.
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    auto absent = store->GetForRead(500);
-    EXPECT_FALSE(absent.ok());
-    EXPECT_EQ(absent.status().code(), StatusCode::kNotFound);
-    EXPECT_EQ(store->map_refreshes_on_miss(), 0u);
-}
-
-TEST(DevicePageStoreOwnershipTest, APageStampedByThisStreamIsClaimedWithoutAGrant) {
-    // PW1c-7 (workplan-peer-writer.md §8): every lease and grant is
-    // memory-resident, so after a restart a core holds rights over none of
-    // the pages it wrote - but each carries the PL-C stamp of the stream
-    // that last wrote it (PL §9 rule 4), and rule 6 lets no page leave a
-    // stream unrestamped. So a page whose stamp names this core is claimed
-    // on the fault, read or write, and nothing else is: a foreign stamp is
-    // another core's page and 0 is a page no stream has written since it
-    // was formatted (a creation page never acquired - the grant path's
-    // job, never a claim's).
-    //
-    // "A previous run of core 2" is a store over the device that stamps
-    // and flushes; "the restart" is a fresh core-2 store whose lease does
-    // not cover those pages.
-    auto device = MakeDevice(64, 0);
-    PageId own = kInvalidPageId, own_read = kInvalidPageId, foreign = kInvalidPageId,
-           blank = kInvalidPageId;
-    {
-        auto previous = OpenStore(*device);
-        ASSERT_NE(previous, nullptr);
-        auto stamped = [&](std::uint16_t stamp) -> PageId {
-            auto created = previous->CreateNew();
-            EXPECT_TRUE(created.ok()) << created.status().message();
-            if (!created.ok()) return kInvalidPageId;
-            Fill(created.value().second.bytes(), 1);
-            SetPageStreamStamp(created.value().second.bytes(), stamp);
-            return created.value().first;
-        };
-        own = stamped(StreamStampFor(2));
-        own_read = stamped(StreamStampFor(2));
-        foreign = stamped(StreamStampFor(0));
-        blank = stamped(0);
-        ASSERT_TRUE(previous->Sync().ok());
-    }
-
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-    LeasedIdSource lease(Extent{1000, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_2(2);
-    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    // Before the fault: no lease, no grant, no rights - as any restart.
-    EXPECT_FALSE(store->MayFault(own));
-    EXPECT_FALSE(store->MayWrite(own));
-    EXPECT_EQ(store->stamp_claims(), 0u);
-
-    // A write fault claims, and the claim is both rights at once.
-    auto written = store->Get(own);
-    ASSERT_TRUE(written.ok()) << written.status().message();
-    EXPECT_TRUE(Matches(written.value().bytes(), 1)) << "the claim's read is the miss path's";
-    EXPECT_TRUE(store->MayWrite(own));
-    EXPECT_TRUE(store->MayFault(own));
-    EXPECT_EQ(store->stamp_claims(), 1u);
-
-    // A read fault claims too, so the first SELECT after a restart is what
-    // makes the next INSERT writable.
-    ASSERT_TRUE(store->GetForRead(own_read).ok());
-    EXPECT_TRUE(store->MayWrite(own_read));
-    EXPECT_EQ(store->stamp_claims(), 2u);
-
-    // Another stream's stamp and no stamp: refused for writes in every
-    // build, and the claim count does not move.
-    //
-    // **`kTxnConflict`, not `kInvalidArgument`**, and the expectation was
-    // left behind by `91f69ed`'s own change rather than by this test: that
-    // commit split the refusal in two — a **system** page has one writer
-    // for the life of the instance and stays `InvalidArgument`, while any
-    // other page is refused because a grant *has not arrived yet* and
-    // becomes `TxnConflict`, which carries `retryable=1` on the wire
-    // (`device_page_store.cpp`'s `permanent = page_id <
-    // first_evictable_page_id_`).
-    // `foreign` and `blank` are user pages, so the retryable code is the
-    // right answer and this line was asserting the pre-split one.
-    //
-    // **And the code is not the same in both builds**, which is why this
-    // asserts per build rather than one value (found 2026-08-29 by RS's
-    // pre-push gate, the first Debug run since `91f69ed`; every gate since
-    // has been `build-release`, per CLAUDE.md's measurement rule, so the
-    // Debug arm went unrun). These two pages can be neither faulted nor
-    // written by this core - the lease is 1000..1003, no grant names them -
-    // so in a **debug** build the shared-nothing fault check above the write
-    // check (`device_page_store.cpp`'s `#ifndef NDEBUG` block) refuses first
-    // and returns `InvalidArgument`, and H4's `TxnConflict` is never
-    // reached. Release compiles that block out and answers `TxnConflict`.
-    //
-    // Asserted as it is rather than made uniform because **which refusal is
-    // right here is not this test's call**: the divergence means a debug
-    // build tells a client "wrong on every retry" where release says
-    // "retry once the grant lands", and H4 chose the second deliberately.
-    // Recorded for the owner of `device_page_store.cpp` rather than papered
-    // over by asserting only the code the current build happens to give.
-#ifndef NDEBUG
-    const StatusCode kUnwritablePageCode = StatusCode::kInvalidArgument;
-#else
-    const StatusCode kUnwritablePageCode = StatusCode::kTxnConflict;
-#endif
-    for (PageId page : {foreign, blank}) {
-        auto refused = store->Get(page);
-        EXPECT_FALSE(refused.ok()) << "page " << page << " must not be writable";
-        if (!refused.ok()) EXPECT_EQ(refused.status().code(), kUnwritablePageCode);
-        EXPECT_FALSE(store->MayWrite(page));
-    }
-    EXPECT_EQ(store->stamp_claims(), 2u);
-#ifndef NDEBUG
-    // And for reads where the fault check is enforced.
-    EXPECT_FALSE(store->GetForRead(foreign).ok());
-    EXPECT_FALSE(store->GetForRead(blank).ok());
-#endif
-
-    // Idempotent: a second fault of a claimed page is a hit, not a claim.
-    ASSERT_TRUE(store->GetForRead(own).ok());
-    EXPECT_EQ(store->stamp_claims(), 2u);
-}
-
-TEST(DevicePageStoreTest, AReservationAfterTheLastFlushIsLandedByPersist) {
-    // Found by PW3b's remount test (workplan-peer-writer.md §6): the store
-    // marks its map dirty when `free_map_bytes()` is *taken*, so an
-    // allocator holding that span across a flush reserved into a map the
-    // next flush skipped as clean. Every extent refill core 0 granted after
-    // its last flush reached the device only if something else dirtied the
-    // map, and a peer's pages in one survived a restart only through redo's
-    // CreateAt - which a checkpoint past their PAGE_INITs removes. Over the
-    // store, a reservation marks the map and Persist() lands it: the grant
-    // handler's call, made before the grant leaves.
-    auto device = MakeDevice(64, /*initial_pages=*/256);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    // **The allocator is built first, and the flush happens under it** -
-    // production's shape (`Expeditor::Serve` builds it at startup and grants
-    // refills for the rest of the run) and the only order that pins the
-    // defect. Built after the flush, the constructor's own `free_map_bytes()`
-    // would leave the map dirty, and a cached-span allocator would land its
-    // reservation on that mark alone.
-    ExtentAllocator extents(*store, /*hint=*/128);
-    ASSERT_TRUE(store->Sync().ok());  // the map is clean - the shape at any refill
-    auto lease = extents.Reserve(8);
-    ASSERT_TRUE(lease.ok()) << lease.status().message();
-    ASSERT_TRUE(extents.Persist().ok());
-
-    store.reset();
-    auto reopened = OpenStore(*device);
-    ASSERT_NE(reopened, nullptr);
-    EXPECT_TRUE(reopened->IsAllocated(lease.value().first))
-        << "the reservation never reached the device";
-    EXPECT_TRUE(reopened->IsAllocated(lease.value().end() - 1));
-}
-
 TEST(DevicePageStoreTest, AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt) {
-    // Found by PW1c-7's restart test (workplan-peer-writer.md §8): an
-    // extent reserved for a peer is allocated whole in the map core 0
-    // flushes, while the peer writes its pages lazily - so a crash between
-    // a page's PAGE_INIT and its first write-back leaves a page the map
-    // calls allocated and the device holds as zeros. Reading it used to be
-    // a checksum Corruption, which redo can only poison and wait for a full
-    // page image to heal; as NotFound, redo's PAGE_INIT arm creates it, and
-    // the peer remounts.
+    // Found by PW1c-7's restart test (workplan-peer-writer.md §8): the map
+    // records an id the moment it is claimed, while the page's bytes reach
+    // the device only at a write-back - so a crash between a page's
+    // PAGE_INIT and its first flush leaves a page the map calls allocated
+    // and the device holds as zeros. Reading it used to be a checksum
+    // Corruption, which redo can only poison and wait for a full page image
+    // to heal; as NotFound, redo's PAGE_INIT arm creates it and the mount
+    // completes.
+    //
+    // **The crash is the point, and `PersistMaps` is what makes it one**:
+    // it writes the bitmaps and syncs, so the claim is durable, and the
+    // frame carrying the page's own bytes is still dirty in memory when the
+    // store below goes away with it. The extent lease used to produce this
+    // state for free - a run of 64 ids marked at reservation, written
+    // lazily - and it was the arrangement that made it a *reported* defect;
+    // one claim is the same state (AW-S1b).
     auto device = MakeDevice(64, /*initial_pages=*/256);
+    PageId page = kInvalidPageId;
+    {
+        auto opened = OpenStore(*device);
+        ASSERT_NE(opened, nullptr);
+        auto created = opened->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        page = created.value().first;
+        ASSERT_TRUE(opened->PersistMaps().ok());
+    }
+
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
-
-    ExtentAllocator extents(*store, /*hint=*/128);
-    auto lease = extents.Reserve(8);
-    ASSERT_TRUE(lease.ok()) << lease.status().message();
-    ASSERT_TRUE(store->Sync().ok());  // the map is durable, the pages are not
-    const PageId page = lease.value().first;
     ASSERT_TRUE(store->IsAllocated(page));
 
     auto got = store->GetForRead(page);
@@ -1491,42 +860,6 @@ TEST(FreeMapRegionTest, TheCeilingIsTheDesignCeilingNotOneBitmapPage) {
     EXPECT_TRUE(store->RaiseAllocationFloor(kMaxPageCount).ok());
 }
 
-TEST(FreeMapRegionTest, ALeasedStoreGetsAPrivateRegionAndNeverReadsTheDevicesMap) {
-    // A peer whose lease lies above region 0 must still be able to record a
-    // headerless page **in memory** - that bit is what stops
-    // StampIfHeadered writing a checksum over a headerless payload - while
-    // reading core 0's live map page here would be an unsynchronised read
-    // of a page core 0 is writing. So the region is private and empty.
-    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    const PageId region1 = FreeMapRegionBase(1);
-    LeasedIdSource lease(Extent{region1 + 100, 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_3(3);
-    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    auto created = store->CreateNewHeaderless();
-    ASSERT_TRUE(created.ok()) << created.status().message();
-    EXPECT_EQ(created.value().first, region1 + 100);
-    EXPECT_TRUE(store->IsHeaderless(region1 + 100));
-
-    // Nothing of the peer's reaches the device: FlushMaps drops a leased
-    // store's map writes, as it always has.
-    ASSERT_TRUE(store->Flush().ok());
-    Page probe{};
-    auto view = std::span<std::byte, kPageSize>(probe);
-    ASSERT_TRUE(device->ReadPage(FreeMapPageIdFor(region1), view).ok());
-    EXPECT_EQ(RawPageType(view), static_cast<std::uint8_t>(PageType::kInvalid))
-        << "a peer published a free-map region";
-}
-
-
 // ---- FM6-FM11: the headerless map, grants, residency ------------------
 
 TEST(FreeMapRegionTest, ADatabaseWithNoHeaderlessPageBuildsNoHeaderlessBitmap) {
@@ -1582,45 +915,12 @@ TEST(FreeMapRegionTest, TheFirstHeaderlessPageBuildsTheBitmapAndItSurvives) {
     EXPECT_FALSE(store->IsHeaderless(kFreeMapPageId)) << "a bitmap page is headered";
 }
 
-TEST(FreeMapRegionTest, AGrantAboveRegionZeroIsHeldAndHonoured) {
-    // D10(a). The rights bitmaps were single pages indexed by absolute id,
-    // so they capped at 65,280 and a peer could hold no grant above region
-    // 0 - GrantWritePages dropped the id at a range check and the refusal
-    // then surfaced at MayFault, one layer from the cause.
-    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    const PageId high = FreeMapRegionBase(3) + 777;
-    LeasedIdSource lease(Extent{FreeMapRegionBase(1), 4});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_2(2);
-    store->SetCoreOwnership(&lease, /*system_page_limit=*/128);
-
-    EXPECT_FALSE(store->MayWrite(high));
-    const PageId granted[] = {high};
-    store->GrantWritePages(granted);
-    EXPECT_TRUE(store->MayWrite(high)) << "a write grant above region 0 was dropped";
-    EXPECT_TRUE(store->MayFault(high)) << "what a core may write it may read";
-    EXPECT_FALSE(store->MayWrite(high + 1)) << "grants stay exact-page";
-
-    // A fault grant spanning a region boundary keeps every id in it.
-    const PageId across = FreeMapRegionBase(2) - 2;
-    store->GrantFaultPages(Extent{across, 6});
-    for (PageId id = across; id < across + 6; ++id) {
-        EXPECT_TRUE(store->MayFault(id)) << "id " << id;
-    }
-    EXPECT_FALSE(store->MayFault(across + 6));
-}
-
 TEST(FreeMapRegionTest, TheAllocatedCountIsMaintainedNotSwept) {
-    // D8(a). Every site that sets a free-map bit moves the count, and the
-    // one that cannot report - the extent allocator, which writes through
-    // the raw span - has a seam of its own.
+    // D8(a). Every site that sets a free-map bit moves the count. The one
+    // site that could not report it - the extent allocator, which wrote
+    // through the raw span and had a `NoteAllocated` seam for exactly this -
+    // went with the leases (AW-S1b), so every writer of a bit is now inside
+    // this class.
     auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
@@ -1630,44 +930,21 @@ TEST(FreeMapRegionTest, TheAllocatedCountIsMaintainedNotSwept) {
     ASSERT_TRUE(store->CreateNew().ok());
     EXPECT_EQ(store->allocated_pages(), 2u);
 
-    ExtentAllocator alloc(*store, 4096);
-    auto e = alloc.Reserve(64);
-    ASSERT_TRUE(e.ok()) << e.status().message();
-    EXPECT_EQ(store->allocated_pages(), 66u) << "a leased run went uncounted";
-
     // Crossing into a new region adds that region's own free map, then the
     // page itself.
     ASSERT_TRUE(store->RaiseAllocationFloor(kFreeMapBitsPerPage).ok());
     ASSERT_TRUE(store->CreateNew().ok());
-    EXPECT_EQ(store->allocated_pages(), 68u);
+    EXPECT_EQ(store->allocated_pages(), 4u);
     EXPECT_EQ(store->map_residency().regions, 2u);
 
     // The first headerless page claims its bitmap's id as it places it -
     // in **region 1**, since that is where allocation now is, not region 0.
     // Two ids: the bitmap's own and the headerless page's.
     ASSERT_TRUE(store->CreateNewHeaderless().ok());
-    EXPECT_EQ(store->allocated_pages(), 70u) << "the bitmap's own id went unclaimed";
+    EXPECT_EQ(store->allocated_pages(), 6u) << "the bitmap's own id went unclaimed";
     EXPECT_TRUE(store->IsAllocated(HeaderlessMapPageIdFor(FreeMapRegionBase(1))));
     EXPECT_FALSE(store->IsAllocated(kHeaderlessMapPageId))
         << "region 0 built a bitmap it has no headerless page for";
-}
-
-TEST(FreeMapRegionTest, AReservationNeverStraddlesARegion) {
-    // D3(a), over a store rather than bare bytes: the run abandons the tail
-    // of region 0 and restarts in region 1, past that region's two
-    // reserved bitmap ids.
-    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    ExtentAllocator alloc(*store, kFreeMapBitsPerPage - 10);
-    auto e = alloc.Reserve(64);
-    ASSERT_TRUE(e.ok()) << e.status().message();
-    EXPECT_EQ(e.value().first, FreeMapRegionBase(1) + 3)
-        << "the run straddled a region boundary or landed on a bitmap id";
-    EXPECT_EQ(FreeMapRegionOf(e.value().first),
-              FreeMapRegionOf(e.value().end() - 1))
-        << "one reservation spans two regions";
 }
 
 TEST(FreeMapRegionTest, MapPagesAreNeverReclaimCandidates) {
@@ -1688,10 +965,11 @@ TEST(FreeMapRegionTest, MapPagesAreNeverReclaimCandidates) {
 
 // Under one stream core 0's mount pass replays and rolls back records
 // belonging to every core, through core 0's store. Stamping core 0 onto a
-// page core 2 owns would not merely mislabel it: at the next mount core 2
-// faults the page, `TryClaimByStamp` grants nothing, and the page is
-// **unwritable by its owner for good** - a heap data page is in no relation
-// write grant and the extent lease is drawn fresh each mount.
+// page core 2 owns mislabels whose stream may name it - and until AW-S1b it
+// did worse: the next mount read that stamp to decide who may write, so
+// core 2 faulted the page, was granted nothing, and could never write it
+// again. The write half is gone; rule 5's "a page's stamp is the truth
+// about its stream" is what the suppression still protects.
 //
 // Redo skips its own restamp, but undo's compensations reach the store
 // through this same ordinary mutation path, which is why the suppression

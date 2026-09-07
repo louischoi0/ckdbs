@@ -141,11 +141,10 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // stream's entries. Under one stream the erase speaks for **every
         // core's** records while the flush still speaks for one core's
         // frames - and a handoff is appended by a core that need not be
-        // the page's writer at all (the re-delivery path in
-        // `relation_grant_service.cpp` re-runs the publish, which appends
-        // one from core 0 for a page a peer has dirty and unflushed). The
-        // erase would then drop that peer's entry and redo's not-dirty
-        // filter would skip its record: a lost update, not slow work.
+        // the page's writer at all (`range_alloc.cpp` appends one from core
+        // 0 for a range head another core will own). The erase would then
+        // drop that peer's entry and redo's not-dirty filter would skip its
+        // record: a lost update, not slow work.
         // Keeping the entry costs redo re-applying what the image may
         // already hold, which the `page_lsn` gate makes idempotent.
         if (record.header.page_id != kInvalidPageId) {

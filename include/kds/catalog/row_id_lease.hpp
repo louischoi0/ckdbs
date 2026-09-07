@@ -15,9 +15,11 @@
 // and catalog pages have exactly one writer - core 0. So a peer holds a
 // **leased block of ids per relation**, carved by core 0 through the same
 // `AllocateRowIdRange()` the bulk INSERT path uses, and issues from it with
-// no message and no catalog write - the page-id lease's design
-// (storage/extent_lease.hpp), applied to the one sequence that is
-// per-relation rather than per-instance.
+// no message and no catalog write - the page-id lease's design, applied to
+// the one sequence that is per-relation rather than per-instance. That
+// lease was struck at AW-S1b; this one stands, because what forced it is
+// unchanged: `sys.tables` has one writer, and no shared frame table makes a
+// peer able to write a catalog page.
 //
 // The same trade as every lease here: ids are **unique and monotonic per
 // core, never gapless**. A crash, a dropped core, or a refill that arrives
@@ -42,7 +44,7 @@ struct RowIdLease {
     // held a grant - which is what "asked for and not yet answered" looks
     // like, and why it reads as low.
     //
-    // In hand rather than cumulative, which is `LeasedIdSource`'s rule and
+    // In hand rather than cumulative, which is the page-id lease's rule and
     // arithmetic rather than taste: a contiguous top-up that *added* to this
     // would raise the quarter mark by count/4 every refill, so the run would
     // be asked for again after only 3/4 of it had been issued - a permanent
@@ -70,8 +72,8 @@ struct RowIdLease {
 
     // Whether it is time to ask for another run. A leased core must ask
     // **before** the run is spent: `AllocateRowId()` is called from inside
-    // an INSERT and cannot await a grant, which is
-    // `storage/extent_lease.hpp`'s rule and its quarter-window threshold.
+    // an INSERT and cannot await a grant. The quarter-window threshold is
+    // the page-id lease's, struck at AW-S1b and still the rule here.
     bool low_water() const noexcept { return window == 0 || remaining() <= window / 4; }
 };
 
@@ -173,7 +175,7 @@ public:
 
     // Applies a grant. A grant that begins exactly where the current lease
     // ends extends it; anything else replaces it and burns the remainder -
-    // LeasedIdSource::Grant's rule, for its reason.
+    // the page-id lease's rule, for its reason.
     void Grant(Oid table_oid, std::uint64_t first, std::uint64_t count) {
         if (count == 0) return;
         RowIdLease& lease = leases_[table_oid];

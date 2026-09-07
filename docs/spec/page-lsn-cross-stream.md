@@ -223,18 +223,17 @@ Six rules; everything else in this file is context.
    - Creation pages cross at DDL publish carrying stamp 0 (`LogPageInit`
      does not stamp); the restamp is what stamps them — the crossing
      itself, not the writer's goodwill.
-   - **The stamp is the durable form of ownership.** Every lease and grant
-     a core holds is memory-resident, so after a restart the stamp is the
-     only statement of whose page this is — complete by rule 4 (every
-     write stamps) and exact by this rule (no page leaves a stream
-     unrestamped). A leased store therefore **claims** a page whose stamp
-     names its own stream, for reads and writes alike, when no lease or
-     grant covers it (`DevicePageStore::TryClaimByStamp`); a foreign
-     stamp or 0 claims nothing, and a creation page never acquired is
-     re-delivered by the giver on request. Binding on any mover: a
-     migration must **revoke** the giver's lease ownership of the page
-     as well as restamp it, or the giver's `LeasedIdSource` keeps
-     admitting a write the stamp no longer allows.
+   - **The stamp was the durable form of ownership, and stopped being it
+     at AW-S1b.** Every lease and grant a core held was memory-resident,
+     so after a restart the stamp was the only statement of whose page
+     this is — complete by rule 4 (every write stamps) and exact by this
+     rule (no page leaves a stream unrestamped) — and a leased store
+     **claimed** a page whose stamp named its own stream, for reads and
+     writes alike, when no lease or grant covered it. There are no leases
+     and no grants: one frame table and one free map serve every core, so
+     nothing is lost across a restart and nothing has to be re-derived.
+     What the stamp still says is **which stream's records may name this
+     page**, which is rules 1-6's subject and unchanged.
 
 Consequences that bind other work:
 

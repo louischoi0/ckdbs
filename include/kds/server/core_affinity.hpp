@@ -157,42 +157,6 @@ Status CrossCoreReadNotImplemented(std::uint32_t this_core, std::uint32_t target
 // enforces it (command_dispatcher.cpp's purge gate cites it).
 Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb);
 
-// The refusal a write to a relation **this core owns** gets while the
-// core does not hold write rights over the relation's creation pages
-// (docs/inflight/in-progress/workplan-peer-writer.md PW1c-7).
-//
-// Every grant is memory-resident, so a crash before the acquisition
-// restamp, a restart, or a message lost to a full ring leaves a relation
-// with an owner and no writer. The dispatcher records the demand where it
-// finds it (CheckWriteAffinity's rights probe) and the drain tick asks the
-// system core to re-deliver; retryable, because that request is what makes
-// the retry succeed. Pages this core wrote itself need no re-delivery -
-// their stamp claims them (device_page_store.hpp, MayWrite) - so this is
-// reached only for creation pages core 0 formatted and this core never
-// acquired.
-Status RelationWriteRightsPending(std::uint32_t this_core, std::string_view relation);
-
-// The relations a core found itself unable to write (PW1c-7): recorded by
-// the dispatcher's rights probe where it refuses, drained one per request
-// by CoreRuntime's drain tick (relation_grant_service.hpp is the ring
-// half). Here rather than beside the ring functions because this is the
-// dispatcher's whole dependency on the path - a sink - and pulling the
-// scheduler and transport headers into command_dispatcher.hpp for it would
-// tax every translation unit that includes the dispatcher. Unique per
-// tick, so a client hammering one relation costs one request per cadence,
-// not one per statement.
-class RelationGrantDemand {
-public:
-    void Record(catalog::Oid table_oid);
-    // The oldest pending relation, removed - the tick asks for one at a
-    // time (one request in flight per core).
-    std::optional<catalog::Oid> Pop();
-    bool empty() const noexcept { return pending_.empty(); }
-
-private:
-    std::vector<catalog::Oid> pending_;
-};
-
 // The refusal a write gets on the owner of a relation whose index is being
 // built there, or built and not yet published by core 0's commit
 // (docs/inflight/in-progress/workplan-peer-writer.md §7c, PW1c-6b-2). Retryable: the window
@@ -204,8 +168,10 @@ Status IndexBuildPending(std::uint32_t this_core, std::string_view relation);
 // The index builds a core is running or has built and not yet heard `done`
 // for (PW1c-6b-2). Opened, closed and expired by the index build service
 // (the ring half); asked by the dispatcher's write gate. Here for
-// RelationGrantDemand's reason: this is the dispatcher's whole dependency
-// on the path. Times are `sched::MonoTimeNs`, spelled as the integer they
+// the reason `PendingIndexBuilds` is: this is the dispatcher's whole
+// dependency on the path, a sink, and pulling the scheduler and transport
+// headers into command_dispatcher.hpp for it would tax every translation
+// unit that includes the dispatcher. Times are `sched::MonoTimeNs`, spelled as the integer they
 // are so this header pulls no scheduler header in.
 class PendingIndexBuilds {
 public:

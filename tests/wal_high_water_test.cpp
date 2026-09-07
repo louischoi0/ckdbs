@@ -13,7 +13,6 @@
 #include "kds/server/superblock.hpp"
 #include "kds/base/current_core.hpp"
 #include "kds/storage/device_page_store.hpp"
-#include "kds/storage/extent_lease.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -288,30 +287,12 @@ TEST(HighWaterTest, AStoreThatCannotRaiseItsFloorRefusesTheMount) {
     EXPECT_EQ(repair.status().code(), StatusCode::kUnsupported) << repair.status().message();
 }
 
-TEST(HighWaterTest, ALeasedStoreRefusesRatherThanSilentlyDoingNothing) {
-    // A leased core allocates from its extent and never consults the floor,
-    // so raising it would change nothing. The multicore equivalent - core
-    // 0's ExtentAllocator starting above the recovered high-water - belongs
-    // to the grant path, and this refusal is what keeps the gap named
-    // instead of hidden behind a repair that reported success.
-    auto device = MakeDevice();
-    ASSERT_NE(device, nullptr);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-
-    storage::LeasedIdSource lease(storage::Extent{/*first=*/1024, /*count=*/64});
-    // The core this store acts as is the *thread's* now (AM-S2 step 3):
-    // `SetCoreOwnership` carries the lease and the system range, and the
-    // identity that the page latch, the stream stamp and the stamp claim
-    // read comes from `CurrentCore()`. A fixture off a reactor thread
-    // declares it the way `CoreRuntime::Open` does.
-    const CurrentCoreGuard as_core_1(1);
-    store->SetCoreOwnership(&lease, /*system_page_limit=*/kFirstUser);
-
-    auto repair = RaiseHighWater(*store, Named(1100));
-    ASSERT_FALSE(repair.ok());
-    EXPECT_EQ(repair.status().code(), StatusCode::kUnsupported) << repair.status().message();
-}
+// **The leased-store refusal went with the lease** (AW-S1b). A leased core
+// allocated from its extent and never consulted the allocation floor, so
+// `RaiseHighWater` refused rather than reporting a repair it had not made.
+// Every core reaches the one free map and the one floor now, so the case
+// the refusal named cannot arise and the arm above it - a store with no
+// floor at all - is the whole of what `RaiseHighWater` refuses.
 
 TEST(HighWaterTest, APageIdBeyondTheDesignCeilingRefusesTheMount) {
     // The log naming a page this build could not have written is a refusal,

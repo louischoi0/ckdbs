@@ -20,7 +20,6 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/server/assertion_build_service.hpp"
-#include "kds/server/extent_lease_service.hpp"
 #include "kds/server/fk_probe_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/shipped_statement_executor.hpp"
@@ -34,7 +33,6 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/page_store_checkpoint_target.hpp"
-#include "kds/storage/extent_lease.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -66,8 +64,9 @@
 //      `kCatalogInvalidate` after a DDL. A peer that has not yet processed
 //      the broadcast answers "table not found", which crosscore.md §5
 //      already specifies as retryable.
-//   2. **Allocation comes from a lease**, never from the free map, which is
-//      also core 0's (storage/extent_lease.hpp).
+//   2. **Allocation reaches the one free map**, under the structure latch.
+//      It came from a per-core extent lease until AW-S1b, because a store a
+//      core did not own could not reach that map at all.
 //   3. **Waystone records nothing here.** `waystone_recording` is off on a
 //      peer, and this is not a default anybody should change without
 //      reading the next paragraph. **`access_statistics` is no longer in
@@ -217,10 +216,6 @@ public:
         // folds into a batch and flushes to core 0, so the operator's one
         // switch means the same thing on every core.
         bool access_statistics = true;
-
-        // This core's page-id lease, carved by core 0's ExtentAllocator
-        // before the worker starts.
-        storage::Extent lease;
 
         // This core's WAL anchor, copied out of core 0's superblock on the
         // startup thread - where recovery starts this stream's scan (RV1/RV2,
@@ -426,11 +421,6 @@ public:
     // handler calls; exposed so a test can drive it without a reactor.
     void InvalidateCatalog();
 
-    // Asks the system core for another extent when this one crosses its
-    // low-water mark. A no-op with no transport, and at most one request in
-    // flight at a time.
-    void MaybeRefillLease();
-
     // The same, for this core's transaction ids (PW1): a peer may not raise
     // the superblock's ceiling, so its windows are granted. Peers only -
     // core 0 carves its own and never leases from itself.
@@ -448,12 +438,6 @@ public:
     // statement asks it for an id (catalog/row_id_lease.hpp).
     void MaybeRefillRowIds();
 
-    // And for a relation's grants (PW1c-7, relation_grant_service.hpp):
-    // sends the system core one re-delivery request per relation the
-    // dispatcher's rights probe found unwritable since the last tick. On
-    // the same tick as the leases; a no-op with no transport or no demand.
-    void MaybeRequestRelationGrants();
-
     // And CR7's access statistics, on the same tick and for the same reason
     // the lease checks are there: cheap `system` work, and a timer of its
     // own would cost more than it measures. The **cadence is
@@ -464,42 +448,17 @@ public:
     // What CB7's sweep sizes is the *buffer*, `kAccessBatchCapacity`.
     void MaybeFlushAccessStats();
 
-    // The receive side of CC7's flush-then-grant handoff (workplan P6b):
-    // fault rights over a relation's page range, granted by core 0 at DDL
-    // publish. What the `kRelationFaultGrant` handler calls; exposed so a
-    // test can drive it without a reactor, InvalidateCatalog's pattern.
-    void GrantRelationFault(storage::Extent extent);
+    // **CC7's grant receivers went with the grants** (AW-S1b):
+    // `GrantRelationFault`, `GrantRelationWrite` and the `AdmitWritePages`
+    // that carried PL §9 rule 6's acquisition restamp. Each answered "may
+    // this core reach that page", which a frame table shared by every core
+    // does not ask.
 
-    // The receive side of PW1c-4's exact-page write grant, and the home of
-    // PL §9 rule 6's **acquisition restamp**: each granted page is faulted
-    // (read rights - the fault grant precedes this on the same FIFO edge),
-    // restamped to this stream (stamp := own, page_lsn := this stream's
-    // current end LSN, via the StampPageLsn funnel) and flushed durable,
-    // and only then admitted to MayWrite. A failure leaves the page
-    // unwritable and logs it - the relation stays refused retryably, the
-    // publish hook's own stance. What the `kRelationWriteGrant` handler
-    // calls; exposed for the reason GrantRelationFault is.
-    void GrantRelationWrite(std::span<const PageId> pages);
-
-    // `GrantRelationWrite`'s body without the relation-grant latch and the
-    // cache drop around it: fault, acquisition-record, restamp, flush,
-    // make writable. False means the grant was abandoned mid-way and this
-    // core holds no new rights - one failure policy for every step, the
-    // 25059bf review's C-2/C-5. RD5 admits a range's head page through
-    // this rather than through its caller, because nothing asked for that
-    // page and clearing the latch would let an outstanding relation
-    // request be sent twice.
-    bool AdmitWritePages(std::span<const PageId> pages);
-
-    // This core's row-id leases and refill state (P5's shape). Exposed for
-    // the same reason GrantRelationFault is: a test drives the grant
-    // without a reactor, and diagnostics read the counters.
+    // This core's row-id leases and refill state (P5's shape). Exposed so a
+    // test drives the grant without a reactor, and diagnostics read the
+    // counters.
     catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
     RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
-
-    // PW1c-7's demand, exposed for the same reason: a test reads that the
-    // dispatcher's probe recorded a relation, then drives the tick.
-    const RelationGrantDemand& relation_grant_demand() const noexcept { return grant_demand_; }
 
     // PW1c-6b-2's window and the service that keeps it, exposed for the
     // same reason. Null on core 0 and before AttachTransport.
@@ -569,7 +528,7 @@ public:
 
 private:
     CoreRuntime(Config config, Logger* log) noexcept
-        : config_(config), log_(log), lease_(config.lease) {}
+        : config_(config), log_(log) {}
 
     Config config_;
     Logger* log_ = nullptr;
@@ -589,9 +548,6 @@ private:
     std::unique_ptr<wal::FileLogDevice> log_device_;
     std::unique_ptr<wal::WalManager> wal_;
 
-    // This core's own supply of page ids, and the store that allocates from
-    // it. Declared before the store, which holds a pointer to it.
-    storage::LeasedIdSource lease_;
     // AU-S3. Empty on a single-core instance and in every fixture that
     // wires a listener with no instance around it, where a peer's STOP has
     // nothing to route to and stopping this reactor is the whole instance.
@@ -607,16 +563,6 @@ private:
     // back into it (see the destructor's note on reverse order).
     std::unique_ptr<storage::DevicePageStore> owned_store_;
     storage::DevicePageStore* store_ = nullptr;
-
-    // The refill this core is waiting on, if any. It outlives the coroutine
-    // that waits on it, which is `WaitFor`'s one requirement - a flag on the
-    // coroutine's own frame would be gone the moment it suspended.
-    ExtentRefill refill_;
-    // One refill in flight at a time. Without this the low-water check
-    // would submit a fresh request on every tick until the first grant
-    // landed, and every one of them would be answered - burning an extent
-    // per tick for a core that needed one.
-    bool refill_in_flight_ = false;
 
     // Row-id leases (P5's shape): the per-relation blocks this core issues
     // Keystone ids from, installed into the catalog on every non-zero
@@ -644,29 +590,11 @@ private:
     // tick rather than racing the first.
     bool row_id_refill_in_flight_ = false;
 
-    // The relations this core owns and found itself unable to write
-    // (PW1c-7): written by the dispatcher's rights probe, drained by
-    // MaybeRequestRelationGrants. Peers only; core 0's dispatcher is never
-    // given it.
-    RelationGrantDemand grant_demand_;
-
     // CR7: this core's folded access shapes, between two ticks. Peers only -
     // core 0 writes `sys.access_stats` directly, being the only core that
     // may. Declared before the dispatcher for the reason every other seam
     // here is: the dispatcher holds a pointer to it.
     stats::AccessBatch access_batch_;
-    // One re-delivery request in flight per core (the PW1c-7 review's C4):
-    // each request makes core 0 run a whole publish - a catalog scan, an
-    // extent flush, three appends and one fsync on its reactor - so a client
-    // retrying an ungrantable relation at the 1 ms drain cadence must not
-    // become a thousand fsyncs a second on core 0. Cleared when a write
-    // grant is admitted; expires after kRelationGrantRequestTicks ticks so
-    // a request core 0 dropped (a failed publish, a relation it does not
-    // grant) can be asked again by the next refused statement.
-    bool grant_request_in_flight_ = false;
-    std::uint32_t grant_request_age_ticks_ = 0;
-    static constexpr std::uint32_t kRelationGrantRequestTicks = 1000;  // ~1 s at 1 ms
-
     // This core's Cabin store (AK-S2; the header's rule 3 says why a peer
     // holds one). Declared ahead of every borrower - the step server just
     // below, the dispatcher and the probe server further down - so reverse
@@ -790,29 +718,5 @@ private:
     // enforcer. Reverse-order destruction therefore takes it first.
     std::optional<wal::Checkpointer> checkpointer_;
 };
-
-// The extent-aligned page range covering a relation's fixed roots (the
-// desc/root page and the var-heap root when one exists) - what core 0
-// grants the owner at DDL publish (crosscore.md CC7). Extent-aligned
-// because the store's ownership unit is the extent; the alignment may
-// cover pages of other core-0 relations, the superset assertion CC7
-// accepts, since the enforced mechanism is statement dispatch and never
-// this check. The production send lands with P6c, when a non-creating
-// owner first becomes possible; until then the contract test drives it.
-storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
-                                      std::uint32_t extent_pages);
-
-// The send-side half of PW1c-4's publish, extracted so it is testable
-// without a whole Expeditor (the 95b45e8 review's S1 - the untested
-// lambda is where C1 hid): appends a PAGE_HANDOFF per formatted page
-// into the giver's stream, makes them durable, and returns the
-// exact-page write-grant payload. A failed status means **withhold the
-// write grant** - the relation stays fault-readable and its writes
-// refused retryably. Refuses more pages than the payload holds rather
-// than truncating (the capacity check PW1c-6 will lean on). The caller
-// owns the flush *before* this and the sends after it.
-StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
-                                                           std::uint32_t owner_core,
-                                                           std::span<const PageId> pages);
 
 }  // namespace kds::server

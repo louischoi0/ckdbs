@@ -1582,7 +1582,6 @@ public:
     // CoreRuntime::Open on every non-system core, beside
     // SetCatalogReadOnly; a dispatcher never told skips the probe. `demand`
     // must outlive this.
-    void SetRelationGrantDemand(RelationGrantDemand* demand) noexcept { grant_demand_ = demand; }
 
     // RD5's `range_size_ids`, which is the same key as "are ranges armed"
     // because a range **is** a lease grant (`server/range_alloc.hpp` says
@@ -1798,9 +1797,8 @@ public:
     // states, which outlive this dispatcher; null on core 0, which leases
     // from nobody, and everywhere the block is then omitted rather than
     // printed as zeroes.
-    void set_lease_refill_stats(const LeaseRefillStats* extent, const LeaseRefillStats* trx_id,
+    void set_lease_refill_stats(const LeaseRefillStats* trx_id,
                                 const LeaseRefillStats* row_id) noexcept {
-        extent_refill_stats_ = extent;
         trx_id_refill_stats_ = trx_id;
         row_id_refill_stats_ = row_id;
     }
@@ -2214,7 +2212,6 @@ private:
     // the first such page.
     bool catalog_read_only_ = false;
     // PW1c-7's demand sink; null on core 0 and on hook-less fixtures.
-    RelationGrantDemand* grant_demand_ = nullptr;
     // PW1c-6b-2's window; null on the same cores.
     const PendingIndexBuilds* pending_index_builds_ = nullptr;
 
@@ -2545,7 +2542,6 @@ private:
     bool cabin_optimizer_enabled_ = false;  // §II.6: off, experimental
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
     // A peer's lease refill stats, set_lease_refill_stats(); null on core 0.
-    const LeaseRefillStats* extent_refill_stats_ = nullptr;
     const LeaseRefillStats* trx_id_refill_stats_ = nullptr;
     const LeaseRefillStats* row_id_refill_stats_ = nullptr;
 

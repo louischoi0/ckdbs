@@ -46,13 +46,15 @@ inline constexpr std::uint32_t kSystemCore = 0;
 //
 // **A relation's owner must be the core that allocates its pages.**
 // Ownership is two facts that have to agree: `sys.tables.owner_core` says
-// which core may run statements against a relation, and a page belongs to
-// whichever core's lease it came from (storage/extent_lease.hpp). A
-// relation owned by a core that cannot fault its own pages is not a
-// placement, it is an unreachable relation.
+// which core may run statements against a relation, and a page belonged to
+// whichever core's lease it came from. A relation owned by a core that
+// could not fault its own pages was not a placement, it was an unreachable
+// relation. **The second fact went with the extent leases at AW-S1b**: one
+// frame table and one free map serve every core, so a page belongs to no
+// core and the invariant is satisfied by construction.
 //
-// Today DDL runs on the system core and allocates from the system core's
-// free map, so **the answer is always the creating core**. The round-robin
+// DDL runs on the system core, so **the answer is always the creating
+// core**. The round-robin
 // M1 proposes is written out below rather than performed, because the thing
 // that would make it correct does not exist yet:
 //

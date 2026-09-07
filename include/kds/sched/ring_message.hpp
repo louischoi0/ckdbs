@@ -59,7 +59,7 @@ enum class RingMessageKind : std::uint16_t {
     // ---- System services (workplan P1, owned by P5/P6) ------------------
     // Not sent yet either.
     kAnchorWrite = 16,        // -> core 0: publish a WAL checkpoint anchor
-    kExtentLease = 17,        // -> core 0: request an extent for file growth
+    kExtentLease = 17,        // unhandled since AW-S1b (see kRelationFaultGrant)
     kTrxIdLease = 18,         // -> core 0: request a transaction-id block
     kCatalogInvalidate = 19,  // core 0 -> all: DDL happened, drop caches
 
@@ -78,35 +78,27 @@ enum class RingMessageKind : std::uint16_t {
     // number a stale peer might still send must not come to mean something
     // else, and the gap is the record that it was spent.
 
-    // core 0 -> owner core: fault rights over a relation's page range
-    // (crosscore.md CC7, workplan P6b). Sent at DDL publish, strictly
-    // after the pages are flushed - the flush-then-grant handoff. The
-    // payload is server::ExtentGrantPayload; the receiving store may fault
-    // the range and may never write or allocate from it.
+    // **Nothing sends or handles 17, 21, 23 or 24 since AW-S1b.** They were
+    // the page-id lease refill and CC7's three relation grants: fault
+    // rights over a relation's page range, write rights over its exact
+    // creation pages, and an owner's request to have both re-delivered.
+    // Every one of them answered "can this core reach that page" for a
+    // frame table one core owned; one table serves every core now. The
+    // enumerators stay - `IsKnownRingMessageKind` still names them, so a
+    // stale peer's message is dropped rather than read as something else -
+    // and AU-R5 is what strikes them.
     kRelationFaultGrant = 21,
 
     // peer <-> core 0: a block of Keystone row ids for one relation
     // (workplan-crosscore.md P5's shape; catalog/row_id_lease.hpp). The
     // request carries `server::RowIdLeaseRequestPayload` and the reply
-    // `server::RowIdLeaseGrantPayload`, on this one kind both ways -
-    // kExtentLease's arrangement. A zero-count grant means the relation's
+    // `server::RowIdLeaseGrantPayload`, on this one kind both ways - the
+    // page-id lease's arrangement. A zero-count grant means the relation's
     // id space is exhausted; the requester fails honestly, never waits.
     kRowIdLease = 22,
 
-    // core 0 -> owner core: **write** rights over the exact pages core 0
-    // formatted for a relation this core owns (PW1c-4,
-    // workplan-peer-writer.md §8). Sent at DDL publish strictly after (a)
-    // the pages are flushed and (b) their PAGE_HANDOFF records are durable
-    // in core 0's stream - PL §9 rule 1's ordering, the sender's to keep.
-    // Payload is server::RelationWriteGrantPayload: exact pages, never an
-    // extent - the superset that is safe to fault is not safe to write.
     kRelationWriteGrant = 23,
 
-    // owner core -> core 0: re-deliver a relation's grants (PW1c-7,
-    // server/relation_grant_service.hpp says when and why). Payload is
-    // server::RelationGrantRequestPayload; the answer is not a reply on
-    // this kind but the ordinary kRelationFaultGrant and
-    // kRelationWriteGrant, produced by the same publish a CREATE TABLE runs.
     kRelationGrantRequest = 24,
 
     // core 0 <-> owner core: a peer-owned relation's CREATE INDEX, built

@@ -1781,7 +1781,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << "_refill_grant_lag_max_iters=" << s->grant_lag_max_iters << ' ' << kind
            << "_refill_resume_lag_max_iters=" << s->resume_lag_max_iters;
     };
-    refill_block("extent", extent_refill_stats_);
     refill_block("trxid", trx_id_refill_stats_);
     refill_block("rowid", row_id_refill_stats_);
 
@@ -1846,7 +1845,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     //   - A statement refused **before resolution** for any other reason -
     //     a parse error, `max_insert_rows`, the multi-row-without-a-
     //     transaction refusal - never reaches the affinity check.
-    //   - The two **owner-core** refusals, `RelationWriteRightsPending`
+    //   - The **owner-core** refusal
     //     (PW1c-7) and `IndexBuildPending` (PW1c-6b-2), are deliberately
     //     *not* counted: the write is not cross-core at all, it is this
     //     core's own write waiting on a grant or a build window, and
@@ -6558,94 +6557,13 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
                 "re-create the assertion so its owner builds it "
                 "(workplan-peer-writer.md §7d, PW1c-6c)");
         }
-        // PW1c-7's rights probe. The shape is funded; whether the *rights*
-        // are here is a separate question, because every grant is
-        // memory-resident and a crash before acquisition, a restart or a
-        // message lost to the ring leaves a relation this core owns with
-        // no writer. The store answers from its lease, its grants and the
-        // stamp claim it makes on the read below (ResidentBytes,
-        // device_page_store.cpp); a page none of them covers is a creation
-        // page core 0 formatted and this core never acquired, which only
-        // the system core can re-deliver - so the demand is recorded for
-        // the drain tick's request and the statement refused retryably by
-        // name, where the store's backstop would name a page id. All three
-        // creation pages, because a crash between the grant path's restamp
-        // flush and its admission can leave them split. One bit test per
-        // page on the funded path. The null test is defence only: the sink
-        // is installed at the same site, under the same condition, as
-        // `catalog_read_only_` (core_runtime.cpp), so nothing reaches here
-        // without one.
-        //
-        // **A range owner is asked about its range, not about the
-        // relation** (R4/IS2), and the three creation pages are the wrong
-        // question for it: `desc_page_id` heads the lo = 0 range, which is
-        // some other core's chain, so probing it would refuse every write
-        // to a range this core owns outright and permanently. What this
-        // core must be able to write is the head of the chain the row goes
-        // into, which is that range's entry page - granted through
-        // `AdmitWritePages` when the range opened, and re-claimed by this
-        // stream's stamp after a restart because that admission restamped
-        // it.
-        //
-        // The other two do not follow it and are not silently dropped:
-        // `varheap_page_id` cannot be reached, because `SchemaCanSpill` is
-        // one of §6a's gates and a relation that can spill never splits;
-        // `anchor_page_id` is the btree root's, and D1 declines every
-        // btree relation. Both are absences the split gates create, which
-        // is why they are stated here rather than tested for.
-        //
-        // The demand it records is the relation-grant sink, which does not
-        // re-deliver a **range** head - RD6's §14e names that as an
-        // inherited debt. The refusal is still the honest one and still
-        // retryable; what it cannot yet promise is that a retry finds the
-        // grant. Recorded rather than papered over.
-        //
-        // **Both, not either** (the review's C5). The first form asked the
-        // creation pages *or* the range head, on whether this core owned
-        // the relation - and the two are not alternatives. A core can own
-        // the relation *and* a higher range (IS5 suppresses only a carve
-        // that continues the asker's own top range, so an owner that took
-        // a block after some other core did holds a second one), and a row
-        // landing there would be admitted on a probe of a page it will not
-        // write. Four page ids at most, all `kInvalidPageId`-skipped, one
-        // bit test each on the funded path.
-        if (grant_demand_ != nullptr) {
-            PageId probe[4] = {kInvalidPageId, kInvalidPageId, kInvalidPageId, kInvalidPageId};
-            std::size_t n = 0;
-            if (access.owner_core == core_id_) {
-                probe[n++] = access.desc_page_id;
-                probe[n++] = access.varheap_page_id;
-                probe[n++] = access.anchor_page_id;
-            } else if (!target_id.has_value()) {
-                // Checked, not assumed: reaching here without owning the
-                // relation means the arm above resolved a *range* to this
-                // core, which only the id-routed call can do. If that ever
-                // stops being true the answer must be a refusal, never a
-                // probe of some other core's creation pages.
-                return Status::Corruption(
-                    "relation oid " + std::to_string(access.oid) + " is owned by core " +
-                    std::to_string(access.owner_core) + " yet core " +
-                    std::to_string(core_id_) +
-                    " admitted a write to it with no row id to name a range");
-            }
-            // The head of the chain this row actually goes into, whenever
-            // the caller named the row. On an unsplit relation it *is*
-            // `desc_page_id` and the duplicate costs one bit test.
-            if (target_id.has_value() &&
-                access.clustered_type == catalog::ClusteredType::kHeap) {
-                auto chain = access.HeapChainFor(*target_id);
-                if (!chain.ok()) return chain.status();
-                probe[n++] = chain.value().head;
-            }
-            for (std::size_t i = 0; i < n; ++i) {
-                const PageId page = probe[i];
-                if (page == kInvalidPageId || page_store_.MayWrite(page)) continue;
-                (void)page_store_.GetForRead(page);  // the claim runs on the fault
-                if (page_store_.MayWrite(page)) continue;
-                grant_demand_->Record(access.oid);
-                return RelationWriteRightsPending(core_id_, relation);
-            }
-        }
+        // **PW1c-7's rights probe went with the grants** (AW-S1b). It asked
+        // the store whether this core could write a relation's creation
+        // pages or its range head, and recorded a re-delivery demand where
+        // the answer was no - a question a shared frame table cannot ask,
+        // since `MayWrite` now answers for the system range alone. The
+        // refusal it produced, `RelationWriteRightsPending`, went with it:
+        // no path reaches it.
     }
     session.BindHomeCore(target_core);
     return Status::OK();
@@ -7330,7 +7248,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     if (Status affinity = CheckWriteAffinity(*ta, stmt.table_name, *scope.session, target_id);
         !affinity.ok()) {
         // ErrorReply, not a bare "ERR ": the affinity refusals are
-        // TxnConflict (CrossCoreWriteRefused, RelationWriteRightsPending)
+        // TxnConflict (CrossCoreWriteRefused, IndexBuildPending)
         // and the wire's `TXN_CONFLICT retryable=1` is what a client
         // retries on - all three write sites spelled it without until
         // PW1c-7's test asked for the bit.

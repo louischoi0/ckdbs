@@ -2020,8 +2020,10 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
     }
 
     // Follow sys.columns' links: more than one page, and every page after
-    // the root inside the reserved range - which is what keeps a peer able
-    // to fault it (MayFault admits only low pages read-only).
+    // the root inside the reserved range. That was what kept a peer able to
+    // fault it at all until AW-S1b; what it still buys is the flush before
+    // `kCatalogInvalidate`, which has to name every catalog page and can
+    // only name a bounded range (well_known.hpp).
     PageId at = kCatalogPageColumns;
     int pages = 0;
     while (at != kInvalidPageId) {

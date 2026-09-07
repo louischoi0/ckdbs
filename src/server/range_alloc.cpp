@@ -241,14 +241,15 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
     // Step 1. **Flush, and it is CC7's own sequence rather than a
     // precaution** (PW1c-4, the relation publish hook's `FlushPages` →
     // handoff → grant → `EvictClean`). `CreateRangeEntryPage` formatted
-    // the head in *this* core's frame and nothing wrote it to the device;
-    // every core has its own `DevicePageStore`, so the owner's admission
-    // faults these bytes from the device and would read the id back as
-    // "allocated but was never written" (`ResidentBytes`' all-zero arm) -
-    // the grant would fail on arrival and the range would have a head no
-    // core could write. `FlushPages` carries the free map out with the
-    // page, which the owner's `RefreshFreeMapFromDevice` then needs to see
-    // the id allocated at all.
+    // the head in *this* core's frame and nothing wrote it to the device.
+    // **It mattered while every core had its own `DevicePageStore`**: the
+    // owner faulted these bytes from the device and read the id back as
+    // "allocated but was never written" (`ResidentBytes`' all-zero arm), so
+    // the range had a head no core could write. One frame table serves
+    // every core since AM-S2 step 3, so the owner finds this very frame -
+    // and the flush stays because the *durability* half is unchanged: the
+    // handoff record below is appended and waited on, and PL §9 rule 1 is
+    // that the page it names reached the device first.
     if (Status s = store.FlushPages(head); !s.ok()) {
         return s.WithContext("flushing range entry page " + std::to_string(entry_page.value()) +
                              " before its handoff");

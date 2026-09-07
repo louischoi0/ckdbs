@@ -178,9 +178,10 @@ static_assert(sizeof(TxnDecideRequestPayload) == 24);
 // **Sized against the refusals a participant can actually produce**, not
 // rounded to a power of two. The first cut of this file chose 104 so that
 // `sizeof` landed on 128, and 104 is three bytes under the engine's single
-// most likely prepare failure - `extent_lease.cpp`'s "this core's lease of
-// N pages is spent; a refill must be granted before it can allocate again",
-// which measures 107 at N=64 and grows with N. That is the inverse of D6's
+// most likely prepare failure at the time - the page-id lease's "this
+// core's lease of N pages is spent; a refill must be granted before it can
+// allocate again", which measured 107 at N=64 and grew with N (that lease
+// was struck at AW-S1b). That is the inverse of D6's
 // warning: nothing was shrunk to fit the *slot*, but a field was cut to fit
 // a self-chosen total while 896 bytes of confirmed headroom went unspent.
 //

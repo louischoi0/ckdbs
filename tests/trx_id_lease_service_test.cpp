@@ -224,7 +224,8 @@ TEST_F(TrxIdLeaseServiceTest, ASecondGrantExtendsAContiguousPendingBlock) {
 
 TEST_F(TrxIdLeaseServiceTest, APendingGrantClearsTheLowWaterMark) {
     // The refill cadence's **stopping** condition, and the one place this
-    // lease may not simply copy `LeasedIdSource`. That one installs its
+    // lease may not simply copy the page-id lease's shape. That one
+    // installed its
     // extent the moment a grant arrives, so its `low_water()` falls with the
     // grant; this one *parks* the block, and the sequence takes it only once
     // its own window is spent. A `low_water()` reading the window alone

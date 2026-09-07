@@ -30,7 +30,6 @@ add_library(kds
     src/storage/index/index_page.cpp
     src/storage/index/index_tree.cpp
     src/storage/free_map.cpp
-    src/storage/extent_lease.cpp
     src/txn/undo_page.cpp
     src/txn/varheap_release.cpp
     src/txn/undo_log.cpp
@@ -53,10 +52,8 @@ add_library(kds
     src/server/stop_signal.cpp
     src/exec/assertion_recover.cpp
     src/server/core_affinity.cpp
-    src/server/extent_lease_service.cpp
     src/server/row_id_lease_service.cpp
     src/server/range_alloc.cpp
-    src/server/relation_grant_service.cpp
     src/server/index_build_service.cpp
     src/server/fk_probe_service.cpp
     src/server/assertion_build_service.cpp

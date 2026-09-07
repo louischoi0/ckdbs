@@ -149,9 +149,9 @@ enum class StatusCode {
 // compatibility surface). Everything the engine means by "wait and retry"
 // spells itself kTxnConflict - a lost write race, a write to another core's
 // relation, a peer's rights still in flight, an index build's window - and
-// since 2026-08-25 a peer's **spent lease** too (row-id, transaction-id,
-// extent: catalog/row_id_lease.hpp, txn/trx_id_lease.hpp,
-// storage/extent_lease.cpp). Those three were kResourceExhausted, whose
+// since 2026-08-25 a peer's **spent lease** too (row-id and transaction-id:
+// catalog/row_id_lease.hpp, txn/trx_id_lease.hpp; the page-id lease was the
+// third until AW-S1b struck it). Those were kResourceExhausted, whose
 // message promised a retry the wire never carried, so a client retrying on
 // the bit lost rows (PW6, docs/inflight/known-gaps.md). kResourceExhausted stays for
 // what a retry cannot fix: a cap, a budget, a ring's backpressure, and a

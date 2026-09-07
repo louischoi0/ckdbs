@@ -18,7 +18,6 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/send_retry.hpp"
-#include "kds/server/relation_grant_service.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/file_page_device.hpp"
 #include "kds/wal/log_page_handoff.hpp"
@@ -744,12 +743,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // below `kFirstUserPageId` is a fixed system structure - the superblock,
     // the two bitmaps, the catalog's pages - and EV3 says that class is
     // never an eviction candidate at any pressure. Every *peer* got this
-    // through `SetCoreOwnership`'s `system_page_limit`, and core 0 got it
-    // nowhere, so the protection depended on whether a lease was installed.
-    // That is an accident of where the call sat: the floor is a property of
-    // the volume's layout, not of a core's arrangement, and once one store
-    // serves every core the instance would otherwise lose a protection all
-    // of its peers had.
+    // from the call that installed its lease, and core 0 got it nowhere, so
+    // the protection depended on whether a lease was installed. That was an
+    // accident of where the call sat: the floor is a property of the
+    // volume's layout, not of a core's arrangement, and this is the one
+    // install site since AW-S1b took the other.
     store.value()->SetResidentLimit(kFirstUserPageId);
 
     // Only when the config asks for one. Zero means "unbounded", which is
@@ -1684,23 +1682,13 @@ Status Expeditor::Start() {
         // Every peer's page-id lease is carved here, on the startup thread,
         // out of core 0's free map - which is the only writer of it (M5).
         //
-        // The search starts above recovery's page floor, not at
-        // `kFirstUserPageId` (RC04's obligation 1, `wal/high_water.hpp`).
-        // The free map is unlogged, so a crash can revert it while the log
-        // still names pages above it; recovery raises the *store's*
-        // allocation floor past them, but an extent is carved from the map
-        // rather than through that floor - so a lease could otherwise cover
-        // exactly the pages redo just wrote. Same hazard, multicore shape.
-        // `Reserve` never scans below its hint (extent_lease.cpp), so raising
-        // it is a guarantee and not an optimization. Floored at
-        // `kFirstUserPageId` because a log naming only system pages must not
-        // *lower* where user extents start.
-        const PageId extent_hint = recovery_.page_floor_raised
-                                       ? std::max<PageId>(recovery_.page_floor, kFirstUserPageId)
-                                       : kFirstUserPageId;
-        // Over the store, not its bytes: a reservation must mark the map
-        // dirty itself (extent_lease.hpp, PW3b's finding).
-        extents_.emplace(*store_, extent_hint);
+        // **Recovery's page floor is the store's own now** (AW-S1b). A
+        // hint was computed here so that an extent carved for a peer could
+        // not cover pages redo had just written - the free map is unlogged,
+        // so a crash can revert it while the log still names pages above it,
+        // and an extent was carved from the map rather than through the
+        // store's allocation floor. Nothing carves extents any more, and
+        // `mount_recovery` raises the floor every core now allocates from.
 
         // **One pool for the instance, where the volume allows it**
         // (AM-S2 step 3), and the answer does not vary by core - it is a
@@ -1732,20 +1720,6 @@ Status Expeditor::Start() {
 
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             // **No extent for a core that borrows the pool** (AM-S2 step 3).
-            // A reservation marks 64 pages allocated in the free map for a
-            // lease `CoreRuntime::Open` no longer installs, and nothing ever
-            // frees an extent - so it would repeat every mount, permanently.
-            // `extent_lease.hpp` says leases exist because "per-core page
-            // stores do not work without it"; a core reaching core 0's free
-            // map under the structure latch is the arrangement that removes
-            // the need.
-            storage::Extent lease_for_core{};
-            if (!share_pool) {
-                auto lease = extents_->Reserve(storage::kDefaultExtentPages);
-                if (!lease.ok()) return lease.status();
-                lease_for_core = lease.value();
-            }
-
             CoreRuntime::Config core_config;
             core_config.core_id = core_id;
             core_config.wal_dir = config_.wal_dir;
@@ -1775,7 +1749,6 @@ Status Expeditor::Start() {
             // passing a share here would hand one pool a fraction of itself.
             core_config.buffer_pool_frames =
                 share_pool ? 0 : FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
-            core_config.lease = lease_for_core;
             // This peer's own anchor, copied out of the superblock core 0
             // decoded. A peer's `SuperBlock` member is a default-constructed
             // one whose anchor slots are all zero, and a peer's checkpointer
@@ -1843,20 +1816,10 @@ Status Expeditor::Start() {
             cores_.push_back(std::move(core.value()));
         }
 
-        // The reservations above set free-map bits that only exist in
-        // memory until something writes the page. A peer's first allocation
-        // must not be an id a restart would think free.
-        if (Status s = Sync(); !s.ok()) return s;
-
-        // Core 0's half of the page-id lease service (P5): a peer at its
-        // low-water mark asks here, and this carves the next extent. The
-        // reservation is synchronous because on this core it is a local
-        // call - it is the *asking* that had to wait for coroutines.
-        if (Status s = RegisterExtentGrantHandler(scheduler, *transport_, *extents_,
-                                                   storage::kDefaultExtentPages, &*logger_);
-            !s.ok()) {
-            return s;
-        }
+        // **Core 0's half of the page-id lease service went with the
+        // leases** (AW-S1b), and the `Sync()` that stood here with it: it
+        // made the reservations above durable before a peer could allocate
+        // into one, and there are no reservations.
 
         // The session side of remote reads (workplan P4c): core 0 ships an
         // eligible single-step read to the owning core and awaits its
@@ -2114,93 +2077,16 @@ Status Expeditor::Start() {
             BroadcastCatalogInvalidation(scheduler);
         });
 
-        // The send side of CC7's flush-then-grant handoff (workplan P6c):
-        // a relation placed on a peer gets that peer fault rights over its
-        // pages, flush strictly first - a grant to unflushed pages would
-        // hand the owner stale bytes. Named rather than passed inline
-        // because it has two callers since PW1c-7: CREATE TABLE's publish
-        // and the owner's re-delivery request (below) run the identical
-        // sequence, and the second exists precisely so that nothing else
-        // ever does.
-        const catalog::Catalog::RelationPublishHook publish =
-            [this, &scheduler](catalog::Oid oid, std::uint32_t owner_core, PageId root,
-                               PageId varheap_root, PageId anchor) {
-                catalog::SysTableRow row{};
-                row.desc_page_id = root;
-                row.varheap_page_id = varheap_root;
-                row.anchor_page_id = anchor;
-                const storage::Extent range =
-                    RelationFaultExtentOf(row, storage::kDefaultExtentPages);
-
-                std::vector<PageId> pages;
-                pages.reserve(range.count);
-                for (PageId id = range.first; id < range.end(); ++id) pages.push_back(id);
-                if (Status s = store_->FlushPages(pages); !s.ok()) {
-                    // Reported, not propagated: the DDL succeeded, and an
-                    // ungranted relation is refused retryably rather than
-                    // served wrong - BroadcastCatalogInvalidation's stance.
-                    logger_->Error("catalog", "flushing relation oid=" + std::to_string(oid) +
-                                                  " before its fault grant failed: " +
-                                                  s.message());
-                    return;
-                }
-
-                // PW1c-4: flush (above) → durable handoff records → grants
-                // (PL §9 rule 1; PrepareRelationHandoff owns the middle).
-                // A failed prepare withholds the write grant - the
-                // relation stays fault-readable, its writes refused
-                // retryably, never served unsound.
-                const PageId formatted_pages[] = {root, varheap_root, anchor};
-                auto write_grant = PrepareRelationHandoff(&*wal_, owner_core, formatted_pages);
-                if (!write_grant.ok()) {
-                    logger_->Error("catalog", "relation oid=" + std::to_string(oid) +
-                                                  ": " + write_grant.status().message());
-                }
-
-                const auto send = [&](sched::RingMessageKind kind, const auto& pod) {
-                    std::byte payload[sizeof(pod)];
-                    std::memcpy(payload, &pod, sizeof(pod));
-                    sched::MessageHeader header{};
-                    header.src_core = 0;
-                    header.dst_core = owner_core;
-                    header.session_core = 0;
-                    header.kind = static_cast<std::uint16_t>(kind);
-                    header.sched_group =
-                        static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-                    // The task copies the payload (send_retry.hpp owns
-                    // it), so a stack buffer is enough.
-                    scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, payload));
-                };
-                send(sched::RingMessageKind::kRelationFaultGrant,
-                     ExtentGrantPayload{range.first, range.count});
-                if (write_grant.ok()) {
-                    send(sched::RingMessageKind::kRelationWriteGrant, write_grant.value());
-                    // Complete the departure on this side (the 95b45e8
-                    // review's C4): core 0 keeps clean frames of pages
-                    // another core now owns; evicting them removes the
-                    // stale-read window. Best-effort - a dirty frame
-                    // refusal here would mean the flush above lied.
-                    const std::span<const PageId> departed(
-                        write_grant.value().page_ids, write_grant.value().count);
-                    if (Status s = store_->EvictClean(departed); !s.ok()) {
-                        logger_->Error("catalog",
-                                       "evicting handed-off pages failed: " + s.message());
-                    }
-                }
-            };
-        database_->catalog.SetRelationPublishHook(publish);
-
-        // PW1c-7 (relation_grant_service.hpp): an owner that finds itself
-        // without a relation's write rights - after a restart, a crash
-        // before its acquisition, or a message lost to the ring - asks, and
-        // core 0 answers by running the same publish. Idempotent: a second
-        // handoff record for a page is analysis's no-op, and the receive
-        // side takes no second acquisition on a page already its own.
-        if (Status s = RegisterRelationGrantHandler(scheduler, database_->catalog, publish,
-                                                    &*logger_);
-            !s.ok()) {
-            return s;
-        }
+        // **CC7's publish hook went with the grants** (AW-S1b). It ran at
+        // every DDL that placed a relation on a peer: flush the creation
+        // pages, log a PAGE_HANDOFF per page, send the owner fault rights
+        // over the relation's extent and write rights over its exact pages,
+        // then evict core 0's now-foreign frames. Every step of it answered
+        // "can the owner reach these bytes", and one frame table serves
+        // every core - the owner reads the frame core 0 formatted, from the
+        // same table, with no flush, no grant and no eviction in between.
+        // PW1c-7's re-delivery service went with it for the same reason:
+        // there is nothing to re-deliver.
 
         // Spawned only after every core is built, so a failure above leaves
         // no thread to unwind.

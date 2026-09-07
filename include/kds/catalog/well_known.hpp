@@ -353,10 +353,10 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // and recorded in sys.tables, where it is DDL-immutable and therefore
 // cacheable (rows.hpp's note on varheap_page_id). That split is intended,
 // not incidental - operator ratification 2026-08-31, crosscore.md
-// CC12/CR1 - and the cost CC12 names is that a page outside the reserved
-// range is not peer-readable through MayFault's `page_id <
-// first_evictable_page_id_` arm, which is why `CoreRuntime::Open` grants
-// those pages one at a time (exec/catalog_spills.hpp).
+// CC12/CR1. The cost CC12 named - a page outside the reserved range was not
+// peer-readable, so `CoreRuntime::Open` granted those pages one at a time -
+// went with the fault grants at AW-S1b: one frame table serves every core,
+// so no core needs a right to read a page another loaded.
 inline constexpr PageId kCatalogPagePatternDefs = 10;
 // sys.access_stats is pinned here, inside the reserved range, which CC11
 // makes core-0-write-only - and Catalog::RecordAccess runs per *statement*,
@@ -418,12 +418,12 @@ inline constexpr PageId kAllCatalogPages[] = {
 // **this reserved range**, never from the free map's general supply, and
 // that is a correctness requirement rather than tidiness.
 //
-// Two rules depend on a catalog page's id being low. A peer core may fault
-// any page below `first_evictable_page_id_` read-only and may fault nothing
-// else it was not leased (`DevicePageStore::MayFault`, workplan-crosscore.md P6)
-// - so a catalog page allocated from the general supply, at an id above
-// that limit, would be one a peer could not read, and a peer that cannot
-// read the catalog cannot resolve a relation at all. And the flush that
+// Two rules depended on a catalog page's id being low, and one still does.
+// A peer core could fault any page below `first_evictable_page_id_`
+// read-only and nothing else it was not leased - so a catalog page at an id
+// above that limit was one a peer could not read at all. That rule went
+// with the fault grants at AW-S1b (every core faults every page now). And
+// the flush that
 // precedes `kCatalogInvalidate` has to name every catalog page; a bounded
 // range can be named, an arbitrary set of general-supply ids cannot without
 // storing it somewhere durable.

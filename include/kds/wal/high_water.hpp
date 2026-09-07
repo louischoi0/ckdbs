@@ -72,10 +72,10 @@ namespace kds::wal {
 
 // What the repair established. Reported rather than assumed, because two
 // consumers outside this function need the numbers: the superblock owes the
-// transaction ceiling (above), and `storage::ExtentAllocator` - core 0's
-// carver of per-core page extents (`storage/extent_lease.hpp`) - must start
-// its search above `page_floor`, since a granted extent covering a page the
-// log names is this same hazard wearing the multicore shape.
+// transaction ceiling (above), and the store's allocation floor is raised
+// past `page_floor` so no allocation hands out an id the log already names.
+// The multicore shape of that hazard - core 0 carving an extent over pages
+// redo had written - went with the extent leases at AW-S1b.
 struct HighWaterRepair {
     // First page id an allocation may hand out: one past the largest id any
     // record in the replayed range named. `kInvalidPageId` when the log

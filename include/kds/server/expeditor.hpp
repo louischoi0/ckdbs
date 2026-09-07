@@ -22,7 +22,6 @@
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
-#include "kds/server/extent_lease_service.hpp"
 #include "kds/server/assertion_build_service.hpp"
 #include "kds/server/index_build_service.hpp"
 #include "kds/server/mount_recovery.hpp"
@@ -897,12 +896,6 @@ private:
     std::optional<FkProbeClient> fk_probe_client_;
 
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
-
-    // Core 0's page-id allocator (M5): the only thing that carves the free
-    // map. A member rather than a local in Serve() because the grant handler
-    // registered on core 0's reactor borrows it and outlives the statement
-    // that installed it.
-    std::optional<storage::ExtentAllocator> extents_;
 
     // Sets every peer's stop flag and kicks it awake (AU-S3: write, then
     // kick). Called on the way down, from core 0's thread, before the

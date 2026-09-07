@@ -17,7 +17,6 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
-#include "kds/server/relation_grant_service.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/wal/log_page_handoff.hpp"
 
@@ -212,14 +211,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // on core 0 - and no order between the two is introduced, which is what
     // workplan-crosscore.md guideline 3 forbids.
     //
-    // It runs **before `SetCoreOwnership`**, deliberately. RC04's repair
-    // raises the store's allocation floor, and `DevicePageStore` refuses that
-    // raise once a lease is installed - correctly, since a leased core takes
-    // its ids from its extent and never consults the floor. Installing the
-    // lease first would therefore make every peer with a non-empty stream
+    // It ran **before the lease was installed**, deliberately, until AW-S1b
+    // removed the lease: RC04's repair raises the store's allocation floor,
+    // and a leased store refused that raise - correctly, since such a core
+    // took its ids from its extent and never consulted the floor - so
+    // installing the lease first made every peer with a non-empty stream
     // refuse its own mount.
     //
-    // The undo log is built here for the same reason: recovery's undo phase
+    // The undo log is built here for a reason of its own: recovery's undo phase
     // writes through it, and the rest of the transaction stack must not exist
     // yet, because `TrxIdSequence` caches the transaction ceiling at
     // construction (txn/trx_id.hpp).
@@ -227,10 +226,10 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // **The stamp identity needs no ordering here any more** (AM-S2 step 3).
     // Recovery's undo phase writes compensations through `StampPageLsn`,
     // which records whose stream the page_lsn belongs to; this used to come
-    // from the store's own `core_id_`, which `SetCoreOwnership` set *below*
-    // - so a `SetStreamCoreId` call had to be hoisted above the recovery or
-    // a peer stamped its own pages as core 0's, the lie rule 5 refuses at
-    // the next mount. The identity is the thread's now, and the
+    // from the store's own `core_id_`, set by the same call that installed
+    // the lease - so a `SetStreamCoreId` call had to be hoisted above the
+    // recovery or a peer stamped its own pages as core 0's, the lie rule 5
+    // refuses at the next mount. The identity is the thread's now, and the
     // `CurrentCoreGuard` at the top of this function covers the whole pass.
     // The page latch (AM-S1): armed from the instance's core count, which
     // the superblock pinned at bootstrap and `Expeditor::Open` copied here -
@@ -337,16 +336,15 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // A peer with no transport still publishes nothing and still rescans,
     // which describes a test fixture rather than a server. Core 0's own
     // checkpoint runs in Expeditor::Open.
-    // **Not on a shared store** (AM-S2 step 3). The lease exists because
-    // "per-core page stores do not work without it"
-    // (`storage/extent_lease.hpp`) - a core that does not own the free map
-    // has to reserve ids up front. A core borrowing core 0's store *is*
-    // reaching the free map, under the structure latch, so there is nothing
-    // for a lease to work around and installing one would put this core's
-    // allocation behind a reservation the store no longer needs. The lease
-    // and the rights sets it keys are step 4's to remove outright.
+    // **The system range, and nothing else** (AW-S1b). This installed an
+    // extent lease beside it while per-core stores existed; the lease is
+    // gone, and what survives is the boundary below which only core 0 may
+    // write (AM-R2, AO-R14). A store the Expeditor built already carries
+    // it - `SetResidentLimit` is where that store gets it - so this is the
+    // arm for a `CoreRuntime` opened directly on a device, which is a test
+    // fixture rather than a server.
     if (runtime->owned_store_ != nullptr) {
-        runtime->store_->SetCoreOwnership(&runtime->lease_, kFirstUserPageId);
+        runtime->store_->SetResidentLimit(kFirstUserPageId);
     }
 
     // The catalog, read-only in practice: DDL is core 0's, and the store
@@ -473,17 +471,13 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         if (config.access_statistics) {
             runtime->dispatcher_->SetAccessBatch(&runtime->access_batch_);
         }
-        // And where its rights probe records a relation this core owns but
-        // cannot write (PW1c-7); the tick in Run() asks core 0 for it.
-        runtime->dispatcher_->SetRelationGrantDemand(&runtime->grant_demand_);
         // And the index-build window its gate reads (PW1c-6b-2); the
         // service that opens and closes it is armed at AttachTransport.
         runtime->dispatcher_->SetPendingIndexBuilds(&runtime->pending_index_builds_);
         // And the lease refills' cost, for `SHOW META` on this core
         // (lease_refill_stats.hpp): the trace PW6's four-writer cell asked
         // for.
-        runtime->dispatcher_->set_lease_refill_stats(&runtime->refill_.stats,
-                                                     &runtime->trx_id_refill_.stats,
+        runtime->dispatcher_->set_lease_refill_stats(&runtime->trx_id_refill_.stats,
                                                      &runtime->row_id_refill_.stats);
     }
 
@@ -512,19 +506,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // Read rights only, and self-granted rather than asked for, which is
     // sound on three counts and is stated here because the grant model is
     // core 0's: the pages are a *system* relation's, in the same class as
-    // the range `SetCoreOwnership` already opens; nothing here may write
-    // them (`MayWrite` still refuses every page below the limit and every
-    // page this core has no lease or stamp for); and a var-heap value is
-    // immutable per version (invariant 14), so reading one without a
-    // coherence protocol is strictly safer than the catalog heap reads a
-    // peer already makes (`docs/inflight/known-gaps.md`).
-    //
-    // **Exactly the pages the rows name, one at a time** - the extent
-    // around them would be wrong, and measurably so: a page that answers
-    // `MayFault` from a grant never reaches `TryClaimByStamp`, so an extent
-    // covering pages this core owns would cost it PW1c-7's restored write
-    // rights (`exec::CatalogSpillPages` carries the argument and the test
-    // that proved it).
+    // the system range itself; nothing here may write them (`MayWrite`
+    // still refuses every page below the limit to every core but 0); and a
+    // var-heap value is immutable per version (invariant 14), so reading
+    // one without a coherence protocol is strictly safer than the catalog
+    // heap reads a peer already makes (`docs/inflight/known-gaps.md`).
     //
     // **Every catalog relation with a var-heap, by list** (CB2,
     // `crosscore.md` CC12/CR1). The list is `sys.assertions` alone since
@@ -532,19 +518,16 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // stays a list because the next catalog relation to gain a var-heap
     // joins it by CR1 rather than by a second grant here.
     //
-    // What CB0 found while `sys.pattern_defs` was on it, kept because it is
-    // a property of the store rather than of that relation: the read-side
-    // `MayFault` check is a Debug one, so a release build faults another
-    // core's page and answers, and a *missing* grant here is invisible in
-    // the configuration every measurement is taken in
-    // (`known-gaps.md`).
-    if (is_peer) {
+    // **The grants themselves went with CC7's fault rights** (AW-S1b): one
+    // frame table serves every core, so a peer reading a catalog var-heap
+    // page finds core 0's frame and needs no right to fault its own copy.
+    // The *read* below stays where it still says something - it is the
+    // only place that names which catalog pages spill - and is kept as the
+    // error path's subject rather than deleted with the grant it fed.
+    if (false) {
         if (auto spills = exec::CatalogSpillPages(*runtime->catalog_, *runtime->store_,
                                                   exec::kVarHeapCatalogRelations);
             spills.ok()) {
-            for (const PageId page : spills.value()) {
-                runtime->store_->GrantFaultPages(storage::Extent{page, 1});
-            }
         } else if (log != nullptr && log->enabled(LogLevel::kError)) {
             log->Error("recovery", "core " + std::to_string(config.core_id) +
                                        ": could not read which pages the stored catalog "
@@ -630,58 +613,15 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         return s;
     }
 
-    // CC7's handoff (workplan P6b): core 0 flushed a relation's pages and
-    // is handing this core fault rights over them. Ordering against
-    // kCatalogInvalidate does not matter: a statement racing either answers
-    // retryably, exactly as the invalidation window above.
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kRelationFaultGrant,
-            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                if (payload.size() != sizeof(ExtentGrantPayload)) {
-                    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                        log_->Error("core", "core " + std::to_string(config_.core_id) +
-                                                " dropped a malformed relation fault grant (" +
-                                                std::to_string(payload.size()) + " bytes)");
-                    }
-                    return;
-                }
-                ExtentGrantPayload grant{};
-                std::memcpy(&grant, payload.data(), sizeof(grant));
-                GrantRelationFault(storage::Extent{grant.first_page_id, grant.page_count});
-            });
-        !s.ok()) {
-        return s;
-    }
-
-    // PW1c-4's write grant. Order against the fault grant is NOT
-    // guaranteed - two send-retry tasks re-queue independently on a full
-    // ring - which is why GrantRelationWrite installs its own exact-page
-    // fault rights (the 95b45e8 review's C2).
-    if (Status s = scheduler_->RegisterMessageHandler(
-            sched::RingMessageKind::kRelationWriteGrant,
-            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
-                if (payload.size() != sizeof(RelationWriteGrantPayload)) {
-                    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                        log_->Error("core", "core " + std::to_string(config_.core_id) +
-                                                " dropped a malformed relation write grant (" +
-                                                std::to_string(payload.size()) + " bytes)");
-                    }
-                    return;
-                }
-                RelationWriteGrantPayload grant{};
-                std::memcpy(&grant, payload.data(), sizeof(grant));
-                if (grant.count == 0 || grant.count > RelationWriteGrantPayload::kMaxPages) {
-                    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                        log_->Error("core", "dropped a relation write grant naming " +
-                                                std::to_string(grant.count) + " pages");
-                    }
-                    return;
-                }
-                GrantRelationWrite(std::span<const PageId>(grant.page_ids, grant.count));
-            });
-        !s.ok()) {
-        return s;
-    }
+    // **CC7's two grant handlers went with the grants** (AW-S1b): core 0
+    // used to hand a peer fault rights over a relation's page range and
+    // write rights over its exact creation pages, because a peer's own
+    // frame table could reach neither without being told. One frame table
+    // serves every core now, so both questions the grants answered have no
+    // asker. `kRelationFaultGrant`, `kRelationWriteGrant` and
+    // `kRelationGrantRequest` stay in `ring_message.hpp` unhandled until
+    // AU-R5 strikes them, so a stale peer's message is dropped rather than
+    // read as something else.
 
     // The row-id lease's receive side (P5's shape), peers only: core 0
     // owns the sequence pages and never leases from itself - and in
@@ -934,13 +874,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // ends because both are this core's.
     dispatcher_->SetFkPendingDeletes(&fk_pending_deletes_);
 
-    // The grant side of the page-id lease (workplan P5). Registered here
-    // rather than in Run() because a grant can arrive before this core has
-    // armed anything.
     transport_ = &transport;
-    if (Status s = RegisterExtentGrantReceiver(*scheduler_, refill_, log_); !s.ok()) {
-        return s;
-    }
 
     // **This core's checkpointer** (PW3, docs/inflight/in-progress/workplan-peer-writer.md), and
     // it can only be built here: the anchor publishes over the ring, so it
@@ -990,213 +924,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
                                    &recovery_.checkpoint_ns, &dispatcher_->assertions());
 }
 
-void CoreRuntime::GrantRelationFault(storage::Extent extent) {
-    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
-    const CurrentCoreGuard as_this_core(core_id());
 
-    // C1 of the 95b45e8 review: a peer's free-map snapshot predates any
-    // relation created after it started, so without this refresh every
-    // granted page answered "page id not found" however many rights the
-    // grant conveyed. Ordered soundly by construction - core 0 flushed
-    // the maps before this grant left. Failure is logged and the grant
-    // still installed: a stale map is the pre-refresh behavior, not a
-    // reason to drop rights.
-    // **A borrowed pool has nothing to refresh** (AM-S2 step 3): what this
-    // reconciles is a *leased* store's private copy of the map, and a core
-    // reading core 0's own map under the structure latch is already looking
-    // at the original. `RefreshFreeMapFromDevice` refuses outright without a
-    // lease, so on a borrowing peer this call fails every time.
-    if (owned_store_ != nullptr) {
-        if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok() && log_ != nullptr) {
-            log_->Error("core", "free-map refresh at fault grant failed: " + s.message());
-        }
-    }
-    store_->GrantFaultPages(extent);
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("core", "core " + std::to_string(config_.core_id) +
-                                " granted fault range [" + std::to_string(extent.first) + ", " +
-                                std::to_string(extent.end()) + ")");
-    }
-}
 
-void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
-    // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
-    const CurrentCoreGuard as_this_core(core_id());
 
-    if (!AdmitWritePages(pages)) return;
-    // Whatever asked for these is answered (PW1c-7's latch); a demand that
-    // waited behind it goes out on the next tick. **Only the relation
-    // grant clears it** - RD5's range entry page is admitted through
-    // `AdmitWritePages` directly, because clearing this latch for a grant
-    // nobody asked for would let a still-outstanding relation request be
-    // sent twice.
-    grant_request_in_flight_ = false;
-    // A fill that ran before these rights landed cached the CREATE-time
-    // row as its root (the pre-grant fall-back in InitTableAccess); drop
-    // it so the next fill resolves the anchor now that it is faultable -
-    // the f5686f8 review's C1 window, closed where the rights arrive.
-    // InvalidateFromPeer, not BumpVersion: this instance's rows did not
-    // change, and nothing should broadcast.
-    catalog_->InvalidateFromPeer();
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("core", "core " + std::to_string(config_.core_id) + " write-granted " +
-                                std::to_string(pages.size()) +
-                                " page(s), acquisition-restamped");
-    }
-}
 
-bool CoreRuntime::AdmitWritePages(std::span<const PageId> pages) {
-    // Rule 6's ordering, restamp-durable before writable, and the whole
-    // body runs inside one task so no statement interleaves it. The fault
-    // is GetForRead - read rights suffice, and the frame must be resident
-    // for StampPageLsn to reach it. The restamp LSN is a **logged
-    // acquisition record**: a PAGE_HANDOFF appended to this stream naming
-    // this core as the incoming one - page_lsn must name a record that
-    // exists (the WAL gate refuses the bare append point), the record is
-    // the receiver's durable acquisition fact. (Analysis's erase, which
-    // this used to justify in both directions, **does not run under one
-    // stream** - `wal/analysis.cpp` says why: the flush that licenses it
-    // covers one core's pool while the erase would speak for every core's
-    // records.)
-    // C1's refresh (see GrantRelationFault) - required here too, because
-    // C2's fix below makes this grant self-sufficient when it arrives
-    // first. One failure policy for this whole function (the 25059bf
-    // review's C-2/C-5): any step failing abandons the grant - a grant
-    // whose pages may answer NotFound is C1's silent uselessness with
-    // extra steps, and re-delivery is the re-grant debt's, not this
-    // path's.
-    // Skipped on a borrowed pool for `GrantRelationFault`'s reason, and here
-    // it is not merely wasted: the failure policy below treats any step's
-    // refusal as fatal, so an unconditional call would abandon **every**
-    // write grant a peer is offered.
-    if (owned_store_ != nullptr) {
-        if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok()) {
-            if (log_ != nullptr) {
-                log_->Error("core", "free-map refresh at write grant failed: " + s.message());
-            }
-            return false;
-        }
-    }
-    // Rule 6's precondition made true by construction, not by "nothing
-    // below exists": the acquisition record's erase declares everything
-    // this stream logged for the page below it durable, and a re-grant
-    // after a remount can arrive with *replayed but unflushed* writes on
-    // the frame - so flush first, then acquire. Free when the frames are
-    // clean, which the first-contact case always is.
-    if (Status s = store_->FlushPages(pages); !s.ok()) {
-        if (log_ != nullptr) {
-            log_->Error("core", "pre-acquisition flush failed: " + s.message());
-        }
-        return false;
-    }
-    for (PageId id : pages) {
-        // C2: the write grant implies fault rights over its exact pages,
-        // so it survives arriving before the extent fault grant - two
-        // send-retry tasks on a full ring can reorder (scheduler
-        // re-queue), and a dropped write grant never returns.
-        store_->GrantFaultPages(storage::Extent{id, 1});
-        auto page = store_->GetForRead(id);
-        if (!page.ok()) {
-            if (log_ != nullptr) {
-                log_->Error("core", "core " + std::to_string(config_.core_id) +
-                                        " could not fault write-granted page " +
-                                        std::to_string(id) + ": " + page.status().message());
-            }
-            return false;
-        }
-        // Idempotent re-grant (the review's C3): a page this core already
-        // holds write rights over gets no second acquisition record - the
-        // erase a second record implies is sound only when everything
-        // below it is durable, which a repeat delivery cannot promise.
-        // Asked after the fault, and of the stamp as well as the rights
-        // (PW1c-7): a re-delivery after a restart names pages whose stamp
-        // already says this stream - the durable form of the acquisition
-        // that already happened - and restamping those again would only
-        // dirty and flush them for a fact the page already states.
-        if (store_->MayWrite(id) || storage::GetPageStreamStamp(page.value().bytes()) ==
-                                        storage::StreamStampFor(config_.core_id)) {
-            continue;
-        }
-        auto acquired = wal::LogPageHandoff(&*wal_, id, config_.core_id);
-        if (!acquired.ok()) {
-            if (log_ != nullptr) {
-                log_->Error("core", "acquisition record for page " + std::to_string(id) +
-                                        " failed: " + acquired.status().message());
-            }
-            return false;
-        }
-        if (Status s = store_->StampPageLsn(id, acquired.value()); !s.ok()) {
-            if (log_ != nullptr) {
-                log_->Error("core", "acquisition restamp of page " + std::to_string(id) +
-                                        " failed: " + s.message());
-            }
-            return false;
-        }
-    }
-    if (Status s = store_->FlushPages(pages); !s.ok()) {
-        if (log_ != nullptr) {
-            log_->Error("core", "core " + std::to_string(config_.core_id) +
-                                    " could not flush its acquisition restamps: " + s.message());
-        }
-        return false;  // unwritable is refused-retryably, never served wrong
-    }
-    store_->GrantWritePages(pages);
-    return true;
-}
-
-StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
-                                                           std::uint32_t owner_core,
-                                                           std::span<const PageId> pages) {
-    // The span signature is the 25059bf review's: (root, varheap) made the
-    // capacity arm unreachable and untestable, and PW1c-6's index pages
-    // would have forced the change anyway.
-    RelationWriteGrantPayload grant{};
-    for (PageId id : pages) {
-        if (id == kInvalidPageId) continue;
-        if (grant.count >= RelationWriteGrantPayload::kMaxPages) {
-            return Status::Unsupported(
-                "relation handoff names more pages than the grant carries (" +
-                std::to_string(RelationWriteGrantPayload::kMaxPages) +
-                "); refused whole, never truncated");
-        }
-        grant.page_ids[grant.count++] = id;
-    }
-    wal::Lsn handoff_max = wal::kNoLsn;
-    for (std::uint32_t i = 0; i < grant.count; ++i) {
-        auto lsn = wal::LogPageHandoff(wal, grant.page_ids[i], owner_core);
-        if (!lsn.ok()) {
-            return lsn.status().WithContext("handoff record for page " +
-                                            std::to_string(grant.page_ids[i]));
-        }
-        handoff_max = std::max(handoff_max, lsn.value());
-    }
-    // PL §9 rule 1: the records go durable before any grant leaves. An
-    // unlogged store answers kNoLsn throughout - nothing to sync, nothing
-    // to recover - so the guard below covers it without a null test.
-    if (handoff_max != wal::kNoLsn) {
-        if (Status s = wal->EnsureDurable(handoff_max); !s.ok()) {
-            return s.WithContext("handoff records not durable");
-        }
-    }
-    return grant;
-}
-
-storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
-                                      std::uint32_t extent_pages) {
-    PageId low = row.desc_page_id;
-    PageId high = row.desc_page_id;
-    if (row.varheap_page_id != kInvalidPageId) {
-        low = std::min(low, row.varheap_page_id);
-        high = std::max(high, row.varheap_page_id);
-    }
-    if (row.anchor_page_id != kInvalidPageId) {
-        low = std::min(low, row.anchor_page_id);
-        high = std::max(high, row.anchor_page_id);
-    }
-    const PageId first = (low / extent_pages) * extent_pages;
-    const PageId end = ((high / extent_pages) + 1) * extent_pages;
-    return storage::Extent{first, end - first};
-}
 
 void CoreRuntime::InvalidateCatalog() {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
@@ -1208,37 +939,11 @@ void CoreRuntime::InvalidateCatalog() {
     // shipped `CREATE INDEX`es, then every write to that relation failed
     // permanently and not retryably
     // (`bench/v2.1.0/results-shipping-pretasks-v2.1.0-10-g82a2749.md` §8d).
-    // `RefreshFreeMapFromDevice`'s contract says why a peer's copy can be
-    // behind at all.
-    //
-    // Ordered by construction, and it must come **first**: `EvictClean`
-    // below `return`s on failure, so a refresh placed after it would be
-    // skipped in exactly the case the peer is already in trouble. Core 0
-    // needs no change - `BroadcastCatalogInvalidation`'s `FlushPages`
-    // writes the dirty maps after the pages they describe, before the send.
-    //
-    // Retried once, then logged and the eviction still runs. The failure
-    // this retries is a torn read racing core 0's concurrent flush of the
-    // same page, whose window is one `WritePage` wide; giving up instead
-    // would leave the peer unable to reach the grown page until the next
-    // *bumping* DDL, which may never come.
-    // Skipped on a borrowed pool (AM-S2 step 3). The message below says a
-    // catalog page core 0 just allocated "stays unreachable here", which is
-    // false where this core reads core 0's own map: there is no private copy
-    // to fall behind. Logging it anyway on every DDL broadcast would be an
-    // error that describes an arrangement this instance is not in.
-    Status refreshed = Status::OK();
-    if (owned_store_ != nullptr) {
-        refreshed = store_->RefreshFreeMapFromDevice();
-        if (!refreshed.ok()) refreshed = store_->RefreshFreeMapFromDevice();
-    }
-    if (!refreshed.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
-        log_->Error("core", "core " + std::to_string(config_.core_id) +
-                                ": free-map refresh at catalog invalidation failed twice, so a "
-                                "catalog page core 0 has just allocated stays unreachable here "
-                                "until the next DDL: " +
-                                refreshed.message());
-    }
+    // **The free-map refresh that stood here went with the lease**
+    // (AW-S1b). It reconciled a peer's private copy of the map, taken at
+    // that peer's mount and stale from that moment; every core reads the
+    // one map now, so the page core 0 has just allocated is allocated here
+    // by the same bit.
     // **Both halves, and the order matters little but the pairing does.**
     // Dropping the catalog's derived facts without dropping the page frames
     // they were derived from is a no-op: the next scan reads the same stale
@@ -1295,12 +1000,11 @@ void CoreRuntime::Run() {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns, drain);
     }
 
-    // The low-water check (extent_lease_service.hpp). It runs on the WAL
-    // drain's cadence rather than one of its own: both are cheap `system`
-    // work, and a second timer for a check that is one integer comparison
-    // would cost more than it measures.
+    // **The page-id lease's low-water check went with the lease** (AW-S1b).
+    // The other two refills below keep the cadence it set: both are cheap
+    // `system` work, and a second timer for a check that is one integer
+    // comparison would cost more than it measures.
     if (transport_ != nullptr && config_.wal_drain_interval_ns > 0) {
-        scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] { MaybeRefillLease(); });
         // R6-2's lifetime ceiling on a cross-owner transaction this core is a
         // participant in. **On every core, not only a peer**: the
         // coordinator is whichever core holds the client's session, so core
@@ -1330,7 +1034,6 @@ void CoreRuntime::Run() {
                 MaybeBurnIdleTrxIdBlock();
                 MaybeRefillTrxIds();
                 MaybeRefillRowIds();
-                MaybeRequestRelationGrants();
                 MaybeFlushAccessStats();
                 // And the index-build windows' ceiling (PW1c-6b-2).
                 if (index_builds_.has_value()) index_builds_->Expire(scheduler_->clock().Now());
@@ -1382,31 +1085,6 @@ void CoreRuntime::MaybeFlushAccessStats() {
     // argument and the counters that keep a drop visible.
     if (transport_ == nullptr) return;
     (void)FlushAccessBatch(*transport_, config_.core_id, catalog::kSystemCore, access_batch_);
-}
-
-void CoreRuntime::MaybeRefillLease() {
-    // Asked for *before* the lease is spent, because allocation itself
-    // cannot await anything (extent_lease.hpp) - by the time Next() fails
-    // it is already too late for this statement.
-    if (refill_in_flight_ || !lease_.low_water()) return;
-
-    refill_in_flight_ = true;
-    refill_.stats.NoteSubmit(scheduler_->clock().Now(), scheduler_->iterations());
-    scheduler_->Submit(sched::MakeCoroTask(
-        sched::SchedulingGroup::kSystem,
-        RequestExtentRefill(*transport_, lease_, refill_, config_.core_id, /*system_core=*/0,
-                            log_, &*scheduler_),
-        [this](const Status& s) {
-            refill_in_flight_ = false;
-            refill_.stats.Complete(scheduler_->clock().Now(), scheduler_->iterations());
-            if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                // Nothing to return it to - this is a background task - and
-                // the consequence is bounded: allocation on this core fails
-                // retryably until a later tick succeeds.
-                log_->Error("extent", "core " + std::to_string(config_.core_id) +
-                                          ": lease refill failed: " + s.message());
-            }
-        }));
 }
 
 void CoreRuntime::MaybeRefillRowIds() {
@@ -1470,15 +1148,16 @@ void CoreRuntime::MaybeRefillRowIds() {
         [this](const Status& s) {
             row_id_refill_in_flight_ = false;
             row_id_refill_.stats.Complete(scheduler_->clock().Now(), scheduler_->iterations());
-            // CC10 step 4's other half: core 0 formatted the range's head
-            // page and logged the handoff before replying, so admitting it
-            // here is what makes this core able to write its own range.
-            // Not through `GrantRelationWrite`: nothing asked for this
-            // page, and clearing that path's latch would let an
-            // outstanding relation request be sent twice.
+            // CC10 step 4's other half. **The write admission it ran went
+            // with the grants** (AW-S1b): core 0 formatted the range's head
+            // page and this core had to acquire write rights over it before
+            // it could write its own range, which a shared frame table
+            // makes unnecessary. What is left is the reason the admission
+            // was here rather than on the ordinary grant path - the
+            // directory this core must see before its next statement
+            // routes.
             if (row_id_refill_.entry_page != kInvalidPageId) {
-                const PageId head = row_id_refill_.entry_page;
-                if (AdmitWritePages(std::span<const PageId>(&head, 1))) {
+                {
                     // The boundary core 0 just published. The broadcast is
                     // coming anyway (BumpVersion's hook); doing it here
                     // means the very next statement resolves against the
@@ -1511,30 +1190,6 @@ void CoreRuntime::MaybeRefillRowIds() {
         }));
 }
 
-void CoreRuntime::MaybeRequestRelationGrants() {
-    // PW1c-7's asking half (relation_grant_service.hpp). Demand is recorded
-    // where it is discovered - the dispatcher's rights probe, on a write the
-    // shape gate admitted - and this tick asks for one relation at a time:
-    // the answer is an ordinary grant pair, not a reply on this kind, so
-    // the latch (see the header) is what bounds core 0's work, released by
-    // the grant's admission or by age. A demand that arrives while a
-    // request is out simply waits its turn.
-    if (transport_ == nullptr) return;
-    if (grant_request_in_flight_) {
-        if (++grant_request_age_ticks_ < kRelationGrantRequestTicks) return;
-        grant_request_in_flight_ = false;  // core 0 never answered; ask again
-    }
-    const auto oid = grant_demand_.Pop();
-    if (!oid.has_value()) return;
-    RequestRelationGrant(*scheduler_, *transport_, *oid, config_.core_id);
-    grant_request_in_flight_ = true;
-    grant_request_age_ticks_ = 0;
-    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-        log_->Info("grant", "core " + std::to_string(config_.core_id) +
-                                " asked the system core to re-deliver relation oid=" +
-                                std::to_string(*oid) + " (workplan-peer-writer.md PW1c-7)");
-    }
-}
 
 void CoreRuntime::MaybeBurnIdleTrxIdBlock() {
     if (!txn_manager_.has_value()) return;

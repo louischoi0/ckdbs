@@ -8,17 +8,16 @@ document (AV) that gates what comes after them. Every `path:line` is
 `[source-read]` at `15a57c2`; the rest is `[design]`; the one
 `[measured]` deliverable is AW-S5's and does not exist until it is run.
 
-**Status: AW-S0, S1, S2, S6 done; AW-S3 *half* done and reviewed;
-AW-S4 *surveyed, one piece landed*; plus AW-a (§10). AW-S1b *begun and not
-done*. 2026-09-06/07 on `worktree-aw-m1-close`.** §11 says which half of
+**Status: AW-S0, S1, S1b, S2, S6 done; AW-S3 *half* done and reviewed;
+AW-S4 *surveyed, one piece landed*; plus AW-a (§10).
+2026-09-06/07 on `worktree-aw-m1-close`.** §11 says which half of
 AN-R14 landed, §11.4 what its review changed, and §12 what AW-S4's survey
 found — including that AN-S3 is **not** the separable stage the AN order
-says it is. §9 is what AW-S1b found and
-where it stopped; it is the stage's sizing that is wrong, not its ruling. §7 is AW-S0's record — its cell was already satisfied when
+says it is. §9 is AW-S1b's record — what it deleted, why its
+four planned slices are one surgery, and the fixture change it forced. §7 is AW-S0's record — its cell was already satisfied when
 the stage opened, and it carries the one thing this order was written
 without knowing. §8 is what S1 and S2 built. **AW-S1b was inserted by the
-operator after AW-S0's fact-check** (§0 item 4); it, S3, S4, S5 and S6 are
-not started.
+operator after AW-S0's fact-check** (§0 item 4).
 
 ## 0. Operator's decisions, 2026-09-06 (verbal)
 
@@ -53,11 +52,11 @@ AM: S0–S3 landed, and AM-S4a with them (`16e6c5c`: the superblock at 17,
 which is D14's mount refusal); AM-S2-P (the ring port) closed at
 `15a57c2`. **AM-S4's other half did not land beside it** — the stamp
 field, the lease, `MayFault`, the CC7 fault grants, `TryClaimByStamp`,
-`CoreRuntimePerCoreStreamTest` and `page-lsn-cross-stream.md` are all
+`CoreRuntimePerCoreStreamTest` and `page-lsn-cross-stream.md` were all
 still in the tree at `15a57c2`, against AM-R4a's "the two halves arrive
-together or not at all" — so AM-S4 is open beside S5 and S6. **AW-S1b
-carries it**, on the operator's decision of 2026-09-06 (§0 item 4); this
-order carried no stage for it as first written. AN: S0/S1 landed; S2 gated until now. AO:
+together or not at all". **AW-S1b carries it**, on the operator's decision
+of 2026-09-06 (§0 item 4), and has now landed all of it but the per-core-stream
+mount branches and `page-lsn-cross-stream.md`'s file (§9.4). AN: S0/S1 landed; S2 gated until now. AO:
 S0–S4a within one core; S5 gated on AM-S6, AN-S2 and AU-S2. AU:
 S1/S1b/S3; **S2 is gated on two things, not one** — the rig order AV,
 which does not exist, and `SimWaker`, which is AU-S1c, filed at `1e4e446`
@@ -347,57 +346,115 @@ lifted for AW-S5 alone.
 
 ---
 
-## 9. AW-S1b — begun, not done, and the sizing is the finding
+## 9. AW-S1b — done, and it was one surgery rather than four slices
 
-**What landed: the refusal half is airtight now, which it was not.**
-AM-R4a's chain is *D14 makes every mountable volume one this build created,
-and every such volume is single-stream* — and the second clause was false.
-`BootstrapDatabase` carried a `log_topology` parameter, defaulted to
-`kSingleStream` but **accepting `kPerCoreStreams`**, precisely so a test
-could build the one thing nothing else could: a genuine pre-M0 volume. So
-after `16e6c5c` refused every non-17 image, the per-core arrangement was
-still reachable — from tests, through the parameter. The parameter is gone
-and the three cells that used it (`CoreRuntimePerCoreStreamTest`, its
-fixture and the base's `LogTopology()` hook) with it. Nothing can now
-create or mount a per-core-stream volume, so `single_stream()` is true on
-every volume that exists and the machinery is provably dead.
+**The first half, landed 2026-09-06: the refusal is airtight now, which it
+was not.** AM-R4a's chain is *D14 makes every mountable volume one this
+build created, and every such volume is single-stream* — and the second
+clause was false. `BootstrapDatabase` carried a `log_topology` parameter,
+defaulted to `kSingleStream` but **accepting `kPerCoreStreams`**, precisely
+so a test could build the one thing nothing else could: a genuine pre-M0
+volume. So after `16e6c5c` refused every non-17 image, the per-core
+arrangement was still reachable — from tests, through the parameter. The
+parameter is gone and the three cells that used it
+(`CoreRuntimePerCoreStreamTest`, its fixture and the base's `LogTopology()`
+hook) with it. **That is a hole in AM-R4a the ruling does not name**, and it
+is the reason the refusal at `16e6c5c` was not the refusal AM-R4a described.
 
-**That is a hole in AM-R4a the ruling does not name**, and it is the
-reason the refusal at `16e6c5c` was not the refusal AM-R4a described.
+**The second half, landed 2026-09-07: the deletion.** The record below is
+what it actually removed and what it cost, because both differ from the
+plan this section carried when it was written.
 
-**What did not land: the deletion.** It is enumerated rather than
-estimated:
+### 9.1 The slicing does not exist — proved, not judged
 
-| what | where |
+CLA planned four green-at-each-step slices: (a) `MayFault` and the CC7
+fault grants, (b) `TryClaimByStamp` and the stamp readers, (c) the lease
+and its dependents, (d) the per-core-stream mount branches. **(a) and (b)
+are not separable from (c), and the suite says so rather than a design
+argument.**
+
+- Cutting `MayFault` alone left two cells red
+  (`APeersOwnPagesSurviveARestartByTheirStamp`,
+  `APageStampedByThisStreamIsClaimedWithoutAGrant`), because `MayFault` was
+  `TryClaimByStamp`'s *read* trigger — the claim probe read
+  `mark_dirty ? !MayWrite : !MayFault`.
+- Cutting `TryClaimByStamp` with it then left a **third** cell red,
+  `AnOwnerBuiltAssertionIsEnforcingAgainAfterTheOwnersRestart`, whose
+  subject is assertion revival and which merely *depended* on the claim:
+  `ReviveAssertion` walks the cabin chain and writes it, and on a restarted
+  peer's store nothing but the stamp said those pages were that core's.
+
+So the claim is load-bearing exactly while the lease exists, and the lease
+is what (c) removes. (d) is genuinely separate and is **not** in this
+commit: the per-core-stream mount branches and `page-lsn-cross-stream.md`
+stay, and `single_stream()` is still tested in `Expeditor` even though no
+volume can answer false.
+
+**One correction to this section as first written.** It said AW-S1b was
+"coupled to AU-S0's frozen ring-kind count". It is not:
+`grep -n static_assert include/kds/sched/ring_message.hpp` shows only
+`sizeof(MessageHeader)`/`alignof` — AU-R4's count freeze is unbuilt, so the
+enumerators for the struck kinds stay in place for AU-R5 to strike and
+nothing here waits on AU.
+
+### 9.2 What left the tree
+
+Eight files deleted outright — `storage/extent_lease.{hpp,cpp}`,
+`server/extent_lease_service.{hpp,cpp}`,
+`server/relation_grant_service.{hpp,cpp}` and the two lease suites — plus,
+inside the files that stay:
+
+| what | where it was |
 |---|---|
-| `lease_` and `LeasedIdSource` | 18 sites in `device_page_store.cpp` alone; 15 in `src`+`include`, 42 in tests |
-| `MayFault`, `HasFaultRight` | 16 in `src`+`include`, 19 in tests |
-| `TryClaimByStamp`, `GetPageStreamStamp` | 19 in `src`+`include`, 14 in tests |
-| the per-core-stream mount branches | `core_runtime.cpp`'s `single_stream()` else-arms: the log device, the recovery pass, the anchor |
-| `page-lsn-cross-stream.md` | leaves the tree |
+| `MayFault`, `HasFaultRight`, `GrantFaultPages`, `RightsRegion::fault`, the `#ifndef NDEBUG` shared-nothing check | `DevicePageStore` |
+| `TryClaimByStamp` and its probe, `stamp_claims_` | `DevicePageStore` |
+| `lease_`, `SetCoreOwnership`, `GrantWritePages`, `rights_regions_`, `HasWriteRight`, `RefreshFreeMapFromDevice`, `AdoptDeviceMapOnMiss`, `map_refreshes_on_miss_`, `FreeMapBytesForRegion`, `NoteAllocated` | `DevicePageStore` |
+| eight `lease_ != nullptr` arms — `EnsureHeaderlessMap`, `EnsureRegionResident`, `FlushMaps`, `IsAllocated`, `CreateAtUnpinned`, `CreateNewUnpinned`, `RaiseAllocationFloor`, `NotAllocated` | `DevicePageStore` |
+| `GrantRelationFault`, `GrantRelationWrite`, `AdmitWritePages`, `MaybeRequestRelationGrants`, `MaybeRefillLease`, `PrepareRelationHandoff`, `RelationFaultExtentOf`, `Config::lease`, `lease_`, `refill_`, `grant_demand_`, `grant_request_in_flight_` | `CoreRuntime` |
+| the `kRelationFaultGrant` / `kRelationWriteGrant` handlers | `CoreRuntime::AttachTransport` |
+| `extents_`, the per-peer reservation, `RegisterExtentGrantHandler`, the whole CC7 publish hook (flush → handoff → two grants → `EvictClean`), `RegisterRelationGrantHandler`, the recovery-seeded extent hint | `Expeditor` |
+| PW1c-7's rights probe, `grant_demand_`, `SetRelationGrantDemand`, `RelationWriteRightsPending`, `RelationGrantDemand`, the `extent` refill block in `SHOW META` | `CommandDispatcher`, `core_affinity` |
 
-**26 files.** And it is not a symbol sweep: `lease_` gates `MayWrite`'s
-grant arm, `AdoptDeviceMapOnMiss`, `RefreshFreeMapFromDevice`'s peer arm
-and `TryClaimByStamp`, while **AM-R2 keeps `MayWrite`** and AO-R14 keeps
-it "while owner routing is in force". So the work is removing one
-predicate's *lease arm* from four call paths that must keep their other
-arms — surgery on the allocator and the free map, with recovery downstream
-of it — not deleting a symbol and its callers.
+**`MayWrite` survives as AM-R2 and AO-R14 require, and is now one
+question**: `page_id < first_evictable_page_id_ ? CurrentCore() == 0 :
+true`. Which core may write a *user* page is the Expeditor's routing
+decision; the store answers for the system range alone.
 
-**AW-S1b is L, not M**, and it wants its own `critics-developer` pass and
-its own cells over the allocator rather than riding the suite. CLA stopped
-rather than produce a large under-reviewed deletion across recovery and
-allocation in one pass, and rather than leave it half-applied against
-AM-R4a's own "together or not at all".
+**`storage::Extent` went too**, which the plan did not anticipate: its only
+remaining users were `RelationFaultExtentOf` and the grant payloads, and
+all three died together.
 
-**What the tree is in the meantime**, stated so nobody reads it as done:
-the machinery is dead code, unreachable from any volume and from any test.
-That is the same shape `16e6c5c` left — refusal without deletion — with
-the refusal now complete instead of leaky. AW-S5 still must not run before
-the deletion lands: §0 item 4 is that AM-S6 measured against an engine
-carrying the old guards is not M1's overhead, and dead code that still
-compiles into the binary is exactly such an engine.
+### 9.3 What it cost the suite, and the fixture change nobody planned
 
+**44 cells** left with the machinery (3359 registered before, 3315 after). Six more had to be restated rather
+than deleted, and the reason is worth recording because it is the same
+reason four times: **`CoreRuntimeTest` was the last place in the tree still
+in the pre-AM-S2-step-3 arrangement.** Its `ConfigFor` gave every peer a
+`DevicePageStore` of its own over core 0's device — a private free-map copy
+taken at that peer's `Open` and stale from the next thing core 0
+allocated — and the lease, the fault grants and `AdoptDeviceMapOnMiss` were
+exactly what papered over that. Deleting them turned seventeen cells red
+with `page id N not found`. The fixture now passes
+`c.shared_store = core0_store_.get()`, which is what `Expeditor` does on
+every volume this build can mount.
+
+The six restated cells:
+
+- `APeerDoesNotSeeADdlThatWasNotFlushed` → `APeerSeesADdlThatWasNotFlushedBecauseItReadsTheSameFrame`. The property **inverted** at AM-S2 step 3 and nothing had noticed.
+- `InvalidatingTheCatalogRefreshesThePeersFreeMap` → deleted; its mechanism is gone.
+- `APeerStoreTakesItsConfiguredFrameBudgetShare` → `APeerOnASharedPoolTakesNoBudgetOfItsOwn`, which is EV4's actual contract.
+- `APeersOwnPagesSurviveARestartByTheirStamp` keeps its end-to-end half (600 rows, restart, read and write again) and loses the stamp-claim assertions.
+- `APeerReadsTheCatalogAndCannotWriteIt`, `APeerIsWiredWithRecordingOff`, `APeersDdlRunsOnCoreZeroAndItsOwnNextStatementSeesIt` each install the system boundary and ask under a `CurrentCoreGuard`. **This is AW-a's change of meaning arriving in the cells**: `MayWrite` answers "who is asking", so a question put from the test thread is core 0's question whichever runtime's store it names.
+- `AnAllocatedPageNeverWrittenIsNotFoundNotCorrupt` and `TheAllocatedCountIsMaintainedNotSwept` lost the `ExtentAllocator` that set up their state; the first now reaches it with `CreateNew` + `PersistMaps` + a remount, which is the same state by the same route.
+
+### 9.4 What did not land, and what changed under it
+
+- **(d) is open**: the per-core-stream mount branches, `page-lsn-cross-stream.md`'s file, and `single_stream()`'s remaining conditionals.
+- The **stamp field stays**, and its spec section is corrected rather than deleted: `SetPageStreamStamp` still records which stream's records may name a page, which is redo's business; what went is the *ownership* reading of it (`page-lsn-cross-stream.md` §9 rule 6).
+- `docs/inflight/bugs/flushmaps-lease-guard-and-unlatched-region-walk.md`: **defect 1 closed** — the lease guard is gone and the writeback every core now runs writes the one live map, so there is nothing stale to publish. **Defect 2 (the unlatched `map_regions_` walk) is open** and still AM-S3's, because taking the latch means restructuring a loop that calls `device_.WritePage` inside it.
+
+**Suite: 3314/3314.** Overhead not measured — `CLAUDE.md`'s suspension, and
+AM-S6 is the stage that lifts it.
 
 ---
 

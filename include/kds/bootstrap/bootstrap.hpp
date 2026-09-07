@@ -79,9 +79,10 @@ struct BootstrapResult {
 // image that is not version 17. Keeping a way to *create* a per-core-stream
 // volume would have left the branch reachable from tests alone, which is
 // the state AM-R4a calls "refusing the volume without deleting the
-// machinery": the refusal is what makes the lease, `MayFault`, the CC7
-// fault grants and `TryClaimByStamp` unreachable, and a bootstrap
-// parameter that reopens them makes the refusal a formality.
+// machinery": the refusal is what made the lease, the CC7 fault grants and
+// the stamp claim unreachable, and a bootstrap parameter that reopened them
+// would have made the refusal a formality. AW-S1b then deleted all three,
+// which is the other half AM-R4a asks to arrive with it.
 //
 // `kPerCoreStreams` survives as a *value* `Decode` still names, because a
 // field it cannot read is a field it must refuse rather than assume.

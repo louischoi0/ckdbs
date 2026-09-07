@@ -19,16 +19,17 @@
 //
 //   - **The mount sweep** (`varheap_sweep.hpp`) compares what the pages hold
 //     against what the rows point at, and collects the difference.
-//   - **A peer's fault grant** (`CoreRuntime::Open`) reads the page ids its
-//     rows name and grants itself read rights over exactly those, because a
-//     catalog relation's var-heap sits *outside* the reserved range and is
-//     therefore not covered by the system-range arm of `MayFault`
-//     (`crosscore.md` CC12/CR1: the root page is reserved so bootstrap can
-//     find it, the var-heap is not).
+//   - **A peer's fault grant** (`CoreRuntime::Open`), until AW-S1b: it read
+//     the page ids its rows name and granted itself read rights over
+//     exactly those, because a catalog relation's var-heap sits *outside*
+//     the reserved range and was therefore not covered by the system-range
+//     arm of the fault predicate (`crosscore.md` CC12/CR1: the root page is
+//     reserved so bootstrap can find it, the var-heap is not). One frame
+//     table serves every core now, so there is no right to grant.
 //
-// **The ids the rows name, with no fetch of any of them.** That is the
-// property the grant depends on: it runs where the fetch is not yet
-// permitted, which is the whole point of it.
+// **The ids the rows name, with no fetch of any of them.** That was the
+// property the grant depended on - it ran where the fetch was not yet
+// permitted - and the sweep keeps it because the fetch is its own work.
 
 namespace kds::exec {
 
@@ -75,13 +76,13 @@ Status ReferencedSpills(const catalog::TableAccess& access, storage::PageStore& 
 // contributes nothing and is not an error, and neither is one this build
 // knows and this instance has not materialized (`kNotFound`, skipped).
 //
-// **Granted page by page and never as the extent around them.** A range
-// grant covers pages this core may *own*, and a page that answers
-// `MayFault` from a grant never reaches `TryClaimByStamp`, so the peer would
-// silently lose the write rights PW1c-7 restores to it on the fault - a
-// restarted owner unable to write its own relation. That was measured, not
-// reasoned: an extent-wide grant here failed
-// `APeersOwnPagesSurviveARestartByTheirStamp`.
+// It granted **page by page and never the extent around them**, because a
+// page admitted by a fault grant never reached the stamp claim, so an
+// extent-wide grant cost a restarted owner the write rights the claim
+// restored - measured, not reasoned: it failed
+// `APeersOwnPagesSurviveARestartByTheirStamp`. Both mechanisms went at
+// AW-S1b; the argument is kept because it is the record of why the list
+// this function returns is a list of pages and not a range.
 StatusOr<std::vector<PageId>> CatalogSpillPages(catalog::Catalog& catalog,
                                                 storage::PageStore& store,
                                                 std::span<const catalog::Oid> relations);

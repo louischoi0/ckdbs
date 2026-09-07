@@ -4,18 +4,6 @@
 
 namespace kds::server {
 
-void RelationGrantDemand::Record(catalog::Oid table_oid) {
-    if (std::find(pending_.begin(), pending_.end(), table_oid) != pending_.end()) return;
-    pending_.push_back(table_oid);
-}
-
-std::optional<catalog::Oid> RelationGrantDemand::Pop() {
-    if (pending_.empty()) return std::nullopt;
-    const catalog::Oid oid = pending_.front();
-    pending_.erase(pending_.begin());
-    return oid;
-}
-
 Status CrossCoreWriteRefused(std::uint32_t home_core, std::uint32_t target_core,
                              std::string_view relation) {
     // kTxnConflict, not a new code: from the client's side this *is* the
@@ -49,21 +37,8 @@ Status CrossCoreReadNotImplemented(std::uint32_t this_core, std::uint32_t target
         "transaction, and this statement is not that shape");
 }
 
-Status RelationWriteRightsPending(std::uint32_t this_core, std::string_view relation) {
-    // kTxnConflict for CrossCoreWriteRefused's reason: a retry may work -
-    // the drain tick asks the system core to re-deliver, and the grant
-    // lands within a few ticks. The message names the relation and the
-    // cause class, where the store's own refusal would name a page id.
-    return Status::TxnConflict(
-        "relation '" + std::string(relation) + "' is owned by core " +
-        std::to_string(this_core) +
-        " but its write rights are not held here - a grant lost to a restart, a crash before "
-        "acquisition, or the ring; re-delivery has been requested from the system core, retry "
-        "(workplan-peer-writer.md PW1c-7)");
-}
-
 Status IndexBuildPending(std::uint32_t this_core, std::string_view relation) {
-    // kTxnConflict for RelationWriteRightsPending's reason: the window
+    // kTxnConflict for CrossCoreWriteRefused's reason: the window
     // closes when the statement ends on the system core, and a retry then
     // writes.
     return Status::TxnConflict(

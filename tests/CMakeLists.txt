@@ -44,8 +44,6 @@ add_executable(kds_tests
     index_compile_test.cpp
     index_contract_test.cpp
     superblock_test.cpp
-    extent_lease_test.cpp
-    extent_lease_service_test.cpp
     trx_id_lease_service_test.cpp
     statement_ship_service_test.cpp
     fk_probe_service_test.cpp

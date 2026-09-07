@@ -279,9 +279,9 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
 
     // **EV3's floor, installed or not** (AM-S2). Everything below
     // `kFirstUserPageId` is a fixed system structure and is never an
-    // eviction candidate - a protection every *peer* got through
-    // `SetCoreOwnership` and core 0 got nowhere, so it depended on whether
-    // a lease was installed. Asserted here because its absence changes no
+    // eviction candidate - a protection every *peer* got from the call that
+    // installed its lease, and core 0 got nowhere, so it depended on
+    // whether a lease was installed. Asserted here because its absence changes no
     // result: the catalog pages would simply be re-read after a sweep
     // reclaimed them, which is slower and never wrong.
     EXPECT_EQ(db.store().first_evictable_page_id(), kFirstUserPageId)

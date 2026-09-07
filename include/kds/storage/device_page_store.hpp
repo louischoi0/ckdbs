@@ -15,7 +15,6 @@
 
 #include "kds/base/latch.hpp"
 #include "kds/base/log.hpp"
-#include "kds/storage/extent_lease.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_latch.hpp"
@@ -261,15 +260,11 @@ public:
     // keeping the two apart is what lets recovery close the hazard without
     // inventing pages.
     //
-    // Refuses with Unsupported on a **leased** store. A leased core takes
-    // its ids from the extent core 0 reserved for it and never consults
-    // this floor (SetCoreOwnership), so raising it here would be a silent
-    // no-op - the shape of repair that reports success and changes nothing.
-    // The leased core's equivalent is that core 0's ExtentAllocator must
-    // start above the recovered high-water, which is the grant path's and
-    // not this store's. Recovery runs at mount, before any lease is
-    // installed (RV1), so the refusal is a guard against this being called
-    // somewhere it does not belong rather than a restriction on recovery.
+    // It refused on a **leased** store until AW-S1b: a core allocating from
+    // an extent core 0 had reserved never consulted this floor, so raising
+    // it there would have been a repair that reported success and changed
+    // nothing. Every core allocates from the one free map now, so the floor
+    // it raises is the floor every core searches from.
     Status RaiseAllocationFloor(PageId first_allocatable_page_id) override;
 
     // Get() that leaves the frame clean (page_store.hpp). Without it a
@@ -295,12 +290,13 @@ public:
     Status Sync() override;
 
     // The two map pages written back if dirty, then the device synced - the
-    // maps alone, not the frames. What an extent grant needs before it
-    // leaves core 0 (extent_lease.hpp, `ExtentAllocator::Persist`): a run of
-    // ids a peer may write into must be allocated on the device before the
-    // peer can hold committed rows in it, or a crash frees the run for the
-    // next mount's allocator to hand out over them. On a leased store the
-    // map write is FlushMaps' guarded no-op and only the sync runs.
+    // maps alone, not the frames. It is what an extent grant needed before
+    // it left core 0 - a run of ids a peer would write into had to be
+    // allocated on the device first, or a crash freed the run for the next
+    // mount's allocator to hand out over committed rows. The grants went at
+    // AW-S1b; the operation stays because "the claim is durable and the
+    // page is not" is a state anything that allocates can be interrupted
+    // in, and the recovery path that reads it back is unchanged.
     Status PersistMaps();
 
     // ---- The writeback primitive (docs/spec/eviction.md §4, EVT03) ------
@@ -382,55 +378,6 @@ public:
     // default) disables it. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
 
-    // ---- Core ownership (docs/inflight/in-progress/workplan-crosscore.md M5, P2) -------------
-    //
-    // Binds this store to `core_id` and, for a core that is not the system
-    // core, to the lease it allocates from (storage/extent_lease.hpp).
-    //
-    // **With a lease installed this store never touches the free map.** That
-    // is the whole point: the map is one durable page and M5 gives it to
-    // core 0, so a second writer would be shared mutable state between cores
-    // - which workplan guideline 1 forbids outright. `CreateNew()` takes its
-    // ids from the lease instead, and `CreateAt()` becomes unavailable,
-    // since placing a page at a *chosen* id is a claim on the map that only
-    // its owner can make.
-    //
-    // `system_page_limit` is the first id that is *not* a fixed system
-    // structure - the superblock, the two bitmaps and the catalog's pages
-    // all sit below it. A peer may **read** those and may never write one
-    // (see MayFault/MayWrite), which is what lets a non-zero core resolve a
-    // relation while the single-writer property survives.
-    //
-    // It is a parameter rather than a constant because the boundary is
-    // `server::kFirstUserPageId` and this layer must not know the catalog's
-    // page layout; 0 means "no readable system range", which is what every
-    // caller predating multicore gets.
-    //
-    // `lease` must outlive the store. Null (the default) is core 0's
-    // arrangement and behaves exactly as this class always has.
-    // **No longer takes a core id** (AM-S2 step 3): a store had one because
-    // each core had a store, and this one is about to be every core's. What
-    // it once fed - the page latch's owner field, the PL-C stream stamp, and
-    // `TryClaimByStamp`'s "is this mine" - are all questions about the
-    // *caller*, and all read `CurrentCore()` now
-    // (`base/current_core.hpp`). The lease and the system range stay,
-    // because those are properties of this store's arrangement rather than
-    // of whoever is calling; they are step 4's to remove.
-    void SetCoreOwnership(LeasedIdSource* lease, PageId system_page_limit = 0) noexcept {
-        lease_ = lease;
-        // **One boundary, one member** (AW-a). This kept its own
-        // `system_page_limit_` and *also* called the setter below, on the
-        // reasoning that they are "the same boundary by the same
-        // definition: everything below is a fixed system structure, and a
-        // fixed system structure is resident by class" (EV3). That
-        // reasoning is right and the second copy was the defect: a store
-        // reached any other way - core 0's, which `Expeditor` gives the
-        // resident floor directly - got one of the two and not the other,
-        // so `MayWrite`'s system range was 0 on every shared store. Two
-        // names for one quantity is what `CLAUDE.md` forbids, and this is
-        // the failure it forbids it for.
-        SetResidentLimit(system_page_limit);
-    }
 
     // **`SetStreamCoreId` and `core_id()` are gone** (AM-S2 step 3). The
     // first existed for an ordering that no longer exists: recovery stamps
@@ -445,11 +392,12 @@ public:
     // length of a recovery pass that is not this core's own (AR0 M0,
     // AL-R5/AL-R6). Under one stream core 0's mount pass replays and rolls
     // back records belonging to *every* core, and the stamp is a claim on
-    // the page - `TryClaimByStamp` reads it at the next fault to decide who
-    // may write. Stamping core 0 onto a page core 2 owns therefore does not
-    // merely mislabel it: core 2 faults the page, is granted nothing, and
-    // **can never write its own page again**, because a heap data page is
-    // in no relation write grant and the extent lease is re-drawn each
+    // the page - it said which stream's records may name it, and until
+    // AW-S1b it was also read at the next fault to decide who may write.
+    // Stamping core 0 onto a page core 2 owns therefore did not merely
+    // mislabel it: core 2 faulted the page, was granted nothing, and
+    // **could never write its own page again**, because a heap data page was
+    // in no relation write grant and the extent lease was re-drawn each
     // mount.
     //
     // Redo skips its own restamp under one stream (`wal/redo.cpp`), but
@@ -483,114 +431,32 @@ public:
     // (grants and stamp claims, below) is consulted here too, so a write
     // grant carries its own fault rights (the 95b45e8 review's C2) and a
     // page claimed from its stamp is readable by the claim alone.
-    bool MayFault(PageId page_id) const noexcept;
 
     // Whether this store's core may **write** `page_id` - i.e. take a frame
     // it is allowed to dirty.
     //
-    // Strictly narrower than MayFault: the system range is readable by
-    // every core and writable only by core 0. That asymmetry is the whole
-    // of P6's soundness. Catalog pages have exactly one writer, so a peer's
-    // view can be stale (which is a retryable "not found", crosscore.md §5)
-    // but never torn by a second writer.
+    // Narrower than reading, which no predicate gates at all since the pool
+    // became one: the system range is readable by every core and writable
+    // only by core 0. That asymmetry is the whole of P6's soundness.
+    // Catalog pages have exactly one writer, so a peer's view can be stale
+    // (which is a retryable "not found", crosscore.md §5) but never torn by
+    // a second writer.
     //
-    // Three sources say yes for a leased store: the lease, a write grant
-    // (PW1c-4), and a **stamp claim** (PW1c-7) - a page whose PL-C stream
-    // stamp names this core, found on the frame-load path when neither of
-    // the first two covered it. The claim is what makes ownership survive
-    // a restart: leases and grants are memory-resident, the stamp is the
-    // page's own durable statement of the same fact, and PL §9 rule 6
-    // guarantees no page leaves a stream without being restamped.
+    // **One question since AW-S1b**, where it used to ask four: the lease,
+    // a write grant, a stamp claim and the system range. The first three
+    // were a leased store's, and a leased store no longer exists - one
+    // frame table serves every core, so who may write a *user* page is the
+    // Expeditor's routing decision and not this layer's. What survives is
+    // the asymmetry AM-R2 and AO-R14 keep: the system range is readable by
+    // every core and writable only by core 0.
     bool MayWrite(PageId page_id) const noexcept override;
 
-    // Fault rights over a page range this core does **not** own by lease
-    // (crosscore.md CC7, workplan P6b): a relation the catalog assigns to
-    // this core is built from another core's allocations, and this is how
-    // page ownership becomes a function of the catalog. MayFault consults
-    // these; MayWrite deliberately never does - a grant is read-only, and
-    // the write path arrives only with statement dispatch.
-    //
-    // Held as bits beside the write-rights bitmap (the PW1c-7 review's S1;
-    // it was a vector of extents merged where contiguous), so a
-    // re-delivered grant that repeats its extent sets what is already set
-    // and MayFault stays one bit test whatever was granted. Nothing revokes
-    // a grant: revocation is ownership rebalance, which M3 keeps out of v1.
-    void GrantFaultPages(Extent extent);
 
-    // Write rights over **exact pages** this core does not own by lease
-    // (PW1c-4, `docs/inflight/in-progress/workplan-peer-writer.md` §8 rule 1): the pages core 0
-    // formatted for a relation this core owns, granted at DDL publish only
-    // after their handoff records are durable (PL §9 rule 1's ordering,
-    // the sender's to keep). Exact-page and never extent-granular,
-    // deliberately - the superset that is safe to fault is not safe to
-    // write, which is the precise objection that rules out widening
-    // GrantFaultPages instead. MayWrite and MayFault consult this set;
-    // nothing revokes an entry, GrantFaultPages' rule. Ids beyond the free
-    // map's coverage hold no bit and are never writable, the store's
-    // existing ceiling.
-    void GrantWritePages(std::span<const PageId> pages);
 
-    // Pages this store admitted from their stream stamp alone (PW1c-7).
-    // A diagnostic, and what a test reads to see that a claim happened.
-    std::uint64_t stamp_claims() const noexcept { return stamp_claims_; }
 
-    // How many times this store adopted the device's free map because its
-    // own copy called a page absent (AdoptDeviceMapOnMiss). A diagnostic,
-    // and what a test reads to see that the adoption happened.
-    std::uint64_t map_refreshes_on_miss() const noexcept { return map_refreshes_on_miss_; }
 
-    // Re-reads the free-map page from the device into this store's copy
-    // (peers only - the system core's copy IS the authority). The fix for
-    // the 95b45e8 review's C1: a peer's snapshot is taken at Open(), so a
-    // relation created *after* the peer started has no bit in it, and
-    // every granted page answered "page id not found". Called by the grant
-    // receivers, ordered correctly by construction: core 0 flushes the
-    // maps inside the publish flush before any grant leaves. Reads into a
-    // scratch page, validates whole, then **unions** into the copy: a
-    // failed or torn read (core 0 flushes this page concurrently, no
-    // latch) leaves the copy intact for the next grant to retry, and
-    // union - never replacement - preserves the bits redo's mount-time
-    // CreateAt set in this copy alone. Does not mark the maps dirty: this
-    // adopts truth, it does not create peer writes.
-    Status RefreshFreeMapFromDevice();
 
-    // The live free-map page **of one region**, for the one caller that
-    // carves extents out of it (storage/extent_lease.hpp's ExtentAllocator).
-    // Exposed rather than wrapped because reservation is *policy* about who
-    // gets which ids, which is not this class's business - what is its
-    // business is that the bytes have a single owner, and handing out a
-    // mutable view of them is exactly as narrow as that ownership.
-    //
-    // FM4: a region, not "the map". The allocator can no longer hold one
-    // span for its lifetime, because the id space is no longer one page -
-    // it asks per region, and the bit indices it passes are within-page
-    // (FreeMapBitIndexOf), never absolute ids.
-    //
-    // FM5: **this is the growth point.** A region the device does not hold
-    // yet is formatted here and its own two bits marked, so an allocator
-    // that walks off the end of region N simply asks for region N+1 and
-    // gets one. Fails rather than returns bytes, which is why it is a
-    // StatusOr where the old accessor was infallible: creating a region
-    // touches the device's capacity, and a peer may not create one at all.
-    //
-    // Marks the region dirty on every take, exactly as the single-page
-    // accessor did - the reason it is taken per call and never cached (the
-    // PW3b finding at extent_lease.hpp).
-    //
-    // **The system core only.** A leased store never allocates from the map
-    // (see SetCoreOwnership), so calling this on one is a defect.
-    StatusOr<std::span<std::byte, kPageSize>> FreeMapBytesForRegion(std::uint32_t region);
 
-    // The other half of that seam, and the reason it is public: the
-    // allocator sets bits through the span above, so it is the only writer
-    // the maintained allocated-page count (D8(a)) cannot see. It reports
-    // the run it just marked.
-    //
-    // Narrow on purpose. `pages` is the length of a run every one of whose
-    // bits Reserve() proved clear before setting it, so this can be a plain
-    // add rather than a re-scan - and the proof is next door, in the loop
-    // that probes the whole run before marking any of it.
-    void NoteAllocated(std::uint32_t pages) noexcept { allocated_pages_ += pages; }
 
     // Records that the record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn and, if this is the first record to dirty the
@@ -696,23 +562,11 @@ public:
     // un-evictable and then found itself evictable is exactly the failure
     // the declaration exists to prevent.
     //
-    // `SetCoreOwnership` already raises it, since its `system_page_limit` is
-    // the same boundary by the same definition; this is also for a store
-    // that never calls that - `Expeditor` installs the volume's boundary on
-    // core 0's (now the instance's) store directly.
-    //
-    // **It is the write/fault boundary too since AW-a, so this is no longer
-    // a residency-only knob.** The two members that carried this one
-    // quantity were collapsed into it, so `MayWrite` and `MayFault` read
-    // *this* value as "the system range". Raising it therefore moves an
-    // authorization boundary, and the system-range arm is tested **before**
-    // `lease_->Owns()` and before `CurrentCore()`:
-    //
-    //   - on a leased store, a raise to `N` makes every page below `N`
-    //     unwritable by that core, **including pages from its own extent**,
-    //     and readable by it whether or not it was granted them;
-    //   - on the shared store, a raise to `N` makes every page below `N`
-    //     writable only from core 0.
+    // **It is the write boundary too since AW-a, so this is no longer a
+    // residency-only knob.** The two members that carried this one quantity
+    // were collapsed into it, so `MayWrite` reads *this* value as "the
+    // system range". Raising it therefore moves an authorization boundary:
+    // a raise to `N` makes every page below `N` writable only from core 0.
     //
     // So the only value any caller may install is the volume's own layout
     // boundary (`server::kFirstUserPageId`). **AST04 must not use this**:
@@ -723,8 +577,8 @@ public:
     // `PageType::kCabinBound`) or a pin, not this.
     //
     // **Install-time only**, and that is what makes it safe to read
-    // unlatched: the member is a plain `PageId` that `MayWrite`/`MayFault`
-    // read from every core's thread, so a raise after the peers exist would
+    // unlatched: the member is a plain `PageId` that `MayWrite` reads from
+    // every core's thread, so a raise after the peers exist would
     // be a data race on the shared store as well as an authorization
     // change. `Expeditor::Open` sets it before the first peer is built.
     void SetResidentLimit(PageId first_evictable_page_id) noexcept;
@@ -897,35 +751,6 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
                                                       bool bump_usage);
 
-    // A leased core's free-map copy is a **mount-time snapshot**, and the
-    // only thing that advanced it was a relation fault/write grant
-    // (core_runtime.cpp's two grant receivers). Every page core 0 allocates
-    // between grants is therefore invisible to a peer - a *catalog* page
-    // above all, which a peer must read to resolve any relation of its own
-    // - and the fault seam turned that staleness into a permanent
-    // `NotFound`, because nothing on the failing path ever asked the device
-    // again: it left a peer-owned relation unwritable for the rest of the
-    // mount (`docs/inflight/known-gaps.md`, G1).
-    //
-    // So: before a leased store calls a page absent, it adopts the device's
-    // truth once - the same operation the grant receivers perform, at the
-    // one seam where "stale" and "absent" are otherwise indistinguishable.
-    // Returns whether the page is allocated after the adoption.
-    //
-    // The cost is a device read per resident region **on a miss**. That is
-    // an error path everywhere but one: `command_dispatcher.cpp`'s
-    // speculative fault of a creation page while write rights are pending
-    // *expects* the miss, so a client retrying a `RelationWriteRightsPending`
-    // refusal pays one adoption per statement until the grant lands. It
-    // buys what that site is for - `TryClaimByStamp` sits behind this same
-    // gate and could never run while the map was stale.
-    //
-    // A page still absent afterwards is one core 0 has allocated but not
-    // yet flushed, or one that genuinely does not exist; the refusal is the
-    // same for both, but the next statement re-adopts, so the first clears
-    // itself.
-    bool AdoptDeviceMapOnMiss(PageId page_id);
-    void LogAdoptionFailure(PageId page_id, const Status& why) const;
 
     struct Frame {
         std::unique_ptr<Page> bytes;
@@ -1002,13 +827,6 @@ private:
         bool dirty = false;
     };
 
-    // One region's two grant bitmaps (CC7's fault grants, PW1c-4's
-    // exact-page write grants and PW1c-7's stamp claims). Each null until
-    // something is granted into this region.
-    struct RightsRegion {
-        std::unique_ptr<Page> fault;
-        std::unique_ptr<Page> write;
-    };
 
     DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept;
 
@@ -1094,12 +912,13 @@ public:
 private:
 
     // Recomputes the maintained count from the resident regions.
-    // (Declared after the public block above; still private.) For the
-    // one path that changes bits without going through a site that can
-    // report them: RefreshFreeMapFromDevice unions in whatever core 0 has
-    // published since, and how many bits that added is not knowable
-    // without counting. O(regions) and rare, where the count it maintains
-    // is O(1) and printed on three paths.
+    // (Declared after the public block above; still private.) It existed
+    // for the one path that changed bits without going through a site that
+    // could report them - the peer's free-map refresh, which unioned in
+    // whatever core 0 had published and could not say how many bits that
+    // added. That path went at AW-S1b; this stays as the recount a region
+    // load performs. O(regions) and rare, where the count it maintains is
+    // O(1) and printed on three paths.
     void RecountAllocatedPages() noexcept;
 
     // Stamps a checksum unless the page is headerless. The one place that
@@ -1123,15 +942,6 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
                                                             bool bump_usage = true);
 
-    // PW1c-7's claim, run by ResidentBytes for a leased store on a page
-    // outside every granted set: reads the page's stream stamp - off the
-    // resident frame when redo left one, else off the device, checksum
-    // verified - and admits the page to the write-rights set when the
-    // stamp names this core. A device read it made is handed back through
-    // `prefetched` so the miss path does not read twice. Anything else
-    // (foreign stamp, unstamped, headerless, unreadable, beyond the bitmap)
-    // leaves the rights exactly as they were: the checks after it refuse.
-    void TryClaimByStamp(PageId page_id, std::unique_ptr<Page>& prefetched);
 
     // Whether the device holds nothing for `page_id` - not addressable, or
     // every byte zero: a page allocated in the map and never written. What
@@ -1281,44 +1091,11 @@ private:
     // caller is CreateNewHeaderlessUnpinned - the moment the fact the
     // bitmap records stops being "no".
     StatusOr<std::span<std::byte, kPageSize>> EnsureHeaderlessMap(PageId page_id);
-    // One region's rights bitmaps, created on first grant into that region
-    // (D10(a)). Null until then, which is the overwhelmingly common state:
-    // a peer holds grants in the handful of regions its relations live in,
-    // not across the id space.
-    RightsRegion& RightsFor(PageId page_id) {
-        return rights_regions_[FreeMapRegionOf(page_id)];
-    }
-    const RightsRegion* FindRights(PageId page_id) const noexcept {
-        auto it = rights_regions_.find(FreeMapRegionOf(page_id));
-        return it == rights_regions_.end() ? nullptr : &it->second;
-    }
-    // The bit tests, range-checked because the bitmap helper reads an id
-    // beyond its coverage as set - stated once, here.
-    // The bit tests. **No id ceiling any more** (D10(a)): these were single
-    // pages indexed by absolute page id, so they capped at one bitmap
-    // page's 65,280 ids and a peer could hold no grant above region 0 -
-    // the free map's ceiling lifting did not lift theirs, because D1's
-    // placement never reached them. They are keyed by region now, like the
-    // map, and a region with no grants answers no without allocating one.
-    bool HasFaultRight(PageId page_id) const noexcept {
-        const RightsRegion* rights = FindRights(page_id);
-        return rights != nullptr && rights->fault != nullptr &&
-               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(*rights->fault),
-                                  FreeMapBitIndexOf(page_id));
-    }
-    bool HasWriteRight(PageId page_id) const noexcept {
-        const RightsRegion* rights = FindRights(page_id);
-        return rights != nullptr && rights->write != nullptr &&
-               FreeMapIsAllocated(std::span<const std::byte, kPageSize>(*rights->write),
-                                  FreeMapBitIndexOf(page_id));
-    }
 
     PageDevice& device_;
     Logger* log_ = nullptr;
     wal::WalDurability* wal_gate_ = nullptr;
 
-    // Core ownership (see SetCoreOwnership). The defaults are core 0's, so
-    // every construction site that predates multicore keeps its behaviour.
     // The page latch's switch and gauge (SetLatchArmed). Off by default:
     // arming is the assembly's act, on the superblock's core count.
     bool latch_armed_ = false;
@@ -1373,7 +1150,7 @@ private:
     // erase runs with no hold. That includes **writers**, not only readers -
     // `ResidentBytes`' resident branch sets `dirty` and bumps `usage`,
     // `StampPageLsn` and `MarkFrameDirty` set `dirty`, `WriteBack` clears it
-    // and `rec_lsn` with it - as well as `TryClaimByStamp`,
+    // and `rec_lsn` with it - as well as
     // `CreateAtUnpinned`'s in-use test, `ScanRing::Fetch`, `AwaitWalGate`,
     // `Flush`, the dirty-page enumerations, `IsPinnedClass`,
     // `resident_pages()` and the test hooks. Step 3 takes them one at a
@@ -1429,27 +1206,6 @@ private:
     // See SetStampSuppressed. Off everywhere but inside a single-stream
     // mount pass.
     bool stamp_suppressed_ = false;
-    LeasedIdSource* lease_ = nullptr;
-    // The two rights sets a leased store holds beyond its lease, one bit
-    // per page id in the free map's layout (the headerless map's
-    // precedent: identical addressing, different meaning): CC7's fault
-    // grants, and the write rights - PW1c-4's exact-page grants plus
-    // PW1c-7's stamp claims. Bitmaps rather than the extent vector and
-    // sorted page vector that preceded them, because the claims grew the
-    // write population from a handful of creation pages to every page of
-    // this core's relations touched since mount, re-delivery repeats
-    // grants, and both checks sit on the frame-load path. Never persisted:
-    // the durable form of the same fact is each page's own stamp, which is
-    // what refills them. Core 0 (no lease) never consults either. 16 KiB
-    // per store.
-    // D10(a): keyed by region, mirroring map_regions_, and each half built
-    // only when something is granted into it. Never persisted - the durable
-    // form of the same fact is each page's own stream stamp, which is what
-    // refills them - so unlike the free map there is no format question and
-    // no migration, which is what made growing them the cheap answer.
-    std::map<std::uint32_t, RightsRegion> rights_regions_;
-    std::uint64_t stamp_claims_ = 0;
-    std::uint64_t map_refreshes_on_miss_ = 0;
 
     // FM2: the resident map pages, keyed by region (free_map.hpp's
     // placement arithmetic). Ordered rather than hashed so a flush writes
@@ -1490,11 +1246,9 @@ private:
     //
     // **0 means nothing has been declared resident**, which is the honest
     // default rather than a gap: this layer must not know the catalog's page
-    // layout (see SetCoreOwnership), so it cannot invent the boundary, and a
-    // structure's real protection is its *pin* and not its class. A server
-    // sets it through SetCoreOwnership, whose `system_page_limit` is already
-    // exactly this boundary - "the first id that is not a fixed system
-    // structure".
+    // layout, so it cannot invent the boundary, and a structure's real
+    // protection is its *pin* and not its class. `Expeditor::Open` installs
+    // it, as the first id that is not a fixed system structure.
     PageId first_evictable_page_id_ = 0;
 
     // §4's dirty queue: what the sweep found dirty at usage zero. Drained by

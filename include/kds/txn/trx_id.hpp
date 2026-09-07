@@ -126,15 +126,15 @@ public:
 
     // Whether it is time to ask for another block. A leased core must ask
     // **before** the window is spent - `Next()` is called from inside a
-    // statement and cannot await a grant, which is
-    // `storage/extent_lease.hpp`'s rule and its quarter-window threshold. A
-    // sequence holding nothing at all reads as low, so a peer's first tick
-    // asks.
+    // statement and cannot await a grant. The quarter-window threshold is
+    // the page-id lease's, which set the rule every lease here follows and
+    // was struck at AW-S1b. A sequence holding nothing at all reads as low,
+    // so a peer's first tick asks.
     //
     // **A grant already in hand counts, even though `remaining()` cannot
     // see it**, and this is the one point where the lease may not simply
-    // copy `LeasedIdSource`. That one installs the extent when the grant
-    // arrives, so its low-water mark falls with the grant; this one parks
+    // copy the page-id lease's shape. That one installed the extent when
+    // the grant arrived, so its low-water mark fell with the grant; this one parks
     // the block until the window is spent. Asking on the window alone would
     // therefore stay true across the whole refill and `MaybeRefillTrxIds()`
     // would ask again on every tick - a superblock write and a full `Sync()`

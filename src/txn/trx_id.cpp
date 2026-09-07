@@ -22,8 +22,7 @@ StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
     if (count == 0) {
         // Refused rather than answered with a zero-width range, which
         // `InstallWindow` would turn into a window `Next()` issues straight
-        // past. `ExtentAllocator::Reserve` answers the same way to the same
-        // question.
+        // past.
         return Status::InvalidArgument("a transaction-id block of 0 ids was asked for");
     }
 

@@ -39,7 +39,8 @@
 //
 // `TrxIdSequence::Next()` runs inside a statement and **cannot await**, so a
 // peer must request its next block while the current one still has ids -
-// `storage/extent_lease.hpp`'s rule, and the reason `low_water()` exists. By
+// the page-id lease's rule (struck at AW-S1b), and the reason `low_water()`
+// exists. By
 // the time `Next()` reports exhaustion it is already too late for that
 // statement, which is why exhaustion is retryable rather than fatal.
 
@@ -79,8 +80,8 @@ Status RegisterTrxIdGrantHandler(sched::Scheduler& system_scheduler,
                                  std::uint64_t ids_per_grant = kTrxIdLeasePerGrant,
                                  Logger* log = nullptr);
 
-// One core's refill state, owned by the caller for the coroutine's reason
-// (extent_lease_service.hpp): it must outlive the wait.
+// One core's refill state, owned by the caller for the coroutine's reason:
+// it must outlive the wait.
 struct TrxIdRefill {
     bool granted = false;
     std::uint64_t first_id = 0;
