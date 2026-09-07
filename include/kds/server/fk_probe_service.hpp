@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -13,6 +14,7 @@
 #include "kds/exec/budget.hpp"
 #include "kds/exec/fk_check.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/sched/ring_message.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
@@ -256,6 +258,21 @@ public:
 
     std::uint64_t probes() const noexcept { return probes_; }
     std::uint64_t reverse_probes() const noexcept { return reverse_probes_; }
+    // AO-S5(b): parks a probe took on an in-flight holder (a probe that
+    // parks on two parents in sequence counts twice), and parks that ended
+    // at the deadline with the holder still undecided. Read by a rig cell
+    // from another thread, so atomic (AV-S1's rule for `wakes_received`).
+    std::uint64_t probe_waits() const noexcept {
+        return probe_waits_.load(std::memory_order_relaxed);
+    }
+    std::uint64_t probe_wait_expiries() const noexcept {
+        return probe_wait_expiries_.load(std::memory_order_relaxed);
+    }
+
+    // The instance's lock table (AO-S5(b)): a parked probe records
+    // `child -> holder` in its wait-for graph, the edge a cycle through a
+    // probe was missing. Null leaves the park without the edge.
+    void SetLockTable(txn::LockTable* locks) noexcept { locks_ = locks; }
 
 private:
     void Reply(std::uint32_t requester, std::uint64_t request_id, std::uint64_t session_id,
@@ -269,6 +286,25 @@ private:
     // message landed next.
     void AnswerReverse(std::uint32_t requester, std::uint64_t request_id,
                        const FkReverseProbeRequestPayload& request);
+
+    // **The forward probe's answer, and where it waits** (AO-S5(b)). Every
+    // parent is checked under one fresh check view; a parent being written
+    // by an in-flight transaction of this core parks the probe here rather
+    // than answering busy - the wait belongs where the holder is, and this
+    // core is the only one that can poll its decide. `deadline_ns` is the
+    // child's own reply deadline: a wait past it would answer a waiter that
+    // has already given up, so it ends there with `kBusy`, the answer the
+    // probe gave unconditionally before this stage.
+    void Answer(std::uint32_t requester, std::uint64_t request_id,
+                const FkProbeRequestPayload& request, sched::MonoTimeNs deadline_ns);
+    // The park: records `child -> holder` in the instance's wait-for graph
+    // (the edge a cycle through a probe was missing; a registration that
+    // closes one refuses the child naming deadlock), waits until `holder`
+    // decides or the deadline passes, clears the edge keyed on the holder,
+    // and answers again from the top under a fresh view.
+    sched::Coro WaitForHolder(std::uint32_t requester, std::uint64_t request_id,
+                              FkProbeRequestPayload request, std::uint64_t holder,
+                              sched::MonoTimeNs deadline_ns);
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
@@ -289,8 +325,17 @@ private:
     // rule 3); before it a peer's reverse answer was always a walk. Null
     // under `cabins = off`, everywhere alike.
     stats::CabinStore* cabins_;
+    // The instance's lock table, for the wait-for edge a parked probe
+    // records on the child's behalf (AO-S5(b)); null means no graph, which
+    // is every fixture that builds no table, and the park still happens.
+    txn::LockTable* locks_ = nullptr;
     std::uint64_t probes_ = 0;
     std::uint64_t reverse_probes_ = 0;
+    // Parks taken, and parks that ended at the deadline with the holder
+    // still undecided - the busy answers that remain, which are the
+    // fault-net shape now rather than the ordinary one.
+    std::atomic<std::uint64_t> probe_waits_{0};
+    std::atomic<std::uint64_t> probe_wait_expiries_{0};
 };
 
 // ---- The child core's half -----------------------------------------------

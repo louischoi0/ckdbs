@@ -500,6 +500,12 @@ public:
     StatementShipClient* statement_ship() noexcept {
         return statement_ship_client_.has_value() ? &*statement_ship_client_ : nullptr;
     }
+    // This core's parent-side half of the foreign-key probe, exposed for
+    // the same reason: a cell reads whether a probe parked (AO-S5(b)).
+    // Null before AttachTransport.
+    FkProbeServer* fk_probe_server() noexcept {
+        return fk_probe_server_.has_value() ? &*fk_probe_server_ : nullptr;
+    }
 
     // This core's coordinator half of the cross-owner commit (R6-3),
     // exposed for the same reason as the two above: a test drives a phase

@@ -4618,13 +4618,18 @@ Status CommandDispatcher::SendForeignKeyProbes(const exec::FkParentVerdicts& hel
 
     for (const auto& group : held.foreign()) {
         const std::uint64_t request_id = next_remote_request_++;
-        // `transaction_id` travels as 0: the intent's holder is
-        // **(coordinator core, session)**, which is what a decide releases
-        // by, and a transaction id minted on this core names nothing on
-        // the owner's. The field is on the wire for a reader of a captured
-        // frame, not for the protocol.
-            if (Status s = fk_probes_->Request(group.owner_core, request_id, session.ship_id(),
-                                           /*transaction_id=*/0, group);
+        // **The transaction id is on the wire for the protocol** since
+        // AO-S5(b), where it travelled as 0 for a reader of a captured
+        // frame: the parent's core parks a busy probe on its holder and
+        // records `child -> holder` in the instance's wait-for graph, and
+        // ids are carved from one superblock counter, so this core's id
+        // names exactly this transaction on the owner's. Zero when nothing
+        // is open, which holds no row a graph could wait on - and it is
+        // still not the intent's holder, which is **(coordinator core,
+        // session)** and is what a decide releases by.
+        if (Status s = fk_probes_->Request(
+                group.owner_core, request_id, session.ship_id(),
+                session.transaction() != nullptr ? session.transaction()->id() : 0, group);
             !s.ok()) {
             // Refused **before** anything left, exactly as `Ship` is: the
             // requests already sent are abandoned by their own deadlines.
@@ -4776,10 +4781,18 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         case exec::FkVerdict::kPass:
             return Status::OK();
         case exec::FkVerdict::kBusy:
+            // **Three paths reach here and only one of them waited**, so
+            // the sentence names the holder's state and not a mechanism: a
+            // foreign parent whose writer AO-S5(b)'s park waited out to the
+            // probe's deadline (the fault-net shape), a foreign parent the
+            // owner registered for deletion (AJ-T1, answered busy with no
+            // park at all), and the self-referencing arm above, which is a
+            // local descent with no probe in it. Retryable in all three:
+            // the holder decides and the retry gets a real answer.
             return Status::TxnConflict("row id=" + std::to_string(value.int_val) + " of '" +
                                        RelationNameOf(fk.rel_oid) +
-                                       "' is being written by another transaction, so the "
-                                       "foreign key on '" +
+                                       "' is being written by another transaction that has "
+                                       "not decided, so the foreign key on '" +
                                        column + "' cannot be checked yet");
         case exec::FkVerdict::kViolation:
             break;

@@ -413,15 +413,20 @@ implementation is the failure mode to refuse in review.
 ## 5. What is deliberately absent
 
 - No lock manager, no wait queues, no deadlock detector **for the
-  probe's own answer** (a cross-core probe still answers `busy` rather
-  than waiting; AO-S5(b) owes the wait and its wait-for edge) — F3 plus
-  in-place `trx_id` makes the uncommitted row itself the conflict
-  signal, and run-to-completion removes the check-to-write race that.
-  The same-core forward check does wait for its parent since AO-S3, and
-  that wait is an edge in the instance's wait-for graph (AO-S4a/S4b,
-  `txn.md` §5), so a child that would close a cycle is refused naming
-  deadlock rather than netted
-  gap locks exist to close elsewhere.
+  reverse probe's own answer** (a `DELETE` meeting a child row being
+  written is still answered `busy`; AO-S6's units are where the delete
+  side's waits belong) — F3 plus in-place `trx_id` makes the uncommitted
+  row itself the conflict signal, and run-to-completion removes the
+  check-to-write race that gap locks exist to close elsewhere. **The
+  forward check waits, on either core**: a same-core parent being written
+  is waited for since AO-S3, and a parent on another core since AO-S5(b) —
+  the parent's core parks the probe until the writer decides, up to the
+  probe's own deadline, records
+  `child -> holder` in the instance's wait-for graph on the child's
+  behalf, and answers from a fresh view; a child that would close a cycle
+  is refused naming deadlock rather than netted (AO-S4a/S4b, `txn.md` §5).
+  Past the deadline with the writer undecided the answer is `busy` as
+  before, which is the fault-net shape now rather than the ordinary one.
 - No ON UPDATE actions of any kind (K2).
 - No cross-relation write hooks: both checks are *reads* injected into
   the writing statement's own path; FK never writes to the other

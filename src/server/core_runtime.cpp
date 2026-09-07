@@ -831,6 +831,8 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
                              // probe a peer answers can be a Cabin lookup where
                              // its own store has observed the value.
                              cabin_store_ ? &*cabin_store_ : nullptr);
+    // AO-S5(b): the graph a parked probe records the child's edge in.
+    fk_probe_server_->SetLockTable(locks_);
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kFkProbeRequest,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

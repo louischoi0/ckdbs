@@ -1,11 +1,17 @@
 #include "kds/server/fk_probe_service.hpp"
 
+#include <atomic>
+
 #include <cstring>
 #include <memory>
 #include <string>
 
 #include "kds/base/crash_point.hpp"
+#include "kds/server/command_dispatcher.hpp"  // DeadlockVictim
+#include "kds/sched/coro.hpp"
 #include "kds/sched/send_retry.hpp"
+#include "kds/sched/task.hpp"
+#include "kds/txn/lock_table.hpp"
 
 namespace kds::server {
 namespace {
@@ -41,9 +47,18 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
     }
     std::memcpy(&request, payload.data(), sizeof(request));
 
+    // The deadline is the child's own (`FkProbeClient` opens its waiter
+    // under the same constant), taken once here so every wait this probe
+    // takes is bounded by the same instant.
+    Answer(header.src_core, header.request_id, request,
+           scheduler_.clock().Now() + kFkProbeReplyDeadlineNs);
+}
+
+void FkProbeServer::Answer(std::uint32_t requester, std::uint64_t request_id,
+                           const FkProbeRequestPayload& request, sched::MonoTimeNs deadline_ns) {
     std::vector<exec::FkVerdict> verdicts;
     if (request.count > kFkProbeMaxParents) {
-        Reply(header.src_core, header.request_id, request.session_id, verdicts,
+        Reply(requester, request_id, request.session_id, verdicts,
               Status::InvalidArgument("a foreign-key probe named " +
                                       std::to_string(request.count) +
                                       " parents, past the " +
@@ -60,7 +75,7 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
         check_view = txn_->MintCheckView(/*writer=*/0);
     }
 
-    const FkIntentHolder holder{header.src_core, request.session_id};
+    const FkIntentHolder holder{requester, request.session_id};
     exec::Budget budget;
 
     verdicts.reserve(request.count);
@@ -70,7 +85,7 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
 
         auto parent = catalog_.InitTableAccess(parent_oid);
         if (!parent.ok()) {
-            Reply(header.src_core, header.request_id, request.session_id, verdicts,
+            Reply(requester, request_id, request.session_id, verdicts,
                   parent.status());
             return;
         }
@@ -81,7 +96,7 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
         // be the same wrong answer the whole order exists to prevent, just
         // one hop further along.
         if (parent.value()->owner_core != core_id_) {
-            Reply(header.src_core, header.request_id, request.session_id, verdicts,
+            Reply(requester, request_id, request.session_id, verdicts,
                   Status::TxnConflict("relation oid " + std::to_string(parent_oid) +
                                       " is not owned by core " + std::to_string(core_id_) +
                                       " any more; re-resolve and retry"));
@@ -115,11 +130,24 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
             continue;
         }
 
+        std::uint64_t busy_trx = 0;
         auto verdict = exec::CheckParentPresent(store_, *parent.value(), parent_pk, check_view,
-                                                &budget);
+                                                &budget, &busy_trx);
         if (!verdict.ok()) {
-            Reply(header.src_core, header.request_id, request.session_id, verdicts,
+            Reply(requester, request_id, request.session_id, verdicts,
                   verdict.status());
+            return;
+        }
+
+        // The park (AO-S5(b); the header carries the contract). The whole
+        // probe parks: the verdicts built so far are dropped, and the wait
+        // ends in `Answer` again from the top under a fresh view.
+        if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0 && txn_ != nullptr &&
+            scheduler_.clock().Now() < deadline_ns) {
+            probe_waits_.fetch_add(1, std::memory_order_relaxed);
+            scheduler_.Submit(sched::MakeCoroTask(
+                sched::SchedulingGroup::kForeground,
+                WaitForHolder(requester, request_id, request, busy_trx, deadline_ns)));
             return;
         }
 
@@ -144,7 +172,35 @@ void FkProbeServer::OnRequest(const sched::MessageHeader& header,
         verdicts.push_back(verdict.value());
     }
 
-    Reply(header.src_core, header.request_id, request.session_id, verdicts, Status::OK());
+    Reply(requester, request_id, request.session_id, verdicts, Status::OK());
+}
+
+sched::Coro FkProbeServer::WaitForHolder(std::uint32_t requester, std::uint64_t request_id,
+                                         FkProbeRequestPayload request, std::uint64_t holder,
+                                         sched::MonoTimeNs deadline_ns) {
+    // **The edge, on the child's behalf** (AO-S4b's shape, the shipped
+    // park's twin): the child is parked on this probe's reply, waiting for
+    // `holder`, and only this core knows that. A registration that closes
+    // a cycle makes the child the closer - refused naming deadlock through
+    // the probe's own status, which its dispatcher turns into the
+    // statement's refusal. Zero when the child holds no transaction, which
+    // is a wait no cycle can pass through.
+    const std::uint64_t child = request.transaction_id;
+    if (locks_ != nullptr && child != 0 && locks_->NoteWaitFor(child, holder)) {
+        Reply(requester, request_id, request.session_id, {},
+              DeadlockVictim("core " + std::to_string(core_id_) + "'s transaction " +
+                             std::to_string(holder) + ", which holds the parent row"));
+        co_return Status::OK();
+    }
+    // AO-S3's same-core wait, run on the holder's core on the child's behalf.
+    const std::function<bool()> decided = [this, holder, deadline_ns] {
+        return !txn_->IsInFlight(holder) || scheduler_.clock().Now() >= deadline_ns;
+    };
+    co_await sched::WaitUntil{&decided};
+    if (locks_ != nullptr && child != 0) locks_->ClearWaitFor(child, holder);
+    if (txn_->IsInFlight(holder)) probe_wait_expiries_.fetch_add(1, std::memory_order_relaxed);
+    Answer(requester, request_id, request, deadline_ns);
+    co_return Status::OK();
 }
 
 // ---- The child owner's half (AJ-T2) --------------------------------------

@@ -186,10 +186,20 @@
 // **The graph is functional: one out-edge per waiter**, which is what
 // makes the walk below a unique chain and the cycle test decisive. A
 // waiter re-registering replaces its edge rather than adding one. That
-// holds while a wait has exactly one blocker, which is true of every wait
-// there is today. It stops being true the moment a waiter can wait on
-// *all* holders of a shared unit - `S` held by three transactions against
-// an `X` request - so AO-S6 owes the container as well as the edge.
+// holds while a wait has exactly one blocker, and it stops being true the
+// moment a waiter can wait on *all* holders of a shared unit - `S` held by
+// three transactions against an `X` request - so AO-S6 owes the container
+// as well as the edge.
+//
+// **One waiter can already have two blockers at once**, since AO-S5(b): a
+// child whose foreign keys name parents on two different owner cores fans
+// out one probe per owner, and each owner that finds its parent busy
+// registers `child -> its own holder` from its own reactor. The second
+// registration replaces the first, so the graph names one of the two
+// blockers and a cycle through the other is not found - a missed
+// detection ended by the probe's deadline and the fault net, never a false
+// one (a walk still only reports a chain that exists). Stated here rather
+// than discovered: it is the container's first customer, ahead of AO-S6.
 //
 // **Detection happens when the edge is added, not on a cadence, and that
 // is a departure from AO-R7 worth stating.** AO-R7 specifies a
