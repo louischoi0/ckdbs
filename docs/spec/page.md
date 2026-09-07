@@ -218,7 +218,7 @@ mmap was evaluated as the paging mechanism (map the single file, let the kernel 
 4. **It breaks deterministic testing outright.** Kernel paging cannot be injected, scheduled, or fault-injected through the `PageDevice` seam; rules.md §4 (whole-engine simulation with torn-write injection) would be unenforceable. In KDS this is not a nice-to-have — it is how every guarantee in wal.md §16 is proven.
 5. **Performance at scale is worse, not better:** TLB shootdown storms on eviction, kernel reclaim contention, 4 KiB kernel granularity vs 8 KiB engine pages, and no interposition point for checksums (§10) or the flush gate (§8).
 
-**Verdict:** explicit per-core buffer pool with seam-injected I/O (decision S11). mmap may appear in offline tooling (e.g. read-only backup inspection utilities) but never inside the engine's data or WAL paths.
+**Verdict:** an explicit buffer pool with seam-injected I/O (decision S11) - one for the instance since AM-S2 step 3, per-core when this was decided, and the verdict does not turn on which. mmap may appear in offline tooling (e.g. read-only backup inspection utilities) but never inside the engine's data or WAL paths.
 
 ## 16. Required Amendments
 

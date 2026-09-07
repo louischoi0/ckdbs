@@ -354,7 +354,7 @@ locking (Keystone lock byte) is not used by this protocol.
 ## 7. Durability and recovery (AS6)
 
 - Bound Cabin pages are headered, checksummed (S9), and cached through the
-  standard per-core buffer pool (S7).
+  standard buffer pool, which is the instance's one frame table since AM-S2 step 3 (`page.md` S7).
 - WAL record types (extends `wal.md`):
   - `ASSERT_RESERVE` — entry append + group delta (statement time);
   - `ASSERT_COMMIT` — reserved→committed flag transition (batched per txn);
