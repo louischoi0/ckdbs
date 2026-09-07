@@ -395,6 +395,37 @@ both bounded by it — and AN-S3's cell says so rather than assuming it.
 The drafted mechanism's lease-ceiling reconciliation cell does not exist
 under the mark.
 
+**AN-R5a — The watermark is removed, not forwarded. [operator,
+2026-09-07, verbal: "[decision][AN-S2] remove watermark"]** This settles
+the question `workorder-aw-m1-close.md` §12.3 filed and AN-S2's row does
+not mention: the cross-owner watermark **is** `ReadView::up_to_trx_id`
+(`shipped_statement_executor.cpp:263` ships it; the coordinator compares
+it at `command_dispatcher.cpp:6197`, `session.hpp:486` and
+`statement_ship_service.hpp:318`), so AN-S2 cannot remove that field and
+leave the watermark standing. The two exits were *become the
+`snapshot_lsn`* — most of AN-S3's mechanism — or *be removed*. **The
+operator took removal.**
+
+Three consequences, stated here so nobody later reads the mark as
+narrower than it is:
+
+- **It is a wire change**, as §12.3 said either exit would be: the
+  enrolment and shipped-statement messages lose the watermark field, and
+  `txn_watermark_refusals` loses its subject.
+- **It pulls that half of AN-S3 into AN-S2**, which is the stage the
+  field's removal forces it into. What is left of AN-S3 is AN-R5's other
+  half — the coordinator's `snapshot_lsn` adopted by the participant —
+  and that stays a separate, still-unmarked stage.
+- **Between the removal and that adoption, cross-owner RR has no global
+  consistency mechanism at all.** The watermark is the check standing
+  there today; removing it without adopting a snapshot leaves
+  `cross-owner-txn.md` §3's stated-possible case unguarded rather than
+  merely unproven. AN-S2 must say so in `client-manual.md` in the same
+  commit — "consistent per core" stays true and the watermark's refusal
+  stops being what enforces it — or land AN-R5's adoption beside it.
+  **CLA flags this as the one thing the mark does not decide**, and it is
+  a `[quiet-wrong]` shape: a removed check reads as a passing one.
+
 **AN-R6 — What AN does not do.** No commit-LSN stamp on tuple headers:
 invariant 12 is untouched, which is
 `ratification-an-commit-order.md` AN-D4's first constraint, and the

@@ -835,6 +835,15 @@ is most of AN-S3's mechanism — or be removed, which is AN-S3's other half.
 That is a decision for the operator or for AN-S2's own read, and it changes
 the wire either way. AN-S2's row does not mention the watermark at all.
 
+**Decided 2026-09-07 (operator, verbal): remove it.** Recorded as AN-R5a in
+`workorder-an-read-view.md`, which is where AN-R5 already owned the
+watermark's retirement. The removal half of AN-S3 therefore lands inside
+AN-S2, and what remains of AN-S3 is the coordinator's `snapshot_lsn`
+adoption. One thing the mark does not decide is flagged there: between the
+removal and that adoption, `cross-owner-txn.md` §3's stated-possible case
+has no check standing over it, which is a removed guard reading as a
+passing one.
+
 ### 12.4 What remains, and its size
 
 `ReadView` reshaped and the four-branch `Visible`; `MintReadView` taking

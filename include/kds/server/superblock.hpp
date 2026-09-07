@@ -227,14 +227,17 @@ inline constexpr std::uint32_t kSuperBlockVersion = 17;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //
-// A durable fact about the volume, not a setting: it decides how many
-// streams recovery must find and therefore how the anchor table below is
-// read. `kPerCoreStreams` is 0 because that is what every image written
-// before AR0 M0 holds in this word, and it is what those images are.
+// A durable fact about the volume, not a setting. `kPerCoreStreams` is 0
+// because that is what every image written before AR0 M0 holds in this
+// word, and it is what those images are.
 //
-// Nothing writes `kSingleStream` yet - the cutover (AL-S1c) does, at
-// bootstrap - so every arm reading it is unreachable in a running
-// instance today and is exercised at this layer's own tests.
+// **Since AM-S4(d) the field's job is the refusal, not a branch.** This
+// build writes `kSingleStream` and can write nothing else, and `Decode`
+// refuses every other value - so no code below this line asks the
+// question. `kPerCoreStreams` survives as the value that refusal names,
+// which is what a field a build cannot read is for: refused by name
+// rather than assumed. Nothing reads the word except `Decode`'s check and
+// `Encode`'s write.
 inline constexpr std::uint32_t kPerCoreStreams = 0;
 inline constexpr std::uint32_t kSingleStream = 1;
 
@@ -461,16 +464,15 @@ public:
     // `core_count` is pinned by the same rule and validated by the same
     // caller (CheckCoreCount), and its default is 1 for the same reason the
     // width's exists: callers that are not testing the count.
-    // `log_topology` is what the volume's log **is**, chosen once here and
-    // never again (AR0 M0). It defaults to `kPerCoreStreams` for the same
-    // reason `core_count` defaults to 1: a caller that is not testing the
-    // topology should get the shape that needs no other party to exist.
-    // Every database `BootstrapDatabase` creates is `kSingleStream`.
+    // The log topology is `kSingleStream` and takes no parameter
+    // (AM-S4(d)): it is what the volume's log **is**, chosen once here and
+    // never again, and this build has one answer. A parameter stood here
+    // defaulting to `kPerCoreStreams`, which meant every superblock built
+    // outside `BootstrapDatabase` claimed the topology `Decode` refuses.
     static SuperBlock CreateFresh(
         std::uint64_t now_unix_seconds,
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
-        std::uint32_t core_count = 1,
-        std::uint32_t log_topology = kPerCoreStreams) noexcept;
+        std::uint32_t core_count = 1) noexcept;
 
     // Reads a superblock image out of a raw page buffer (e.g. just loaded
     // off disk). Fails with Corruption if the magic doesn't match
@@ -566,22 +568,6 @@ public:
     // there is no longer a list of fields a peer may ask about.
     std::uint32_t log_topology() const noexcept { return fields_.log_topology; }
     bool single_stream() const noexcept { return fields_.log_topology == kSingleStream; }
-
-    // Overrides the topology on an **in-memory copy**. Not a mount-time
-    // change to a volume: the field is chosen once at `CreateFresh` and a
-    // decoded image already carries the right value, so calling this on a
-    // superblock that came off a device is at best a no-op.
-    //
-    // It exists for one caller, and the caller is a symptom rather than a
-    // design: `tests/core_runtime_test.cpp` bootstraps a **single-stream**
-    // volume and then models a peer under **per-core** streams, which is a
-    // combination no real instance can be in. Restoring the whole image to
-    // a peer (AL-S9 review) made the contradiction visible - 123 cells
-    // began refusing, correctly, because a peer on a single-stream volume
-    // must be handed a stream to attach to. `docs/inflight/bugs/` carries
-    // the defect; this setter is what keeps the suite honest about
-    // everything *else* in the image until that fixture is rebuilt.
-    Status SetLogTopology(std::uint32_t topology) noexcept;
 
     // Stamps last_mount_time to `now_unix_seconds` (call once per boot,
     // after Decode()/CreateFresh() succeeds).

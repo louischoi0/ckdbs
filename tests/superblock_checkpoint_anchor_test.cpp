@@ -163,27 +163,16 @@ TEST_F(SuperBlockAnchorTest, ASecondCheckpointAdvancesTheAnchorOnDisk) {
     EXPECT_EQ(anchor.publishes(), 2u);
 }
 
-TEST_F(SuperBlockAnchorTest, StreamsFromDifferentCoresDoNotOverwriteEachOther) {
-    SuperBlockCheckpointAnchor anchor(superblock_, store_);
-    ASSERT_TRUE(anchor.Publish({/*core_id=*/0, 100, 200, 300, 0}).ok());
-    ASSERT_TRUE(anchor.Publish({/*core_id=*/3, 400, 500, 600, 0}).ok());
+// ---- The fold, which is now the only arm (AR0 M0 AL-R4; AM-S4(d)) ------
 
-    auto reloaded = Reload();
-    ASSERT_TRUE(reloaded.ok());
-    EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 200u);
-    EXPECT_EQ(reloaded.value().wal_anchor(3).redo_start_lsn, 500u);
-    EXPECT_EQ(reloaded.value().wal_anchor_count(), 4u);
-    // And nothing folded: per-core streams keep one anchor per stream,
-    // which is the proof AL-S3 changed no behaviour a running instance has.
-    EXPECT_EQ(anchor.folded_cores(), 0u);
-}
-
-// ---- The fold under one stream (AR0 M0, work order AL's AL-R4) ----------
-
-// Turns the fixture's superblock into a single-stream one. Patching the
-// page and decoding is the only route in - there is no setter, deliberately
-// (`superblock.hpp`) - and it is the route a real single-stream volume
-// takes, through the same `Decode`.
+// **This fixture used to patch the topology byte and re-decode**, because
+// the base fixture's volume was per-core and single-stream was the arm
+// under test. AM-S4(d) inverted that: `CreateFresh` writes `kSingleStream`
+// and `Decode` refuses anything else, so what is left to set is the core
+// count. `StreamsFromDifferentCoresDoNotOverwriteEachOther` stood above
+// this line asserting the per-core arm and went with it - one stream has
+// one slot, which `TheAnchorNamesTheLowestRedoStartOverEveryCore` below is
+// the live statement of.
 class SuperBlockFoldTest : public SuperBlockAnchorTest {
 protected:
     // `cores` matters: the fold holds the anchor where the mount found it
@@ -191,15 +180,6 @@ protected:
     // would never exercise the warm-up.
     void MakeSingleStream(std::uint32_t cores = 4) {
         superblock_ = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, cores);
-        std::array<std::byte, kPageSize> buf{};
-        superblock_.Encode(std::span<std::byte, kPageSize>(buf));
-        const std::uint32_t single = kSingleStream;
-        std::memcpy(buf.data() + kSuperBlockBodyOffset + kLogTopologyOffset, &single,
-                    sizeof(single));
-        auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(buf));
-        ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-        superblock_ = std::move(decoded.value());
-        ASSERT_TRUE(superblock_.single_stream());
 
         auto page = store_.GetUnpinned(kSuperBlockPageId);
         ASSERT_TRUE(page.ok());
@@ -465,9 +445,27 @@ TEST_F(SuperBlockAnchorTest, PublishingForACoreBeyondTheTableIsRefused) {
 // must hold is that the two routes produce the **same page**: the remote one
 // is a delivery mechanism, not a second implementation.
 
-TEST_F(SuperBlockAnchorTest, AnAnchorSentFromAPeerLandsInThatPeersSlot) {
+// **The slot this used to assert is gone** (AM-S4(d)): there is one slot,
+// so a peer's anchor cannot land in "that peer's". What survives is the
+// claim the section header makes and the one worth keeping - the remote
+// route is a *delivery mechanism*, not a second implementation - and the
+// way to see that under one stream is that the delivered numbers reach the
+// **fold** intact. Core 2's are made the lowest of the three, so slot 0
+// carrying them is proof the payload crossed the ring unmangled and went
+// through the same `Publish` a local checkpoint uses.
+TEST_F(SuperBlockAnchorTest, AnAnchorSentFromAPeerIsFoldedIntoSlotZero) {
     auto transport = sched::RealRingTransport::Create(/*core_count=*/3, 16, 128);
     ASSERT_TRUE(transport.ok());
+
+    // A three-core volume, because the fold holds the mount's anchor until
+    // every core has published and `Publish` refuses an id at or above the
+    // count.
+    superblock_ = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, /*cores=*/3);
+    {
+        auto page = store_.GetUnpinned(kSuperBlockPageId);
+        ASSERT_TRUE(page.ok());
+        superblock_.Encode(page.value());
+    }
 
     // Core 2's side: a scheduler to run the send task on, and the anchor
     // that queues it.
@@ -496,17 +494,29 @@ TEST_F(SuperBlockAnchorTest, AnAnchorSentFromAPeerLandsInThatPeersSlot) {
                                 fields.durable_lsn, fields.segment_no})
                     .ok());
 
-    // In slot 2, not slot 0: the anchor names a WAL stream, and the sender
-    // says which - the transport's src_core is a different fact.
-    auto reloaded = store_.GetUnpinned(kSuperBlockPageId);
+    // Not on the page yet: the warm-up holds the anchor where the mount
+    // found it until every core has published, and this is the delivered
+    // one being counted rather than ignored.
+    {
+        auto reloaded = Reload();
+        ASSERT_TRUE(reloaded.ok());
+        EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 0u);
+    }
+
+    // The other two, locally and higher, so the minimum is the one that
+    // crossed the ring.
+    ASSERT_TRUE(local.Publish({/*core_id=*/0, 900, 800, 1000, 0}).ok());
+    ASSERT_TRUE(local.Publish({/*core_id=*/1, 950, 850, 1050, 0}).ok());
+
+    auto reloaded = Reload();
     ASSERT_TRUE(reloaded.ok());
-    auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(reloaded.value()));
-    ASSERT_TRUE(decoded.ok());
-    EXPECT_EQ(decoded.value().wal_anchor(2).checkpoint_lsn, 111u);
-    EXPECT_EQ(decoded.value().wal_anchor(2).redo_start_lsn, 222u);
-    EXPECT_EQ(decoded.value().wal_anchor(2).durable_lsn, 333u);
-    EXPECT_EQ(decoded.value().wal_anchor(2).segment_no, 44u);
-    EXPECT_EQ(decoded.value().wal_anchor(0).redo_start_lsn, 0u) << "it landed in the wrong slot";
+    EXPECT_EQ(reloaded.value().wal_anchor(0).checkpoint_lsn, 111u);
+    EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 222u);
+    EXPECT_EQ(reloaded.value().wal_anchor(0).durable_lsn, 333u);
+    // The four numbers stay one core's set: a field-wise minimum would have
+    // taken core 0's segment_no beside core 2's LSNs.
+    EXPECT_EQ(reloaded.value().wal_anchor(0).segment_no, 44u);
+    EXPECT_EQ(reloaded.value().wal_anchor_count(), 1u);
 }
 
 TEST_F(SuperBlockAnchorTest, ThePeersAnchorScheduleSurvivesAMomentarilyFullRing) {

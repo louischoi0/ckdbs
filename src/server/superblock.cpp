@@ -28,12 +28,18 @@ SuperBlock::SuperBlock() noexcept : fields_{} {}
 
 SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds,
                                    std::uint32_t inline_cell_width,
-                                   std::uint32_t core_count,
-                                   std::uint32_t log_topology) noexcept {
+                                   std::uint32_t core_count) noexcept {
     SuperBlockFields f{};
     f.magic = kSuperBlockMagic;
     f.version = kSuperBlockVersion;
-    f.log_topology = log_topology;
+    // **One stream, and there is no parameter for the other** (AM-S4(d),
+    // AM-R4a). The parameter that stood here defaulted to
+    // `kPerCoreStreams`, so every superblock built outside `bootstrap.cpp`
+    // - fifty-odd of them, all in tests - claimed a topology `Decode` now
+    // refuses. A default that no volume this build can mount is worse than
+    // no default: it is the shape the fixtures were quietly written
+    // against.
+    f.log_topology = kSingleStream;
     f.create_time = now_unix_seconds;
     f.last_mount_time = now_unix_seconds;
     f.wal_anchor_count = 0;
@@ -76,14 +82,27 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
                                   std::to_string(kSuperBlockVersion) + ")");
     }
     std::memcpy(&f.log_topology, base + kLogTopologyOffset, sizeof(f.log_topology));
-    if (f.log_topology != kPerCoreStreams && f.log_topology != kSingleStream) {
-        // A value this build has no reading for. Refused rather than
-        // defaulted: guessing the topology guesses how many streams
-        // recovery must find.
+    if (f.log_topology != kSingleStream) {
+        // **`kSingleStream` is the only topology this build reads**
+        // (AM-S4(d), on AM-R4a and D14). The version test above already
+        // refuses every image this build did not write, and this build
+        // writes `kSingleStream` and has no way to write anything else -
+        // so reaching here means a version-17 image whose topology word
+        // was corrupted or hand-edited, and the honest answer is the same
+        // refusal a bad version gets.
+        //
+        // **This is the door the collapse is proved against.** Every
+        // per-core-stream branch in the engine was reachable only through
+        // this word; refusing the word is what makes deleting them a
+        // deletion of dead code rather than of a live arm. `kPerCoreStreams`
+        // survives as the value named here, because a field this build
+        // cannot read is one it must refuse by name rather than assume.
         return Status::Corruption("superblock: log topology " +
-                                  std::to_string(f.log_topology) + " is neither per-core (" +
-                                  std::to_string(kPerCoreStreams) + ") nor single (" +
-                                  std::to_string(kSingleStream) + ")");
+                                  std::to_string(f.log_topology) + " is not single (" +
+                                  std::to_string(kSingleStream) +
+                                  "); this build mounts no other topology, and a per-core-stream "
+                                  "volume (" + std::to_string(kPerCoreStreams) +
+                                  ") has no migration path - recreate the database");
     }
     std::memcpy(&f.create_time, base + kCreateTimeOffset, sizeof(f.create_time));
     std::memcpy(&f.last_mount_time, base + kLastMountTimeOffset, sizeof(f.last_mount_time));
@@ -203,8 +222,12 @@ Status SuperBlock::SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& an
         return Status::InvalidArgument("superblock: WAL anchor core_id " +
                                        std::to_string(core_id) + " is at or above kMaxWalCores");
     }
-    if (single_stream() && core_id != 0) {
-        // superblock.hpp's SetWalAnchor comment carries the rule.
+    if (core_id != 0) {
+        // superblock.hpp's SetWalAnchor comment carries the rule. **No
+        // longer conditional** (AM-S4(d)): the topology this tested for is
+        // the only one `Decode` admits, so slot 0 is the only slot, full
+        // stop. The 64-slot array stays in the on-disk layout because
+        // shrinking it would be a second format event no reader wants.
         return Status::InvalidArgument(
             "superblock: this database has one WAL stream, so core " + std::to_string(core_id) +
             " has no anchor slot; publish the fold into slot 0 instead");
@@ -223,15 +246,6 @@ Status SuperBlock::SetNextTrxId(std::uint64_t next) noexcept {
                                        std::to_string(next));
     }
     fields_.next_trx_id = next;
-    return Status::OK();
-}
-
-Status SuperBlock::SetLogTopology(std::uint32_t topology) noexcept {
-    if (topology != kPerCoreStreams && topology != kSingleStream) {
-        return Status::InvalidArgument("superblock: log_topology " + std::to_string(topology) +
-                                       " is neither kPerCoreStreams nor kSingleStream");
-    }
-    fields_.log_topology = topology;
     return Status::OK();
 }
 

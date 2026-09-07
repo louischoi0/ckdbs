@@ -89,29 +89,38 @@ std::uint32_t TopologyByteOf(const PageBuf& buf) {
     return out;
 }
 
-// The whole reason this needed no format event, and the claim is about the
-// *byte*: the word this build now writes the topology into is the word
-// every superblock ever written already holds zero in, and zero is what a
-// per-core-stream database is. So the assertion is on the encoded page,
-// not on a value poked back in - that would prove nothing.
-TEST(SuperBlockTopologyTest, AFreshImagesTopologyByteIsTheZeroEveryOldImageHolds) {
+// The claim is about the *byte*, not about a value in a struct: a fresh
+// image says single-stream on the page, so the word a later mount reads is
+// the word this build wrote rather than a default it fell back to.
+TEST(SuperBlockTopologyTest, AFreshImageSaysSingleStreamOnThePage) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
     PageBuf buf;
     buf.fill(std::byte{0xAB});  // so a byte left unwritten would fail here
     sb.Encode(AsSpan(buf));
 
-    EXPECT_EQ(TopologyByteOf(buf), 0u);
+    EXPECT_EQ(TopologyByteOf(buf), kSingleStream);
 
     auto decoded = SuperBlock::Decode(AsConstSpan(buf));
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_EQ(decoded.value().log_topology(), kPerCoreStreams);
-    EXPECT_FALSE(decoded.value().single_stream());
 }
 
-TEST(SuperBlockTopologyTest, AFreshDatabaseIsPerCoreUntilTheCutoverSaysOtherwise) {
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    EXPECT_EQ(sb.log_topology(), kPerCoreStreams);
-    EXPECT_FALSE(sb.single_stream());
+// **The door AM-S4(d)'s collapse is proved against.** Every per-core-stream
+// branch in the engine was reachable only through this word, so this cell
+// is what makes deleting them a deletion of dead code. `kPerCoreStreams` is
+// a value a version-17 image cannot legally hold - `CreateFresh` writes
+// `kSingleStream` and takes no parameter - so reaching it means a corrupted
+// or hand-edited word, and it gets the refusal a bad version gets.
+TEST(SuperBlockTopologyTest, APerCoreStreamVolumeIsRefusedAtDecode) {
+    PageBuf buf = PageWithTopology(kPerCoreStreams);
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    EXPECT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(decoded.status().message().find("topology"), std::string::npos);
+    // Named rather than merely refused: an operator holding a pre-M0
+    // volume is told there is no migration, not that their file is
+    // damaged in some unspecified way.
+    EXPECT_NE(decoded.status().message().find("recreate"), std::string::npos);
 }
 
 // Decode *and* re-encode. Reading alone would pass on an `Encode` that
@@ -159,15 +168,6 @@ TEST(SuperBlockTopologyTest, UnderOneStreamOnlySlotZeroTakesAnAnchor) {
     EXPECT_EQ(one.wal_anchor_count(), 1u);
 }
 
-// The per-core arm is unchanged, which is what keeps every core's
-// checkpoint working until the cutover.
-TEST(SuperBlockTopologyTest, UnderPerCoreStreamsEveryCoreStillTakesItsOwnAnchor) {
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    EXPECT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{1, 2, 3, 0}).ok());
-    EXPECT_TRUE(sb.SetWalAnchor(3, WalAnchorFields{4, 5, 6, 0}).ok());
-    EXPECT_EQ(sb.wal_anchor(3).checkpoint_lsn, 4u);
-}
-
 // ---- Per-core WAL anchors (wal.md section 14-3) --------------------------
 
 TEST(SuperBlockWalAnchorTest, FreshDatabaseHasNoAnchors) {
@@ -184,55 +184,54 @@ TEST(SuperBlockWalAnchorTest, FreshDatabaseHasNoAnchors) {
     }
 }
 
+// Slot 0 alone, because slot 0 alone is legal: `SetWalAnchor` refuses
+// every other, so what has to survive the codec is the one slot plus the
+// count field beside it. The 64-slot array stays in the on-disk layout -
+// shrinking it would be a second format event for no reader's benefit.
 TEST(SuperBlockWalAnchorTest, AnchorsSurviveEncodeDecode) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
     ASSERT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{4096, 8192, 12288, 0}).ok());
-    ASSERT_TRUE(sb.SetWalAnchor(7, WalAnchorFields{1 << 20, 1 << 21, 1 << 22, 3}).ok());
 
     PageBuf buf{};
     sb.Encode(AsSpan(buf));
     auto decoded = SuperBlock::Decode(AsConstSpan(buf));
     ASSERT_TRUE(decoded.ok());
 
-    EXPECT_EQ(decoded.value().wal_anchor_count(), 8u);
+    EXPECT_EQ(decoded.value().wal_anchor_count(), 1u);
     EXPECT_EQ(decoded.value().wal_anchor(0).checkpoint_lsn, 4096u);
     EXPECT_EQ(decoded.value().wal_anchor(0).redo_start_lsn, 8192u);
     EXPECT_EQ(decoded.value().wal_anchor(0).durable_lsn, 12288u);
     EXPECT_EQ(decoded.value().wal_anchor(0).segment_no, 0u);
-    EXPECT_EQ(decoded.value().wal_anchor(7).redo_start_lsn, 1u << 21);
-    EXPECT_EQ(decoded.value().wal_anchor(7).segment_no, 3u);
 
-    // A slot between two published ones is still "never checkpointed".
+    // Every other slot reads "never checkpointed", which is now the only
+    // thing any of them can say.
     EXPECT_EQ(decoded.value().wal_anchor(3).redo_start_lsn, 0u);
+    EXPECT_EQ(decoded.value().wal_anchor(7).redo_start_lsn, 0u);
 }
 
-TEST(SuperBlockWalAnchorTest, AnchorsAreIndexedIndependentlyPerCore) {
+// Slot 0 is the only slot (AM-S4(d)), so this is the refusal that says so.
+// It replaces `AnchorsAreIndexedIndependentlyPerCore` and
+// `CountTracksTheHighestCoreEverPublished`, whose subject - a table indexed
+// by core, with a count tracking the highest one - the collapse removed.
+TEST(SuperBlockWalAnchorTest, EveryCoreButZeroIsRefusedASlot) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
-    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
-        ASSERT_TRUE(sb.SetWalAnchor(core, WalAnchorFields{core + 1, core + 2, core + 3, core}).ok());
+
+    for (std::uint32_t core = 1; core < kMaxWalCores; ++core) {
+        Status s = sb.SetWalAnchor(core, WalAnchorFields{core + 1, core + 2, core + 3, core});
+        EXPECT_FALSE(s.ok()) << "core " << core << " was given a slot";
+        EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+        EXPECT_NE(s.message().find("one WAL stream"), std::string::npos);
     }
 
-    PageBuf buf{};
-    sb.Encode(AsSpan(buf));
-    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
-    ASSERT_TRUE(decoded.ok());
+    // And nothing was written by any of them: a refusal that had raised the
+    // count would send the next mount looking for anchors nobody published.
+    EXPECT_EQ(sb.wal_anchor_count(), 0u);
 
-    EXPECT_EQ(decoded.value().wal_anchor_count(), kMaxWalCores);
-    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
-        EXPECT_EQ(decoded.value().wal_anchor(core).redo_start_lsn, core + 2)
-            << "core " << core << " read another core's entry";
-    }
-}
-
-TEST(SuperBlockWalAnchorTest, CountTracksTheHighestCoreEverPublished) {
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    ASSERT_TRUE(sb.SetWalAnchor(5, WalAnchorFields{1, 2, 3, 0}).ok());
-    EXPECT_EQ(sb.wal_anchor_count(), 6u);
-
-    // A lower core publishing later does not shrink it: the count says how
-    // wide the table is, not which entry was written last.
-    ASSERT_TRUE(sb.SetWalAnchor(1, WalAnchorFields{4, 5, 6, 0}).ok());
-    EXPECT_EQ(sb.wal_anchor_count(), 6u);
+    // Slot 0 still takes one, and the count is then 1 and stays 1.
+    ASSERT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{4, 5, 6, 0}).ok());
+    EXPECT_EQ(sb.wal_anchor_count(), 1u);
+    ASSERT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{7, 8, 9, 0}).ok());
+    EXPECT_EQ(sb.wal_anchor_count(), 1u);
 }
 
 TEST(SuperBlockWalAnchorTest, CoreIdBeyondTheTableIsRefusedNotWrapped) {
@@ -318,7 +317,10 @@ TEST(SuperBlockTest, TheCoreCountDoesNotDisturbTheAnchorTable) {
     // offset moves. Asserted rather than assumed, because the last two
     // format bumps both turned on this property holding.
     SuperBlock sb = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, 8);
-    ASSERT_TRUE(sb.SetWalAnchor(3, WalAnchorFields{11, 22, 33, 44}).ok());
+    // Slot 0, because slot 0 is the only one a publish can reach
+    // (AM-S4(d)). The claim under test is the *offset*, not the slot: an
+    // eight-core count must not have shifted the anchor table's bytes.
+    ASSERT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{11, 22, 33, 44}).ok());
 
     PageBuf buf{};
     sb.Encode(AsSpan(buf));
@@ -326,10 +328,10 @@ TEST(SuperBlockTest, TheCoreCountDoesNotDisturbTheAnchorTable) {
     ASSERT_TRUE(decoded.ok());
 
     EXPECT_EQ(decoded.value().core_count(), 8u);
-    EXPECT_EQ(decoded.value().wal_anchor(3).checkpoint_lsn, 11u);
-    EXPECT_EQ(decoded.value().wal_anchor(3).redo_start_lsn, 22u);
-    EXPECT_EQ(decoded.value().wal_anchor(3).durable_lsn, 33u);
-    EXPECT_EQ(decoded.value().wal_anchor(3).segment_no, 44u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).checkpoint_lsn, 11u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).redo_start_lsn, 22u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).durable_lsn, 33u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).segment_no, 44u);
     EXPECT_EQ(decoded.value().next_trx_id(), sb.next_trx_id());
 }
 

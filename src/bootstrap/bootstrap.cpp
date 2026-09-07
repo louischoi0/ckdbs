@@ -116,9 +116,11 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     // D14 a v3 build mounts only volumes it created, so leaving a way to
     // create a per-core-stream one would have kept the whole per-core store
     // arrangement reachable from tests after the refusal was supposed to
-    // have made it dead.
-    server::SuperBlock sb = server::SuperBlock::CreateFresh(
-        now_unix_seconds, inline_cell_width, cores, server::kSingleStream);
+    // have made it dead. **`CreateFresh` no longer takes the topology at
+    // all** (AM-S4(d)): it writes `kSingleStream` because that is the only
+    // thing this build's `Decode` will read back.
+    server::SuperBlock sb =
+        server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width, cores);
     sb.Encode(created.value().bytes());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +
