@@ -8,8 +8,11 @@ document (AV) that gates what comes after them. Every `path:line` is
 `[source-read]` at `15a57c2`; the rest is `[design]`; the one
 `[measured]` deliverable is AW-S5's and does not exist until it is run.
 
-**Status: AW-S0, S1, S1b, S2, S6 done; AW-S3 *half* done and reviewed;
-AW-S4 *surveyed, one piece landed*; plus AW-a (§10).
+**Status: AW-S0, S1, S1b, S2, S6 done, and AM-S4's slice (d) with them
+(§9.4, 2026-09-07 — which is what makes "AM has no open stage" true for
+every stage but S6); AW-S3 *half* done and reviewed;
+AW-S4 *surveyed, one piece landed*, and the operator has since marked its
+open watermark question (§12.3); plus AW-a (§10).
 2026-09-06/07 on `worktree-aw-m1-close`.** §11 says which half of
 AN-R14 landed, §11.4 what its review changed, and §12 what AW-S4's survey
 found — including that AN-S3 is **not** the separable stage the AN order
@@ -55,8 +58,9 @@ field, the lease, `MayFault`, the CC7 fault grants, `TryClaimByStamp`,
 `CoreRuntimePerCoreStreamTest` and `page-lsn-cross-stream.md` were all
 still in the tree at `15a57c2`, against AM-R4a's "the two halves arrive
 together or not at all". **AW-S1b carries it**, on the operator's decision
-of 2026-09-06 (§0 item 4), and has now landed all of it but the per-core-stream
-mount branches and `page-lsn-cross-stream.md`'s file (§9.4). AN: S0/S1 landed; S2 gated until now. AO:
+of 2026-09-06 (§0 item 4), and has now landed all of it; the per-core-stream
+mount branches and `page-lsn-cross-stream.md`'s file were slice (d), which
+landed separately as AM-S4(d) on 2026-09-07 and closed AM-S4 (§9.4). AN: S0/S1 landed; S2 gated until now. AO:
 S0–S4a within one core; S5 gated on AM-S6, AN-S2 and AU-S2. AU:
 S1/S1b/S3; **S2 is gated on two things, not one** — the rig order AV,
 which does not exist, and `SimWaker`, which is AU-S1c, filed at `1e4e446`
@@ -449,7 +453,14 @@ The six restated cells:
 
 ### 9.4 What did not land, and what changed under it
 
-- **(d) is open**: the per-core-stream mount branches, `page-lsn-cross-stream.md`'s file, and `single_stream()`'s remaining conditionals.
+- **(d) landed 2026-09-07** on `worktree-am-s4d-s3-close` (`5e8b041`,
+  `40510cc`), and it closes AM-S4 and with it AM: the per-core-stream mount
+  branches, `page-lsn-cross-stream.md`'s file, and every `single_stream()`
+  conditional. The finding that shaped it is that **(d)'s own door was not
+  shut**: `Decode` still accepted `kPerCoreStreams` inside a version-17
+  image, and `CreateFresh` *defaulted* to it, so fifty-odd test superblocks
+  claimed a topology no volume can have. See
+  `workorder-am-m1-shared-pool.md`'s AM-S4(d) row.
 - The **stamp field stays**, and its spec section is corrected rather than deleted: `SetPageStreamStamp` still records which stream's records may name a page, which is redo's business; what went is the *ownership* reading of it (`page-lsn-cross-stream.md` §9 rule 6).
 - `docs/inflight/bugs/flushmaps-lease-guard-and-unlatched-region-walk.md`: **defect 1 closed** — the lease guard is gone and the writeback every core now runs writes the one live map, so there is nothing stale to publish. **Defect 2 (the unlatched `map_regions_` walk) is open** and still AM-S3's, because taking the latch means restructuring a loop that calls `device_.WritePage` inside it.
 
