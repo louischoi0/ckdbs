@@ -798,9 +798,9 @@ private:
     // built one at `core_count == 1`, and a server's core 0 is this class
     // rather than a `CoreRuntime` - so AO-S4a's detector, wired "at one
     // core, where per-core and instance-wide are the same object", ran in
-    // every fixture and in no instance. The manager takes the table here;
-    // the dispatcher does not, yet (`Open` says why), so a server's
-    // admission rule is what it was and only the wake crosses.
+    // every fixture and in no instance. The manager took the table at
+    // AO-S5(a) and the dispatcher at AO-S4b, so a server admits a holding
+    // waiter under AO-S4a's rule and the graph it checks spans every core.
     std::unique_ptr<txn::LockTable> locks_;
 
     std::optional<txn::TrxIdSequence> trx_ids_;

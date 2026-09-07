@@ -677,15 +677,16 @@ private:
     // releases its borrows into the one table and wakes - and kicks - a
     // waiter queued from any core (AU-S2).
     //
-    // **The dispatcher takes it only at one core.** Its use of the table is
-    // the wait-for graph and the admission it gates: with a table, a
-    // transaction holding rows may wait because the detector catches the
-    // cycle it could close (AO-S4a). Across cores that detector is not
-    // complete - a cycle can pass through a wait that registers no edge,
-    // the shipped-statement park and the FK probe park (AO-S4a's row) - so
-    // above one core the dispatcher keeps AO-S3's narrow rule and a null
-    // table until AO-S4b's cadence exists. The table crossing reactors is
-    // the wake's business before it is the detector's.
+    // **The dispatcher takes it on every core since AO-S4b.** Its use of
+    // the table is the wait-for graph and the admission it gates: with a
+    // table, a transaction holding rows may wait because the detector
+    // catches the cycle it could close (AO-S4a). Across cores that was not
+    // complete at AO-S5(a) - a cycle could pass through a wait that
+    // registered no edge, the shipped-statement park - so the dispatcher
+    // kept AO-S3's narrow rule above one core. AO-S4b records that edge
+    // where it can be recorded, on the owner at enrolment
+    // (`shipped_statement_executor.hpp`), and lifts the rule. The FK probe
+    // park registers none and waits on nothing yet; AO-S5(b) owes both.
     std::unique_ptr<txn::LockTable> owned_locks_;
     txn::LockTable* locks_ = nullptr;
 

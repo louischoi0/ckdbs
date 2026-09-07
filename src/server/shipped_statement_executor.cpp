@@ -141,6 +141,31 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
         }
         running = std::make_unique<Running>(std::move(statement.text),
                                             enrolled.value()->session);
+        // **The edge only this core can record** (AO-S4b): the coordinator
+        // is parked on this statement's reply, waiting for the transaction
+        // just enrolled. Registered before the statement runs, so a park it
+        // takes on a row here closes any cycle through the coordinator at
+        // that park's own registration - which is where every real
+        // cross-core cycle closes. *This* registration cannot close one in
+        // a graph with no stale edge: the walk starts from the participant,
+        // which is either new or an idle joined context between statements,
+        // and neither has an out-edge. The arm below is therefore defensive
+        // - a stale edge, which no clear should leave, would surface here
+        // as a refusal rather than as a wrong wait - and it counts nothing:
+        // the enrolment succeeded and the context stays open, which is not
+        // what `enrolment_refusals_` counts.
+        if (locks_ != nullptr && statement.coordinator_txn != 0 &&
+            enrolled.value()->session.transaction() != nullptr) {
+            const std::uint64_t participant = enrolled.value()->session.transaction()->id();
+            if (locks_->NoteWaitFor(statement.coordinator_txn, participant)) {
+                reply(DeadlockVictim("core " + std::to_string(core_id_) + "'s transaction " +
+                                     std::to_string(participant)),
+                      {});
+                return;
+            }
+            running->coordinator_txn = statement.coordinator_txn;
+            running->participant_txn = participant;
+        }
     } else {
         running = std::make_unique<Running>(std::move(statement.text),
                                             dispatcher_.default_isolation(), statement.role);
@@ -160,6 +185,15 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
     // honour it.
     if (statement.typed_answer) {
         if (remote_steps_ == nullptr) {
+            // **These two arms answer without ever reaching `Finish`, so
+            // the enrolment edge is cleared here or not at all** (AO-S4b).
+            // Left behind it names a coordinator waiting for a participant
+            // whose statement was refused before it ran, and it lives until
+            // that transaction decides - long enough for the next waiter to
+            // close a cycle against a wait that is not happening.
+            if (locks_ != nullptr && running->coordinator_txn != 0) {
+                locks_->ClearWaitFor(running->coordinator_txn, running->participant_txn);
+            }
             running->reply = std::move(reply);
             Running* refused = running.get();
             running_.emplace(key, std::move(running));
@@ -172,6 +206,10 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
         }
         if (Status s = remote_steps_->OpenAnswerEdge(statement.answer_tag, statement.requester);
             !s.ok()) {
+            // The arm above's reason, and it applies unchanged here.
+            if (locks_ != nullptr && running->coordinator_txn != 0) {
+                locks_->ClearWaitFor(running->coordinator_txn, running->participant_txn);
+            }
             running->reply = std::move(reply);
             Running* refused = running.get();
             running_.emplace(key, std::move(running));
@@ -208,6 +246,12 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
     std::unique_ptr<Running> state = std::move(it->second);
     running_.erase(it);
     ++executed_;
+    // The coordinator's wait ends with this reply, whatever it says
+    // (AO-S4b). Before the reply is sent, so the graph never names a
+    // coordinator that has already moved on.
+    if (locks_ != nullptr && state->coordinator_txn != 0) {
+        locks_->ClearWaitFor(state->coordinator_txn, state->participant_txn);
+    }
 
     // The rendered line back into a code and a text. An error line carries
     // its message in the status - `ErrorReply` on the arrival core puts it

@@ -208,6 +208,14 @@ std::string ErrorReply(const Status& status) {
     return "ERR " + status.message();
 }
 
+Status DeadlockVictim(const std::string& waited_for) {
+    return Status::TxnConflict(
+        "deadlock: this transaction waited for " + waited_for +
+        ", which is itself waiting on a row this transaction holds. This transaction closed "
+        "the cycle, so its statement is the one refused; ROLLBACK to release its rows and let "
+        "the other proceed");
+}
+
 Status StatusFromErrorReply(std::string_view reply) {
     constexpr std::string_view kPrefix = "ERR ";
     if (reply.rfind(kPrefix, 0) != 0) return Status::OK();
@@ -432,14 +440,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // when this client rolls back, which is the same contract every
             // other failed statement inside a transaction has (PostgreSQL
             // holds locks to transaction end too).
-            RefuseParkedWrite(
-                *out, waiting_session,
-                Status::TxnConflict(
-                    "deadlock: this transaction waited for row id=" + std::to_string(block.pk) +
-                    ", held by transaction " + std::to_string(block.trx_id) +
-                    ", which is itself waiting on a row this transaction holds. This "
-                    "transaction closed the cycle, so its statement is the one refused; "
-                    "ROLLBACK to release its rows and let the other proceed"));
+            RefuseParkedWrite(*out, waiting_session,
+                              DeadlockVictim("row id=" + std::to_string(block.pk) +
+                                             ", held by transaction " +
+                                             std::to_string(block.trx_id)));
         }
         if (out->write_block.has_value()) {
             // **The fault net fired, and that is not an outcome - it is a
@@ -5885,10 +5889,11 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     // admissible at all. An autocommit ship carries `in_txn = 0` and no
     // level, byte-identical to what SS2 sent.
     const bool in_txn = session.in_explicit_txn();
+    // The transaction this statement ships under, or null in autocommit:
+    // its level and its id are one fact about one object.
+    const txn::Transaction* coordinator = in_txn ? session.transaction() : nullptr;
     const std::optional<txn::IsolationLevel> isolation =
-        in_txn && session.transaction() != nullptr
-            ? std::optional{session.transaction()->isolation()}
-            : std::nullopt;
+        coordinator != nullptr ? std::optional{coordinator->isolation()} : std::nullopt;
 
     // `Ship` refuses before it sends - an over-long statement, a core this
     // instance does not have - so this refusal means the statement did not
@@ -5907,12 +5912,16 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     // transaction carries the same value, and the participant that enrolled
     // on the first reads it once.
     const std::uint64_t snapshot_lsn =
-        in_txn && session.transaction() != nullptr ? session.transaction()->view().snapshot_lsn
-                                                   : 0;
+        coordinator != nullptr ? coordinator->view().snapshot_lsn : 0;
+    // **And its id** (AO-S4b): the owner records `coordinator -> participant`
+    // in the instance's wait-for graph while the shipped statement runs, the
+    // one edge a cross-core cycle through a shipped park was missing. Zero
+    // in autocommit, which holds nothing a graph could name.
+    const std::uint64_t coordinator_txn = coordinator != nullptr ? coordinator->id() : 0;
     if (Status s = statement_ship_->Ship(owner_core, request_id, session.ship_id(), sequence,
                                          oid, session.role(), line, /*retry=*/false, in_txn,
                                          isolation, join, typed_answer, answer_tag,
-                                         snapshot_lsn);
+                                         snapshot_lsn, coordinator_txn);
         !s.ok()) {
         // The receiver goes with the request that never left. `Ship`
         // refuses only *before* it sends (the rule this function's header
@@ -6224,6 +6233,16 @@ DispatchOutcome CommandDispatcher::FinishShippedStatement(
 
     DispatchOutcome out;
     out.response = reply->status.ok() ? reply->text : ErrorReply(reply->status);
+    // **The carried status too, not only the rendered line** (found by
+    // AO-S4b's cell; `c168acb`'s class). The owner's refusal arrives as a
+    // real `Status` - its code and `retryable` bit recovered at the owner's
+    // `Finish` and carried on the wire - and `KwpSession::OnStatementComplete`
+    // prefers `status`, falling back to `StatusFromErrorReply` on the line.
+    // The fallback recovers `TxnConflict` and its bit, so a deadlock victim
+    // was already told; what it folds is the bare-arm set (`NotFound`,
+    // `Unsupported`, `OutOfRange`, ...), which every shipped refusal in
+    // that set reached a typed client as until this line.
+    if (!reply->status.ok()) out.status = reply->status;
     // CB6: a DDL this core shipped has changed catalog pages core 0 flushed
     // before it answered, so every fact cached here about them is stale.
     // Dropped on success only - a refused DDL wrote nothing - and before the

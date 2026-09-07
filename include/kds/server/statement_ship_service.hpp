@@ -166,7 +166,14 @@ namespace kds::server {
 // participant adopts in place of minting its own, so a cross-owner RR
 // transaction reads one instant on every core. The statement falls
 // **976 -> 968 bytes**, stated in the same two places.
-inline constexpr std::size_t kShippedStatementFixedBytes = 56;
+//
+// **64 since AO-S4b, and the eight bytes are the coordinator's transaction
+// id** (`coordinator_txn` below): the one fact the owner cannot derive and
+// must have to record the wait-for edge a shipped park otherwise leaves
+// out of the graph. The ceiling falls **968 -> 960 bytes**, stated in the
+// same two places. The two stages landed the same day on two branches,
+// each taking the ceiling 976 -> 968; merged, both bytes are paid.
+inline constexpr std::size_t kShippedStatementFixedBytes = 64;
 inline constexpr std::size_t kShippedStatementTextMax =
     sched::kCoreRingPayloadBytes - kShippedStatementFixedBytes;
 
@@ -208,6 +215,16 @@ struct ShippedStatementRequestPayload {
     // carries the same value as the one that enrolled (the coordinator's
     // view never re-mints) and it is not re-read: the context adopted once.
     std::uint64_t snapshot_lsn;
+    // **AO-S4b: the coordinator's transaction, so the owner can record the
+    // edge nobody else can.** A coordinator that ships a statement inside
+    // its transaction waits for the participant that runs it, and only the
+    // owner knows both ids - the participant's is minted at enrolment. The
+    // owner registers `coordinator -> participant` in the instance's
+    // wait-for graph, which is what makes a cycle through a shipped park
+    // detectable at the registration that closes it. Zero for an
+    // autocommit coordinator, which holds nothing and waits for nothing a
+    // graph could name.
+    std::uint64_t coordinator_txn;
     // **XG1: where a typed answer's rows go.** Minted and registered by the
     // arrival core before this request is sent (§4a), so the owner names a
     // receiver that already exists. Zeroed and unread where `form == 0`,
@@ -245,12 +262,14 @@ struct ShippedStatementRequestPayload {
     // the owner cannot tell "enrolled" from "autocommit" by inspection, and
     // there is no earlier message to enrol with, because **the first shipped
     // statement is the enrolment** (D1 - participants are discovered as the
-    // transaction runs, not declared up front). What it does *not* carry is
-    // the coordinator's transaction id: that is 8 bytes against the 4 this
-    // payload had left, and it is not needed here - the owner finds the
-    // transaction by `(src_core, session_id)`, the pair every shipped
-    // statement already arrives under, and records the coordinator's id when
-    // prepare brings it (D2, `txn_2pc_service.hpp`).
+    // transaction runs, not declared up front). **It carried no coordinator
+    // transaction id until AO-S4b**, and the reason it did not is worth
+    // keeping: the owner finds the transaction by `(src_core, session_id)`,
+    // the pair every shipped statement already arrives under, and prepare
+    // brought the id when a decide needed it (D2, `txn_2pc_service.hpp`).
+    // What made the eight bytes worth paying is the wait-for edge, which
+    // needs the id *while the statement runs* rather than at prepare -
+    // `coordinator_txn` above.
     std::uint8_t in_txn;
     // **R6-8: the coordinator's isolation level, for an enrolled statement.**
     //
@@ -373,7 +392,7 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(
     std::string_view text, bool retry = false, bool in_txn = false,
     std::optional<txn::IsolationLevel> isolation = std::nullopt, bool join = false,
     bool typed_answer = false, PipelineTag answer_tag = PipelineTag{},
-    std::uint64_t snapshot_lsn = 0);
+    std::uint64_t snapshot_lsn = 0, std::uint64_t coordinator_txn = 0);
 
 // ---- XG1: the two values `form` may take, and nothing else --------------
 //
@@ -483,6 +502,8 @@ public:
         // `(requester, session_id)`, opening one if this is the first
         // statement, and leave it open when the statement finishes.
         bool in_txn = false;
+        // The coordinator's transaction id, 0 for autocommit (AO-S4b).
+        std::uint64_t coordinator_txn = 0;
         // R6-8: the coordinator's level for an enrolled statement, empty
         // where the request stated none - which is every autocommit one.
         // An optional rather than a defaulted level, because "the client
@@ -601,7 +622,8 @@ public:
                 std::string_view text, bool retry = false, bool in_txn = false,
                 std::optional<txn::IsolationLevel> isolation = std::nullopt,
                 bool join = false, bool typed_answer = false,
-                PipelineTag answer_tag = PipelineTag{}, std::uint64_t snapshot_lsn = 0);
+                PipelineTag answer_tag = PipelineTag{}, std::uint64_t snapshot_lsn = 0,
+                std::uint64_t coordinator_txn = 0);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.

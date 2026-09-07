@@ -332,6 +332,14 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
         << "the lock table kicks through a registry that is not this instance's";
     EXPECT_EQ(db.locks()->partition_count(), 64u * 2u)
         << "the lock table is not partitioned for both cores";
+    // **And every dispatcher records its edges in it** (AO-S4b): a
+    // dispatcher handed no table keeps the narrow admission and records
+    // no edge, and a cross-core cycle through it is one the detector never
+    // sees - ended by the fault net, eleven seconds later.
+    EXPECT_EQ(db.dispatcher().locks(), db.locks())
+        << "core 0's dispatcher records its edges in some other table, or none";
+    EXPECT_EQ(peer.dispatcher().locks(), db.locks())
+        << "the peer's dispatcher records its edges in some other table, or none";
 
     // **The superblock image.** A peer used to hold a default-constructed
     // copy, and zero is a legal value of most of its fields - so it reported
@@ -382,6 +390,28 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // The shutdown tail cleared them, so a caller that asks afterwards sees
     // an instance with no cores rather than dangling ones.
     EXPECT_TRUE(db.cores().empty());
+}
+
+TEST_F(ExpeditorTest, AtOneCoreTheDispatcherHoldsTheInstancesLockTable) {
+    // AO-S4b, and the finding AO-S5(a) recorded on the way: no server had a
+    // lock table before it - `CoreRuntime` built one at `core_count == 1`,
+    // and a server's core 0 is the `Expeditor` - so AO-S4a's detector ran
+    // in every fixture and in no instance. A single-core server builds
+    // one now, latchless, with no wake registry to kick through (there is
+    // no peer to kick), and its dispatcher records its edges in it: the
+    // first time a server admits a holding waiter under AO-S4a's rule.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(db.Start().ok());
+
+    ASSERT_NE(db.locks(), nullptr) << "a single-core server built no lock table";
+    EXPECT_FALSE(db.locks()->latched()) << "a single-core table constructed latches";
+    EXPECT_EQ(db.locks()->partition_count(), 64u);
+    EXPECT_EQ(db.locks()->wake_registry(), nullptr) << "no peer exists to be kicked";
+    EXPECT_EQ(db.dispatcher().locks(), db.locks())
+        << "core 0's dispatcher records its edges in some other table, or none";
 }
 
 TEST_F(ExpeditorTest, AtOneCoreThereIsNoWakeRegistryAndNoTransportToAskIt) {

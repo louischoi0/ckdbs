@@ -547,8 +547,15 @@ callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
 
 ## 5. Write conflicts — first-updater-wins
 
-No lock manager, no waiting, no deadlock detection, and the Keystone lock byte
-stays unused. A conflict is detected from the tuple header alone. For writer `T`
+A conflict is detected from the tuple header alone, and the Keystone lock byte
+stays unused. **What follows the detection is no longer a refusal alone**
+(M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`, until AO-S8
+moves it here): a writer meeting an undecided holder waits for its decide
+(AO-S3), a transaction holding rows may wait because a wait-for graph in
+the instance's lock table refuses the waiter whose registration would close
+a cycle, naming deadlock (AO-S4a on one core, AO-S4b across cores, where the
+shipped-statement park records the edge only its owner can), and a wait
+that reaches the fault net is logged as the defect it is (AO-R8). For writer `T`
 with read view `V` over the *current* header `trx_id` (`cur`):
 
 | `cur` | Verdict |

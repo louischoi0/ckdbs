@@ -56,8 +56,8 @@ autocommit case in exactly three wire bits:
 and none on the way back: the reply carried the participant's watermark
 (§3) until AN-S2 removed it with the quantity it was read from, and the
 eight bytes went to the reply text (`kShippedStatementReplyTextMax`, 1000).
-The request paid eight for the snapshot at AN-S3, so the longest shippable
-statement is **968 bytes** (`kShippedStatementTextMax`).
+The request paid eight for the snapshot at AN-S3 and eight for the coordinator's transaction id at AO-S4b (the wait-for edge only the owner can record), so the longest shippable
+statement is **960 bytes** (`kShippedStatementTextMax`).
 
 **Both reads and writes ship, and a read enrols.** A transaction that wrote
 a row on a peer and then reads that relation has to see its own uncommitted

@@ -35,7 +35,8 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
                                                                    std::optional<txn::IsolationLevel> isolation,
                                                                    bool join, bool typed_answer,
                                                                    PipelineTag answer_tag,
-                                                                   std::uint64_t snapshot_lsn) {
+                                                                   std::uint64_t snapshot_lsn,
+                                                                   std::uint64_t coordinator_txn) {
     if (text.empty()) {
         return Status::InvalidArgument("statement shipping: an empty statement is not a statement");
     }
@@ -57,6 +58,7 @@ StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(std::uint64_t
     out.role = static_cast<std::uint8_t>(role);
     out.retry = retry ? 1 : 0;
     out.in_txn = in_txn ? 1 : 0;
+    out.coordinator_txn = coordinator_txn;
     // 0 stays 0 where nothing was stated, which is every autocommit
     // statement: the level is a promise about a transaction that spans
     // statements, and an autocommit one is not that.
@@ -264,6 +266,7 @@ void StatementShipServer::OnRequest(const sched::MessageHeader& header,
     statement.role = role.value();
     statement.retry = request.retry != 0;
     statement.in_txn = request.in_txn != 0;
+    statement.coordinator_txn = request.coordinator_txn;
     statement.isolation = isolation.value();
     statement.typed_answer = typed_answer.value();
     statement.answer_tag = request.answer_tag;
@@ -435,7 +438,7 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
                                  bool retry, bool in_txn,
                                  std::optional<txn::IsolationLevel> isolation, bool join,
                                  bool typed_answer, PipelineTag answer_tag,
-                                 std::uint64_t snapshot_lsn) {
+                                 std::uint64_t snapshot_lsn, std::uint64_t coordinator_txn) {
     // **One live waiter per request id.** Reusing an id that still has a
     // statement parked on it would replace that statement's waiter with
     // this one's, and the identity check on the reply path cannot catch it -
@@ -463,7 +466,8 @@ Status StatementShipClient::Ship(std::uint32_t owner_core, std::uint64_t request
     }
     auto request =
         ShippedStatementRequestOf(session_id, sequence, target_oid, role, text, retry, in_txn,
-                                  isolation, join, typed_answer, answer_tag, snapshot_lsn);
+                                  isolation, join, typed_answer, answer_tag, snapshot_lsn,
+                                  coordinator_txn);
     // A statement the wire refuses opens no waiter: nothing was sent, so
     // nothing will answer, and a waiter would only cost the statement a
     // deadline before saying what is already known.

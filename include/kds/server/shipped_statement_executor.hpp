@@ -282,6 +282,22 @@ public:
     // itself takes.
     void SetRemoteSteps(RemoteStepServer* server) noexcept { remote_steps_ = server; }
 
+    // **The instance's lock table, for the wait-for graph** (AO-S4b). A
+    // coordinator that shipped a statement inside its transaction waits for
+    // the participant that runs it here, and this core is the only one that
+    // knows both ids - so `Execute` records `coordinator -> participant` at
+    // enrolment and `Finish` clears it, keyed on the participant so a later
+    // edge the coordinator registered for itself is never the one erased.
+    // With that edge in the graph, the participant's own row park is the
+    // registration that closes a real cross-core cycle, and the dispatcher
+    // loop refuses it there as it refuses any closer; the refusal rides the
+    // reply. The enrolment registration itself cannot close a cycle in a
+    // graph with no stale edge - the walk starts from the participant,
+    // which is new or idle and has no out-edge - and its refusal arm is
+    // defensive, `Execute` says on what terms. Null means no graph, which
+    // is every fixture that builds no table.
+    void SetLockTable(txn::LockTable* locks) noexcept { locks_ = locks; }
+
     // Statements this core ran on another core's behalf, and finished.
     std::uint64_t executed() const noexcept { return executed_; }
     // Duplicates answered from the record instead of run again (D4).
@@ -495,6 +511,11 @@ private:
         StatementShipServer::ReplyFn reply;
         // The identity's third component. The first two are the map key.
         std::uint64_t sequence = 0;
+        // The edge `Execute` recorded and `Finish` clears - the coordinator's
+        // transaction waiting for this statement's participant - or 0/0 when
+        // none was (AO-S4b). Both ids, because the clear is keyed on both.
+        std::uint64_t coordinator_txn = 0;
+        std::uint64_t participant_txn = 0;
 
         // ---- XG1: this statement's answer is typed -----------------------
         //
@@ -778,6 +799,8 @@ private:
 
     // XG1's answer edge, or null where this core serves none.
     RemoteStepServer* remote_steps_ = nullptr;
+    // Borrowed, the instance's; see `SetLockTable`.
+    txn::LockTable* locks_ = nullptr;
 
     // SA-T0. Prepares this core answered with no record and no sync because
     // the enrolment had written nothing. Counted on a logged instance only -

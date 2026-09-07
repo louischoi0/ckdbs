@@ -531,9 +531,9 @@ TEST_F(StatementShipTest, AnAnswerFormThisBuildDoesNotServeIsRefusedNotGuessed) 
 TEST_F(StatementShipTest, TheLongestShippableStatementIsTheSlotMinusTheHeader) {
     // XG-R6's client-visible bound, asserted where it is derived rather
     // than where it is documented: the tag cost sixteen bytes of statement,
-    // AN-S3's snapshot eight more, and `client-manual.md` says 968 because
-    // of this.
-    EXPECT_EQ(kShippedStatementTextMax, 968u);
+    // AN-S3's snapshot eight more, AO-S4b's coordinator id eight more, and
+    // `client-manual.md` says 960 because of this.
+    EXPECT_EQ(kShippedStatementTextMax, 960u);
     EXPECT_EQ(kShippedStatementTextMax,
               sched::kCoreRingPayloadBytes - kShippedStatementFixedBytes);
 

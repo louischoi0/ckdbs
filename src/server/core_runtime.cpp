@@ -448,13 +448,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // row is blocked whether or not this core has a transport - the
     // transaction that holds the row is this core's own.
     runtime->dispatcher_->set_in_doubt_ceiling_ns(config.in_doubt_ceiling_ns);
-    // Null above one core, which is AO-S3's narrow rule and needs no
-    // detector; non-null at one, where the wait-for graph is what lets a
-    // transaction holding rows wait at all (AO-S4a). The instance table
-    // reaches the *manager* on every core (AO-S5); the dispatcher's use of
-    // it is the detector, and the member's declaration says why that stays
-    // at one core until AO-S4b.
-    runtime->dispatcher_->set_locks(config.core_count == 1 ? runtime->locks_ : nullptr);
+    // The wait-for graph and the admission it gates, on every core since
+    // AO-S4b - the member's declaration says why that is safe now.
+    runtime->dispatcher_->set_locks(runtime->locks_);
     // `SHOW META`'s group-accounting block on this core (sched.md §4). Set
     // on every core, peer or not: the accounting question is about a
     // reactor, and every core runs one. Set on the startup thread, before
@@ -744,6 +740,8 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // it.
     shipped_executor_.emplace(config_.core_id, *dispatcher_, *scheduler_, scheduler_->clock(),
                               log_, &*wal_);
+    // AO-S4b: the graph a shipped statement's coordinator is recorded in.
+    shipped_executor_->SetLockTable(locks_);
     statement_ship_server_.emplace(config_.core_id, *scheduler_, transport,
                                    shipped_executor_->Seam(), log_);
     if (Status s = scheduler_->RegisterMessageHandler(
