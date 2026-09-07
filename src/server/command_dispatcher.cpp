@@ -2023,10 +2023,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // re-execution risk, provided the sender marks its retries.
         // `shipped_enrolled` (R6-2) is the population that is *not* free to
         // sit there: each one is a live local transaction pinning this
-        // core's `ReadHorizon()`. `shipped_enrolment_expiries` non-zero
-        // means a coordinator abandoned one and the idle ceiling cleaned up
-        // after it - nothing on a healthy path reaches that ceiling, so it
-        // reads as a defect somewhere else rather than as a rate.
+        // core's `ReadHorizon()`. `shipped_enrolment_expiries` counts the
+        // contexts the **lifetime** ceiling rolled back (AN-R14): since the
+        // key became age rather than idleness it names an abandoning
+        // coordinator *and* a transaction that was simply still running at
+        // 60 s, and nothing here separates the two.
         os << " shipped_executed=" << shipped_statements_->executed()
            << " shipped_running=" << shipped_statements_->running()
            << " shipped_deduped=" << shipped_statements_->deduped()
@@ -10902,8 +10903,9 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     // sends when a connection dies all ended this core's half and told
     // nobody - leaving each participant holding uncommitted rows, pinning
     // that core's `ReadHorizon()` and one of its sixteen enrolment slots,
-    // until the five-minute idle ceiling swept it. On a loop any client can
-    // run.
+    // until the lifetime ceiling swept it - five minutes when this was
+    // written, sixty seconds since AN-R14, and on a loop any client can run
+    // either way.
     //
     // **Read off the session before `RollbackLocal`**, because `Finish()`
     // clears the participant list with the transaction - and the id must be
@@ -10926,7 +10928,7 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
 
     // **After the local half, and unconditionally afterwards.** This core's
     // transaction is already unwound, so a send that refuses changes no
-    // outcome - it costs the participants their idle ceiling instead of a
+    // outcome - it costs the participants their lifetime ceiling instead of a
     // message, which is exactly what this leg improves on and not something
     // to report to a client that asked to roll back and did.
     //
@@ -10942,7 +10944,7 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
                                       " rolled back transaction " +
                                       std::to_string(transaction_id) +
                                       " and could not tell its participants: " + s.message() +
-                                      "; they will be swept by their idle ceiling");
+                                      "; they will be swept by their lifetime ceiling");
             }
         } else if (logging(LogLevel::kDebug)) {
             log_->Debug("2pc", "core " + std::to_string(core_id_) + " told " +

@@ -37,26 +37,43 @@ the earlier proposal, and the operator's numbers say this engine does not
 serve that shape.
 
 **Three exemptions**, each with its reason so none is later struck as a
-special case:
+special case. **Only the third is built**; 1 and 2 are `[PROPOSED]` and
+described here so the instance-wide sweep is not written without them:
 
 1. **DDL** — a single statement holding relation `X`. Aborting a
    `CREATE INDEX` at 60 s gains nothing and forbids large indexes. No
-   ceiling.
+   ceiling. `[PROPOSED]` — nothing exempts it today because nothing
+   reaches it: DDL is never a shipped statement and so never an enrolled
+   context.
 2. **Background read views** (the Cabin build, the checkpoint, the
-   relayout survey) — they hold undo like any view, so the ceiling applies,
-   but the response is not abort: the task **re-mints its view and
+   relayout survey) — they hold undo like any view, so the ceiling would
+   apply, but the response is not abort: the task **re-mints its view and
    resumes** at its next resumable point. A background task that cannot
-   resume is a task defect, not a ceiling exemption.
+   resume is a task defect, not a ceiling exemption. `[PROPOSED]` — no
+   sweep reaches a read view, and no task re-mints on a ceiling's account;
+   this is a second mechanism on a different object, not this one.
 3. **Prepared contexts** — D4's exclusion, inherited unchanged: after a
    participant replies prepared it may not unilaterally abort. It leaves
-   with 2PC at AT.
+   with 2PC at AT. **Built** (`ExpireEnrolled`'s `prepared` arm).
 
 **Where it is enforced today, which is narrower than the rule**: the sweep
 exists only over cross-owner *participant* contexts
-(`ShippedStatementExecutor::Expire`), so a plain local transaction carries
-no start time and nothing sweeps it — `txn/manager.hpp` has no clock. The
-rule above is the engine's scope; the instance-wide half of its
+(`ShippedStatementExecutor::ExpireEnrolled`), so a plain local transaction
+carries no start time and nothing sweeps it — `txn/manager.hpp` has no
+clock. The rule above is the engine's scope; the instance-wide half of its
 enforcement is not built (AW-S3's record says what remains).
+
+**Two consequences of the sweep being a periodic tick, not a deadline.**
+It rides `wal_drain_interval_ns` (1 ms by default), so a context is swept
+on the first tick after its lifetime *on which no statement or phase is in
+flight on it* — a statement in flight defers the sweep, it does not exempt
+the context, and `phase_running` is itself bounded by
+`kTxnPhaseDeadlineNs`. And **`wal_drain_interval_ns = 0` disables the
+ceiling entirely**, because that is the registration the sweep is on.
+
+**`kds.txn_lifetime_ceiling` is a name, not yet a key.** AN-R14 asks for
+the config key; it is not registered in `Expeditor`'s key set, so the
+number is only the compiled `kTxnLifetimeCeilingNs` today.
 
 ### The levels
 
@@ -380,11 +397,19 @@ is ever told its snapshot expired. That is the whole of the difference
 between the ruling taken and the `SnapshotTooOld` one declined: the same
 reclamation, reached by ending the holder rather than by failing the read.
 
-**And the price is now per instance, not per core.** The sentence above
-about the horizon being per-core is §5's; under one shared read view
-(AN-S1) an idle `BEGIN` on any core holds *the instance's* undo, where it
-once held one core's. That is the exposure AN-R10 was marked to bound and
-the reason the bound is a wall-clock lifetime rather than a byte cap. A previous run's
+**Whose undo the price is paid in is still per core.** `ReadHorizon()`
+walks one core's `live_` and one core's reader slots, and each core owns
+its own `UndoLog` (`CoreRuntime`/`Expeditor` each hold one), so an idle
+`BEGIN` on core 3 holds core 3's undo and nothing else's. AN-S1's shared
+read view publishes **commit order** on one stream
+(`instance_visibility.hpp`); it does not fold the horizons together.
+`[PROPOSED]` — the exposure AN-R10 was marked to bound is that a *shared
+buffer pool* lets a reader on one core reach another core's versions,
+which is exactly the condition `instance_visibility.hpp` names as the one
+under which a per-core horizon stops being sound. When that lands the
+price becomes the instance's and this paragraph is the one that changes;
+it is the reason the bound is a wall-clock lifetime rather than a byte
+cap, and it is not the state of the tree today. A previous run's
 undo pages are not reclaimed at mount: each run starts a fresh chain and
 the old pages leak.
 

@@ -8,10 +8,12 @@ document (AV) that gates what comes after them. Every `path:line` is
 `[source-read]` at `15a57c2`; the rest is `[design]`; the one
 `[measured]` deliverable is AW-S5's and does not exist until it is run.
 
-**Status: AW-S0, S1, S2, S6 done and AW-S3 *half* done, plus AW-a (§10);
-AW-S1b *begun and not done*, 2026-09-06/07 on `worktree-aw-m1-close`.**
-§11 says which half of AN-R14 landed and why the other is a different
-size. §9 is what AW-S1b found and
+**Status: AW-S0, S1, S2, S6 done; AW-S3 *half* done and reviewed;
+AW-S4 *surveyed, one piece landed*; plus AW-a (§10). AW-S1b *begun and not
+done*. 2026-09-06/07 on `worktree-aw-m1-close`.** §11 says which half of
+AN-R14 landed, §11.4 what its review changed, and §12 what AW-S4's survey
+found — including that AN-S3 is **not** the separable stage the AN order
+says it is. §9 is what AW-S1b found and
 where it stopped; it is the stage's sizing that is wrong, not its ruling. §7 is AW-S0's record — its cell was already satisfied when
 the stage opened, and it carries the one thing this order was written
 without knowing. §8 is what S1 and S2 built. **AW-S1b was inserted by the
@@ -585,3 +587,119 @@ own letter, since it lands in `txn/` rather than in AM or AN.
 
 **3364/3364 plain, armed (`KDS_TEST_PAGE_LATCH=1`), and armed with
 `KDS_TEST_FRAME_BUDGET=8`.** Overhead not measured.
+
+
+### 11.4 What AW-S3's `critics-developer` pass changed
+
+**The mechanism is correct on every path; the contract around it was not.**
+The pass found no executable defect and rewrote nine places that still
+described the retired policy — including `client-manual.md`, which is
+user-facing, and `cross-owner-txn.md`, which had taken the rename and left
+the semantics ("`kTxnLifetimeCeilingNs`, **300 s of idleness**", with 300 s
+still in its settings table).
+
+**CLA's in-doubt hypothesis was wrong, and the answer is better than an
+assert.** `kTxnInDoubtCeilingNs` is **200 ms**, three orders below the
+ceiling, *and* the prepared arm `continue`s out of the sweep before the age
+test is reached — so the two apply to disjoint populations and an ordering
+`static_assert` would encode an obligation that does not exist.
+
+**The magnitude dependency is not a constant.** The sweep is registered
+under `if (wal_drain_interval_ns > 0)`, so **setting the drain interval to
+0 silently disables the lifetime ceiling**. Under the retired constant that
+was a backstop going dark; under AN-R14 it is a ruled policy going dark.
+Recorded in `txn.md` §1; a code-side warning is proposed, not built.
+
+**`touched_at_ns` had no reader left, and CLA's comment named two that do
+not exist** — the in-doubt cadence reads `asked_at_ns` (whose own comment
+says it is deliberately separate), and `SHOW META` prints counters, never a
+stamp. The commit turned a live field into write-only state and justified
+it falsely. The field and its write are deleted here.
+
+**The order's mutation for cell (2) is an equivalent mutant.**
+`if (busy || age < ceiling) skip` and `if (busy) skip; if (age < ceiling)
+skip;` are the same program by short-circuit, so "exempt busy transactions"
+cannot be written as a change and nothing can kill it. §11's earlier
+account — that the mutation was written against a misreading — was the
+wrong correction. The property *is* testable, as a **sticky** deferral: a
+flag that skips a context once deferred. `TheCeilingSkipsAContextAStatement`
+`IsRunningOn` now carries the four lines that kill it, which is the half of
+"defers, not exempts" that had no cell.
+
+**And one cell CLA added discriminated nothing.**
+`AnIdleTransactionUnderItsLifetimeIsNotSwept` was line-for-line the first
+half of `AnAbandonedTransactionIsRolledBackAtTheIdleCeiling`. Deleted.
+
+**`kds.txn_lifetime_ceiling` is a name, not a key.** It is not in
+`expeditor.cpp`'s registered key set, so the WARN log naming it told an
+operator to set something the config loader would refuse. The log names the
+constant now; `txn.md` §1 records the key as unbuilt, and registering it is
+a config-surface change with its own cell.
+
+---
+
+## 12. AW-S4 — surveyed, one piece landed, and AN-S3 is not separable
+
+### 12.1 What landed
+
+**AN-R9's published commit ceiling**, on `InstanceVisibility`: the highest
+commit LSN this instance has *published*, raised inside `PublishCommit`'s
+hold and **after** the window entry. That order is the ruling's point — a
+snapshot that reads a ceiling covering some commit must be able to find
+that commit's entry, and the reverse order would let one snapshot answer a
+commit invisible and then visible. `AN-Q3` names that interval as the one
+place this design can be implemented wrongly and pass every test.
+
+It is **additive**: nothing mints against it yet, so the cutover becomes a
+change to the predicate rather than to the predicate and its input at once.
+Its cell pins the ceiling's three properties — covers what is published,
+monotone under out-of-order publication, unmoved by an abort.
+
+### 12.2 What the survey corrected
+
+**The cutover's surface is 8 sites, not 70.** A `grep` for the fields being
+removed returns ~70 hits, and most are unrelated: `tcp_server`'s
+`conn.in_flight`, `lease_refill_stats`, `sim_ring_transport`. The real
+consumers of `ReadView::up_to_trx_id` / `in_flight` outside `read_view.hpp`
+are `manager.cpp`'s mint and horizon, `step_vm.cpp:851`,
+`visibility.hpp:173`'s `sees_everything()`, and the watermark below.
+
+**AN-R9's ceiling did not exist** before this commit, and AN-S2's row reads
+"`MintReadView` reads AN-R9's ceiling" as though it did.
+
+**`Visible` cannot stay a pure function on a POD.** Branches 3 and 4 need
+the live floor and the window — AN-R3 rules the floor is read live, not
+copied — so the view must reach `InstanceVisibility`. AW-S2's
+`LookupCommit` is exactly the pair those two branches need, in one hold.
+There is no include cycle. The design decision AN-S2 must make and does not
+state: the view carries a `const InstanceVisibility*`, or every call site
+passes one.
+
+### 12.3 The finding: AN-S3 is not separable
+
+The AN order says AN-S3 "is separable and can be declined without
+disturbing the rest". **It cannot be.** The cross-owner watermark **is**
+`up_to_trx_id` — `shipped_statement_executor.cpp:263` reads
+`held->view().up_to_trx_id` and ships it, and the coordinator compares it
+(`command_dispatcher.cpp:6197`, `session.hpp:486`,
+`statement_ship_service.hpp:318`). AN-S2 removes the field that value comes
+from. So at S2 the watermark must either become the `snapshot_lsn` — which
+is most of AN-S3's mechanism — or be removed, which is AN-S3's other half.
+
+That is a decision for the operator or for AN-S2's own read, and it changes
+the wire either way. AN-S2's row does not mention the watermark at all.
+
+### 12.4 What remains, and its size
+
+`ReadView` reshaped and the four-branch `Visible`; `MintReadView` taking
+the ceiling; `ReadHorizon()` changing unit to an LSN with `min_snapshot_lsn`
+published and both consumers moved; `Everything()`'s flag with its 13 sites
+verified; the watermark decision; and seven cells, **two of which
+(H1 and H2) must be shown failing on the current mechanism before they
+pass** — which means writing them against a two-core assembly first.
+
+It is the predicate at the heart of MVCC, and every one of the 3364 cells
+depends on it. CLA landed the additive half and stopped there rather than
+begin a cutover it could not finish and could not leave half-applied: a
+half-done MVCC change does not compile, so unlike AW-S1b's deletion there
+is no dead-code state to rest in.

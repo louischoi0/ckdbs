@@ -547,6 +547,49 @@ TEST_F(VisibilityWiringTest, ABareManagerNeverBurns) {
     EXPECT_EQ(ids_->peek(), before);
 }
 
+// ---- AN-R9: the ceiling a snapshot will take -------------------------------
+
+TEST(InstanceVisibilityTest, TheCommitCeilingCoversEveryPublishedCommitAndOnlyThose) {
+    // **The ceiling AN-S2's mint will read**, landed ahead of it because it
+    // is the additive half: nothing takes it yet, so this cell is the whole
+    // of its behaviour.
+    //
+    // The property is not "the highest LSN assigned" but "the highest
+    // **published**". A commit's LSN is fixed under the append latch and
+    // its window entry becomes readable later, and AN-Q3 names that
+    // interval as the one place this design can be implemented wrongly and
+    // pass every test - so what a snapshot may take is bounded by what it
+    // could then find.
+    InstanceVisibility vis;
+    EXPECT_EQ(vis.CommitCeiling(), 0u) << "a fresh instance has published nothing";
+
+    vis.PublishCommit(10, 400);
+    EXPECT_EQ(vis.CommitCeiling(), 400u);
+
+    // Every commit at or below the ceiling is findable, which is the pairing
+    // the ordering inside `PublishCommit` exists to guarantee.
+    const InstanceVisibility::CommitLookup found = vis.LookupCommit(10);
+    EXPECT_EQ(found.commit_lsn, 400u);
+    EXPECT_LE(found.commit_lsn, vis.CommitCeiling());
+
+    // Monotone, and out-of-order publication does not lower it. A commit
+    // LSN comes from one stream under one latch so this should not arise,
+    // but the max is taken rather than assumed: "assigned in order" and
+    // "published in order" are the two things AN-Q3 says not to conflate.
+    vis.PublishCommit(11, 900);
+    EXPECT_EQ(vis.CommitCeiling(), 900u);
+    vis.PublishCommit(12, 700);
+    EXPECT_EQ(vis.CommitCeiling(), 900u) << "a later publication lowered the ceiling";
+
+    // An abort publishes nothing, so it moves neither the window nor the
+    // ceiling - the property `Abort leaves no entry` already pins, restated
+    // here because a ceiling raised by an abort would let a snapshot cover
+    // a transaction that never committed.
+    const std::uint64_t before = vis.CommitCeiling();
+    EXPECT_EQ(vis.LookupCommit(13).commit_lsn, kNoCommitLsn);
+    EXPECT_EQ(vis.CommitCeiling(), before);
+}
+
 // ---- AN-R12: the floor and the window are read together -------------------
 
 TEST(InstanceVisibilityTest, AReclaimedWinnerIsNeverAnsweredUncommitted) {

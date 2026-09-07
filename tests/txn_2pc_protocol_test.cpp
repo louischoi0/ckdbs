@@ -38,7 +38,7 @@
 // means the record is on the platter and this core may no longer abort. The
 // things worth pinning, in the order they would hurt:
 //
-//   1. a prepared context is not rolled back - not by the idle sweep, not by
+//   1. a prepared context is not rolled back - not by the lifetime sweep, not by
 //      the shutdown path. Either would append TXN_ABORT for a transaction
 //      the coordinator may have committed, which is the one durable
 //      disagreement two-phase commit exists to prevent;

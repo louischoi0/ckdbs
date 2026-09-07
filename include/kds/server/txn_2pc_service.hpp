@@ -676,7 +676,7 @@ public:
     //     synchronous `Dispatch()` and cannot await anything. A rollback
     //     also has nothing to learn from an acknowledgement: the outcome is
     //     abort whatever any participant says, and a participant that never
-    //     hears rolls back on its own idle ceiling.
+    //     hears rolls back on its own lifetime ceiling.
     //   - **No decision record**, for the same reason: the record exists so
     //     an in-doubt participant can ask (R6-5), and a participant of a
     //     rolled-back transaction is never in doubt - it never prepared,

@@ -1301,7 +1301,7 @@ void CoreRuntime::Run() {
     // would cost more than it measures.
     if (transport_ != nullptr && config_.wal_drain_interval_ns > 0) {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] { MaybeRefillLease(); });
-        // R6-2's idle ceiling on a cross-owner transaction this core is a
+        // R6-2's lifetime ceiling on a cross-owner transaction this core is a
         // participant in. **On every core, not only a peer**: the
         // coordinator is whichever core holds the client's session, so core
         // 0 is a participant whenever a peer's client writes a relation core

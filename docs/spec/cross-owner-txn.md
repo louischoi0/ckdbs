@@ -148,7 +148,7 @@ author, one reading. One-phase commit and presumed-commit/presumed-abort
 stay foreclosed by it.
 
 **A participant that replied prepared may not unilaterally abort.** The
-idle ceiling that ends an abandoned context stops applying to it; the
+lifetime ceiling that ends an un-prepared context stops applying to it; the
 shutdown path leaves it in doubt rather than rolling it back, because a
 `TXN_ABORT` for a transaction the coordinator may already have committed
 is durable disagreement — the one outcome two-phase commit exists to
@@ -192,9 +192,10 @@ protocol; only the third is bookkeeping.
 
 A participant's context is keyed on `(coordinator core, session_id)` and
 nothing else — the statement leg carries no transaction id. Two things end
-one while its coordinator's transaction is still open: the **idle
-ceiling** (`kTxnLifetimeCeilingNs`, 300 s of idleness, for a coordinator
-that never decides) and the participant core stopping. Both erase it.
+one while its coordinator's transaction is still open: the **lifetime
+ceiling** (`kTxnLifetimeCeilingNs`, 60 s measured from the context's own
+`BEGIN`, whether or not statements are still arriving — AN-R14, `txn.md`
+§1) and the participant core stopping. Both erase it.
 
 So the coordinator states, on every statement after the first it sent that
 owner, that the statement may only **join**. A participant told to join and
@@ -391,7 +392,7 @@ such bound.
   data back — is not given to a statement whose whole purpose was to read
   it.
 - A `ROLLBACK` tells the participants too, so their contexts end at the
-  client's word rather than at the idle ceiling.
+  client's word rather than at the lifetime ceiling.
 - **The client's answer does not depend on participant acknowledgements.**
   The coordinator answers from its own decision record: where a
   participant does not acknowledge, the coordinator logs a line and the
@@ -411,7 +412,7 @@ such bound.
 | name | where | what bounds it |
 |---|---|---|
 | `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` = 200 ms | **Nothing, since AO-S3** — the writer's stall was its only reader and that wait now ends on the holder's decide. Kept so a configuration carrying it still mounts; M3 re-scopes it to the lock-wait fault net (AO-R8). What bounds a writer that waits too long is `txn::kLockWaitFaultNetNs`, 11 s, a fault and not a ceiling. Log retention never tracked this knob; the floor in §2c holds the log back and `kTxnPhaseDeadlineNs` bounds a slow-but-alive coordinator |
-| `kTxnLifetimeCeilingNs` | `shipped_statement_executor.hpp`, 300 s | How long an abandoned participant context is held before it is rolled back. Deliberately far above the statement deadline: nothing on a healthy path reaches it |
+| `kTxnLifetimeCeilingNs` | `shipped_statement_executor.hpp`, 60 s | How long a participant context lives, measured from its own `BEGIN` and **not** from its last statement (AN-R14, `txn.md` §1). Above the statement deadline so a context outlives at least one full round trip taken from its own start; a transaction that is still busy at 60 s is rolled back all the same, so this is reachable on a healthy path and `shipped_enrolment_expiries` is not a defect counter |
 | `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is one of `txn::kMaxTrackedLiveTxns`, which local clients share — so without it a coordinator storm would refuse an unrelated connection's `BEGIN` with nothing naming the cause |
 | wire sizing | `txn_2pc_service.hpp` | 24 bytes per request leg, 256 for the participant reply, against a 1,024-byte ring slot — asserted against `kCoreRingPayloadBytes`, never the literal |
 
@@ -452,7 +453,7 @@ structurally impossible.
 |---|---|
 | `shipped_enrolled` / `shipped_enrolments` | this core as a participant: how many cross-owner transactions it holds now, and how many it has opened. Each live one pins this core's read horizon and one of its 64 live-transaction slots |
 | `shipped_enrolment_refusals` | enrolments this core declined — its own limit, or a trx-id lease it could not draw. Retryable |
-| `shipped_enrolment_expiries` | **should be 0**: contexts the idle ceiling rolled back because no decide arrived. Non-zero names an abandoning coordinator, not a rate |
+| `shipped_enrolment_expiries` | contexts the **lifetime** ceiling rolled back — either no decide arrived, or the transaction was still running at 60 s (AN-R14). It is no longer "should be 0": an abandoning coordinator and an over-long but healthy transaction reach it alike, and only the workload's own lifetime distribution separates them |
 | `shipped_join_refusals` | statements that could only join a context and found none — §2a, the other side of the line above. **A subset of `shipped_enrolment_refusals`**, not a count beside it: every refusal the enrolment path returns is counted there too, so the two are never summed |
 | `shipped_readonly_prepares` | participants prepared without a record because they wrote nothing (§1a) |
 | `txn_watermark_refusals` | transactions refused because a participant answered from a different snapshot than the one they had been reading it at (§3) |

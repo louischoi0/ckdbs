@@ -5339,7 +5339,7 @@ TEST_F(CoreRuntimeTest, AConnectionThatDiesMidCrossOwnerTransactionAbortsItsPart
     // **synchronous** `Dispatch()`, which cannot park - so a decide leg
     // that waited for acknowledgements could not serve it at all, and a
     // dropped connection would leave a participant holding rows until its
-    // idle ceiling. Driven here as that path drives it.
+    // lifetime ceiling. Driven here as that path drives it.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "cross_owner_drop");
 
@@ -6081,7 +6081,7 @@ TEST_F(CoreRuntimeTest, AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsCon
     // **RR0's correctness half, and the answer to CR2.** A participant's
     // context is keyed on `(coordinator core, session_id)` and nothing
     // else, and two things end one while its coordinator's transaction is
-    // still open: the idle ceiling (`kTxnLifetimeCeilingNs`) and this
+    // still open: the lifetime ceiling (`kTxnLifetimeCeilingNs`) and this
     // core stopping. Before the `join` bit the next statement of that
     // transaction found no context and opened a **fresh** one; prepare and
     // commit then made the second half durable, the first half was gone,

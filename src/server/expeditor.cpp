@@ -2344,7 +2344,7 @@ Status Expeditor::Start() {
 
     if (config_.wal_drain_interval_ns > 0) {
         scheduler.SubmitEvery(config_.wal_drain_interval_ns, drain);
-        // R6-2's idle ceiling, on **core 0 as well as the peers**. A peer
+        // R6-2's lifetime ceiling, on **core 0 as well as the peers**. A peer
         // gets this from `CoreRuntime::Run`; core 0's executor is this
         // object's, so without a registration here the one core that is a
         // participant whenever a peer's client writes a core-0-owned

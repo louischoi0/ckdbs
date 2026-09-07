@@ -138,36 +138,36 @@ inline constexpr sched::MonoTimeNs kShippedDedupRetentionNs = 2 * kShippedStatem
 // says so.
 inline constexpr std::size_t kShippedDedupMaxRecords = 4096;
 
-// ---- R6-2: how long an enrolled transaction may go untouched -------------
+// ---- R6-2 / AN-R14: how long an enrolled transaction may live -----------
 //
-// **A backstop for a lost abort, not a normal-path bound**, and the
-// distinction decides the number. A cross-owner transaction is a client's
-// `BEGIN … COMMIT`, so the gap between two of its statements is client think
-// time and has no engine-side bound - the same is true of a local
-// transaction, which this engine lets a connection hold open indefinitely
-// and unwinds only when the socket dies (`tcp_server.cpp`'s close path,
-// `docs/spec/txn.md` §10-8). A participant has **no socket to notice that
-// death**, which is the whole reason a ceiling has to exist here at all.
+// **Why a ceiling has to exist here at all**, which R6-2 established and
+// AN-R14 did not change: a local transaction is unwound when its socket
+// dies (`tcp_server.cpp`'s close path, `docs/spec/txn.md` §10-8), and a
+// participant has **no socket to notice that death**. Nothing else on this
+// core can tell an abandoned context from a slow one.
 //
-// So it is set well above any coordinator-side deadline in the series rather
-// than tuned to a workload: five minutes against the shipped statement's ten
-// seconds. Being wrong in the tight direction rolls back a transaction a
-// client is still using, which reaches that client as an abort it did not
-// ask for - a wrong answer. Being wrong in the generous direction costs an
-// abandoned transaction pinning `ReadHorizon()` for five minutes **and one
-// of this core's `txn::kMaxTrackedLiveTxns` slots for the same five
-// minutes**, which is the half a first draft of this paragraph left out:
-// the table is 64 entries and it is shared with every *local* client, so
-// enough abandoned enrolments would refuse an unrelated connection's
-// `BEGIN` and nothing would say why. `kShippedMaxEnrolled` below is what
-// keeps that from being local clients' problem.
+// **What being wrong costs, in each direction.** Too tight rolls back a
+// transaction a client is still using, which reaches that client as an
+// abort it did not ask for; R6-2 called that a wrong answer and sized the
+// constant to make it unreachable. **AN-R14 overrules that**: the operator's
+// envelope says the engine does not serve a transaction that runs past
+// 60 s, so aborting one is the ruled answer rather than a defect, and the
+// direction that is still purely a cost is the generous one - an abandoned
+// transaction pins `ReadHorizon()` and holds one of this core's
+// `txn::kMaxTrackedLiveTxns` slots for the whole ceiling. The table is 64
+// entries and is shared with every *local* client, so enough abandoned
+// enrolments would refuse an unrelated connection's `BEGIN` with nothing
+// saying why; `kShippedMaxEnrolled` below is what keeps that from being
+// local clients' problem.
 //
-// **`Expire` is only sound while nothing here has prepared.** After a
+// **The sweep is only sound while nothing here has prepared.** After a
 // participant replies prepared it may not unilaterally abort (D4), so R6-3
-// must exclude prepared contexts from this sweep - the ceiling then belongs
-// to the in-doubt resolution D5 states, not to this constant. Written here
-// because R6-2 is where the sweep is introduced and R6-3 is where it would
-// silently become wrong.
+// excludes prepared contexts - the bound that then applies is the in-doubt
+// resolution D5 states (`kTxnInDoubtCeilingNs`, 200 ms, and no interaction
+// with this constant, since the two never apply to the same context).
+// Written here because R6-2 is where the sweep is introduced and R6-3 is
+// where it would silently become wrong.
+//
 // **`kds.txn_lifetime_ceiling`** (AN-R14, operator's number, 2026-09-06).
 // A transaction past this is aborted; the abort surfaces at its next
 // statement as an ordinary one, never `SnapshotTooOld` - `txn.md` §4.1
@@ -184,9 +184,18 @@ inline constexpr std::size_t kShippedDedupMaxRecords = 4096;
 // **Provisional.** Set by the operator, not measured; AS-E measures the
 // lifetime distribution and this number is re-read then.
 inline constexpr sched::MonoTimeNs kTxnLifetimeCeilingNs = 60ull * 1'000'000'000ull;
+// **What the relation still buys, now that the key is lifetime.** Under
+// the retired *idleness* key this assert meant "never torn down under a
+// statement still on its way"; a lifetime key cannot promise that at any
+// ratio - a context at 59.9 s is swept while its next statement is on the
+// ring, and the `join` bit (`statement_ship_service.hpp`) is what makes
+// that safe rather than this number. What survives is the weaker and still
+// necessary claim below: a context outlives one full statement round trip
+// taken from its own start, so the statement that *opened* it can never be
+// answered into a context the sweep has already taken.
 static_assert(kTxnLifetimeCeilingNs > kShippedStatementDeadlineNs,
-              "a participant must outwait the coordinator's per-statement deadline, or a "
-              "transaction is torn down under a statement that is still on its way");
+              "a participant's context must outlive one full round trip measured from its "
+              "own start, or the statement that opened it could outlive it");
 
 // How many cross-owner transactions one core will hold as a participant.
 //
@@ -316,8 +325,8 @@ public:
     std::uint64_t enrolment_refusals() const noexcept { return enrolment_refusals_; }
 
     // **RR0: statements refused because their context was gone.** A
-    // statement that may only join a transaction and found none - the idle
-    // ceiling having rolled it back, or this core having stopped and come
+    // statement that may only join a transaction and found none - the
+    // lifetime ceiling having rolled it back, or this core having stopped and come
     // back. A rising number means coordinators are holding cross-owner
     // transactions open past `kTxnLifetimeCeilingNs`.
     //
@@ -327,9 +336,14 @@ public:
     // context that existed and does not any more, against the rest, which
     // are a context that could not be opened at all.
     std::uint64_t join_refusals() const noexcept { return join_refusals_; }
-    // Transactions the idle ceiling rolled back because no decide came.
-    // **Non-zero means a coordinator abandoned one**, which is a defect
-    // somewhere else - nothing on a healthy path reaches the ceiling.
+    // Transactions the lifetime ceiling rolled back.
+    //
+    // **It stopped being a defect counter at AN-R14.** Under the retired
+    // idleness key nothing on a healthy path reached the ceiling, so
+    // non-zero named an abandoning coordinator. Under a *lifetime* key a
+    // transaction that is still issuing statements at 60 s is rolled back
+    // too, so this now counts two populations - an abandoned context and an
+    // over-long healthy one - that nothing here separates.
     std::uint64_t enrolment_expiries() const noexcept { return enrolment_expiries_; }
 
     // **What each leg of this core's participation cost** (XF4,
@@ -425,8 +439,11 @@ public:
         return in_doubt_resolved_unknown_;
     }
 
-    // Rolls back every enrolled transaction idle past
-    // `kTxnLifetimeCeilingNs`, and (R6-5) asks about every prepared one
+    // Rolls back every enrolled transaction older than
+    // `kTxnLifetimeCeilingNs` - **older, not idler** (AN-R14): the test is
+    // against `began_at_ns`, so a context still taking statements is
+    // reached exactly as an abandoned one is. It also (R6-5) asks about
+    // every prepared one
     // that has been in doubt for `kTxnInDoubtCeilingNs`. Driven from the
     // reactor's periodic tick, the way `PendingIndexBuilds::Expire` is - a
     // lazy sweep would never run for an abandoned context, since nothing
@@ -544,17 +561,6 @@ private:
         // **When this context began**, which is what the ceiling reads
         // (AN-R14). It never moves.
         sched::MonoTimeNs began_at_ns = 0;
-        // Moved when a statement *finishes*. It measured **idleness**, and
-        // the ceiling used to read it: "a long transaction that is still
-        // being used is not the thing the sweep is looking for". AN-R14
-        // says it is - the operator's envelope is that a transaction
-        // completes within 10 s and one past 60 s may be aborted, and a
-        // transaction that stays busy for an hour is exactly the shape that
-        // an idleness bound never catches. Kept because `SHOW META`'s
-        // enrolment reporting and the in-doubt cadence below still ask when
-        // this context was last touched, which is a different question from
-        // when it began.
-        sched::MonoTimeNs touched_at_ns = 0;
         // **This core has replied prepared and may no longer abort** (D4).
         // Set only once the PREPARE record is durable, never at the append:
         // a reply sent before the sync would promise a durability the
@@ -587,10 +593,14 @@ private:
         // R6-5. When the last in-doubt ask went out, or when the promise
         // was made if none has - the ceiling runs from whichever, so the
         // first ask waits one ceiling after prepare and each later one a
-        // ceiling after the last. Separate from `touched_at_ns` because
-        // that one moves when a *statement* finishes, and a prepared
-        // context takes no statements: folding them would make the ask
-        // cadence depend on work that can no longer happen.
+        // ceiling after the last. It was kept separate from the
+        // statement-finished stamp `Enrolled` used to carry, because that
+        // one moved when a *statement* finished and a prepared context
+        // takes no statements: folding them would have made the ask cadence
+        // depend on work that can no longer happen. That stamp went with
+        // AN-R14 - the sweep reads `began_at_ns` now and nothing read the
+        // other - so this field is simply the only clock this context
+        // keeps besides its start.
         sched::MonoTimeNs asked_at_ns = 0;
         // **The ask is over** (R6-5, D5). Raised by an `UnknownOutcome`
         // answer, which is the one terminal answer the leg has: the
@@ -609,7 +619,7 @@ private:
         sched::MonoTimeNs decide_began_ns = 0;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
-            : session(isolation), began_at_ns(now), touched_at_ns(now) {
+            : session(isolation), began_at_ns(now) {
             session.set_role(role);
         }
     };

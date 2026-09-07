@@ -231,7 +231,7 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
     if (state->enrolled()) {
         // **R6-2: the transaction is meant to still be open**, so the
         // refusal below does not apply and nothing is rolled back here - the
-        // decide leg ends it (R6-3), or the idle ceiling does.
+        // decide leg ends it (R6-3), or the lifetime ceiling does.
         //
         // What is checked instead is the opposite failure: an enrolled
         // statement that *ended* the transaction. Only a shipped `COMMIT` or
@@ -241,10 +241,10 @@ void ShippedStatementExecutor::Finish(const DedupKey& key) {
         // were: drop it, so the next statement for this session opens a new
         // one rather than silently running outside any transaction.
         auto it_enrolled = enrolled_.find(key);
-        // Stamped at the statement's **end**, not its start, so the ceiling
-        // measures idleness: a statement that ran four minutes must not
-        // leave its coordinator one minute of grace.
-        if (it_enrolled != enrolled_.end()) it_enrolled->second->touched_at_ns = clock_.Now();
+        // Stamped at the statement's **end**, not its start. It measured
+        // idleness for the ceiling; since AN-R14 the ceiling reads
+        // `began_at_ns` instead and **nothing reads this field** - see its
+        // declaration, which carries the same note.
         // **RR0 / D3: the watermark this core is reading this transaction
         // at**, taken from the lookup that was already here rather than
         // from one of its own - the RC path must pay nothing this row did
@@ -482,7 +482,7 @@ StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor
     //
     // The coordinator has shipped this transaction a statement to this core
     // before, so a context existed and is gone. The reachable cause is the
-    // idle ceiling below (`ExpireEnrolled`), which rolls a context back and
+    // lifetime ceiling below (`ExpireEnrolled`), which rolls a context back and
     // erases it while its coordinator's transaction is still open; this
     // core having stopped and come back is the other, and both mean the
     // same thing - this transaction's earlier work on this core is not
@@ -589,7 +589,7 @@ void ShippedStatementExecutor::Prepare(const Txn2pcServer::PrepareAsk& ask,
     auto it = enrolled_.find(key);
     if (it == enrolled_.end()) {
         // Nothing here to prepare. The reachable causes are all the same
-        // outcome: the idle ceiling rolled the context back, the enrolment
+        // outcome: the lifetime ceiling rolled the context back, the enrolment
         // was refused, or this core restarted. None of them committed
         // anything, so the coordinator's abort is the correct end and the
         // refusal is **retryable** - the transaction can be run again from
@@ -1331,7 +1331,7 @@ void ShippedStatementExecutor::ExpireEnrolled() {
     if (enrolled_.empty()) return;
     const sched::MonoTimeNs now = clock_.Now();
     for (auto it = enrolled_.begin(); it != enrolled_.end();) {
-        // **A prepared context is not the idle ceiling's** (R6-3, D4): this
+        // **A prepared context is not the lifetime ceiling's** (R6-3, D4): this
         // core promised not to abort it unilaterally, and the ceiling that
         // applies to it is D5's, which asks rather than ends. The number of
         // contexts this passes over is `in_doubt()`.
@@ -1392,7 +1392,14 @@ void ShippedStatementExecutor::ExpireEnrolled() {
         }
         auto doomed = it++;
         ++enrolment_expiries_;
-        EndEnrolled(doomed, "the transaction outlived kds.txn_lifetime_ceiling; rolled back");
+        // **Names the constant, not a setting.** AN-R14 asks for one
+        // config key, `kds.txn_lifetime_ceiling`, and it is not
+        // registered (`expeditor.cpp`'s key set does not carry it), so
+        // naming it here would tell an operator to set something the
+        // config loader would refuse. `txn.md` §1 records the key as
+        // unbuilt; this message says what actually bounded the
+        // transaction.
+        EndEnrolled(doomed, "the transaction outlived the 60s lifetime ceiling; rolled back");
     }
 }
 

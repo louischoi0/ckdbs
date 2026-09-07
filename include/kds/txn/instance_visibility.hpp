@@ -187,6 +187,27 @@ public:
 
     // ---- Derived ----------------------------------------------------------
 
+    // **The ceiling a new snapshot takes** (AN-R9). The highest commit LSN
+    // this instance has *published*, which is a different thing from the
+    // highest it has assigned: a commit's LSN is fixed under the append
+    // latch and its window entry becomes readable later, and the interval
+    // between the two is the one place this design can be implemented
+    // wrongly and pass every test (`ratification-an-commit-order.md`
+    // AN-Q3). Raised inside `PublishCommit`'s hold and *after* the entry,
+    // so a snapshot that reads a ceiling covering some commit can always
+    // find that commit's entry - the reverse order would let a snapshot
+    // include a commit whose entry it cannot yet see, answer it invisible,
+    // and answer it visible a moment later.
+    //
+    // **Nothing mints against it yet.** `MintReadView` takes a bound on
+    // trx ids until AN-S2 turns the view into an LSN snapshot; this is the
+    // half of that stage that is additive, and it is here so the cutover
+    // is a change to the predicate rather than to the predicate and its
+    // input at once.
+    std::uint64_t CommitCeiling() const noexcept {
+        return commit_ceiling_.load(std::memory_order_acquire);
+    }
+
     // Below this, a version still on a page was written by a winner.
     //
     // **Not the visibility decision's floor** (AN-R12). This is the atomic
@@ -251,6 +272,12 @@ private:
     std::size_t reclaim_at_ = kReclaimFloor;
 
     std::atomic<std::uint64_t> floor_{0};
+    // `CommitCeiling()`. Monotone: a commit LSN is assigned from one
+    // stream under one latch, so a later publication never carries an
+    // earlier LSN - but the max is taken rather than assumed, because
+    // "assigned in order" and "published in order" are the two things
+    // AN-Q3 says not to conflate.
+    std::atomic<std::uint64_t> commit_ceiling_{0};
 
     // Small enough that the window stays a few tens of KiB between passes,
     // large enough that the pass is amortised over many commits. Not

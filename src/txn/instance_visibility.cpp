@@ -82,6 +82,15 @@ void InstanceVisibility::PublishCommit(std::uint64_t trx_id, std::uint64_t commi
         // one's order with the second's. Keeping the first is the
         // conservative half of the choice; the assignment is simply dropped.
         window_.try_emplace(trx_id, commit_lsn);
+        // **After the entry, under the same hold** (AN-R9). A snapshot that
+        // takes this ceiling must be able to find every commit it covers;
+        // raising it first would publish a commit's *order* before its
+        // *entry* and let one snapshot answer that commit invisible and
+        // then visible. Both writes are inside the window latch, so a
+        // reader taking the pair sees them together or not at all.
+        if (commit_lsn > commit_ceiling_.load(std::memory_order_relaxed)) {
+            commit_ceiling_.store(commit_lsn, std::memory_order_release);
+        }
         reclaim = window_.size() >= reclaim_at_;
     }
     if (reclaim) Reclaim();

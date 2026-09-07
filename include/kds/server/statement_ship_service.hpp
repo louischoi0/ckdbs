@@ -259,7 +259,7 @@ struct ShippedStatementRequestPayload {
     //
     // What it closes is a silent partial commit, not a tidiness gap. A
     // participant's context is keyed on `(coordinator core, session_id)`
-    // and nothing else, and the idle ceiling
+    // and nothing else, and the lifetime ceiling
     // (`kTxnLifetimeCeilingNs`) rolls one back and **erases** it while
     // the coordinator's transaction is still open. Without this bit the
     // next statement of that same transaction found no context and opened

@@ -491,8 +491,14 @@ TEST_F(ShippedStatementExecutorTest, AnEnrolledStatementThatEndsItsTransactionIs
 }
 
 TEST_F(ShippedStatementExecutorTest, AnAbandonedTransactionIsRolledBackAtTheIdleCeiling) {
-    // The backstop for a coordinator that never decides. Nothing on a
-    // healthy path reaches it, which is why the counter is worth having.
+    // The backstop for a coordinator that never decides, and **the ceiling's
+    // boundary**: one nanosecond under leaves it, one over takes it.
+    //
+    // The name says `IdleCeiling` and the ceiling has measured *lifetime*
+    // since AN-R14; on an abandoned context the two coincide, which is why
+    // this cell did not have to change. "Nothing on a healthy path reaches
+    // it" was true of the idle bound and is not true of the lifetime one -
+    // `ABusyTransactionIsSweptAtItsLifetimeNotItsIdleness` is that case.
     ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
                      /*in_txn=*/true)
                     .status.ok());
@@ -628,20 +634,6 @@ TEST_F(ShippedStatementExecutorTest, ABusyTransactionIsSweptAtItsLifetimeNotItsI
     EXPECT_EQ(executor_->enrolment_expiries(), 1u);
 }
 
-TEST_F(ShippedStatementExecutorTest, AnIdleTransactionUnderItsLifetimeIsNotSwept) {
-    // The other side of the same predicate, and the reason the ceiling is
-    // not simply "sweep everything": a transaction that has done nothing
-    // for a while but is still inside its envelope is a transaction the
-    // engine serves. Idleness is not the question any more, so this cell
-    // exists to say that age alone is.
-    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false, true)
-                    .status.ok());
-    clock_.Advance(kTxnLifetimeCeilingNs - 1);
-    executor_->ExpireEnrolled();
-    EXPECT_EQ(executor_->enrolled(), 1u) << "swept a transaction inside its lifetime";
-    EXPECT_EQ(executor_->enrolment_expiries(), 0u);
-}
-
 TEST_F(ShippedStatementExecutorTest, TwoCoordinatorsHoldTwoSeparateTransactions) {
     // The dedup key's argument, one level up: a session id is minted per
     // core, so core 2's session 99 and core 3's session 99 are different
@@ -717,6 +709,24 @@ TEST_F(ShippedStatementExecutorTest, TheCeilingSkipsAContextAStatementIsRunningO
     ASSERT_TRUE(answer->answered);
     EXPECT_TRUE(answer->status.ok()) << answer->status.message();
     EXPECT_EQ(executor_->enrolments(), 1u);
+
+    // **`busy` defers, it does not exempt** (AN-R14), and this is where
+    // that is checkable. The guard held this context only while the
+    // statement did; with the statement finished the next sweep takes it,
+    // and the cadence guarantees a next sweep.
+    //
+    // **The mutation this half exists for**, since the obvious one is not a
+    // mutation at all: `if (busy || age < ceiling) skip` and
+    // `if (busy) skip; if (age < ceiling) skip;` are the same program by
+    // short-circuit, so "make `busy` an exemption" cannot be written as a
+    // change. What *can* be written is a **sticky** deferral - a flag on
+    // `Enrolled` that skips it once it has been deferred - and the two
+    // lines below are what kill it.
+    ASSERT_EQ(executor_->running(), 0u);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 0u)
+        << "the deferral outlived the statement it deferred for";
+    EXPECT_EQ(executor_->enrolment_expiries(), 1u);
 }
 
 TEST_F(ShippedStatementExecutorTest, AParticipantRefusesPastItsEnrolmentLimitRetryably) {
