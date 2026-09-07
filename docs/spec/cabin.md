@@ -401,13 +401,17 @@ INSERT INTO t VALUES (0, 'b');
 SELECT * FROM t WHERE v = 0;   -- would return the second row alone
 ```
 
-**The rule.** `WalkAndRecord` declines when the walk's read view carries
-any in-flight transaction or belongs to one:
+**The rule.** `WalkAndRecord` declines when the walk's read view was minted
+beside an in-flight transaction or belongs to one:
 
-    view.in_flight_count == 0 && view.own_trx_id == kNoTrxId
+    !view.in_flight_at_mint && view.own_trx_id == kNoTrxId
 
-Both facts are already in the `ReadView` the walk carries, so this costs
-two comparisons on the miss path and needs nothing new. Declining is free
+Both facts are in the `ReadView` the walk carries, so this costs two
+comparisons on the miss path and needs nothing new. The first was
+`in_flight_count == 0` until AN-S2 turned the view into a commit-LSN
+snapshot that carries no in-flight set; the manager now stamps the one bit
+this rule needs at the mint - "another transaction on this core was live" -
+and the rule's meaning is unchanged. Declining is free
 by §1's corollary — an unobserved value is answered by the authoritative
 scan, a performance event and never a wrong one — and `SHOW CABINS`
 reports `unbankable_views=` so an operator can tell "nobody probed this
@@ -426,7 +430,7 @@ this rule a second look.
 **What it costs, stated rather than discovered.** Two things, and the first
 is wider than it sounds:
 
-- `in_flight_count` is a property of the *manager*, not of the relation, so
+- `in_flight_at_mint` is a property of the *manager*, not of the relation, so
   **one** session idling on an open `BEGIN` stops every Cabin on that core
   from building — including relations that transaction has never touched.
   Not "a workload that stays in transactions": one session is enough.

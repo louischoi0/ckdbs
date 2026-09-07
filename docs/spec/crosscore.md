@@ -199,8 +199,8 @@ step wire**, and nothing about that wire changes. The arrival core mints
 the `PipelineTag` and registers the receiver *before* it ships; the
 request carries the tag; the owner installs a batch sink on the shipped
 session and sends `STEP_BATCH` under the existing credit protocol; the
-ship reply POD arrives last as the **terminator**, carrying the status and
-the watermark with `text_len = 0`. Codec, batch builder, credit grant,
+ship reply POD arrives last as the **terminator**, carrying the status
+with `text_len = 0`. Codec, batch builder, credit grant,
 `STEP_CANCEL` and the ceiling are reused unchanged — this is a fifth
 **producer** on the pipeline, not a second pipeline.
 
@@ -224,8 +224,9 @@ asks, because that arm ships `form = 0`. Row boundaries come from
 file that owns the format, so nothing reads the row format twice.
 
 *Why an edge and not a bigger reply.* Both ship PODs fill exactly one ring
-slot, so the reply carries **992 bytes** and cannot hold a result set at
-all. The rows cross on the thing that already batches.
+slot, so the reply carries **1000 bytes** (`kShippedStatementReplyTextMax`;
+992 until AN-S2 took RR0's eight-byte watermark off the reply) and cannot
+hold a result set at all. The rows cross on the thing that already batches.
 
 **The tag is minted by the arrival core, not the owner**, because
 `SessionStepClient` discards a batch whose tag matches no open read. The
@@ -258,8 +259,8 @@ statement is **976 bytes**. That bound is client-visible and is stated in
 
 **The text arm does not move a byte.** A session with no result sink ships
 `form = 0`, the owner installs no sink, and the rendered-text reply is
-byte-identical to the newline protocol's — including its own 992-byte
-whole-reply cap, which is a debug surface's limit and stays one.
+byte-identical to the newline protocol's — including its own whole-reply
+cap, which is a debug surface's limit and stays one.
 
 **Fail closed, never misparse.** `form = 0` is rendered text and `form = 1`
 is typed; **any other value is refused by name**, and an owner that cannot
@@ -272,8 +273,8 @@ takes.
 The dedup record (§6) keeps running for every write; a typed read is
 exempt — `docs/spec/cross-owner-txn.md` §1a says why and what it bounds.
 The owner cannot tell a *text-arm* read from a write, because nothing on
-the request says so, so a text read keeps its record, bounded at 992 bytes
-either way.
+the request says so, so a text read keeps its record, bounded at
+`kShippedStatementReplyTextMax` either way.
 
 **What is refused**, by name, so a client sees one rule rather than a
 surprise:
@@ -338,9 +339,9 @@ client manual states the widened form beside the one-range one.
   the latest committed state.
 - **REPEATABLE READ** transactions issuing cross-core reads: a cross-owner
   RR transaction sees a **consistent-per-core** snapshot — each participant
-  pins one view for the transaction's life and the coordinator carries that
-  participant's watermark, which is compared with nothing on any other
-  core. `docs/spec/cross-owner-txn.md` §3 owns the rule and
+  pins one view for the transaction's life, and nothing on the coordinator
+  checks it (the per-participant watermark it used to carry went with the
+  trx-id predicate at AN-S2). `docs/spec/cross-owner-txn.md` §3 owns the rule and
   `docs/spec/client-manual.md` states it in the client's words. What is
   **not** given is a single global instant: two such transactions can
   disagree about the order of two commits on two cores, and sharing the log
@@ -353,7 +354,7 @@ client manual states the widened form beside the one-range one.
   in the transaction the owner holds for it, and no view this leg can take
   shows them. So both remote-read fast paths are skipped for a session that
   can enrol, and the read ships instead (§6), under §4a's bounds: the
-  widest row on a typed session, the 992-byte reply on a text one.
+  widest row on a typed session, the one-slot reply on a text one.
 - Catalog: the plan is resolved entirely on the session core from its
   catalog cache; a remote step trusts the descriptor in `STEP_OPEN` and does
   not re-resolve. DDL invalidation between resolve and execute surfaces as a

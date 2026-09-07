@@ -367,9 +367,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             // Settles the moment the transaction is decided, whichever way:
             // a committed one releases the row to a re-read, an aborted one
             // puts the old version back, and both are "no longer in doubt".
-            // One clock read and one walk of a table bounded by
-            // `kMaxTrackedLiveTxns` per turn, which is the predicate shape
-            // every park in this file uses.
+            // One clock read and one walk of this core's live set per
+            // turn, which is the predicate shape every park in this file
+            // uses.
             const std::function<bool()> decided = [this, block, deadline_ns] {
                 return !txn_->IsInFlight(block.trx_id) || NowNs() >= deadline_ns;
             };
@@ -2001,15 +2001,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " shipped_waiting=" << statement_ship_->waiting()
            << " shipped_late_executed=" << statement_ship_->late_executed_replies()
            << " shipped_identity_mismatches=" << statement_ship_->identity_mismatches();
-        // **RR0's one coordinator-side counter.** Non-zero means a
-        // participant answered from a snapshot other than the one this
-        // core's transaction had been reading it at, and the transaction
-        // was refused rather than committed across two views. Structurally
-        // 0 on a single-owner instance and on every READ COMMITTED
-        // transaction, which carries no watermark at all.
-        if (watermark_refusals_ != 0) {
-            os << " txn_watermark_refusals=" << watermark_refusals_;
-        }
     }
     if (shipped_statements_ != nullptr) {
         // The owner's side. `shipped_executed` against the arrival cores'
@@ -3710,11 +3701,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     // manager reads everything, which is the pre-MVCC engine and what every
     // socket-free test runs on.
     txn::ReadView check_view = txn::ReadView::Everything();
-    if (txn_ != nullptr) {
-        auto minted = txn_->MintReadView(txn::kNoTrxId);
-        if (!minted.ok()) return {ErrorReply(minted.status()), false, 0, minted.status()};
-        check_view = minted.value();
-    }
+    if (txn_ != nullptr) check_view = txn_->MintCheckView(txn::kNoTrxId);
 
     // Through ErrorReply, not a bare "ERR ": the build can refuse with the
     // two coded spellings - ASSERTION_VIOLATION for data already past the
@@ -4259,7 +4246,7 @@ DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
 
 // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) ----------------
 
-StatusOr<txn::ReadView> CommandDispatcher::CheckView(const WriteScope& scope) {
+txn::ReadView CommandDispatcher::CheckView(const WriteScope& scope) {
     // **Minted here, not taken from the statement.** A constraint check reads
     // latest state, so it needs a view of *now*: a parent committed-deleted
     // after this statement's snapshot must still fail the check, and an
@@ -4269,7 +4256,7 @@ StatusOr<txn::ReadView> CommandDispatcher::CheckView(const WriteScope& scope) {
     // satisfy its own constraints - the table's fourth row, with no special
     // case anywhere.
     if (txn_ == nullptr) return txn::ReadView::Everything();
-    return txn_->MintReadView(WriterId(scope));
+    return txn_->MintCheckView(WriterId(scope));
 }
 
 void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_oid,
@@ -6193,60 +6180,20 @@ DispatchOutcome CommandDispatcher::FinishShippedStatement(
                     "rather than retrying")),
                 false};
     }
-    // **RR0 / D3: the watermark, held here and checked against itself.**
-    //
-    // The owner reported the `up_to_trx_id` its enrolled REPEATABLE READ
-    // transaction is reading through; 0 means it reported none, which is
-    // every autocommit statement and every READ COMMITTED one, and nothing
-    // is held for those. The first reply from a participant establishes the
-    // value; every later one has to repeat it, because a participant's
-    // enrolled RR transaction pins its view once and never re-mints it
-    // (`TransactionManager::StartStatement`).
-    //
-    // **What can move it, and why this is a bound rather than a detector.**
-    // One thing moves a pinned view: the context being replaced by a newer
-    // one. RR0's `join` bit refuses that a whole leg earlier, on the
-    // participant, before the statement runs - so on this tree the false
-    // branch below is unreachable, and it is written down here rather than
-    // left for a later reader to infer, because the existence of a check is
-    // otherwise read as evidence that the case occurs. It is D3's rule
-    // stated where D3 says it lives, at the coordinator that carries the
-    // watermark, and it is one comparison on a field already in the reply.
-    //
-    // **What it cannot see**: a level that failed to cross. A participant
-    // running READ COMMITTED reports no watermark at all, so nothing is
-    // held and nothing is compared. That gap belongs to the wire's
-    // `isolation` byte and its own refusal.
-    //
-    // The statement has already run on the owner when this fires, which is
-    // why the answer is a refusal and not a repair: nothing the participant
-    // wrote can become durable without this core's decision, and the ERR
-    // poisons the transaction on the way out.
-    if (reply->status.ok() && reply->read_watermark != 0 &&
-        !session.NoteParticipantWatermark(shipped.owner_core, reply->read_watermark)) {
-        // Read before the close, which frees what it reads: `Find` returns
-        // a pointer into `waiting_`, and `Close` erases that node
-        // (statement_ship_service.cpp). The same rule the prepare phase's
-        // `DescribePrepareFailure` states one function down.
-        const std::uint64_t answered_at = reply->read_watermark;
-        statement_ship_->Close(shipped.request_id);
-        ++watermark_refusals_;
-        if (logging(LogLevel::kError)) {
-            log_->Error("2pc", "core " + std::to_string(core_id_) + " was reading core " +
-                                   std::to_string(shipped.owner_core) + " at watermark " +
-                                   std::to_string(session.ParticipantWatermark(
-                                       shipped.owner_core)) +
-                                   " and that core now answers at " +
-                                   std::to_string(answered_at) +
-                                   "; the transaction's snapshot of that core moved");
-        }
-        return {ErrorReply(Status::TxnConflict(
-                    "cross-owner transaction: core " + std::to_string(shipped.owner_core) +
-                    " answered from a different snapshot than the one this transaction has "
-                    "been reading it at, so REPEATABLE READ was not delivered; retry the "
-                    "transaction from the top")),
-                false};
-    }
+    // **No watermark check stands here since AN-S2** (AN-R5a, operator).
+    // RR0's per-participant watermark was the participant's
+    // `ReadView::up_to_trx_id`, held by the coordinator and compared with
+    // itself one reply later; the field it was read from is gone with the
+    // trx-id predicate, and the operator took removal over forwarding it
+    // as the snapshot LSN. What delivers "consistent per core" is the
+    // participant's own pinned REPEATABLE READ view plus the `join` bit,
+    // which refuses the one event that could replace it a leg earlier -
+    // the branch this check guarded was unreachable on this tree, and it
+    // stays so. What is *not* delivered, and was not before, is a single
+    // instant across cores: that is AN-R5's other half, the coordinator's
+    // `snapshot_lsn` adopted by the participant (AN-S3), and until it lands
+    // `cross-owner-txn.md` §3's stated-possible case has no check standing
+    // over it at all.
 
     // The owner's own answer, and on the refusal arm its own spelling: the
     // code crossed, so `ErrorReply` here reproduces the line the owner
@@ -7296,11 +7243,10 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // owner without the row loop below noticing.
     exec::FkParentVerdicts fk_held;
     if (!ta->fkeys_out.empty()) {
-        auto view = CheckView(scope);
-        if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
+        const txn::ReadView view = CheckView(scope);
         for (const auto& values : stmt.rows) {
             const std::vector<parser::AstValue> body = InsertBodyOf(*ta, values);
-            if (Status s = ResolveForeignKeyParents(*ta, body, view.value(), fk_held, scope.txn); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(*ta, body, view, fk_held, scope.txn); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -7384,10 +7330,9 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // body is the row.
     exec::FkParentVerdicts fk_held;
     if (!ta.fkeys_out.empty()) {
-        auto view = CheckView(scope);
-        if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
+        const txn::ReadView view = CheckView(scope);
         for (const auto& values : stmt.rows) {
-            if (Status s = ResolveForeignKeyParents(ta, values, view.value(), fk_held, scope.txn); !s.ok()) {
+            if (Status s = ResolveForeignKeyParents(ta, values, view, fk_held, scope.txn); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
         }
@@ -7418,18 +7363,14 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             err = "ERR expected " + std::to_string(ncols - 1) +
                   " value(s) after the primary key, got " + std::to_string(values.size());
         } else if (!ta.fkeys_out.empty()) {
-            auto view = CheckView(scope);
-            if (!view.ok()) {
-                err = ErrorReply(view.status());
-            } else {
-                for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
-                    if (fk.column_no == 0 || fk.column_no > values.size()) continue;
-                    if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1],
-                                                          view.value(), fk_held);
-                        !s.ok()) {
-                        err = ErrorReply(s);
-                        break;
-                    }
+            const txn::ReadView view = CheckView(scope);
+            for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
+                if (fk.column_no == 0 || fk.column_no > values.size()) continue;
+                if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1], view,
+                                                      fk_held);
+                    !s.ok()) {
+                    err = ErrorReply(s);
+                    break;
                 }
             }
         }
@@ -7661,12 +7602,10 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // What is left here is the per-row *answer*, which is what keeps the
     // refusal on the row that caused it.
     if (!ta.fkeys_out.empty()) {
-        auto view = CheckView(scope);
-        if (!view.ok()) return ErrorReply(view.status());
+        const txn::ReadView view = CheckView(scope);
         for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
             if (fk.column_no == 0 || fk.column_no > body.size()) continue;
-            if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1], view.value(),
-                                                  fk_held);
+            if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1], view, fk_held);
                 !s.ok()) {
                 return ErrorReply(s);
             }
@@ -8444,9 +8383,7 @@ std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     // Autocommit: everything committed right now. Minted per resolution
     // rather than reused, because "right now" is the whole meaning of an
     // autocommit read - and this only runs while DDL is genuinely open.
-    auto view = txn_->MintReadView(txn::kNoTrxId);
-    if (!view.ok()) return std::nullopt;
-    return view.value();
+    return txn_->MintCheckView(txn::kNoTrxId);
 }
 
 std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
@@ -10112,9 +10049,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     txn::ReadView check_view = txn::ReadView::Everything();
     exec::FkParentVerdicts fk_held;
     if (!fk_assignments.empty()) {
-        auto view = CheckView(scope);
-        if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
-        check_view = view.value();
+        check_view = CheckView(scope);
 
         // ---- The extraction pass (foreign-keys.md §2a, AH-R1) -----------
         //
@@ -10741,9 +10676,9 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session, wal::Lsn* commi
         // `Commit` returns on a logging failure *before* it clears
         // `active_`, and `Release` refuses to erase an active
         // transaction - so without this the transaction sits in `live_`
-        // for the life of the process: in every future read view's
-        // in-flight set, counting against `kMaxTrackedLiveTxns`, and
-        // since DT9 answering `IsInFlight` true forever, which would keep
+        // for the life of the process: holding the instance's floor and
+        // its commit window at its own id, and since DT9 answering
+        // `IsInFlight` true forever, which would keep
         // every catalog row it delete-marked alive to every unfiltered
         // read. A dropped index maintained and probed for ever after.
         //
@@ -11428,9 +11363,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     txn::ReadView check_view = txn::ReadView::Everything();
     exec::FkParentVerdicts reverse_held;
     if (!ta.fkeys_in.empty()) {
-        auto view = CheckView(scope);
-        if (!view.ok()) return {ErrorReply(view.status()), false, 0, view.status()};
-        check_view = view.value();
+        check_view = CheckView(scope);
 
         // ---- The reverse hoist (AJ-T3, foreign-keys.md §3a) -------------
         //

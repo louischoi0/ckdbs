@@ -1007,9 +1007,8 @@ TEST_F(TxnSessionTest, TheMountSweepRetiresTheMarksACommittedDropLeftBehind) {
     ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
 
     // The reader that keeps §5d's resolution-time purge off the marks.
-    auto view = mgr_->MintReadView(txn::kNoTrxId);
-    ASSERT_TRUE(view.ok());
-    auto lease = mgr_->RegisterReader(view.value());
+    const txn::ReadView view = mgr_->MintReadView(txn::kNoTrxId);
+    auto lease = mgr_->RegisterReader(view);
     ASSERT_TRUE(lease.ok());
 
     ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
@@ -1173,9 +1172,8 @@ TEST_F(TxnSessionTest, ALeasedReaderHoldsTheMarksAndItsReleaseFreesThem) {
 
     // An autocommit reader from before the drop - what a parked
     // session-side statement or a shipped stage holds.
-    auto view = mgr_->MintReadView(txn::kNoTrxId);
-    ASSERT_TRUE(view.ok());
-    auto lease = mgr_->RegisterReader(view.value());
+    const txn::ReadView view = mgr_->MintReadView(txn::kNoTrxId);
+    auto lease = mgr_->RegisterReader(view);
     ASSERT_TRUE(lease.ok());
 
     ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");

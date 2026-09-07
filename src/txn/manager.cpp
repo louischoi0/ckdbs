@@ -76,25 +76,48 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
                                    "'; expected 'read committed' or 'repeatable read'");
 }
 
-StatusOr<ReadView> TransactionManager::MintReadView(std::uint64_t own_trx_id) {
+ReadView TransactionManager::MintView(std::uint64_t own_trx_id, bool held) noexcept {
     ReadView view;
-    // Exclusive high-water mark over ids **already handed out**: an id the
-    // sequence has not issued cannot have written anything.
-    view.up_to_trx_id = ids_.peek();
+    // **A held snapshot is announced before it is taken** (AN-8 §8.5 C1,
+    // `instance_visibility.hpp`'s "reclamation" note). Between this mint
+    // and the publication that follows it - after a WAL append in `Begin`,
+    // inside `RegisterReader` for an autocommit statement - a pass on
+    // another core would otherwise see no reader on this core, drop an
+    // entry above the ceiling this is about to read, and raise the floor
+    // past it; the view would then answer that transaction committed at an
+    // LSN above its own snapshot. Lowering the slot to a value at or below
+    // the ceiling first closes that: a pass that misses this store is
+    // ordered before it, and the ceiling read below is ordered after, so
+    // whatever that pass dropped the ceiling already covers. The next
+    // `PublishCoreBounds` recomputes the slot exactly.
+    if (held) visibility_->LowerSnapshotBound(core_, visibility_->SnapshotCeiling());
+    // The ceiling every commit at or below which is already in the window
+    // (AN-R9): one load, and the whole of what a snapshot is.
+    view.snapshot_lsn = visibility_->SnapshotCeiling();
     view.own_trx_id = own_trx_id;
+    view.visibility = visibility_;
+    // The Cabin's bit (cabin.md section 6a), and the one reason this still
+    // walks `live_`: a set may not be banked from a view that could not see
+    // a transaction in flight on this core. `Begin` mints before it pushes,
+    // so the owner is never its own contemporary here.
     for (const std::unique_ptr<Transaction>& t : live_) {
-        if (!t->active_) continue;
-        if (t->id_ == own_trx_id) continue;  // my own writes are always mine
-        if (Status s = view.AddInFlight(t->id_); !s.ok()) return s;
+        if (t->active_ && t->id_ != own_trx_id) {
+            view.in_flight_at_mint = true;
+            break;
+        }
     }
     return view;
 }
 
+ReadView TransactionManager::MintReadView(std::uint64_t own_trx_id) noexcept {
+    return MintView(own_trx_id, /*held=*/true);
+}
+
+ReadView TransactionManager::MintCheckView(std::uint64_t writer_trx_id) noexcept {
+    return MintView(writer_trx_id, /*held=*/false);
+}
+
 StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
-    if (ActiveCount() >= kMaxTrackedLiveTxns) {
-        return Status::OutOfSpace("more than " + std::to_string(kMaxTrackedLiveTxns) +
-                                  " live transactions; a read view cannot track them");
-    }
     auto id = ids_.Next();
     if (!id.ok()) return id.status();
 
@@ -102,24 +125,22 @@ StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
     txn->id_ = id.value();
     txn->isolation_ = isolation;
     txn->active_ = true;
-
-    // Minted *after* the transaction is registered nowhere yet, so it does
-    // not appear in its own in-flight set - which it must not, because a
-    // transaction always sees its own writes.
-    auto view = MintReadView(id.value());
-    if (!view.ok()) return view.status();
-    txn->view_ = view.value();
+    txn->view_ = MintReadView(id.value());
 
     if (wal_ != nullptr) {
         if (auto begun = wal_->Append(wal::RecordSpec{wal::RecordType::kTxnBegin, id.value()});
             !begun.ok()) {
+            // The mint lowered this core's slot for a view nothing will
+            // hold; recomputed here rather than left stale-low until the
+            // next publication, which on an idle core could be a while.
+            PublishCoreBounds();
             return begun.status();
         }
     }
 
     live_.push_back(std::move(txn));
-    // After the push: `OldestActiveTrxId()` reads `live_`, and this
-    // transaction is exactly what may have lowered it.
+    // After the push: `OldestActiveTrxId()` and `LocalSnapshotBound()` read
+    // `live_`, and this transaction is exactly what may have lowered both.
     PublishCoreBounds();
     return live_.back().get();
 }
@@ -135,9 +156,12 @@ Status TransactionManager::StartStatement(Transaction& txn) {
     // began.
     if (txn.isolation_ == IsolationLevel::kRepeatableRead) return Status::OK();
 
-    auto view = MintReadView(txn.id_);
-    if (!view.ok()) return view.status();
-    txn.view_ = view.value();
+    txn.view_ = MintReadView(txn.id_);
+    // The view this transaction held is gone, and it may have been the one
+    // holding this core's snapshot bound down. A bound left stale-low costs
+    // retention, never correctness, but an RC session that never ends would
+    // then pin the instance at its first statement's snapshot for its life.
+    PublishCoreBounds();
     return Status::OK();
 }
 
@@ -237,6 +261,15 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
                                        " is no longer active");
     }
     wal::Lsn lsn = wal::kNoLsn;
+    // **Before the append** (AN-R9, `instance_visibility.hpp`'s "snapshot
+    // ceiling" note): from here until the marker is released, no snapshot
+    // minted on any core covers the LSN this commit is about to be
+    // assigned. Set before rather than after the append, because the gap
+    // between the append returning and a marker being stored is exactly
+    // the interval AN-Q3 names, and a marker stored inside it closes
+    // nothing. Released on every exit, including a throw: a marker left
+    // set caps every mint on the instance for good.
+    InstanceVisibility::PendingCommit pending(*visibility_, core_);
     if (wal_ != nullptr) {
         auto committed = wal_->Commit(txn.id_, durability);
         // **The borrows stay held here, and that is the contract, not an
@@ -258,23 +291,18 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     // Nothing is said to the undo log. Its pages are shared by every
     // transaction (undo_log.hpp), so a transaction ending releases nothing
     // and reserves nothing to release - what it does do is stop bounding
-    // the horizon, which is what lets a later growth recycle its pages.
+    // the floor, which is what lets a later growth recycle its pages.
     txn.trail_.clear();
 
     // **The window entry goes in before the in-flight set lets go**
-    // (AN-R2, AN-R9). Either order gives a consistent answer, but this one
-    // has no instant where the transaction is in neither record, which is
-    // the property AN-S2's cutover leans on: the two say the same thing
-    // throughout, so where a map insert sits cannot move visibility on its
-    // own.
-    //
-    // Nothing is published on the unlogged path. There is no commit record
-    // and so no order to record, and a manager wired to an instance
-    // without a WAL is a shape AN-S2 has to rule on rather than one this
-    // line should guess at.
-    if (visibility_ != nullptr && lsn != wal::kNoLsn) {
-        visibility_->PublishCommit(txn.id_, lsn);
-    }
+    // (AN-R2, AN-R9): there is no instant where the transaction is in
+    // neither record, so where a map insert sits cannot move visibility on
+    // its own. On the unlogged path `lsn` is `kNoLsn`, which the window
+    // reads as "the next position in commit order" - an unlogged instance
+    // has no record to take an order from and this is that order's only
+    // home. The marker lifts with `pending` at the end of this function,
+    // after the entry and the ceiling are both in.
+    visibility_->PublishCommit(txn.id_, lsn);
     txn.active_ = false;
     PublishCoreBounds();
     // **The borrows go last** (AO-R6). After the window entry and after
@@ -495,8 +523,6 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
 }
 
 TransactionManager::BurnOutcome TransactionManager::MaybeBurnIdleBlock() {
-    if (visibility_ == nullptr) return BurnOutcome::kNotNeeded;
-
     // Idle since the previous tick. Checked before anything that touches
     // the shared structure, so a busy core pays one load of its own
     // sequence and returns.
@@ -545,24 +571,46 @@ TransactionManager::BurnOutcome TransactionManager::MaybeBurnIdleBlock() {
 }
 
 void TransactionManager::PublishCoreBounds() noexcept {
-    if (visibility_ == nullptr) return;
-    // **The unresolved bound first, and the order is the contract, not a
-    // preference.** `Begin` moves the two in opposite directions in one
-    // step: it lowers this core's oldest unresolved id to the id it has
-    // just issued, and raises the cursor past that id. A concurrent
-    // `Reclaim()` on another core that read the *raised* cursor beside the
-    // *old* unresolved bound would compute a floor above a transaction that
-    // is live, and the floor's branch would then answer "committed" for it -
-    // H2 reintroduced through the publication order rather than through the
-    // predicate.
+    // The horizon's term first. It has no ordering relation to the pair
+    // below - a stale-high read of it is covered by AN-R1's ceiling
+    // argument, not by store order - so it goes where a new snapshot lowers
+    // it soonest.
+    visibility_->PublishSnapshotBound(core_, LocalSnapshotBound());
+    // **The unresolved bound before the cursor, and the order is the
+    // contract, not a preference.** `Begin` moves the two in opposite
+    // directions in one step: it lowers this core's oldest unresolved id to
+    // the id it has just issued, and raises the cursor past that id. A
+    // concurrent `Reclaim()` on another core that read the *raised* cursor
+    // beside the *old* unresolved bound would compute a floor above a
+    // transaction that is live, and the floor's branch would then answer
+    // "committed" for it - H2 reintroduced through the publication order
+    // rather than through the predicate.
     //
     // Storing the bound that moves *down* first closes it. Both stores are
     // release and both loads are acquire, so a reader that sees the new
     // cursor sees the new bound with it; and a reader that sees the old
     // cursor is bounded by the old cursor, which is the id just issued
     // (`peek()` is exclusive) and so still at or below every live id.
-    visibility_->PublishOldestUnresolved(core_, OldestActiveTrxId());
-    visibility_->PublishIssueCursor(core_, ids_.peek());
+    // `PublishBounds` is that order made one call.
+    visibility_->PublishBounds(core_, OldestActiveTrxId(), ids_.peek());
+}
+
+std::uint64_t TransactionManager::LocalSnapshotBound() const noexcept {
+    std::uint64_t bound = kUnboundedBound;
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (!t->active_) continue;
+        if (t->view_.snapshot_lsn < bound) bound = t->view_.snapshot_lsn;
+    }
+    for (std::size_t word = 0; word < reader_used_.size(); ++word) {
+        std::uint64_t used = reader_used_[word];
+        while (used != 0) {
+            const unsigned bit = static_cast<unsigned>(std::countr_zero(used));
+            used &= used - 1;
+            const std::uint64_t held = reader_slots_[word * 64 + bit];
+            if (held < bound) bound = held;
+        }
+    }
+    return bound;
 }
 
 std::vector<wal::CheckpointActiveTxn> TransactionManager::Snapshot() const {
@@ -665,10 +713,15 @@ StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
         const unsigned bit = static_cast<unsigned>(std::countr_one(reader_used_[word]));
         const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + bit);
         reader_used_[word] |= std::uint64_t{1} << bit;
-        // Stored as-is, zero included: a core whose id sequence has issued
-        // nothing mints `up_to_trx_id == 0`, and a bound of 0 simply holds
-        // the horizon below every real id - which is what that view means.
-        reader_slots_[slot] = view.MinVisibleBound();
+        // Stored as-is, zero included: a fresh instance that has published
+        // no commit mints `snapshot_lsn == 0`, and a bound of 0 simply
+        // holds the horizon below every commit - which is what that view
+        // means.
+        reader_slots_[slot] = view.snapshot_lsn;
+        // Published before the lease is handed back, so the slot is never
+        // held by a reader the instance cannot see. AN-R1 says why the gap
+        // between the mint and this store is harmless anyway.
+        PublishCoreBounds();
         return ReaderLease(this, slot);
     }
     return Status::OutOfSpace("more than " + std::to_string(kMaxRegisteredReaders) +
@@ -677,28 +730,39 @@ StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
 
 void TransactionManager::UnregisterReader(std::uint32_t slot) noexcept {
     reader_used_[slot / 64] &= ~(std::uint64_t{1} << (slot % 64));
+    PublishCoreBounds();
 }
 
 std::uint64_t TransactionManager::ReadHorizon() const noexcept {
-    std::uint64_t horizon = std::numeric_limits<std::uint64_t>::max();
-    for (const std::unique_ptr<Transaction>& t : live_) {
-        if (!t->active_) continue;
-        // One term, not two: the view's bound already folds in the owner's
-        // own id - Begin and StartStatement always mint with it - so a
-        // separate `t->id_` comparison could never lower this further.
-        const std::uint64_t bound = t->view_.MinVisibleBound();
-        if (bound < horizon) horizon = bound;
-    }
-    for (std::size_t word = 0; word < reader_used_.size(); ++word) {
-        std::uint64_t used = reader_used_[word];
-        while (used != 0) {
-            const unsigned bit = static_cast<unsigned>(std::countr_zero(used));
-            used &= used - 1;
-            const std::uint64_t bound = reader_slots_[word * 64 + bit];
-            if (bound < horizon) horizon = bound;
-        }
-    }
-    return horizon;
+    return visibility_->HorizonLsn();
+}
+
+bool TransactionManager::ResolvedForEveryReader(std::uint64_t trx_id) const {
+    if (trx_id == kAlwaysVisibleTrxId) return true;
+    if (trx_id < visibility_->Floor()) return true;
+    const InstanceVisibility::CommitLookup found = visibility_->LookupCommit(trx_id);
+    if (trx_id < found.floor) return true;
+    if (found.commit_lsn == kNoCommitLsn) return false;
+    // **The bound after the lookup, and the order is the whole argument.**
+    // What may still need this deleter invisible is a snapshot below its
+    // commit: one published (the horizon), one a commit in flight may cap
+    // a future mint to (the pending-commit markers), or one minted and not
+    // yet published - which lowered its core's slot *before* it read the
+    // ceiling (`MintView`). Read after the lookup, the bound is ordered
+    // after the commit's publication; a mint that this read does not see
+    // stored its slot after this read, and so read the ceiling after the
+    // publication too, and covers the commit. Read *before* the lookup the
+    // same mint could sit between the two reads and take a ceiling below
+    // the commit while this sweep, having seen no reader, retires the
+    // mark: a row physically gone from a snapshot that was owed it.
+    //
+    // This is `ReadView::Visible`'s branch 4 with the bound in place of
+    // the snapshot, and it is not written as one because `Visible` reads
+    // the snapshot first - which is right for a fixed snapshot and wrong
+    // for a bound read live.
+    const std::uint64_t bound =
+        std::min(visibility_->HorizonLsn(), visibility_->PendingCommitBound());
+    return found.commit_lsn <= bound;
 }
 
 }  // namespace kds::txn

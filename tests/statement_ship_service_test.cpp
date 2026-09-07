@@ -92,7 +92,7 @@ TEST_F(StatementShipTest, AStatementCrossesAndItsAnswerComesBack) {
         seen_oid = st.target_oid;
         seen_role = st.role;
         seen.emplace_back(std::move(st.text));
-        reply(Status::OK(), "INSERTED oid=4000 id=7 page=12 slot=3", 0);
+        reply(Status::OK(), "INSERTED oid=4000 id=7 page=12 slot=3");
     });
 
     ASSERT_TRUE(client_
@@ -130,7 +130,7 @@ TEST_F(StatementShipTest, TheOwnersRefusalArrivesAsTheOwnerSpelledIt) {
     // silently loses.
     InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) {
-        reply(Status::TxnConflict("extent lease: this core's lease of 64 pages is spent"), {}, 0);
+        reply(Status::TxnConflict("extent lease: this core's lease of 64 pages is spent"), {});
     });
 
     ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
@@ -191,7 +191,7 @@ TEST_F(StatementShipTest, AReplyWhoseIdentityDoesNotMatchItsWaiterIsDropped) {
     // says "unknown outcome" - truthful, because this core now knows
     // nothing about its own statement.
     InstallOwner([](StatementShipServer::ShippedStatement,
-                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK", 0); });
+                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     ASSERT_TRUE(client_->Ship(1, /*request_id=*/1, /*session_id=*/99, /*sequence=*/1, 4000, Role::kReadWrite,
                               "INSERT INTO t VALUES ('a', 1)")
@@ -222,7 +222,7 @@ TEST_F(StatementShipTest, ALateReplyIsCountedRatherThanDelivered) {
     // cannot be undone - so it is counted, and that count is the measure of
     // how often SS3's dedup record is what saves a client.
     InstallOwner([](StatementShipServer::ShippedStatement,
-                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK", 0); });
+                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
     clock_.Advance(kShippedStatementDeadlineNs);
@@ -240,7 +240,7 @@ TEST_F(StatementShipTest, AnOverLongStatementIsRefusedAndShipsNothing) {
     InstallOwner([&](StatementShipServer::ShippedStatement st,
                      StatementShipServer::ReplyFn reply) {
         seen.emplace_back(std::move(st.text));
-        reply(Status::OK(), "OK", 0);
+        reply(Status::OK(), "OK");
     });
 
     const std::string too_long(kShippedStatementTextMax + 1, 'x');
@@ -272,7 +272,7 @@ TEST_F(StatementShipTest, AnOverLongReplyIsUnknownOutcomeBecauseTheStatementAlre
     // class as a deadline and wears the same code.
     InstallOwner([](StatementShipServer::ShippedStatement,
                     StatementShipServer::ReplyFn reply) {
-        reply(Status::OK(), std::string(kShippedStatementReplyTextMax + 1, 'r'), 0);
+        reply(Status::OK(), std::string(kShippedStatementReplyTextMax + 1, 'r'));
     });
 
     ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadOnly, "SELECT * FROM t").ok());
@@ -335,7 +335,7 @@ TEST_F(StatementShipTest, TheArrivalCoresRankCrossesWithTheStatement) {
     InstallOwner([&](StatementShipServer::ShippedStatement st,
                      StatementShipServer::ReplyFn reply) {
         seen = st.role;
-        reply(Status::OK(), "OK", 0);
+        reply(Status::OK(), "OK");
     });
     ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadOnly, "SELECT * FROM t").ok());
     Pump();
@@ -351,7 +351,7 @@ TEST_F(StatementShipTest, ARoleByteThisBuildCannotReadIsRefusedNotAssumed) {
     InstallOwner([&](StatementShipServer::ShippedStatement,
                      StatementShipServer::ReplyFn reply) {
         executed = true;
-        reply(Status::OK(), "OK", 0);
+        reply(Status::OK(), "OK");
     });
 
     auto forged = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT * FROM t");
@@ -381,7 +381,7 @@ TEST_F(StatementShipTest, AFullRingRetriesAndNeverDrops) {
     InstallOwner([&](StatementShipServer::ShippedStatement,
                      StatementShipServer::ReplyFn reply) {
         ++executed;
-        reply(Status::OK(), "OK", 0);
+        reply(Status::OK(), "OK");
     });
 
     constexpr int kShipped = 40;  // well past the 16 slots
@@ -413,7 +413,7 @@ TEST_F(StatementShipTest, ARequestIdWithAStatementParkedOnItIsRefused) {
     // compare against and the first statement would be woken with the
     // second's answer.
     InstallOwner([](StatementShipServer::ShippedStatement,
-                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK", 0); });
+                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('a', 1)").ok());
     Status refused = client_->Ship(1, 1, 99, 2, 4000, Role::kReadWrite, "INSERT INTO t VALUES ('b', 2)");
@@ -433,7 +433,7 @@ TEST_F(StatementShipTest, AShipToACoreTheInstanceHasNotIsRefusedBeforeAnythingPa
     // before being told its outcome is unknown - for a request that
     // provably never left this core.
     InstallOwner([](StatementShipServer::ShippedStatement,
-                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK", 0); });
+                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     Status refused = client_->Ship(/*owner_core=*/7, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES (1)");
     EXPECT_FALSE(refused.ok());
@@ -473,7 +473,7 @@ TEST_F(StatementShipTest, AWrongSizedRequestGetsNoReplyAndLeavesTheDeadlineToAns
     // size names the waiter to answer to. It must not crash, must not
     // reply, and must leave the arrival core's deadline as the backstop.
     InstallOwner([](StatementShipServer::ShippedStatement,
-                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK", 0); });
+                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     const std::byte runt[8]{};
     sched::MessageHeader header{};
@@ -564,7 +564,7 @@ TEST_F(StatementShipTest, TheRetryBitCrossesWithTheStatement) {
     InstallOwner([&](StatementShipServer::ShippedStatement st,
                      StatementShipServer::ReplyFn reply) {
         seen.push_back(st.retry);
-        reply(Status::OK(), "OK", 0);
+        reply(Status::OK(), "OK");
     });
 
     ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES (1)").ok());
@@ -606,7 +606,7 @@ TEST_F(StatementShipTest, TheInTxnBitCrossesWithTheStatement) {
     InstallOwner([&](StatementShipServer::ShippedStatement st,
                      StatementShipServer::ReplyFn reply) {
         seen.push_back(st.in_txn);
-        reply(Status::OK(), "OK", 0);
+        reply(Status::OK(), "OK");
     });
 
     ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "INSERT INTO t VALUES (1)").ok());
@@ -621,12 +621,12 @@ TEST_F(StatementShipTest, TheInTxnBitCrossesWithTheStatement) {
     EXPECT_TRUE(seen[1]);
 }
 
-TEST_F(StatementShipTest, TheJoinBitAndTheWatermarkCrossInOppositeDirections) {
-    // **RR0's two fields, and neither is on the leg the other is.** `join`
-    // goes out with the request - it is the coordinator's statement about a
-    // context it believes exists - and the watermark comes back with the
-    // reply, because the coordinator has observed nothing on a participant
-    // before that participant's first answer (the order's HR2).
+TEST_F(StatementShipTest, TheJoinBitCrossesOnTheRequestLeg) {
+    // **RR0's field, on the request leg.** `join` goes out with the request
+    // - it is the coordinator's statement about a context it believes
+    // exists. The reply leg used to carry the participant's watermark back
+    // (the order's HR2); AN-S2 removed it with the field it was read from,
+    // and the reply now carries the status and the text alone.
     auto plain = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1");
     ASSERT_TRUE(plain.ok()) << plain.status().message();
     EXPECT_EQ(plain.value().join, 0u);
@@ -642,8 +642,7 @@ TEST_F(StatementShipTest, TheJoinBitAndTheWatermarkCrossInOppositeDirections) {
     InstallOwner([&](StatementShipServer::ShippedStatement st,
                      StatementShipServer::ReplyFn reply) {
         seen_join.push_back(st.join);
-        // The owner's watermark, echoed back on the reply leg.
-        reply(Status::OK(), "OK", st.join ? 4242u : 4141u);
+        reply(Status::OK(), "OK");
     });
 
     ASSERT_TRUE(client_
@@ -663,42 +662,16 @@ TEST_F(StatementShipTest, TheJoinBitAndTheWatermarkCrossInOppositeDirections) {
     const ShippedStatementOutcome* first = client_->Find(1);
     ASSERT_NE(first, nullptr);
     ASSERT_TRUE(first->arrived);
-    EXPECT_EQ(first->read_watermark, 4141u);
     const ShippedStatementOutcome* second = client_->Find(2);
     ASSERT_NE(second, nullptr);
     ASSERT_TRUE(second->arrived);
-    EXPECT_EQ(second->read_watermark, 4242u);
-}
-
-TEST_F(StatementShipTest, ARefusalCarriesNoWatermarkHoweverOneIsPassed) {
-    // A watermark is a promise about a view the client's transaction is
-    // reading through, and a statement that did not run makes no such
-    // promise. Dropped at the encode rather than left to every refusal site
-    // to remember.
-    auto refusal = ShippedStatementReplyOf(99, 1, Status::TxnConflict("no"), {},
-                                           /*read_watermark=*/777);
-    ASSERT_TRUE(refusal.ok()) << refusal.status().message();
-    EXPECT_EQ(refusal.value().read_watermark, 777u)
-        << "the encode itself carries what it is given; the drop is the sender's";
-
-    InstallOwner([](StatementShipServer::ShippedStatement,
-                    StatementShipServer::ReplyFn reply) {
-        reply(Status::TxnConflict("the owner refused"), {}, 777);
-    });
-    ASSERT_TRUE(client_->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "SELECT 1").ok());
-    Pump();
-    const ShippedStatementOutcome* out = client_->Find(1);
-    ASSERT_NE(out, nullptr);
-    ASSERT_TRUE(out->arrived);
-    EXPECT_FALSE(out->status.ok());
-    EXPECT_EQ(out->read_watermark, 0u) << "a refusal carried a watermark";
 }
 
 TEST_F(StatementShipTest, AForgedTextLengthIsRefusedNotRead) {
     // The payload is bytes this core did not compute, and `text_len` is
     // the only thing between a forged length and a read past the array.
     InstallOwner([](StatementShipServer::ShippedStatement,
-                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK", 0); });
+                    StatementShipServer::ReplyFn reply) { reply(Status::OK(), "OK"); });
 
     ShippedStatementRequestPayload forged{};
     forged.session_id = 99;

@@ -848,8 +848,8 @@ void Catalog::InvalidateAfterCompensation() {
     BumpVersion("a transaction that wrote catalog rows resolved");
 }
 
-StatusOr<std::uint64_t> Catalog::RetireDeleteMarksBelow(std::uint64_t horizon,
-                                                          std::uint64_t* remaining_out) {
+StatusOr<std::uint64_t> Catalog::RetireDeleteMarks(
+    const std::function<bool(std::uint64_t deleter)>& settled, std::uint64_t* remaining_out) {
     std::uint64_t retired = 0;
     for (const PageId root : kAllCatalogPages) {
         Status inner = Status::OK();
@@ -872,10 +872,10 @@ StatusOr<std::uint64_t> Catalog::RetireDeleteMarksBelow(std::uint64_t horizon,
                     return tuple.status();
                 }
                 if (!tuple.value().deleted) return storage::VisitControl::kContinue;
-                // A mark's trx_id is its *deleter*. At or above the
-                // horizon proves nothing - some live view may still see
-                // the row - so the mark stays for a later pass.
-                if (tuple.value().trx_id >= horizon) {
+                // A mark's trx_id is its *deleter*. A deleter some live
+                // view may still look through proves nothing, so the mark
+                // stays for a later pass.
+                if (!settled(tuple.value().trx_id)) {
                     if (remaining_out != nullptr) ++*remaining_out;
                     return storage::VisitControl::kContinue;
                 }
@@ -902,11 +902,11 @@ StatusOr<std::uint64_t> Catalog::RetireDeleteMarksBelow(std::uint64_t horizon,
 }
 
 StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
-    // Every mark, unconditionally: a real id is 48 bits, so the horizon
-    // that admits everything is any value above kMaxTrxId.
-    auto swept = RetireDeleteMarksBelow(std::numeric_limits<std::uint64_t>::max());
+    // Every mark, unconditionally: nothing that was live before the mount
+    // is live now, and recovery has rolled every loser back.
+    auto swept = RetireDeleteMarks([](std::uint64_t) { return true; });
     if (!swept.ok()) return swept;
-    pending_marks_ = 0;  // nothing survives a horizon above every id
+    pending_marks_ = 0;  // nothing survives a sweep that admits every deleter
     const std::uint64_t retired = swept.value();
 
     if (retired > 0) {
@@ -933,7 +933,9 @@ StatusOr<std::uint64_t> Catalog::PurgeSettledDeleteMarks() {
     // only while some mark written this run may still be on a page.
     if (pending_marks_ == 0) return std::uint64_t{0};
     std::uint64_t remaining = 0;
-    auto swept = RetireDeleteMarksBelow(txn_->ReadHorizon(), &remaining);
+    auto swept = RetireDeleteMarks(
+        [this](std::uint64_t deleter) { return txn_->ResolvedForEveryReader(deleter); },
+        &remaining);
     if (!swept.ok()) return swept;
     pending_marks_ = remaining;
     if (swept.value() > 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {

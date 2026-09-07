@@ -56,10 +56,13 @@ enum class Visibility : std::uint8_t {
     kNeedsUndoWalk,
 };
 
-// Phase 1 (txn.md section 4.3 step 2 and 3). Pure, no page fetch, safe to
-// call with a page span live.
-constexpr Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool deleted,
-                              std::uint64_t undo_ptr) noexcept {
+// Phase 1 (txn.md section 4.3 step 2 and 3). No page fetch, safe to call
+// with a page span live. **Not pure since AN-S2**: an invisible-by-floor
+// writer costs the view one latched window lookup (`read_view.hpp`), which
+// is why this is no longer `constexpr` - and still no fetch, which is the
+// property the span rule needs.
+inline Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool deleted,
+                           std::uint64_t undo_ptr) {
     if (view.Visible(trx_id)) {
         // The version exists iff it is not delete-marked. A delete-mark by
         // a writer I can see is a row that is gone for me.
@@ -77,7 +80,7 @@ constexpr Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool d
 
 // Convenience over a tuple the caller already read. Same phase-1 contract:
 // no fetch, safe under a span.
-inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tuple) noexcept {
+inline Visibility Classify(const ReadView& view, const heap::PageView::Tuple& tuple) {
     return Classify(view, tuple.trx_id, tuple.deleted, tuple.undo_ptr);
 }
 
@@ -138,14 +141,12 @@ enum class CheckVerdict : std::uint8_t {
 
 // `undo_ptr` is deliberately absent from the parameter list: latest state
 // never consults it. See the note above.
-constexpr CheckVerdict CheckVisibility(const ReadView& view, std::uint64_t trx_id,
-                                       bool deleted) noexcept {
+inline CheckVerdict CheckVisibility(const ReadView& view, std::uint64_t trx_id, bool deleted) {
     if (!view.Visible(trx_id)) return CheckVerdict::kBusy;
     return deleted ? CheckVerdict::kAbsent : CheckVerdict::kLive;
 }
 
-inline CheckVerdict CheckVisibility(const ReadView& view,
-                                    const heap::PageView::Tuple& tuple) noexcept {
+inline CheckVerdict CheckVisibility(const ReadView& view, const heap::PageView::Tuple& tuple) {
     return CheckVisibility(view, tuple.trx_id, tuple.deleted);
 }
 
@@ -167,11 +168,10 @@ struct Snapshot {
 
     // True when this snapshot can never need the undo chain, so a reader
     // may skip the classification entirely. Not an optimization the reader
-    // depends on - Classify() is one comparison - but it makes "nothing
-    // changed for a non-transactional caller" checkable in one place.
-    bool sees_everything() const noexcept {
-        return view.up_to_trx_id == UINT64_MAX && view.in_flight_count == 0;
-    }
+    // depends on - Classify() is a handful of comparisons - but it makes
+    // "nothing changed for a non-transactional caller" checkable in one
+    // place.
+    bool sees_everything() const noexcept { return view.sees_everything; }
 };
 
 }  // namespace kds::txn

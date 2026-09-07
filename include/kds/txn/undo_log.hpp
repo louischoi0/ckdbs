@@ -81,10 +81,16 @@
 //
 // **The reachability fact**: a record holds the version its writer
 // *replaced*, and a reader walks into undo only while writers are
-// invisible - so a record whose writer is below the manager's
-// ReadHorizon() is unreachable by every live and future traversal, and
-// recovery's undo phase cannot need it either (an active transaction
-// bounds the horizon at or below its own id).
+// invisible - so a record whose writer is below the bound the manager
+// installs is unreachable by every live and future traversal, and
+// recovery's undo phase cannot need it either. **That bound is the
+// instance's commit-order floor since AN-S2** (`instance_visibility.hpp`):
+// below it every writer is resolved and visible to every live and future
+// snapshot, and an active transaction holds it at or below its own id.
+// The horizon's other half - "committed at or below the oldest live
+// snapshot" - is not judged here, because a page knows its writers' ids
+// and not their commit LSNs; it reaches this purge only through the floor,
+// which reclamation keeps below any commit a live snapshot cannot see.
 //
 // The purge unit is a whole page (records are addressed by byte offset;
 // nothing smaller can be reclaimed), the bound is a per-page maximum
@@ -99,8 +105,8 @@
 //
 // **Disarmed by default**: with no horizon source installed the log
 // behaves exactly as before - nothing is freed. TransactionManager
-// installs its ReadHorizon() on construction, so every manager-owned log
-// purges; a log built bare (tests, tools) does not. A crash forgets the
+// installs the floor on construction, so every manager-owned log purges; a
+// log built bare (tests, tools) does not. A crash forgets the
 // recycle list and this run's chain alike; the next run starts a fresh
 // chain, so the old pages leak exactly as they always have - the
 // mount-time reclaim of prior-run pages is UP4, not built.
@@ -196,8 +202,9 @@ public:
 
     // ---- The purge (header note above; docs/inflight/in-progress/workplan-undo-purge.md) -----
 
-    // Arms purge-on-growth: `horizon` answers the manager's ReadHorizon()
-    // when called. Null disarms (the default, and the pre-purge behaviour).
+    // Arms purge-on-growth: `horizon` answers a trx id below which every
+    // writer's records are unreachable - the instance's floor, from the
+    // manager. Null disarms (the default, and the pre-purge behaviour).
     // The source is called only from inside Append(), so a caller whose
     // lambda captures an object need only guarantee that object is alive
     // while appends run - which TransactionManager, the sole appender,

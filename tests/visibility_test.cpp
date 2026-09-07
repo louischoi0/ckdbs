@@ -14,16 +14,25 @@
 #include "kds/txn/read_view.hpp"
 
 // docs/spec/txn.md section 10-3, the whole group: kBootstrapXid always visible,
-// own writes visible, trx_id >= up_to_trx_id invisible, in-flight
-// invisible, undo_ptr == 0 with an invisible writer means no version, a
-// delete-mark read from both sides, a three-version chain read from three
+// own writes visible, a commit above the snapshot LSN invisible, a live
+// writer invisible, undo_ptr == 0 with an invisible writer means no version,
+// a delete-mark read from both sides, a three-version chain read from three
 // views yielding three payloads, and garbage in the tuple header's two free
 // bytes changing nothing - the mechanized form of "no xmax anywhere".
+//
+// **The views here are hand-built over an `InstanceVisibility`** (AN-S2):
+// a view is a snapshot LSN plus the instance it reads the floor and the
+// window through. `Committed()` publishes every id up to `kLastCommitted`
+// at an LSN equal to its id, so `ViewAt(n)` sees writers below `n` and not
+// those at or above it - exactly what the number meant over the trx-id
+// predicate, which is why the chain cells below read unchanged. A cell
+// about a *live* writer builds its own instance and leaves that id out.
 
 namespace kds::txn {
 namespace {
 
 constexpr PageId kFirstUserPageId = 128;
+constexpr std::uint64_t kLastCommitted = 200;
 
 std::vector<std::byte> BytesOf(std::string_view s) {
     std::vector<std::byte> out(s.size());
@@ -37,11 +46,31 @@ std::string StringOf(std::span<const std::byte> b) {
     return out;
 }
 
-ReadView ViewAt(std::uint64_t up_to, std::uint64_t own = kNoTrxId) {
+// One instance in which ids 2..kLastCommitted are committed at LSN = id.
+// Function-local so a view built in any cell can point at it for the
+// binary's life; nothing here ever reclaims it (no cursor is published, so
+// the floor stays at 0 and every answer goes through the window).
+const InstanceVisibility& Committed() {
+    static const InstanceVisibility* const vis = [] {
+        auto* built = new InstanceVisibility();
+        for (std::uint64_t id = 2; id <= kLastCommitted; ++id) built->PublishCommit(id, id);
+        return built;
+    }();
+    return *vis;
+}
+
+// A view over `vis` that sees every commit at an LSN below `up_to`.
+ReadView ViewOver(const InstanceVisibility& vis, std::uint64_t up_to,
+                  std::uint64_t own = kNoTrxId) {
     ReadView v;
-    v.up_to_trx_id = up_to;
+    v.snapshot_lsn = up_to == 0 ? 0 : up_to - 1;
     v.own_trx_id = own;
+    v.visibility = &vis;
     return v;
+}
+
+ReadView ViewAt(std::uint64_t up_to, std::uint64_t own = kNoTrxId) {
+    return ViewOver(Committed(), up_to, own);
 }
 
 // ---- ReadView::Visible, on its own ---------------------------------------
@@ -53,60 +82,86 @@ TEST(ReadViewTest, TheBootstrapTransactionIsVisibleToEveryView) {
     EXPECT_TRUE(ViewAt(0).Visible(kAlwaysVisibleTrxId));
     EXPECT_TRUE(ViewAt(1000).Visible(kAlwaysVisibleTrxId));
 
-    ReadView with_it_in_flight = ViewAt(1000);
-    ASSERT_TRUE(with_it_in_flight.AddInFlight(kAlwaysVisibleTrxId).ok());
-    EXPECT_TRUE(with_it_in_flight.Visible(kAlwaysVisibleTrxId))
-        << "the always-visible arm comes first, so nothing can shadow it";
+    // And over an instance that has published nothing at all - the window
+    // empty, the floor at zero - which is what "unconditional" means: the
+    // always-visible arm comes first, so nothing can shadow it.
+    InstanceVisibility empty;
+    EXPECT_TRUE(ViewOver(empty, 1000).Visible(kAlwaysVisibleTrxId));
 }
 
 TEST(ReadViewTest, AViewSeesItsOwnWritesIncludingUncommittedOnes) {
-    ReadView v = ViewAt(/*up_to=*/50, /*own=*/50);
-    ASSERT_TRUE(v.AddInFlight(50).ok());  // it is live, being itself
+    // 50 is live: it has no window entry anywhere.
+    InstanceVisibility vis;
+    const ReadView v = ViewOver(vis, /*up_to=*/50, /*own=*/50);
     EXPECT_TRUE(v.Visible(50));
+    EXPECT_FALSE(ViewOver(vis, 50).Visible(50)) << "and nobody else sees it";
 }
 
-TEST(ReadViewTest, IdsAtOrAboveTheHighWaterMarkAreInvisible) {
-    ReadView v = ViewAt(50);
+TEST(ReadViewTest, ACommitAboveTheSnapshotIsInvisible) {
+    const ReadView v = ViewAt(50);
     EXPECT_TRUE(v.Visible(49));
     EXPECT_FALSE(v.Visible(50));
     EXPECT_FALSE(v.Visible(51));
 }
 
-TEST(ReadViewTest, InFlightIdsAreInvisibleAndTheSetStaysSorted) {
-    ReadView v = ViewAt(100);
-    for (std::uint64_t id : {std::uint64_t{40}, std::uint64_t{10}, std::uint64_t{25}}) {
-        ASSERT_TRUE(v.AddInFlight(id).ok());
+// A writer with no window entry is live, aborted or never issued, and the
+// snapshot cannot tell which - all three are "not committed before me".
+// The trx-id predicate found this case in an in-flight set the view
+// carried; the commit-LSN one finds it by absence from the window.
+TEST(ReadViewTest, ALiveWriterIsInvisibleWhateverItsId) {
+    InstanceVisibility vis;
+    vis.PublishCommit(11, 11);
+    vis.PublishCommit(99, 99);
+    const ReadView v = ViewOver(vis, 100);
+    for (std::uint64_t live : {std::uint64_t{10}, std::uint64_t{25}, std::uint64_t{40}}) {
+        EXPECT_FALSE(v.Visible(live)) << live;
     }
-    EXPECT_EQ(v.in_flight[0], 10u);
-    EXPECT_EQ(v.in_flight[1], 25u);
-    EXPECT_EQ(v.in_flight[2], 40u);
-
-    EXPECT_FALSE(v.Visible(10));
-    EXPECT_FALSE(v.Visible(25));
-    EXPECT_FALSE(v.Visible(40));
     EXPECT_TRUE(v.Visible(11));
     EXPECT_TRUE(v.Visible(99));
 }
 
-// The bound is documented and testable rather than an unbounded vector -
-// and it fails loudly, because a dropped in-flight id would make an
-// uncommitted row visible.
-TEST(ReadViewTest, TrackingMoreThanTheBoundIsOutOfSpace) {
-    ReadView v = ViewAt(1000);
-    for (std::size_t i = 0; i < kMaxTrackedLiveTxns; ++i) {
-        ASSERT_TRUE(v.AddInFlight(static_cast<std::uint64_t>(i + 2)).ok());
-    }
-    EXPECT_EQ(v.AddInFlight(999).code(), StatusCode::kOutOfSpace);
+// AN-R3's third branch: below the floor, a version still on a page was
+// written by a winner, whatever the window says. The floor is read
+// through the instance at every call rather than copied into the view -
+// so a view minted *before* the floor rose answers the same as one minted
+// after it, which is the property that lets reclamation drop entries.
+TEST(ReadViewTest, BelowTheFloorEveryWriterOnAPageIsAWinner) {
+    InstanceVisibility vis;
+    vis.PublishCommit(10, 10);
+    const ReadView minted_early = ViewOver(vis, 5);
+    EXPECT_FALSE(minted_early.Visible(10)) << "committed at 10, snapshot at 4";
+    EXPECT_FALSE(minted_early.Visible(7)) << "no entry, above the floor";
+
+    // The floor rises past both and the window entry goes with it.
+    vis.PublishBounds(/*core=*/0, kUnboundedBound, /*cursor=*/200);
+    ASSERT_EQ(vis.Reclaim(), 1u);
+    ASSERT_EQ(vis.Floor(), 200u);
+    EXPECT_TRUE(minted_early.Visible(10)) << "a reclaimed entry never hides a committed row";
+    EXPECT_TRUE(minted_early.Visible(7)) << "below the floor, an id on a page is resolved";
+    EXPECT_FALSE(minted_early.Visible(201)) << "above it, nothing changed";
+}
+
+// A view built with no instance behind it admits nothing but the two
+// unconditional arms - the safe default, and the one `CheckVisibility`
+// reads as "every writer busy".
+TEST(ReadViewTest, AViewOverNoInstanceAdmitsOnlyTheUnconditionalArms) {
+    ReadView v;
+    v.own_trx_id = 7;
+    EXPECT_TRUE(v.Visible(kAlwaysVisibleTrxId));
+    EXPECT_TRUE(v.Visible(7));
+    EXPECT_FALSE(v.Visible(2));
 }
 
 // A dispatcher with no transaction manager holds this view, and under it
 // the predicate must admit exactly what the engine admitted before MVCC
-// existed. That is what makes wiring the predicate in a no-op.
+// existed. That is what makes wiring the predicate in a no-op - and it is
+// the one view that admits a writer no window has ever heard of.
 TEST(ReadViewTest, TheEverythingViewAdmitsEveryWriter) {
     const ReadView v = ReadView::Everything();
     EXPECT_TRUE(v.Visible(kAlwaysVisibleTrxId));
     EXPECT_TRUE(v.Visible(2));
     EXPECT_TRUE(v.Visible(1u << 20));
+    EXPECT_EQ(v.visibility, nullptr) << "it consults nothing";
 }
 
 // ---- Classify: phase 1, no page fetch ------------------------------------
@@ -261,14 +316,15 @@ TEST_F(VisibilityTest, AThreeVersionChainReadFromThreeViewsYieldsThreePayloads) 
     }
 }
 
-// An in-flight writer is invisible even though its id is below the high
-// water mark - which is the arm that distinguishes "started before me" from
-// "committed before me".
-TEST_F(VisibilityTest, AnInFlightWriterIsSteppedOverEvenBelowTheHighWaterMark) {
+// A live writer is invisible even though its id is below every id the view
+// can see committed - which is what distinguishes "started before me" from
+// "committed before me", and what the window's absence answers.
+TEST_F(VisibilityTest, ALiveWriterIsSteppedOverEvenBelowCommittedIds) {
     const std::uint64_t ptr = Supersede(60, kAlwaysVisibleTrxId, kNoUndoPtr,
                                         UndoRecordType::kOverwrite, "committed");
-    ReadView v = ViewAt(/*up_to=*/100);
-    ASSERT_TRUE(v.AddInFlight(60).ok());
+    InstanceVisibility vis;
+    vis.PublishCommit(99, 99);  // something above 60 is committed; 60 is not
+    const ReadView v = ViewOver(vis, /*up_to=*/100);
 
     std::string seen;
     auto verdict = Resolve(v, /*trx_id=*/60, false, ptr, "uncommitted", &seen);
@@ -280,8 +336,8 @@ TEST_F(VisibilityTest, AnInFlightWriterIsSteppedOverEvenBelowTheHighWaterMark) {
 TEST_F(VisibilityTest, AWriterSeesItsOwnUncommittedOverwrite) {
     const std::uint64_t ptr = Supersede(60, kAlwaysVisibleTrxId, kNoUndoPtr,
                                         UndoRecordType::kOverwrite, "committed");
-    ReadView v = ViewAt(/*up_to=*/100, /*own=*/60);
-    ASSERT_TRUE(v.AddInFlight(60).ok());
+    InstanceVisibility vis;
+    const ReadView v = ViewOver(vis, /*up_to=*/100, /*own=*/60);
 
     std::string seen;
     auto verdict = Resolve(v, /*trx_id=*/60, false, ptr, "mine", &seen);

@@ -1283,14 +1283,16 @@ public:
 
 private:
     // The one sweep both delete-mark retirers share: every mark whose
-    // deleter is below `horizon` is retired in place, and the count
-    // answered. The mount sweep passes a horizon above every possible id;
-    // the in-mount purge passes the manager's ReadHorizon().
+    // deleter `settled` answers true for is retired in place, and the count
+    // answered. The mount sweep passes "every deleter"; the in-mount purge
+    // passes the manager's `ResolvedForEveryReader` - below the instance's
+    // floor, or committed at or below every live snapshot (AN-S2), which is
+    // the two-branch test the reader's own predicate decides by.
     // `remaining_out`, when given, receives how many marks the sweep saw
-    // and left (deleter at or above the horizon) - what resettles
-    // `pending_marks_` after a purge.
-    StatusOr<std::uint64_t> RetireDeleteMarksBelow(std::uint64_t horizon,
-                                                   std::uint64_t* remaining_out = nullptr);
+    // and left - what resettles `pending_marks_` after a purge.
+    StatusOr<std::uint64_t> RetireDeleteMarks(
+        const std::function<bool(std::uint64_t deleter)>& settled,
+        std::uint64_t* remaining_out = nullptr);
 
     // Phase 5 of Bootstrap(): creates sys.assertions as an ordinary
     // row-codec relation - fixed root page, var-heap chain, six sys.columns

@@ -2165,11 +2165,12 @@ TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatRead
                                     ClusteredType::kHeap, kCreator);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
-    // A concurrent reader: the creating transaction is live, so it is in
-    // this view's in-flight set and everything it wrote is invisible.
+    // A concurrent reader: the creating transaction is live, so the window
+    // holds no commit for it and everything it wrote is invisible.
+    txn::InstanceVisibility vis;
     txn::ReadView other;
-    other.up_to_trx_id = 1000;
-    ASSERT_TRUE(other.AddInFlight(kCreator).ok());
+    other.visibility = &vis;
+    other.snapshot_lsn = 1000;
 
     EXPECT_EQ(catalog_.FindTableOidByName("pending", &other).status().code(),
               StatusCode::kNotFound)
@@ -2187,9 +2188,9 @@ TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatRead
 
     // The creating transaction itself sees its own work, uncommitted.
     txn::ReadView own;
-    own.up_to_trx_id = 1000;
+    own.visibility = &vis;
+    own.snapshot_lsn = 1000;
     own.own_trx_id = kCreator;
-    ASSERT_TRUE(own.AddInFlight(kCreator).ok());
     auto mine = catalog_.FindTableOidByName("pending", &own);
     ASSERT_TRUE(mine.ok()) << "a transaction cannot see its own CREATE TABLE";
     EXPECT_EQ(mine.value(), oid.value());
@@ -2212,16 +2213,17 @@ TEST_F(CatalogTest, ATransactionalLookupNeitherReadsNorFillsTheSharedCache) {
                                      ClusteredType::kHeap, kCreator)
                     .ok());
 
+    txn::InstanceVisibility vis;
     txn::ReadView own;
-    own.up_to_trx_id = 1000;
+    own.visibility = &vis;
+    own.snapshot_lsn = 1000;
     own.own_trx_id = kCreator;
-    ASSERT_TRUE(own.AddInFlight(kCreator).ok());
     ASSERT_TRUE(catalog_.FindTableOidByName("half_open", &own).ok());  // creator sees it
 
     // Nothing about that lookup may have leaked into the shared cache.
     txn::ReadView other;
-    other.up_to_trx_id = 1000;
-    ASSERT_TRUE(other.AddInFlight(kCreator).ok());
+    other.visibility = &vis;
+    other.snapshot_lsn = 1000;
     EXPECT_EQ(catalog_.FindTableOidByName("half_open", &other).status().code(),
               StatusCode::kNotFound)
         << "the creator's lookup published its uncommitted relation through the cache";
@@ -2231,9 +2233,9 @@ TEST_F(CatalogTest, ATransactionalLookupNeitherReadsNorFillsTheSharedCache) {
 
 TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
     // **The view is not what makes this work, and that is the point.**
-    // `ReadView::Visible` answers "below the high-water mark and not
-    // in-flight" - it has no notion of "aborted" - so a reader minted
-    // *after* the rollback would see the creating id as committed. The
+    // `ReadView::Visible` answers "committed" for anything below the
+    // instance's floor - it has no notion of "aborted" there - so a reader
+    // whose floor has passed the creating id sees it as committed. The
     // engine hides aborted work by compensation, so DDL has to put its
     // rows on the trail like every other write
     // (ddl-transactional.md §2's correction).
@@ -2259,11 +2261,15 @@ TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
     }
     ASSERT_TRUE(mgr.Abort(*txn.value()).ok());
 
-    // A reader minted after the abort: it considers the creating id
+    // A reader whose floor is above the creating id: it considers that id
     // committed, and must still not find the relation - because the rows
     // are gone, not because they are hidden.
+    txn::InstanceVisibility resolved;
+    resolved.PublishBounds(/*core=*/0, txn::kUnboundedBound, /*cursor=*/1u << 20);
+    resolved.Reclaim();
+    ASSERT_GT(resolved.Floor(), txn.value()->id());
     txn::ReadView later;
-    later.up_to_trx_id = 1u << 20;
+    later.visibility = &resolved;
     EXPECT_EQ(catalog_.FindTableOidByName("doomed", &later).status().code(),
               StatusCode::kNotFound)
         << "the rolled-back relation survived its own rollback";
