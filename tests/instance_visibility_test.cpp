@@ -508,6 +508,83 @@ TEST_F(VisibilityWiringTest, AHeldMintLowersTheSlotBeforeItIsPublished) {
         << "a check view is never held and holds nothing back";
 }
 
+// **AN-S3, at the managers.** The case `cross-owner-txn.md` §3 stated as
+// possible: a cross-owner REPEATABLE READ transaction whose participant
+// minted its own snapshot at its own BEGIN saw a commit the coordinator's
+// snapshot predates - two instants in one transaction. The participant
+// adopts the coordinator's snapshot instead, publishes it into its slot
+// before it reads, and from then on both cores hold that instant: when
+// the coordinator ends, the participant alone keeps the entry above the
+// snapshot from being reclaimed.
+//
+// The roles are chosen so the floor *can* pass the commit: the coordinator
+// on core 1 (the high block), the participant and the commit on core 0
+// (the low block), whose cursor is what bounds the floor once nothing
+// holds it. **Mutation**: adopt the view without lowering the slot, and
+// the pass after the coordinator ends drops the entry, the floor passes
+// it, and the adopted view answers it committed.
+TEST_F(VisibilityWiringTest, AnAdoptedSnapshotReadsTheCoordinatorsInstantAndHoldsIt) {
+    auto core0 = Attach();
+    auto core1 = AttachPeer();
+    CommitOne(*core0);
+    CommitOne(*core1);
+
+    // The coordinator, on core 1, pins its instant.
+    auto coordinator = core1->Begin(IsolationLevel::kRepeatableRead);
+    ASSERT_TRUE(coordinator.ok()) << coordinator.status().message();
+    const std::uint64_t instant = coordinator.value()->view().snapshot_lsn;
+
+    // A commit on core 0 after that instant.
+    const std::uint64_t later = CommitOne(*core0);
+    ASSERT_FALSE(coordinator.value()->view().Visible(later));
+
+    // The participant's own BEGIN mints after the commit and would see it:
+    // the two halves of one transaction disagreeing about `later`.
+    auto participant = core0->Begin(IsolationLevel::kRepeatableRead);
+    ASSERT_TRUE(participant.ok()) << participant.status().message();
+    ASSERT_TRUE(participant.value()->view().Visible(later))
+        << "the fixture did not put the participant's mint after the commit";
+
+    // Adoption: the coordinator's instant, published before the first read.
+    ASSERT_TRUE(core0->AdoptSnapshot(*participant.value(), instant).ok());
+    EXPECT_EQ(participant.value()->view().snapshot_lsn, instant);
+    EXPECT_FALSE(participant.value()->view().Visible(later));
+    EXPECT_LE(vis_.slot(kCore0).min_snapshot_lsn.load(), instant)
+        << "the adopted snapshot is not what core 0's slot publishes";
+
+    // The coordinator ends. The participant is now the only thing holding
+    // `later`'s entry above the floor, and it must.
+    ASSERT_TRUE(core1->Commit(*coordinator.value(), wal::DurabilityClass::kRelaxed).ok());
+    core1->Release(*coordinator.value());
+    vis_.Reclaim();
+    EXPECT_NE(vis_.LookupCommit(later).commit_lsn, kNoCommitLsn)
+        << "a pass reclaimed a commit the adopted snapshot must still not see";
+    EXPECT_FALSE(participant.value()->view().Visible(later))
+        << "the adopted view's answer flipped: two instants in one transaction";
+
+    // The participant ends, and the entry is free to go.
+    ASSERT_TRUE(core0->Commit(*participant.value(), wal::DurabilityClass::kRelaxed).ok());
+    core0->Release(*participant.value());
+    vis_.Reclaim();
+    EXPECT_GT(vis_.Floor(), later);
+}
+
+// A snapshot above the ceiling this transaction's own mint read is refused
+// and the view is untouched: one commit order makes it impossible for a
+// coordinator that minted first.
+TEST_F(VisibilityWiringTest, AdoptingASnapshotAboveTheCeilingIsRefused) {
+    auto mgr = Attach();
+    auto txn = mgr->Begin(IsolationLevel::kRepeatableRead);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+    const std::uint64_t own = txn.value()->view().snapshot_lsn;
+    const Status refused = mgr->AdoptSnapshot(*txn.value(), own + 1);
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument) << refused.message();
+    EXPECT_EQ(txn.value()->view().snapshot_lsn, own);
+    // At the ceiling itself is legal: the coordinator minted at the same
+    // instant.
+    EXPECT_TRUE(mgr->AdoptSnapshot(*txn.value(), own).ok());
+}
+
 // The marker is a slot field because at most one commit per core is ever
 // between its append and its publication; a failed append lifts it too, or
 // every later mint on the instance would stay capped.

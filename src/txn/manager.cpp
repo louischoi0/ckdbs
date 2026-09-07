@@ -165,6 +165,35 @@ Status TransactionManager::StartStatement(Transaction& txn) {
     return Status::OK();
 }
 
+Status TransactionManager::AdoptSnapshot(Transaction& txn, std::uint64_t snapshot_lsn) {
+    if (!txn.active_) {
+        return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
+                                       " is no longer active");
+    }
+    if (snapshot_lsn > txn.view_.snapshot_lsn) {
+        return Status::InvalidArgument(
+            "cross-owner transaction: the coordinator's snapshot " +
+            std::to_string(snapshot_lsn) + " is above this core's ceiling " +
+            std::to_string(txn.view_.snapshot_lsn) +
+            ", which a snapshot minted earlier on one commit order cannot be");
+    }
+    // The slot first, the view second, the publication third. The
+    // publication alone would cover a transaction that is in `live_` - it
+    // recomputes the slot over every live view, this one's included - and
+    // nothing on this core runs between the two lines; the lowering is
+    // what covers the snapshot whatever the caller holds, and it costs one
+    // store. `in_flight_at_mint` is left as the mint stamped it: moving the
+    // snapshot back makes it stale in principle (a transaction live at the
+    // adopted instant and since committed is invisible to this view and
+    // absent from `live_`), and it costs nothing because the Cabin's
+    // banking gate refuses on `own_trx_id` first, which an enrolled context
+    // always carries.
+    visibility_->LowerSnapshotBound(core_, snapshot_lsn);
+    txn.view_.snapshot_lsn = snapshot_lsn;
+    PublishCoreBounds();
+    return Status::OK();
+}
+
 Status TransactionManager::CheckWriteConflict(const Transaction& txn, std::uint64_t cur,
                                               std::uint64_t pk) const {
     if (cur == kAlwaysVisibleTrxId) return Status::OK();

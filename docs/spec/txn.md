@@ -416,7 +416,11 @@ that `txn::AutocommitSnapshot` returns beside the snapshot, so registering
 is structural rather than disciplinary. Each core publishes the oldest
 `snapshot_lsn` over both into its slot, and a held mint lowers that slot
 *before* it reads the ceiling, so a pass on another core can never outrun a
-view in the gap between its mint and its registration.
+view in the gap between its mint and its registration. A snapshot that is
+**adopted** rather than minted — a cross-owner REPEATABLE READ participant
+taking its coordinator's (`cross-owner-txn.md` §3) — lowers the slot the
+same way before the view moves, and is safe to hold because the
+coordinator's live transaction already holds it.
 `TransactionManager::ReadHorizon()` is the minimum over cores: **the
 instance's oldest live snapshot**, not this core's. A version superseded by
 a transaction below the floor, or committed at or below every live and

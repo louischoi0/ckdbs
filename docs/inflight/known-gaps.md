@@ -204,15 +204,6 @@ statement about an engine that no longer exists; re-verify or strike it.
   so AN-S1b's landing note is not read as closing AN-R13 entirely. Owner:
   `instructions/v3.0.0/workorder-an-read-view.md` AN-R14, first bullet.
 
-- **A cross-owner REPEATABLE READ transaction has no single instant across
-  cores, and since AN-S2 nothing checks the per-core promise either.**
-  Verified at AN-S2. The per-participant watermark went with the trx-id
-  predicate (AN-R5a, operator); what remains is the participant's own
-  pinned view, which delivers consistency per core, and the unbuilt
-  adoption of the coordinator's `snapshot_lsn` (AN-S3), which would deliver
-  the instant. `docs/spec/cross-owner-txn.md` §3 states both halves. Owner:
-  `instructions/v3.0.0/workorder-an-read-view.md` AN-R5, AN-S3.
-
   *(The entry that stood here — "the read view and the read horizon are
   both per-core, and one spec sentence asserts the opposite" — closed at
   AN-S2: `ReadView::Visible` decides by the instance's commit-LSN window

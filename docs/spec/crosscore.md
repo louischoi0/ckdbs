@@ -253,8 +253,9 @@ target, `StepBatchCeiling` of the transport's slot as the bound. The KWP
 socket's 64 KiB batch target is a socket-side quantity and bounds nothing
 on a ring.
 
-**The request POD pays 16 bytes for the tag**, so the longest shippable
-statement is **976 bytes**. That bound is client-visible and is stated in
+**The request POD pays 16 bytes for the tag** and, since AN-S3, 8 for the
+coordinator's snapshot (`cross-owner-txn.md` §1a), so the longest shippable
+statement is **968 bytes**. That bound is client-visible and is stated in
 `docs/spec/client-manual.md`.
 
 **The text arm does not move a byte.** A session with no result sink ships
@@ -335,24 +336,25 @@ old topology that owner was also a distinct WAL stream, which is how this
 sentence used to read; with one stream per instance — `wal.md` §3 — the
 binding that matters is the owning core, which is unchanged.)
 
-The RR weakening reads the same one level down: RR guarantees hold per
-core, and a cross-range read of one relation is a cross-core read. The
-client manual states the widened form beside the one-range one.
+One level down, a cross-range read of one relation is a cross-core read,
+and it never meets REPEATABLE READ at all: a multi-owner relation refuses
+every read inside an explicit transaction (`CLAUDE.md`'s range row), so the
+per-stage weakening above is an autocommit statement's and no RR
+transaction's.
 
 - **READ COMMITTED** statements: semantically equivalent to local execution —
   RC already permits each statement (and each lookup within it) to observe
   the latest committed state.
 - **REPEATABLE READ** transactions issuing cross-core reads: a cross-owner
-  RR transaction sees a **consistent-per-core** snapshot — each participant
-  pins one view for the transaction's life, and nothing on the coordinator
-  checks it (the per-participant watermark it used to carry went with the
-  trx-id predicate at AN-S2). `docs/spec/cross-owner-txn.md` §3 owns the rule and
-  `docs/spec/client-manual.md` states it in the client's words. What is
-  **not** given is a single global instant: two such transactions can
-  disagree about the order of two commits on two cores. Since AN-S2 that
-  is no longer structural — every participant mints from one commit order
-  — but each still mints its own snapshot at its own BEGIN, and adopting
-  the coordinator's is AN-S3, unbuilt (`cross-owner-txn.md` §3).
+  RR transaction reads **one instant on every core** — the snapshot its
+  coordinator pinned at BEGIN, carried on every shipped statement and
+  adopted by each participant when it opens its context (AN-S3;
+  `docs/spec/cross-owner-txn.md` §3 owns the rule, `docs/spec/client-manual.md`
+  states it in the client's words). Until AN-S2 the promise was consistent
+  *per core* — each participant minted its own view at its own BEGIN — and
+  two such transactions could disagree about the order of two commits on
+  two cores; AN-S2 made the view instance-wide and AN-S3 carried the
+  snapshot across, which is what closed it.
 
   **The remote-step pipeline does not run inside such a transaction.** It
   reads each core's latest-committed snapshot outside any enrolled

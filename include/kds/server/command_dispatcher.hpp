@@ -1133,6 +1133,19 @@ private:
     // move".
     Status EnsureStatementBoundary(Session& session);
     bool statement_boundary_taken_ = false;
+
+public:
+    // **AN-S3: a participant adopts the coordinator's snapshot** (AN-R5).
+    // The transaction open on `session` - a REPEATABLE READ context the
+    // shipped-statement executor has just opened with `BEGIN` - takes
+    // `snapshot_lsn` as its view in place of the one its own `BEGIN`
+    // minted, and this core's slot is lowered to cover it before the
+    // transaction reads anything (`TransactionManager::AdoptSnapshot`).
+    // Public because the executor is the caller and holds this dispatcher,
+    // not the manager; the manager's contract is stated there.
+    Status AdoptSnapshot(Session& session, std::uint64_t snapshot_lsn);
+
+private:
     // Registers everything `written` holds on the transaction's trail.
     // Called **even when the DDL failed**: rows written before the failure
     // are on the page either way, and a rollback that skipped them would

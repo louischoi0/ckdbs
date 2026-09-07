@@ -387,6 +387,29 @@ public:
     // cannot drift.
     Status StartStatement(Transaction& txn);
 
+    // **A participant adopts its coordinator's snapshot** (AN-R5, AN-S3):
+    // `txn`'s view takes `snapshot_lsn` in place of the ceiling its own
+    // `Begin` read, so a cross-owner REPEATABLE READ transaction reads one
+    // instant on every core it touches. Called once, on the context's
+    // first statement, before that statement reads anything.
+    //
+    // **The one case AN-R1's lock-free argument does not cover** (the
+    // `instance_visibility.hpp` header): a minted snapshot is at or above
+    // every live one, an adopted snapshot is *below* this core's current
+    // ceiling. The mechanism here is that this core's slot is lowered to
+    // the snapshot **before** the view moves; the argument that this is
+    // enough - the coordinator's live transaction already holds that
+    // snapshot, and what happens when it does not - is
+    // `docs/spec/cross-owner-txn.md` §3's, which owns the rule.
+    //
+    // Refused, never clamped, when `snapshot_lsn` is above the ceiling this
+    // transaction's own mint read: the ceiling is monotone over time and
+    // the coordinator minted first, so that value can only be a wire or a
+    // wiring defect, and adopting it would cover commits whose entries are
+    // not in the window - AN-Q3's flip, by request. `InvalidArgument`: a
+    // value that cannot be right, and one a retry would repeat.
+    Status AdoptSnapshot(Transaction& txn, std::uint64_t snapshot_lsn);
+
     // Ends the transaction. The trail is dropped: a committed write needs
     // no compensation, and the undo records stay for readers whose
     // snapshots predate it.

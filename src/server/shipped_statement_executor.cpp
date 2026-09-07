@@ -110,9 +110,20 @@ void ShippedStatementExecutor::Execute(StatementShipServer::ShippedStatement sta
         // the request states none - which no enrolled statement does, and
         // every autocommit one does - the fallback is this core's default,
         // exactly as before.
+        // **The adoption gate is the encoder's gate** (AN-S3): the snapshot
+        // is adopted where the request *states* REPEATABLE READ, which is
+        // exactly where the encoder put a value in the field. Gating on the
+        // level the context ends up at would let a participant whose config
+        // default is RR adopt a zeroed field from a request that stated no
+        // level - a context reading at the dawn of the commit order, pinning
+        // the instance's horizon at 0 for its life. Unreachable from the one
+        // sender in the tree, which always states a level under `in_txn`;
+        // refused by construction rather than by that fact.
+        const bool stated_repeatable_read =
+            statement.isolation == std::optional{txn::IsolationLevel::kRepeatableRead};
         auto enrolled = EnrolFor(key, statement.role,
                                  statement.isolation.value_or(dispatcher_.default_isolation()),
-                                 statement.join);
+                                 statement.join, statement.snapshot_lsn, stated_repeatable_read);
         if (!enrolled.ok()) {
             // No context was left half-open: `EnrolFor` refuses before it
             // records anything. A spent transaction-id lease and a full
@@ -410,7 +421,8 @@ void ShippedStatementExecutor::Remember(const DedupKey& key, std::uint64_t seque
 }
 
 StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor(
-    const DedupKey& key, Role role, txn::IsolationLevel isolation, bool join) {
+    const DedupKey& key, Role role, txn::IsolationLevel isolation, bool join,
+    std::uint64_t snapshot_lsn, bool stated_repeatable_read) {
     if (auto it = enrolled_.find(key); it != enrolled_.end()) {
         // **A prepared transaction takes no more statements** (R6-3, D4).
         // Prepare is a promise that everything this transaction wrote is
@@ -508,6 +520,34 @@ StatusOr<ShippedStatementExecutor::Enrolled*> ShippedStatementExecutor::EnrolFor
         // Nothing is recorded: a half-open context would be joined by the
         // next statement as though a transaction existed.
         return why;
+    }
+
+    // **AN-S3: under REPEATABLE READ the context reads at the coordinator's
+    // snapshot, not at the one its `BEGIN` just minted** (AN-R5). Adopted
+    // here, before the first statement runs and before the context is
+    // recorded, so there is no statement that read at the wrong instant
+    // and no context that could be joined at it. A refusal - the wire
+    // naming a snapshot above this core's ceiling, which one commit order
+    // makes impossible - rolls the fresh transaction back and enrols
+    // nothing, for the same reason the failed `BEGIN` above records
+    // nothing. READ COMMITTED adopts nothing: it re-mints per statement by
+    // design and promises no instant across cores. `stated_repeatable_read`
+    // rather than `isolation`: the caller says why.
+    if (stated_repeatable_read) {
+        if (Status s = dispatcher_.AdoptSnapshot(context->session, snapshot_lsn); !s.ok()) {
+            (void)dispatcher_.Dispatch("ROLLBACK", &context->session);
+            // `EndEnrolled`'s rule: the context dies with this frame, so a
+            // transaction the rollback could not end would sit in `live_`
+            // for the life of the process with nothing left to reach it.
+            if (context->session.in_explicit_txn() && log_ != nullptr &&
+                log_->enabled(LogLevel::kError)) {
+                log_->Error("ship", "core " + std::to_string(core_id_) +
+                                        " could not roll back a transaction whose snapshot "
+                                        "adoption was refused; it stays active and holds the "
+                                        "instance's floor for the life of this process");
+            }
+            return s;
+        }
     }
 
     ++enrolments_;

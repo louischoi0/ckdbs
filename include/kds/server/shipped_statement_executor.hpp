@@ -654,8 +654,15 @@ private:
     // existing context and may not open one, which is what the coordinator
     // says on every statement after the first it sent this core in this
     // transaction.
+    // `snapshot_lsn` is the coordinator's (AN-S3), adopted when a context is
+    // opened by a request that **stated** REPEATABLE READ
+    // (`stated_repeatable_read`, the encoder's own gate) and unread
+    // otherwise - including on a join, where the context adopted on its
+    // first statement, and where the level was this core's default rather
+    // than the request's.
     StatusOr<Enrolled*> EnrolFor(const DedupKey& key, Role role, txn::IsolationLevel isolation,
-                                 bool join);
+                                 bool join, std::uint64_t snapshot_lsn,
+                                 bool stated_repeatable_read);
 
     // Rolls `it`'s transaction back and drops the context. **Rollback
     // only**, still: R6-3's commit arm is not here but in `Decide`, and for

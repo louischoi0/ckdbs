@@ -51,10 +51,13 @@ autocommit case in exactly three wire bits:
 | `in_txn` | request | run this under the transaction held for `(coordinator core, session_id)`, and do not end that transaction when the statement finishes |
 | `isolation` | request | the **coordinator's** level, because the level selects a branch (§3) and a participant that fell back to its own config default would give a transaction the weaker promise while its client was told the stronger one |
 | `join` | request | this statement may **join** a context and may not open one (§2a) |
+| `snapshot_lsn` | request | the coordinator's snapshot, which the participant adopts when it opens a REPEATABLE READ context (§3, AN-S3); zeroed and unread outside `in_txn` with REPEATABLE READ, so 0 - a legal snapshot on a fresh instance - is never mistaken for "none stated" |
 
 and none on the way back: the reply carried the participant's watermark
 (§3) until AN-S2 removed it with the quantity it was read from, and the
 eight bytes went to the reply text (`kShippedStatementReplyTextMax`, 1000).
+The request paid eight for the snapshot at AN-S3, so the longest shippable
+statement is **968 bytes** (`kShippedStatementTextMax`).
 
 **Both reads and writes ship, and a read enrols.** A transaction that wrote
 a row on a peer and then reads that relation has to see its own uncommitted
@@ -296,48 +299,69 @@ participant's half durable (§2).
 
 ## 3. Isolation — what a cross-owner transaction promises
 
-**A cross-owner transaction under REPEATABLE READ sees a
-consistent-per-core snapshot, not a globally consistent one.** It is a
-weakening and it is a product property, not only a spec line —
+**A cross-owner transaction under REPEATABLE READ reads one instant on
+every core it touches** (AN-R5, AN-S3): the snapshot its coordinator
+pinned at `BEGIN`. It is a product property, not only a spec line —
 `docs/spec/client-manual.md` states it in the client's words.
 
 Concretely:
 
-- The participant's own enrolled transaction is what *delivers* the
-  promise: opened at the coordinator's level, it pins its view at its own
-  BEGIN and cannot re-mint it. §2a's join rule is what guarantees it cannot
-  be silently replaced by a newer one either.
-- **No check stands over it on the coordinator, since AN-S2** (AN-R5a,
-  operator, 2026-09-07). Until then the coordinator carried a
-  per-participant watermark — that participant's `ReadView::up_to_trx_id`,
-  established by its first reply and compared with itself on every later
-  one — and refused a reply that named a different value, counting it in
-  `txn_watermark_refusals`. The quantity was a high-water mark over the ids
-  *that* core had issued, comparable with nothing on any other core, and
-  the trx-id predicate it belonged to is gone
-  (`instructions/v3.0.0/workorder-an-read-view.md` AN-3 E). The operator
-  took removal over forwarding it as the participant's snapshot LSN: the
-  branch it guarded was unreachable on this tree — the one event that
-  moves a pinned view is the context being replaced, which §2a refuses a
-  leg earlier and on the participant — so the check's absence changes no
-  answer. What it leaves is stated rather than implied: **between this
-  removal and AN-S3, nothing on the engine checks or delivers a single
-  instant across cores**, and the paragraph below is a possible case with
-  no guard standing over it.
-- **READ COMMITTED never carried a watermark.** RC already permits every
-  statement to observe the latest committed state, so there was nothing for
-  one to pin, and the default level pays nothing for any of this.
+- The coordinator's transaction pins its view at its own `BEGIN` — a
+  commit-LSN snapshot over the instance's one commit order (`txn.md` §4.1)
+  — and every statement it ships inside that transaction carries that
+  `snapshot_lsn` (§1a's fourth bit).
+- **The participant adopts it.** The statement that enrols a core opens an
+  ordinary local transaction there with `BEGIN` at the coordinator's level,
+  and under REPEATABLE READ that transaction's view then takes the
+  coordinator's snapshot in place of the one its `BEGIN` minted
+  (`TransactionManager::AdoptSnapshot`), before its first statement reads
+  anything and before the context is recorded. Statements that join read
+  through the same view; §2a's join rule is what guarantees it cannot be
+  silently replaced by a newer one.
+- **What makes an adopted snapshot safe to reclaim under**, since it is the
+  one case the instance read view's lock-free argument does not cover
+  (`instance_visibility.hpp`): the coordinator's transaction is live with
+  that very snapshot and its core's slot is at or below it, so no
+  reclamation pass has passed a commit above it and none will while that
+  transaction runs — and the participant lowers its own slot to the
+  snapshot before its view moves, so from then on both cores hold it, and
+  the participant alone holds it once the coordinator's `COMMIT` lets go.
+  **The case that argument does not reach**: a coordinator that gave up
+  on the transaction while the statement was in flight - a deadline, a
+  session torn down - so that its slot rose before the participant
+  adopted. A pass may then have passed a commit above the snapshot, and
+  the adopted view answers that commit visible by the floor. Nothing
+  observes it: both exits `Finish()` the coordinator's session, after
+  which no further statement of that transaction can ship, the parked
+  waiter is gone so the late reply is discarded on its identity check,
+  and the participant's writes are unwound by the rollback fan-out or the
+  lifetime ceiling. No client reads the wrong rows and no wrong row is
+  made durable, which is why this is stated here rather than filed as a
+  gap.
+  A snapshot above the participant's own ceiling is refused, never clamped:
+  one commit order makes it impossible for a coordinator that minted first,
+  so it can only be a wire defect, and adopting it would cover commits
+  whose entries are not yet in the window.
+- **No check stands over the promise on the coordinator** (AN-R5a). Until
+  AN-S2 it carried a per-participant watermark — that participant's
+  `ReadView::up_to_trx_id`, compared with itself one reply later — and
+  refused a reply that named a different value; the quantity went with the
+  trx-id predicate, and the branch it guarded was unreachable (the one
+  event that moves a pinned view is the context being replaced, which §2a
+  refuses a leg earlier). Adoption does not reinstate a check: the
+  participant reads at the coordinator's snapshot by construction rather
+  than being caught reading elsewhere.
+- **READ COMMITTED adopts nothing.** RC already permits every statement to
+  observe the latest committed state, so there is no instant to carry, and
+  the default level pays nothing for any of this — the encoder zeroes the
+  field outside REPEATABLE READ.
 
-Two cross-owner RR transactions can disagree about the order of two commits
-on two cores. That was the price of a per-core `ReadView`, and it is the
-price `crosscore.md` §5 was already paying. **Since AN-S2 it is no longer
-structural**: the view is a commit-LSN snapshot over one instance-wide
-order (`txn.md` §4.1), so the coordinator's own `snapshot_lsn` *could* be
-adopted by every participant and the two transactions would then agree —
-that is AN-R5's other half, AN-S3, unmarked and unbuilt. Until it lands a
-participant mints its own snapshot at its own BEGIN, which is a later
-instant than the coordinator's, and the disagreement stays possible.
-Sharing the log did not change that on its own — a shared WAL gives every
+Two cross-owner RR transactions therefore agree about the order of any two
+commits on any two cores: each reads one prefix of the instance's commit
+order, chosen at its `BEGIN`. That case was the price of a per-core
+`ReadView`, and `crosscore.md` §5 paid it until AN-S2 made the view
+instance-wide and AN-S3 carried the snapshot across. Sharing the log did
+not change it on its own — a shared WAL gives every
 commit a comparable LSN, and it was AN, not M0, that minted a snapshot
 across cores; AR0-3 declined the cut vector that
 would.
