@@ -166,7 +166,7 @@ public:
     // only this is kicked with no queue to drain, which is what every
     // caller after AU-S5 will be. Creates the `Waker` if attaching a
     // transport has not already, so the two need no ordering between them.
-    Status AttachWakerTable(WakerTable* table, std::uint32_t core_id);
+    Status AttachWakerTable(WakeRegistry* table, std::uint32_t core_id);
 
 private:
     // Creates and registers this reactor's eventfd, once, for whichever
@@ -381,7 +381,7 @@ private:
     // The instance's wake registry, borrowed. Held for one reason beyond
     // registering into it: `wakes_sent()` reads its counter, and after
     // AU-S1b that counter is the only one there is.
-    const WakerTable* wakers_ = nullptr;
+    const WakeRegistry* wakers_ = nullptr;
 
     // **The wake path** (waker.hpp), armed by whichever attach point runs
     // first and absent on every single-core build.
@@ -438,8 +438,10 @@ public:
     // `wake_race_skips` counts the ones whose pre-block re-check found work
     // and skipped the block - which *is* the race the flag exists for, so a
     // run where it stays 0 has not exercised it. Diagnostics and tests, and
-    // the only two accessors on this class that may be read from another
-    // thread (see the members).
+    // - with `wakes_received()` below, which reads the `Waker`'s own atomic
+    // and a `waker_` engaged at attach before any worker exists - the only
+    // three accessors on this class that may be read from another thread
+    // (see the members).
     std::uint64_t idle_blocks() const noexcept {
         return idle_blocks_.load(std::memory_order_relaxed);
     }

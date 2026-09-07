@@ -116,13 +116,13 @@ public:
     // startup thread before any worker exists; a transport with none simply
     // never kicks, and every destination falls back to its idle block -
     // which is what every build did before the wake existed at all.
-    void AttachWakers(const WakerTable* wakers) noexcept { wakers_ = wakers; }
+    void AttachWakers(const WakeRegistry* wakers) noexcept { wakers_ = wakers; }
 
     // Which table, so an assembly test can say "this one" rather than
     // "some one" - `expeditor_test.cpp`'s two-core cell does, because a
     // transport left pointing at nothing is silent: every send still
     // succeeds and every destination waits out its block.
-    const WakerTable* wakers() const noexcept { return wakers_; }
+    const WakeRegistry* wakers() const noexcept { return wakers_; }
 
     Status TrySend(const MessageHeader& header, std::span<const std::byte> payload) override;
     bool TryReceive(std::uint32_t dst_core, MessageHeader& header,
@@ -163,7 +163,7 @@ private:
     // Borrowed, never owned: the table outlives this transport by design
     // (AR0-6 retires the ring and keeps the wake), and the Expeditor builds
     // it beside this one for exactly that reason.
-    const WakerTable* wakers_ = nullptr;
+    const WakeRegistry* wakers_ = nullptr;
 
     // Where the next TryReceive(dst) starts its sweep over peers. A
     // rotating start is what keeps a busy peer from starving a quiet one:

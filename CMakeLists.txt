@@ -148,6 +148,7 @@ add_library(kds
     src/sched/ring_transport.cpp
     src/sched/waker.cpp
     src/sched/sim_ring_transport.cpp
+    src/sched/sim_waker_table.cpp
     src/sched/epoll_io_backend.cpp
 )
 target_include_directories(kds PUBLIC include)

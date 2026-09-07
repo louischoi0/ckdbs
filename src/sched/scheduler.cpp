@@ -81,7 +81,7 @@ Status Scheduler::ArmWaker() {
     return Status::OK();
 }
 
-Status Scheduler::AttachWakerTable(WakerTable* table, std::uint32_t core_id) {
+Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id) {
     core_id_ = core_id;
     wakers_ = table;
     if (table == nullptr) return Status::OK();
