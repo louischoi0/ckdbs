@@ -308,6 +308,14 @@ public:
         // than one field copied out of it: `rules.md`'s second-name rule,
         // and the shape an operator knob would take if one ever lands.
         sched::SchedulerConfig scheduler;
+
+        // **The instance's lock table** (AO-S5), borrowed the way
+        // `visibility` is: `Expeditor` builds one for every core and hands
+        // it here, so a decide on one core flips - and kicks - a waiter
+        // queued on another (AU-S2). Null builds this runtime its own at
+        // `core_count == 1`, which is a fixture's shape (`core_runtime_test`'s
+        // core-0 runtimes), and none above it.
+        txn::LockTable* locks = nullptr;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -662,18 +670,24 @@ private:
     std::optional<catalog::Catalog> catalog_;
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
-    // **The lock family's table** (AO-R2), built here **only at
-    // `core_count == 1`** and owned by this runtime rather than by the
-    // expeditor. One core is the case where per-core and instance-wide are
-    // the same object, and where AO-3 C's finding makes the cross-core path
-    // unreachable by construction - so the table can be real without
-    // touching anything AO-S5 owns and gates.
+    // **The lock family's table** (AO-R2): the instance's, borrowed through
+    // `Config::locks` (AO-S5), or this runtime's own at `core_count == 1`
+    // when none was handed over - `owned_store_`/`store_`'s shape, and a
+    // fixture's case. The manager takes it on every core, so a decide here
+    // releases its borrows into the one table and wakes - and kicks - a
+    // waiter queued from any core (AU-S2).
     //
-    // Above one core it stays null and AO-S3's narrow rule runs: a wait is
-    // offered only to a transaction that holds nothing, which needs no
-    // detector. AO-S5 is where the instance table is built once and handed
-    // to every core, which is what lifts that.
-    std::unique_ptr<txn::LockTable> locks_;
+    // **The dispatcher takes it only at one core.** Its use of the table is
+    // the wait-for graph and the admission it gates: with a table, a
+    // transaction holding rows may wait because the detector catches the
+    // cycle it could close (AO-S4a). Across cores that detector is not
+    // complete - a cycle can pass through a wait that registers no edge,
+    // the shipped-statement park and the FK probe park (AO-S4a's row) - so
+    // above one core the dispatcher keeps AO-S3's narrow rule and a null
+    // table until AO-S4b's cadence exists. The table crossing reactors is
+    // the wake's business before it is the detector's.
+    std::unique_ptr<txn::LockTable> owned_locks_;
+    txn::LockTable* locks_ = nullptr;
 
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;

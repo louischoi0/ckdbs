@@ -12,6 +12,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
 
+
 // The borrow model's **lock family** (AR2 §2) - AR0 D2's lock manager.
 //
 // Built for AO-S1 of `instructions/v3.0.0/workorder-ao-m2-lock-family.md`,
@@ -70,13 +71,26 @@
 // than inherit it: either AO-R4's disjunction returns, or the borrow is
 // taken before the header is read.
 //
-// **Cross-core, a wake is late rather than lost, until AO-S5.** A slot
-// flip from a foreign thread is not one of the three things that end a
-// sleeping reactor's idle block (`Scheduler::IdleTimeoutMs`: an fd, a
-// timer, the ring waker), so a waiter whose reactor has gone idle learns
-// of the flip when the block expires - `max_idle_block_ms`, 10 ms - not
-// when it happens. Liveness is unaffected and latency is not:
-// AO-R4's `kLockWake` ring message is what closes it, and AO-S5 owes it.
+// **Cross-core, a wake is write-then-kick** (AU-S2, AR0-6-R1, AO-R4 as
+// AU-S3 amended it). A slot flip from a foreign thread is not one of the
+// three things that end a sleeping reactor's idle block
+// (`Scheduler::IdleTimeoutMs`: an fd, a timer, the waker), so until AU-S2 a
+// waiter whose reactor had gone idle learned of the flip when the block
+// expired - `max_idle_block_ms`, 10 ms - not when it happened. Now every
+// waiter records the core it parks on, and whoever flips its slot - a
+// decide's `WakeWaiters`, a withdrawal's `DequeueWaiter` - kicks that core
+// through the instance's wake registry (`sched/waker_table.hpp`'s
+// `WakeRegistry`, installed with `SetWakeRegistry`) **after** releasing the
+// partition latch. A waiter on the decider's own core is not kicked - the
+// decide runs on that reactor, where it runs on one at all; from any other
+// thread `CurrentCore()` is 0 and a core-0 waiter goes unkicked, which
+// costs it a block and never a wake. At `cores = 1` no registry is
+// installed, so the single-core path pays nothing. A kick that finds the
+// waiter's reactor awake is skipped by the registry, and a kick lost to the
+// registry's accepted race costs one idle block - AR0-6-R1's stated cost,
+// never liveness, because the park is level-triggered: a parked task is
+// re-polled after every block, so no third leg of the fence pair is built
+// for it and none is owed. No `kLockWake` ring kind was ever built (AU-R4).
 //
 // Two consequences of having no caller yet, stated so they are not read as
 // finished work:
@@ -209,6 +223,10 @@
 // keeps, because a cap cannot be waited out (AR2-A §3) - which is why it
 // is refused **before** a conflict is queued: a transaction at its cap must
 // not be left waiting for a grant that will be refused on arrival.
+
+namespace kds::sched {
+class WakeRegistry;
+}  // namespace kds::sched
 
 namespace kds::txn {
 
@@ -486,6 +504,15 @@ public:
     // removes a holder, and the cell's whole point is a wake with none.
     void WakeWaiters(const LockKey& key);
 
+    // **The instance's wake registry** (AU-S2), through which a slot flip
+    // reaches a waiter parked on another core. Installed once, on the
+    // startup thread, before any reactor can wait; null - the default and
+    // the whole single-core story - means no waiter is ever kicked, which
+    // is right where every waiter shares the decide's reactor. `registry`
+    // must outlive this table.
+    void SetWakeRegistry(const sched::WakeRegistry* registry) noexcept { wake_ = registry; }
+    const sched::WakeRegistry* wake_registry() const noexcept { return wake_; }
+
     // Is a range- or slice-unit fence held over `pk` by anyone but `txn`,
     // in `S` or `X`? The probe AO-R3 puts in place of a persisted lock bit.
     // Tuple-unit conflicts are **not** its business - those are found by
@@ -531,7 +558,18 @@ private:
         LockMode mode = LockMode::kIntentionShared;
         // A waiter's slot; null for a holder.
         std::shared_ptr<LockWaitSlot> slot;
+        // The core a waiter parks on - `CurrentCore()` at the `Acquire` that
+        // queued it, which is the reactor its `WaitUntil` polls on - so a
+        // flip from another core knows whom to kick (AU-S2). Meaningless
+        // for a holder.
+        std::uint32_t core = 0;
     };
+
+    // Flips a waiter's slot and, if the waiter parks on another core,
+    // records that core in `kick`; the caller kicks after the partition
+    // latch is released, which keeps a syscall out of the section.
+    static void FlipSlot(Tenant& w, std::vector<std::uint32_t>& kick);
+    void KickAll(const std::vector<std::uint32_t>& cores) const noexcept;
 
     struct Entry {
         LockKey key;
@@ -563,11 +601,17 @@ private:
     // order forbids.
     std::unique_ptr<Latch> wait_latch_;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> wait_edges_;
+    // Edges live, maintained under `wait_latch_` and read without it by
+    // `ClearWaitFor`, which every decide calls: zero means no latch is
+    // taken on the commit path (the `.cpp` says why that read is sound).
+    std::atomic<std::size_t> wait_edge_count_{0};
 
     std::vector<Partition> partitions_;
     std::vector<std::unique_ptr<Latch>> latches_;
     std::size_t max_locks_per_txn_;
     std::vector<std::atomic<std::uint64_t>> fence_counters_;
+    // Borrowed; null at `cores = 1` and before `SetWakeRegistry`.
+    const sched::WakeRegistry* wake_ = nullptr;
 };
 
 }  // namespace kds::txn

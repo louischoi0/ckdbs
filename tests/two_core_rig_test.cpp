@@ -30,17 +30,6 @@ namespace {
 
 using namespace std::chrono_literals;
 
-// Spins until `pred` holds or `limit` passes; the value is whether it held.
-template <typename Pred>
-bool Within(std::chrono::milliseconds limit, Pred pred) {
-    const auto deadline = std::chrono::steady_clock::now() + limit;
-    while (!pred()) {
-        if (std::chrono::steady_clock::now() >= deadline) return pred();
-        std::this_thread::sleep_for(1ms);
-    }
-    return true;
-}
-
 // A task that parks on `go` and records that it proceeded. The predicate is
 // a member because `WaitUntil` holds a pointer to it across the park.
 struct ParkedTask {
@@ -60,19 +49,6 @@ std::unique_ptr<TwoCoreRig> OpenRig(TwoCoreRig::Options options) {
     auto rig = TwoCoreRig::Open(options);
     EXPECT_TRUE(rig.ok()) << rig.status().message();
     return rig.ok() ? std::move(rig.value()) : nullptr;
-}
-
-// The kicks the log holds for one destination. **The engine's own kicks are
-// in the log too** - the peer's completion checkpoint publishes its anchor
-// to core 0 over the ring the moment its reactor starts, and that send
-// kicks core 0 through the same table - so a cell reads the log per
-// destination rather than assuming it holds only what the cell asked for.
-std::vector<sched::SimWakerTable::Record> KicksTo(TwoCoreRig& rig, std::uint32_t dst) {
-    std::vector<sched::SimWakerTable::Record> to;
-    for (const sched::SimWakerTable::Record& r : rig.wake().log()) {
-        if (r.dst == dst) to.push_back(r);
-    }
-    return to;
 }
 
 TEST(TwoCoreRigTest, AKickWakesAParkedPeer) {
@@ -215,6 +191,16 @@ TEST(TwoCoreRigTest, APageHeldExclusiveOnCore0BlocksAFetchOnCore1) {
     storage::DevicePageStore& store = rig->store();
 
     PageHold hold;
+    // **The holder is released on every exit from this cell.** Its task
+    // spins on `release` while holding the page, and the fetcher's reactor
+    // spins in `PageLatch::Acquire` behind it; an `ASSERT` that left the
+    // cell without setting the flag left both reactors spinning and the
+    // rig's `Stop()` joining forever - which is how the budget-8 suite hung
+    // on this cell once (2026-09-07).
+    struct ReleaseOnExit {
+        PageHold& h;
+        ~ReleaseOnExit() { h.release.store(true, std::memory_order_release); }
+    } release_on_exit{hold};
     {
         auto created = store.CreateNew();
         ASSERT_TRUE(created.ok()) << created.status().message();
@@ -230,9 +216,14 @@ TEST(TwoCoreRigTest, APageHeldExclusiveOnCore0BlocksAFetchOnCore1) {
                                                          FetchThroughRing(store, hold)));
     rig->Start();
 
-    ASSERT_TRUE(Within(2000ms, [&] { return hold.held.load(std::memory_order_acquire); }))
+    // Both are the cell's own barriers across cores, so both kick: core 1
+    // parks on `held`, a flag core 0 sets with nothing kicking for it, and
+    // under a frame budget core 0's `Get` faults slowly enough that core 1
+    // has blocked by the time the flag flips - a five-second sleep against
+    // a two-second wait, which is the shape that hung this cell.
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return hold.held.load(std::memory_order_acquire); }))
         << "core 0 never took the page";
-    ASSERT_TRUE(Within(2000ms, [&] { return hold.fetching.load(std::memory_order_acquire); }))
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return hold.fetching.load(std::memory_order_acquire); }))
         << "core 1 never reached its fetch";
     // Bounded rather than timed, as the promoted cell was: what is asserted
     // is that a wait happens, not how long it is. Two thousand yields after

@@ -1,5 +1,8 @@
 #include "kds/txn/lock_table.hpp"
 
+#include "kds/base/current_core.hpp"
+#include "kds/sched/waker_table.hpp"
+
 #include <algorithm>
 #include <string>
 
@@ -216,8 +219,10 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
                         }
                     }
                     if (queued == nullptr) {
+                        // Queued on the core that asked, which is the core
+                        // whose reactor will poll the slot (AU-S2).
                         entry->waiters.push_back(
-                            Tenant{txn, mode, std::make_shared<LockWaitSlot>()});
+                            Tenant{txn, mode, std::make_shared<LockWaitSlot>(), CurrentCore()});
                         queued = &entry->waiters.back();
                     }
                     // **The wake is consumed here, under this latch.** A
@@ -239,6 +244,10 @@ StatusOr<AcquireResult> LockTable::Acquire(std::uint64_t txn, const LockKey& key
                     // otherwise be the only exit from.
                     queued->slot->ready.store(false, std::memory_order_release);
                     queued->mode = mode;
+                    // And the core, so a re-ask from another reactor - a
+                    // cross-owner transaction's, one day - parks where it
+                    // will be polled rather than where it first asked.
+                    queued->core = CurrentCore();
                     result.slot = queued->slot;
                     holdings.waiting_ = key;
                     return result;
@@ -297,14 +306,26 @@ bool LockTable::NoteWaitFor(std::uint64_t waiter, std::uint64_t holder) {
         }
     }
     wait_edges_.emplace_back(waiter, holder);
+    wait_edge_count_.fetch_add(1, std::memory_order_release);
     return false;
 }
 
 void LockTable::ClearWaitFor(std::uint64_t waiter) {
+    // **Gated on the count before the latch is taken** - AO-R3's shape,
+    // the fence counter gating the probe. Every decide on every core calls
+    // this (`Release`), and above one core `wait_latch_` is a real mutex,
+    // so an ungated clear would put one instance-wide lock on the commit
+    // path of every reactor for a graph that, until AO-S4b, nothing above
+    // one core can even populate. Sound without the latch: a transaction
+    // registers its own edge from its own thread, so a zero read means this
+    // waiter has none, whatever another core is doing.
+    if (wait_edge_count_.load(std::memory_order_acquire) == 0) return;
     LatchGuard guard(wait_latch_.get());
-    wait_edges_.erase(std::remove_if(wait_edges_.begin(), wait_edges_.end(),
-                                     [&](const auto& e) { return e.first == waiter; }),
-                      wait_edges_.end());
+    auto gone = std::remove_if(wait_edges_.begin(), wait_edges_.end(),
+                               [&](const auto& e) { return e.first == waiter; });
+    const auto erased = static_cast<std::size_t>(wait_edges_.end() - gone);
+    wait_edges_.erase(gone, wait_edges_.end());
+    if (erased != 0) wait_edge_count_.fetch_sub(erased, std::memory_order_release);
 }
 
 std::size_t LockTable::WaitEdgeCount() const {
@@ -320,42 +341,68 @@ void LockTable::WakeWaiters(const LockKey& key) {
     // AO-R4's mandatory re-check makes unavoidable - a grant handed out
     // here would be a grant decided under this latch and consumed after it,
     // with nothing holding the unit in between.
-    Partition& part = PartitionFor(key);
-    LatchGuard guard(part.latch);
-    for (Entry& e : part.entries) {
-        if (!(e.key == key)) continue;
-        for (Tenant& w : e.waiters) {
-            if (w.slot != nullptr) w.slot->ready.store(true, std::memory_order_release);
+    std::vector<std::uint32_t> kick;
+    {
+        Partition& part = PartitionFor(key);
+        LatchGuard guard(part.latch);
+        for (Entry& e : part.entries) {
+            if (!(e.key == key)) continue;
+            for (Tenant& w : e.waiters) FlipSlot(w, kick);
+            break;
         }
-        return;
     }
+    // Write, then kick (AR0-6-R1): the flips above are the write, published
+    // by the latch's release; the kicks carry nothing and run with no latch
+    // held, so a decide never holds a partition across a syscall.
+    KickAll(kick);
+}
+
+void LockTable::FlipSlot(Tenant& w, std::vector<std::uint32_t>& kick) {
+    if (w.slot == nullptr) return;
+    w.slot->ready.store(true, std::memory_order_release);
+    // A waiter on this core is polled by the reactor running this flip, so
+    // it needs no kick; one on another core does, or it learns of the flip
+    // at its block's expiry (the header, "cross-core"). One kick per core,
+    // not per waiter: eight waiters parked on one core are one sleeping
+    // reactor, and the registry's skip does not fire between two writes to
+    // a flag that stays raised.
+    if (w.core == CurrentCore()) return;
+    if (std::find(kick.begin(), kick.end(), w.core) == kick.end()) kick.push_back(w.core);
+}
+
+void LockTable::KickAll(const std::vector<std::uint32_t>& cores) const noexcept {
+    if (wake_ == nullptr) return;
+    for (const std::uint32_t core : cores) wake_->Kick(core);
 }
 
 void LockTable::DequeueWaiter(std::uint64_t txn, const LockKey& key) {
-    Partition& part = PartitionFor(key);
-    LatchGuard guard(part.latch);
-    for (std::size_t i = 0; i < part.entries.size(); ++i) {
-        Entry& e = part.entries[i];
-        if (!(e.key == key)) continue;
-        // **Flipped on the way out.** A withdrawal drops the record the
-        // next decide would have flipped, so a waiter still parked on this
-        // slot - AO-S4a's deadlock victim, AO-R8's fault net - would poll a
-        // bit nobody owns any more and never be entered again. The wake is
-        // not a grant (`WakeWaiters`), so telling a withdrawn waiter to
-        // look again costs one poll and cannot admit it to anything.
-        for (Tenant& w : e.waiters) {
-            if (w.txn == txn && w.slot != nullptr) {
-                w.slot->ready.store(true, std::memory_order_release);
+    std::vector<std::uint32_t> kick;
+    {
+        Partition& part = PartitionFor(key);
+        LatchGuard guard(part.latch);
+        for (std::size_t i = 0; i < part.entries.size(); ++i) {
+            Entry& e = part.entries[i];
+            if (!(e.key == key)) continue;
+            // **Flipped on the way out.** A withdrawal drops the record the
+            // next decide would have flipped, so a waiter still parked on
+            // this slot - AO-S4a's deadlock victim, AO-R8's fault net -
+            // would poll a bit nobody owns any more and never be entered
+            // again. The wake is not a grant (`WakeWaiters`), so telling a
+            // withdrawn waiter to look again costs one poll and cannot
+            // admit it to anything.
+            for (Tenant& w : e.waiters) {
+                if (w.txn == txn) FlipSlot(w, kick);
             }
+            e.waiters.erase(std::remove_if(e.waiters.begin(), e.waiters.end(),
+                                           [&](const Tenant& w) { return w.txn == txn; }),
+                            e.waiters.end());
+            if (e.holders.empty() && e.waiters.empty()) {
+                part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+            break;
         }
-        e.waiters.erase(std::remove_if(e.waiters.begin(), e.waiters.end(),
-                                       [&](const Tenant& w) { return w.txn == txn; }),
-                        e.waiters.end());
-        if (e.holders.empty() && e.waiters.empty()) {
-            part.entries.erase(part.entries.begin() + static_cast<std::ptrdiff_t>(i));
-        }
-        return;
     }
+    KickAll(kick);
 }
 
 void LockTable::Release(std::uint64_t txn, LockHoldings& holdings) {

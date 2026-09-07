@@ -45,12 +45,14 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <unistd.h>
 
@@ -68,6 +70,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/txn/instance_visibility.hpp"
+#include "kds/txn/lock_table.hpp"
 #include "kds/wal/file_log_device.hpp"
 #include "kds/wal/manager.hpp"
 
@@ -128,6 +131,9 @@ public:
     // registry a teardown kicks through.
     sched::WakerTable& wakers() noexcept { return *wakers_; }
     sched::RealRingTransport& transport() noexcept { return *transport_; }
+    // The instance's lock table (AO-S5), the one both runtimes' managers
+    // release into, kicking through the sim.
+    txn::LockTable& locks() noexcept { return *locks_; }
 
     // Funds the peer with a row-id block for `oid` (`row_id_lease.hpp`), the
     // way core 0's grant handler would over the ring on the peer's tick -
@@ -218,6 +224,13 @@ private:
         // The transport kicks through the sim, so a send's wake is logged
         // and held like any other (AU-S1b: one registry, and this is it).
         transport_->AttachWakers(&*sim_);
+        // The instance's lock table (AO-S5), `Expeditor::Open`'s, kicking
+        // through the same registry (AU-S2) - so a decide's wake to a
+        // waiter on the other core is logged and held like a send's.
+        auto locks = txn::LockTable::Create(/*core_count=*/2);
+        if (!locks.ok()) return locks.status();
+        locks_ = std::move(locks.value());
+        locks_->SetWakeRegistry(&*sim_);
 
         for (std::uint32_t id = 0; id < 2; ++id) {
             CoreRuntime::Config config;
@@ -230,6 +243,7 @@ private:
             config.shared_stream = wal_->stream();
             config.shared_writer = wal_->writer();
             config.visibility = &*visibility_;
+            config.locks = locks_.get();
             config.wal_drain_interval_ns = options_.wal_drain_interval_ns;
             config.scheduler.max_idle_block_ms = options_.max_idle_block_ms;
             auto core = CoreRuntime::Open(config, *device_, clock_, /*log=*/nullptr);
@@ -306,10 +320,59 @@ private:
     std::optional<sched::RealRingTransport> transport_;
     std::optional<sched::WakerTable> wakers_;
     std::optional<sched::SimWakerTable> sim_;
+    std::unique_ptr<txn::LockTable> locks_;
     std::array<std::thread, 2> threads_;
     // Last, so they die first: every runtime borrows everything above.
     std::array<std::unique_ptr<CoreRuntime>, 2> cores_;
     bool started_ = false;
 };
+
+// ---- What every cell on the rig needs, beside the rig --------------------
+
+// Spins until `pred` holds or `limit` passes; the value is whether it held.
+template <typename Pred>
+bool Within(std::chrono::milliseconds limit, Pred pred) {
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() >= deadline) return pred();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+// A cell's own barrier across cores: kick `core` through the **real** table
+// until `pred` holds. Repeated rather than once, because a single kick is
+// best-effort by the registry's own contract - a reactor between its last
+// look and its flag raise skips it and sleeps the whole block - and a
+// barrier that lost that race would fail the cell for the mechanism's
+// accepted cost. The real table rather than the sim's, so no barrier
+// depends on a tick nobody advances and none lands in the log the cells
+// read; what the barrier's kicks do reach is the destination's
+// `wakes_received()`, so a cell asserting on that takes a baseline after
+// its last barrier.
+template <typename Pred>
+bool KickUntil(TwoCoreRig& rig, std::uint32_t core, Pred pred,
+               std::chrono::milliseconds limit = std::chrono::milliseconds(2000)) {
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() >= deadline) return pred();
+        rig.wakers().Kick(core);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+// The kicks the log holds for one destination. **The engine's own kicks are
+// in the log too** - the peer's completion checkpoint publishes its anchor
+// to core 0 over the ring the moment its reactor starts, and that send
+// kicks core 0 through the same table - so a cell reads the log per
+// destination rather than assuming it holds only what the cell asked for.
+inline std::vector<sched::SimWakerTable::Record> KicksTo(TwoCoreRig& rig, std::uint32_t dst) {
+    std::vector<sched::SimWakerTable::Record> to;
+    for (const sched::SimWakerTable::Record& r : rig.wake().log()) {
+        if (r.dst == dst) to.push_back(r);
+    }
+    return to;
+}
 
 }  // namespace kds::server

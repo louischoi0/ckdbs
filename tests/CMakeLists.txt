@@ -8,6 +8,7 @@ add_executable(kds_tests
     waker_table_test.cpp
     sim_waker_table_test.cpp
     two_core_rig_test.cpp
+    lock_wake_rig_test.cpp
     current_core_test.cpp
     alloc_race_test.cpp
     free_map_race_test.cpp
