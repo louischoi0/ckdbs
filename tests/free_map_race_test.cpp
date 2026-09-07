@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/status.hpp"
 #include "kds/base/current_core.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/free_map.hpp"
@@ -325,6 +326,152 @@ TEST(FreeMapRaceTest, ConcurrentFlushersWriteTheMapOnceBetweenThem) {
     EXPECT_EQ(writes, static_cast<std::size_t>(kRounds))
         << kFlushers << " cores flushed one dirty region " << kRounds << " times and wrote its map "
         << writes << " times; the hold is what makes the losers find it clean";
+}
+
+// **Exactly one caller may place a page at a chosen id** - the guarantee
+// `ClaimNamedIdLocked` gives, and the one AM-S3 nearly moved off its latch.
+// That function decides one question out of *two* structures: the free
+// map's bit says whether the id is allocated, and the frame table's
+// `frames_.count` says whether it is resident. Guarding it with the map's
+// latch alone left the second read racing `InsertFrame`'s `emplace` on an
+// `unordered_map`, so a missed node reads as "not resident" and a live page
+// passes the in-use test.
+//
+// Eight threads race for the same ids, so every id has one winner and seven
+// losers, and every loser must be refused `AlreadyExists`. The faulting
+// threads beside them are what put `InsertFrame` in flight during the test.
+//
+// **Mutation:** drop the `LatchGuard structure(structure_latch())` from
+// `CreateAtUnpinned`'s claim loop, leaving the map's latch alone - the
+// shape this commit shipped before the review.
+TEST(FreeMapRaceTest, OnlyOneCallerEverPlacesAPageAtAChosenId) {
+    std::unique_ptr<MemoryPageDevice> device;
+    auto store = ArmedStore(device);
+    ASSERT_NE(store, nullptr);
+
+    constexpr int kThreads = 8;
+    constexpr int kIds = 40;
+    constexpr int kFaulters = 4;
+
+    // Pages that already exist, for the faulting half to reach.
+    std::vector<PageId> resident;
+    for (int n = 0; n < 16; ++n) {
+        auto made = store->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        resident.push_back(made.value().first);
+        made.value().second.Release();
+    }
+
+    std::vector<std::atomic<int>> winners(kIds);
+    for (std::atomic<int>& w : winners) w.store(0, std::memory_order_relaxed);
+    std::atomic<int> unexpected{0};
+    std::atomic<bool> done{false};
+    std::atomic<int> ready{0};
+
+    const int kAll = kThreads + kFaulters;
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(kAll));
+
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&, t] {
+            SetCurrentCore(static_cast<std::uint32_t>(t));
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) < kAll) std::this_thread::yield();
+            for (int n = 0; n < kIds; ++n) {
+                auto made = store->CreateAt(IdIn(2, n));
+                if (made.ok()) {
+                    winners[n].fetch_add(1, std::memory_order_relaxed);
+                    made.value().Release();
+                } else if (made.status().code() != StatusCode::kAlreadyExists) {
+                    // A loser is owed `AlreadyExists` and nothing else.
+                    unexpected.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            done.store(true, std::memory_order_release);
+        });
+    }
+    for (int f = 0; f < kFaulters; ++f) {
+        threads.emplace_back([&, f] {
+            SetCurrentCore(static_cast<std::uint32_t>(kThreads + f));
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) < kAll) std::this_thread::yield();
+            // Reads of resident pages, to keep the frame table busy while
+            // the claimers are inside its `count`.
+            while (!done.load(std::memory_order_acquire)) {
+                for (PageId id : resident) {
+                    auto got = store->Get(id);
+                    if (got.ok()) got.value().Release();
+                }
+            }
+        });
+    }
+    for (std::thread& th : threads) th.join();
+
+    EXPECT_EQ(unexpected.load(), 0) << "a losing claim was refused something other than "
+                                       "AlreadyExists";
+    int multiply_placed = 0;
+    for (int n = 0; n < kIds; ++n) {
+        if (winners[n].load(std::memory_order_relaxed) != 1) ++multiply_placed;
+    }
+    EXPECT_EQ(multiply_placed, 0)
+        << multiply_placed << " of " << kIds
+        << " ids were placed by a number of callers other than one: the in-use test read a frame "
+           "table another core was inserting into";
+}
+
+// **A failed map write leaves the whole batch owing one** (AM-S3's review).
+// The dirty flag is cleared at the copy, for the concurrency reason
+// `FlushMaps` gives, which puts the batch in debt to the tail: a write that
+// fails partway leaves every region after it copied, cleared and unwritten.
+// Leaving those clean means their allocation bits never reach the platter
+// and a restart reads the pages free and re-issues them - the exact loss
+// the free-map write's own comment warns about, one region over.
+//
+// Single-threaded on purpose. This is not a race; it is what the race's fix
+// costs, and it reproduces deterministically.
+//
+// **Mutation:** re-mark only the failing region rather than the tail - the
+// shape this commit shipped before the review - and the second flush writes
+// one region instead of two.
+TEST(FreeMapRaceTest, AFailedMapWriteLeavesEveryLaterRegionStillOwed) {
+    std::unique_ptr<MemoryPageDevice> device;
+    auto store = ArmedStore(device);
+    ASSERT_NE(store, nullptr);
+
+    // Three dirty regions: 0 from the store's own open, plus two more.
+    // `CreateAt` past a region's base is what brings it into existence.
+    constexpr int kA = 3;
+    constexpr int kB = 5;
+    ASSERT_TRUE(store->CreateAt(IdIn(kA, 0)).ok());
+    ASSERT_TRUE(store->CreateAt(IdIn(kB, 0)).ok());
+    auto seed = store->CreateNew();  // dirties region 0
+    ASSERT_TRUE(seed.ok());
+    seed.value().second.Release();
+
+    // Fail the *first* map write of the batch. Regions are written in
+    // ascending order, so region 0's is first and A's and B's are behind
+    // it - copied and cleared, and never reached.
+    device->FailNextWrite(Status::IoError("injected"));
+    EXPECT_FALSE(store->PersistMaps().ok()) << "the injected failure was not reported";
+
+    // Now let it through. Every region that was dirty going into the failed
+    // flush must be written here; if the tail was left clean, the ones
+    // behind the failure are missing.
+    device->ClearTrace();
+    EXPECT_TRUE(store->PersistMaps().ok());
+
+    bool wrote_zero = false;
+    bool wrote_a = false;
+    bool wrote_b = false;
+    for (const MemoryPageDevice::TraceEntry& entry : device->trace()) {
+        if (entry.kind != MemoryPageDevice::OpKind::kWrite) continue;
+        if (entry.first_page_id == FreeMapPageIdFor(FreeMapRegionBase(0))) wrote_zero = true;
+        if (entry.first_page_id == FreeMapPageIdFor(FreeMapRegionBase(kA))) wrote_a = true;
+        if (entry.first_page_id == FreeMapPageIdFor(FreeMapRegionBase(kB))) wrote_b = true;
+    }
+    EXPECT_TRUE(wrote_zero) << "the region whose write failed was not retried";
+    EXPECT_TRUE(wrote_a) << "a region behind the failure was left clean and never written";
+    EXPECT_TRUE(wrote_b) << "a region behind the failure was left clean and never written";
 }
 
 }  // namespace

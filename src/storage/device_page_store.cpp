@@ -106,6 +106,7 @@ Status DevicePageStore::LoadRegionIfPresent(std::uint32_t region) {
     if (device_.page_capacity() <= free_id) return Status::OK();
 
     MapRegion pages;
+    bool saw_headerless = false;
     auto view = std::span<std::byte, kPageSize>(pages.free_map);
     if (Status s = device_.ReadPage(free_id, view); !s.ok()) return s;
     // An all-zero page reads back as page_type kInvalid, which is what a
@@ -130,7 +131,13 @@ Status DevicePageStore::LoadRegionIfPresent(std::uint32_t region) {
                 return s;
             }
             pages.headerless_map = std::move(loaded);
-            any_headerless_ = true;
+            // Set below, under the hold that publishes the region - not
+            // here, where the bitmap is still this thread's private copy
+            // (AM-S3's review). A reader that saw `true` before the region
+            // was in the map would take the latched path and find nothing,
+            // which is harmless; setting it after publication is what makes
+            // the two agree in the direction that matters.
+            saw_headerless = true;
         }
     }
 
@@ -146,6 +153,7 @@ Status DevicePageStore::LoadRegionIfPresent(std::uint32_t region) {
     if (inserted) {
         allocated_pages_ +=
             FreeMapCountAllocated(std::span<const std::byte, kPageSize>(it->second.free_map));
+        if (saw_headerless) any_headerless_.store(true, std::memory_order_release);
     }
     return Status::OK();
 }
@@ -187,7 +195,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::EnsureHeaderlessMap(P
         FormatFreeMapPage(std::span<std::byte, kPageSize>(*made), PageType::kHeaderlessMap);
         region.value()->headerless_map = std::move(made);
         region.value()->dirty = true;
-        any_headerless_ = true;
+        any_headerless_.store(true, std::memory_order_release);
     }
     return std::span<std::byte, kPageSize>(*region.value()->headerless_map);
 }
@@ -335,7 +343,7 @@ bool DevicePageStore::IsHeaderless(PageId page_id) const noexcept {
     // path and the WAL gate, and for a database with no Waystone directory
     // - which has no headerless page anywhere, `waystone_dir.cpp` being the
     // engine's only creator of them - the answer is no, with no lookup.
-    if (!any_headerless_) return false;
+    if (!any_headerless_.load(std::memory_order_acquire)) return false;
     // A map page's class is arithmetic, never a lookup. §3 of
     // docs/inflight/in-progress/workplan-multi-free-map.md needs this to be true rather than
     // merely convenient: this predicate sits on the fault path, the
@@ -458,7 +466,19 @@ StatusOr<std::size_t> DevicePageStore::FlushMaps() {
     // on its own region's map and nothing else - so the order across them is
     // a determinism choice, not a correctness one. Within a region it is
     // both, and the rule is the one the single-page map always followed.
-    for (Pending& entry : pending) {
+    // **A failure re-marks this region and every one after it** - the debt
+    // clearing the flag at the copy creates, and AM-S3's review caught it
+    // paid for one entry only. Regions {3, 7, 9} dirty, the write of 7
+    // fails: 9 was copied, cleared, and never written, so leaving it clean
+    // means its allocation bits never reach the platter and a restart reads
+    // those pages free and re-issues them. The comment on the free-map write
+    // below says exactly that - "losing this write loses pages whose bytes
+    // did land" - and it was true of the tail as well as of the failure.
+    auto remark_from = [&](std::size_t first) {
+        for (std::size_t j = first; j < pending.size(); ++j) RemarkRegionDirty(pending[j].region);
+    };
+    for (std::size_t i = 0; i < pending.size(); ++i) {
+        Pending& entry = pending[i];
         // The headerless map first, the free map second. Both orderings are
         // safe, but this one is safe for a reason worth writing down: the
         // free map is what makes a page id *exist*, so a crash between the
@@ -475,7 +495,7 @@ StatusOr<std::size_t> DevicePageStore::FlushMaps() {
                     log_->Error("pagestore", "headerless-map write failed for region " +
                                                  std::to_string(entry.region) + ": " + s.message());
                 }
-                RemarkRegionDirty(entry.region);
+                remark_from(i);
                 return s;
             }
         }
@@ -488,15 +508,15 @@ StatusOr<std::size_t> DevicePageStore::FlushMaps() {
                 log_->Error("pagestore", "free-map write failed for region " +
                                              std::to_string(entry.region) + ": " + s.message());
             }
-            RemarkRegionDirty(entry.region);
+            remark_from(i);
             return s;
         }
     }
 
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("pagestore", "maps written, " + std::to_string(allocated_pages()) +
-                                     " page(s) allocated across " +
-                                     std::to_string(pending.size()) + " region(s)");
+        log_->Debug("pagestore", "maps written for " + std::to_string(pending.size()) +
+                                     " dirty region(s); " + std::to_string(allocated_pages()) +
+                                     " page(s) allocated across the instance");
     }
     return pending.size();
 }
@@ -993,7 +1013,7 @@ bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
 
 StatusOr<PageId> DevicePageStore::ClaimNextFreeIdLocked(std::uint32_t* missing_region) {
     // FM3/FM5: the search crosses regions. It does **not** create one - that
-    // is a device write, and this runs under the structure latch; a missing
+    // is a device write, and this runs under the free map's latch; a missing
     // region goes back to the caller to load outside the hold.
     for (PageId candidate = next_new_page_id_; candidate < kMaxPageCount;) {
         const std::uint32_t region = FreeMapRegionOf(candidate);
@@ -1055,6 +1075,13 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
         FreeMapIsAllocated(std::span<const std::byte, kPageSize>(pages->free_map), bit);
     if (allocated) {
         if (frames_.count(page_id) != 0) return Status::AlreadyExists("page id already in use");
+        // **Claimed by somebody, just not resident yet** (AM-S3). Without
+        // this the torn-creation reading below applies to a page another
+        // core claimed microseconds ago and has not inserted, whose bytes
+        // are therefore still zeros - and two callers walk away with it.
+        if (claiming_.count(page_id) != 0) {
+            return Status::AlreadyExists("page id already in use");
+        }
         // The bit is set and the caller did not read the device, because it
         // saw the bit clear before it took the hold. It has to look now.
         if (!zeros_known) return ClaimOutcome::kNeedsDeviceRead;
@@ -1109,14 +1136,55 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
             device_zeros = DeviceHoldsOnlyZeros(page_id);
             zeros_known = true;
         }
+        // **Both latches, frames outer and map inner** - the declared order
+        // (`device_page_store.hpp`), and a regression AM-S3's review caught
+        // in AM-S3 itself. `ClaimNamedIdLocked` decides one question out of
+        // two structures: the bit is the *map's*, and the in-use test
+        // `frames_.count(page_id)` is the *frame table's*. Moving this guard
+        // to the map latch alone left that `count` racing `InsertFrame`'s
+        // `emplace` on an `unordered_map` - the same undefined behaviour
+        // this stage removed from `map_regions_`, relocated into the other
+        // structure, and with a worse non-crashing outcome: a missed node
+        // reads as "not resident", so a live page passes the in-use test and
+        // is handed to a second caller.
+        //
+        // Neither hold spans device work: the two device reads this loop
+        // needs (`EnsureAddressable`, `DeviceHoldsOnlyZeros`) happen above,
+        // outside both, and are re-validated under them.
+        LatchGuard structure(structure_latch());
         LatchGuard alloc(map_latch());
         auto claimed = ClaimNamedIdLocked(page_id, zeros_known, device_zeros);
         if (!claimed.ok()) return claimed.status();
-        if (claimed.value() == ClaimOutcome::kClaimed) break;
+        if (claimed.value() == ClaimOutcome::kClaimed) {
+            // Recorded under the same hold that set the bit, so no second
+            // claimer can see the bit without seeing this (AM-S3).
+            claiming_.insert(page_id);
+            break;
+        }
         // The bit was set after all and nobody had asked the device yet.
         // The hold ends here, and the next turn asks.
         zeros_known = false;
     }
+
+    // Drops the claim however this function leaves, so a failed
+    // `EnsureAddressable` above or a throwing allocation below cannot
+    // strand an id in `claiming_` and refuse it forever (AM-S3).
+    class ClaimGuard {
+    public:
+        ClaimGuard(DevicePageStore& store, PageId page_id) noexcept
+            : store_(store), page_id_(page_id) {}
+        ~ClaimGuard() {
+            LatchGuard alloc(store_.map_latch());
+            store_.claiming_.erase(page_id_);
+        }
+        ClaimGuard(const ClaimGuard&) = delete;
+        ClaimGuard& operator=(const ClaimGuard&) = delete;
+
+    private:
+        DevicePageStore& store_;
+        PageId page_id_;
+    };
+    ClaimGuard claim(*this, page_id);
 
     auto bytes = std::make_unique<Page>();
     bytes->fill(std::byte{0});
@@ -1125,7 +1193,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
                                      std::to_string(allocated_pages()) + ")");
     }
     // A brand-new page exists only in this frame until it is written back,
-    // so it is dirty by definition.
+    // so it is dirty by definition. The claim is dropped after this returns,
+    // by which time the frame is in the table and `frames_.count` is what
+    // refuses the next caller.
     return InsertFrame(page_id, std::move(bytes), /*dirty=*/true);
 }
 
@@ -1651,6 +1721,23 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     if (!flushed.ok()) return flushed.status();
     if (flushed.value() > 0) wrote_any = true;
 
+    // **Why a zero count may skip the sync, and where that stops being
+    // enough.** Under sharing this call can write nothing because another
+    // core's flush already copied the dirty regions and is between its copy
+    // and its own sync. For the checkpointer - this function's reason to
+    // exist (`wal/checkpointer.cpp`) - that is covered: a checkpoint's
+    // durability point is the anchor publish, and
+    // `SuperBlockCheckpointAnchor::Publish` syncs the store itself, after
+    // every step. The contract above already tolerates the same shape for
+    // *pages*: "something else may have flushed them since the snapshot".
+    //
+    // The two callers that reach no anchor publish - `range_alloc.cpp`'s
+    // handoff flush and `expeditor.cpp`'s catalog flush - do not have that
+    // cover, and the skip is unchanged in shape from before AM-S3, where
+    // `maps_dirty()` read false in the same window. `PersistMaps` syncs
+    // unconditionally for exactly this reason and this does not; the
+    // asymmetry is deliberate, because a checkpoint step that synced on
+    // every round would pay an `fsync` per step for a map it did not write.
     if (!wrote_any) return Status::OK();  // nothing written, nothing to sync
     Status s = device_.Sync();
     if (log_ != nullptr) {
@@ -1746,6 +1833,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
     // here would be a self-deadlock rather than a slow read, which is why
     // the body it calls is the `Locked` one and the public
     // `EvictColdFrames` is a door that takes the latch.
+    AssertOrderBeforeFrames("FetchPinned");
     std::unique_lock<Latch> hold(*latch);
     for (;;) {
         // **The `loading_` half of the test below outlived the race it was

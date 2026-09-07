@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -281,8 +282,8 @@ public:
     // not exist, which is the safe answer: an unknown page is treated as
     // headered and therefore verified.
     //
-    // **Takes the structure latch** (AM-S3), and the reason is sharper than
-    // the free map's: the headerless bitmap is a `unique_ptr` installed
+    // **Takes the free map's latch** (AM-S3), and the reason is sharper
+    // than the bitmap's own: the headerless bitmap is a `unique_ptr` installed
     // lazily on first use (FM6), so this reads a pointer another core may
     // be storing to, not merely bits it may be setting.
     bool IsHeaderless(PageId page_id) const noexcept;
@@ -720,8 +721,9 @@ public:
     static constexpr std::size_t kPinCeiling = 8;
 
     std::uint32_t allocated_pages() const noexcept;
-    // **Takes the structure latch** (AM-S3). The free map is one structure
-    // every core reads and grows, and this predicate sits on the fault
+    // **Takes the free map's latch** (AM-S3), not the frame table's - the
+    // two are nested and one latch would hang (see `map_latch_`). The free
+    // map is one structure every core reads and grows, and this predicate sits on the fault
     // path, the writeback path and the WAL gate - so it is the most
     // frequent reader of the map a peer may be inserting a region into.
     // A caller already inside the hold wants `IsAllocatedLocked`; asking
@@ -830,7 +832,7 @@ private:
 
     // The same lookup for a caller that is about to mark a bit. Separate
     // from `EnsureRegionResident` because it is the half that cannot touch
-    // the device, which is what lets it run under the structure latch.
+    // the device, which is what lets it run under the free map's latch.
     MapRegion* MutableRegion(std::uint32_t region) noexcept {
         auto it = map_regions_.find(region);
         return it == map_regions_.end() ? nullptr : &it->second;
@@ -842,7 +844,7 @@ private:
     // Open has always applied to region 0 and RV3 applied to the catalog.
     StatusOr<MapRegion*> EnsureRegionResident(std::uint32_t region);
 
-    // ---- Allocation, with the structure latch held ----------------------
+    // ---- Allocation, with the free map's latch held ----------------------
     //
     // **The claim and the mark are one step, and that is the whole of it**
     // (AM-S2). They used to be two calls in two functions -
@@ -863,8 +865,10 @@ private:
     // What is left under the hold is a bitmap scan over one 8 KiB page.
     StatusOr<PageId> ClaimNextFreeIdLocked(std::uint32_t* missing_region);
 
-    // The named-id half, same hold, same reason: the in-use test and the
-    // mark decide one question together. `device_zeros` is the answer to
+    // The named-id half, and it decides one question out of **two**
+    // structures: the bit is the free map's and the in-use test
+    // `frames_.count` is the frame table's, so its caller holds both, frames
+    // outer (AM-S3). It held one latch when there was one. `device_zeros` is the answer to
     // `DeviceHoldsOnlyZeros(page_id)` read *outside* the hold, and
     // `zeros_known` says whether it was read at all - a caller that found
     // the bit clear has no need for it, and gets `AlreadyExists`'s
@@ -894,6 +898,27 @@ private:
 
     // Restores a region's dirty bit after `FlushMaps`' write of it failed.
     void RemarkRegionDirty(std::uint32_t region) noexcept;
+
+    // ---- Ids claimed but not yet resident (AM-S3) ------------------------
+    //
+    // `CreateAt` sets the map bit under the hold and inserts the frame
+    // *after* releasing it, because `InsertFrame` takes the frame table's
+    // latch itself. Between the two the page is allocated, not resident,
+    // and its bytes on the device are still all zeros - which is exactly
+    // the signature `ClaimNamedIdLocked` reads as a **torn creation** and
+    // re-claims. So a second caller naming the same id in that window was
+    // handed a page the first had already been given: two callers, one live
+    // id, which is the class `tests/alloc_race_test.cpp` exists to forbid
+    // on the other allocation path.
+    //
+    // **Pre-existing, and found by AM-S3's own cell rather than by its
+    // survey** - the window does not depend on which latch guards the
+    // claim, so it was there before the free map had one. The set is the
+    // same shape `loading_` uses for a fault in flight: an id here is
+    // claimed by somebody, so the torn-creation reading does not apply to
+    // it. Guarded by `map_latch_`, and erased by an RAII guard so a failed
+    // `EnsureAddressable` or a throwing allocation does not strand an id.
+    std::unordered_set<PageId> claiming_;
 
     // Debug: a public free-map reader must not be reached from inside the
     // *map* hold, because `Latch` is not recursive (`base/latch.hpp`) and a
@@ -932,30 +957,20 @@ public:
             out.resident_pages += 1 + (pages.headerless_map != nullptr ? 1 : 0);
         }
         out.coverage_ids = static_cast<std::uint64_t>(out.regions) * kFreeMapBitsPerPage;
-        out.has_headerless = any_headerless_;
+        out.has_headerless = any_headerless_.load(std::memory_order_acquire);
         return out;
     }
 
 private:
 
-    // Recomputes the maintained count from the resident regions.
-    // (Declared after the public block above; still private.) It existed
-    // for the one path that changed bits without going through a site that
-    // could report them - the peer's free-map refresh, which unioned in
-    // whatever core 0 had published and could not say how many bits that
-    // added. That path went at AW-S1b; this stays as the recount a region
-    // load performs. O(regions) and rare, where the count it maintains is
-    // O(1) and printed on three paths.
-
     // Stamps a checksum unless the page is headerless. The one place that
     // decision is made, so no write path can forget it.
     void StampIfHeadered(PageId page_id, std::span<std::byte, kPageSize> page) const;
 
-    // Writes back whichever of the two bitmap pages are dirty, after the
-    // data pages they describe. Same ordering rule the free map always
-    // followed: a page is only reachable once the map says so.
-    // Writes every dirty region's bitmap pair out, and answers **how many
-    // regions it wrote** (AM-S3) - which is what tells a caller whether a
+    // Writes every dirty region's bitmap pair out, after the data pages
+    // they describe - the ordering rule the free map always followed, since
+    // a page is only reachable once the map says so - and answers **how
+    // many regions it wrote** (AM-S3) - which is what tells a caller whether a
     // sync is owed. It used to return `Status` and callers asked
     // `maps_dirty()` first; that was two unsynchronised walks of the region
     // map to answer one question, with a window between them in which
@@ -967,7 +982,11 @@ private:
     // are checksummed and copied into a local while the map is held and
     // the dirty flags are cleared *there*. Clearing at copy time rather
     // than after the write is what makes a concurrent allocation re-dirty
-    // the region instead of being lost; a failed write re-marks it.
+    // the region instead of being lost. **A failed write re-marks that
+    // region and every one after it**, because the flags of the whole batch
+    // were cleared at the copy and the tail was never written - leaving it
+    // clean would mean its allocation bits never reach the platter and a
+    // restart re-issues live pages.
     //
     // It also answers "who runs the map writeback when one store serves
     // every core" without a rule: N checkpointers each call this, the first
@@ -1302,7 +1321,22 @@ private:
     // Waystone directory this answers all three with no lookup at all.
     // Seeded at mount from what loaded, and moved by the one writer that
     // can change it.
-    bool any_headerless_ = false;
+    // **Atomic, and it is the gate rather than the data** (AM-S3's review).
+    // `IsHeaderless` reads this *before* the map hold, deliberately - a
+    // database with no Waystone directory has no headerless page anywhere,
+    // and that answer costs no lookup. But it is written when the first
+    // bitmap is installed, on another core, so a plain `bool` here is a
+    // torn read that decides whether the latched half runs at all: a stale
+    // `false` sends `StampIfHeadered` on to write a checksum into the body
+    // of a headerless page, which is silent corruption of authoritative
+    // data (invariant 14).
+    //
+    // Release on the store, acquire on the load: a reader that sees `true`
+    // sees the bitmap the writer installed before setting it. It never goes
+    // back to `false` - nothing removes a headerless page - so a stale
+    // `false` costs one extra pass through the latched path and never a
+    // wrong answer in the other direction.
+    std::atomic<bool> any_headerless_{false};
 
     // D8(a): the instance's allocated-page count, maintained rather than
     // swept. Seeded at mount - which already reads every region, so the
