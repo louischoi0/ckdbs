@@ -128,12 +128,14 @@ private:
     wal::CheckpointAnchorRecord FoldedAnchor() const noexcept;
 
     // The floor the warm-up holds to: the lowest redo start over the anchor
-    // slots the mount found **that were ever published into**. For a volume
-    // born single-stream that is slot 0 alone, since nothing else is ever
-    // written. It differs only for a volume converted in place, where a
-    // peer's old slot can sit below core 0's and a floor above it would
-    // reintroduce the hazard the warm-up closes. Nothing converts in place
-    // today (AL-R3); this costs one loop over 64 entries, once.
+    // slots the mount found **that were ever published into**, which is slot 0
+    // alone, since nothing else is ever written. The loop over 64 entries
+    // existed for a volume converted in place, where a peer's old slot
+    // could sit below core 0's and a floor above it would reintroduce the
+    // hazard the warm-up closes. Nothing converts in place (AL-R3) and
+    // since AM-S4(d) no volume carrying such a slot mounts, so the loop is
+    // a canary rather than a case: one pass over 64 entries, once, and the
+    // thing that would notice if either of those stopped holding.
     //
     // **Skipping the never-published slots is not a detail.** A zero
     // `redo_start_lsn` means "this core has never checkpointed"

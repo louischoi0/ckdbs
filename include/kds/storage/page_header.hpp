@@ -158,11 +158,11 @@ void SetPageStreamStamp(std::span<std::byte, kPageSize> page, std::uint16_t stam
 constexpr std::uint16_t StreamStampFor(std::uint32_t core_id) noexcept {
     return static_cast<std::uint16_t>(core_id + 1);
 }
-// Foreign = stamped, and by some other stream. Never true of an unstamped
-// page, whose page_lsn is meaningful as-is.
-constexpr bool StampIsForeign(std::uint16_t stamp, std::uint32_t core_id) noexcept {
-    return stamp != 0 && stamp != StreamStampFor(core_id);
-}
+// `StampIsForeign` stood here - stamped, and by some other stream - and
+// went at AM-S4(d) with its one caller, redo's refusal of a page carrying
+// another stream's stamp inside this scan's scope. There is one stream, so
+// there is no other stream to have crossed from and the question has no
+// answer to give.
 
 // ---- Relayout epoch (docs/spec/physical-optimizer.md R4) ----------------
 //

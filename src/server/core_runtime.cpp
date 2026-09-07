@@ -129,9 +129,10 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     const CurrentCoreGuard as_this_core(config.core_id);
 
     auto runtime = std::unique_ptr<CoreRuntime>(new CoreRuntime(config, log));
-    // The whole decoded image, not a field of it. `anchor` and `anchors`
-    // stay on the config: those are selections over the image, not gaps in
-    // it.
+    // The whole decoded image, not a field of it. `anchor` stays on the
+    // config: it is a selection over the image - the fold's slot 0 - not a
+    // gap in it. `anchors` stood beside it and went at AM-S4(d) with the
+    // cross-stream resolver that was its only reader.
     runtime->superblock_ = *config.superblock;
 
     // Each core gets its own epoll instance. Sharing one would be shared

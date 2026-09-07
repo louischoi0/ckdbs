@@ -130,6 +130,42 @@ statement about an engine that no longer exists; re-verify or strike it.
   Owner: `docs/spec/wal.md` §5.2, and `docs/spec/crosscore.md` CC7 for why
   the handoff exists at all.
 
+- **Three cuts AM-S4(d) made possible and did not take.** Named by that
+  stage's `critics-developer` pass, verified by it by trace and exhaustive
+  grep, and deferred because the operator called for the push before they
+  could be made and verified on their own:
+
+  1. **`CoreRuntime`'s unshared-store arm** (`core_runtime.cpp`'s
+     `else { DevicePageStore::Open … SetWalGate }`, the `owned_store_`
+     member, its budget site, and `Config::buffer_pool_frames`). Every
+     caller now sets `shared_store` unconditionally, and AM-S4(d) removed
+     the last syntactic path to null when `share_pool ? store_.get() :
+     nullptr` became `store_.get()`. The one cell touching the budget field
+     asserts it is *ignored*.
+  2. **`FrameBudgetShare`** (`expeditor.cpp`, declared in its header). Its
+     only non-test call divides a total that nothing keeps divided: at one
+     core the share is the total, and above one `Start()` overwrites it
+     with the total. **One behavioural residue the reviewer did not test**:
+     core 0's mount pass — recovery plus the completion checkpoint — runs
+     on `total/cores` frames before `Start()` restores the total. The
+     budget is an eviction target rather than a hard cap, so this is a
+     warm-up cost and not a refusal, but the claim is untested and should
+     be measured or pinned before the function goes.
+  3. **`SuperBlock::wal_anchors()` and `MountAnchorOf`'s loop.** Only slot
+     0 can be non-zero — `SetWalAnchor` refuses every other unconditionally
+     and `Decode` refuses the volumes that could carry an old one — so
+     `MountAnchorOf` collapses to `wal_anchor(0)` and the vector accessor
+     loses its last caller. The loop is deliberately kept for now as a
+     canary, and `superblock_checkpoint_anchor.hpp` says so at the
+     declaration; cutting it means deciding the canary is not worth a pass
+     over 64 entries once per mount.
+
+  All three are dead code this stage *created*, which is the class AM-R4
+  warns about: a field nothing writes and nothing reads is worse than no
+  field, because the next reader assumes it means something. Owner:
+  whichever stage next opens `core_runtime.cpp` — AM-S3 touches the same
+  file.
+
 ## Multi-core state
 
 - **Closed 2026-09-03, recorded because the closure is the interesting

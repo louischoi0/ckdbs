@@ -81,7 +81,6 @@ enum class TxnOutcome : std::uint8_t {
     kPrepared = 3,
 };
 
-
 // What analysis knows about one transaction: its verdict, and - for a loser
 // - where its undo chain starts.
 //
