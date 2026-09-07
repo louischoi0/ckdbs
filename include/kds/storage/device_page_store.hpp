@@ -280,6 +280,11 @@ public:
     // Whether `page_id` was created headerless. False for an id that does
     // not exist, which is the safe answer: an unknown page is treated as
     // headered and therefore verified.
+    //
+    // **Takes the structure latch** (AM-S3), and the reason is sharper than
+    // the free map's: the headerless bitmap is a `unique_ptr` installed
+    // lazily on first use (FM6), so this reads a pointer another core may
+    // be storing to, not merely bits it may be setting.
     bool IsHeaderless(PageId page_id) const noexcept;
 
     // Writes dirty frames back in page-id order, which is file order
@@ -715,6 +720,12 @@ public:
     static constexpr std::size_t kPinCeiling = 8;
 
     std::uint32_t allocated_pages() const noexcept;
+    // **Takes the structure latch** (AM-S3). The free map is one structure
+    // every core reads and grows, and this predicate sits on the fault
+    // path, the writeback path and the WAL gate - so it is the most
+    // frequent reader of the map a peer may be inserting a region into.
+    // A caller already inside the hold wants `IsAllocatedLocked`; asking
+    // here would hang, and debug builds abort naming the reader instead.
     bool IsAllocated(PageId page_id) const noexcept;
 
 private:
@@ -868,15 +879,53 @@ private:
     // exist and must not be created by the act of looking.
     Status LoadRegionIfPresent(std::uint32_t region);
 
-    // Whether any resident region has unwritten bits.
-    bool maps_dirty() const noexcept;
+    // **`maps_dirty()` is gone** (AM-S3). It walked `map_regions_` to answer
+    // whether `FlushMaps` had anything to do, and every caller then walked
+    // it again inside `FlushMaps` - two unsynchronised passes to answer one
+    // question, and a window between them in which another core's flush
+    // could take the work. `FlushMaps` returns how many regions it wrote
+    // instead, which is the same answer taken once and under the hold.
+
+    // The free map's readers, without the hold, for callers that already
+    // have it. Never public: the acquisition is what a caller from outside
+    // this class is owed (AM-S3).
+    bool IsAllocatedLocked(PageId page_id) const noexcept;
+    bool IsHeaderlessLocked(PageId page_id) const noexcept;
+
+    // Restores a region's dirty bit after `FlushMaps`' write of it failed.
+    void RemarkRegionDirty(std::uint32_t region) noexcept;
+
+    // Debug: a public free-map reader must not be reached from inside the
+    // *map* hold, because `Latch` is not recursive (`base/latch.hpp`) and a
+    // second acquisition **hangs**, naming nothing. This aborts naming the
+    // reader instead, and running the suite armed with it in place is the
+    // census AM-S3 used - the same method AM-S1's never-upgrade detector
+    // used for the page latch, and it is what found that `FetchPinned`'s
+    // hit path reaches `IsAllocated` and `IsHeaderless` under the frame
+    // table's hold, which is why the map has a latch of its own.
+    //
+    // Holding `frames_latch_` here is fine and expected: that is the
+    // declared order.
+    void AssertNotUnderMapHold(const char* reader) const noexcept;
+
+    // Debug: the other half of the order - nothing may take the frame table
+    // while holding the map. Called where `frames_latch_` is acquired on a
+    // path the map could reach.
+    void AssertOrderBeforeFrames(const char* site) const noexcept;
 
 public:
     // FM10. Resident is in-existence for the free map (see map_regions_),
     // so `regions` counts what the file holds and the gap between
     // `resident_pages` and twice that is what FM6's deferred headerless
     // bitmaps save.
+    //
+    // **Under the hold** (AM-S3): it walks every region and reads each
+    // one's headerless pointer, which is exactly what a concurrent
+    // `EnsureRegionResident` inserts into and `EnsureHeaderlessMap` stores
+    // to.
     MapResidency map_residency() const noexcept override {
+        AssertNotUnderMapHold("map_residency");
+        LatchGuard map(map_latch());
         MapResidency out;
         out.regions = map_regions_.size();
         for (const auto& [region, pages] : map_regions_) {
@@ -897,7 +946,6 @@ private:
     // added. That path went at AW-S1b; this stays as the recount a region
     // load performs. O(regions) and rare, where the count it maintains is
     // O(1) and printed on three paths.
-    void RecountAllocatedPages() noexcept;
 
     // Stamps a checksum unless the page is headerless. The one place that
     // decision is made, so no write path can forget it.
@@ -906,7 +954,25 @@ private:
     // Writes back whichever of the two bitmap pages are dirty, after the
     // data pages they describe. Same ordering rule the free map always
     // followed: a page is only reachable once the map says so.
-    Status FlushMaps();
+    // Writes every dirty region's bitmap pair out, and answers **how many
+    // regions it wrote** (AM-S3) - which is what tells a caller whether a
+    // sync is owed. It used to return `Status` and callers asked
+    // `maps_dirty()` first; that was two unsynchronised walks of the region
+    // map to answer one question, with a window between them in which
+    // another core's flush could take the work and leave the caller
+    // syncing nothing.
+    //
+    // **Copy under the hold, write outside it.** The device calls may not
+    // run under the latch (this class's rule since AM-S2 2b), so the bytes
+    // are checksummed and copied into a local while the map is held and
+    // the dirty flags are cleared *there*. Clearing at copy time rather
+    // than after the write is what makes a concurrent allocation re-dirty
+    // the region instead of being lost; a failed write re-marks it.
+    //
+    // It also answers "who runs the map writeback when one store serves
+    // every core" without a rule: N checkpointers each call this, the first
+    // to take the hold clears the flags, and the rest write nothing.
+    StatusOr<std::size_t> FlushMaps();
 
     // Waits for the log records of `page_ids` to be durable before any of
     // them is written. A no-op with no gate installed or no logged page in
@@ -1142,6 +1208,34 @@ private:
     // callers correctly treat them as reads.
     mutable Latch frames_latch_;
     Latch* structure_latch() const noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
+
+    // ---- The free map's latch, and the order (AM-S3) ---------------------
+    //
+    // **A second latch, not a second use of the first**, and the reason is
+    // not contention - it is that the two are *nested*. `FetchPinned`'s hit
+    // path holds the frame table across `Resolve`, and `Resolve` begins with
+    // `IsAllocated`; `ResidentBytes` under the same hold asks
+    // `IsHeaderless`. Both are free-map reads, so guarding the map with
+    // `frames_latch_` would be a second acquisition on one thread, which
+    // `base/latch.hpp` says plainly is a hang. The AM-S2 review already
+    // named the shape: *structure -> allocation, allocation the inner
+    // leaf*. This is that leaf.
+    //
+    // **The declared order is `frames_latch_` then `map_latch_`, never the
+    // reverse** (`docs/rules/rules.md` §3). Nothing takes the frame table
+    // while holding the map: the two allocation paths end their map hold
+    // before calling `InsertFrame`, which is the edge AM-S2's review moved
+    // for exactly this reason, and `EnsureRegionResidentLocked` does its
+    // device work outside both. `AssertOrderBeforeFrames` is the debug
+    // enforcement, so the order is a checked statement rather than a
+    // comment.
+    //
+    // What it guards: `map_regions_` itself - a `std::map` that region
+    // creation *inserts* into while other cores are inside `find` - and
+    // every `MapRegion` in it, including the lazily installed
+    // `headerless_map` pointer and the `dirty` flag.
+    mutable Latch map_latch_;
+    Latch* map_latch() const noexcept { return latch_armed_ ? &map_latch_ : nullptr; }
 
     // ---- AM-S2 step 2b: the loading set ---------------------------------
     //

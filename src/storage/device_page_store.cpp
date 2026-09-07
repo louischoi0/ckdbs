@@ -70,19 +70,35 @@ const DevicePageStore::Page& DevicePageStore::AbsentRegionPage() noexcept {
     return kZero;
 }
 
-void DevicePageStore::RecountAllocatedPages() noexcept {
-    std::uint32_t total = 0;
-    for (const auto& [region, pages] : map_regions_) {
-        total += FreeMapCountAllocated(std::span<const std::byte, kPageSize>(pages.free_map));
+void DevicePageStore::AssertNotUnderMapHold(const char* reader) const noexcept {
+#ifndef NDEBUG
+    if (HoldsLatch(map_latch())) {
+        std::fprintf(stderr,
+                     "DevicePageStore: %s was called from inside the free map's own hold. The "
+                     "latch is not recursive (base/latch.hpp), so this would hang; call the "
+                     "Locked form instead (AM-S3).\n",
+                     reader);
+        std::abort();
     }
-    allocated_pages_ = total;
+#else
+    (void)reader;
+#endif
 }
 
-bool DevicePageStore::maps_dirty() const noexcept {
-    for (const auto& [region, pages] : map_regions_) {
-        if (pages.dirty) return true;
+void DevicePageStore::AssertOrderBeforeFrames(const char* site) const noexcept {
+#ifndef NDEBUG
+    if (HoldsLatch(map_latch())) {
+        std::fprintf(stderr,
+                     "DevicePageStore: %s took the frame table while holding the free map. The "
+                     "declared order is frames then map, never the reverse (AM-S3, "
+                     "device_page_store.hpp); this is the inversion that would deadlock against "
+                     "an allocator on another core.\n",
+                     site);
+        std::abort();
     }
-    return false;
+#else
+    (void)site;
+#endif
 }
 
 Status DevicePageStore::LoadRegionIfPresent(std::uint32_t region) {
@@ -118,21 +134,52 @@ Status DevicePageStore::LoadRegionIfPresent(std::uint32_t region) {
         }
     }
 
-    allocated_pages_ += FreeMapCountAllocated(std::span<const std::byte, kPageSize>(view));
-    map_regions_.emplace(region, std::move(pages));
+    // **Published under the map hold, and the loser keeps the winner's**
+    // (AM-S3). Every device read above ran outside it, which is the rule;
+    // this is the one line that touches the shared map. `try_emplace` for
+    // `EnsureRegionResidentLocked`'s reason: two cores can read the same
+    // region off the device at once, and the second must not replace a
+    // bitmap the first has already handed out.
+    AssertNotUnderMapHold("LoadRegionIfPresent");
+    LatchGuard map(map_latch());
+    auto [it, inserted] = map_regions_.try_emplace(region, std::move(pages));
+    if (inserted) {
+        allocated_pages_ +=
+            FreeMapCountAllocated(std::span<const std::byte, kPageSize>(it->second.free_map));
+    }
     return Status::OK();
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::EnsureHeaderlessMap(PageId page_id) {
     auto region = EnsureRegionResident(FreeMapRegionOf(page_id));
     if (!region.ok()) return region.status();
+    // **The grow runs before the hold, unconditionally** (AM-S3). It is
+    // this class's rule that device work never runs under a latch, and
+    // `EnsureCapacity` is idempotent and a comparison when the file is
+    // already large enough - so paying it on the already-installed path is
+    // cheaper than the alternative, which is take the hold, drop it to
+    // grow, and re-check.
+    const PageId headerless_id = HeaderlessMapPageIdFor(page_id);
+    if (Status s = device_.EnsureCapacity(headerless_id + 1); !s.ok()) return s;
+
+    // **`region.value()` stays valid across the drop**, which is what makes
+    // the split legal: `map_regions_` is a `std::map`, and `std::map` never
+    // invalidates a pointer to an existing element when another is
+    // inserted. A hash map here would have made this an
+    // insert-then-re-look-up.
+    //
+    // **Under the map hold** (AM-S3), and this is the sharper half of the
+    // free map's race: the headerless bitmap is a `unique_ptr` installed
+    // lazily on first use (FM6), so an unlatched install is a pointer store
+    // racing every `IsHeaderless` read of it - not bits that might be stale
+    // but a pointer that might be torn.
+    AssertNotUnderMapHold("EnsureHeaderlessMap");
+    LatchGuard map(map_latch());
     if (region.value()->headerless_map == nullptr) {
         // The id is claimed *here*, as the page is placed, so the free map
         // never says a page exists whose bytes have not been written. It
         // cannot have been taken in the meantime: every allocation path
         // skips a bitmap id by arithmetic.
-        const PageId headerless_id = HeaderlessMapPageIdFor(page_id);
-        if (Status s = device_.EnsureCapacity(headerless_id + 1); !s.ok()) return s;
         FreeMapAllocate(std::span<std::byte, kPageSize>(region.value()->free_map),
                         FreeMapBitIndexOf(headerless_id));
         ++allocated_pages_;
@@ -147,18 +194,35 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::EnsureHeaderlessMap(P
 
 StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     std::uint32_t region) {
-    if (auto it = map_regions_.find(region); it != map_regions_.end()) return &it->second;
-
+    // **The lookup is under the map hold, the device work is not** (AM-S3),
+    // which is `FetchPinned`'s retry idiom applied to the one other
+    // structure that grows. This function used to run wholly unlatched, and
+    // its `map_regions_.emplace` below was a `std::map` insertion racing
+    // every other core's `find` - undefined behaviour rather than a stale
+    // read. `tests/free_map_race_test.cpp` measures what that cost: with the
+    // publication moved back outside this hold, 4 runs in 8 die or report a
+    // corrupted region count, one of them on a SIGSEGV.
+    //
     // **The peer's private empty region went with the lease** (AW-S1b). A
     // leased store could not read a map page from the device - core 0 owns
     // it, writes it and does not latch it - so a peer reaching a region
     // after its mount got a private, never-dirty copy instead. One frame
-    // table serves every core now and every caller reaches this map under
-    // the structure latch, so the unsynchronised read that arm avoided
-    // cannot arise: there is one copy, and one discipline over it.
+    // table serves every core now, so the unsynchronised read that arm
+    // avoided cannot arise: there is one copy, and this is the discipline
+    // over it.
+    {
+        AssertNotUnderMapHold("EnsureRegionResident");
+        LatchGuard map(map_latch());
+        if (auto it = map_regions_.find(region); it != map_regions_.end()) return &it->second;
+    }
 
+    // Outside the hold: this reads the device, and may grow the file.
+    // `LoadRegionIfPresent` takes the hold itself for its own insertion.
     if (Status s = LoadRegionIfPresent(region); !s.ok()) return s;
-    if (auto it = map_regions_.find(region); it != map_regions_.end()) return &it->second;
+    {
+        LatchGuard map(map_latch());
+        if (auto it = map_regions_.find(region); it != map_regions_.end()) return &it->second;
+    }
 
     // FM5: the region does not exist, so this is where the map grows.
     const PageId free_id = FreeMapPageIdFor(FreeMapRegionBase(region));
@@ -186,7 +250,6 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     // by arithmetic (IsMapPageId), which does not depend on a bit having
     // been set at the right moment.
     FreeMapAllocate(view, FreeMapBitIndexOf(free_id));
-    ++allocated_pages_;
     (void)headerless_id;
     pages.dirty = true;
 
@@ -196,7 +259,20 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
                                      std::to_string(FreeMapRegionBase(region)) + ".." +
                                      std::to_string(FreeMapRegionBase(region) + kFreeMapBitsPerPage - 1));
     }
-    auto [it, inserted] = map_regions_.emplace(region, std::move(pages));
+    // **Published under the hold, and the loser of a race keeps the
+    // winner's region** (AM-S3). Two cores can reach here for one region -
+    // both found it absent, both grew the file, and `EnsureCapacity` is
+    // idempotent - so `try_emplace` rather than `emplace`: whoever inserted
+    // first has the authoritative bitmap, and the second returns it rather
+    // than replacing a map another core may already have set bits in.
+    // Same shape as `InsertFrame`'s "lose the race rather than win it".
+    //
+    // `allocated_pages_` is bumped **here**, not where the bit was set, for
+    // the same reason: a loser's page was never published, so counting it
+    // would double-count the winner's self-referential map page.
+    LatchGuard map(map_latch());
+    auto [it, inserted] = map_regions_.try_emplace(region, std::move(pages));
+    if (inserted) ++allocated_pages_;
     return &it->second;
 }
 
@@ -267,8 +343,18 @@ bool DevicePageStore::IsHeaderless(PageId page_id) const noexcept {
     // would be a recursion if a map page could ever be the question. Both
     // bitmap classes are headered, so the answer is no.
     if (IsMapPageId(page_id)) return false;
+    AssertNotUnderMapHold("IsHeaderless");
+    LatchGuard map(map_latch());
+    return IsHeaderlessLocked(page_id);
+}
+
+bool DevicePageStore::IsHeaderlessLocked(PageId page_id) const noexcept {
+    if (IsMapPageId(page_id)) return false;
+    // `IsAllocatedLocked`, not `IsAllocated`: this already holds the latch
+    // that one takes, and the pair used to nest freely because neither took
+    // anything (AM-S3).
     return FreeMapIsAllocated(headerless_map_bytes_for(page_id), FreeMapBitIndexOf(page_id)) &&
-           IsAllocated(page_id);
+           IsAllocatedLocked(page_id);
 }
 
 void DevicePageStore::StampIfHeadered(PageId page_id,
@@ -304,7 +390,7 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
         // shares** (AM-S2), so it takes the latch even though the *id* is
         // this caller's alone: a neighbouring id's bit in the same byte
         // belongs to somebody else.
-        LatchGuard alloc(structure_latch());
+        LatchGuard alloc(map_latch());
         FreeMapAllocate(map.value(), FreeMapBitIndexOf(headerless_page));
         region.value()->dirty = true;
     }
@@ -315,9 +401,7 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
     return created;
 }
 
-Status DevicePageStore::FlushMaps() {
-    if (!maps_dirty()) return Status::OK();
-
+StatusOr<std::size_t> DevicePageStore::FlushMaps() {
     // **This is the one write path that reaches `device_.WritePage` without
     // asking `MayWrite`.** It used to carry a check of its own for that
     // reason - a leased store dropped its map writes rather than publishing
@@ -325,23 +409,56 @@ Status DevicePageStore::FlushMaps() {
     // the lease. Region 0's map pages sit below the system range, so the
     // core that writes them is the core `MayWrite` would admit anyway.
     //
-    // The bit that gets here is redo's: `CreateAt` marks the map at mount,
-    // *before* the lease is installed (core_runtime.cpp orders it that way
-    // deliberately), and until a peer had a checkpointer nothing on a peer
-    // ever called FlushMaps. Publishing this core's copy would write back
-    // the map as it stood when this store opened - reverting every
-    // allocation and every extent reservation core 0 has made since, which
-    // is silent reuse of live pages rather than a lost bit. Dropped instead:
-    // the id redo re-created came out of an extent core 0 reserved, so core
-    // 0's map already carries it and core 0's own flush makes it durable.
-    // Ascending by region, which `std::map` gives for free. Regions are
-    // independent of one another - a page's reachability rests on its own
-    // region's map and nothing else - so the order across them is a
-    // determinism choice, not a correctness one. Within a region it is
-    // both, and the rule is the one the single-page map always followed.
-    for (auto& [region, pages] : map_regions_) {
-        if (!pages.dirty) continue;
+    // **Copy under the hold, write outside it** (AM-S3). The rule this class
+    // has had since AM-S2 2b is that device work does not run under the
+    // structure latch, and the walk that stood here obeyed it by taking no
+    // latch at all - iterating a `std::map` another core inserts regions
+    // into, and checksumming pages another core sets bits in. So the pair
+    // is split: the bytes are stamped and copied while the map is held, and
+    // the writes run after it is dropped.
+    //
+    // **The dirty flag is cleared at copy time, not after the write.** A
+    // concurrent allocation that dirties the region between the two must
+    // re-dirty it rather than have its bit lost, which is what clearing
+    // afterwards would do. A failed write re-marks the region below.
+    struct Pending {
+        std::uint32_t region;
+        PageId free_id;
+        Page free_map;
+        bool has_headerless;
+        PageId headerless_id;
+        Page headerless_map;
+    };
+    std::vector<Pending> pending;
+    {
+        AssertNotUnderMapHold("FlushMaps");
+        LatchGuard map(map_latch());
+        for (auto& [region, pages] : map_regions_) {
+            if (!pages.dirty) continue;
+            const PageId base = FreeMapRegionBase(region);
+            Pending entry;
+            entry.region = region;
+            entry.free_id = FreeMapPageIdFor(base);
+            entry.free_map = pages.free_map;
+            entry.has_headerless = pages.headerless_map != nullptr;
+            entry.headerless_id = HeaderlessMapPageIdFor(base);
+            if (entry.has_headerless) entry.headerless_map = *pages.headerless_map;
+            StampPageChecksum(std::span<std::byte, kPageSize>(entry.free_map));
+            if (entry.has_headerless) {
+                StampPageChecksum(std::span<std::byte, kPageSize>(entry.headerless_map));
+            }
+            pages.dirty = false;
+            pending.push_back(std::move(entry));
+        }
+    }
+    if (pending.empty()) return std::size_t{0};
 
+    // Ascending by region, which the copy took from `std::map` for free.
+    // Regions are independent of one another - a page's reachability rests
+    // on its own region's map and nothing else - so the order across them is
+    // a determinism choice, not a correctness one. Within a region it is
+    // both, and the rule is the one the single-page map always followed.
+    for (Pending& entry : pending) {
         // The headerless map first, the free map second. Both orderings are
         // safe, but this one is safe for a reason worth writing down: the
         // free map is what makes a page id *exist*, so a crash between the
@@ -351,47 +468,66 @@ Status DevicePageStore::FlushMaps() {
         // headerless bit had not landed, and the next read of it would
         // verify a checksum that was never written and call the page
         // corrupt.
-        const PageId base = FreeMapRegionBase(region);
-        if (pages.headerless_map != nullptr) {
-            auto hbytes = std::span<std::byte, kPageSize>(*pages.headerless_map);
-            StampPageChecksum(hbytes);
-            if (Status s = device_.WritePage(HeaderlessMapPageIdFor(base), hbytes); !s.ok()) {
+        if (entry.has_headerless) {
+            auto hbytes = std::span<std::byte, kPageSize>(entry.headerless_map);
+            if (Status s = device_.WritePage(entry.headerless_id, hbytes); !s.ok()) {
                 if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                     log_->Error("pagestore", "headerless-map write failed for region " +
-                                                 std::to_string(region) + ": " + s.message());
+                                                 std::to_string(entry.region) + ": " + s.message());
                 }
+                RemarkRegionDirty(entry.region);
                 return s;
             }
         }
 
-        auto fbytes = std::span<std::byte, kPageSize>(pages.free_map);
-        StampPageChecksum(fbytes);
-        if (Status s = device_.WritePage(FreeMapPageIdFor(base), fbytes); !s.ok()) {
+        auto fbytes = std::span<std::byte, kPageSize>(entry.free_map);
+        if (Status s = device_.WritePage(entry.free_id, fbytes); !s.ok()) {
             // The map is what makes a page reachable after a restart, so
             // losing this write loses pages whose bytes did land.
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore", "free-map write failed for region " +
-                                             std::to_string(region) + ": " + s.message());
+                                             std::to_string(entry.region) + ": " + s.message());
             }
+            RemarkRegionDirty(entry.region);
             return s;
         }
-        pages.dirty = false;
     }
 
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("pagestore", "maps written, " + std::to_string(allocated_pages()) +
                                      " page(s) allocated across " +
-                                     std::to_string(map_regions_.size()) + " region(s)");
+                                     std::to_string(pending.size()) + " region(s)");
     }
-    return Status::OK();
+    return pending.size();
+}
+
+// Puts a region's dirty bit back after a failed write, so the next flush
+// retries it (AM-S3). Under the hold, because it touches the map, and a
+// plain store rather than a test-then-set: an allocation may have
+// re-dirtied it already and both readings are "owes a write".
+void DevicePageStore::RemarkRegionDirty(std::uint32_t region) noexcept {
+    AssertNotUnderMapHold("RemarkRegionDirty");
+    LatchGuard map(map_latch());
+    if (MapRegion* pages = MutableRegion(region); pages != nullptr) pages->dirty = true;
 }
 
 Status DevicePageStore::PersistMaps() {
-    if (Status s = FlushMaps(); !s.ok()) return s;
+    // Syncs whether or not this call was the one that wrote: a caller
+    // asking for the maps to be durable is owed durability, and under
+    // sharing the core that wrote them may be another one.
+    if (auto flushed = FlushMaps(); !flushed.ok()) return flushed.status();
     return device_.Sync();
 }
 
 bool DevicePageStore::IsAllocated(PageId page_id) const noexcept {
+    // The ceiling test needs no map and therefore no hold.
+    if (page_id >= kMaxPageCount) return false;
+    AssertNotUnderMapHold("IsAllocated");
+    LatchGuard map(map_latch());
+    return IsAllocatedLocked(page_id);
+}
+
+bool DevicePageStore::IsAllocatedLocked(PageId page_id) const noexcept {
     // FM3: the ceiling is the design ceiling now, not one bitmap page's
     // coverage. A region that does not exist reads as empty below it,
     // which is the same answer by a different route.
@@ -432,6 +568,11 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
     // here, because a resident page's branch in `ResidentBytes` is a find,
     // a flag and a span.
     //
+    // **The declared order is checked here** (AM-S3): this is the frame
+    // table's one structural mutation, so it is where a future caller
+    // holding the free map would land, and holding the map here is the
+    // inversion that deadlocks against an allocator on another core.
+    //
     // **And a resident frame is never replaced** (AM-S2 R2). This used to
     // `insert_or_assign`, which overwrote a whole `Frame` - latch word and
     // pin count with it - whenever one was already there. The `loading_`
@@ -449,6 +590,7 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
     // path wanted *the* page and now has it, and the create paths cannot
     // collide at all, since `CreateAt` refuses an id already in use and the
     // two `CreateNew`s take an id nothing else holds.
+    AssertOrderBeforeFrames("InsertFrame");
     LatchGuard structure(structure_latch());
     if (auto resident = frames_.find(page_id); resident != frames_.end()) {
         // Lost the race. The frame that is here outranks the bytes just
@@ -967,7 +1109,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
             device_zeros = DeviceHoldsOnlyZeros(page_id);
             zeros_known = true;
         }
-        LatchGuard alloc(structure_latch());
+        LatchGuard alloc(map_latch());
         auto claimed = ClaimNamedIdLocked(page_id, zeros_known, device_zeros);
         if (!claimed.ok()) return claimed.status();
         if (claimed.value() == ClaimOutcome::kClaimed) break;
@@ -1006,7 +1148,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     for (;;) {
         std::uint32_t missing_region = 0;
         {
-            LatchGuard alloc(structure_latch());
+            LatchGuard alloc(map_latch());
             auto claimed = ClaimNextFreeIdLocked(&missing_region);
             if (!claimed.ok()) return claimed.status();
             page_id = claimed.value();
@@ -1392,7 +1534,7 @@ Status DevicePageStore::Flush() {
     auto written = WriteBack(dirty);
     if (!written.ok()) return written.status();
 
-    if (Status s = FlushMaps(); !s.ok()) return s;
+    if (auto flushed = FlushMaps(); !flushed.ok()) return flushed.status();
     if (written.value() > 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("pagestore",
                     "flushed " + std::to_string(written.value()) + " dirty page(s)");
@@ -1498,10 +1640,16 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // The maps go out with them, and after them: a page is only reachable
     // once the map says its id is allocated, so publishing the map first
     // would let a crash expose a page whose bytes never landed.
-    if (maps_dirty()) {
-        if (Status s = FlushMaps(); !s.ok()) return s;
-        wrote_any = true;
-    }
+    //
+    // **One walk, not two** (AM-S3). This asked `maps_dirty()` first and
+    // then let `FlushMaps` walk the map again; under sharing the two
+    // answers can differ, because another core's flush can take the work
+    // in between - and this caller would then sync for a write nobody
+    // made. The count `FlushMaps` returns is the same answer taken once,
+    // and under the hold.
+    auto flushed = FlushMaps();
+    if (!flushed.ok()) return flushed.status();
+    if (flushed.value() > 0) wrote_any = true;
 
     if (!wrote_any) return Status::OK();  // nothing written, nothing to sync
     Status s = device_.Sync();

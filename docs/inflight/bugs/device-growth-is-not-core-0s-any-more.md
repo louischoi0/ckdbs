@@ -74,5 +74,5 @@ declared rule says.
 ## Owner
 
 AM-S3, with the free-map writeback question it already carries
-(`flushmaps-lease-guard-and-unlatched-region-walk.md`) — both are "what does
+(the free map's own latch, closed at AM-S3) — both are "what does
 one store serving every core do about the structures underneath it".

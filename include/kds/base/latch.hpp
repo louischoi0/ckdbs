@@ -27,19 +27,75 @@
 // second acquisition on one thread hangs. A subsystem that takes this
 // documents its acquisition order at the top of its own file
 // (`docs/rules/rules.md` §3).
+//
+// **`HoldsLatch` is the debug half of that sentence** (AM-S3). "A second
+// acquisition on one thread hangs" is a fact a reader has to keep in their
+// head across every call an accessor makes; a hang is also the worst
+// possible way to be told, because it names nothing. So debug builds track
+// which latches this thread holds, and a structure that guards its public
+// readers asserts it is not already inside one. The census AM-S3 needed -
+// which of `DevicePageStore`'s free-map readers are reached from under the
+// hold - is that assertion plus the suite, which is how AM-S1 found the
+// two S-then-X sites for the page latch.
+//
+// Debug only, and the tracking is a thread-local vector of pointers: at
+// the depths this engine reaches (two, and only inside the store) a linear
+// scan beats anything with an allocation in it.
+
+#ifndef NDEBUG
+#include <algorithm>
+#include <vector>
+#endif
 
 namespace kds {
 
 using Latch = std::mutex;
 
+#ifndef NDEBUG
+namespace detail {
+// The latches this thread holds right now, innermost last. `inline` so the
+// header needs no translation unit of its own; one instance per thread
+// across every TU that includes this.
+inline thread_local std::vector<const Latch*> held_latches;
+}  // namespace detail
+
+// Whether this thread already holds `latch`. Null is never held, so a
+// caller may pass an unarmed structure's null latch without testing it.
+inline bool HoldsLatch(const Latch* latch) noexcept {
+    if (latch == nullptr) return false;
+    return std::find(detail::held_latches.begin(), detail::held_latches.end(), latch) !=
+           detail::held_latches.end();
+}
+#else
+inline bool HoldsLatch(const Latch*) noexcept { return false; }
+#endif
+
 // RAII over an optional latch. `nullptr` means "not shared".
 class LatchGuard {
 public:
     explicit LatchGuard(Latch* latch) noexcept : latch_(latch) {
-        if (latch_ != nullptr) latch_->lock();
+        if (latch_ != nullptr) {
+            latch_->lock();
+#ifndef NDEBUG
+            detail::held_latches.push_back(latch_);
+#endif
+        }
     }
     ~LatchGuard() {
-        if (latch_ != nullptr) latch_->unlock();
+        if (latch_ != nullptr) {
+#ifndef NDEBUG
+            // Popped before the unlock, so a thread that is about to release
+            // is never recorded as still holding. Erasing the *last* match
+            // rather than the first keeps nesting honest if one latch were
+            // ever taken twice by different guards on one thread - which is
+            // a hang, and this is not the place that would report it.
+            auto it = std::find(detail::held_latches.rbegin(), detail::held_latches.rend(), latch_);
+            if (it != detail::held_latches.rend()) {
+                detail::held_latches.erase(std::next(it).base());
+            }
+#endif
+            latch_->unlock();
+        }
     }
     LatchGuard(const LatchGuard&) = delete;
     LatchGuard& operator=(const LatchGuard&) = delete;

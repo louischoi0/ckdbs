@@ -462,7 +462,7 @@ The six restated cells:
   claimed a topology no volume can have. See
   `workorder-am-m1-shared-pool.md`'s AM-S4(d) row.
 - The **stamp field stays**, and its spec section is corrected rather than deleted: `SetPageStreamStamp` still records which stream's records may name a page, which is redo's business; what went is the *ownership* reading of it (`page-lsn-cross-stream.md` §9 rule 6).
-- `docs/inflight/bugs/flushmaps-lease-guard-and-unlatched-region-walk.md`: **defect 1 closed** — the lease guard is gone and the writeback every core now runs writes the one live map, so there is nothing stale to publish. **Defect 2 (the unlatched `map_regions_` walk) is open** and still AM-S3's, because taking the latch means restructuring a loop that calls `device_.WritePage` inside it.
+- `docs/inflight/bugs/flushmaps-lease-guard-and-unlatched-region-walk.md`: **defect 1 closed** — the lease guard is gone and the writeback every core now runs writes the one live map, so there is nothing stale to publish. **Defect 2 (the unlatched `map_regions_` walk) was open** and still AM-S3's, because taking the latch means restructuring a loop that calls `device_.WritePage` inside it. **AM-S3 closed it on 2026-09-07** and the file left the tree with it; the walk turned out to be the least dangerous reader in it, and the fix is the free map's own latch (`docs/spec/page.md` §5).
 
 **Suite at the commit: 3314/3314**; 3316/3316 after §9.5's restorations.
 Overhead not measured — `CLAUDE.md`'s suspension, and AM-S6 is the stage
@@ -646,10 +646,11 @@ own declaration invited exactly that, naming AST04's Bound Cabin pages,
 a use already served by `IsPinnedClass`'s kind half. The contract is
 narrowed: volume layout only, install-time only.
 
-**Two findings left open rather than fixed**, both recorded:
-`docs/inflight/bugs/flushmaps-lease-guard-and-unlatched-region-walk.md` is
-the same lease-vacuity defect one function away, plus an unlatched walk of
-the shared region map — UB rather than a stale read. And the gate now
+**Two findings left open rather than fixed**, both recorded: the same
+lease-vacuity defect one function away, plus an unlatched walk of the
+shared region map — UB rather than a stale read. **Both closed at AM-S3**
+(2026-09-07), and the second turned out to be the smaller half of a wider
+defect: the map was *written* unlatched too, so a `find` raced an `insert`. And the gate now
 **fails open on a missing identity**: `CurrentCore()` defaults to 0, so a
 future thread that touches the store without declaring itself is told it
 may write the system range. That is the failure just fixed, reached by a
