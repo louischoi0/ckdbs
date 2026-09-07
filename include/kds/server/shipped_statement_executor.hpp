@@ -168,8 +168,23 @@ inline constexpr std::size_t kShippedDedupMaxRecords = 4096;
 // to the in-doubt resolution D5 states, not to this constant. Written here
 // because R6-2 is where the sweep is introduced and R6-3 is where it would
 // silently become wrong.
-inline constexpr sched::MonoTimeNs kShippedTxnIdleCeilingNs = 300ull * 1'000'000'000ull;
-static_assert(kShippedTxnIdleCeilingNs > kShippedStatementDeadlineNs,
+// **`kds.txn_lifetime_ceiling`** (AN-R14, operator's number, 2026-09-06).
+// A transaction past this is aborted; the abort surfaces at its next
+// statement as an ordinary one, never `SnapshotTooOld` - `txn.md` §4.1
+// stays literally true, because no reader is ever told its snapshot
+// expired.
+//
+// **It replaced `kShippedTxnIdleCeilingNs`, 300 s of idleness, rather than
+// joining it.** Under a 60 s *lifetime* an idle bound of 300 s is
+// unreachable - a dead constant - and "one quantity, one name" retires it
+// rather than leaving two. The rename is the smaller half; the change is
+// that the sweep reads `began_at_ns` instead of `touched_at_ns`, so a
+// transaction that never goes idle is now reached.
+//
+// **Provisional.** Set by the operator, not measured; AS-E measures the
+// lifetime distribution and this number is re-read then.
+inline constexpr sched::MonoTimeNs kTxnLifetimeCeilingNs = 60ull * 1'000'000'000ull;
+static_assert(kTxnLifetimeCeilingNs > kShippedStatementDeadlineNs,
               "a participant must outwait the coordinator's per-statement deadline, or a "
               "transaction is torn down under a statement that is still on its way");
 
@@ -304,7 +319,7 @@ public:
     // statement that may only join a transaction and found none - the idle
     // ceiling having rolled it back, or this core having stopped and come
     // back. A rising number means coordinators are holding cross-owner
-    // transactions open past `kShippedTxnIdleCeilingNs`.
+    // transactions open past `kTxnLifetimeCeilingNs`.
     //
     // **A subset of `enrolment_refusals_`, not a count beside it.** Every
     // refusal `EnrolFor` returns is counted there by its one caller, so the
@@ -411,7 +426,7 @@ public:
     }
 
     // Rolls back every enrolled transaction idle past
-    // `kShippedTxnIdleCeilingNs`, and (R6-5) asks about every prepared one
+    // `kTxnLifetimeCeilingNs`, and (R6-5) asks about every prepared one
     // that has been in doubt for `kTxnInDoubtCeilingNs`. Driven from the
     // reactor's periodic tick, the way `PendingIndexBuilds::Expire` is - a
     // lazy sweep would never run for an abandoned context, since nothing
@@ -419,7 +434,7 @@ public:
     //
     // **A prepared context is not the ceiling's** (R6-3, D4): a participant
     // that has replied prepared may not unilaterally abort, so
-    // `kShippedTxnIdleCeilingNs` stops applying to it and D5's ask applies
+    // `kTxnLifetimeCeilingNs` stops applying to it and D5's ask applies
     // instead. That is the whole difference between the two halves of this
     // sweep - one ends transactions, the other asks about them and ends
     // nothing.
@@ -526,9 +541,19 @@ private:
         // The coordinator's, recorded when prepare brings it (R6-3). D2 asks
         // for it by name, which is why it is here before its writer is.
         std::uint64_t coordinator_txn_id = 0;
-        // Moved when a statement *finishes*, so the ceiling measures
-        // idleness: a long transaction that is still being used is not the
-        // thing the sweep is looking for.
+        // **When this context began**, which is what the ceiling reads
+        // (AN-R14). It never moves.
+        sched::MonoTimeNs began_at_ns = 0;
+        // Moved when a statement *finishes*. It measured **idleness**, and
+        // the ceiling used to read it: "a long transaction that is still
+        // being used is not the thing the sweep is looking for". AN-R14
+        // says it is - the operator's envelope is that a transaction
+        // completes within 10 s and one past 60 s may be aborted, and a
+        // transaction that stays busy for an hour is exactly the shape that
+        // an idleness bound never catches. Kept because `SHOW META`'s
+        // enrolment reporting and the in-doubt cadence below still ask when
+        // this context was last touched, which is a different question from
+        // when it began.
         sched::MonoTimeNs touched_at_ns = 0;
         // **This core has replied prepared and may no longer abort** (D4).
         // Set only once the PREPARE record is durable, never at the append:
@@ -584,7 +609,7 @@ private:
         sched::MonoTimeNs decide_began_ns = 0;
 
         Enrolled(txn::IsolationLevel isolation, Role role, sched::MonoTimeNs now)
-            : session(isolation), touched_at_ns(now) {
+            : session(isolation), began_at_ns(now), touched_at_ns(now) {
             session.set_role(role);
         }
     };

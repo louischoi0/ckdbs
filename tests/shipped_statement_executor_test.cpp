@@ -441,7 +441,7 @@ TEST_F(ShippedStatementExecutorTest, AnEnrolledWriteIsInvisibleUntilItsTransacti
     // And it appears once the transaction ends - which R6-2 has no decide
     // leg for, so the ceiling's rollback is used here only to show the row
     // was genuinely uncommitted rather than never written.
-    clock_.Advance(kShippedTxnIdleCeilingNs);
+    clock_.Advance(kTxnLifetimeCeilingNs);
     executor_->ExpireEnrolled();
     EXPECT_EQ(executor_->enrolled(), 0u);
     EXPECT_EQ(Rows().find(",7"), std::string::npos) << "a rolled-back write survived: " << Rows();
@@ -501,7 +501,7 @@ TEST_F(ShippedStatementExecutorTest, AnAbandonedTransactionIsRolledBackAtTheIdle
     // Not yet: one nanosecond under the ceiling is still a live transaction,
     // and tearing it down early reaches the client as an abort it did not
     // ask for.
-    clock_.Advance(kShippedTxnIdleCeilingNs - 1);
+    clock_.Advance(kTxnLifetimeCeilingNs - 1);
     executor_->ExpireEnrolled();
     EXPECT_EQ(executor_->enrolled(), 1u) << "a transaction was expired before the ceiling";
     EXPECT_EQ(executor_->enrolment_expiries(), 0u);
@@ -527,7 +527,7 @@ TEST_F(ShippedStatementExecutorTest, AStatementThatMayOnlyJoinIsRefusedOnceTheCe
     ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false,
                      /*in_txn=*/true)
                     .status.ok());
-    clock_.Advance(kShippedTxnIdleCeilingNs);
+    clock_.Advance(kTxnLifetimeCeilingNs);
     executor_->ExpireEnrolled();
     ASSERT_EQ(executor_->enrolled(), 0u);
     ASSERT_EQ(executor_->enrolments(), 1u);
@@ -575,21 +575,71 @@ TEST_F(ShippedStatementExecutorTest, AWatermarkIsReportedForRepeatableReadAndFor
     EXPECT_EQ(autocommit.watermark, 0u);
 }
 
-TEST_F(ShippedStatementExecutorTest, AStatementKeepsItsTransactionAliveAcrossTheCeiling) {
-    // Idleness, not age: a transaction still receiving statements is not the
-    // thing the sweep looks for, however old it is.
+TEST_F(ShippedStatementExecutorTest, ABusyTransactionIsSweptAtItsLifetimeNotItsIdleness) {
+    // **The cell AN-R10's first proposal did not have** (AN-R14). This
+    // asserted the opposite until 2026-09-07: "idleness, not age: a
+    // transaction still receiving statements is not the thing the sweep
+    // looks for, however old it is". It kept shipping a statement just
+    // under the ceiling and asserted the context survived - forever, in
+    // principle, since every statement moved `touched_at_ns`.
+    //
+    // The operator's envelope is that a transaction completes within 10 s
+    // and one past 60 s may be aborted, and a transaction that stays busy
+    // is exactly the shape an idleness bound never reaches. The sweep reads
+    // `began_at_ns` now, which does not move.
+    //
+    // **What this cost, stated where it is paid**: a long *busy*
+    // transaction is aborted where the earlier proposal accepted it. The
+    // engine does not serve that shape (`txn.md` §1).
+    //
+    // **Mutation**: key the sweep on `touched_at_ns` again - the statements
+    // below keep the context alive and `enrolment_expiries()` stays 0.
     ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false, true)
                     .status.ok());
-    for (std::uint64_t sequence = 2; sequence <= 4; ++sequence) {
-        clock_.Advance(kShippedTxnIdleCeilingNs - 1);
+
+    // Busy throughout: a statement lands in every window, so idleness never
+    // accumulates and the old ceiling could not have fired.
+    std::uint64_t sequence = 2;
+    for (; sequence <= 4; ++sequence) {
+        clock_.Advance(kTxnLifetimeCeilingNs / 4);
         executor_->ExpireEnrolled();
-        ASSERT_EQ(executor_->enrolled(), 1u) << "expired at sequence " << sequence;
+        ASSERT_EQ(executor_->enrolled(), 1u)
+            << "swept before its lifetime, at sequence " << sequence;
         ASSERT_TRUE(Ship("INSERT INTO t VALUES (8)", 99, sequence, Role::kReadWrite, 0, false,
                          true)
                         .status.ok());
     }
+
+    // **Past the lifetime, but nowhere near idle** - and the gap between
+    // those two is the whole cell. Three quarters of a ceiling has elapsed
+    // since the context began and a statement landed at the end of it, so
+    // advancing half a ceiling now puts it at 1.25 ceilings old and 0.5
+    // ceilings idle. A sweep keyed on `touched_at_ns` leaves it; one keyed
+    // on `began_at_ns` takes it. Getting this wrong is how the first
+    // version of this cell passed under both keys - it advanced a full
+    // ceiling after the last statement, so idleness fired too, and the
+    // mutation went green.
+    //
+    // `busy` defers a sweep only while a statement is *in flight*; between
+    // statements there is nothing to tear the ground from.
+    clock_.Advance(kTxnLifetimeCeilingNs / 2);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 0u) << "a busy transaction outlived the lifetime ceiling";
+    EXPECT_EQ(executor_->enrolment_expiries(), 1u);
+}
+
+TEST_F(ShippedStatementExecutorTest, AnIdleTransactionUnderItsLifetimeIsNotSwept) {
+    // The other side of the same predicate, and the reason the ceiling is
+    // not simply "sweep everything": a transaction that has done nothing
+    // for a while but is still inside its envelope is a transaction the
+    // engine serves. Idleness is not the question any more, so this cell
+    // exists to say that age alone is.
+    ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 99, 1, Role::kReadWrite, 0, false, true)
+                    .status.ok());
+    clock_.Advance(kTxnLifetimeCeilingNs - 1);
+    executor_->ExpireEnrolled();
+    EXPECT_EQ(executor_->enrolled(), 1u) << "swept a transaction inside its lifetime";
     EXPECT_EQ(executor_->enrolment_expiries(), 0u);
-    EXPECT_EQ(executor_->enrolments(), 1u);
 }
 
 TEST_F(ShippedStatementExecutorTest, TwoCoordinatorsHoldTwoSeparateTransactions) {
@@ -656,7 +706,7 @@ TEST_F(ShippedStatementExecutorTest, TheCeilingSkipsAContextAStatementIsRunningO
                       });
     ASSERT_EQ(executor_->running(), 1u) << "the statement did not stay in flight";
 
-    clock_.Advance(kShippedTxnIdleCeilingNs);
+    clock_.Advance(kTxnLifetimeCeilingNs);
     executor_->ExpireEnrolled();
     EXPECT_EQ(executor_->enrolled(), 1u)
         << "the sweep tore a context out from under a running statement";

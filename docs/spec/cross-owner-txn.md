@@ -193,7 +193,7 @@ protocol; only the third is bookkeeping.
 A participant's context is keyed on `(coordinator core, session_id)` and
 nothing else — the statement leg carries no transaction id. Two things end
 one while its coordinator's transaction is still open: the **idle
-ceiling** (`kShippedTxnIdleCeilingNs`, 300 s of idleness, for a coordinator
+ceiling** (`kTxnLifetimeCeilingNs`, 300 s of idleness, for a coordinator
 that never decides) and the participant core stopping. Both erase it.
 
 So the coordinator states, on every statement after the first it sent that
@@ -411,7 +411,7 @@ such bound.
 | name | where | what bounds it |
 |---|---|---|
 | `in_doubt_ceiling_ms` | `CommandDispatcher::InDoubtCeilingNs()`, default `kTxnInDoubtCeilingNs` = 200 ms | **Nothing, since AO-S3** — the writer's stall was its only reader and that wait now ends on the holder's decide. Kept so a configuration carrying it still mounts; M3 re-scopes it to the lock-wait fault net (AO-R8). What bounds a writer that waits too long is `txn::kLockWaitFaultNetNs`, 11 s, a fault and not a ceiling. Log retention never tracked this knob; the floor in §2c holds the log back and `kTxnPhaseDeadlineNs` bounds a slow-but-alive coordinator |
-| `kShippedTxnIdleCeilingNs` | `shipped_statement_executor.hpp`, 300 s | How long an abandoned participant context is held before it is rolled back. Deliberately far above the statement deadline: nothing on a healthy path reaches it |
+| `kTxnLifetimeCeilingNs` | `shipped_statement_executor.hpp`, 300 s | How long an abandoned participant context is held before it is rolled back. Deliberately far above the statement deadline: nothing on a healthy path reaches it |
 | `kShippedMaxEnrolled` | `shipped_statement_executor.hpp`, 16 | How many cross-owner transactions one core holds as a participant. A bound on a **shared** resource — each enrolment is one of `txn::kMaxTrackedLiveTxns`, which local clients share — so without it a coordinator storm would refuse an unrelated connection's `BEGIN` with nothing naming the cause |
 | wire sizing | `txn_2pc_service.hpp` | 24 bytes per request leg, 256 for the participant reply, against a 1,024-byte ring slot — asserted against `kCoreRingPayloadBytes`, never the literal |
 

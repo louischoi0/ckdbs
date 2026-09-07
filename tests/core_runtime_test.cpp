@@ -5289,7 +5289,7 @@ TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionLeavesTheOwnersRowsAlone
     // rollback leg missing - `HandleCommit` forked on `has_participants()`
     // and `HandleRollback` did not - so the row was unseen only because
     // the participant's transaction had not committed, and the real
-    // unwinding waited five minutes for `kShippedTxnIdleCeilingNs`. D4 says
+    // unwinding waited five minutes for `kTxnLifetimeCeilingNs`. D4 says
     // a coordinator tells its participants either way; `AbortAndForget` is
     // that leg, and the assertions below are what separate "told" from
     // "not yet swept".
@@ -5445,7 +5445,7 @@ TEST_F(CoreRuntimeTest, ARolledBackCrossOwnerTransactionsWritesDoNotCommitWithTh
     // enrolled anyone drops the shipping id, so the next one addresses a
     // fresh context. What it does *not* fix, and what this test therefore
     // does not assert, is the abandoned context itself: it is still there,
-    // holding its rows uncommitted until `kShippedTxnIdleCeilingNs`.
+    // holding its rows uncommitted until `kTxnLifetimeCeilingNs`.
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "cross_owner_reuse");
 
@@ -6081,7 +6081,7 @@ TEST_F(CoreRuntimeTest, AStatementThatCanOnlyJoinIsRefusedWhenTheParticipantsCon
     // **RR0's correctness half, and the answer to CR2.** A participant's
     // context is keyed on `(coordinator core, session_id)` and nothing
     // else, and two things end one while its coordinator's transaction is
-    // still open: the idle ceiling (`kShippedTxnIdleCeilingNs`) and this
+    // still open: the idle ceiling (`kTxnLifetimeCeilingNs`) and this
     // core stopping. Before the `join` bit the next statement of that
     // transaction found no context and opened a **fresh** one; prepare and
     // commit then made the second half durable, the first half was gone,

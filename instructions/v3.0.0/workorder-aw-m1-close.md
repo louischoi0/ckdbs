@@ -8,8 +8,10 @@ document (AV) that gates what comes after them. Every `path:line` is
 `[source-read]` at `15a57c2`; the rest is `[design]`; the one
 `[measured]` deliverable is AW-S5's and does not exist until it is run.
 
-**Status: AW-S0, S1, S2 and S6 done, plus AW-a (§10); AW-S1b *begun and
-not done*, 2026-09-06/07 on `worktree-aw-m1-close`.** §9 is what AW-S1b found and
+**Status: AW-S0, S1, S2, S6 done and AW-S3 *half* done, plus AW-a (§10);
+AW-S1b *begun and not done*, 2026-09-06/07 on `worktree-aw-m1-close`.**
+§11 says which half of AN-R14 landed and why the other is a different
+size. §9 is what AW-S1b found and
 where it stopped; it is the stage's sizing that is wrong, not its ruling. §7 is AW-S0's record — its cell was already satisfied when
 the stage opened, and it carries the one thing this order was written
 without knowing. §8 is what S1 and S2 built. **AW-S1b was inserted by the
@@ -496,3 +498,90 @@ different omission, and nothing asserts it.
 
 **Suite: 3363/3363 plain, armed, and armed with `KDS_TEST_FRAME_BUDGET=8`.**
 Overhead not measured.
+
+
+---
+
+## 11. AW-S3 — the half that landed, and the half that is a different order
+
+AN-R14 reads as one ruling and is two mechanisms. **The participant half
+landed; the instance-wide half is not built**, and the gap is not effort
+but the absence of anything to attach to.
+
+### 11.1 What landed
+
+`kShippedTxnIdleCeilingNs` (300 s of **idleness**) is retired into
+`kTxnLifetimeCeilingNs` (60 s of **lifetime**), one quantity with one name,
+across all 19 references in 7 files — cell (6)'s grep returns only the one
+historical mention inside the constant's own doc block. The sweep reads a
+new `Enrolled::began_at_ns`, which never moves, instead of
+`touched_at_ns`, which moved on every statement.
+
+**The `busy` guard is a safety guard and it now says so.** It was easy to
+read as leniency — and cell (2)'s mutation is written against exactly that
+reading. It is not: tearing a context down while a statement or a phase is
+in flight would pull the session out from under a coroutine holding a
+pointer into it. So it **defers** a sweep to the next tick on which nothing
+is in flight; it does not exempt. A transaction that keeps issuing
+statements is reached between them.
+
+**One existing cell was the old policy, stated.**
+`AStatementKeepsItsTransactionAliveAcrossTheCeiling` asserted "idleness,
+not age: a transaction still receiving statements is not the thing the
+sweep looks for, however old it is" — which is precisely what AN-R14
+inverts. It is rewritten as
+`ABusyTransactionIsSweptAtItsLifetimeNotItsIdleness`, with
+`AnIdleTransactionUnderItsLifetimeIsNotSwept` beside it for the other side
+of the predicate.
+
+**Its first version discriminated nothing**, and the mutation said so: it
+advanced a full ceiling after the last statement, so *idleness* fired too
+and keying the sweep back on `touched_at_ns` left it green. The arithmetic
+now puts the context at 1.25 ceilings old and 0.5 ceilings idle, where the
+two keys disagree. Mutation kills it.
+
+`txn.md` §1 carries the envelope, the ceiling, the cost and the three
+exemptions; §4.1 says the price is per instance now and that the ceiling
+is what bounds it — ending the holder rather than failing the read, which
+is the difference between the ruling taken and the `SnapshotTooOld` one
+declined.
+
+### 11.2 What did not, and why it is a different size
+
+The ceiling reaches **cross-owner participant contexts only**, because
+`ShippedStatementExecutor::Expire` is the only sweep in the engine. A
+plain local `BEGIN` on one core is reached by nothing:
+`include/kds/txn/manager.hpp` has **no clock, no start timestamp and no
+sweep** — the AW-S0 fact-check said this and the source read confirms it.
+Making the rule instance-wide needs, in order: a clock on
+`TransactionManager`, a start per live transaction, a sweep with a cadence,
+an abort that surfaces at the next statement, and a way for the sweep to
+know which transactions are DDL.
+
+That reshapes the remaining cells:
+
+- **(1) and (2)** hold for participant contexts and are green. For a
+  local transaction they are **unbuilt**, not failing.
+- **(3) `CREATE INDEX` past 60 s completes** would be **vacuous today**:
+  DDL is core 0's and is never an enrolled context, so the ceiling cannot
+  reach it and the cell would assert an exemption that nothing enforces.
+  It becomes meaningful only with the instance-wide half.
+- **(4) a Cabin build re-mints and resumes** is not this mechanism at all.
+  The build holds a **read view** (`MintCheckView`), not a transaction;
+  "the ceiling applies but the response is re-mint" is a second mechanism
+  on a different object, and nothing in the sweep touches it.
+- **(5) a prepared context is not swept** was true before this stage and
+  is true after it (D4).
+- **(6)** is done.
+
+**Sizing.** The order gives AW-S3 M and a three-site consumer list; the
+consumer list was 19 sites in 7 files, which is the part that landed. The
+instance-wide half is a new field, a new sweep, a new cadence and an abort
+path through the dispatcher, with the DDL exemption needing a fact the
+manager does not currently carry. That is its own stage and probably its
+own letter, since it lands in `txn/` rather than in AM or AN.
+
+### 11.3 Suite
+
+**3364/3364 plain, armed (`KDS_TEST_PAGE_LATCH=1`), and armed with
+`KDS_TEST_FRAME_BUDGET=8`.** Overhead not measured.

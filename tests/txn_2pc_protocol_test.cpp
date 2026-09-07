@@ -304,7 +304,7 @@ TEST_F(Txn2pcParticipantTest, APreparedTransactionIsNotExpiredByTheIdleSweep) {
     ASSERT_TRUE(Prepare().status.ok());
 
     // Well past the ceiling that would end an un-prepared one.
-    clock_.Advance(kShippedTxnIdleCeilingNs * 4);
+    clock_.Advance(kTxnLifetimeCeilingNs * 4);
     executor_->ExpireEnrolled();
 
     EXPECT_EQ(executor_->enrolled(), 1u) << "a prepared participant may not abort unilaterally";
@@ -331,7 +331,7 @@ TEST_F(Txn2pcParticipantTest, APreparedTransactionIsLeftInDoubtAtShutdownRatherT
 
 TEST_F(Txn2pcParticipantTest, AnUnpreparedTransactionIsStillTheSweepsAndTheShutdownPaths) {
     ASSERT_TRUE(Ship("INSERT INTO t VALUES (7)", 1).status.ok());
-    clock_.Advance(kShippedTxnIdleCeilingNs * 2);
+    clock_.Advance(kTxnLifetimeCeilingNs * 2);
     executor_->ExpireEnrolled();
     EXPECT_EQ(executor_->enrolled(), 0u);
     EXPECT_EQ(executor_->enrolment_expiries(), 1u);

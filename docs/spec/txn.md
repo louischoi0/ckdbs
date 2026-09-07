@@ -6,6 +6,60 @@ How KDS isolates concurrent statements and what a reader sees. `[PROPOSED]` mark
 
 ## 1. Isolation levels
 
+### The transaction this engine serves
+
+**A transaction completes within 10 seconds; one that exceeds 60 seconds
+may be aborted.** (Operator, 2026-09-06; AN-R14 in
+`instructions/v3.0.0/workorder-aw-m1-close.md`.) This is scope, not a
+mechanism: it is the shape of transaction the engine is built for, and it
+is the input every retention-sized quantity is derived from — undo
+retention, the visibility window, the lock-wait fault nets, and later the
+WAL-replication ack timeout.
+
+**The 10 seconds already exist under another name**:
+`kShippedStatementDeadlineNs` (`statement_ship_service.hpp`), the point
+past which a shipped statement's reply is presumed lost rather than slow.
+AN-R14 makes that coincidence a statement — the per-statement deadline
+*is* the envelope — and when statement shipping retires at AT the envelope
+survives under its own name.
+
+**The 60 seconds are the mechanism**, `kds.txn_lifetime_ceiling`
+(`kTxnLifetimeCeilingNs`, default 60 s, **provisional**: set by the
+operator, not measured, and re-read when AS-E measures the lifetime
+distribution). Wall-clock from `BEGIN`. A transaction past it is aborted
+by a sweep and the abort surfaces at its next statement **as an ordinary
+abort** — §4.1 stays literally true, because no reader is ever told its
+snapshot expired.
+
+**What it costs, stated rather than discovered**: a long *busy*
+transaction is aborted, where a bound on *idleness* accepted it. That was
+the earlier proposal, and the operator's numbers say this engine does not
+serve that shape.
+
+**Three exemptions**, each with its reason so none is later struck as a
+special case:
+
+1. **DDL** — a single statement holding relation `X`. Aborting a
+   `CREATE INDEX` at 60 s gains nothing and forbids large indexes. No
+   ceiling.
+2. **Background read views** (the Cabin build, the checkpoint, the
+   relayout survey) — they hold undo like any view, so the ceiling applies,
+   but the response is not abort: the task **re-mints its view and
+   resumes** at its next resumable point. A background task that cannot
+   resume is a task defect, not a ceiling exemption.
+3. **Prepared contexts** — D4's exclusion, inherited unchanged: after a
+   participant replies prepared it may not unilaterally abort. It leaves
+   with 2PC at AT.
+
+**Where it is enforced today, which is narrower than the rule**: the sweep
+exists only over cross-owner *participant* contexts
+(`ShippedStatementExecutor::Expire`), so a plain local transaction carries
+no start time and nothing sweeps it — `txn/manager.hpp` has no clock. The
+rule above is the engine's scope; the instance-wide half of its
+enforcement is not built (AW-S3's record says what remains).
+
+### The levels
+
 KDS supports exactly two isolation levels.
 
 | Level | Read view | Meaning |
@@ -316,7 +370,21 @@ triggered by growth, so this run's chain plateaus instead of growing without
 bound. Retention is **horizon-only**: nothing a live view can reach is ever
 freed, so `SnapshotTooOld` is never raised, and the price is that one
 long-running transaction holds reclamation for its lifetime. A byte-cap
-retention that would make the error reachable is declined. A previous run's
+retention that would make the error reachable is declined.
+
+**What bounds that price is the transaction, not the snapshot** (AN-R10,
+AN-R14; §1). The lifetime ceiling ends a transaction that has held the
+horizon too long, and the reader learns of it at its next statement as an
+**ordinary abort** — this paragraph stays literally true, since no reader
+is ever told its snapshot expired. That is the whole of the difference
+between the ruling taken and the `SnapshotTooOld` one declined: the same
+reclamation, reached by ending the holder rather than by failing the read.
+
+**And the price is now per instance, not per core.** The sentence above
+about the horizon being per-core is §5's; under one shared read view
+(AN-S1) an idle `BEGIN` on any core holds *the instance's* undo, where it
+once held one core's. That is the exposure AN-R10 was marked to bound and
+the reason the bound is a wall-clock lifetime rather than a byte cap. A previous run's
 undo pages are not reclaimed at mount: each run starts a fresh chain and
 the old pages leak.
 

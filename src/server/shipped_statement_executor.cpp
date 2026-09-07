@@ -1372,15 +1372,27 @@ void ShippedStatementExecutor::ExpireEnrolled() {
         // deferral `TcpServer::CloseClient` makes for the same reason. A
         // phase in flight (a prepare reaching the device) holds it for the
         // same reason and is the same hazard.
+        // **`busy` defers, it does not exempt** (AN-R14). It is a safety
+        // guard, not a policy one: tearing a context down while a statement
+        // or a phase is in flight would pull the session out from under a
+        // coroutine holding a pointer into it. So a transaction that is
+        // over its lifetime and busy right now is swept at the next tick on
+        // which nothing is in flight - which is the tick after the
+        // statement finishes, since `Expire` runs on a cadence rather than
+        // once. Reading it as an exemption is what would let a transaction
+        // that keeps issuing statements outlive the ceiling forever, and
+        // that is the shape the ceiling exists for.
         const bool busy =
             it->second->phase_running || running_.find(it->first) != running_.end();
-        if (busy || now - it->second->touched_at_ns < kShippedTxnIdleCeilingNs) {
+        // Lifetime, not idleness: `began_at_ns` never moves, so a context
+        // that is still being used is reached exactly as one that is idle.
+        if (busy || now - it->second->began_at_ns < kTxnLifetimeCeilingNs) {
             ++it;
             continue;
         }
         auto doomed = it++;
         ++enrolment_expiries_;
-        EndEnrolled(doomed, "no decide arrived within the idle ceiling; rolled back");
+        EndEnrolled(doomed, "the transaction outlived kds.txn_lifetime_ceiling; rolled back");
     }
 }
 

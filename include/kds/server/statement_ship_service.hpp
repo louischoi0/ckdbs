@@ -260,7 +260,7 @@ struct ShippedStatementRequestPayload {
     // What it closes is a silent partial commit, not a tidiness gap. A
     // participant's context is keyed on `(coordinator core, session_id)`
     // and nothing else, and the idle ceiling
-    // (`kShippedTxnIdleCeilingNs`) rolls one back and **erases** it while
+    // (`kTxnLifetimeCeilingNs`) rolls one back and **erases** it while
     // the coordinator's transaction is still open. Without this bit the
     // next statement of that same transaction found no context and opened
     // a *fresh* one; prepare and commit then made the fresh half durable
