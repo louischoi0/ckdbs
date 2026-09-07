@@ -530,9 +530,10 @@ TEST_F(StatementShipTest, AnAnswerFormThisBuildDoesNotServeIsRefusedNotGuessed) 
 
 TEST_F(StatementShipTest, TheLongestShippableStatementIsTheSlotMinusTheHeader) {
     // XG-R6's client-visible bound, asserted where it is derived rather
-    // than where it is documented: the tag cost sixteen bytes of statement
-    // and `client-manual.md` says 968 because of this.
-    EXPECT_EQ(kShippedStatementTextMax, 968u);
+    // than where it is documented: the tag cost sixteen bytes of statement,
+    // AN-S3's snapshot eight more, AO-S4b's coordinator id eight more, and
+    // `client-manual.md` says 960 because of this.
+    EXPECT_EQ(kShippedStatementTextMax, 960u);
     EXPECT_EQ(kShippedStatementTextMax,
               sched::kCoreRingPayloadBytes - kShippedStatementFixedBytes);
 
@@ -619,6 +620,62 @@ TEST_F(StatementShipTest, TheInTxnBitCrossesWithTheStatement) {
     ASSERT_EQ(seen.size(), 2u);
     EXPECT_FALSE(seen[0]) << "the default must not cross as enrolled";
     EXPECT_TRUE(seen[1]);
+}
+
+// **AN-S3: the coordinator's snapshot crosses on the request leg, under
+// REPEATABLE READ inside a transaction and nowhere else.** The encoder
+// decides that once, so a sender cannot put a value on the wire that the
+// owner would ignore for one level and adopt for another; the owner reads
+// it into the statement as it arrived.
+TEST_F(StatementShipTest, TheCoordinatorsSnapshotCrossesUnderRepeatableReadOnly) {
+    auto rr = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1",
+                                        /*retry=*/false, /*in_txn=*/true,
+                                        txn::IsolationLevel::kRepeatableRead, /*join=*/false,
+                                        /*typed_answer=*/false, PipelineTag{},
+                                        /*snapshot_lsn=*/4141);
+    ASSERT_TRUE(rr.ok()) << rr.status().message();
+    EXPECT_EQ(rr.value().snapshot_lsn, 4141u);
+
+    auto rc = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1",
+                                        /*retry=*/false, /*in_txn=*/true,
+                                        txn::IsolationLevel::kReadCommitted, /*join=*/false,
+                                        /*typed_answer=*/false, PipelineTag{},
+                                        /*snapshot_lsn=*/4141);
+    ASSERT_TRUE(rc.ok()) << rc.status().message();
+    EXPECT_EQ(rc.value().snapshot_lsn, 0u) << "READ COMMITTED adopts nothing and carries nothing";
+
+    auto autocommit = ShippedStatementRequestOf(99, 1, 4000, Role::kReadWrite, "SELECT 1",
+                                                /*retry=*/false, /*in_txn=*/false,
+                                                std::nullopt, /*join=*/false,
+                                                /*typed_answer=*/false, PipelineTag{},
+                                                /*snapshot_lsn=*/4141);
+    ASSERT_TRUE(autocommit.ok()) << autocommit.status().message();
+    EXPECT_EQ(autocommit.value().snapshot_lsn, 0u) << "an autocommit statement is its own instant";
+
+    // And it arrives as it was sent - 0 is a legal snapshot, so what says
+    // whether it is stated is the isolation byte beside it, not the value.
+    std::vector<std::uint64_t> seen;
+    InstallOwner([&](StatementShipServer::ShippedStatement st,
+                     StatementShipServer::ReplyFn reply) {
+        seen.push_back(st.snapshot_lsn);
+        reply(Status::OK(), "OK");
+    });
+    ASSERT_TRUE(client_
+                    ->Ship(1, 1, 99, 1, 4000, Role::kReadWrite, "SELECT 1", /*retry=*/false,
+                           /*in_txn=*/true, txn::IsolationLevel::kRepeatableRead,
+                           /*join=*/false, /*typed_answer=*/false, PipelineTag{},
+                           /*snapshot_lsn=*/0)
+                    .ok());
+    ASSERT_TRUE(client_
+                    ->Ship(1, 2, 99, 2, 4000, Role::kReadWrite, "SELECT 2", /*retry=*/false,
+                           /*in_txn=*/true, txn::IsolationLevel::kRepeatableRead,
+                           /*join=*/true, /*typed_answer=*/false, PipelineTag{},
+                           /*snapshot_lsn=*/777)
+                    .ok());
+    Pump();
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0], 0u);
+    EXPECT_EQ(seen[1], 777u);
 }
 
 TEST_F(StatementShipTest, TheJoinBitCrossesOnTheRequestLeg) {

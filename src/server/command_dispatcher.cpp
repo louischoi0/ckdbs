@@ -5905,16 +5905,23 @@ DispatchOutcome CommandDispatcher::ShipStatement(std::string_view line, catalog:
     // the same owner carries 1. False on every autocommit ship, which
     // enrols nobody and whose owner-side shape is unchanged.
     const bool join = in_txn && session.HasParticipant(owner_core);
-    // **This transaction's id rides the request** (AO-S4b): the owner
-    // records `coordinator -> participant` in the instance's wait-for graph
-    // while the shipped statement runs, the one edge a cross-core cycle
-    // through a shipped park was missing. Zero in autocommit, which holds
-    // nothing a graph could name.
+    // **AN-S3: the snapshot this transaction reads at**, for the participant
+    // to adopt (AN-R5). The encoder puts it on the wire under REPEATABLE
+    // READ only; here it is simply what the transaction holds. Under RR the
+    // view was pinned at BEGIN and never re-mints, so every ship of this
+    // transaction carries the same value, and the participant that enrolled
+    // on the first reads it once.
+    const std::uint64_t snapshot_lsn =
+        coordinator != nullptr ? coordinator->view().snapshot_lsn : 0;
+    // **And its id** (AO-S4b): the owner records `coordinator -> participant`
+    // in the instance's wait-for graph while the shipped statement runs, the
+    // one edge a cross-core cycle through a shipped park was missing. Zero
+    // in autocommit, which holds nothing a graph could name.
     const std::uint64_t coordinator_txn = coordinator != nullptr ? coordinator->id() : 0;
     if (Status s = statement_ship_->Ship(owner_core, request_id, session.ship_id(), sequence,
                                          oid, session.role(), line, /*retry=*/false, in_txn,
                                          isolation, join, typed_answer, answer_tag,
-                                         coordinator_txn);
+                                         snapshot_lsn, coordinator_txn);
         !s.ok()) {
         // The receiver goes with the request that never left. `Ship`
         // refuses only *before* it sends (the rule this function's header
@@ -8374,6 +8381,19 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
     // cache the open DDL filtered is stale either way, and settled marks
     // are worth one sweep (§5d).
     if (owned) EndDdlScopeById(id);
+}
+
+Status CommandDispatcher::AdoptSnapshot(Session& session, std::uint64_t snapshot_lsn) {
+    // Called from `EnrolFor` alone, immediately after a `BEGIN` it checked
+    // succeeded - so the session holds a transaction and this dispatcher a
+    // manager (`HandleBegin` refuses without one). The one guard is the
+    // null dereference's.
+    if (txn_ == nullptr || session.transaction() == nullptr) {
+        return Status::InvalidArgument(
+            "cross-owner transaction: no transaction is open on this session to adopt a "
+            "snapshot into");
+    }
+    return txn_->AdoptSnapshot(*session.transaction(), snapshot_lsn);
 }
 
 Status CommandDispatcher::EnsureStatementBoundary(Session& session) {

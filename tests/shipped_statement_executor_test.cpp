@@ -1,5 +1,6 @@
 #include "kds/server/shipped_statement_executor.hpp"
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -72,7 +73,8 @@ protected:
     Answer Ship(const std::string& sql, std::uint64_t session_id, std::uint64_t sequence,
                 Role role = Role::kReadWrite, std::uint32_t requester = 0,
                 bool retry = false, bool in_txn = false, bool join = false,
-                std::optional<txn::IsolationLevel> isolation = std::nullopt) {
+                std::optional<txn::IsolationLevel> isolation = std::nullopt,
+                std::uint64_t snapshot_lsn = 0) {
         StatementShipServer::ShippedStatement statement;
         statement.requester = requester;
         statement.session_id = session_id;
@@ -83,6 +85,7 @@ protected:
         statement.in_txn = in_txn;
         statement.join = join;
         statement.isolation = isolation;
+        statement.snapshot_lsn = snapshot_lsn;
         statement.text = sql;
 
         auto answer = std::make_shared<Answer>();
@@ -545,6 +548,57 @@ TEST_F(ShippedStatementExecutorTest, AStatementThatMayOnlyJoinIsRefusedOnceTheCe
     EXPECT_EQ(executor_->enrolments(), 1u);
     EXPECT_EQ(executor_->enrolled(), 0u);
     EXPECT_EQ(txns_->ActiveCount(), 0u);
+}
+
+// **AN-S3, at the participant.** An enrolled REPEATABLE READ context reads
+// at the coordinator's snapshot, not at the one its own `BEGIN` minted: a
+// row committed here *after* that snapshot and *before* the context opened
+// is invisible to it, on the first statement and on every join. READ
+// COMMITTED adopts nothing and sees the row.
+TEST_F(ShippedStatementExecutorTest, ARepeatableReadContextReadsAtTheCoordinatorsSnapshot) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7)").rfind("INSERTED", 0), 0u);
+    // The coordinator's instant: what it would have pinned at its BEGIN.
+    const txn::ReadView coordinator = txns_->MintReadView(txn::kNoTrxId);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (8)").rfind("INSERTED", 0), 0u);
+    ASSERT_NE(Rows().find(",8"), std::string::npos) << "autocommit sees the latest state";
+
+    const Answer first = Ship("SELECT * FROM t", 99, 1, Role::kReadWrite, 0, false,
+                              /*in_txn=*/true, /*join=*/false,
+                              txn::IsolationLevel::kRepeatableRead, coordinator.snapshot_lsn);
+    ASSERT_TRUE(first.status.ok()) << first.status.message();
+    EXPECT_NE(first.text.find(",7"), std::string::npos) << first.text;
+    EXPECT_EQ(first.text.find(",8"), std::string::npos)
+        << "the context read at its own BEGIN, not at the coordinator's snapshot: " << first.text;
+
+    const Answer joined = Ship("SELECT * FROM t", 99, 2, Role::kReadWrite, 0, false,
+                               /*in_txn=*/true, /*join=*/true,
+                               txn::IsolationLevel::kRepeatableRead, coordinator.snapshot_lsn);
+    ASSERT_TRUE(joined.status.ok()) << joined.status.message();
+    EXPECT_EQ(joined.text, first.text) << "pinned: the join reads the same instant";
+    EXPECT_EQ(executor_->enrolled(), 1u);
+
+    const Answer rc = Ship("SELECT * FROM t", 98, 1, Role::kReadWrite, 0, false,
+                           /*in_txn=*/true, /*join=*/false,
+                           txn::IsolationLevel::kReadCommitted, coordinator.snapshot_lsn);
+    ASSERT_TRUE(rc.status.ok()) << rc.status.message();
+    EXPECT_NE(rc.text.find(",8"), std::string::npos)
+        << "READ COMMITTED promises no instant across cores and adopts none: " << rc.text;
+}
+
+// A snapshot above this core's ceiling cannot come from a coordinator that
+// minted first on one commit order; it is a wire or a wiring defect, and
+// adopting it would cover commits whose entries are not yet in the window.
+// Refused, and nothing is enrolled: the fresh transaction is rolled back.
+TEST_F(ShippedStatementExecutorTest, ASnapshotAboveTheCeilingIsRefusedAndEnrolsNothing) {
+    const Answer refused = Ship("SELECT * FROM t", 99, 1, Role::kReadWrite, 0, false,
+                                /*in_txn=*/true, /*join=*/false,
+                                txn::IsolationLevel::kRepeatableRead,
+                                /*snapshot_lsn=*/std::numeric_limits<std::uint64_t>::max() / 2);
+    ASSERT_TRUE(refused.answered);
+    EXPECT_EQ(refused.status.code(), StatusCode::kInvalidArgument) << refused.status.message();
+    EXPECT_EQ(executor_->enrolled(), 0u);
+    EXPECT_EQ(executor_->enrolment_refusals(), 1u);
+    EXPECT_EQ(txns_->ActiveCount(), 0u) << "the BEGIN'd transaction was not rolled back";
 }
 
 TEST_F(ShippedStatementExecutorTest, ABusyTransactionIsSweptAtItsLifetimeNotItsIdleness) {

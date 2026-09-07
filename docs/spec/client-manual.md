@@ -295,21 +295,19 @@ hold on the debug port too (Appendix A gives the text spellings).
   design admits and this release has not built — outer joins, CTEs,
   `UNIQUE`, `ALTER TABLE ADD COLUMN` — so a client may feature-detect and
   try again against a newer server.
-- **`REPEATABLE READ` does not cross cores as a single instant**
+- **`REPEATABLE READ` crosses cores as a single instant**
   (`docs/spec/cross-owner-txn.md` §3). A cross-owner transaction commits or
-  aborts as a whole, and what `REPEATABLE READ` gives it is a **consistent
-  snapshot per core**: each core it touches is pinned at one moment for the
-  transaction's life, so a relation read twice answers alike and a
-  transaction always sees its own earlier writes. What it does not give is
-  one instant across all of them — two such transactions can disagree about
-  the order of two commits on two different cores. Relations whose ordering
-  matters to an application must live on one core. **Nothing on the
-  coordinator checks the per-core promise** (since AN-S2): it is delivered
-  by the participant's own pinned view, and the refusal that used to stand
-  beside it — `txn_watermark_refusals`, a reply naming a snapshot other
-  than the one the transaction had been reading at — is gone with the
-  quantity it compared. The promise did not change; what enforced it was
-  never reachable on this engine and is no longer reported.
+  aborts as a whole, and what `REPEATABLE READ` gives it is **one snapshot
+  for every core it touches**: the moment its `BEGIN` pinned, which each
+  core the transaction reaches adopts for that transaction's life. A
+  relation read twice answers alike, a transaction always sees its own
+  earlier writes, and two such transactions agree about the order of any
+  two commits on any two cores. (Until this release the promise was a
+  consistent snapshot *per core* and relations whose ordering mattered had
+  to live on one core; that limit is gone.) Nothing on the coordinator
+  checks the promise — the participant reads at the coordinator's snapshot
+  by construction — and the counter that used to report a check,
+  `txn_watermark_refusals`, is no longer printed.
 
   **Four limits ride with a statement carried to another core**
   (`docs/spec/crosscore.md` §4a). A read of another core's relation
@@ -320,7 +318,7 @@ hold on the debug port too (Appendix A gives the text spellings).
   cross-core message and no batching policy can split a row across two. A
   row wider than that is refused rather than truncated, and the refusal
   does not end the transaction; project fewer columns, or narrow them. The
-  **longest statement that may be carried to another core is 968 bytes** (976 before AO-S4b);
+  **longest statement that may be carried to another core is 960 bytes** (976 before AN-S3, 968 before AO-S4b);
   a longer one is refused by name rather than truncated — a truncated
   statement is a different statement. An answer that does not arrive
   within 10 s is `UNKNOWN_OUTCOME` (*the read returned nothing and changed

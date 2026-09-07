@@ -160,12 +160,20 @@ namespace kds::server {
 // because a second tag shape in an engine whose no-second-name rule is
 // load-bearing is a worse trade than sixteen bytes of statement.
 //
-// **56 since AO-S4b, and the eight bytes are the coordinator's transaction
+// **56 since AN-S3, and the eight bytes are the coordinator's snapshot**
+// (`workorder-an-read-view.md` AN-R5): an enrolled REPEATABLE READ
+// statement carries the coordinator's `snapshot_lsn`, which the
+// participant adopts in place of minting its own, so a cross-owner RR
+// transaction reads one instant on every core. The statement falls
+// **976 -> 968 bytes**, stated in the same two places.
+//
+// **64 since AO-S4b, and the eight bytes are the coordinator's transaction
 // id** (`coordinator_txn` below): the one fact the owner cannot derive and
 // must have to record the wait-for edge a shipped park otherwise leaves
-// out of the graph. The ceiling falls **976 -> 968 bytes**, stated in the
-// same two places.
-inline constexpr std::size_t kShippedStatementFixedBytes = 56;
+// out of the graph. The ceiling falls **968 -> 960 bytes**, stated in the
+// same two places. The two stages landed the same day on two branches,
+// each taking the ceiling 976 -> 968; merged, both bytes are paid.
+inline constexpr std::size_t kShippedStatementFixedBytes = 64;
 inline constexpr std::size_t kShippedStatementTextMax =
     sched::kCoreRingPayloadBytes - kShippedStatementFixedBytes;
 
@@ -192,6 +200,21 @@ struct ShippedStatementRequestPayload {
     std::uint64_t session_id;
     std::uint64_t sequence;
     std::uint64_t target_oid;
+    // **AN-S3: the coordinator's snapshot, for an enrolled REPEATABLE READ
+    // statement** (AN-R5). The `snapshot_lsn` of the view the coordinator's
+    // transaction pinned at its BEGIN (`txn.md` §4.1). The participant
+    // adopts it when it opens its context, in place of the view its own
+    // `BEGIN` minted, so every core the transaction touches reads the same
+    // instant of the instance's one commit order.
+    //
+    // **Read only under `in_txn` with `isolation` REPEATABLE READ**, which
+    // is what keeps the zero-collision rule without a sentinel: 0 is a
+    // legal snapshot on a fresh instance, so the field cannot mean "none
+    // stated" by its value - the isolation byte says whether it is stated
+    // at all, and it is zeroed everywhere it is not. A joining statement
+    // carries the same value as the one that enrolled (the coordinator's
+    // view never re-mints) and it is not re-read: the context adopted once.
+    std::uint64_t snapshot_lsn;
     // **AO-S4b: the coordinator's transaction, so the owner can record the
     // edge nobody else can.** A coordinator that ships a statement inside
     // its transaction waits for the participant that runs it, and only the
@@ -264,9 +287,10 @@ struct ShippedStatementRequestPayload {
     // dispatcher, whose `default_isolation()` is *that server's config key*,
     // not the client's session. So `BEGIN ISOLATION LEVEL REPEATABLE READ`
     // on the coordinator produced a READ COMMITTED participant, silently -
-    // and D3 ratified makes the level *select a branch*: watermarks are
-    // carried for REPEATABLE READ only. A participant that mistakes the
-    // level therefore gives a transaction the weaker promise while the
+    // and the level *selects a branch*: the coordinator's snapshot is
+    // adopted for REPEATABLE READ only (AN-S3; until AN-S2 it was the
+    // watermark that was carried for RR only). A participant that mistakes
+    // the level therefore gives a transaction the weaker promise while the
     // client was told the stronger one.
     std::uint8_t isolation;
     // **RR0: this statement may only *join* a transaction, never open one.**
@@ -361,12 +385,14 @@ inline constexpr sched::MonoTimeNs kShippedStatementDeadlineNs = 10ull * 1'000'0
 // The encode. **Refuses rather than truncates** - both because a shortened
 // statement is a different statement, and because the bound is the ring's
 // and a caller cannot be expected to know it.
+// `snapshot_lsn` crosses only under `in_txn` with REPEATABLE READ and is
+// zeroed otherwise - decided here, once, rather than at each sender.
 StatusOr<ShippedStatementRequestPayload> ShippedStatementRequestOf(
     std::uint64_t session_id, std::uint64_t sequence, std::uint64_t target_oid, Role role,
     std::string_view text, bool retry = false, bool in_txn = false,
     std::optional<txn::IsolationLevel> isolation = std::nullopt, bool join = false,
     bool typed_answer = false, PipelineTag answer_tag = PipelineTag{},
-    std::uint64_t coordinator_txn = 0);
+    std::uint64_t snapshot_lsn = 0, std::uint64_t coordinator_txn = 0);
 
 // ---- XG1: the two values `form` may take, and nothing else --------------
 //
@@ -489,6 +515,9 @@ public:
         // open one. False on the enrolling statement, true on every later
         // one of the same transaction to this owner.
         bool join = false;
+        // AN-S3: the coordinator's snapshot, meaningful under `in_txn` with
+        // REPEATABLE READ and zero otherwise (the payload's note).
+        std::uint64_t snapshot_lsn = 0;
         // XG1: the answer's shape, and where a typed one goes. `false`
         // leaves `answer_tag` unread - the whole text arm.
         bool typed_answer = false;
@@ -593,7 +622,8 @@ public:
                 std::string_view text, bool retry = false, bool in_txn = false,
                 std::optional<txn::IsolationLevel> isolation = std::nullopt,
                 bool join = false, bool typed_answer = false,
-                PipelineTag answer_tag = PipelineTag{}, std::uint64_t coordinator_txn = 0);
+                PipelineTag answer_tag = PipelineTag{}, std::uint64_t snapshot_lsn = 0,
+                std::uint64_t coordinator_txn = 0);
 
     // The parked statement's predicate: the reply arrived, the deadline
     // passed, or the waiter is gone. One clock read per reactor turn.

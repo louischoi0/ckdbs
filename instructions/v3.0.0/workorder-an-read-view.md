@@ -379,7 +379,9 @@ taken while the transaction was live — rather than as an assumption.
 deleted because it is the clearest single statement of what the mark
 bought.
 
-**AN-R5 — Global consistency for cross-owner RR. [operator, spec change]**
+**AN-R5 — Global consistency for cross-owner RR. [operator, spec change;
+marked 2026-09-07 by the operator's word to start AN-S3, built the same
+day - AN-8 §8.6]**
 Under the mark this is small: the coordinator's `snapshot_lsn` is one
 `uint64` copied into the enrolment message, and a participant adopts it
 instead of minting. What it retires: the per-participant watermark
@@ -757,7 +759,7 @@ nothing and is not scheduled.
 | AN-S1 (fixes) | **two bugs found by review after `b5abab6` landed and fixed on top of it**, plus four cells over a real `WalManager` covering the publication points. 3267/3267. See AN-7's third pass; AN-R13 is live at this stage and unresolved |
 | AN-S1b | **built, suite green at 3274/3274, review running.** AN-R13's marked exit (a). `TrxIdSequence::can_burn()`/`BurnWindow()`; `InstanceVisibility::PinsFloor()`/`attached_cores()`; `TransactionManager::MaybeBurnIdleBlock()` with its three-part gate; the peer's tick asks through `burn_requested_` and core 0 rides the writeback tick. Seven cells |
 | AN-S2 | **built 2026-09-07 on `an-s2-read-view-cutover` from `8d07d7e`; suite green three times over - 3299/3299 on the cutover alone, 3306/3306 with the stage's cells, 3309/3309 with the review's fixes and their cells - each time plain, armed (`KDS_TEST_PAGE_LATCH=1`) and budgeted (`KDS_TEST_FRAME_BUDGET=8`); overhead not measured.** The cutover as the row states it, and the two cells that had to fail first did: H1 and H2, written against the trx-id predicate, fail at `8d07d7e` (`instance_visibility_test.cpp:314`, `:339`, `:345`) and pass on the commit-LSN one. What AN-8 records beyond the row: a manager handed no visibility owns one (there is no second predicate), the AN-R9 ceiling is capped by a per-core pending-commit marker set *before* the append (the ruling's own shape had the AN-Q3 gap it was written to close), the undo purge is handed the floor and the catalog purge a two-branch predicate, the Cabin's rule gets the one bit it needs stamped at the mint, the 64-entry live-transaction bound retires, AN-R5a's watermark removal is a wire change (the reply text grows 992 → 1000), and `MintReadView` cannot fail. Gates: AN-R10 marked at AW (AN-R14 built), AN-R12 built at AW-S2, AN-R5a marked 2026-09-07 |
-| AN-S3 | not started; AN-R5's adoption half, still unmarked. **Its removal half landed inside AN-S2** (AN-R5a) |
+| AN-S3 | **built 2026-09-07 on `an-s3-snapshot-adoption` from `57c609d`** (AN-8 §8.6): the coordinator's `snapshot_lsn` rides every shipped statement (`ShippedStatementRequestPayload`, eight bytes, the statement cap 976 → 968), the encoder zeroes it outside `in_txn` with REPEATABLE READ, and the participant adopts it when it opens a REPEATABLE READ context (`TransactionManager::AdoptSnapshot`, through `CommandDispatcher::AdoptSnapshot`) before its first statement reads and before the context is recorded; a snapshot above the participant's own ceiling is refused `InvalidArgument` and the fresh transaction rolled back. The two cells the row asks for, plus two: the §3 case at the managers (`AnAdoptedSnapshotReadsTheCoordinatorsInstantAndHoldsIt`, with the slot published before the first read and the entry held after the coordinator ends) and end to end over the two-core rig (`ARepeatableReadCrossOwnerTransactionReadsOneInstantOnEveryCore`), the participant's own (`ARepeatableReadContextReadsAtTheCoordinatorsSnapshot`), the refusal, and the wire (`TheCoordinatorsSnapshotCrossesUnderRepeatableReadOnly`). **Two mutants, four cells, four kills**: adoption skipped at the executor, and adoption without lowering or publishing the slot. **Its removal half landed inside AN-S2** (AN-R5a) |
 | AN-S4 | **built 2026-09-07 on `an-s2-read-view-cutover` after `18fed49`**, out of the order's sequence (S3 before S4) because the specs described the retired shape from `18fed49` on and S3 is unmarked. `txn.md` §4.1 rewritten whole - the `ReadView` block, the four branches, "why no commit table older than the window", when a commit becomes visible, readers registered and the horizon's scope (instance-wide), the two purges and the price - with §4.2's always-visible id named as `Visible`'s first branch, §4.4's cost sentence and §10 item 3 corrected; `crosscore.md` §5's "the trx-id domain is global, so ids compare cleanly" rewritten with the mechanism, and its RR bullet; `cross-owner-txn.md` §1 per AN-D6's first row (the rejection scoped to per-core streams, "no global counter" struck, commit order named global); `ddl-transactional.md` §5's two visibility sentences; `command_dispatcher.cpp`'s purge-gate comment names the gate as defence in depth; `rules.md` §3's row points at `txn.md`; `ratification-an-commit-order.md`'s header records AN-Q3 closed at AN-S2 with the marker correction; `CLAUDE.md`'s Transactions row. `client-manual.md` changed at AN-S2 already (AN-R5a's obligation), last as AN-D6 orders. **The condition AN-S4's row states holds only after this stage's `critics-developer` pass**, which found four documents the first sweep left on the retired shape and fixed them there: `ddl-transactional.md` §5d, whose purge predicate was still "cleared the core's read horizon" and whose core-0 gate still carried the per-core-horizon soundness argument the dispatcher comment above had just retired - the two contradicted each other in the same commit; `cabin.md`'s banking assumption, resting on a transaction appearing "in every other view's `in_flight`"; `foreign-keys.md` §4, still naming `MintReadView` for a check view that has called `MintCheckView` since AN-S2; and `rules.md`'s own window row, which called a reclamation pass a slot writer and said it read every bound under the latch (the floor candidate is read before it). §4.1's "a view's answer for any transaction never changes for its life" was scoped to a *held* view in the same pass, an unregistered check view's answer being exactly what reclamation may move. The grep the row named catches none of the four: three name no retired identifier at all. **Six more it reported and left, all taken**: `catalog.hpp`'s `PurgeSettledDeleteMarks` doc ("cleared the core's read horizon"), `relayout_planner.hpp`'s gate 1 ("the per-core horizon"), `visibility.hpp`'s two cost sentences ("one integer comparison"), `fk_probe_service.cpp`'s reason for minting on the owner (which no longer held, though its conclusion does), `crosscore.md`'s CC4 row ("the owning core's latest committed snapshot"), and the gate comment's "the catalog's pages *are* the system range", a subset stated as an equality. Nothing rejected: the pass's every finding was a sentence the code no longer bears out |
 | AN-S5 | not started |
 
@@ -1151,3 +1153,105 @@ and not this stage's.
 
 **After the fixes**: the suite plain, armed and budgeted, counted in the
 AN-6 row.
+
+### 8.6 AN-S3 as built, 2026-09-07 on `an-s3-snapshot-adoption` from `57c609d`
+
+The operator's word: *"start AN-S3"* — which is AN-R5's mark, since
+AN-R5's proposal was to take the adoption in AN and AN-R5a had already
+taken the removal. What the stage is, and the three things it decided:
+
+- **The snapshot rides the request, eight bytes, under REPEATABLE READ
+  only.** `ShippedStatementRequestPayload` gains `snapshot_lsn` among its
+  u64s (no interior padding; `kShippedStatementFixedBytes` 48 → 56, the
+  statement cap **976 → 968**, client-visible and stated in
+  `client-manual.md`, `crosscore.md` and `cross-owner-txn.md` §1a). The
+  encoder zeroes it outside `in_txn` with REPEATABLE READ, once, so no
+  sender can put a value on the wire the owner would ignore for one level
+  and adopt for another. **The zero-collision rule is kept without a
+  sentinel**: 0 is a legal snapshot on a fresh instance, so the field
+  cannot mean "none stated" by its value — the isolation byte says whether
+  it is stated, and the participant reads it only where it is. A joining
+  statement carries the same value (the coordinator's RR view never
+  re-mints) and is not re-read; the context adopted once.
+- **The participant adopts before its first read and before the context is
+  recorded.** `EnrolFor` opens the local transaction with the ordinary
+  `BEGIN` as before, then under REPEATABLE READ calls
+  `CommandDispatcher::AdoptSnapshot` → `TransactionManager::AdoptSnapshot`:
+  the slot is lowered to the snapshot, the view moves, the bounds are
+  republished. A refusal rolls the fresh transaction back and enrols
+  nothing, for the reason a failed `BEGIN` records nothing. The dispatcher
+  is the seam because the executor holds it and not the manager.
+- **Refused, never clamped, above the ceiling.** The ceiling is monotone
+  over time and the coordinator minted first, so a snapshot above the
+  participant's own mint can only be a wire or wiring defect, and adopting
+  it would cover commits whose entries are not yet in the window — AN-Q3's
+  flip, by request. `InvalidArgument`, naming both LSNs.
+
+**Why an adopted snapshot is safe to hold** — the one case AN-R1's
+argument does not cover, stated in `manager.hpp` and `cross-owner-txn.md`
+§3: the coordinator's transaction is live with that very snapshot and its
+core's slot is at or below it, so no pass has passed a commit above it and
+none will while that transaction runs; the participant lowers its own slot
+before its view moves, so both cores hold it from then on, and the
+participant alone once the coordinator's `COMMIT` lets go. A coordinator
+that gave up on the transaction while the statement was in flight is the
+case the argument does not reach, and that transaction is doomed either
+way: nothing it reads can be decided committed by a coordinator that has
+already rolled back.
+
+**The rig had to change to host the end-to-end cell**, and the change is
+itself a finding: `core_runtime_test.cpp`'s two-core rig gave core 0's
+manager and the peer's `CoreRuntime` *separate* `InstanceVisibility`
+objects — a shape no instance can be in — and nothing noticed, because no
+cell read the other core's rows locally. A snapshot adopted from another
+instance's order would read nonsense, so the fixture now shares one, as
+`Expeditor` does. What it still gets wrong is stated at the site: core 0's
+manager is unlogged and takes the window's own order while the peer takes
+real LSNs, and the two interleave consistently only while core 0 commits
+fewer times between two peer commits than a commit record is bytes wide.
+The rig AV owns is where that stops.
+
+**Cells** — the row's two and two more, each failing under the mutation it
+names before the build and passing after: the §3 case at the managers
+(`VisibilityWiringTest.AnAdoptedSnapshotReadsTheCoordinatorsInstantAndHoldsIt`,
+roles chosen so the floor *can* pass the commit — coordinator on the high
+block, participant and commit on the low one — and the entry shown held by
+the participant alone after the coordinator ends), the refusal
+(`AdoptingASnapshotAboveTheCeilingIsRefused`), the participant's own
+(`ShippedStatementExecutorTest.ARepeatableReadContextReadsAtTheCoordinatorsSnapshot`,
+`…ASnapshotAboveTheCeilingIsRefusedAndEnrolsNothing`), the wire
+(`StatementShipTest.TheCoordinatorsSnapshotCrossesUnderRepeatableReadOnly`),
+and end to end (`CoreRuntimeTest.ARepeatableReadCrossOwnerTransactionReadsOneInstantOnEveryCore`).
+Mutants: adoption skipped at the executor (three cells fail), adoption
+without lowering or publishing the slot (the managers' cell fails) — four
+of four.
+
+**Not done here**: AN-R11 (mint at first read) stays unmarked, and
+`BEGIN`-then-idle on a coordinator now pins every participant it later
+enrols at that instant too, which is the same price AN-R10 bounds.
+
+**The `critics-developer` pass, 73 tool calls, no reachable defect.** It
+traced the retention argument (the coordinator's slot is `≤ S` from its
+`Begin` on, RR never re-mints, `Reclaim` retains every entry above the
+horizon), proved `M ≥ S` term by term so the refusal is dead on a healthy
+instance, checked the wire arithmetic and every caller, the join path, and
+the rig's "one lie" as bounded. Seven findings, six taken:
+
+| finding | what it was | where it landed |
+|---|---|---|
+| **F1 `[quiet-wrong]`** - the adoption gate was the *effective* level (`isolation.value_or(default)`) while the encoder's was the *stated* one; a participant whose config default is RR would adopt a zeroed field from an `in_txn` request stating no level, read at the dawn of the commit order and pin the instance's horizon at 0 for 60 s | the one sender always states a level, so unreachable; the file's own posture elsewhere is refuse-never-default | `EnrolFor` takes `stated_repeatable_read`, the encoder's predicate, and adopts on that alone |
+| F2 - the refusal's `ROLLBACK` was unchecked, twelve lines from `EndEnrolled`'s precedent of checking it | a rollback that fails (`AbortTxn` refusing) leaves the transaction in `live_` with nothing to reach it | logged as `EndEnrolled` logs it |
+| F3 - `crosscore.md` §5 still said "RR guarantees hold per core" and cited a manual form that no longer exists | a stale paragraph the AN-S4 sweep's grep could not catch | rewritten: a cross-range read never meets RR (a multi-owner relation refuses reads in a transaction), the per-stage weakening is autocommit's |
+| F4 - `cross-owner-txn.md` §3 gave the safety argument without the case it does not cover | a spec stating an argument and omitting its exception reads as covering it | the coordinator-gave-up case is in §3 with the reason nothing observes it: both exits `Finish()` the session, the late reply is discarded on its identity check, the participant's writes are unwound |
+| F5 - `CommandDispatcher::AdoptSnapshot` carried three dead guards and a six-line justification of a state the dispatcher cannot be in | the seam is needed (the executor holds no manager); the guards were not | one null-dereference guard, one sentence |
+| F6 - the adopted-snapshot argument was written out three times | `manager.hpp`, §3, this order | `manager.hpp` keeps the mechanism and points at §3, which owns the rule; this order keeps its record |
+| F7 - `LowerSnapshotBound` in `AdoptSnapshot` argued an ordering the publication two lines later already provides | the line is right for a narrower reason: it covers a transaction whatever the caller holds | the comment says that, and records `in_flight_at_mint` left stale by design |
+
+**Rejected, one**: cutting the `!txn.active_` check in
+`TransactionManager::AdoptSnapshot` as a third copy of one message. A
+public method that mutates a transaction refuses a dead one; the message
+is the same because the condition is. **Not taken, on its own terms**: the
+pass's alternative to F1 - refusing an `in_txn` request that states no
+level - is a behaviour change against `statement_ship_service.hpp`'s "the
+fallback is this core's default, exactly as before" and needs the
+operator's word.

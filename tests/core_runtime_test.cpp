@@ -160,6 +160,16 @@ protected:
         // names, and the mount refuses - correctly.
         config_superblock_ = core0_->superblock;
         c.superblock = &config_superblock_;
+        // **The instance's read view** (AN-R1, AN-S3): one for the fixture,
+        // shared with core 0's manager where a rig builds one, as
+        // `Expeditor` shares it with every core. Until AN-S3 each side
+        // owned a private one, which no instance can be in - a peer's view
+        // could not see a core-0 commit at all and nothing noticed, because
+        // no cell read the other core's rows locally. What made it
+        // load-bearing is the coordinator's snapshot crossing the ring: a
+        // participant that adopted an LSN from another instance's order
+        // would read nonsense.
+        c.visibility = &visibility_;
         // What `Expeditor` hands a peer on a single-stream volume, and what
         // `CoreRuntime::Open` refuses to proceed without (AM-S0). Null on
         // the per-core arm, where a peer opens its own log.
@@ -233,6 +243,9 @@ protected:
     std::unique_ptr<wal::WalManager> core0_wal_;
     // The image `ConfigFor` hands over: core 0's, as the volume really is.
     SuperBlock config_superblock_;
+    // The instance read view every core of this fixture shares (AN-S3;
+    // `ConfigFor` says why one and not one per side).
+    txn::InstanceVisibility visibility_;
 };
 
 TEST_F(CoreRuntimeTest, AnotherThreadStopsTheReactorThroughTheAtomicFlag) {
@@ -4033,7 +4046,15 @@ void CoreRuntimeTest::OpenForeignIndexRig(ForeignIndexRig& rig, const char* tabl
     ASSERT_TRUE(block.ok());
     rig.peer->trx_id_lease().Grant(block.value().first, block.value().count);
     rig.undo.emplace(*core0_store_, /*wal=*/nullptr);
-    rig.txns.emplace(*rig.ids, *rig.undo, *core0_store_, /*wal=*/nullptr);
+    // Unlogged, over the fixture's shared visibility (`ConfigFor` says why
+    // it is shared). **The fixture's one lie, stated**: core 0's commits
+    // take the window's own order - one past the highest published - while
+    // the peer's take real LSNs from the stream, and the two interleave
+    // consistently only while core 0 commits fewer times between two peer
+    // commits than a commit record is bytes wide. A production instance
+    // logs every core; the rig AV owns is where this stops being a lie.
+    rig.txns.emplace(*rig.ids, *rig.undo, *core0_store_, /*wal=*/nullptr, &visibility_,
+                     /*core=*/0);
     rig.cabins0.emplace();
     rig.dispatcher.emplace(core0_->superblock, *rig.catalog2, *core0_store_, /*log=*/nullptr,
                            &rig.clock, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
@@ -5828,6 +5849,59 @@ TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionReadsOnePinnedViewPe
     // own contract.
     EXPECT_NE(rc_out.response.find(",444"), std::string::npos) << rc_out.response;
 
+    DispatchOutcome rc_rb;
+    auto rc_rollback = rig.Start("ROLLBACK", rc_rb, &rc);
+    ASSERT_TRUE(rig.Drive(*rc_rollback)) << rc_rb.response;
+}
+
+// **AN-S3, end to end over two cores.** A REPEATABLE READ transaction's
+// snapshot is pinned at its BEGIN on the coordinator; a row the participant
+// commits *after* that and *before* the transaction's first shipped read
+// must be invisible to that read, because the participant adopts the
+// coordinator's snapshot rather than minting its own. Until AN-S3 the
+// participant minted at its own BEGIN - which was after the commit - and
+// the read saw the row: two instants in one transaction, the case
+// `cross-owner-txn.md` §3 stated as possible. READ COMMITTED adopts
+// nothing and sees it.
+TEST_F(CoreRuntimeTest, ARepeatableReadCrossOwnerTransactionReadsOneInstantOnEveryCore) {
+    std::optional<SessionStepClient> reads;  // declared first: outlives rig.dispatcher
+    ForeignIndexRig rig(clock_);
+    OpenForeignIndexRig(rig, "instant_rr");
+    WireRemoteReads(rig, reads);
+
+    Session rr;
+    DispatchOutcome begun;
+    auto begin = rig.Start("BEGIN ISOLATION LEVEL REPEATABLE READ", begun, &rr);
+    ASSERT_TRUE(rig.Drive(*begin)) << begun.response;
+
+    // Committed on the participant after the coordinator's BEGIN and before
+    // its first read there.
+    ASSERT_EQ(rig.peer->dispatcher()
+                  .Dispatch("INSERT INTO instant_rr VALUES (444)")
+                  .response.rfind("INSERTED", 0),
+              0u);
+
+    DispatchOutcome first;
+    auto read = rig.Start("SELECT * FROM instant_rr", first, &rr);
+    ASSERT_TRUE(rig.Drive(*read)) << first.response;
+    ASSERT_NE(first.response.rfind("ERR", 0), 0u) << first.response;
+    EXPECT_EQ(first.response.find(",444"), std::string::npos)
+        << "the participant read at its own BEGIN rather than at the coordinator's snapshot: "
+        << first.response;
+
+    DispatchOutcome rb;
+    auto rollback = rig.Start("ROLLBACK", rb, &rr);
+    ASSERT_TRUE(rig.Drive(*rollback)) << rb.response;
+
+    Session rc;
+    DispatchOutcome rc_begun;
+    auto rc_begin = rig.Start("BEGIN", rc_begun, &rc);
+    ASSERT_TRUE(rig.Drive(*rc_begin)) << rc_begun.response;
+    DispatchOutcome rc_out;
+    auto rc_read = rig.Start("SELECT * FROM instant_rr", rc_out, &rc);
+    ASSERT_TRUE(rig.Drive(*rc_read)) << rc_out.response;
+    ASSERT_NE(rc_out.response.rfind("ERR", 0), 0u) << rc_out.response;
+    EXPECT_NE(rc_out.response.find(",444"), std::string::npos) << rc_out.response;
     DispatchOutcome rc_rb;
     auto rc_rollback = rig.Start("ROLLBACK", rc_rb, &rc);
     ASSERT_TRUE(rig.Drive(*rc_rollback)) << rc_rb.response;
