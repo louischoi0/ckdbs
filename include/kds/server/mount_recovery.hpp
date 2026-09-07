@@ -211,30 +211,21 @@ struct MountRecovery {
 // (`txn/recovery_undo.hpp`).
 // `clock`, when given, times the phases into `MountRecovery::timings` (RC09).
 //
-// `wal_dir` and `anchors` are what let a **prepared** transaction be
-// resolved (R6-4): the verdict is in the coordinator's stream, which is
-// another file in that directory, and that core's anchor is what says how
-// far the scan of it must reach before an absent decision may be read as
-// one (`prepared_resolver.hpp`). `anchors` is indexed by core id and holds
-// every core's, this one's included.
+// **A prepared transaction is resolved inside this pass** (AR0 M0, AL-R5;
+// AM-S4(d)). The participant's TXN_PREPARE and its coordinator's decision
+// are records of the same log, so the scan that found the first found the
+// second, and absence of a decision is abort - sound because the redo
+// start is floored by the oldest live prepare.
 //
-// Either empty means no resolver is installed, and a stream that holds a
-// prepared transaction then **refuses the mount** rather than guessing -
-// which is the right answer for the fixtures that pass nothing here, since
-// they have no other core's stream to read.
+// `wal_dir` and `anchors` stood here for the other topology: they named
+// the coordinator's *own* stream, another file in that directory, and the
+// anchor that said how far a scan of it must reach. There is one stream,
+// so there is no second file and no second anchor, and both parameters
+// left with `CoordinatorStreamResolver`.
 StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
-                                          Logger* log, const sched::Clock* clock = nullptr,
-                                          const std::string& wal_dir = {},
-                                          const std::vector<WalAnchorFields>& anchors = {},
-                                          // Whether this volume's log is the
-                                          // instance's one stream, which
-                                          // decides redo's stamp discipline
-                                          // (`wal/analysis.hpp`). False is
-                                          // per-core streams, every fixture's
-                                          // case and today's only one.
-                                          bool single_stream = false);
+                                          Logger* log, const sched::Clock* clock = nullptr);
 
 // RV3's honest counter - **the half of it that can be computed**.
 //

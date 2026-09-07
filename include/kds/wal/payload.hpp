@@ -475,19 +475,21 @@ StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::by
 
 // ---- Which core appended a record (AR0 M0, AL-R4/AL-R5/AL-R6) ----------
 //
-// Under per-core streams the answer is the stream. Under **one stream**
-// every core's records interleave in the same log, and two kinds of record
-// cannot do their job without saying whose they are:
+// Under per-core streams the answer was the stream. There is one stream
+// now, so every core's records interleave in the same log, and two kinds of
+// record cannot do their job without saying whose they are:
 //
 //   `CHECKPOINT_BEGIN`/`END`  a dirty table belongs to one core's pool, so
 //                             a checkpoint that cannot be attributed cannot
 //                             be applied to the right one.
 //   `PAGE_INIT`               redo may have to *create* the page, and the
-//                             page it creates carries an ownership claim
-//                             (`device_page_store`'s stamp). Created for
-//                             the recovering core rather than the owning
-//                             one, the page is unreclaimable by its owner
-//                             at the next mount - stamp 0 is never a claim.
+//                             page it creates carries the stamp
+//                             (`docs/spec/page.md` §2b). Created for the
+//                             recovering core rather than the logging one,
+//                             the page would record the wrong writer. That
+//                             was an ownership fact until AW-S1b and is a
+//                             diagnostic one now, and keeping it truthful
+//                             costs a byte already in the envelope.
 //
 // It rides the envelope's **per-type `flags` byte** (`record.hpp`), not the
 // payload, and that is a departure from AL-R2's letter which AL-R4 records.

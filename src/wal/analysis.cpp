@@ -7,16 +7,6 @@
 
 namespace kds::wal {
 
-const char* TxnOutcomeName(TxnOutcome outcome) noexcept {
-    switch (outcome) {
-        case TxnOutcome::kWinner: return "winner";
-        case TxnOutcome::kAborted: return "aborted";
-        case TxnOutcome::kLoser: return "loser";
-        case TxnOutcome::kPrepared: return "prepared";
-    }
-    return "?";
-}
-
 Lsn RedoStartFrom(Lsn floor_lsn, const std::map<PageId, Lsn>& dirty_pages) noexcept {
     Lsn out = floor_lsn;
     for (const auto& [page_id, rec_lsn] : dirty_pages) {
@@ -107,53 +97,36 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // page is already known dirty from earlier - the recLSN is the
         // oldest record that must be replayed, so the first one wins.
         //
-        // PAGE_HANDOFF is the *removal* (PW1c-2, PL §9 rule 3): the page
-        // left this stream at this LSN, and everything this stream logged
-        // for it before is already in the durable image (rule 1a's flush),
-        // so this stream's redo has nothing left to contribute - a
-        // checkpoint-seeded entry included. A page that later comes back
-        // re-enters through its re-acquirer's ordinary records, so erase
-        // followed by first-wins emplace gives the post-return recLSN.
+        // **PAGE_HANDOFF dirties nothing and undirties nothing.** It is an
+        // ownership fact rather than a mutation, so it must not become a
+        // page's recLSN; and the *removal* it used to perform (PW1c-2, PL
+        // §9 rule 3) was a per-core-stream rule that does not survive one
+        // stream (AM-S4(d), and AL-R6 before it). What licensed the removal
+        // was rule 1(a)'s **flush**, which covers *one core's page store*,
+        // pools being per core: under per-core streams the erase reached
+        // exactly as far, because it dropped only the appending stream's
+        // entries. With one log the erase would speak for **every core's**
+        // records while the flush still speaks for one core's frames - and
+        // a handoff is appended by a core that need not be the page's
+        // writer at all (`range_alloc.cpp` appends one from core 0 for a
+        // range head another core will own). It would drop that peer's
+        // entry and redo's not-dirty filter would skip its record: a lost
+        // update, not slow work. Keeping the entry costs redo re-applying
+        // what the durable image may already hold, which the `page_lsn`
+        // gate makes idempotent.
         //
-        // The erase is positional: a later CHECKPOINT_BEGIN whose dirty
-        // table still lists the page re-seeds it at a pre-handoff recLSN.
-        // Sound only because the pool's dirty table keys off the frame's
-        // dirty bit - so PW1c-4's rule-1a flush must clear the pool's
-        // dirty entry, not merely write the bytes (the d3a8b08 review's
-        // stated precondition on that unbuilt task).
-        //
-        // max_page_id takes the handoff's page too, deliberately: the
-        // durable record of which pages exist is the unlogged free map,
+        // max_page_id takes the handoff's page all the same, deliberately:
+        // the durable record of which pages exist is the unlogged free map,
         // so "the page existed here" is exactly what may not survive the
-        // crash - if this stream's ordinary records for it fell below the
-        // scan start and the incoming core never wrote it, this record is
-        // the one durable proof the id is in use, and the high-water must
-        // rise past it (RV4's hazard, reopened for exactly the handed-off
-        // page; raising it is monotone and free).
-        //
-        // **The erase is a per-core-stream rule and does not survive one
-        // stream** (AR0 M0, AL-R6, amended twice from building AL-S5 - the
-        // second time because the first reason was wrong). What licenses
-        // it is rule 1(a)'s **flush**, as the paragraph above and
-        // `analysis.hpp` both say; and a flush covers *one core's page
-        // store*, pools being per core. Under per-core streams the erase's
-        // reach matched the flush's, because it dropped only the appending
-        // stream's entries. Under one stream the erase speaks for **every
-        // core's** records while the flush still speaks for one core's
-        // frames - and a handoff is appended by a core that need not be
-        // the page's writer at all (`range_alloc.cpp` appends one from core
-        // 0 for a range head another core will own). The erase would then
-        // drop that peer's entry and redo's not-dirty filter would skip its
-        // record: a lost update, not slow work.
-        // Keeping the entry costs redo re-applying what the image may
-        // already hold, which the `page_lsn` gate makes idempotent.
+        // crash - if the ordinary records for it fell below the scan start
+        // and the incoming core never wrote it, this record is the one
+        // durable proof the id is in use, and the high-water must rise past
+        // it (RV4's hazard, reopened for exactly the handed-off page;
+        // raising it is monotone and free).
         if (record.header.page_id != kInvalidPageId) {
             if (record.type() == RecordType::kPageHandoff) {
-                // Under one stream: neither erased nor seeded. A handoff is
-                // an ownership fact, not a mutation, so it must not become
-                // a page's recLSN either. `max_page_id` below still takes
-                // it, which the erase never governed.
-                if (!start.single_stream) out.dirty_pages.erase(record.header.page_id);
+                // Neither erased nor seeded - only `max_page_id` below
+                // takes it.
             } else {
                 out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
             }
@@ -190,9 +163,10 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                 break;
             case RecordType::kTxnPrepare: {
                 // **R6-4: this core promised not to decide.** The outcome
-                // is provisional and stays so until a resolver reads the
-                // coordinator's stream; a TXN_COMMIT or TXN_ABORT later in
-                // *this* scan overrides it, which is the participant's own
+                // is provisional and stays so until `RecoverCore` looks
+                // the coordinator's transaction id up in this same table
+                // (AM-S4(d)); a TXN_COMMIT or TXN_ABORT later in *this*
+                // scan overrides it first, which is the participant's own
                 // decided end and needs no resolution at all.
                 if (record.header.txn_id == kNoTxnId) {
                     // The envelope's id is the participant's own local

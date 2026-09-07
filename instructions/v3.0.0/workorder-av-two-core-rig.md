@@ -83,6 +83,41 @@ that is this ruling's real content: the AU order states a mechanism that
 its own code does not admit, and the rig cannot be built until that is
 settled.
 
+**AV-R1 marked — seam 4, the table. [operator, 2026-09-07, verbal]** In
+the operator's own terms: *the attach point takes an interface
+`WakerTable` implements; `SimWakerTable` wraps it, logs `(tick, dest)` per
+`Kick`, forwards at the scheduled tick. `Wake()` stays non-virtual; AU-R3
+rewritten to match.*
+
+The mark is seam 4 as proposed **and it settles the one cost the proposal
+left open**, which is worth stating because it is what makes seam 4 safe:
+`SimWakerTable` **wraps** a real `WakerTable` rather than reproducing it,
+so the `sleeping` fence and the skip counter (`waker_table.hpp:86-97`)
+stay in one implementation and the rig cannot disagree with the protocol
+it is testing. The rig's own content is the two things it adds around the
+forward: the `(tick, dest)` log AV-R3 makes the determinism claim over,
+and holding the kick until the scheduled tick.
+
+What the mark obliges, and what it does not:
+
+- **An interface at the attach point**, which `WakerTable` implements and
+  `SimWakerTable` also implements by wrapping one. That is the production
+  seam H4 asks about, and under the mark it is a virtual call **per
+  `Kick`** rather than per `Wake()` - a cross-core wake, not the 8-byte
+  write `waker.hpp` argues is cheap. Seam 1's cost was on the wrong path
+  and this is why.
+- **`Waker` is untouched.** `Wake()` stays non-virtual and `Waker` gains
+  no vtable, so AU-S1c's "nothing in the engine learns a new type" stays
+  literally true of the type it was said about.
+- **AU-R3's sentence is rewritten**, per the ruling above and per the
+  operator's own last clause. AU-S1c owes `SimWakerTable` rather than
+  `SimWaker`, and the name in `include/kds/sched/` changes with it.
+- **It does not settle H4's verdict.** Whether the interface can be
+  injected without a production seam in `Expeditor` or `CoreRuntime` is
+  AV-S0's read; the mark says which shape to build, not that the shape
+  costs nothing. If a seam has to open there, `rules.md` still wants the
+  justification.
+
 **AV-R2 — The rig is the production arrangement, not a mock. [design]**
 Two `CoreRuntime`s over **one** `DevicePageStore`, **one** WAL stream,
 **one** `InstanceVisibility`, **one** `WakerTable` — which is what
@@ -143,8 +178,8 @@ Every stage: `critics-developer` review; suite plain, armed
 
 | # | stage | cells (definition of done) | size | gate |
 |---|---|---|---|---|
-| AV-S0 | **The read, and AV-R1's decision.** What `Expeditor::Open` wires that a rig must reproduce; whether the waker table can be injected without a production seam (H4); which of AV-R1's four seams is taken, and AU-R3's sentence rewritten to match | a table appended here: every wiring step, reproduced-by-the-rig or not-needed, with the reason | S | — |
-| AV-S1 | **The rig itself**: two `CoreRuntime`s, one store, one stream, one visibility, one waker table; the seam from AV-R1 | the three cells §6 lists as the rig's own | M | AV-S0, AU-S1c |
+| AV-S0 | **The read.** What `Expeditor::Open` wires that a rig must reproduce, and whether the waker table interface can be injected without a production seam (H4). **AV-R1 is no longer this stage's to decide** - the operator marked seam 4 on 2026-09-07 - so what is left of that half is rewriting AU-R3's sentence to name `SimWakerTable` | a table appended here: every wiring step, reproduced-by-the-rig or not-needed, with the reason; AU-R3 rewritten | S | — |
+| AV-S1 | **The rig itself**: two `CoreRuntime`s, one store, one stream, one visibility, one waker table; seam 4 per AV-R1's mark - an interface at the attach point, `SimWakerTable` wrapping a real `WakerTable` | the three cells §6 lists as the rig's own | M | AV-S0, AU-S1c |
 | AV-S2 | **AV-R5's promotion**: the S-P2 cell over two genuine cores, the test hook gone from it | `ARingFetchWaitsForAPageAnotherCoreHoldsExclusive` passes with a real core-1 exclusive holder; **mutation**: drop the ring's page latch and it returns while the hold stands | S | AV-S1 |
 | AV-S3 | **Hosting**: AU-S2's and AO-S5's cells by name (§6), each running on the rig | each named cell exists and is green; none uses `LatchFrameForTest` | M | AV-S1, and the owning stage's own gates |
 
@@ -197,10 +232,13 @@ than restating it on AO's behalf.
 ## 7. What this order does not do
 
 - It does not build anything. AW-S6's condition is the document.
-- It does not decide AV-R1. Four seams are set out with a proposal; the
-  choice rewrites AU-R3's sentence and belongs to the operator or to
-  AV-S0's read.
-- It does not build `SimWaker`. That is AU-S1c's, and AV-S1 gates on it.
+- ~~It does not decide AV-R1.~~ **The operator marked it 2026-09-07**:
+  seam 4, `SimWakerTable` wrapping a real `WakerTable`. Struck rather than
+  deleted, because this list is what the order shipped without and the
+  mark is what closed it.
+- It does not build `SimWakerTable`. That is AU-S1c's, and AV-S1 gates on
+  it - and the mark renames what AU-S1c owes, from `SimWaker` to the
+  table.
 - It does not widen to N cores. H3 is the claim that two is enough for
   every cell named in §6.
 - It does not touch AU-S2's or AO-S5's own content. §6 lists their cells so

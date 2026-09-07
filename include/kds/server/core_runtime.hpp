@@ -129,7 +129,11 @@ class CoreRuntime {
 public:
     struct Config {
         std::uint32_t core_id = 0;
-        std::string wal_dir;
+        // **No `wal_dir`** (AM-S4(d)). A peer opened no log file even
+        // before this stage; the directory was still handed over because
+        // `RecoverCoreAtMount` needed it to find a *coordinator's* stream
+        // for the cross-stream prepared resolver. That resolver is gone,
+        // and with it the last thing on this core that named a path.
         sched::MonoTimeNs checkpoint_interval_ns = 0;
         sched::MonoTimeNs wal_drain_interval_ns = 0;
 
@@ -145,15 +149,15 @@ public:
         // serve every other. Null keeps the arrangement every build had
         // before - a frame table per core over the same device.
         //
-        // **Conditional on one WAL stream, and that is not a detail.** The
-        // store's writeback gate is a `wal::WalDurability`, which is a
-        // property of the *log*: under AR0 M0 every core's manager attaches
-        // to core 0's stream, so any of them answers for all. A pre-M0
-        // volume mounts per-core, and a shared store there would check a
-        // page logged in core 1's stream against core 0's watermark and
-        // could write it back ahead of the record describing it. `Expeditor`
-        // therefore passes this only where `single_stream()` holds, until
-        // AM-S4 refuses such a volume outright.
+        // **It used to be conditional on one WAL stream, and that was not a
+        // detail.** The store's writeback gate is a `wal::WalDurability`,
+        // which is a property of the *log*: under AR0 M0 every core's
+        // manager attaches to core 0's stream, so any of them answers for
+        // all. A pre-M0 volume mounted per-core, and a shared store there
+        // would check a page logged in core 1's stream against core 0's
+        // watermark and could write it back ahead of the record describing
+        // it. AM-S4(d) made `SuperBlock::Decode` refuse such a volume, so
+        // `Expeditor` passes this unconditionally now.
         storage::DevicePageStore* shared_store = nullptr;
 
         // This core's share of the instance frame budget
@@ -235,20 +239,12 @@ public:
         // caller's stack contents.
         WalAnchorFields anchor{};
 
-        // **Every core's anchor, this one included** (R6-4). Copied from
-        // core 0's superblock on the startup thread beside `anchor` above,
-        // and used for one thing: resolving a transaction this core
-        // prepared means reading its *coordinator's* stream, and a scan of
-        // another core's stream owes the same honesty check `Analyze`
-        // applies to its own - that it reached the durable point that
-        // core's anchor was published with. Without it a coordinator stream
-        // whose tail the crash took reads as "no decision", which is an
-        // abort, which durably contradicts a coordinator that committed.
-        //
-        // Empty means no resolver is installed (every fixture), and a
-        // stream that then holds a prepared transaction refuses the mount
-        // rather than guessing. Indexed by core id.
-        std::vector<WalAnchorFields> anchors;
+        // **`anchors` - every core's, for R6-4 - is gone** (AM-S4(d)). It
+        // fed one thing: the cross-stream resolver, which read a
+        // *coordinator's* own stream and needed that core's anchor to bound
+        // the scan honestly. With one stream a prepare's verdict is in core
+        // 0's own mount pass, so there is no second stream to scan and no
+        // second anchor to bound it.
 
         // **The volume's superblock, and it is required** — `Open` refuses
         // without it. Copied wholesale into `superblock_` below, which is
@@ -269,37 +265,37 @@ public:
         // So the peer gets the whole decoded image and the pointer is
         // mandatory: a `CoreRuntime` cannot be constructed without being
         // told what volume it is on. `anchor` above stays separate because
-        // it is a *selection* — this core's slot, or the fold's under one
-        // stream — not a field the image is missing.
+        // it is a *selection* — the fold's slot 0 — not a field the image
+        // is missing.
         //
         // **A borrowed pointer, read once and not retained.** `Open` copies
         // through it in its first statement, on the startup thread, after
         // core 0 has finished raising its own ceiling and before any peer
-        // worker runs — the same single-threaded discipline `anchor` and
-        // `anchors` already rely on. It is not a handle on core 0's live
-        // image and must not become one: that would be shared mutable state
-        // with no declaration (`docs/rules/rules.md` §3).
+        // worker runs — the same single-threaded discipline `anchor`
+        // relies on. It is not a handle on core 0's live image and must not
+        // become one: that would be shared mutable state with no
+        // declaration (`docs/rules/rules.md` §3).
         const SuperBlock* superblock = nullptr;
 
-        // **The instance's log, when there is one** (AR0 M0, AL-R1/AL-S1c).
-        // Both null under per-core streams, where this core opens its own
-        // device and manager as it always has. Both set under one stream,
-        // where core 0 owns them and this core attaches: it appends through
-        // the shared stream's latch and asks the writer for every sync,
-        // touching the device itself never.
+        // **The instance's log, and it is required** (AR0 M0, AL-R1/AL-S1c;
+        // AM-S4(d)). Core 0 owns them and this core attaches: it appends
+        // through the shared stream's latch and asks the writer for every
+        // sync, touching the device itself never. `Open` refuses a null,
+        // because the arm that opened a device of this core's own left with
+        // the topology that had one.
         //
-        // Borrowed and outliving every peer, the way `anchors` and the ring
-        // transport are.
+        // Borrowed and outliving every peer, the way the ring transport is.
         wal::WalStream* shared_stream = nullptr;
         wal::WalWriter* shared_writer = nullptr;
 
         // **The instance's visibility state** (AN-R1), borrowed from the
-        // expeditor on the same terms as the two above and null for the
-        // same reason: it records commit order as a commit record's LSN,
-        // and under per-core streams there is no such order across cores.
-        // Null is also every fixture's answer - a `CoreRuntime` built
-        // without one keeps the per-core `ReadView`, which at AN-S1 is
-        // what every core is still reading anyway.
+        // expeditor on the same terms as the two above: it records commit
+        // order as a commit record's LSN, which one stream is what makes
+        // comparable across cores. Every instance hands one over since
+        // AM-S4(d), where the per-core arm that could not have supplied one
+        // went. Null is still every *fixture's* answer - a `CoreRuntime`
+        // built without one keeps the per-core `ReadView`, which at AN-S1
+        // is what every core is still reading anyway.
         txn::InstanceVisibility* visibility = nullptr;
     };
 
@@ -543,9 +539,9 @@ private:
     // holds references into everything below it.
     std::unique_ptr<sched::IoBackend> io_backend_;
     std::optional<sched::Scheduler> scheduler_;
-    // Null under one stream: the device is core 0's and this core reaches
-    // it only through the borrowed stream.
-    std::unique_ptr<wal::FileLogDevice> log_device_;
+    // **No `log_device_`** (AM-S4(d)): the device is core 0's and this core
+    // reaches it only through the borrowed stream. The member was always
+    // null under one stream and only ever written by the per-core arm.
     std::unique_ptr<wal::WalManager> wal_;
 
     // AU-S3. Empty on a single-core instance and in every fixture that

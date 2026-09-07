@@ -91,53 +91,14 @@ public:
 //
 // A `TxnOutcome::kPrepared` transaction is one this stream promised not to
 // decide: it made its work durable, replied prepared, and from that moment
-// may not abort unilaterally. Its outcome lives in exactly one stream - the
-// coordinator's - so recovery has to *ask*, and the asking is what this
-// interface is.
-//
-// An interface for `UndoPhase`'s reasons, and one more: the ask reaches
-// **another core's log**, which `wal/` cannot open on its own - the layout
-// of a log directory is `server/`'s. So the mechanism is here and the
-// lookup is injected, exactly as the undo phase is.
-//
-// **What it must not do**, stated because the temptation is the obvious
-// implementation: compare LSNs across streams. Two streams' LSNs are
-// incomparable (`workplan-crosscore.md` guideline 3), and no comparison is
-// needed - the verdict is a *lookup of one transaction id in one stream*,
-// and the participant's own records say what to redo. Two independent
-// reads, never an ordering.
-class PreparedResolver {
-public:
-    virtual ~PreparedResolver() = default;
-
-    // The verdict for **every** prepared transaction analysis found, keyed
-    // by the same participant-side transaction id. A verdict may only be:
-    //
-    //   - `kWinner`  - the coordinator's stream holds the COMMIT that
-    //                  decided it. This half stands; redo has already
-    //                  replayed it and undo must not touch it.
-    //   - `kLoser`   - the coordinator decided ABORT, or decided nothing at
-    //                  all before it stopped. Either way nothing committed
-    //                  anywhere, and undo owes this transaction its
-    //                  rollback.
-    //
-    // **Not `kAborted`**: that outcome means "already compensated by
-    // records in this stream", and a prepared participant wrote no
-    // compensations - it was waiting.
-    //
-    // **All of them at once, rather than one call each**, because the
-    // implementation reads a whole stream per coordinator and several of
-    // this core's transactions can share one: a per-transaction interface
-    // would make the cost of a resolution the number of transactions rather
-    // than the number of coordinators.
-    //
-    // A failure is a **refusal to mount**, not a default. Guessing either
-    // way is the one thing this protocol forbids: guessing commit publishes
-    // a transaction that may have aborted, guessing abort discards one the
-    // coordinator may have committed and told a client about.
-    virtual StatusOr<std::map<std::uint64_t, TxnOutcome>> ResolveAll(
-        const std::map<std::uint64_t, PreparedTxn>& prepared) = 0;
-};
+// may not abort unilaterally. The verdict is the coordinator's - and with
+// one stream for the instance (AM-S4(d)) the coordinator's decision is a
+// record of the log this recovery is already scanning, so `RecoverCore`
+// resolves it in-stream: a lookup of the coordinator's transaction id in
+// the table analysis built, with absence of a decision meaning abort
+// (`recovery.cpp` carries why that is sound and not a default). The
+// injected `PreparedResolver` that read a second core's log went with the
+// topology that made a second log exist.
 
 // How long each phase took (`docs/spec/wal.md` §13's "recovery phase timings",
 // RC09). Zero throughout when no clock was supplied, which `timed` says
@@ -193,11 +154,10 @@ struct RecoveryReport {
 //     page reaches the end of the scan unhealed (`redo.hpp`);
 //   - the store cannot raise its allocation floor (`high_water.hpp`);
 //   - **analysis found losers and `undo` is null** - see above;
-//   - **analysis found prepared transactions and `resolver` is null**, or a
-//     resolution fails (R6-4): a prepared transaction handed to undo would
-//     be rolled back on a promise this core made not to decide, and one
-//     handed to nobody would be published uncommitted. Both are the same
-//     refusal as the loser case, one protocol up;
+//   - a prepared transaction has no analysis state to resolve into (R6-4),
+//     which is a table that contradicts itself rather than an undecided
+//     transaction: the resolution itself cannot fail for want of an
+//     answer, because absence of a decision *is* the answer;
 //   - the undo phase itself fails.
 //
 // Every one of those is a refusal rather than a partial success, which is
@@ -210,7 +170,6 @@ struct RecoveryReport {
 StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                                      storage::PageStore& store, const AnalysisStart& start,
                                      UndoPhase* undo = nullptr,
-                                     const sched::Clock* clock = nullptr,
-                                     PreparedResolver* resolver = nullptr);
+                                     const sched::Clock* clock = nullptr);
 
 }  // namespace kds::wal

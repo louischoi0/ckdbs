@@ -39,7 +39,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
 }
 
 TEST(PageHeaderTest, TheStreamStampRoundTripsAndDefaultsToNeverStamped) {
-    // PW1c-3 (page-lsn-cross-stream.md §9 rule 4): the flags word
+    // PW1c-3 (docs/spec/page.md §2b): the flags word
     // carries core_id + 1 of the stream that last wrote the page, and a
     // zeroed page reads 0 - never stamped, the no-backfill default every
     // pre-PW1c-3 page relies on.

@@ -134,14 +134,20 @@ void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn);
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page);
 std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 
-// ---- The PL-C stream stamp (page-lsn-cross-stream.md §9 rule 4) ----
+// ---- The stream stamp (`docs/spec/page.md` §2b) ---------------------
 //
-// The 16-bit `flags` word at offset 2 carries `core_id + 1` of the WAL
-// stream that last wrote the page; **0 means never stamped**, which is
-// what every pre-PW1c-3 page reads - the owner_oid no-backfill precedent.
-// It exists because `page_lsn` is a byte offset into one stream's file:
-// after a PL-B handoff the number is meaningless to the other stream, and
-// the stamp is what lets redo tell "mine" from "incomparable" (rule 5).
+// The 16-bit `flags` word at offset 2 carries `core_id + 1` of the core
+// that last wrote the page; **0 means never stamped**, which is what
+// every pre-PW1c-3 page reads - the owner_oid no-backfill precedent.
+//
+// **It decides nothing.** It existed because `page_lsn` was a byte offset
+// into *one stream's* file, so after a handoff the number was meaningless
+// to the other stream and the stamp was what let redo tell "mine" from
+// "incomparable". There is one stream (AR0 M0) and one owner of the fact
+// (AW-S1b took the ownership reading), so what is left is a diagnostic:
+// `SHOW PAGE` prints it, every logged mutation writes it, and redo's
+// full-page-image restore keeps it truthful. No branch reads it.
+//
 // Explicit load/store like every persisted field - invariant 6, no
 // bitfields. Like SetPageLsn, mutation does not restamp the checksum.
 std::uint16_t GetPageStreamStamp(std::span<const std::byte, kPageSize> page);

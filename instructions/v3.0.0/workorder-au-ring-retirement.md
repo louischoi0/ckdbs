@@ -60,10 +60,25 @@ needs to know *what* woke it reads its structure. This is AO-R4's existing
 shape with the message removed, and it is what `rules.md` §3's wake-flag row
 will state.
 
-**AU-R3 — `SimWaker`.** A deterministic waker for the rig: `Kick(core)`
-records `(tick, dst)` and schedules the destination's idle block to end at
-`tick + delay(seed)`. Replaces `SimRingTransport` for new consumers; the two
-transport tests keep theirs until AT.
+**AU-R3 — `SimWakerTable`. [rewritten 2026-09-07 on the operator's mark of
+AV-R1; this ruling named `SimWaker` and could not be built as written]** A
+deterministic waker *table* for the rig: `Kick(core)` records `(tick, dst)`
+and forwards to a wrapped real `WakerTable` at the scheduled tick, ending
+the destination's idle block at `tick + delay(seed)`. Replaces
+`SimRingTransport` for new consumers; the two transport tests keep theirs
+until AT.
+
+**Why it is the table and not the waker.** This ruling used to say a
+`Waker`-shaped seam, on the reading that `WakerTable` holds `const Waker*`
+so a sim one substitutes where the table is built. `Waker::Wake()` is not
+virtual (`waker.hpp:66`) and `Kick` calls it statically, so a derived waker
+through that pointer runs the base and writes to an eventfd it does not own
+- the finding `workorder-av-two-core-rig.md` AV-R1 filed, with four ways
+out. The operator took the fourth: an interface at the attach point that
+`WakerTable` implements, `SimWakerTable` implementing it by **wrapping** a
+real one. `Waker` is untouched, the wake path keeps its static call, the
+`sleeping` fence and skip counter stay in one implementation, and the cost
+moves to one virtual call per cross-core `Kick`.
 
 **AU-R4 — The enum is frozen at its true size.** `ring_message.hpp` gains a
 `static_assert` on the kind count — **at 34 since AU-S3 struck `kShutdown`**,
@@ -83,7 +98,7 @@ which is inside AT, not here.
 | AU-S0 | This order; AR0-6 filed; AO-R4's text and the AO-S5 row amended; the rig order re-lettered per D26 | the files at the commit | the hour | — |
 | AU-S1 | `Waker::Kick`, the `sleeping` protocol moved in; `SimWaker` | `cores = 1` byte-identical (no eventfd write on a self-kick, asserted); a kick to a sleeping peer ends its idle block within one `RunOnce` (real threads, the existing two-core `core_runtime_test` fixture); a kick to a busy peer writes nothing (counter); `SimWaker` reproduces a seed's `(tick, dst)` log across three runs | S–M | — |
 | AU-S1b | **The two registries collapsed into one.** AU-S1 built `WakerTable` *beside* `RingTransport::WakeTarget` rather than in place of it, so every reactor registered the same two pointers twice and a send kicked through one copy while a stop kicked through the other. `WakeTarget`, `SetWakeTarget`, `RealRingTransport::wake_`, its `wakes_sent_` and `RingTransport::wakes_sent()` are deleted; `RealRingTransport` holds a `const WakerTable*` and its send calls `Kick`; `TrySend`'s explicit seq_cst fence moves into `Kick`, where every caller gets it; `Scheduler::wakes_sent()` (`SHOW META`'s `sched_wakes_sent`) reads the table. AU-S5 then removes a *user* of the wake rather than unpicking a registry | the instance's transport holds the instance's table (mutation: deleting the one wiring line leaves the whole suite green but for this cell — measured); at one core neither object is built; the four existing wake cells re-pointed at the table's counters | S | AU-S1 |
-| AU-S1c | **`SimWaker`, the deliverable AU-S1 dropped** (AU-R3): `Kick(core)` records `(tick, dst)` and schedules the destination's idle block to end at `tick + delay(seed)`. It is a `Waker`-shaped seam for a rig rather than a second wake path — `WakerTable` holds `const Waker*`, so the sim one substitutes where the table is built, and nothing in the engine learns a new type | a seed's `(tick, dst)` log is byte-identical across three runs; a kick to a busy destination is recorded and delivers nothing; the maximum delay still delivers | S | AU-S1 |
+| AU-S1c | **`SimWakerTable`, the deliverable AU-S1 dropped** (AU-R3, rewritten on AV-R1's mark): `Kick(core)` records `(tick, dst)` and forwards at `tick + delay(seed)`, ending the destination's idle block. It substitutes the **table**, not the waker - an interface at the attach point that `WakerTable` implements and `SimWakerTable` implements by wrapping one, so `Waker` gains no vtable and the fence protocol has one implementation | a seed's `(tick, dst)` log is byte-identical across three runs; a kick to a busy destination is recorded and delivers nothing; the maximum delay still delivers | S | AU-S1 |
 | AU-S2 | **AO-S5 re-based**: cross-core lock wake and victim notification as write-then-kick; no `kLockWake`/`kLockAbort` kind is ever added | AO-S5's cells unchanged in statement — the waiter on core 1 proceeds at the kick rather than at idle-block expiry (`sched_wakes_received` moves); the victim's refusal **reaches the client**, which is `c168acb`'s lesson (a report reaching nobody is the defect class) | M | the rig, on `SimWaker` |
 | AU-S3 | `kShutdown` → atomic stop flag + `Kick`; the kind struck, count **34** | `STOP` at `cores = 4` stops every reactor within one idle block; the expeditor's join ordering re-read against the flag | S | D23 |
 | AU-S4 | The three page-rights kinds struck with their grants — `kRelationFaultGrant` at AM-S2, `kRelationWriteGrant` and `kRelationGrantRequest` at AO-S5. Count **31** | no `GrantFaultPages`/`GrantWritePages` caller remains | S | AM-S2, AO-S5 |

@@ -72,14 +72,15 @@ enum class TxnOutcome : std::uint8_t {
     // have been committed by its coordinator, and rolling it back would
     // make two streams disagree durably, which is the one failure
     // two-phase commit exists to prevent - and it is not a winner either.
-    // The verdict lives in exactly one stream, the coordinator's, and
-    // `PreparedResolver` (wal/recovery.hpp) is what reads it. Nothing
-    // downstream may treat this outcome as either of the other three; a
-    // mount that cannot resolve it refuses instead.
+    // The verdict is the coordinator's, and with one stream for the
+    // instance (AM-S4(d)) it is a record of *this* log: `RecoverCore`
+    // resolves the outcome by looking the coordinator's transaction id up
+    // in the table this scan built, and absence of a decision is abort.
+    // Nothing downstream may treat this outcome as either of the other
+    // three before that resolution has run.
     kPrepared = 3,
 };
 
-const char* TxnOutcomeName(TxnOutcome outcome) noexcept;
 
 // What analysis knows about one transaction: its verdict, and - for a loser
 // - where its undo chain starts.
@@ -110,16 +111,17 @@ struct TxnState {
 };
 
 // One prepared-but-undecided transaction, and the handle its verdict is
-// reachable by (R6-4). The participant's own id is the map key; every other
-// field is the **coordinator's**, straight out of the TXN_PREPARE payload,
-// because the decision lives in that core's stream and nowhere else (D4).
+// reachable by (R6-4). The participant's own id is the map key.
+// `coordinator_txn_id` is the one field the resolution reads: with one
+// stream for the instance (AM-S4(d)) it names a transaction of *this* log,
+// and `RecoverCore` looks it up in `transactions` (D4).
 //
-// `prepare_lsn` is this stream's, kept for the mount line and for a
-// refusal's message - never to be compared against anything in the
-// coordinator's stream. Two streams' LSNs are incomparable
-// (`workplan-crosscore.md` guideline 3), and the resolution deliberately
-// needs no such comparison: it is a **lookup of one id in one stream**, not
-// an ordering of two.
+// `coordinator_core`, `coordinator_session_id` and `prepare_lsn` are the
+// prepare's remaining facts, carried but unread - `coordinator_core`
+// routed the resolver to a second core's log, and nothing has routed on
+// any of them since that log stopped existing. No LSN here is compared
+// against anything: the resolution is a **lookup of one id in one table**,
+// never an ordering.
 struct PreparedTxn {
     std::uint32_t coordinator_core = 0;
     std::uint64_t coordinator_session_id = 0;
@@ -138,22 +140,12 @@ struct AnalysisResult {
     // seeded from CHECKPOINT_BEGIN's table. Redo replays a page from its
     // recLSN; the page_lsn gate does the rest (wal.md §9).
     //
-    // A PAGE_HANDOFF removes its page **under per-core streams only**
-    // (PW1c-2, `page-lsn-cross-stream.md` §9 rule 3): from that LSN the
-    // page belongs to another stream and this stream's redo never touches
-    // it - sound because the handoff's flush put everything logged before
-    // it in the durable image. **Under one stream it removes nothing**
-    // (AR0 M0): that flush covers one core's page store, while with one log
-    // the erase would speak for every core's records - so it would drop a
-    // peer's unflushed entry and redo would skip its record. `analysis.cpp`
-    // carries the case.
-    //
-    // A page that returns is durably restamped at re-acquisition (§9 rule
-    // 6), so
-    // it re-enters here through its post-return records with a page_lsn
-    // already in this stream's space - no per-page departure memory is
-    // needed, and none is kept (the f19ead1 review's C2: a durable fact
-    // must not be keyed to one scan window).
+    // **A PAGE_HANDOFF neither seeds an entry nor removes one**: only
+    // `max_page_id` takes its page. An entry therefore stands from the
+    // first record that dirtied the page to the end of the scan, and no
+    // per-page departure is remembered because none happens. The removal
+    // per-core streams performed here went with them (AM-S4(d));
+    // `analysis.cpp` carries why it had no licence left.
     //
     // Ordered containers throughout, not hashed ones: sched.md §8 requires
     // deterministic iteration, and a recovery whose page visit order
@@ -204,10 +196,11 @@ struct AnalysisResult {
     std::uint64_t winners = 0;
     std::uint64_t aborted = 0;
     std::uint64_t losers = 0;
-    // Transactions this stream prepared and holds no outcome for. **Nonzero
-    // means the mount cannot finish on this stream alone**: `RecoverCore`
-    // refuses without a resolver, for the reason it refuses losers with no
-    // undo phase.
+    // Transactions this stream prepared and held no outcome for at the
+    // end of the scan. `RecoverCore` resolves every one of them against
+    // this same log (AM-S4(d)): the coordinator's decision is a record of
+    // the instance's one stream, so the resolution is a lookup rather than
+    // a second file to open, and absence of a decision is abort.
     std::uint64_t prepared = 0;
 };
 
@@ -236,23 +229,12 @@ struct AnalysisStart {
     // check, which is the same "no anchor yet" case.
     Lsn anchor_durable_lsn = 0;
 
-    // **Whether this log is the instance's one stream** (AR0 M0, AL-R5/R6).
-    // A bool rather than the superblock's enum for the reason the two LSNs
-    // above are plain: `wal/` sits below `server/`, and the layer that owns
-    // the superblock is the one that reads it.
-    //
-    // What it changes is redo's stamp discipline **and the handoff rule
-    // `AnalysisResult::dirty_pages` describes** - `Analyze` reads this
-    // field too, for that erase. Under per-core streams a page carrying
-    // another core's stamp inside this stream's redo scope is `Corruption`
-    // - the crossing must have been logged - and every applied page is
-    // restamped for this stream. Under
-    // **one** stream both are wrong: every core's records are in this log
-    // by construction, so a peer's stamp is not foreign but simply true,
-    // and restamping it to the recovering core would take the page away
-    // from the core that owns it, which `device_page_store`'s claim-at-fault
-    // reads at the next mount.
-    bool single_stream = false;
+    // No topology field: there is one stream for the instance (AM-S4(d)),
+    // and the superblock refuses a volume written any other way. So a page
+    // carrying another core's stamp inside this scan's scope is that core
+    // owning its page, not a crossing that lost its handoff record - every
+    // core's records are in this log by construction. Redo's foreign-stamp
+    // refusal and its restamp went with the topology they asked about.
 };
 
 // One forward pass. Fails with Corruption when the stream ends before the

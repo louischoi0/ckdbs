@@ -325,9 +325,11 @@ struct SuperBlockFields {
     // direction and bear on this field directly:
     //
     //   - **prepared transactions resolve before anything is reorganised**
-    //     (R6-4's `PreparedResolver`), because reassigning or discarding a
-    //     coordinator's stream destroys the evidence a prepare is resolved
-    //     against; an unresolved prepare refuses the mount;
+    //     (R6-4), because reassigning or discarding a coordinator's records
+    //     destroys the evidence a prepare is resolved against; an
+    //     unresolved prepare refuses the mount. The cross-stream resolver
+    //     that made this a *per-stream* constraint went at AM-S4(d); the
+    //     evidence is now in the one log, which does not weaken the rule;
     //   - **this field is written last**, so a crash mid-reorganisation
     //     reads as the old count and the work reruns - which makes
     //     idempotence a requirement on the reassignment, not a nicety;
@@ -528,12 +530,16 @@ public:
     // stream, which is safe.
     WalAnchorFields wal_anchor(std::uint32_t core_id) const noexcept;
 
-    // Every core's anchor, indexed by core id, for the one caller that
-    // needs somebody else's: resolving a transaction a peer prepared means
-    // scanning its coordinator's stream, and that core's anchor is what
-    // says how far the scan must reach before an absent decision may be
-    // read as one (R6-4, `prepared_resolver.hpp`). Sized by `core_count`,
-    // so the table also bounds which cores this database has.
+    // Every slot, indexed by core id, for the one caller left:
+    // `SuperBlockCheckpointAnchor::MountAnchorOf` seeds the fold from the
+    // lowest *populated* slot on the page. Only slot 0 is ever written now
+    // (`SetWalAnchor` refuses the rest), so the others read zero, which is
+    // "never checkpointed" and is skipped. Sized by `core_count`, so the
+    // table also bounds which cores this database has.
+    //
+    // The caller this doc block used to name - the cross-stream prepared
+    // resolver, which needed a *coordinator's* anchor to bound a scan of
+    // that core's own stream - went at AM-S4(d) with the second stream.
     std::vector<WalAnchorFields> wal_anchors() const;
 
     // Records a completed checkpoint's anchor. In-memory only - it is
@@ -552,9 +558,12 @@ public:
     // bypassing that fold rather than a limitation.
     Status SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& anchor) noexcept;
 
-    // How many WAL streams this database's log is: `kPerCoreStreams` or
-    // `kSingleStream`. A durable fact recorded at bootstrap, never a
-    // setting a mount may change.
+    // **There is no `log_topology()` and no `single_stream()`** (AM-S4(d)).
+    // Both could answer only one way once `Decode` began refusing every
+    // topology but `kSingleStream`, and a predicate that can only say true
+    // is the same defect as a printed field that can only say one thing -
+    // the next reader takes it for a question the engine still asks. The
+    // word is still encoded and still validated; nothing branches on it.
     //
     // **A peer's copy is the volume's whole decoded image**, handed over on
     // `CoreRuntime::Config` and copied in `Open`'s first statement. It used
@@ -566,8 +575,6 @@ public:
     // times before the AL-S9 review found the next three already live in
     // `SHOW META`. `Open` now refuses a config with no image, which is why
     // there is no longer a list of fields a peer may ask about.
-    std::uint32_t log_topology() const noexcept { return fields_.log_topology; }
-    bool single_stream() const noexcept { return fields_.log_topology == kSingleStream; }
 
     // Stamps last_mount_time to `now_unix_seconds` (call once per boot,
     // after Decode()/CreateFresh() succeeds).

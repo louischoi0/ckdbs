@@ -39,11 +39,12 @@
 //     dumps core with the fix reverted; the other three cells pass, because
 //     the resume short-circuits on an *empty* assertion list, which is
 //     exactly why nothing caught it.
-//   - **`cores = 1` arming the stream latch**: `single_stream()` is true of
-//     every database this build creates, so arming on it alone put a mutex
-//     on every logged page mutation for a section no second thread can
-//     reach. `AtOneCoreTheStreamsLatchIsNeverArmed` fails with the fix
-//     reverted, naming what it costs.
+//   - **`cores = 1` arming the stream latch**: the volume's topology is
+//     true of every database this build creates, so arming on it alone put
+//     a mutex on every logged page mutation for a section no second thread
+//     can reach. The core count is the whole predicate since AM-S4(d).
+//     `AtOneCoreTheStreamsLatchIsNeverArmed` fails with the fix reverted,
+//     naming what it costs.
 //
 // **The third is not reproduced here**: the assertion scan's floor, which
 // stays green in every cell with its fix reverted. A cleanly stopped
@@ -396,12 +397,13 @@ TEST_F(ExpeditorTest, AtOneCoreThereIsNoWakeRegistryAndNoTransportToAskIt) {
 
 TEST_F(ExpeditorTest, AtOneCoreTheStreamsLatchIsNeverArmed) {
     // **AR0's G2, and it is a property of the code rather than of a build
-    // flag** (`base/latch.hpp`). `single_stream()` is true of every database
-    // this build creates, the single-core default included, so arming on
-    // that alone put a mutex on every logged page mutation for a section no
-    // second thread can reach. Caught by review at AL-7c and invisible to
-    // every test in the tree, because the decision is `Expeditor`'s and
-    // nothing constructed one.
+    // flag** (`base/latch.hpp`). The volume's topology is the same on every
+    // database this build creates, the single-core default included, so
+    // arming on that alone put a mutex on every logged page mutation for a
+    // section no second thread can reach. Caught by review at AL-7c and
+    // invisible to every test in the tree, because the decision is
+    // `Expeditor`'s and nothing constructed one. Since AM-S4(d) the count
+    // is the only test left, which is what this cell now pins.
     Expeditor::Config config = ConfigAt(/*cores=*/1);
     auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
     ASSERT_TRUE(opened.ok()) << opened.status().message();

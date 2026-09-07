@@ -158,20 +158,29 @@ enum class RecordType : std::uint8_t {
     // Appending them later is exactly what this enum's append-only rule is
     // for.
     //
-    // The PL handoff (docs/spec/page-lsn-cross-stream.md §9 rule 1,
-    // workplan-peer-writer.md PW1c-1): *this page left this stream at this
-    // LSN*, appended by the outgoing owner after the page is flushed
-    // durable and before the incoming owner is granted write rights. The
-    // envelope's page_id names the page; the payload names the incoming
-    // core; the handoff LSN is the record's own. It moves a **fact**,
-    // never an ordering - no LSN is ever compared across streams.
+    // The PL handoff (`docs/spec/page.md` §2b, workplan-peer-writer.md
+    // PW1c-1): *this page left this stream at this LSN*, appended by the
+    // outgoing owner after the page is flushed durable and before the
+    // incoming owner is granted write rights. The envelope's page_id names
+    // the page; the payload names the incoming core; the handoff LSN is
+    // the record's own.
     //
-    // Redo applies nothing for it and must not even load the page (the
-    // page belongs to another stream from this LSN on); analysis is its
-    // real consumer. PW1c-2 (built): analysis *removes* the page from
-    // this stream's dirty page table at the handoff, and redo's
-    // not-dirty filter skips the page's earlier records without faulting
-    // it. Nothing emits it until PW1c-4 wires the DDL-publish grant.
+    // **Nothing reads it any more.** Its consumer was the receiver's write
+    // grant, struck at AW-S1b; analysis neither erases nor seeds on it and
+    // redo skips it (AM-S4(d)). `range_alloc.cpp` is the one site still
+    // appending one, and the flush it pays for is a cost with no reader -
+    // filed in `docs/inflight/known-gaps.md` rather than retired here,
+    // because removing a record type is a format decision of its own.
+    //
+    // Redo applies nothing for it and must not even load the page - it
+    // describes no mutation, so faulting the page to discover that is
+    // work for nothing. Analysis was its real consumer, and no longer
+    // is: PW1c-2 had analysis *remove* the page from the dirty table at
+    // the handoff so redo's not-dirty filter would skip its earlier
+    // records, and what licensed that removal was a flush covering one
+    // core's frames. With one log the removal would speak for every
+    // core's records, so it neither erases nor seeds and only
+    // `max_page_id` still takes the page (AM-S4(d), `wal/analysis.cpp`).
     kPageHandoff = 25,
     // One anchor-page slot update (storage/anchor_page.hpp; PW2,
     // workplan-peer-writer.md §7a): the clustered root (index_oid 0) or

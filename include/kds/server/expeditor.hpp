@@ -772,11 +772,12 @@ private:
     // therefore destroyed last, after `cores_` and after `txn_manager_` -
     // the same rule `wal_` follows for the stream peers append through.
     //
-    // Present only under `kSingleStream`: it records commit order as a
-    // commit record's LSN, and under per-core streams LSNs are stream-local
-    // and never compared across streams (`wal.md` §3), so there would be no
-    // order to record. A pre-M0 volume keeps the per-core `ReadView` it has
-    // (`ratification-an-commit-order.md` AN-D4's fourth constraint).
+    // **Always engaged since AM-S4(d)**, where the arm that left it empty
+    // went with the topology that needed it: it records commit order as a
+    // commit record's LSN, and under per-core streams LSNs were
+    // stream-local and never compared across streams (`wal.md` §3), so
+    // there was no order to record. `SuperBlock::Decode` refuses such a
+    // volume now, so every mount has one order and records it.
     std::optional<txn::InstanceVisibility> visibility_;
 
     std::optional<txn::TrxIdSequence> trx_ids_;

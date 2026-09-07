@@ -255,8 +255,9 @@ StatusOr<PageId> OpenRangeOnSystemCore(catalog::Catalog& catalog,
     // and redo skips it (`wal/analysis.cpp`, `wal/redo.cpp`), so what this
     // pair costs today is one flush and one fsync per range opening for a
     // record nothing reads. Retiring it belongs with the rest of the
-    // stamp's ownership reading (`page-lsn-cross-stream.md`); until then
-    // the ordering is kept whole rather than half-kept.
+    // stamp's ownership reading (`docs/spec/page.md` §2b); until then the
+    // ordering is kept whole rather than half-kept. Filed in
+    // `docs/inflight/known-gaps.md` under WAL.
     if (Status s = store.FlushPages(head); !s.ok()) {
         return s.WithContext("flushing range entry page " + std::to_string(entry_page.value()) +
                              " before its handoff");

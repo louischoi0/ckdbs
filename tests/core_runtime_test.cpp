@@ -149,7 +149,6 @@ protected:
     CoreRuntime::Config ConfigFor(std::uint32_t core_id) {
         CoreRuntime::Config c;
         c.core_id = core_id;
-        c.wal_dir = dir_.string();
         // Required, and deliberately so: a core cannot be opened without
         // the volume's image (`core_runtime.hpp`). Every cell below then
         // sees the topology, the ceiling and the times the volume really

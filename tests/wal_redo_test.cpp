@@ -250,35 +250,26 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
     EXPECT_EQ(r.value().no_page, 2u);
 }
 
-TEST_F(RedoTest, AHandedOffPagesRecordsAreSkippedAndThePageNeverFaulted) {
-    // PW1c-2, page-lsn-cross-stream.md section 9 rule 3's redo half.
-    // The stream holds PAGE_INIT + two inserts for kPage and then a
-    // PAGE_HANDOFF: the page left this stream, so redo must apply nothing
-    // for it and must not even create or load it. The store deliberately
-    // does not hold the page, which makes any touch loud - an unfiltered
-    // redo would CreateAt the page from its PAGE_INIT and apply all three
-    // records.
+TEST_F(RedoTest, ARecordBelowItsPagesRecLsnIsSkippedAndThePageNeverFaulted) {
+    // The not-dirty filter, at the arm that survives one stream
+    // (AM-S4(d)): a record whose LSN is below its page's recLSN describes
+    // state already in the durable image, and must be skipped *before the
+    // load* - faulting the page to compare page_lsn would be work on a page
+    // recovery has no business touching. The shape it stands for is a page
+    // dirtied, written back, and re-dirtied: the checkpoint seeds its
+    // recLSN above the flushed records, while the redo start - the minimum
+    // over every page - lies below them. Set here rather than scripted,
+    // because a second page's low recLSN is the only thing a checkpoint
+    // record would add.
+    //
+    // The store deliberately does not hold the page, which makes any touch
+    // loud: an unfiltered redo would CreateAt the page from its PAGE_INIT
+    // and apply all three records.
     WriteHeapStream(2);
-    {
-        // An ordinary stream, plus a handoff: Open resumes at the durable
-        // tail, so this appends after the helper's records.
-        auto s = WalStream::Open(device_.get(), 0);
-        ASSERT_TRUE(s.ok());
-        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
-        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
-        ASSERT_TRUE(
-            s.value()->Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
-        ASSERT_TRUE(s.value()->Sync().ok());
-    }
 
     AnalysisResult analysis = Analyzed();
-    ASSERT_EQ(analysis.dirty_pages.count(kPage), 0u)
-        << "the handoff must have removed the page from the dirty page table";
-    // The table is empty, so RedoStartFrom answered end_lsn and redo would
-    // correctly visit nothing. What is under test is the per-record filter
-    // - that a visited record for a departed page is skipped unfaulted -
-    // so scan from the head, the TransactionAndCheckpointRecords test's
-    // arrangement.
+    ASSERT_EQ(analysis.dirty_pages.count(kPage), 1u);
+    analysis.dirty_pages[kPage] = analysis.end_lsn;
     analysis.redo_start_lsn = 0;
 
     auto r = Redo((*device_), 0, store_, analysis);
@@ -286,21 +277,7 @@ TEST_F(RedoTest, AHandedOffPagesRecordsAreSkippedAndThePageNeverFaulted) {
     EXPECT_EQ(r.value().applied, 0u);
     EXPECT_EQ(r.value().skipped_not_dirty, 3u) << "init + two inserts";
     EXPECT_FALSE(store_.Get(kPage).ok())
-        << "redo must not create or fault a page that left the stream";
-}
-
-// ---- The PL-C stamp (PW1c-3, page-lsn-cross-stream.md §9 4-5) -------
-
-TEST_F(RedoTest, AnAppliedRecordStampsTheOwningStream) {
-    // Rule 4: the stream stamp rides the page_lsn stamp, so a replayed
-    // page names the stream whose byte offsets its page_lsn is in.
-    WriteHeapStream(1);
-    auto r = Redo((*device_), 0, store_, Analyzed());
-    ASSERT_TRUE(r.ok()) << r.status().message();
-    ASSERT_GT(r.value().applied, 0u);
-    auto page = store_.Get(kPage);
-    ASSERT_TRUE(page.ok());
-    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u);  // core 0 + 1
+        << "redo must not create or fault a page whose records the image already holds";
 }
 
 TEST_F(RedoTest, AnAnchorReplaysItsInitAndItsSlotUpdates) {
@@ -359,16 +336,15 @@ TEST_F(RedoTest, AnAnchorUpdateAgainstANonAnchorPageIsCorruption) {
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
 
-// **The other half of the stamp problem.** Redo may have to *create* a page
-// whose allocation the crash lost. Created for the recovering core - or
-// left unstamped, which is never a claim - the page cannot be reclaimed by
-// the core that owns it at the next mount, by a different route to the same
-// dead end the restamp reached. So the record names its core, and the page
-// is created for that core.
-TEST_F(RedoTest, UnderOneStreamACreatedPageIsStampedForTheCoreThatLoggedIt) {
+// **The stamp a formatting record writes.** Redo may have to *create* a
+// page whose allocation the crash lost. Created for the recovering core -
+// or left unstamped, which is never a claim - the page could not be
+// reclaimed by the core that owns it at the next mount. So the record names
+// its core, and the page is created for that core.
+TEST_F(RedoTest, ACreatedPageIsStampedForTheCoreThatLoggedIt) {
     WriteHeapStreamLoggedBy(/*core=*/2);
 
-    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
+    auto r = Redo((*device_), 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
     ASSERT_GT(r.value().applied, 0u);
 
@@ -383,7 +359,7 @@ TEST_F(RedoTest, UnderOneStreamACreatedPageIsStampedForTheCoreThatLoggedIt) {
 TEST_F(RedoTest, APageLoggedByCoreZeroIsStampedForCoreZero) {
     WriteHeapStreamLoggedBy(/*core=*/0);
 
-    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
+    auto r = Redo((*device_), 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
 
     auto page = store_.Get(kPage);
@@ -391,43 +367,19 @@ TEST_F(RedoTest, APageLoggedByCoreZeroIsStampedForCoreZero) {
     EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), storage::StreamStampFor(0));
 }
 
-// ---- Under one stream (AR0 M0, AL-R5/AL-R6) ----------------------------
-
-// The rule asks "did this page cross into my stream without a logged
-// handoff". With one stream there is no other stream to have crossed
-// from, so a page stamped by core 2 met in core 0's mount pass is core 2
-// owning its page, not a lost handoff. Left in force, this refusal would
-// fail the first multi-core mount after the cutover.
-TEST_F(RedoTest, UnderOneStreamAnotherCoresStampIsNotForeign) {
-    WriteHeapStream(1);
-    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true).ok());
-    {
-        auto page = store_.Get(kPage);
-        ASSERT_TRUE(page.ok());
-        storage::SetPageStreamStamp(page.value().bytes(), 3);  // core 2's
-    }
-
-    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
-    EXPECT_TRUE(r.ok()) << r.status().message();
-
-    // And per-core streams still refuse it, which is the same bytes read
-    // under the other topology.
-    auto per_core = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/false);
-    ASSERT_FALSE(per_core.ok());
-    EXPECT_EQ(per_core.status().code(), StatusCode::kCorruption);
-}
+// ---- The stamp redo must not touch (AM-S4(d)) ---------------------------
 
 // Restamping every page it redoes would hand core 2's pages to core 0,
 // which `device_page_store`'s claim-at-fault reads at the next mount as
-// core 0 owning them. The stamp stays a claim; it stops being a statement
+// core 0 owning them. The stamp stays a claim; it stopped being a statement
 // about which log the records are in, because there is one.
-TEST_F(RedoTest, UnderOneStreamRedoLeavesTheOwningCoresStampAlone) {
+TEST_F(RedoTest, RedoLeavesTheOwningCoresStampAlone) {
     // The page must already exist and be stamped when a record is applied
     // to it, so: replay once, hand the page to core 2, append a further
     // record, and replay again. Stamping before the first pass would prove
     // nothing - the replayed PAGE_INIT reformats the page and clears it.
     WriteHeapStream(1);
-    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true).ok());
+    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
     {
         auto page = store_.Get(kPage);
         ASSERT_TRUE(page.ok());
@@ -439,7 +391,7 @@ TEST_F(RedoTest, UnderOneStreamRedoLeavesTheOwningCoresStampAlone) {
     ASSERT_NE(AppendHeapInsert(*s2.value(), /*slot=*/1, 0xB2), 0u);
     ASSERT_TRUE(s2.value()->Sync().ok());
 
-    auto r = Redo((*device_), 0, store_, Analyzed(), /*single_stream=*/true);
+    auto r = Redo((*device_), 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
     ASSERT_GT(r.value().applied, 0u) << "nothing was applied, so nothing could restamp";
 
@@ -452,72 +404,19 @@ TEST_F(RedoTest, UnderOneStreamRedoLeavesTheOwningCoresStampAlone) {
     EXPECT_GT(storage::GetPageLsn(page.value().bytes()), 0u);
 }
 
-TEST_F(RedoTest, AForeignStampReachableByRedoRefusesTheMount) {
-    // Rule 5, at full strength since rule 6 (the acquisition restamp): a
-    // foreign stamp inside this stream's redo scope has no benign reading
-    // - every legitimate crossing restamps durably before this stream's
-    // first record for the page exists - so redo refuses rather than
-    // compare incomparable page_lsns, the spec's §3 silent corruption
-    // made loud. The second pass revisits records RV5 would have skipped;
-    // the stamp check must fire first, because "a mismatch redo can
-    // reach" includes exactly those.
+TEST_F(RedoTest, APageWithAHandoffInItsWindowReplaysTheRecordsAfterIt) {
+    // A→B→A with one stream (AM-S4(d)): the handoff erases nothing, so the
+    // page keeps the recLSN its pre-handoff record gave it, and the record
+    // after the handoff passes the ordinary RV5 gate against the page_lsn
+    // the first pass wrote - no bypass, no special case. The handoff itself
+    // names a page but touches none, so redo never loads it.
     WriteHeapStream(1);
     ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
+    Lsn first_pass_lsn = 0;
     {
         auto page = store_.Get(kPage);
         ASSERT_TRUE(page.ok());
-        storage::SetPageStreamStamp(page.value().bytes(), 3);  // stream 2's
-    }
-    auto r = Redo((*device_), 0, store_, Analyzed());
-    ASSERT_FALSE(r.ok());
-    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
-}
-
-TEST_F(RedoTest, AForeignStampRefusesEvenWithAHandoffInTheWindow) {
-    // The shape rule 5a (retracted same-day at the f19ead1 review's C2)
-    // would have admitted: foreign stamp, a PAGE_HANDOFF in the scanned
-    // range, post-return records above it. Under rule 6 the legitimate
-    // return restamps at re-acquisition, so this durable state can only
-    // mean the restamp was lost - refused, never applied over another
-    // stream's data.
-    WriteHeapStream(1);
-    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
-    {
-        auto page = store_.Get(kPage);
-        ASSERT_TRUE(page.ok());
-        storage::SetPageStreamStamp(page.value().bytes(), 2);  // stream 1's
-        storage::SetPageLsn(page.value().bytes(), 0x7FFFFFFFFFFFULL);
-    }
-    {
-        auto s = WalStream::Open(device_.get(), 0);
-        ASSERT_TRUE(s.ok());
-        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
-        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
-        ASSERT_TRUE(
-            s.value()->Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
-        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0xC5), 0u);
-        ASSERT_TRUE(s.value()->Sync().ok());
-    }
-    auto r = Redo((*device_), 0, store_, Analyzed());
-    ASSERT_FALSE(r.ok());
-    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
-}
-
-TEST_F(RedoTest, ARestampedReturnedPageReplaysItsPostReturnRecordsNormally) {
-    // The legitimate A→B→A, as rule 6 leaves it at mount: the
-    // re-acquisition restamped the page to this stream and re-based
-    // page_lsn into this stream's space (here: below the post-return
-    // record, as a restamp taken at the stream's then-current end always
-    // is), so the post-return record passes the ordinary RV5 gate - no
-    // bypass, no special case.
-    WriteHeapStream(1);
-    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
-    Lsn restamp_base = 0;
-    {
-        auto page = store_.Get(kPage);
-        ASSERT_TRUE(page.ok());
-        restamp_base = storage::GetPageLsn(page.value().bytes());
-        storage::SetPageStreamStamp(page.value().bytes(), 1);  // own, per rule 6
+        first_pass_lsn = storage::GetPageLsn(page.value().bytes());
     }
     Lsn returned = 0;
     {
@@ -531,18 +430,20 @@ TEST_F(RedoTest, ARestampedReturnedPageReplaysItsPostReturnRecordsNormally) {
         ASSERT_NE(returned, 0u);
         ASSERT_TRUE(s.value()->Sync().ok());
     }
-    ASSERT_GT(returned, restamp_base);
+    ASSERT_GT(returned, first_pass_lsn);
 
     const AnalysisResult analysis = Analyzed();
-    ASSERT_EQ(analysis.dirty_pages.at(kPage), returned);
+    ASSERT_EQ(analysis.dirty_pages.count(kPage), 1u);
+    EXPECT_LT(analysis.dirty_pages.at(kPage), returned)
+        << "the handoff neither erased the entry nor re-seeded it at its own LSN";
 
     auto r = Redo((*device_), 0, store_, analysis);
     ASSERT_TRUE(r.ok()) << r.status().message();
-    EXPECT_EQ(r.value().applied, 1u) << "the post-return record replays";
+    EXPECT_EQ(r.value().applied, 1u) << "only the record after the handoff replays";
+    EXPECT_EQ(r.value().no_page, 1u) << "the handoff must reach redo as touching no page";
 
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u);
     EXPECT_EQ(storage::GetPageLsn(page.value().bytes()), returned);
 }
 

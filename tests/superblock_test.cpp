@@ -129,9 +129,11 @@ TEST(SuperBlockTopologyTest, APerCoreStreamVolumeIsRefusedAtDecode) {
 TEST(SuperBlockTopologyTest, ANonZeroTopologySurvivesBothHalvesOfTheCodec) {
     PageBuf buf = PageWithTopology(kSingleStream);
 
+    // A successful `Decode` *is* the topology assertion now (AM-S4(d)):
+    // there is no accessor, because there is one answer, and the refusal
+    // above is what carries the fact.
     auto decoded = SuperBlock::Decode(AsConstSpan(buf));
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_TRUE(decoded.value().single_stream());
 
     PageBuf again;
     again.fill(std::byte{0xAB});

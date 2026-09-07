@@ -145,35 +145,27 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->scheduler_.emplace(clock, *runtime->io_backend_);
     runtime->scheduler_->SetLogger(log);
 
-    // **One stream, or this core's own** (AR0 M0, AL-S1c). Attached, this
-    // core opens no device at all: it appends through core 0's stream under
+    // **The instance's one stream** (AR0 M0, AL-S1c; AM-S4(d)). This core
+    // opens no log device at all: it appends through core 0's stream under
     // its latch and asks the writer for every sync, which is what takes
     // `fdatasync` off this reactor (AL-2's case for the whole milestone).
-    // Unattached, it opens `wal-<core_id>-<segment_no>.log` in the shared
-    // directory - the naming predates multicore (file_log_device.hpp) and
-    // is why N streams need no per-core directory.
-    if (config.superblock->single_stream()) {
-        if (config.shared_stream == nullptr || config.shared_writer == nullptr) {
-            // A peer with no stream to attach to would silently open one of
-            // its own and write records nobody replays.
-            return Status::InvalidArgument(
-                "core " + std::to_string(config.core_id) +
-                ": this database has one WAL stream, but no stream and writer were handed to "
-                "this core to attach to");
-        }
-        auto wal = wal::WalManager::Attach(config.shared_stream, config.shared_writer, clock,
-                                           config.core_id);
-        if (!wal.ok()) return wal.status();
-        runtime->wal_ = std::move(wal.value());
-    } else {
-        auto log_device = wal::FileLogDevice::Open(config.wal_dir, config.core_id);
-        if (!log_device.ok()) return log_device.status();
-        runtime->log_device_ = std::move(log_device.value());
-
-        auto wal = wal::WalManager::Open(runtime->log_device_.get(), clock, config.core_id);
-        if (!wal.ok()) return wal.status();
-        runtime->wal_ = std::move(wal.value());
+    //
+    // The arm that stood beside this one opened
+    // `wal-<core_id>-<segment_no>.log` for a peer that owned its own
+    // stream. No mountable volume has one, so this core has no `wal_dir`
+    // to open and holds no `log_device_`.
+    if (config.shared_stream == nullptr || config.shared_writer == nullptr) {
+        // A peer with no stream to attach to would silently open one of
+        // its own and write records nobody replays.
+        return Status::InvalidArgument(
+            "core " + std::to_string(config.core_id) +
+            ": this database has one WAL stream, but no stream and writer were handed to "
+            "this core to attach to");
     }
+    auto wal =
+        wal::WalManager::Attach(config.shared_stream, config.shared_writer, clock, config.core_id);
+    if (!wal.ok()) return wal.status();
+    runtime->wal_ = std::move(wal.value());
     runtime->wal_->SetLogger(log);
 
     // **The instance's one pool, or this core's own** (AM-S2 step 3). A
@@ -233,9 +225,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The page latch (AM-S1): armed from the instance's core count, which
     // the superblock pinned at bootstrap and `Expeditor::Open` copied here -
     // after the identity above, so the owner field the word records is this
-    // core's. `core_count > 1` alone: frames have no stream topology, so the
-    // WAL's `single_stream()` conjunct has no counterpart. At one core the
-    // word is never touched (device_page_store.hpp, "The page latch").
+    // core's. `core_count > 1` alone, which is what the WAL's own arming
+    // predicate came down to at AM-S4(d) as well. At one core the word is
+    // never touched (device_page_store.hpp, "The page latch").
     // **The pinner count, not just the arm** (AM-S2). `kPinCeiling` bounds
     // *one operation*'''s pin stack, and `live_pins_` is a proxy for it only
     // while one thread reaches this store. That holds today and stops
@@ -266,32 +258,25 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // undo losers core 0 has already rolled back. The recovery report stays
     // zeroed, which is the truth for a core that recovered nothing, and
     // `SHOW META`'s block reads that way on a peer.
-    if (config.superblock->single_stream()) {
-        // **Timed, though nothing was recovered.** `SHOW META` prints the
-        // whole `_us` block only where a clock was supplied
-        // (`command_dispatcher.cpp`), and this core still measures the
-        // completion checkpoint at `AttachTransport` - so leaving this false
-        // would hide a number that was taken, and print a peer's recovery
-        // block as a subset of core 0's rather than the same block reading
-        // zero.
-        runtime->recovery_.timings.timed = true;
-        // Says why the numbers below it are zero: this core did not scan,
-        // rather than scanning and finding nothing.
-        runtime->recovery_.ran = false;
-        if (log != nullptr && log->enabled(LogLevel::kInfo)) {
-            log->Info("recovery", "core " + std::to_string(config.core_id) +
-                                      ": one stream, so core 0's mount pass covered this core's "
-                                      "records; nothing recovered here");
-        }
-    } else {
-        auto recovered = RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
-                                            *runtime->store_, *runtime->undo_log_, &*runtime->wal_,
-                                            log, &clock, config.wal_dir, config.anchors);
-        if (!recovered.ok()) return recovered.status();
-        // Kept, not discarded: the dispatcher's `SHOW META` prints it and a
-        // test reads it (PW3b) - the one field that says whether the last
-        // stop bounded this mount.
-        runtime->recovery_ = recovered.value();
+    // **Unconditional since AM-S4(d)**: the per-core arm that stood beside
+    // this one called `RecoverCoreAtMount` over this core's own stream, and
+    // no mountable volume gives it one.
+    //
+    // **Timed, though nothing was recovered.** `SHOW META` prints the
+    // whole `_us` block only where a clock was supplied
+    // (`command_dispatcher.cpp`), and this core still measures the
+    // completion checkpoint at `AttachTransport` - so leaving this false
+    // would hide a number that was taken, and print a peer's recovery
+    // block as a subset of core 0's rather than the same block reading
+    // zero.
+    runtime->recovery_.timings.timed = true;
+    // Says why the numbers below it are zero: this core did not scan,
+    // rather than scanning and finding nothing.
+    runtime->recovery_.ran = false;
+    if (log != nullptr && log->enabled(LogLevel::kInfo)) {
+        log->Info("recovery", "core " + std::to_string(config.core_id) +
+                                  ": one stream, so core 0's mount pass covered this core's "
+                                  "records; nothing recovered here");
     }
 
     // A peer may not raise the durable transaction ceiling - the superblock is
@@ -510,23 +495,21 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // the base.
     runtime->recovery_ = ResumeAssertionsAfterRecovery(
         *runtime->catalog_, *runtime->store_,
-        // **The stream's device, not `log_device_`** - which is null under
-        // one stream, where this core opened none (`core_runtime.hpp`).
-        // Asking the stream is right in both topologies: it answers core
-        // 0's device when attached and this core's when not.
+        // **The stream's device.** This core opened none, so there is no
+        // `log_device_` to ask; the stream answers core 0's, which it is
+        // attached to (`core_runtime.hpp`).
         *runtime->wal_->stream()->device(),
         /*owner_core=*/config.core_id,
-        // **The stream's core, which is not this core under one stream.**
-        // The assertions are this core's to adopt - only their owner can
-        // enforce them - but the log they were recorded in is stream 0's,
-        // and the scanner validates every segment header against the id it
-        // is given (`mount_recovery.hpp` says what each answers).
-        /*stream_core=*/config.superblock->single_stream() ? 0 : config.core_id,
-        // **And `redo_start_lsn` under one stream, not `checkpoint_lsn`.**
-        // The scan must begin at or before *this* core's own first
-        // `ASSERT_SNAPSHOT`, which is written just after its own
-        // `CHECKPOINT_BEGIN`. Per core the anchor is this core's, so its
-        // `checkpoint_lsn` is exactly that point. Under one stream the
+        // **The stream's core, which is never this core.** The assertions
+        // are this core's to adopt - only their owner can enforce them -
+        // but the log they were recorded in is stream 0's, and the scanner
+        // validates every segment header against the id it is given
+        // (`mount_recovery.hpp` says what each answers). Literal 0 since
+        // AM-S4(d): there is one stream and it is core 0's.
+        /*stream_core=*/0,
+        // **And `redo_start_lsn`, not `checkpoint_lsn`.** The scan must
+        // begin at or before *this* core's own first `ASSERT_SNAPSHOT`,
+        // which is written just after its own `CHECKPOINT_BEGIN`. The
         // anchor is the fold, and the fold selects on `redo_start_lsn`:
         // the record it carries belongs to whichever core had the lowest
         // one, so its `checkpoint_lsn` can sit *past* an idle core's
@@ -539,8 +522,10 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         // folds `ASSERT_*` records after whatever base it finds, and
         // `DedupeEntryLinkage` exists for that overlap - and it is no wider
         // than the redo pass that just ran.
-        config.superblock->single_stream() ? config.anchor.redo_start_lsn
-                                             : config.anchor.checkpoint_lsn,
+        //
+        // The `checkpoint_lsn` arm was the per-core one, where the anchor
+        // was this core's own rather than a fold, and it went at AM-S4(d).
+        config.anchor.redo_start_lsn,
         runtime->dispatcher_->assertions(), runtime->recovery_, log);
 
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {

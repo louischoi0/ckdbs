@@ -40,11 +40,11 @@ bool IsAssertionRecord(RecordType type) noexcept {
 // checkpoint control. Analysis read them; redo has nothing to apply.
 bool TouchesNoPage(RecordType type) noexcept {
     switch (type) {
-        // PAGE_HANDOFF names a page in its envelope but redo must not even
-        // load it: from the handoff LSN on, the page belongs to another
-        // stream, and loading it here is the exact cross-stream touch the
-        // record exists to end (page-lsn-cross-stream.md §9 rule 3).
-        // Analysis is the consumer (PW1c-2).
+        // PAGE_HANDOFF names a page in its envelope but describes no
+        // mutation of it - it is an ownership fact - so there is nothing to
+        // apply and redo must not fault the page to discover that. Analysis
+        // is its only consumer, and since AM-S4(d) only for `max_page_id`
+        // (PW1c-2, `analysis.cpp`).
         case RecordType::kPageHandoff:
         case RecordType::kTxnBegin:
         case RecordType::kTxnCommit:
@@ -64,11 +64,12 @@ bool TouchesNoPage(RecordType type) noexcept {
 }
 
 // Formats the page the record describes, then gives it the stamp of the
-// core that logged the record - **not** of the core replaying it. The two
-// are the same under per-core streams, where redo's tail restamps every
-// applied page anyway; they differ under one stream, and there the page's
-// owner is the only right answer, because the stamp is what
-// `device_page_store` reads at the next fault to decide who may write it.
+// core that logged the record - **not** of the core replaying it. This is
+// the only place redo writes a stamp at all, the apply path's restamp
+// having gone with per-core streams (AM-S4(d)), and the logging core is the
+// only right answer: the stamp is what `device_page_store` reads at the
+// next fault to decide who may write the page, so stamping the recovering
+// core would hand it one it does not own.
 Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
     auto fields = DecodePageInit(record.payload);
     if (!fields.ok()) {
@@ -268,7 +269,7 @@ Status ApplyIndexInsert(std::span<std::byte, kPageSize> page, const DecodedRecor
 }  // namespace
 
 StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::PageStore& store,
-                         const AnalysisResult& analysis, bool single_stream) {
+                         const AnalysisResult& analysis) {
     RedoStats stats;
     PoisonedPages poisoned;
 
@@ -294,16 +295,21 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         const PageId page_id = record.header.page_id;
         const bool is_image = record.type() == RecordType::kFullPageImage;
 
-        // PW1c-2, PL §9 rule 3's redo half: a record for a page analysis
-        // holds no dirty entry for - or one below that entry's recLSN -
-        // describes state already in the durable image. For a handed-off
-        // page that is state *another stream owns from that LSN on*, where
-        // the RV5 gate below is meaningless: the two LSN spaces are
-        // incomparable (the PL spec's §3 failure). Skipped before the
-        // load, because the page must not even be faulted here. For a
-        // page that never crossed streams this skips nothing the RV5 gate
-        // would have applied: a scanned record's LSN is never below its
-        // own page's recLSN, seeded or first-wins.
+        // PW1c-2's filter: a record for a page analysis holds no dirty
+        // entry for - or one below that entry's recLSN - describes state
+        // already in the durable image, and is skipped **before the load**,
+        // because a page recovery owes nothing to must not even be faulted.
+        // What reaches it is the checkpoint-seeded entry: a page dirtied,
+        // written back and re-dirtied carries a recLSN above its flushed
+        // records, while the redo start is the minimum over every page and
+        // lies below them. The departed-page case this also served is gone
+        // with the topology - a handoff removes no entry now (AM-S4(d),
+        // `analysis.cpp`) - and a first-wins entry is never above its own
+        // page's records, so for the rest this skips nothing the RV5 gate
+        // would have applied. The no-entry disjunct is unreachable from any
+        // result `Analyze` produces now - every page-touching record
+        // emplaces its page - and is kept for the hand-built results this
+        // function's tests pass it.
         const auto dirty = analysis.dirty_pages.find(page_id);
         if (dirty == analysis.dirty_pages.end() || record.header.lsn < dirty->second) {
             ++stats.skipped_not_dirty;
@@ -375,30 +381,16 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             return Status::OK();
         }
 
-        // PL §9 rules 5-6 (PW1c-3, reworked at the f19ead1 review's C2): a
-        // reachable foreign stamp is Corruption, unconditionally - rule
-        // 6's durable restamp at acquisition is what makes every
-        // legitimate crossing carry the own stamp before any of this
-        // stream's records for the page exist, so there is no benign
-        // foreign case left for redo to admit. An unstamped page (0)
-        // takes the comparison below unchanged.
+        // No foreign-stamp check here. PL §9 rules 5-6 (PW1c-3) made a
+        // reachable foreign stamp Corruption because it meant "this page
+        // crossed into my stream without a logged handoff"; with one stream
+        // for the instance (AM-S4(d)) there is no other stream to have
+        // crossed from - every core's records are in this log by
+        // construction, so a page stamped by core 2 met in core 0's mount
+        // pass is core 2 owning its page and not evidence of anything lost.
+        // The stamp survives as a claim (`device_page_store`'s
+        // claim-at-fault), which is why redo leaves it alone.
         //
-        // **Not under one stream** (AR0 M0, AL-R5/R6). The rule asks "did
-        // this page cross into my stream without a logged handoff", and
-        // with one stream there is no other stream to have crossed from:
-        // every core's records are in this log by construction, so a page
-        // stamped by core 2 met in core 0's mount pass is not evidence of
-        // a lost handoff, it is core 2 owning its page. Left in force, it
-        // would refuse the first multi-core mount after the cutover.
-        const std::uint16_t stamp = storage::GetPageStreamStamp(page);
-        if (!single_stream && storage::StampIsForeign(stamp, core_id)) {
-            return Status::Corruption(
-                "redo: page " + std::to_string(page_id) + " is stamped by stream " +
-                std::to_string(stamp - 1) + " inside stream " + std::to_string(core_id) +
-                "'s redo scope - a handoff record or the rule-6 acquisition restamp was "
-                "lost or mis-ordered (page-lsn-cross-stream.md §9 rules 5-6)");
-        }
-
         // RV5, the whole of idempotence. An FPI is gated too: a page
         // already at or past this LSN does not need its image restored.
         if (storage::GetPageLsn(page) >= record.header.lsn) {
@@ -502,16 +494,18 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // must follow the mutation: a stamp written first would mark the
         // page done for a change that then failed.
         storage::SetPageLsn(page, record.header.lsn);
-        // The stream stamp rides it (PL §9 rule 4) - **under per-core
-        // streams only**. With one stream the recovering core is not the
-        // owning core, and restamping every page it redoes would hand core
-        // 2's pages to core 0, which is exactly what
-        // `device_page_store`'s claim-at-fault reads at the next mount.
-        // The stamp stays a claim; it stops being a statement about which
-        // log the page's records are in, because there is one.
-        if (!single_stream) {
-            storage::SetPageStreamStamp(page, storage::StreamStampFor(core_id));
-        }
+        // No restamp rides it. PL §9 rule 4 had every applied page take the
+        // replaying stream's stamp; with one stream (AM-S4(d)) the
+        // recovering core is not the owning core, so that would hand core
+        // 2's pages to core 0 - which is precisely what
+        // `device_page_store`'s claim-at-fault reads at the next mount. The
+        // stamp stays a claim about ownership and has stopped being a
+        // statement about which log the page's records are in, there being
+        // one. `ApplyPageInit` is the one path that still writes a stamp,
+        // from `LoggingCoreOf(record.header.flags)` - the record's own
+        // owner, not the recovering core. An FPI writes none: its memcpy
+        // restores whatever stamp the captured image carried, which is the
+        // owning core's by the same argument.
         ++stats.applied;
         return Status::OK();
     };

@@ -9,7 +9,6 @@
 
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/assertion_recover.hpp"
-#include "kds/server/prepared_resolver.hpp"
 #include "kds/txn/recovery_undo.hpp"
 #include "kds/wal/recovery.hpp"
 
@@ -18,48 +17,35 @@ namespace kds::server {
 StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
-                                          Logger* log, const sched::Clock* clock,
-                                          const std::string& wal_dir,
-                                          const std::vector<WalAnchorFields>& anchors,
-                                          bool single_stream) {
+                                          Logger* log, const sched::Clock* clock) {
     // A zeroed slot means no checkpoint was ever published: scan from the
     // head of the stream, and disable the durable-point check because there
     // is no published point to hold the scan to (`analysis.hpp`).
     wal::AnalysisStart start;
     start.redo_start_lsn = anchor.redo_start_lsn;
     start.anchor_durable_lsn = anchor.durable_lsn;
-    // What the volume's log is, threaded down so redo knows whether a
-    // page's stream stamp is a statement about *this* log (`analysis.hpp`).
-    start.single_stream = single_stream;
 
     txn::RecoveryUndo undo(undo_log, wal);
-    // R6-4's resolver, built here for the reason the undo phase is: this is
-    // the layer that knows where a log directory lives, and `wal/` may not
-    // open a file by core id. Absent with no directory - and a stream that
-    // then holds a prepared transaction refuses the mount rather than
-    // guessing at its outcome (`prepared_resolver.hpp`).
+    // **R6-4's cross-stream resolver is gone** (AM-S4(d)). It was built
+    // here rather than in `wal/` because this is the layer that knows where
+    // a log directory lives, and its job was to open the *coordinator's*
+    // stream - another file - to learn a prepared transaction's verdict.
+    // With one stream that verdict is in the pass's own table, so
+    // `RecoverCore` resolves it inline and there is no second file to open,
+    // no `wal_dir` to open it from and no peer anchor to bound the scan of
+    // it. The `NotImplemented` refusal that fired when no resolver was
+    // installed went with it: nothing can now reach a mount that cannot
+    // decide its own prepares.
     //
-    // **Not built under one stream** (AR0 M0, AL-R5), where a prepare's
-    // verdict is a lookup in the pass's own table rather than another
-    // file's. Constructing one there would be harmless - `RecoverCore`
-    // takes the in-stream branch and never calls it - and misleading, which
-    // is the objection: a resolver present at a mount that cannot use it
-    // reads as a mount that might. This is also the last reader of the
-    // per-core `anchors` vector, so under one stream nothing consults a
-    // peer's anchor slot at all.
-    std::optional<CoordinatorStreamResolver> resolver;
-    if (!single_stream && !wal_dir.empty() && !anchors.empty()) {
-        resolver.emplace(wal_dir, device.segment_size(), core_id, anchors, log);
-    }
-    // **The whole pass writes without claiming, under one stream** (AR0 M0,
-    // AL-R6). Redo skips its own restamp, but undo's compensations reach
-    // the store through the ordinary mutation path, so the suppression is
-    // set here - around both phases - rather than at either. A guard, so a
-    // refused mount leaves the store as it found it.
+    // **The whole pass writes without claiming** (AR0 M0, AL-R6). Redo
+    // takes no restamp, but undo's compensations reach the store through
+    // the ordinary mutation path, so the suppression is set here - around
+    // both phases - rather than at either. A guard, so a refused mount
+    // leaves the store as it found it. Unconditional since AM-S4(d): the
+    // topology it tested for is the only one that mounts.
     class StampSuppression {
     public:
-        StampSuppression(storage::PageStore& store, bool on) noexcept {
-            if (!on) return;
+        explicit StampSuppression(storage::PageStore& store) noexcept {
             device_store_ = dynamic_cast<storage::DevicePageStore*>(&store);
             if (device_store_ != nullptr) device_store_->SetStampSuppressed(true);
         }
@@ -72,10 +58,9 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     private:
         storage::DevicePageStore* device_store_ = nullptr;
     };
-    StampSuppression suppression(store, single_stream);
+    StampSuppression suppression(store);
 
-    auto report = wal::RecoverCore(device, core_id, store, start, &undo, clock,
-                                   resolver.has_value() ? &*resolver : nullptr);
+    auto report = wal::RecoverCore(device, core_id, store, start, &undo, clock);
     if (!report.ok()) {
         // Propagated, not logged-and-continued. The status already carries
         // the phase and the core (`recovery.cpp`), and RV1 makes it the

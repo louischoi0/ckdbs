@@ -64,28 +64,25 @@ wal::CheckpointAnchorRecord SuperBlockCheckpointAnchor::FoldedAnchor() const noe
 }
 
 Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& anchor) {
-    // Which slot, and what goes in it, is the volume's topology's answer
-    // (the header's fold section).
-    std::uint32_t slot = anchor.core_id;
-    wal::CheckpointAnchorRecord landing = anchor;
-    if (superblock_.single_stream()) {
-        if (anchor.core_id >= superblock_.core_count()) {
-            // Refused rather than recorded: an out-of-range id would set a
-            // bit no `core_count` accounts for, releasing the warm-up early
-            // and putting a phantom core's number into the minimum. The
-            // ring path memcpys this id out of a peer's payload
-            // (`expeditor.cpp`), so it is the one field here that does not
-            // come from a caller this object can see.
-            return Status::InvalidArgument(
-                "superblock: checkpoint anchor names core " + std::to_string(anchor.core_id) +
-                ", which this database's core count (" +
-                std::to_string(superblock_.core_count()) + ") does not have");
-        }
-        per_core_[anchor.core_id] = anchor;
-        published_ |= std::uint64_t{1} << anchor.core_id;
-        slot = 0;
-        landing = FoldedAnchor();
+    // **Always the fold into slot 0** (the header's fold section);
+    // unconditional since AM-S4(d), where the per-core arm that wrote
+    // `anchor.core_id`'s own slot left with the topology it belonged to.
+    if (anchor.core_id >= superblock_.core_count()) {
+        // Refused rather than recorded: an out-of-range id would set a
+        // bit no `core_count` accounts for, releasing the warm-up early
+        // and putting a phantom core's number into the minimum. The
+        // ring path memcpys this id out of a peer's payload
+        // (`expeditor.cpp`), so it is the one field here that does not
+        // come from a caller this object can see.
+        return Status::InvalidArgument(
+            "superblock: checkpoint anchor names core " + std::to_string(anchor.core_id) +
+            ", which this database's core count (" + std::to_string(superblock_.core_count()) +
+            ") does not have");
     }
+    per_core_[anchor.core_id] = anchor;
+    published_ |= std::uint64_t{1} << anchor.core_id;
+    const std::uint32_t slot = 0;
+    const wal::CheckpointAnchorRecord landing = FoldedAnchor();
 
     const WalAnchorFields fields{landing.checkpoint_lsn, landing.redo_start_lsn,
                                  landing.durable_lsn, landing.segment_no};
@@ -111,12 +108,9 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
         log_->Debug("superblock", "wal anchor written for core " +
                                       std::to_string(anchor.core_id) + ": redo_start=" +
                                       std::to_string(landing.redo_start_lsn) + " durable_lsn=" +
-                                      std::to_string(landing.durable_lsn) +
-                                      (superblock_.single_stream()
-                                           ? " (folded over " + std::to_string(folded_cores()) +
-                                                 " of " + std::to_string(superblock_.core_count()) +
-                                                 " cores)"
-                                           : " into slot " + std::to_string(slot)));
+                                      std::to_string(landing.durable_lsn) + " (folded over " +
+                                      std::to_string(folded_cores()) + " of " +
+                                      std::to_string(superblock_.core_count()) + " cores)");
     }
 
     if (Status s = store_.Sync(); !s.ok()) {

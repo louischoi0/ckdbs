@@ -64,13 +64,14 @@ Status SimInstance::Boot() {
 
     undo_.emplace(*store_, wal_.get());
     if (!options_.skip_recovery) {
+        // The harness bootstraps a real database and recovers the same
+        // volume the bootstrap wrote (AR0 M0). It used to hand the topology
+        // down explicitly; since AM-S4(d) there is one, so `RecoverCoreAtMount`
+        // no longer asks - and the `wal_dir`/`anchors` pair it passed empty
+        // went with the cross-stream resolver those two fed.
         auto recovered = server::RecoverCoreAtMount(
             /*core_id=*/0, boot_->superblock.wal_anchor(0), *log_device_, *store_, *undo_,
-            wal_.get(), /*log=*/nullptr, /*clock=*/nullptr, /*wal_dir=*/{}, /*anchors=*/{},
-            // The harness bootstraps a real database, so it gets the
-            // topology a real one gets - and recovery must read the same
-            // volume the bootstrap wrote (AR0 M0).
-            boot_->superblock.single_stream());
+            wal_.get(), /*log=*/nullptr, /*clock=*/nullptr);
         if (!recovered.ok()) return recovered.status();
         recovery_ = recovered.value();
         // RV3 D3a, exactly as the expeditor does it: redo mutated catalog

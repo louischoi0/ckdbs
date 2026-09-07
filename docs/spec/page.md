@@ -9,7 +9,7 @@ Page allocation, the buffer pool, the file layout, and the I/O path. Consistent 
 | S1 | Page layout abstraction | **Common 32-byte page header** at offset 0 for all header-bearing page classes |
 | S2 | Store interface | **`PageRef`** — RAII pinned-page handle; the `PageStore` contract hands out no raw span |
 | S5 | Disk layout | **Single data file**; `offset = page_id × 8192`; extent-based growth |
-| S7 | Multi-core ownership | **Per-core buffer pools** over core-owned pages. Unchanged by AR0 M0: the log is shared, the frames are not (§6) |
+| S7 | Multi-core ownership | **One buffer pool for the instance** over core-owned pages (§6). Reversed by AM-S2 step 3: this row read *per-core buffer pools*, and *"the log is shared, the frames are not"*, until the frames were shared too. Ownership is unchanged — M0 removed the second stream, M1 the second pool, neither the second owner |
 | S9 | Page checksums | **Adopted** — CRC32C in the common header, computed at flush, verified at load |
 | S11 | Paging mechanism | **Explicit buffer pool. mmap is rejected for data and WAL** (§15) |
 | S12 | Page → relation resolution | **`owner_oid` in the common header** (§2a) — the page is the mapping, no auxiliary structure |
@@ -31,7 +31,7 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 |---|---|---|---|
 | 0 | 1 | `page_type` | frozen append-only enum: `heap`, `btree_internal`, `btree_leaf`, `undo`, `catalog`, `superblock`, `freemap`, … (`0` = invalid/unformatted) |
 | 1 | 1 | `format_version` | per-type layout version; bumps are format events |
-| 2 | 2 | `flags` | the PL-C stream stamp: `core_id + 1` of the core that last claimed the page, 0 = never stamped (`page-lsn-cross-stream.md` §9 rule 4). **A claim of ownership, not a statement about which log the page's records are in** — under one WAL stream (`wal.md` §3) redo neither refuses a foreign value nor rewrites one |
+| 2 | 2 | `flags` | the stream stamp: `core_id + 1` of the core that last wrote the page, 0 = never stamped (§2b) |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
 | 16 | 8 | `relayout_epoch` | bumped when tuples on the page move (`docs/spec/physical-optimizer.md` R4, `heap-and-tuple.md` §3.1a); 0 = never relayouted |
@@ -63,6 +63,46 @@ What it does not give:
 **oid 0 is unambiguous as "unattributed."** It is *not* free catalog-wide (`kNamespaceSys = 0` is a live persisted oid) but it names an object that owns no pages, and no page-owning object can carry it: system relations sit at oid 115+, user objects from `kUserOidStart` = 4000. Pages written before the field existed carry 0 permanently and are never reclaimable.
 
 No consumer reads the field today: there is no census scan, no orphan test and no reclamation.
+
+## 2b. The stream stamp — what is left of it
+
+The 2-byte `flags` word at offset 2 holds `core_id + 1` of the core that
+last wrote the page, and 0 for a page never written under a log. **It
+decides nothing.** No branch anywhere in the engine reads it; it is a
+diagnostic record, printed by `SHOW PAGE`'s `stream_stamp=` field and
+kept truthful by redo.
+
+Two writers, and they agree by construction:
+
+- **Every logged mutation** stamps the page with the writing core
+  (`device_page_store.cpp`), suppressed for the duration of a mount's
+  recovery so that a replay does not claim another core's pages as the
+  recovering core's (`SetStampSuppressed`, `mount_recovery.cpp`).
+- **Redo's full-page-image restore** stamps from the record's own logging
+  core, so a healed page carries the core that wrote it rather than the
+  core that replayed it.
+
+**This section is what survives `page-lsn-cross-stream.md`**, which left
+the tree at AM-S4(d) and is retrievable at `535b337`. That document's
+subject was a page written by *more than one WAL stream* over its life —
+what makes redo's idempotence test meaningful when `page_lsn` values are
+not comparable. Three things dismantled it, in order:
+
+1. **AR0 M0** gave the instance one stream, so LSNs became comparable and
+   §6's rejection of a single global LSN was reversed by the thing M0
+   built.
+2. **AW-S1b** deleted the *ownership* reading of the stamp: the extent
+   lease, the write grants and `TryClaimByStamp`'s claim-at-fault went
+   with the per-core store arrangement, and with them PL-C's guard.
+3. **AM-S4(d)** refused the volume. `SuperBlock::Decode` admits one
+   topology, so §9 rules 5-6 (a foreign stamp is `Corruption`) and rule
+   4's restamp had no reachable case and were deleted from `redo.cpp`.
+
+What that leaves is the paragraph above: a field that says who wrote a
+page, and nothing that acts on the answer. It is kept rather than
+reclaimed because removing it is a format event and it costs two bytes
+already spent; if a later stage wants those bytes, it takes them with a
+version bump and this section is the whole of what it must replace.
 
 ## 3. `PageRef` — the Pinned-Page Handle
 
@@ -108,7 +148,7 @@ Owns "which page_ids exist / are free" inside the disk-backed store, behind the 
 - **What synchronizes it**, since it is no longer "nothing": the frame table carries a **structure latch** (`frames_latch_`, `base/latch.hpp`), armed only at `cores > 1`, held across every structural mutation and every read of a `Frame`'s metadata — the insert, all three erasers, and the pin accounting. Fetch-and-pin is one operation under that hold (`FetchPinned`), and a miss publishes the page id to an in-flight set and drops the latch across the device read rather than holding one across I/O. Frame *bytes* need none of this: `Frame::bytes` is a `unique_ptr<Page>` the table never moves, and a `PageRef` holds a raw pointer to it, so a pinned page's bytes survive any table reorganisation.
 - **The page latch** (`include/kds/storage/page_latch.hpp`; `rules.md` §3's row): every resident frame carries one 32-bit word — an exclusive bit, the owning core, a count — operated on by CAS through `std::atomic_ref`, and **armed only at `cores > 1`** from the superblock's core count; an unarmed store never touches it. Taken with the pin and released with it: `Get` and the `Create*` accessors hold a frame exclusive, `GetForRead` shared. Re-entrant for the owning **core** — a task may hold one page twice, and shared under its own exclusive — where "the owning core is the running task" is a discipline, not a gate: no task parks holding a pin, the suspend audit *records* a violation in debug builds only (`sched/coro.hpp`'s `NoteSuspension`, not fatal), and a park under a latch would be a silent second exclusive grant to the next task on that core; a per-task owner is AM-S2's escalation if the audit ever records one. **Never upgraded**: a shared holder asking for exclusive is a self-deadlock, aborted in debug and an unbounded spin on the reactor thread in release. The debug check **stopped being a proxy at AM-S2 step 3b**: it read the store's own `pins` as "the shares are mine", which one table serving every core turns into "two cores hold one pin each" as readily as "this core holds two" — a detector that would fire on correct traffic and miss the defect it exists for. It is a thread-local multiset of the pages this thread holds shared now, exact on the same premise `CurrentCore()` rests on: one reactor per thread, no handle crossing threads. Acquisition order: **outer** to the WAL stream latch — a task appends while holding its page latches, and no WAL path asks for a page latch while holding the stream latch (recovery's redo is the one place `wal/` touches a frame at all, and it runs on the mount thread holding no stream latch) — never nested with the visibility window latch, never held across a park; on the fault path a task may hold other frames latched while a writeback it triggered waits on the WAL gate, which is sound (the writer thread takes no page latch) and a latency cost AM-S3 prices. Page against page is **unordered, and the reason it was safe is gone**. It read: two page latches are held on every split and chain growth (a descent holds one at a time), and one core owns its pool, so no two holders can wait on each other. The second clause stopped being true at `2663001`. The pairs held at once are listed in `device_page_store.hpp`'s "The page latch" section — the split's old leaf and new sibling, chain growth's old tail and new page, and since AM-R8 a scan ring's shared hold on a heap leaf across its consumer's var-heap fetches — and **stating the order is still owed**. Two more items are owed with it. A re-validation after the re-fetch the two S-then-X fixes in `btree.cpp` and `index_tree.cpp` introduced: each decides on a read handle and acts after dropping it, which was sound only while one core owned its pool and is not audited under a shared one. And starvation — waits spin, then yield, with no queue and no writer preference, so steady shared holders of a hot page can starve an exclusive request; that one is not made worse by sharing, only reachable by more threads. **The latch is live in production at `cores > 1`** and inert at one core, where it is never armed; the primitive, its order and its cells are AM-S1's, and `device_page_store.hpp`'s header carries the same statement.
 - **Cross-core page access is what the pool now is.** It did not exist through AM-S1 — work moved to the owning core over the message interface — and a peer reading a page core 0 faulted is the cell AM-S2 step 3 landed on. What still moves to the owning core is the *write*, and it moves there by **statement dispatch alone** since AW-S1b: AM-R2 keeps `MayWrite`, but the predicate now answers for the system range only — the extent lease, the write grants and the stamp claim that made it a per-page question went with the arrangement they described. Ownership routing is unchanged; what carries it is the Expeditor, not the store (`rules.md` §3).
-- Ownership: a relation's pages belong to the core `sys.tables.owner_core` names (`docs/spec/crosscore.md` CC7). The clause that stood here — "a core writes only pages inside an extent it was granted or leased" — was struck at AW-S1b with the grants and the lease; the store admits any core above the system range, and which core writes a relation's pages is decided where the statement is routed. A page changes hands only through the logged handoff of `docs/spec/page-lsn-cross-stream.md` §9. **Ownership and caching came apart at AM-S2 step 3.** This bullet used to end "the log is shared, the frames are not"; the frames are shared now too, and what did *not* change is the owner — M0 removed the second stream, M1 the second pool, and neither removed the second owner. AT is where ownership itself goes (`ar0-5-amendment-uniformity.md`).
+- Ownership: a relation's pages belong to the core `sys.tables.owner_core` names (`docs/spec/crosscore.md` CC7). The clause that stood here — "a core writes only pages inside an extent it was granted or leased" — was struck at AW-S1b with the grants and the lease; the store admits any core above the system range, and which core writes a relation's pages is decided where the statement is routed. A page changes hands only through the logged handoff of `docs/spec/page.md` §2b. **Ownership and caching came apart at AM-S2 step 3.** This bullet used to end "the log is shared, the frames are not"; the frames are shared now too, and what did *not* change is the owner — M0 removed the second stream, M1 the second pool, and neither removed the second owner. AT is where ownership itself goes (`ar0-5-amendment-uniformity.md`).
 - **The device under them is shared, and that is declared** (`rules.md` §3): one `PageDevice` serves every core's store. **Core 0 alone grew it until the pool became one**; a peer allocating through the instance's free map grows it now, with nothing serialising the write to `page_capacity_` — filed at `docs/inflight/bugs/device-growth-is-not-core-0s-any-more.md` and AM-S3's to decide. A reader still sees a capacity that only rises, which is what has made an unsynchronized `uint32_t` survive so far and would not survive a shrink.
 
 ## 7. Eviction

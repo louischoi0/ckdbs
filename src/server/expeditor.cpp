@@ -801,22 +801,24 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     wal::WalManagerConfig wal_config;
     wal_config.relaxed_flush_interval_ns = expeditor->config_.relaxed_flush_interval_ns;
-    // **Shared where the volume says its log is the instance's** (AR0 M0,
-    // AL-S1c): the stream arms its latch, and every peer appends through it
-    // rather than opening one of its own. Unshared otherwise, which is one
-    // branch and no atomic on the `cores = 1` path.
-    // **And only above one core.** `single_stream()` is true of every
-    // database this build creates, `cores = 1` included - the shipped
-    // default - and arming the latch there would put a mutex on every
-    // logged page mutation for a section no second thread can reach. AR0's
-    // G2 is that `cores = 1` pays nothing, and `latch.hpp` calls it a
-    // property of the code rather than of a build flag; this conjunct is
-    // where that stays true. `core_count` is pinned at bootstrap and
-    // validated at every mount, so it cannot disagree with the peers that
-    // actually exist, and `WalManager::Attach` refuses an unshared stream -
-    // so getting this wrong fails the mount loudly rather than racing.
-    wal_config.shared_stream = expeditor->database_->superblock.single_stream() &&
-                               expeditor->database_->superblock.core_count() > 1;
+    // **Shared above one core** (AR0 M0, AL-S1c): the stream arms its
+    // latch, and every peer appends through it rather than opening one of
+    // its own.
+    //
+    // **The core count is the whole predicate now** (AM-S4(d)). It used to
+    // carry a `single_stream()` conjunct beside it, which was true of every
+    // database this build creates; the topology test moved to `Decode`,
+    // where a volume that is not one stream is refused rather than mounted
+    // down a second path. What the count still decides stands: at
+    // `cores = 1` arming the latch would put a mutex on every logged page
+    // mutation for a section no second thread can reach. AR0's G2 is that
+    // `cores = 1` pays nothing, and `latch.hpp` calls it a property of the
+    // code rather than of a build flag; this test is where that stays true.
+    // `core_count` is pinned at bootstrap and validated at every mount, so
+    // it cannot disagree with the peers that actually exist, and
+    // `WalManager::Attach` refuses an unshared stream - so getting this
+    // wrong fails the mount loudly rather than racing.
+    wal_config.shared_stream = expeditor->database_->superblock.core_count() > 1;
     auto wal = wal::WalManager::Open(expeditor->log_device_.get(), expeditor->clock_,
                                      /*core_id=*/0, wal_config);
     if (!wal.ok()) return wal.status();
@@ -900,17 +902,15 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // The wal dir goes in too (R6-4): core 0 is a participant like any
     // other - a peer's client writes core-0-owned relations - so its stream
     // can hold a prepared transaction whose verdict is in a peer's.
-    auto recovered = RecoverCoreAtMount(/*core_id=*/0,
-                                        expeditor->database_->superblock.wal_anchor(0),
-                                        *expeditor->log_device_, *expeditor->store_,
-                                        *expeditor->undo_log_, &*expeditor->wal_,
-                                        &*expeditor->logger_, &expeditor->clock_,
-                                        expeditor->config_.wal_dir,
-                                        expeditor->database_->superblock.wal_anchors(),
-                                        // Under one stream this pass is the
-                                        // whole instance's, so it meets
-                                        // pages every core owns (AL-R5/R6).
-                                        expeditor->database_->superblock.single_stream());
+    // **This pass is the whole instance's** (AL-R5/R6), so it meets pages
+    // every core owns. The `wal_dir` and per-core anchor vector that used
+    // to go in here were the cross-stream prepared resolver's, and it left
+    // at AM-S4(d): with one stream a prepare's verdict is in this same
+    // scan.
+    auto recovered = RecoverCoreAtMount(
+        /*core_id=*/0, expeditor->database_->superblock.wal_anchor(0), *expeditor->log_device_,
+        *expeditor->store_, *expeditor->undo_log_, &*expeditor->wal_, &*expeditor->logger_,
+        &expeditor->clock_);
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
 
@@ -1007,13 +1007,16 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     Expeditor* self = expeditor.get();
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
                                 [self] { return self->PersistSuperBlock(); });
-    // Before the manager that publishes into it. Under per-core streams
-    // there is no comparable commit order to record, so there is nothing
-    // here and every manager keeps the per-core view it has (AN-R1).
-    if (expeditor->database_->superblock.single_stream()) expeditor->visibility_.emplace();
+    // Before the manager that publishes into it. **Unconditional since
+    // AM-S4(d)**: the arm that skipped it was per-core streams, where
+    // there is no comparable commit order to record (AN-R1), and no such
+    // volume mounts. `visibility_` is therefore always engaged, and the
+    // null the manager still accepts is for the embedded callers that
+    // build one directly.
+    expeditor->visibility_.emplace();
     expeditor->txn_manager_.emplace(*expeditor->trx_ids_, *expeditor->undo_log_,
                                     *expeditor->store_, &*expeditor->wal_,
-                                    expeditor->visibility_ ? &*expeditor->visibility_ : nullptr,
+                                    &*expeditor->visibility_,
                                     /*core=*/0);
 
     expeditor->dispatcher_.emplace(
@@ -1049,21 +1052,20 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // checkpoint" means. The anchor read here is the one recovery already used,
     // so the two cannot disagree about which checkpoint that was.
     //
-    // **Under one stream it is `redo_start_lsn` instead, and core 0 is not
-    // exempt from the reason** (AR0 M0). Slot 0 holds the *fold* — the
+    // **It is `redo_start_lsn`, and core 0 is not exempt from the reason**
+    // (AR0 M0; unconditional since AM-S4(d)). Slot 0 holds the *fold* — the
     // record of whichever core had the lowest redo start — so its
     // `checkpoint_lsn` is that core's `CHECKPOINT_BEGIN`, which can sit
     // past core 0's own snapshot exactly as it can past a peer's. Starting
     // there finds no base, and no base is not a slow scan: it is
     // `NoteUnenforceable` for every assertion this core owns. The field the
     // fold does bound is `redo_start_lsn` — at or below every core's redo
-    // start, which is at or below every core's own `CHECKPOINT_BEGIN`.
+    // start, which is at or below every core's own `CHECKPOINT_BEGIN`. The
+    // `checkpoint_lsn` arm beside this one was the per-core anchor's.
     expeditor->recovery_ = ResumeAssertionsAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
         /*owner_core=*/0, /*stream_core=*/0,
-        expeditor->database_->superblock.single_stream()
-            ? expeditor->database_->superblock.wal_anchor(0).redo_start_lsn
-            : expeditor->database_->superblock.wal_anchor(0).checkpoint_lsn,
+        expeditor->database_->superblock.wal_anchor(0).redo_start_lsn,
         expeditor->dispatcher_->assertions(), expeditor->recovery_, &*expeditor->logger_);
 
     // **The completion checkpoint** (RC08), which is what makes the next
@@ -1689,21 +1691,20 @@ Status Expeditor::Start() {
         // store's allocation floor. Nothing carves extents any more, and
         // `mount_recovery` raises the floor every core now allocates from.
 
-        // **One pool for the instance, where the volume allows it**
-        // (AM-S2 step 3), and the answer does not vary by core - it is a
-        // property of the volume, so it is decided once here rather than
-        // per peer inside the loop.
+        // **One pool for the instance** (AM-S2 step 3), unconditionally
+        // since AM-S4(d).
         //
-        // **Gated on `single_stream()`**, and the gate is the writeback
-        // path rather than the pool. The store's gate is a
-        // `wal::WalDurability` - a property of the log, not of a core -
+        // The gate that stood here was `single_stream()`, and its subject
+        // was the writeback path rather than the pool: the store's gate is
+        // a `wal::WalDurability` - a property of the log, not of a core -
         // and under AR0 M0 every core's manager attaches to core 0's
-        // stream, so core 0's gate answers for all. A pre-M0 volume mounts
+        // stream, so core 0's gate answers for all. A pre-M0 volume mounted
         // per-core, where one gate would check a page logged in core 1's
         // stream against core 0's watermark and could write it out ahead of
-        // the record that describes it. AM-S4 refuses such a volume
-        // outright and this branch goes with it.
-        const bool share_pool = database_->superblock.single_stream();
+        // the record that describes it. `SuperBlock::Decode` now refuses
+        // such a volume, which is what AM-S2 step 3's own comment said this
+        // branch was waiting for.
+        //
         // **And the one pool takes the whole budget** (EV4). `Open` above
         // applied core 0's *share* - `buffer_pool_frames / cores` - because
         // there were `cores` frame tables to divide the instance total
@@ -1713,7 +1714,7 @@ Status Expeditor::Start() {
         // because this line is what applies the total. Nonzero only, for
         // `Open`'s reason - writing 0 would undo the debug
         // `KDS_TEST_FRAME_BUDGET` override the store may be carrying.
-        if (share_pool && config_.buffer_pool_frames != 0) {
+        if (config_.buffer_pool_frames != 0) {
             store_->SetFrameBudget(config_.buffer_pool_frames);
         }
 
@@ -1721,7 +1722,6 @@ Status Expeditor::Start() {
             // **No extent for a core that borrows the pool** (AM-S2 step 3).
             CoreRuntime::Config core_config;
             core_config.core_id = core_id;
-            core_config.wal_dir = config_.wal_dir;
             core_config.checkpoint_interval_ns = config_.checkpoint_interval_ns;
             core_config.wal_drain_interval_ns = config_.wal_drain_interval_ns;
             core_config.inline_cell_width = database_->superblock.inline_cell_width();
@@ -1737,17 +1737,16 @@ Status Expeditor::Start() {
             // AK-S2: and the Cabin's, now that a peer holds a store.
             core_config.cabins = config_.cabins;
             core_config.cabin_limits = config_.CabinLimitsOf();
-            // **This peer borrows the instance's pool** (AM-S2 step 3,
-            // `share_pool` above): a frame table of its own over the same
-            // device is what sharing replaces, so a page faulted on one
-            // core is served from the frame another core loaded.
-            core_config.shared_store = share_pool ? store_.get() : nullptr;
+            // **This peer borrows the instance's pool** (AM-S2 step 3): a
+            // frame table of its own over the same device is what sharing
+            // replaces, so a page faulted on one core is served from the
+            // frame another core loaded.
+            core_config.shared_store = store_.get();
             // **The division is what sharing removes** (EV4). Splitting the
             // instance total N ways was standing in for a pool that could
             // not be shared; the whole number went on that pool above, so
             // passing a share here would hand one pool a fraction of itself.
-            core_config.buffer_pool_frames =
-                share_pool ? 0 : FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
+            core_config.buffer_pool_frames = 0;
             // This peer's own anchor, copied out of the superblock core 0
             // decoded. A peer's `SuperBlock` member is a default-constructed
             // one whose anchor slots are all zero, and a peer's checkpointer
@@ -1755,22 +1754,16 @@ Status Expeditor::Start() {
             // without this copy every peer would recover from the head of its
             // stream while core 0 recovered from its checkpoint.
             //
-            // **Slot 0 under one stream, this core's slot otherwise.** The
-            // fold puts every core's checkpoint into slot 0 and
-            // `SetWalAnchor` refuses any other (AL-R3/AL-R4), so a peer's
-            // own slot reads all zeros there - which means "no checkpoint
-            // ever", and would send the assertion resume scanning from the
-            // head of the whole log at every mount. The anchor a peer needs
-            // under one stream is the instance's.
-            core_config.anchor = database_->superblock.single_stream()
-                                     ? database_->superblock.wal_anchor(0)
-                                     : database_->superblock.wal_anchor(core_id);
-            // Every core's, for R6-4: resolving a transaction this peer
-            // prepared means scanning its coordinator's stream, and that
-            // core's anchor is what says how far the scan must reach.
-            // Unread under one stream, where a peer recovers nothing and the
-            // resolution is an in-stream lookup (AL-R5).
-            core_config.anchors = database_->superblock.wal_anchors();
+            // **Slot 0, which is the only slot** (AL-R3/AL-R4; AM-S4(d)).
+            // The fold puts every core's checkpoint there and
+            // `SetWalAnchor` refuses any other, so a peer's own slot reads
+            // all zeros - which means "no checkpoint ever", and would send
+            // the assertion resume scanning from the head of the whole log
+            // at every mount. The anchor a peer needs is the instance's.
+            core_config.anchor = database_->superblock.wal_anchor(0);
+            // `anchors` - every core's, for R6-4's cross-stream resolver -
+            // went with that resolver at AM-S4(d): a peer recovers nothing
+            // and a prepare resolves in core 0's own scan (AL-R5).
             // And the ceiling this peer's recovery must not sit above (PW1).
             // Same copy, same thread, same reason as the anchor.
             // The third field copied off core 0's superblock because a
@@ -1781,18 +1774,16 @@ Status Expeditor::Start() {
             // from and what every topology test on that core reads
             // (`core_runtime.hpp`'s `Config::superblock`).
             core_config.superblock = &database_->superblock;
-            // The instance's log, where there is one. Core 0's manager owns
-            // both and outlives every peer, so these are borrowed rather
-            // than shared - and they are null under per-core streams, where
-            // this peer opens its own device (`core_runtime.hpp`).
-            if (database_->superblock.single_stream()) {
-                core_config.shared_stream = wal_->stream();
-                core_config.shared_writer = wal_->writer();
-            }
-            // Borrowed on the same terms and for the same topology reason
-            // (AN-R1). Null under per-core streams, where this peer's LSNs
-            // are comparable with nothing else.
-            core_config.visibility = visibility_ ? &*visibility_ : nullptr;
+            // The instance's log. Core 0's manager owns both and outlives
+            // every peer, so these are borrowed rather than shared. Handed
+            // over unconditionally since AM-S4(d) - `CoreRuntime::Open`
+            // refuses a peer that arrives without them, there being no
+            // second topology in which it could open one of its own.
+            core_config.shared_stream = wal_->stream();
+            core_config.shared_writer = wal_->writer();
+            // Borrowed on the same terms and for the same reason (AN-R1):
+            // one stream is what makes these LSNs comparable across cores.
+            core_config.visibility = &*visibility_;
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

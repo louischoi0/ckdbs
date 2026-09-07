@@ -1605,16 +1605,17 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     std::ostringstream os;
     os << "version=" << superblock_.version() << " create_time=" << superblock_.create_time()
        << " last_mount_time=" << superblock_.last_mount_time()
-       // **What the volume's log is** (AR0 M0), and the anchor count only
-       // where it still varies. Under one stream the answer is always 1 -
-       // slot 0 holds the fold and `SetWalAnchor` refuses any other - so
-       // printing it would be a field that can only ever say one thing,
-       // where `wal_topology` says the thing worth knowing.
-       << " wal_topology=" << (superblock_.single_stream() ? "single" : "per-core");
-    if (!superblock_.single_stream()) {
-        os << " wal_anchor_count=" << superblock_.wal_anchor_count();
-    }
-    os << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+       // **What the volume's log is** (AR0 M0). Always `single` since
+       // AM-S4(d) - `SuperBlock::Decode` refuses every other topology - and
+       // kept rather than dropped because it is a durable *format* fact a
+       // client reads off the volume, not a setting that varies. A literal,
+       // because there is no longer a field to read it from.
+       //
+       // `wal_anchor_count` stood beside it under `per-core` only, since
+       // under one stream it can only ever say 1. That is now every volume,
+       // so it is printed nowhere.
+       << " wal_topology=single"
+       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
        // The core serving this session (PW6, docs/inflight/in-progress/workplan-peer-writer.md).
        // Under `peer_listeners = on` the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -

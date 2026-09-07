@@ -51,10 +51,11 @@ scripts/stop.sh                        # graceful stop (sends STOP via the CLI)
 On startup the server prints the data file, page count, superblock version,
 log destination and the port, then blocks in `Serve()` for the life of the
 process. The data file is created if absent; the WAL segments live in
-`<data_file>.wal/` unless `wal_dir` says otherwise. A volume bootstrapped by
-this build has **one WAL stream for the instance**, whatever `cores` says;
-`SHOW META`'s `wal_topology` field reports which topology a mounted volume
-was written with.
+`<data_file>.wal/` unless `wal_dir` says otherwise. Every volume this build
+mounts has **one WAL stream for the instance**, whatever `cores` says, and
+`SHOW META`'s `wal_topology` field says so. A volume written before that
+change has one stream per core and **no longer mounts**: there is no
+migration, and the refusal names it. Recreate the database.
 
 The listener is **loopback only** (`127.0.0.1`), plain TCP, no TLS, no
 authentication — a development/inspection surface, not a production API.

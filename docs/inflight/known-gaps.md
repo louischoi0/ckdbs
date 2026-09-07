@@ -112,6 +112,24 @@ statement about an engine that no longer exists; re-verify or strike it.
   states the gap; `docs/spec/client-manual.md`'s ring-counter row now does
   too. Owner: `docs/spec/wal.md` §16.
 
+## WAL
+
+- **`PAGE_HANDOFF` is written and never read.** Verified at AM-S4(d),
+  2026-09-07. The record's consumer was the receiving core's write grant,
+  struck at AW-S1b; analysis neither erases the page from the dirty table
+  nor seeds a recLSN for it, and redo skips it — so nothing acts on one.
+  `range_alloc.cpp` is the single remaining site that appends one, and it
+  pays PL §9 rule 1's durability ordering for it: **one `FlushPages` and
+  one device sync per range opening**, for a record with no reader. The
+  ordering is kept whole rather than half-kept, which is the right state to
+  leave it in, but the cost is real and attributable.
+
+  Not fixed here because retiring a record type is a format decision of its
+  own: the kind stays in `ring_message.hpp`'s frozen enum, AU-R4's count
+  freeze is unbuilt, and AU-R5 is where struck kinds are meant to go.
+  Owner: `docs/spec/wal.md` §5.2, and `docs/spec/crosscore.md` CC7 for why
+  the handoff exists at all.
+
 ## Multi-core state
 
 - **Closed 2026-09-03, recorded because the closure is the interesting

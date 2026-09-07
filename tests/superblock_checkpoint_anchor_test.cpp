@@ -305,17 +305,9 @@ TEST_F(SuperBlockFoldTest, AFailedSyncKeepsTheCoresContributionForTheNextPublish
     UnsyncablePageStore store;
     auto page = store.CreateAtUnpinned(kSuperBlockPageId);
     ASSERT_TRUE(page.ok());
+    // No topology patch: `CreateFresh` writes `kSingleStream` (AM-S4(d)),
+    // so setting the core count is the whole of what this needs.
     superblock_ = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, /*cores=*/4);
-    {
-        std::array<std::byte, kPageSize> buf{};
-        superblock_.Encode(std::span<std::byte, kPageSize>(buf));
-        const std::uint32_t single = kSingleStream;
-        std::memcpy(buf.data() + kSuperBlockBodyOffset + kLogTopologyOffset, &single,
-                    sizeof(single));
-        auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(buf));
-        ASSERT_TRUE(decoded.ok());
-        superblock_ = std::move(decoded.value());
-    }
     superblock_.Encode(page.value());
 
     SuperBlockCheckpointAnchor anchor(superblock_, store);

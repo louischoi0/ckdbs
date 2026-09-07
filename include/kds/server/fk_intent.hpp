@@ -54,7 +54,9 @@
 // parent DELETE arriving afterwards no longer sees one. That window is
 // closed by the transaction rather than by this table — the coordinator's
 // in-doubt resolution fails a transaction whose participant lost its state
-// (`prepared_resolver.hpp`), so the child insert that relied on the intent
+// (`wal/recovery.hpp`; the cross-stream `prepared_resolver.hpp` that used to
+// carry it went at AM-S4(d), and the resolution is now a lookup inside the
+// mount's own scan), so the child insert that relied on the intent
 // does not commit either. Recorded here because the argument lives in two
 // files and this is the one a reader of the table reaches first.
 //
