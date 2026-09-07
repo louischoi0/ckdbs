@@ -315,14 +315,32 @@ void LockTable::ClearWaitFor(std::uint64_t waiter) {
     // the fence counter gating the probe. Every decide on every core calls
     // this (`Release`), and above one core `wait_latch_` is a real mutex,
     // so an ungated clear would put one instance-wide lock on the commit
-    // path of every reactor for a graph that, until AO-S4b, nothing above
-    // one core can even populate. Sound without the latch: a transaction
-    // registers its own edge from its own thread, so a zero read means this
-    // waiter has none, whatever another core is doing.
+    // path of every reactor for a graph that is empty whenever nothing
+    // waits. Sound without the latch, and not because every edge is its
+    // waiter's own - since AO-S4b an owner registers a *foreign* waiter's
+    // edge, the coordinator's, from its own thread - but because an edge
+    // added after this zero read is one whose own clear has not happened
+    // yet: the owner's `Finish` clears what the owner added, keyed on the
+    // holder it named. What that leaves is narrow and stated: a decide
+    // that read zero while the owner was adding leaves the edge naming a
+    // decided transaction until that `Finish`, which can only make a walk
+    // find a cycle that is not there - a spurious refusal, bounded by the
+    // shipped statement's life, never a missed one.
     if (wait_edge_count_.load(std::memory_order_acquire) == 0) return;
     LatchGuard guard(wait_latch_.get());
     auto gone = std::remove_if(wait_edges_.begin(), wait_edges_.end(),
                                [&](const auto& e) { return e.first == waiter; });
+    const auto erased = static_cast<std::size_t>(wait_edges_.end() - gone);
+    wait_edges_.erase(gone, wait_edges_.end());
+    if (erased != 0) wait_edge_count_.fetch_sub(erased, std::memory_order_release);
+}
+
+void LockTable::ClearWaitFor(std::uint64_t waiter, std::uint64_t holder) {
+    if (wait_edge_count_.load(std::memory_order_acquire) == 0) return;
+    LatchGuard guard(wait_latch_.get());
+    auto gone = std::remove_if(wait_edges_.begin(), wait_edges_.end(), [&](const auto& e) {
+        return e.first == waiter && e.second == holder;
+    });
     const auto erased = static_cast<std::size_t>(wait_edges_.end() - gone);
     wait_edges_.erase(gone, wait_edges_.end());
     if (erased != 0) wait_edge_count_.fetch_sub(erased, std::memory_order_release);

@@ -412,9 +412,15 @@ implementation is the failure mode to refuse in review.
 
 ## 5. What is deliberately absent
 
-- No lock manager, no wait queues, no deadlock detector — F3 plus
+- No lock manager, no wait queues, no deadlock detector **for the
+  probe's own answer** (a cross-core probe still answers `busy` rather
+  than waiting; AO-S5(b) owes the wait and its wait-for edge) — F3 plus
   in-place `trx_id` makes the uncommitted row itself the conflict
-  signal, and run-to-completion removes the check-to-write race that
+  signal, and run-to-completion removes the check-to-write race that.
+  The same-core forward check does wait for its parent since AO-S3, and
+  that wait is an edge in the instance's wait-for graph (AO-S4a/S4b,
+  `txn.md` §5), so a child that would close a cycle is refused naming
+  deadlock rather than netted
   gap locks exist to close elsewhere.
 - No ON UPDATE actions of any kind (K2).
 - No cross-relation write hooks: both checks are *reads* injected into

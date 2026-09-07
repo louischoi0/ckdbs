@@ -635,6 +635,18 @@ std::string ErrorReply(const Status& status);
 // reply shape added later that can lead with free text breaks it silently.
 Status StatusFromErrorReply(std::string_view reply);
 
+// **The deadlock victim's refusal, one sentence for both sites** (AO-R7,
+// AO-S4a's dispatcher loop and AO-S4b's owner-side arm). `TxnConflict`,
+// because that is the one retryable code and a deadlock genuinely is
+// retryable - the survivor will have released by the time this one comes
+// back - and the message names deadlock, because an operator meeting a
+// conflict needs to know whether to look for contention or for a
+// lock-order bug. What is aborted is the statement; the transaction is
+// poisoned and still holds its rows, and the sentence says so rather than
+// "the other proceeds" without saying when. `waited_for` names what the
+// victim waited on: a row and its holder, or a core's transaction.
+Status DeadlockVictim(const std::string& waited_for);
+
 // Where a tuple lives, as a point lookup reports it. Local to the
 // dispatcher because it is the shape of an answer to "skip the scan and
 // look here", not a storage-layer concept.
@@ -1731,6 +1743,9 @@ public:
     // AO-S3's guard, where only a transaction holding nothing waits and no
     // cycle can form. Both states are correct; the second is narrower.
     void set_locks(txn::LockTable* locks) noexcept { locks_ = locks; }
+    // Which table this dispatcher records its edges in, so an assembly cell
+    // can name it (AO-S4b).
+    const txn::LockTable* locks() const noexcept { return locks_; }
 
     sched::MonoTimeNs InDoubtCeilingNs() const noexcept { return in_doubt_ceiling_ns_; }
     void set_in_doubt_ceiling_ns(sched::MonoTimeNs ns) noexcept { in_doubt_ceiling_ns_ = ns; }

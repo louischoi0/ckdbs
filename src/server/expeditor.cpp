@@ -1051,15 +1051,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // a copy, so the block reports the mount's own report and cannot drift from
     // it; `recovery_` is declared above the dispatcher and so outlives it.
     expeditor->dispatcher_->set_recovery(&expeditor->recovery_);
-    // **The dispatcher is deliberately not handed the table** (AO-S5(a)).
-    // The manager above took it on every count, which is the wake's need;
-    // the dispatcher's use of it is AO-S4a's admission - a transaction
-    // holding rows may park because a detector catches the cycle - and a
-    // server never ran that: `CoreRuntime` wires it at `core_count == 1`,
-    // and a server's core 0 is this class. Handing it here at `cores = 1`
-    // is one line and a behaviour change in a shipped configuration, so
-    // it waits for the operator's word rather than riding in with the
-    // wake (`workorder-ao-m2-lock-family.md` AO-S5's row).
+    // The dispatcher takes the table too (AO-S4b; AO-S5(a) had held this
+    // line) - the member's declaration says what that lands.
+    expeditor->dispatcher_->set_locks(expeditor->locks_.get());
 
     // **Assertion enforcement, resumed** (RC07, AS6a). Here rather than beside
     // the recovery call above, because the registry it refills lives on the
@@ -1393,6 +1387,19 @@ Expeditor::~Expeditor() {
     // the ordinary path and not an exotic one. Null after `RunUntilStopped`
     // and after a failed `Start`, both of which have already unwound it.
     if (running_ != nullptr) StopStartedCores();
+    // **And the suspend audit `Start` installed on the calling thread.**
+    // `InstallSuspendAudit` is thread-local and points at this instance's
+    // store; only `RunUntilStopped`'s tail withdrew it, so an instance
+    // started and dropped - the `Start()`-then-look fixture shape - left the
+    // thread's audit naming a freed store, and the next coroutine that
+    // parked on that thread read it (found 2026-09-07: a same-core deadlock
+    // cell segfaulting after two single-core `Expeditor` cells in one
+    // process). Idempotent after the tail's own withdrawal. The last
+    // install on a thread wins and this withdraws whoever made it, so two
+    // live instances started on one thread would leave the later one
+    // unaudited - a shape no caller has, and a fixture that took it would
+    // reinstall.
+    exec::UninstallSuspendAudit();
 }
 
 Status Expeditor::Serve() {
@@ -1911,6 +1918,8 @@ Status Expeditor::Start() {
         // participant's prepare record is written into its own stream.
         shipped_executor_.emplace(/*core_id=*/0, *dispatcher_, scheduler, clock_, &*logger_,
                                   &*wal_);
+        // AO-S4b: the graph a shipped statement's coordinator is recorded in.
+        shipped_executor_->SetLockTable(locks_.get());
         statement_ship_server_.emplace(/*core_id=*/0, scheduler, *transport_,
                                        shipped_executor_->Seam(), &*logger_);
         if (Status s = scheduler.RegisterMessageHandler(

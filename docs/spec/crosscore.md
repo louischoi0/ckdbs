@@ -253,9 +253,10 @@ target, `StepBatchCeiling` of the transport's slot as the bound. The KWP
 socket's 64 KiB batch target is a socket-side quantity and bounds nothing
 on a ring.
 
-**The request POD pays 16 bytes for the tag**, so the longest shippable
-statement is **976 bytes**. That bound is client-visible and is stated in
-`docs/spec/client-manual.md`.
+**The request POD pays 16 bytes for the tag and 8 for the coordinator's
+transaction id** (AO-S4b's wait-for edge), so the longest shippable
+statement is **968 bytes** — 992 before the tag, 976 before the id. That
+bound is client-visible and is stated in `docs/spec/client-manual.md`.
 
 **The text arm does not move a byte.** A session with no result sink ships
 `form = 0`, the owner installs no sink, and the rendered-text reply is

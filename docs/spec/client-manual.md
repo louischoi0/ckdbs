@@ -320,7 +320,7 @@ hold on the debug port too (Appendix A gives the text spellings).
   cross-core message and no batching policy can split a row across two. A
   row wider than that is refused rather than truncated, and the refusal
   does not end the transaction; project fewer columns, or narrow them. The
-  **longest statement that may be carried to another core is 976 bytes**;
+  **longest statement that may be carried to another core is 968 bytes** (976 before AO-S4b);
   a longer one is refused by name rather than truncated — a truncated
   statement is a different statement. An answer that does not arrive
   within 10 s is `UNKNOWN_OUTCOME` (*the read returned nothing and changed

@@ -493,6 +493,15 @@ public:
     // Drops `waiter`'s edge. Called when the wait ends, however it ends -
     // granted, refused, or the transaction decided.
     void ClearWaitFor(std::uint64_t waiter);
+    // Drops `waiter`'s edge **only if it still names `holder`** (AO-S4b).
+    // The form for a clear made on the waiter's behalf by another core: the
+    // owner that recorded `coordinator -> participant` at enrolment clears
+    // it at the reply, but by then the coordinator may have given up on the
+    // ship (its 10 s deadline is inside the 11 s fault net) and registered
+    // a live edge of its own for a later park - which the one-argument
+    // form would erase, leaving a parked waiter with no edge and a cycle
+    // through it undetectable.
+    void ClearWaitFor(std::uint64_t waiter, std::uint64_t holder);
 
     // Edges currently held. Zero when nothing is waiting, which is what a
     // cell asserts after every wait in it has ended.
