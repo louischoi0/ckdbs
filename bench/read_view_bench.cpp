@@ -96,7 +96,8 @@ Options ParseOptions(int argc, char** argv) {
 // (the floor cannot pass them while anything is live below them, and the
 // bench keeps one transaction live below every commit for exactly that).
 struct Rig {
-    server::SuperBlock superblock = server::SuperBlock::CreateFresh(/*now_unix_seconds=*/1000);
+    kds::server::SuperBlock superblock =
+        kds::server::SuperBlock::CreateFresh(/*now_unix_seconds=*/1000);
     kds::storage::InMemoryPageStore store{128};
     std::unique_ptr<kds::txn::TrxIdSequence> ids;
     std::unique_ptr<kds::txn::UndoLog> undo;
