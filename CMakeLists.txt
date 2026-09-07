@@ -176,12 +176,17 @@ endif()
 add_executable(kds_server src/server/main.cpp)
 target_link_libraries(kds_server PRIVATE kds)
 
-# The microbenchmarks (kds_bench, kds_keystone_alloc_bench, kds_txn_bench,
+# The v2 microbenchmarks (kds_bench, kds_keystone_alloc_bench, kds_txn_bench,
 # kds_crosscore_bench, kds_session_step_state_bench) left the tree with
 # bench/ on 2026-09-02, ahead of the big-bang change; `git show
 # 1769487:bench/<file>` retrieves a source and bench/README.md says why.
-# KDS_BUILD_BENCH went with them: a configure line still passing it gets
-# CMake's unused-variable warning and nothing else.
+# KDS_BUILD_BENCH returned with the first v3 microbenchmark (AN-S5): off by
+# default, so the test builds pay nothing for it.
+option(KDS_BUILD_BENCH "Build the ckdbs microbenchmarks" OFF)
+if(KDS_BUILD_BENCH)
+    add_executable(kds_read_view_bench bench/read_view_bench.cpp)
+    target_link_libraries(kds_read_view_bench PRIVATE kds)
+endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the
 # engine driven in-process through CommandDispatcher over crashable
