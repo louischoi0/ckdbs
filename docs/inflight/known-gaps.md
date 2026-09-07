@@ -217,8 +217,8 @@ statement about an engine that no longer exists; re-verify or strike it.
   both per-core, and one spec sentence asserts the opposite" — closed at
   AN-S2: `ReadView::Visible` decides by the instance's commit-LSN window
   and floor, `ReadHorizon()` answers the instance-wide oldest snapshot, and
-  `crosscore.md`'s "the trx-id domain is global, so ids compare cleanly" is
-  AN-S4's to rewrite. The two cells that fail on the old predicate and
+  `crosscore.md`'s "the trx-id domain is global, so ids compare cleanly" was
+  rewritten at AN-S4. The two cells that fail on the old predicate and
   pass on the new one are
   `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`
   and `…ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible`.)*

@@ -341,52 +341,106 @@ the same guard `kMaxChainPages` provides for the heap chain.
 ### 4.1 `ReadView`
 
 ```
-up_to_trx_id     exclusive high-water: ids >= this had not started
-own_trx_id       0 for a read-only view
-in_flight[64]    sorted; kMaxTrackedLiveTxns = 64, as kMaxWalCores
-in_flight_count
+snapshot_lsn       every commit whose record is at or below this LSN was
+                   published when the view was minted; nothing above it had
+                   committed, whatever its id
+own_trx_id         0 for a read-only view
+visibility         the instance read view the floor and the window are read
+                   through (txn/instance_visibility.hpp)
+sees_everything    Everything()'s mechanism: every writer visible, nothing consulted
+in_flight_at_mint  another transaction was live on the minting core (cabin.md §6a)
 ```
 
 A copyable POD with no heap allocation — the reactor body allocates nothing in
-steady state (`sched.md`). `Begin` past `kMaxTrackedLiveTxns` is `OutOfSpace`: a
-documented, testable bound rather than an unbounded vector.
+steady state (`sched.md`). Nothing here bounds anything: the 64-entry
+in-flight array, and the `OutOfSpace` past 64 live transactions that was its
+width, went with the trx-id predicate at AN-S2.
 
 ```
-Visible(t):  t == kAlwaysVisibleTrxId -> true
-             t == own_trx_id          -> true
-             t >= up_to_trx_id        -> false
-             otherwise                -> not in in_flight
+Visible(t):  t == kAlwaysVisibleTrxId  -> true      (§4.2, unconditional and permanent)
+             t == own_trx_id           -> true
+             t <  floor                -> true      (resolved, and still on the page: a winner)
+             otherwise                 -> window holds t, and commit_lsn(t) <= snapshot_lsn
 ```
 
-**Why no commit table is needed, and the condition on that.** "Committed before
-my snapshot" collapses to "below the high-water mark and not in my in-flight set"
-*only* because an aborted transaction's page changes are physically undone,
-synchronously, in-process (§6) — and, across a crash, by recovery's undo
-phase (`wal.md` §12), which rolls back every loser before the database is
-served. That is the load-bearing assumption of the whole design.
+**A commit-LSN snapshot, not a bound on transaction ids.** Until AN-S2 a view
+was an exclusive high-water mark over trx ids plus the ids in flight when it
+was minted. That is sound only while issue order is id order, and ids are
+leased to each core in disjoint blocks of `kTrxIdBlockSize` (§4.2), so across
+cores it is not: a commit on a core holding a higher block read as "not yet
+started" until the reader's core burned its own block (H1), and a transaction
+begun after the mint out of a lower core's unspent range read as committed
+before it had started (H2). One stream gives every commit one LSN in one
+order (`wal.md` §3), and the **instance read view** carries it: a window
+`trx_id → commit_lsn` for every transaction committed and not yet reclaimed,
+a **floor**, a slot per core, and the ceiling a mint reads. `instance_visibility.hpp`
+owns the mechanism; `instructions/v3.0.0/workorder-an-read-view.md` AN-3 E
+is the source read that found H1 and H2, and its AN-8 the build.
+
+**Why no commit table older than the window is needed, and the condition on
+that.** Above the floor the window answers; below it the answer is
+"committed" with no lookup — *only* because an aborted transaction's page
+changes are physically undone, synchronously, in-process (§6) and, across a
+crash, by recovery's undo phase (`wal.md` §12), which rolls back every loser
+before the database is served. That is the load-bearing assumption of the
+whole design. The floor is a trx id below which every transaction is
+resolved **and no id will ever be issued again**: the second bound is what
+block leases require, because a core holding an unspent range below the
+floor could otherwise issue into it, and it is the minimum issue cursor over
+attached cores. **The floor is read live and never copied into the view**:
+reclamation drops a window entry *because* the floor rose past it, so a view
+holding a stale lower floor would miss the entry, decline the floor, and
+answer "not committed" for a row committed long ago. Branch 4 reads the
+window and the floor together under one hold, so a reclamation pass is seen
+whole or not at all.
+
+**When a commit becomes visible.** The committing core publishes its window
+entry where the transaction leaves the in-flight set — after
+`WalManager::Commit` returns, never under the append latch — so a reader
+sees a commit as soon as the record is appended, which under `group` is
+before the platter has it, exactly as before (`wal.md` §3). The ceiling a
+mint takes is the highest published commit LSN **capped by every core's
+pending-commit marker**, set before that core's append: no view ever covers
+a commit whose entry it cannot yet see, so a **held** view's answer for any
+transaction never changes for its life. An unregistered check view holds no
+slot, so reclamation can move its answer for a committed writer to
+"committed" a moment earlier — the exemption below, and the only direction
+it moves. An unlogged instance has no LSN and the window assigns the next
+position in commit order.
 
 **Readers are registered.** Two records together name every reader on a
 core: live transactions in the manager's `live_`, and every other snapshot
 that can read a superseded version across a park — an autocommit
 statement's, a shipped pipeline stage's — through a move-only `ReaderLease`
 that `txn::AutocommitSnapshot` returns beside the snapshot, so registering
-is structural rather than disciplinary. `TransactionManager::ReadHorizon()`
-folds both into one bound: a version superseded by a **committed**
-transaction below it is invisible to every live and future view, so a purge
-may retire it. Views exempt by proof: latest-state check views (they never
-read a superseded version) and views that never outlive one synchronous
-span on the core's single thread — an exemption to re-check whenever the
-executor gains a suspension point. The horizon is **per-core**, sound while
-every reader reads its own core's versions (`crosscore.md` §5); a cross-core
-writer must extend it.
+is structural rather than disciplinary. Each core publishes the oldest
+`snapshot_lsn` over both into its slot, and a held mint lowers that slot
+*before* it reads the ceiling, so a pass on another core can never outrun a
+view in the gap between its mint and its registration.
+`TransactionManager::ReadHorizon()` is the minimum over cores: **the
+instance's oldest live snapshot**, not this core's. A version superseded by
+a transaction below the floor, or committed at or below every live and
+future snapshot, is invisible to every view, so a purge may retire it. Views
+exempt by proof: latest-state check views (`MintCheckView`: they never read
+a superseded version, and they touch no slot) and views that never outlive
+one synchronous span on the core's single thread — an exemption to re-check
+whenever the executor gains a suspension point. **The horizon is
+instance-wide since AN-S2**: a reader on core 3 holding a snapshot from
+before core 0's commit keeps that commit's entry, and the undo it
+superseded, wherever the undo lives.
 
-Two purges consume the horizon: the catalog delete-mark purge
-(`ddl-transactional.md` §5d) and the **undo purge**: a settled undo page —
-newest writer below the horizon — recycles into the log's own next growth,
-triggered by growth, so this run's chain plateaus instead of growing without
-bound. Retention is **horizon-only**: nothing a live view can reach is ever
-freed, so `SnapshotTooOld` is never raised, and the price is that one
-long-running transaction holds reclamation for its lifetime. A byte-cap
+Two purges consume it. The catalog delete-mark purge (`ddl-transactional.md`
+§5d) judges each mark's deleter by the two branches
+(`TransactionManager::ResolvedForEveryReader`). The **undo purge** settles a
+page by its newest writer's id against the **floor** alone — a page knows
+its writers' ids and not their commit LSNs — and the floor reaches it with
+the second branch already applied, since reclamation never raises the floor
+past a commit some live or future snapshot cannot see; a settled page
+recycles into the log's own next growth, triggered by growth, so this run's
+chain plateaus instead of growing without bound. Retention is
+**horizon-only**: nothing a live view can reach is ever freed, so
+`SnapshotTooOld` is never raised, and the price is that one long-running
+transaction holds reclamation for its lifetime — the instance's. A byte-cap
 retention that would make the error reachable is declined.
 
 **What bounds that price is the transaction, not the snapshot** (AN-R10,
@@ -397,26 +451,21 @@ is ever told its snapshot expired. That is the whole of the difference
 between the ruling taken and the `SnapshotTooOld` one declined: the same
 reclamation, reached by ending the holder rather than by failing the read.
 
-**Whose undo the price is paid in is still per core.** `ReadHorizon()`
-walks one core's `live_` and one core's reader slots, and each core owns
-its own `UndoLog` (`CoreRuntime`/`Expeditor` each hold one), so an idle
-`BEGIN` on core 3 holds core 3's undo and nothing else's. AN-S1's shared
-read view publishes **commit order** on one stream
-(`instance_visibility.hpp`); it does not fold the horizons together.
-`[PROPOSED]` — the exposure AN-R10 was marked to bound is that a *shared
-buffer pool* lets a reader on one core reach another core's versions,
-which is exactly the condition `instance_visibility.hpp` names as the one
-under which a per-core horizon stops being sound. When that lands the
-price becomes the instance's and this paragraph is the one that changes;
-it is the reason the bound is a wall-clock lifetime rather than a byte
-cap, and it is not the state of the tree today. A previous run's
-undo pages are not reclaimed at mount: each run starts a fresh chain and
-the old pages leak.
+**Whose undo the price is paid in is the instance's** (AN-S2). Each core
+still owns its own `UndoLog` (`CoreRuntime`/`Expeditor` each hold one), but
+the horizon folds every core's readers, so an idle `BEGIN` on core 3 holds
+*every* core's undo above its snapshot, and the commit window with it. That
+is the exposure AN-R10 was marked to bound and the reason the bound is a
+wall-clock lifetime rather than a byte cap. A previous run's undo pages are
+not reclaimed at mount: each run starts a fresh chain and the old pages
+leak.
 
 ### 4.2 The always-visible transaction id
 
 `trx_id == 1` (`catalog::kBootstrapXid`) is visible to **every** read view,
-unconditionally and permanently. This is not a migration shim that ages out:
+unconditionally and permanently — `Visible`'s first branch, ahead of the
+floor and the window, so a catalog row never reaches either. This is not a
+migration shim that ages out:
 
 - Every row written before the transaction manager existed carries it.
 - Bootstrap catalog rows keep it (`ddl-transactional.md`); a DDL statement's
@@ -482,8 +531,11 @@ under the span), and `ResolveThroughUndo()` walks after the span is
 released, over a copy of the tuple taken while it was still held. The copy
 is a fixed number of bytes because invariant 13 makes a row's size a schema
 constant, and it is taken **only** when the writer is invisible — a visible
-writer, which is every row of a single-transaction workload and every
-bootstrap row forever, costs one integer comparison and no copy at all.
+writer costs no copy at all: a bootstrap row or the view's own writer one
+comparison, a writer below the floor one atomic load, and a writer above it
+one latched window lookup, which is the cost AN-S5 measures. `Classify()`
+is no longer `constexpr` for that last reason; it still fetches no page,
+which is the property the span rule needs.
 
 `heap::ChainVisit` remains a purely physical walk. Visibility belongs to its
 callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
@@ -603,8 +655,9 @@ sockets (`rules.md` §4).
 2. **Txn ids:** monotonic, never 1, never reissued across a simulated restart;
    a crash burns the block remainder; past `kMaxTxnId` is `OutOfRange`.
 3. **Visibility (satisfies `wal.md` §16-5):** `kBootstrapXid` always visible; own
-   writes visible; `trx_id >= up_to_trx_id` invisible; in-flight invisible;
-   `undo_ptr == 0` with an invisible writer ⇒ no version; delete-mark by a
+   writes visible; a commit above the snapshot LSN invisible; a live writer
+   invisible whatever its id; below the floor visible whatever the window
+   says; `undo_ptr == 0` with an invisible writer ⇒ no version; delete-mark by a
    visible deleter ⇒ no version; by an invisible deleter ⇒ prior version visible;
    a 3-version chain read from three read views yields three payloads; and
    garbage written into the tuple header's two free bytes changes nothing — the

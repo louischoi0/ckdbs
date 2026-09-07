@@ -388,9 +388,10 @@ parent committed-deleted *after* this snapshot was taken must still
 fail the check (latest-state semantics), and an in-flight writer must
 be *seen* to fail fast (F3). `txn::CheckVisibility` is a sibling of the
 snapshot visibility routine over the same three tuple fields, against a
-read view **minted at check time** (`TransactionManager::MintReadView`)
-rather than the statement's. Latest-state semantics means the answer is
-the version on the page, so the check never steps back through undo:
+read view **minted at check time** (`TransactionManager::MintCheckView`,
+which registers nothing and holds no horizon) rather than the statement's.
+Latest-state semantics means the answer is the version on the page, so the
+check never steps back through undo:
 
 | tuple's own version, against a freshly minted view | verdict |
 |---|---|

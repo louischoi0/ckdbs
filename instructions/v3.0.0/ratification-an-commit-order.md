@@ -8,8 +8,12 @@ four were the document reading a spec at `d15b5ac` while claiming `f027a3c`.
 
 **Marked 2026-09-03; see AN-D10.** AN-Q1, AN-Q2 and AN-Q4 are settled by
 the operator's mark of `workorder-an-read-view.md` AN-R7(B) and are built
-there. AN-Q3, AN-Q5 and AN-Q6 remain open and have **moved** into that work
-order as AN-R9, AN-R10 and AN-R11. AR0 §5's standing rule did not carry
+there — **at AN-S2, 2026-09-07**, which is also where AN-Q3 closed: AN-R9's
+publication point, with a pending-commit marker set before the append
+because the ruling's own "set of reserved LSNs" had the gap it was written
+to close (that order's AN-8 §8.2 item 2 and §8.5). AN-Q5 is AN-R10, marked
+at AW and built as AN-R14; AN-Q6 is AN-R11, unmarked. The three had **moved**
+into that work order as AN-R9, AN-R10 and AN-R11. AR0 §5's standing rule did not carry
 them: AN-Q3 is a `[quiet-wrong]` item in that rule's own sense — an
 implementation window whose failure is a missing row rather than an error —
 and AN-Q5 reopens a policy decided against a smaller cost. Both were named

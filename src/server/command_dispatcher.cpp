@@ -8450,16 +8450,18 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
         // the marks it left are exactly as reachable as before, so it is
         // logged and the reply stands.
         //
-        // **System core only.** This core's ReadHorizon() is blind to
-        // every other core's readers, and a peer's - no transactions, no
-        // leases - answers UINT64_MAX, which would retire a mark whose
-        // deleter is live on core 0. Unreachable because peers take no
-        // DDL - **enforced at dispatch since PW4** (PeerDdlRefused: the
-        // verb guard refuses DDL wherever the store may not write the
-        // catalog, which is every production peer) - and this gate
-        // stays as the defense in depth that makes the soundness argument
-        // local even if a new dispatch path forgets the guard (spec §5d,
-        // workplan D1).
+        // **System core only, as defence in depth.** Until AN-S2 this
+        // gate carried the soundness argument: a core's `ReadHorizon()`
+        // walked its own readers alone, so a peer's - no transactions, no
+        // leases - answered UINT64_MAX and would have retired a mark whose
+        // deleter was live on core 0. Since AN-S2 the sweep judges every
+        // mark by the instance's floor and horizon
+        // (`ResolvedForEveryReader`), so a peer's sweep would be sound;
+        // what still makes this core-0-only is that the catalog's pages sit in
+        // the system range and peers take no DDL - **enforced at dispatch
+        // since PW4** (PeerDdlRefused) - and the gate stays so that a new
+        // dispatch path forgetting the guard runs no sweep from a core the
+        // catalog's writers do not expect (spec §5d).
         if (core_id_ == catalog::kSystemCore) {
             auto purged = catalog_.PurgeSettledDeleteMarks();
             if (purged.ok()) {

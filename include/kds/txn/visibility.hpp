@@ -31,10 +31,12 @@
 // **The copy is only paid when the answer is not already known.** A tuple
 // whose writer is visible - which is every row of a single-transaction
 // workload, and every catalog row forever - is decided by Classify() with
-// no copy and no fetch, so the ordinary read path costs one integer
-// comparison. Only an invisible writer pays for the scratch copy, and the
-// copy is a fixed number of bytes because invariant 13 makes a row's size a
-// schema constant.
+// no copy and no fetch: a bootstrap row or the view's own writer costs one
+// comparison, a writer below the instance's floor one atomic load, and a
+// writer above it one latched window lookup (`read_view.hpp`, AN-S2). Only
+// an invisible writer pays for the scratch copy, and the copy is a fixed
+// number of bytes because invariant 13 makes a row's size a schema
+// constant.
 //
 // ---- Every chain terminates -----------------------------------------------
 //
@@ -168,9 +170,9 @@ struct Snapshot {
 
     // True when this snapshot can never need the undo chain, so a reader
     // may skip the classification entirely. Not an optimization the reader
-    // depends on - Classify() is a handful of comparisons - but it makes
-    // "nothing changed for a non-transactional caller" checkable in one
-    // place.
+    // depends on - Classify() answers this view in one branch - but it
+    // makes "nothing changed for a non-transactional caller" checkable in
+    // one place.
     bool sees_everything() const noexcept { return view.sees_everything; }
 };
 

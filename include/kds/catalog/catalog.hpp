@@ -376,8 +376,10 @@ public:
     StatusOr<std::uint64_t> FinalizeDeleteMarksAtMount();
 
     // The in-mount sibling of the sweep above: retires every delete-marked
-    // catalog row whose deleter has cleared the core's read horizon, and
-    // answers how many. Callable while the listener is bound; no version
+    // catalog row whose deleter every live and future reader on any core
+    // sees as committed (`TransactionManager::ResolvedForEveryReader`, the
+    // instance's floor and horizon since AN-S2), and answers how many.
+    // Callable while the listener is bound; no version
     // bump, unlogged like every catalog write; a held-back mark survives
     // to the next call or to the mount sweep. The caller is DDL resolution
     // (`CommandDispatcher::EndDdlScope`, system core only). The soundness

@@ -39,7 +39,7 @@ multi-*range* write statement or transaction is refused (§6).
 | CC1 | Execution model | **Step pipeline (function shipping)** — each step runs on the core owning its range(s); output flows to the next step's core; final rows to the session core |
 | CC2 | Intermediate transfer | **KWP binary row batches (protocol D5 encoding) in chunked ring messages + credit-based flow control** |
 | CC3 | Write scope | A transaction's writes bind to one **owner core**; ownership is per **range**. (Under per-core streams that owner was also a distinct WAL stream, which is how this read before AR0 M0; §4a carries the reading.) A transaction writing relations owned by two cores commits through `docs/spec/cross-owner-txn.md`'s protocol. A statement or transaction writing two *ranges* owned by different cores — including two ranges of one relation — is refused with a retryable error (§6). Two ranges the home core co-owns stay legal: single-owner, nothing 2PC-shaped in them (§6, and the reader-side consequence in §5) |
-| CC4 | Remote-read isolation | A remote step reads the owning core's **latest committed snapshot**; no cross-core ReadView. RC-equivalent; RR weakening documented (§5). Per range: each stage reads its *range* owner's view |
+| CC4 | Remote-read isolation | A remote step reads the **latest committed snapshot** as of the moment its stage mints one — since AN-S2 a commit-LSN snapshot over the instance read view, which covers every core's commits; no view crosses a core. RC-equivalent; RR weakening documented (§5). Per range: each stage mints its own |
 | CC5 | Cancellation & errors | Cancel/error messages propagate both directions; every message tagged `(session_core, request_id, step_id)`; stale batches discarded by tag |
 | CC6 | Scheduling | Remote step tasks run in the **foreground** group on their core (step chains are the OLTP path) |
 | CC7 | Page ownership | **Page ownership is a function of the catalog**: a relation's pages belong to the core `sys.tables.owner_core` names, whatever lease allocated them. **The handoff that realized it is gone** (AW-S1b, 2026-09-07). Until then a DDL publish ran a **flush-then-grant handoff** — core 0 flushed the relation's pages, then granted the owner fault rights at extent granularity and write rights over its exact creation pages, over the ring — because a core reaching a page its own frame table had never loaded could not read it and a core reaching a page core 0 had formatted could not write it. AM-S2 step 3 removed the first premise (one frame table serves every core, so the owner finds the frame core 0 wrote) and AW-S1b removed the second with the extent lease that keyed it. **Page ownership is therefore satisfied by construction rather than realized by a protocol**: a page belongs to the relation's owner because that owner is the only core statement dispatch sends a write to, and no page-level predicate is consulted except the system range's (CC11). `CREATE TABLE` allocates from the one free map, under the structure latch. The engine does not rebalance ownership after creation. Every page movement between owners was a PL-B logged handoff; the DDL publish was its easiest case (pages quiescent, no peer ever logged), and the range allocator's entry page is the one site that still appends one — **for a record nothing reads**, since analysis neither erases nor seeds on it and redo skips it (`docs/inflight/known-gaps.md`). **The page's stamp was the durable form of the fact**: leases and grants were memory-resident, so a core's ownership after a restart was re-derived from the stamp on each page it faulted. That reading went with the grants at AW-S1b — nothing is re-derived, because nothing was lost — and AM-S4(d) took the last of it: redo neither refuses a foreign value nor rewrites one, there being no other log one could have come from. What the stamp is now is a diagnostic saying which core last wrote a page, and `docs/spec/page.md` §2b is all of it. **The owner-builds exception**: for `CREATE INDEX` on a peer-owned relation core 0 cannot produce the pages — its `Backfill` reads the device's last checkpoint and misses every row the owner holds uncommitted or never checkpointed — so the **owner builds** the tree itself and no page crosses an owner (from its own extent lease until AW-S1b, from the instance's free map since); core 0 keeps only the catalog half (the `sys.indexes` row and the commit; `docs/spec/ddl-transactional.md` §5e). The same holds for an assertion's Bound Cabin on a premise that was stronger and is now historical: it is **appended to by every write to the relation**, so its pages had to be writable by the owner forever after, which a core-0-allocated chain never was while `MayWrite` consulted a lease. `MayWrite` now refuses only the system range, so the constraint is gone; the owner still builds the cabin, because `Backfill`'s argument above is unchanged, and **holds its live directory**: the enforcing core for an assertion is the core that owns the relation, on every core and at every mount. Core 0 keeps the `sys.assertions` row, and a `DROP` on core 0 tells the owner to forget the directory |
@@ -297,9 +297,14 @@ closes a pending shipped statement.
 
 ## 5. Isolation Semantics
 
-There is no cross-core ReadView. A remote step reads what is committed on
-its own core (`docs/spec/txn.md` visibility with an empty live-set view; the
-trx-id domain is global, so ids compare cleanly).
+A remote step reads what is committed at the moment its stage mints its
+view. Since AN-S2 that view is a commit-LSN snapshot over the instance read
+view (`docs/spec/txn.md` §4.1): it would answer the same on any core, and
+what keeps it core-local is the one-view-per-stage rule below, not the
+view's shape. (Until AN-S2 the sentence here read "the trx-id domain is
+global, so ids compare cleanly" — a per-core view over per-core id blocks,
+which `workorder-an-read-view.md` AN-3 E shows compared nothing across
+cores.)
 
 **One view per stage**, minted when the stage's coroutine first runs and
 held for that stage's whole life. Re-minting per batch would not be a
@@ -344,8 +349,10 @@ client manual states the widened form beside the one-range one.
   trx-id predicate at AN-S2). `docs/spec/cross-owner-txn.md` §3 owns the rule and
   `docs/spec/client-manual.md` states it in the client's words. What is
   **not** given is a single global instant: two such transactions can
-  disagree about the order of two commits on two cores, and sharing the log
-  did not change that (`cross-owner-txn.md` §3).
+  disagree about the order of two commits on two cores. Since AN-S2 that
+  is no longer structural — every participant mints from one commit order
+  — but each still mints its own snapshot at its own BEGIN, and adopting
+  the coordinator's is AN-S3, unbuilt (`cross-owner-txn.md` §3).
 
   **The remote-step pipeline does not run inside such a transaction.** It
   reads each core's latest-committed snapshot outside any enrolled

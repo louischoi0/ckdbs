@@ -421,8 +421,9 @@ transaction".
 **The assumption this rests on, named because nothing else names it**:
 `TransactionManager::Begin` allocates an id and pushes into `live_`
 *eagerly*, for read-only and `REPEATABLE READ` transactions alike, so every
-one of them appears in every other view's `in_flight`. If ids ever become
-lazily allocated for read-only transactions — an ordinary optimization — a
+one of them makes every view minted beside it on that core carry
+`in_flight_at_mint`. If ids ever become lazily allocated for read-only
+transactions — an ordinary optimization — a
 session holding a pre-record view stops being visible to this guard, the
 break returns, and **no test fails**. Anyone touching that allocation owes
 this rule a second look.

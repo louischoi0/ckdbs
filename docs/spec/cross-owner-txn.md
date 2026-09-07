@@ -32,9 +32,12 @@ core owns. There is no declaration, no join, no registration up front:
 - A participant runs the transaction as an **ordinary local transaction**
   under **its own** trx id, carved from its own core's lease. The
   coordinator's `(session_id, transaction_id)` is recorded beside it when
-  prepare brings it. There is no shared transaction id and no global
-  counter — a shared id would put foreign ids in every participant's
-  stream, which `CoreRuntime::Open`'s mount check refuses.
+  prepare brings it. There is no shared transaction id — under per-core
+  streams a shared id would have put foreign ids in every participant's
+  stream, which `CoreRuntime::Open`'s mount check refused, and under one
+  stream the id stays per core because the lease is (`trx_id.hpp`). Commit
+  *order* is global: the commit record's LSN, which the instance read view
+  carries (`txn.md` §4.1, `ratification-an-commit-order.md` AN-D4).
 
 ### 1a. How a statement reaches a participant
 
